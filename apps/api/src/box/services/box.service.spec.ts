@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ForbiddenException } from '@nestjs/common'
+import { ForbiddenException, NotFoundException } from '@nestjs/common'
 import { BoxService } from './box.service'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
 import { BoxEvents } from '../constants/box-events.constants'
+import { VolumeState } from '../enums/volume-state.enum'
 
 // ensureStartedForProxy only touches boxRepository + eventEmitter +
 // organizationService; every other injected dependency is irrelevant.
@@ -208,6 +209,199 @@ describe('BoxService.ensureStartedForProxy', () => {
     await expect(service.ensureStartedForProxy('box-1', activeOrg)).rejects.toBe(databaseError)
     expect(eventEmitter.emit).not.toHaveBeenCalled()
   }) // Unexpected database errors must remain visible to callers.
+})
+
+// attachVolume/detachVolume touch boxRepository.updateWhere + volumeService;
+// every other injected dependency is irrelevant.
+function makeVolumeAttachService() {
+  const boxRepository = { updateWhere: jest.fn() } as any
+  const volumeService = { findOneByIdOrName: jest.fn() } as any
+  const noop = {} as any
+  const service = new BoxService(
+    boxRepository, // boxRepository
+    noop, // runnerRepository
+    noop, // runnerService
+    volumeService, // volumeService
+    noop, // configService
+    noop, // warmPoolService
+    noop, // eventEmitter
+    noop, // organizationService
+    noop, // runnerAdapterFactory
+    noop, // redisLockProvider
+    noop, // redis
+    noop, // regionService
+    noop, // boxLookupCacheInvalidationService
+    noop, // boxActivityService
+    noop, // jobRepository
+    noop, // jobService
+  )
+  return { service, boxRepository, volumeService }
+}
+
+const readyVolume = { id: 'vol-1', name: 'my-vol', organizationId: 'org-1', state: VolumeState.READY } as any
+
+describe('BoxService.attachVolume', () => {
+  it('adds the volume to a stopped box and persists it via updateWhere', async () => {
+    const { service, boxRepository, volumeService } = makeVolumeAttachService()
+    const box = { ...stoppedBox, name: 'my-box', organizationId: 'org-1', volumes: [] }
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(box as any)
+    volumeService.findOneByIdOrName.mockResolvedValue(readyVolume)
+    boxRepository.updateWhere.mockImplementation((_id: string, { updateData }: any) => ({
+      ...box,
+      ...updateData,
+    }))
+
+    const result = await service.attachVolume('my-box', 'org-1', 'my-vol', '/data')
+
+    expect(boxRepository.updateWhere).toHaveBeenCalledWith('box-1', {
+      updateData: { volumes: [{ volumeId: 'vol-1', mountPath: '/data', readOnly: false }] },
+      whereCondition: { pending: false, state: BoxState.STOPPED },
+    })
+    expect(result.volumes).toEqual([{ volumeId: 'vol-1', mountPath: '/data', readOnly: false }])
+  })
+
+  it('rejects a running box - no hot-plug', async () => {
+    const { service, boxRepository, volumeService } = makeVolumeAttachService()
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
+      ...stoppedBox,
+      state: BoxState.STARTED,
+      volumes: [],
+    } as any)
+
+    await expect(service.attachVolume('my-box', 'org-1', 'my-vol', '/data')).rejects.toThrow(
+      'Box must be stopped to attach a volume',
+    )
+    expect(volumeService.findOneByIdOrName).not.toHaveBeenCalled()
+    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+  })
+
+  it('rejects a volume that is not ready', async () => {
+    const { service, boxRepository, volumeService } = makeVolumeAttachService()
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({ ...stoppedBox, volumes: [] } as any)
+    volumeService.findOneByIdOrName.mockResolvedValue({ ...readyVolume, state: VolumeState.PENDING_CREATE })
+
+    await expect(service.attachVolume('my-box', 'org-1', 'my-vol', '/data')).rejects.toThrow(
+      "Volume 'my-vol' is not in a ready state",
+    )
+    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+  })
+
+  it('rejects re-attaching an already-attached volume', async () => {
+    const { service, boxRepository, volumeService } = makeVolumeAttachService()
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
+      ...stoppedBox,
+      volumes: [{ volumeId: 'vol-1', mountPath: '/other' }],
+    } as any)
+    volumeService.findOneByIdOrName.mockResolvedValue(readyVolume)
+
+    await expect(service.attachVolume('my-box', 'org-1', 'my-vol', '/data')).rejects.toThrow(
+      /already attached/,
+    )
+    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+  })
+
+  it('rejects a mount path already used by another volume on the box', async () => {
+    const { service, boxRepository, volumeService } = makeVolumeAttachService()
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
+      ...stoppedBox,
+      volumes: [{ volumeId: 'vol-other', mountPath: '/data' }],
+    } as any)
+    volumeService.findOneByIdOrName.mockResolvedValue(readyVolume)
+
+    await expect(service.attachVolume('my-box', 'org-1', 'my-vol', '/data')).rejects.toThrow(
+      /already in use/,
+    )
+    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+  })
+
+  it('rejects an invalid mount path', async () => {
+    const { service, volumeService } = makeVolumeAttachService()
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({ ...stoppedBox, volumes: [] } as any)
+    volumeService.findOneByIdOrName.mockResolvedValue(readyVolume)
+
+    await expect(service.attachVolume('my-box', 'org-1', 'my-vol', '/etc')).rejects.toThrow(/system directory/)
+  })
+})
+
+describe('BoxService.detachVolume', () => {
+  it('removes the volume from a stopped box and persists it via updateWhere', async () => {
+    const { service, boxRepository, volumeService } = makeVolumeAttachService()
+    const box = {
+      ...stoppedBox,
+      name: 'my-box',
+      volumes: [{ volumeId: 'vol-1', mountPath: '/data' }],
+    }
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(box as any)
+    volumeService.findOneByIdOrName.mockResolvedValue(readyVolume)
+    boxRepository.updateWhere.mockImplementation((_id: string, { updateData }: any) => ({
+      ...box,
+      ...updateData,
+    }))
+
+    const result = await service.detachVolume('my-box', 'org-1', 'my-vol')
+
+    expect(boxRepository.updateWhere).toHaveBeenCalledWith('box-1', {
+      updateData: { volumes: [] },
+      whereCondition: { pending: false, state: BoxState.STOPPED },
+    })
+    expect(result.volumes).toEqual([])
+  })
+
+  it('rejects a running box - no hot-unplug', async () => {
+    const { service, boxRepository } = makeVolumeAttachService()
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
+      ...stoppedBox,
+      state: BoxState.STARTED,
+      volumes: [{ volumeId: 'vol-1', mountPath: '/data' }],
+    } as any)
+
+    await expect(service.detachVolume('my-box', 'org-1', 'my-vol')).rejects.toThrow(
+      'Box must be stopped to detach a volume',
+    )
+    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+  })
+
+  it('throws NotFoundException when the volume is not attached', async () => {
+    const { service, boxRepository, volumeService } = makeVolumeAttachService()
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({ ...stoppedBox, volumes: [] } as any)
+    volumeService.findOneByIdOrName.mockResolvedValue(readyVolume)
+
+    await expect(service.detachVolume('my-box', 'org-1', 'my-vol')).rejects.toThrow(/not attached/)
+    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+  })
+
+  it('force treats an unattached volume as already detached (idempotent no-op)', async () => {
+    const { service, boxRepository, volumeService } = makeVolumeAttachService()
+    const box = { ...stoppedBox, volumes: [] }
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(box as any)
+    volumeService.findOneByIdOrName.mockResolvedValue(readyVolume)
+
+    const result = await service.detachVolume('my-box', 'org-1', 'my-vol', true)
+
+    expect(result).toBe(box)
+    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+  })
+
+  it('force treats a nonexistent volume as already detached (idempotent no-op)', async () => {
+    const { service, boxRepository, volumeService } = makeVolumeAttachService()
+    const box = { ...stoppedBox, volumes: [] }
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(box as any)
+    volumeService.findOneByIdOrName.mockRejectedValue(new NotFoundException("Volume 'my-vol' not found"))
+
+    const result = await service.detachVolume('my-box', 'org-1', 'my-vol', true)
+
+    expect(result).toBe(box)
+    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+  })
+
+  it('without force, propagates a nonexistent-volume NotFoundException', async () => {
+    const { service, boxRepository, volumeService } = makeVolumeAttachService()
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({ ...stoppedBox, volumes: [] } as any)
+    volumeService.findOneByIdOrName.mockRejectedValue(new NotFoundException("Volume 'my-vol' not found"))
+
+    await expect(service.detachVolume('my-box', 'org-1', 'my-vol', false)).rejects.toThrow(NotFoundException)
+    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+  })
 })
 
 function makeNetworkTunnelService() {

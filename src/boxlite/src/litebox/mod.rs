@@ -135,6 +135,27 @@ impl LiteBox {
         self.box_backend.stop().await
     }
 
+    /// Attach a managed volume to this box. No hot-plug: the box must be
+    /// stopped, and the mount takes effect on the box's next `start()`.
+    pub async fn attach_volume(
+        &self,
+        volume_id_or_name: &str,
+        guest_path: &str,
+        read_only: bool,
+    ) -> BoxliteResult<()> {
+        self.box_backend
+            .attach_volume(volume_id_or_name, guest_path, read_only)
+            .await
+    }
+
+    /// Detach a managed volume from this box. No hot-plug, mirroring
+    /// `attach_volume`. `force` treats an already-detached volume as success.
+    pub async fn detach_volume(&self, volume_id_or_name: &str, force: bool) -> BoxliteResult<()> {
+        self.box_backend
+            .detach_volume(volume_id_or_name, force)
+            .await
+    }
+
     /// Copy files/directories from host into the container rootfs.
     pub async fn copy_into(
         &self,

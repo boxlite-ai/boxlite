@@ -6,6 +6,28 @@
 
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 
+@ApiSchema({ name: 'AttachedVolume' })
+export class AttachedVolumeDto {
+  @ApiProperty({
+    description: 'Server-assigned managed volume identifier',
+    example: 'vol_01K2EXAMPLE',
+  })
+  volume_id: string
+
+  @ApiProperty({
+    description: 'Mount point inside the box',
+    example: '/data',
+  })
+  guest_path: string
+
+  @ApiProperty({
+    description: 'Whether the volume is mounted read-only',
+    example: false,
+    default: false,
+  })
+  read_only: boolean
+}
+
 @ApiSchema({ name: 'Box' })
 export class BoxResponseDto {
   @ApiProperty({
@@ -87,6 +109,12 @@ export class BoxResponseDto {
     example: true,
   })
   auto_resume: boolean
+
+  @ApiPropertyOptional({
+    description: 'Managed volumes currently mounted into this box',
+    type: [AttachedVolumeDto],
+  })
+  volumes?: AttachedVolumeDto[]
 }
 
 @ApiSchema({ name: 'ListBoxesResponse' })

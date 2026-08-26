@@ -181,6 +181,21 @@ export class VolumeService {
     })
   }
 
+  async findOneByIdOrName(volumeIdOrName: string, organizationId: string): Promise<Volume> {
+    const volume = await this.volumeRepository.findOne({
+      where: [
+        { id: volumeIdOrName, organizationId, state: Not(VolumeState.DELETED) },
+        { name: volumeIdOrName, organizationId, state: Not(VolumeState.DELETED) },
+      ],
+    })
+
+    if (!volume) {
+      throw new NotFoundException(`Volume '${volumeIdOrName}' not found`)
+    }
+
+    return volume
+  }
+
   async findByName(organizationId: string, name: string): Promise<Volume> {
     const volume = await this.volumeRepository.findOne({
       where: {

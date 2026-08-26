@@ -24,8 +24,8 @@ use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 use super::client::{ApiClient, WsStream};
 use super::exec::RestExecControl;
 use super::types::{
-    BoxMetricsResponse, BoxResponse, CloneBoxRequest, CreateSnapshotRequest, ExecRequest,
-    ExecResponse, ExecutionStatusResponse, ExportBoxRequest, ListSnapshotsResponse,
+    AttachVolumeRequest, BoxMetricsResponse, BoxResponse, CloneBoxRequest, CreateSnapshotRequest,
+    ExecRequest, ExecResponse, ExecutionStatusResponse, ExportBoxRequest, ListSnapshotsResponse,
     SnapshotResponse,
 };
 
@@ -266,6 +266,40 @@ impl BoxBackend for RestBox {
         let resp: BoxResponse = self.client.post_empty(&path).await?;
         self.validate_info(resp.to_box_info()?)?;
         Ok(())
+    }
+
+    async fn attach_volume(
+        &self,
+        volume_id_or_name: &str,
+        guest_path: &str,
+        read_only: bool,
+    ) -> BoxliteResult<()> {
+        let box_id = self.box_id_str();
+        let path = format!("/boxes/{}/volumes", box_id);
+        let req = AttachVolumeRequest {
+            volume: volume_id_or_name.to_string(),
+            guest_path: guest_path.to_string(),
+            read_only,
+        };
+        let resp: BoxResponse = self.client.post(&path, &req).await?;
+        self.validate_info(resp.to_box_info()?)?;
+        Ok(())
+    }
+
+    async fn detach_volume(&self, volume_id_or_name: &str, force: bool) -> BoxliteResult<()> {
+        let box_id = self.box_id_str();
+        let path = format!(
+            "/boxes/{}/volumes/{}",
+            box_id,
+            urlencoding::encode(volume_id_or_name)
+        );
+        if force {
+            self.client
+                .delete_with_query(&path, &[("force", "true")])
+                .await
+        } else {
+            self.client.delete(&path).await
+        }
     }
 
     async fn copy_into(

@@ -39,6 +39,8 @@ export enum AuditAction {
   INITIALIZE_WEBHOOKS = 'initialize_webhooks',
   UPDATE_BOX_DEFAULT_LIMITED_NETWORK_EGRESS = 'update_box_default_limited_network_egress',
   RECOVER = 'recover',
+  ATTACH_VOLUME = 'attach_volume',
+  DETACH_VOLUME = 'detach_volume',
   REGENERATE_PROXY_API_KEY = 'regenerate_proxy_api_key',
   // toolbox actions (must be prefixed with 'toolbox_')
   TOOLBOX_DELETE_FILE = 'toolbox_delete_file',

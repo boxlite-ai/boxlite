@@ -31,6 +31,13 @@ export class BoxVolume {
     example: 'users/alice',
   })
   subpath?: string
+
+  @ApiPropertyOptional({
+    description:
+      'Whether the volume is mounted read-only. Not yet enforced at the mount layer; REST callers can only set this to false today (see AttachVolumeDto.read_only).',
+    default: false,
+  })
+  readOnly?: boolean
 }
 
 @ApiSchema({ name: 'Box' })

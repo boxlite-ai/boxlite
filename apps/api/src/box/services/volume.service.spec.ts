@@ -40,6 +40,35 @@ describe('VolumeService delete', () => {
   })
 })
 
+describe('VolumeService.findOneByIdOrName', () => {
+  function createService(volume: Record<string, unknown> | null) {
+    const volumeRepository = {
+      findOne: jest.fn().mockResolvedValue(volume),
+    }
+    const service = new VolumeService(volumeRepository as never, {} as never, {} as never, {} as never, {} as never)
+    return { service, volumeRepository }
+  }
+
+  it('resolves by id or name in a single org-scoped, non-deleted query', async () => {
+    const volume = { id: 'volume-1', name: 'my-vol', state: VolumeState.READY }
+    const { service, volumeRepository } = createService(volume)
+
+    await expect(service.findOneByIdOrName('my-vol', 'org-1')).resolves.toBe(volume)
+    expect(volumeRepository.findOne).toHaveBeenCalledWith({
+      where: [
+        { id: 'my-vol', organizationId: 'org-1', state: expect.anything() },
+        { name: 'my-vol', organizationId: 'org-1', state: expect.anything() },
+      ],
+    })
+  })
+
+  it('throws NotFoundException when neither id nor name matches', async () => {
+    const { service } = createService(null)
+
+    await expect(service.findOneByIdOrName('missing', 'org-1')).rejects.toBeInstanceOf(NotFoundException)
+  })
+})
+
 describe('VolumeService waitForReady', () => {
   function createService(...volumes: Array<Record<string, unknown> | null>) {
     const volumeRepository = {

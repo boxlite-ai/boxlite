@@ -31,6 +31,7 @@ import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
 import { CreateBoxDto } from './dto/create-box.dto'
+import { AttachVolumeDto } from './dto/attach-volume.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.mapper'
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
@@ -204,6 +205,57 @@ export class BoxliteBoxController {
     const box = await this.boxService.stop(boxId, authContext.organizationId)
     const dto = await this.boxService.toBoxDto(box)
     return boxToBoxResponse(dto)
+  }
+
+  @Post(':boxId/volumes')
+  @ApiResponse({
+    status: 200,
+    description: 'Volume attached',
+    type: BoxResponseDto,
+  })
+  @Audit({
+    action: AuditAction.ATTACH_VOLUME,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    targetIdFromResult: (result: BoxResponseDto) => result?.box_id,
+  })
+  async attachVolume(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Body() dto: AttachVolumeDto,
+  ): Promise<BoxResponseDto> {
+    const box = await this.boxService.attachVolume(
+      boxId,
+      authContext.organizationId,
+      dto.volume,
+      dto.guest_path,
+      dto.read_only ?? false,
+    )
+    const boxDto = await this.boxService.toBoxDto(box)
+    return boxToBoxResponse(boxDto)
+  }
+
+  @Delete(':boxId/volumes/:volumeId')
+  @ApiResponse({
+    status: 200,
+    description: 'Volume detached',
+    type: BoxResponseDto,
+  })
+  @Audit({
+    action: AuditAction.DETACH_VOLUME,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    targetIdFromResult: (result: BoxResponseDto) => result?.box_id,
+  })
+  async detachVolume(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Param('volumeId') volumeId: string,
+    @Query('force') force?: string,
+  ): Promise<BoxResponseDto> {
+    const box = await this.boxService.detachVolume(boxId, authContext.organizationId, volumeId, force === 'true')
+    const boxDto = await this.boxService.toBoxDto(box)
+    return boxToBoxResponse(boxDto)
   }
 
   private isStartAlreadyInProgress(box: Box): boolean {

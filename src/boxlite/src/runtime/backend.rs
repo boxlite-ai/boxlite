@@ -106,6 +106,30 @@ pub(crate) trait BoxBackend: Send + Sync {
 
     async fn stop(&self) -> BoxliteResult<()>;
 
+    /// Attach a managed volume to this box. Cold-plug only: the box must be
+    /// stopped, and the mount takes effect on the box's next start. Only the
+    /// REST backend models managed volumes; local boxes have no such
+    /// concept, hence the default.
+    async fn attach_volume(
+        &self,
+        _volume_id_or_name: &str,
+        _guest_path: &str,
+        _read_only: bool,
+    ) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support managed volumes".into(),
+        ))
+    }
+
+    /// Detach a managed volume from this box. Cold-plug only, mirroring
+    /// `attach_volume`. `force` treats a volume that is not currently
+    /// attached as already detached instead of an error.
+    async fn detach_volume(&self, _volume_id_or_name: &str, _force: bool) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support managed volumes".into(),
+        ))
+    }
+
     async fn copy_into(
         &self,
         host_src: &Path,

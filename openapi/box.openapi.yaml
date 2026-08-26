@@ -435,6 +435,84 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  /{prefix}/boxes/{box_id}/volumes:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: attachVolume
+      summary: Attach a managed volume to a box
+      description: |
+        Mounts a volume into a box's guest filesystem. There is no
+        hot-plug: the box must be `stopped`, and the mount only takes
+        effect on the box's next start (attaching to a non-`stopped` box
+        returns 400). The volume must exist and be `ready` (see
+        GET /volumes/{volume_id}) and is resolved by ID or name, scoped to
+        the caller's organization. Re-attaching an already-attached volume,
+        or attaching to a `guest_path` already in use on the box, returns
+        409.
+      tags: [Boxes]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttachVolumeRequest"
+      responses:
+        "200":
+          description: Volume attached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/volumes/{volume_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - name: volume_id
+        in: path
+        required: true
+        description: Managed volume ID or name, scoped to the caller's organization
+        schema:
+          type: string
+          minLength: 1
+    delete:
+      operationId: detachVolume
+      summary: Detach a managed volume from a box
+      description: |
+        Unmounts a volume from a box's guest filesystem. There is no
+        hot-plug: the box must be `stopped` (detaching from a non-`stopped`
+        box returns 400). Does not delete the volume itself; see
+        DELETE /volumes/{volume_id} for that.
+      tags: [Boxes]
+      parameters:
+        - name: force
+          in: query
+          description: Treat a volume not currently attached as successfully detached
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Volume detached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
   # -------------------------------------------------------------------------
   # Snapshot / Portability
   # -------------------------------------------------------------------------
@@ -1664,6 +1742,47 @@ components:
           type: boolean
           default: true
           description: Whether the box automatically resumes when accessed after AutoStop
+        volumes:
+          type: array
+          description: Managed volumes currently mounted into this box.
+          items:
+            $ref: "#/components/schemas/AttachedVolume"
+
+    AttachedVolume:
+      type: object
+      description: A managed volume mount attached to a box.
+      required: [volume_id, guest_path]
+      properties:
+        volume_id:
+          type: string
+          description: Server-assigned managed volume identifier
+        guest_path:
+          type: string
+          description: Mount point inside the container
+        read_only:
+          type: boolean
+          default: false
+
+    AttachVolumeRequest:
+      type: object
+      description: Request body for POST /boxes/{box_id}/volumes.
+      required: [volume, guest_path]
+      properties:
+        volume:
+          type: string
+          description: Managed volume ID or name, scoped to the caller's organization
+          example: vol_01K2EXAMPLE
+        guest_path:
+          type: string
+          description: Mount point inside the box
+          example: /data
+        read_only:
+          type: boolean
+          default: false
+          description: |
+            Not yet enforced at the mount layer. Only `false` validates;
+            an explicit `true` returns 400 instead of silently mounting
+            read-write.
 
     BoxStatus:
       type: string

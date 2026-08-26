@@ -41,6 +41,8 @@ import { BoxDto, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
 import { VolumeService } from './volume.service'
+import { Volume } from '../entities/volume.entity'
+import { VolumeState } from '../enums/volume-state.enum'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import {
   BoxSortField,
@@ -886,6 +888,94 @@ export class BoxService {
 
     this.eventEmitter.emit(BoxEvents.DESTROYED, new BoxDestroyedEvent(updatedBox))
     return updatedBox
+  }
+
+  /**
+   * Attaches a managed volume to a stopped box. There is no hot-plug: the
+   * mount only takes effect the next time the box starts, when
+   * BoxStartAction reads the updated `box.volumes` and forwards it to the
+   * runner the same way it does on create.
+   */
+  async attachVolume(
+    boxIdOrName: string,
+    organizationId: string,
+    volumeIdOrName: string,
+    mountPath: string,
+    readOnly = false,
+  ): Promise<Box> {
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+
+    if (box.pending) {
+      throw new BoxError('Box state change in progress')
+    }
+    if (box.state !== BoxState.STOPPED) {
+      throw new BoxError('Box must be stopped to attach a volume')
+    }
+
+    const volume = await this.volumeService.findOneByIdOrName(volumeIdOrName, organizationId)
+    if (volume.state !== VolumeState.READY) {
+      throw new BadRequestError(`Volume '${volume.name}' is not in a ready state. Current state: ${volume.state}`)
+    }
+
+    if (box.volumes.some((v) => v.volumeId === volume.id)) {
+      throw new ConflictException(`Volume '${volume.name}' is already attached to box '${box.name}'`)
+    }
+    if (box.volumes.some((v) => v.mountPath === mountPath)) {
+      throw new ConflictException(`Mount path '${mountPath}' is already in use on box '${box.name}'`)
+    }
+
+    const volumes = this.resolveVolumes([...box.volumes, { volumeId: volume.id, mountPath, readOnly }])
+
+    return this.boxRepository.updateWhere(box.id, {
+      updateData: { volumes },
+      whereCondition: { pending: box.pending, state: box.state },
+    })
+  }
+
+  /**
+   * Detaches a volume from a stopped box. `force` makes detaching a volume
+   * that is not currently attached a no-op instead of a 404, mirroring
+   * VolumeService.delete's force semantics.
+   */
+  async detachVolume(
+    boxIdOrName: string,
+    organizationId: string,
+    volumeIdOrName: string,
+    force = false,
+  ): Promise<Box> {
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+
+    if (box.pending) {
+      throw new BoxError('Box state change in progress')
+    }
+    if (box.state !== BoxState.STOPPED) {
+      throw new BoxError('Box must be stopped to detach a volume')
+    }
+
+    let volume: Volume
+    try {
+      volume = await this.volumeService.findOneByIdOrName(volumeIdOrName, organizationId)
+    } catch (error) {
+      if (force && error instanceof NotFoundException) {
+        return box
+      }
+      throw error
+    }
+
+    const isAttached = box.volumes.some((v) => v.volumeId === volume.id)
+    if (!isAttached) {
+      if (force) {
+        return box
+      }
+      throw new NotFoundException(`Volume '${volume.name}' is not attached to box '${box.name}'`)
+    }
+
+    const volumes = box.volumes.filter((v) => v.volumeId !== volume.id)
+
+    return this.boxRepository.updateWhere(box.id, {
+      updateData: { volumes },
+      whereCondition: { pending: box.pending, state: box.state },
+    })
   }
 
   async start(boxIdOrName: string, organization: Organization): Promise<Box> {

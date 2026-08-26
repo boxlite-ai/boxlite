@@ -419,6 +419,16 @@ pub(crate) struct ListVolumesResponse {
     pub volumes: Vec<VolumeResponse>,
 }
 
+/// Body for `POST /v1/boxes/{box_id}/volumes`. `volume` accepts either a
+/// volume id or name — the server resolves it, scoped to the caller's org.
+#[derive(Debug, Serialize)]
+pub(crate) struct AttachVolumeRequest {
+    pub volume: String,
+    pub guest_path: String,
+    /// Not yet enforced at the mount layer; the server rejects `true`.
+    pub read_only: bool,
+}
+
 // ============================================================================
 // Snapshot / Clone / Export
 // ============================================================================

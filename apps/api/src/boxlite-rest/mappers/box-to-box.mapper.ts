@@ -12,7 +12,7 @@ import {
   DEFAULT_AUTO_STOP_SECONDS,
   DEFAULT_AUTO_RESUME,
 } from '../../box/constants/box-lifecycle.constants'
-import { BoxResponseDto } from '../dto/box-response.dto'
+import { AttachedVolumeDto, BoxResponseDto } from '../dto/box-response.dto'
 import { CreateBoxDto as RestCreateBoxDto } from '../dto/create-box.dto'
 import { CreateBoxDto } from '../../box/dto/create-box.dto'
 
@@ -30,6 +30,15 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     auto_stop: box.autoStop ?? DEFAULT_AUTO_STOP_SECONDS,
     auto_delete: box.autoDelete ?? AUTO_DELETE_DISABLED,
     auto_resume: box.autoResume ?? DEFAULT_AUTO_RESUME,
+    volumes: box.volumes?.length ? box.volumes.map(boxVolumeToAttachedVolume) : undefined,
+  }
+}
+
+function boxVolumeToAttachedVolume(volume: BoxDto['volumes'][number]): AttachedVolumeDto {
+  return {
+    volume_id: volume.volumeId,
+    guest_path: volume.mountPath,
+    read_only: volume.readOnly ?? false,
   }
 }
 
