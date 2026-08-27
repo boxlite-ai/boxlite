@@ -19,11 +19,20 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 		c.logger.Warn("failed to destroy during recover", "error", err)
 	}
 
-	createDto := dto.CreateBoxDTO{
+	_, _, err := c.Create(ctx, recoverCreateDto(boxId, recoverDto))
+	return err
+}
+
+// recoverCreateDto rebuilds the create request RecoverBox hands to Create by
+// hand. Extracted as a pure function so the copy is testable without a live
+// runtime: a field not copied here is silently lost on a recovered box.
+func recoverCreateDto(boxId string, recoverDto dto.RecoverBoxDTO) dto.CreateBoxDTO {
+	return dto.CreateBoxDTO{
 		Id:               boxId,
 		Image:            "alpine:latest",
 		OsUser:           recoverDto.OsUser,
 		CpuQuota:         recoverDto.CpuQuota,
+		GpuQuota:         recoverDto.GpuQuota,
 		MemoryQuota:      recoverDto.MemoryQuota,
 		StorageQuota:     recoverDto.StorageQuota,
 		Env:              recoverDto.Env,
@@ -33,9 +42,6 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 		NetworkAllowList: recoverDto.NetworkAllowList,
 		FromVolumeId:     recoverDto.FromVolumeId,
 	}
-
-	_, _, err := c.Create(ctx, createDto)
-	return err
 }
 
 // UpdateNetworkSettings updates the network allowlist/blocklist for a box.
