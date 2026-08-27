@@ -6,20 +6,20 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import {
   Auth0EmailProviderConfigurator,
   buildAuth0CodeEmailTemplates,
   parseAuth0EmailProviderOptions,
+  readAuth0CodeEmailTemplates,
 } from './auth0-email-provider.js'
 import type { Auth0ManagementClient } from './auth0-login-policy.js'
 
 type JsonObject = Record<string, any>
 
 function sourceTemplates(): JsonObject[] {
-  return ['verify-email-by-code.json', 'reset-email-by-code.json'].map((name) =>
-    JSON.parse(readFileSync(new URL(`./auth0/email-templates/${name}`, import.meta.url), 'utf8')),
-  )
+  return readAuth0CodeEmailTemplates(fileURLToPath(new URL('./auth0/email-templates.json', import.meta.url)))
 }
 
 function options(apply = false) {
@@ -81,8 +81,18 @@ test('checked-in Auth0 code templates render a code and receive the selected sen
     true,
   )
   assert.equal(
-    templates.every((template) => template.body.includes('{{ code }}')),
+    templates.every((template) => !('render_html' in template)),
     true,
+  )
+  // The build above is the positive check: it throws unless every checked-in
+  // body renders the code variable, whichever Liquid filters it uses.
+  assert.throws(
+    () =>
+      buildAuth0CodeEmailTemplates(
+        'no-reply@boxlite.example',
+        sourceTemplates().map((template) => ({ ...template, body: '<p>Sign in to BoxLite.</p>' })),
+      ),
+    /must render the code variable/,
   )
 })
 

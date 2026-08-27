@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { customApiArgs, enableRpLogoutDiscoveryArgs, spaApplicationArgs } from './auth0.js'
+import { customApiArgs, spaApplicationArgs, tenantSettingsArgs } from './auth0.js'
 
 function valueAfter(args: any, flag: any) {
   const index = args.indexOf(flag)
@@ -31,10 +31,11 @@ test('customApiArgs derives the identifier that becomes OIDC_AUDIENCE', () => {
   )
 })
 
-test('enableRpLogoutDiscoveryArgs flips the tenant logout-discovery setting', () => {
-  const args = enableRpLogoutDiscoveryArgs()
+test('tenantSettingsArgs sets logout discovery and keeps public signup non-enumerable', () => {
+  const args = tenantSettingsArgs()
   assert.deepEqual(args.slice(0, 3), ['api', 'patch', 'tenants/settings'])
   assert.deepEqual(JSON.parse(valueAfter(args, '--data')), {
     oidc_logout: { rp_logout_end_session_endpoint_discovery: true },
+    flags: { enable_public_signup_user_exists_error: false },
   })
 })
