@@ -74,7 +74,6 @@ import {
   resolveAwsRegion,
   resolveMailDomain,
   resolveSstStage,
-  sesSmtpEndpoint,
 } from '../deployment/environment.js'
 import {
   GITHUB_OIDC_PROVIDER_URL,
@@ -93,6 +92,7 @@ import {
   withStageConfigFile,
 } from './environment.js'
 import { validateDotenvSyntax } from '../deployment/key-policy.js'
+import { promptSecret, requireNonEmptySecret } from './secret-prompt.js'
 import {
   customApiArgs,
   enableRpLogoutDiscoveryArgs,
@@ -227,71 +227,6 @@ function currentAwsIdentity(awsCliPath: any, region: any) {
     throw new Error('aws sts get-caller-identity returned an unexpected response')
   }
   return identity
-}
-
-// A blank answer at the prompt, or an env var set to '', would otherwise be
-// stored as a real secret and only surface as an auth failure at deploy time.
-function requireNonEmptySecret(label: any, value: any) {
-  const trimmed = value?.trim()
-  if (!trimmed) throw new Error(`${label} cannot be empty`)
-  return trimmed
-}
-
-// No native masked-input in node:readline — a minimal raw-mode reader avoids
-// pulling in a prompt dependency for two secrets. TTY-gated: a non-interactive
-// caller (CI, a script) must supply the value through the matching env var
-// instead of hanging on a prompt that can never be answered.
-function promptSecret(label: any) {
-  if (!process.stdin.isTTY) {
-    throw new Error(`${label} has no value and stdin is not a TTY to prompt for one; set the matching env var instead`)
-  }
-  process.stdout.write(label)
-  return new Promise((resolvePrompt, reject) => {
-    const { stdin } = process
-    stdin.resume()
-    stdin.setRawMode(true)
-    stdin.setEncoding('utf8')
-    let value = ''
-    const cleanup = () => {
-      stdin.setRawMode(false)
-      stdin.pause()
-      stdin.removeListener('data', onData)
-    }
-    // Raw mode delivers a chunk, not a keystroke: a pasted token arrives as one
-    // string, usually with its terminator attached. Comparing the chunk itself
-    // sends the whole paste to `default`, so the secret keeps the trailing
-    // control character and the prompt never resolves. Step through characters,
-    // and stop at the first terminator so anything typed after it is ignored.
-    let settled = false
-    const onData = (chunk: any) => {
-      for (const char of chunk) {
-        if (settled) return
-        switch (char) {
-          case '\n':
-          case '\r':
-          case '\u0004':
-            settled = true
-            cleanup()
-            process.stdout.write('\n')
-            resolvePrompt(value)
-            break
-          case '\u0003':
-            settled = true
-            cleanup()
-            process.stdout.write('\n')
-            reject(new Error('interrupted'))
-            break
-          case '\u007f':
-          case '\b':
-            value = value.slice(0, -1)
-            break
-          default:
-            value += char
-        }
-      }
-    }
-    stdin.on('data', onData)
-  })
 }
 
 function ssmParameterExists(awsCliPath: any, region: any, name: any) {
@@ -693,10 +628,10 @@ function requireAuth0Session() {
 }
 
 /*
- * Creates the application and API identities that are safe to bootstrap before
- * the tenant's production email provider and code templates are configured.
- * The login-policy configurator owns the database connection, Form/Flows,
- * Action, and binding as one previewable and rollback-journaled reconciliation.
+ * Creates the application and API identities. The email-provider configurator
+ * owns SES and the code templates; the login-policy configurator owns the
+ * database connection, Form/Flows, Action, and binding. Both are previewable
+ * and write rollback receipts.
  *
  * Not idempotent the way the AWS/GitHub steps are: Auth0 has no upsert for
  * applications or APIs, so rerunning creates duplicates. Gated behind an
@@ -722,8 +657,9 @@ function provisionAuth0({ stackDomain }: any) {
     throw new Error('auth0 tenants list did not return exactly one active tenant')
   }
   console.log(
-    `[${SCRIPT_NAME}] preview the email-first login policy from apps/infra:\n` +
-      `  npm run auth0:configure-login -- --tenant ${activeTenants[0].name} --client-id ${clientId} --connection boxlite-users`,
+    `[${SCRIPT_NAME}] preview the email provider and email-first login policy from apps/infra:\n` +
+      `  npm run auth0:configure-email -- --tenant ${activeTenants[0].name} --from <verified-sender> --region <ses-region>\n` +
+      `  npm run auth0:configure-login -- --tenant ${activeTenants[0].name} --client-id ${clientId} --connection <database-connection-name>`,
   )
 
   // OIDC_CLIENT_ID is an SST secret, not a .env key — seeded below by
@@ -832,12 +768,12 @@ function provisionSesSmtpUser({ awsCliPath, region, stage, accountId, senderDoma
     console.log(`[${SCRIPT_NAME}] revoked previous access key ${key.AccessKeyId}`)
   }
 
-  // Auth0's provider is per-tenant state this script does not own, and the login-policy
-  // configurator is the tool that does — it refuses to apply while the built-in test
-  // provider is in use, so this is a pointer rather than a silent prerequisite.
+  // Auth0's provider is per-tenant state this script does not own. Auth0's SES
+  // provider requires the raw AWS secret rather than this derived SMTP password,
+  // so its reconciler deliberately uses a separate send-only access key.
   console.log(
-    `[${SCRIPT_NAME}] point Auth0 at the same credential (Branding -> Email Provider -> SMTP):\n` +
-      `  host ${sesSmtpEndpoint(region)}, port 465, the SMTP_USER / SMTP_PASSWORD just stored.`,
+    `[${SCRIPT_NAME}] configure Auth0 email delivery with a separate SES API credential:\n` +
+      `  npm run auth0:configure-email -- --tenant <tenant.auth0.com> --from <verified-sender> --region ${region}`,
   )
 }
 
