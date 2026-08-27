@@ -11,7 +11,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import axios from 'axios'
 import Redis from 'ioredis'
 import { In, Repository } from 'typeorm'
-import { RedisLockProvider } from '../../box/common/redis-lock.provider'
+import { RedisLockProvider, withRedisLockLease } from '../../box/common/redis-lock.provider'
 import { Runner } from '../../box/entities/runner.entity'
 import { RunnerState } from '../../box/enums/runner-state.enum'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
@@ -27,9 +27,9 @@ import { AlertEvent, IncidentIoClient } from './incident-io.client'
 const STATUS_SYNC_LOCK_KEY = 'status-sync'
 
 /**
- * Safety margin the lock keeps over the slowest possible tick (one probe
- * timeout plus one incident.io timeout), so the key cannot expire while a
- * request is still in flight and let a second replica interleave sends.
+ * Safety margin the initial lease keeps over one probe plus one send; the
+ * lease then renews itself at half-TTL for as long as the tick runs, so a
+ * multi-send tick cannot outlive it and hand the lock to a second replica.
  */
 const LOCK_MARGIN_MS = 30_000
 
@@ -37,9 +37,11 @@ const LOCK_MARGIN_MS = 30_000
 const FIRE_AFTER_TICKS = 3
 /** Consecutive good ticks before a public recovery — absorbs one-tick blips. */
 const RESOLVE_AFTER_TICKS = 2
-/** Damping state survives deploys but self-clears when a component vanishes. */
+/** Damping state survives deploys but self-clears if the sweep ever misses. */
 const STATE_TTL_SECONDS = 86_400
 const STATE_KEY_PREFIX = 'status-sync:component:'
+/** Set of every component id with damping state — what the retirement sweep diffs against. */
+const STATE_SET_KEY = 'status-sync:components'
 
 type AlertStatus = 'firing' | 'resolved'
 
@@ -66,11 +68,11 @@ interface ComponentSendState {
  *
  * Observed components: `api` (DB + Redis reachability), `boxes-<region>`
  * (runner fleet per SHARED region), `box-ingress-<region>` (each SHARED
- * region's proxy /health over its public URL). Deliberate v1 blind spots: a
- * region with no eligible runners emits nothing; draining runners are the
- * operator's intent and excluded; per-runner serviceHealth granularity is
- * unused; dedicated/custom regions are org-scoped and never belong on the
- * public page.
+ * region's proxy /health over its public URL). A component that vanishes
+ * (region deleted, proxyUrl cleared, fleet emptied) is retired: its firing
+ * alert is resolved before its state is dropped. Deliberate v1 blind spots:
+ * per-runner serviceHealth granularity is unused, and dedicated/custom
+ * regions are org-scoped so they never reach the public page.
  */
 @Injectable()
 export class StatusSyncService implements TrackableJobExecutions, OnApplicationShutdown {
@@ -110,37 +112,53 @@ export class StatusSyncService implements TrackableJobExecutions, OnApplicationS
         LOCK_MARGIN_MS) /
         1000,
     )
-    if (!(await this.redisLockProvider.lock(STATUS_SYNC_LOCK_KEY, lockTtlSeconds))) {
+    const lease = await this.redisLockProvider.acquireLease(STATUS_SYNC_LOCK_KEY, lockTtlSeconds)
+    if (!lease) {
       return
     }
 
-    try {
-      // Evaluators are independent on purpose: with the database down, the
-      // boxes/ingress evaluators reject while the api evaluator still reports
-      // exactly that failure.
-      const evaluations = await Promise.allSettled([
-        this.evaluateApi(),
-        this.evaluateBoxes(),
-        this.evaluateBoxIngress(),
-      ])
-      for (const evaluation of evaluations) {
-        if (evaluation.status === 'rejected') {
-          // A crashed evaluator is a defect in the probe, not a component
-          // outage: skip its components this tick rather than declare one.
-          this.logger.error(`Status evaluator failed: ${this.describe(evaluation.reason)}`)
-          continue
+    await withRedisLockLease(
+      lease,
+      async (signal) => {
+        // Evaluators are independent on purpose: with the database down, the
+        // boxes/ingress evaluators reject while the api evaluator still
+        // reports exactly that failure.
+        const evaluations = await Promise.allSettled([
+          this.evaluateApi(),
+          this.evaluateBoxes(),
+          this.evaluateBoxIngress(),
+        ])
+
+        const observedIds = new Set<string>()
+        let everyEvaluatorCompleted = true
+        for (const evaluation of evaluations) {
+          if (evaluation.status === 'rejected') {
+            // A crashed evaluator is a defect in the probe, not a component
+            // outage: skip its components this tick rather than declare one.
+            this.logger.error(`Status evaluator failed: ${this.describe(evaluation.reason)}`)
+            everyEvaluatorCompleted = false
+            continue
+          }
+          for (const observation of evaluation.value) {
+            signal.throwIfAborted()
+            observedIds.add(observation.id)
+            await this.reconcile(observation)
+          }
         }
-        for (const observation of evaluation.value) {
-          await this.reconcile(observation)
+
+        // Only a fully observed tick can prove absence: with any evaluator
+        // down, "missing" is indistinguishable from "unobserved".
+        if (everyEvaluatorCompleted) {
+          await this.retireVanished(observedIds, signal)
         }
-      }
-      // Pinged only after a completed evaluation pass: a wedged evaluator must
-      // look dead to incident.io, not healthy. Rejected sends above do not
-      // block it — incident.io refusing an event is not reporter death.
-      await this.pingHeartbeat()
-    } finally {
-      await this.redisLockProvider.unlock(STATUS_SYNC_LOCK_KEY)
-    }
+
+        // Pinged only after a completed evaluation pass: a wedged evaluator
+        // must look dead to incident.io, not healthy. Rejected sends above do
+        // not block it — incident.io refusing an event is not reporter death.
+        await this.pingHeartbeat()
+      },
+      (releaseError) => this.logger.error(`Suppressed lease release error: ${this.describe(releaseError)}`),
+    )
   }
 
   private async evaluateApi(): Promise<ComponentObservation[]> {
@@ -154,9 +172,7 @@ export class StatusSyncService implements TrackableJobExecutions, OnApplicationS
     }
     return [
       {
-        id: 'api',
-        component: 'api',
-        title: 'API degraded',
+        ...this.observationShape('api'),
         healthy: failedDependencies.length === 0,
         detail:
           failedDependencies.length === 0
@@ -209,10 +225,7 @@ export class StatusSyncService implements TrackableJobExecutions, OnApplicationS
     }
 
     return [...byRegion.entries()].map(([region, counts]) => ({
-      id: `boxes-${region}`,
-      component: 'boxes' as const,
-      region,
-      title: `Boxes degraded (${region})`,
+      ...this.observationShape(`boxes-${region}`),
       healthy: counts.unresponsive === 0,
       detail:
         counts.unresponsive === 0
@@ -229,12 +242,7 @@ export class StatusSyncService implements TrackableJobExecutions, OnApplicationS
   /** Never throws: an observed probe failure is data, not an evaluator crash. */
   private async probeIngress(region: Region): Promise<ComponentObservation> {
     const url = `${region.proxyUrl?.replace(/\/+$/, '')}/health`
-    const observation = {
-      id: `box-ingress-${region.id}`,
-      component: 'box-ingress' as const,
-      region: region.id,
-      title: `Box Ingress degraded (${region.id})`,
-    }
+    const observation = this.observationShape(`box-ingress-${region.id}`)
     try {
       await axios.get(url, { timeout: this.configService.get('incidentIo.probeTimeoutMs') })
       return { ...observation, healthy: true, detail: `GET ${url} ok` }
@@ -248,43 +256,94 @@ export class StatusSyncService implements TrackableJobExecutions, OnApplicationS
     return this.regionRepository.find({ where: { regionType: RegionType.SHARED } })
   }
 
+  /**
+   * Rebuilds an observation's identity (component, region, title, dedup key
+   * tail) from its stable id, so the retirement sweep can resolve alerts for
+   * components the evaluators no longer return.
+   */
+  private observationShape(id: string): Omit<ComponentObservation, 'healthy' | 'detail'> {
+    if (id.startsWith('boxes-')) {
+      const region = id.slice('boxes-'.length)
+      return { id, component: 'boxes', region, title: `Boxes degraded (${region})` }
+    }
+    if (id.startsWith('box-ingress-')) {
+      const region = id.slice('box-ingress-'.length)
+      return { id, component: 'box-ingress', region, title: `Box Ingress degraded (${region})` }
+    }
+    return { id, component: 'api', title: 'API degraded' }
+  }
+
   private async reconcile(observation: ComponentObservation): Promise<void> {
     const observed: AlertStatus = observation.healthy ? 'resolved' : 'firing'
-    const stateKey = `${STATE_KEY_PREFIX}${observation.id}`
-    const state = await this.readState(stateKey)
+    const state = await this.readState(observation.id)
 
-    // Unknown last-sent state (first tick, or Redis lost it): send what we see
-    // now, undamped — a recovery after a Redis flush must still emit resolved
-    // or the incident.io alert fires forever. Duplicates are no-ops thanks to
-    // the dedup key.
+    // Unknown last-sent state (first tick, or Redis lost it) is asymmetric on
+    // purpose: an observed recovery is sent undamped, because after a Redis
+    // flush mid-incident the resolved event must still reach incident.io or
+    // its alert fires forever (duplicates are no-ops thanks to the dedup
+    // key). An observed failure only seeds the streak — a single bad probe on
+    // a component's first tick must not bypass FIRE_AFTER_TICKS.
     if (state === null) {
-      if (await this.send(observation, observed)) {
-        await this.writeState(stateKey, { sent: observed, streak: 0 })
+      if (observed === 'resolved') {
+        if (await this.send(observation, observed)) {
+          await this.writeState(observation.id, { sent: observed, streak: 0 })
+        }
+      } else {
+        await this.writeState(observation.id, { sent: 'resolved', streak: 1 })
       }
       return
     }
 
     if (state.sent === observed) {
-      await this.writeState(stateKey, { sent: state.sent, streak: 0 })
+      await this.writeState(observation.id, { sent: state.sent, streak: 0 })
       return
     }
 
     const streak = Math.min(state.streak + 1, FIRE_AFTER_TICKS)
     const threshold = observed === 'firing' ? FIRE_AFTER_TICKS : RESOLVE_AFTER_TICKS
     if (streak < threshold) {
-      await this.writeState(stateKey, { sent: state.sent, streak })
+      await this.writeState(observation.id, { sent: state.sent, streak })
       return
     }
 
     if (await this.send(observation, observed)) {
-      await this.writeState(stateKey, { sent: observed, streak: 0 })
+      await this.writeState(observation.id, { sent: observed, streak: 0 })
     } else {
       // Keep the streak at threshold so the next tick retries the send.
-      await this.writeState(stateKey, { sent: state.sent, streak })
+      await this.writeState(observation.id, { sent: state.sent, streak })
     }
   }
 
-  private async send(observation: ComponentObservation, status: AlertStatus): Promise<boolean> {
+  /**
+   * Resolves alerts for components the evaluators stopped returning — a
+   * deleted region, a cleared proxyUrl, an emptied fleet. Without this, the
+   * incident.io alert would stay firing forever: the state TTL only forgets
+   * our local damping, never their alert.
+   */
+  private async retireVanished(observedIds: Set<string>, signal: AbortSignal): Promise<void> {
+    const knownIds = await this.redis.smembers(STATE_SET_KEY)
+    for (const id of knownIds) {
+      if (observedIds.has(id)) {
+        continue
+      }
+      signal.throwIfAborted()
+      const state = await this.readState(id)
+      if (state?.sent === 'firing') {
+        const retired = {
+          ...this.observationShape(id),
+          detail: 'Component no longer observed (region removed or fleet emptied); retiring.',
+        }
+        if (!(await this.send(retired, 'resolved'))) {
+          continue // keep the state; next tick retries the retirement
+        }
+      }
+      await this.redis.del(`${STATE_KEY_PREFIX}${id}`)
+      await this.redis.srem(STATE_SET_KEY, id)
+      this.logger.log(`Retired status component ${id}`)
+    }
+  }
+
+  private async send(observation: Omit<ComponentObservation, 'healthy'>, status: AlertStatus): Promise<boolean> {
     const dedupPrefix = this.configService.get('incidentIo.dedupPrefix')
     const event: AlertEvent = {
       title: observation.title,
@@ -308,8 +367,8 @@ export class StatusSyncService implements TrackableJobExecutions, OnApplicationS
     }
   }
 
-  private async readState(key: string): Promise<ComponentSendState | null> {
-    const raw = await this.redis.get(key)
+  private async readState(id: string): Promise<ComponentSendState | null> {
+    const raw = await this.redis.get(`${STATE_KEY_PREFIX}${id}`)
     if (!raw) {
       return null
     }
@@ -324,8 +383,9 @@ export class StatusSyncService implements TrackableJobExecutions, OnApplicationS
     return null
   }
 
-  private writeState(key: string, state: ComponentSendState): Promise<unknown> {
-    return this.redis.set(key, JSON.stringify(state), 'EX', STATE_TTL_SECONDS)
+  private async writeState(id: string, state: ComponentSendState): Promise<void> {
+    await this.redis.set(`${STATE_KEY_PREFIX}${id}`, JSON.stringify(state), 'EX', STATE_TTL_SECONDS)
+    await this.redis.sadd(STATE_SET_KEY, id)
   }
 
   private async pingHeartbeat(): Promise<void> {

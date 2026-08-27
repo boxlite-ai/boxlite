@@ -58,8 +58,16 @@ Do these in order; the stage stays dark until the final step.
 5. **Create the heartbeat** (On-call → Heartbeats): **interval 2 minutes** —
    four ticks, so one slow/skipped tick or a rolling deploy does not false-fire,
    while a dead reporter still alarms in ~2–3 minutes. Note its id, then
-   curl-verify the ping path before arming:
-   `curl -X POST https://api.incident.io/v2/heartbeat/<id>/ping -H "Authorization: Bearer <key>"`
+   curl-verify the ping path before arming — read the key without echo and
+   feed the header through curl's config stream so it never reaches shell
+   history or process arguments:
+
+   ```sh
+   read -rs INCIDENT_IO_KEY   # paste the key; no echo
+   printf 'header = "Authorization: Bearer %s"\n' "$INCIDENT_IO_KEY" \
+     | curl -X POST https://api.incident.io/v2/heartbeat/<id>/ping -K -
+   ```
+
    (a wrong path announces itself as an immediate heartbeat alarm).
 6. **Alert route + workflow**: route the source's alerts to auto-create an
    incident per deduplication key (grouping window ≥ 5 min; auto-resolve the
@@ -95,9 +103,9 @@ Do these in order; the stage stays dark until the final step.
   no-ops that establish the dedup keys.
 - **Dev stages stay dark**: never set `INCIDENT_IO_TOKEN` there. The public
   page describes production only.
-- **Removing a region** while its alert is firing leaves that alert firing
-  (the sync's Redis state just expires after 24h): resolve the incident
-  manually and remove the page components.
+- **Removing a region** (or clearing its proxyUrl, or emptying its fleet)
+  auto-resolves its alert: the sync retires components its evaluators stop
+  returning. Still remove the retired page components in incident.io.
 - **Token rotation**: set the new secret and redeploy; until then failed sends
   retry twice a minute per component and are visible in the API logs.
 - If external uptime probing is ever added, `GET /api/health` is the only

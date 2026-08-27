@@ -196,7 +196,13 @@ export function incidentIoConfig(env: NodeJS.ProcessEnv = process.env) {
     throw new Error(`STATUS_SYNC_DEDUP_PREFIX must be a lowercase slug, got "${dedupPrefix}"`)
   }
 
-  return { ...settings, apiUrl: requiredHttpUrl(rawApiUrl, 'INCIDENT_IO_API_URL') }
+  const apiUrl = requiredHttpUrl(rawApiUrl, 'INCIDENT_IO_API_URL')
+  // The client presents INCIDENT_IO_TOKEN as a bearer header on this URL;
+  // plaintext transport would hand the credential to the network (CWE-319).
+  if (new URL(apiUrl).protocol !== 'https:') {
+    throw new Error('INCIDENT_IO_API_URL must use https')
+  }
+  return { ...settings, apiUrl }
 }
 
 // The object-store key namespace migration archives land in by default, inside

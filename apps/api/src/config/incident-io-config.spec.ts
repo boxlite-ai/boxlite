@@ -89,6 +89,8 @@ describe('incidentIoConfig', () => {
     ['a bare hostname', 'api.incident.test.invalid'],
     ['a non-http scheme', 'ftp://api.incident.io'],
     ['a query string', 'https://api.incident.io?x=1'],
+    // The token rides this URL as a bearer header; http would leak it.
+    ['plain http', 'http://api.incident.io'],
   ])('rejects %s as the API URL when enabled', (_case, value) => {
     expect(() => incidentIoConfig(enabled({ INCIDENT_IO_API_URL: value }))).toThrow(/INCIDENT_IO_API_URL/)
   })
