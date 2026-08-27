@@ -775,12 +775,12 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
     // uniformly. Operators who want a different policy run the
     // server with a different default; clients cannot relax it.
 
-    if let Some(volumes) = &req.volumes {
-        if !volumes.is_empty() {
-            return Err(boxlite::BoxliteError::InvalidArgument(
-                "managed volumes are not supported by boxlite serve".into(),
-            ));
-        }
+    if let Some(volumes) = &req.volumes
+        && !volumes.is_empty()
+    {
+        return Err(boxlite::BoxliteError::InvalidArgument(
+            "managed volumes are not supported by boxlite serve".into(),
+        ));
     }
 
     // Map secrets onto the core `Secret` type and apply the placeholder
@@ -1422,7 +1422,10 @@ mod tests {
         .expect("body with explicit placeholder must deserialize");
 
         let opts = build_box_options(&req).expect("build");
-        assert_eq!(opts.secrets[0].placeholder, "<MY_TOKEN>", "caller placeholder wins");
+        assert_eq!(
+            opts.secrets[0].placeholder, "<MY_TOKEN>",
+            "caller placeholder wins"
+        );
     }
 
     #[test]
