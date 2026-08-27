@@ -135,6 +135,12 @@ Existing unverified database users receive a hosted Auth0 verification Form on
 their next browser login. Social and enterprise connections, other Auth0
 applications, and non-`auth0` subjects are outside this policy.
 
+It also turns the tenant flag `enable_public_signup_user_exists_error` on, so a
+signup with an address that already has an account is told the account exists
+instead of Auth0's generic "Something went wrong, please try again later". The
+trade-off is that the public signup API then confirms which addresses have an
+account.
+
 First configure an external Auth0 email provider and enable the
 `verify_email_by_code` and `reset_email_by_code` templates. Auth0's built-in
 provider is testing-only. The stack's own SES identity serves this: run

@@ -16,6 +16,7 @@ import {
   buildDatabaseConnectionUpdate,
   buildLoginPolicyBindings,
   buildPromptUpdate,
+  buildTenantSettingsUpdate,
   hydrateEmailVerificationTemplate,
   hydrateLoginPolicyAction,
   parseAuth0LoginPolicyOptions,
@@ -122,13 +123,15 @@ test('assertDatabaseConnectionCompatible rejects configurations that cannot safe
   )
 })
 
-test('Auth0 login policy login requests connection-options scopes', () => {
+test('Auth0 login policy login requests connection-options and tenant-settings scopes', () => {
   const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
   const loginCommand = packageJson.scripts['auth0:login-policy-login']
 
   assert.match(loginCommand, /read:connections_options/)
   assert.match(loginCommand, /update:connections_options/)
   assert.match(loginCommand, /read:client_credentials/)
+  assert.match(loginCommand, /read:tenant_settings/)
+  assert.match(loginCommand, /update:tenant_settings/)
 })
 
 test('rollback snapshots reject credential fields and credential-like string values before writing', () => {
@@ -163,6 +166,19 @@ test('buildPromptUpdate enables New Universal Login Identifier First without rep
     universal_login_experience: 'new',
     identifier_first: true,
   })
+})
+
+test('buildTenantSettingsUpdate reveals the duplicate-signup error without replacing other flags', () => {
+  const settings = {
+    friendly_name: 'BoxLite',
+    flags: { enable_client_connections: true, enable_public_signup_user_exists_error: false },
+  }
+
+  assert.deepEqual(buildTenantSettingsUpdate(settings), {
+    flags: { enable_client_connections: true, enable_public_signup_user_exists_error: true },
+  })
+  assert.equal(settings.flags.enable_public_signup_user_exists_error, false)
+  assert.deepEqual(buildTenantSettingsUpdate({}), { flags: { enable_public_signup_user_exists_error: true } })
 })
 
 test('buildLoginPolicyBindings replaces the legacy claims Action and preserves unrelated Actions', () => {
@@ -296,6 +312,7 @@ test('Auth0LoginPolicyConfigurator preview is read-only and reports prerequisite
         'email-templates/verify_email_by_code': { template: 'verify_email_by_code', enabled: true },
         'email-templates/reset_email_by_code': { template: 'reset_email_by_code', enabled: true },
         prompts: { universal_login_experience: 'classic', identifier_first: false },
+        'tenants/settings': { flags: { enable_public_signup_user_exists_error: false } },
         clients: [{ client_id: 'spa_123', name: 'boxlite-dashboard', app_type: 'spa' }],
         'client-grants': [],
         'flows/vault/connections': [],
@@ -353,6 +370,7 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
     },
     clientConnectionEnabled: false,
     prompt: { universal_login_experience: 'classic', identifier_first: false },
+    tenantSettings: { friendly_name: 'BoxLite', flags: { enable_public_signup_user_exists_error: false } },
     managementClient: {
       client_id: 'm2m_123',
       name: 'boxlite-forms-email-verification',
@@ -432,6 +450,7 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
           'email-templates/verify_email_by_code': { enabled: true },
           'email-templates/reset_email_by_code': { enabled: true },
           prompts: state.prompt,
+          'tenants/settings': state.tenantSettings,
           clients: [state.client, state.managementClient],
           'client-grants': [state.grant],
           'flows/vault/connections': [state.vault],
@@ -453,6 +472,10 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
         state.clientConnectionEnabled = update?.status === true
       }
       if (method === 'patch' && path === 'prompts') state.prompt = { ...state.prompt, ...options.data }
+      if (method === 'patch' && path === 'tenants/settings') {
+        const flags = Array.isArray(options.data) ? {} : (options.data?.flags ?? {})
+        state.tenantSettings = { ...state.tenantSettings, flags: { ...state.tenantSettings.flags, ...flags } }
+      }
       if (method === 'patch' && path === 'client-grants/cgr_123') Object.assign(state.grant, options.data)
       if (method === 'patch' && path.startsWith('flows/')) {
         const flow = state.flows.find((candidate: any) => candidate.id === path.split('/')[1])
@@ -533,6 +556,8 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
     assert.deepEqual(connectionBindingCall?.data, [{ client_id: 'spa_123', status: true }])
     assert.equal(state.clientConnectionEnabled, true)
     assert.equal(state.prompt.identifier_first, true)
+    assert.equal(state.tenantSettings.flags.enable_public_signup_user_exists_error, true)
+    assert.equal(state.tenantSettings.friendly_name, 'BoxLite')
     assert.equal(
       state.bindings.some((binding: any) => binding.action.id === 'act_policy'),
       true,
@@ -548,6 +573,7 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
     assert.equal(rollback.mode, 'rolled-back')
     assert.equal(state.clientConnectionEnabled, false)
     assert.equal(state.prompt.identifier_first, false)
+    assert.equal(state.tenantSettings.flags.enable_public_signup_user_exists_error, false)
     assert.deepEqual(state.grant.scope, ['update:users', 'delete:users'])
     assert.equal(state.grant.allow_all_scopes, true)
   } finally {

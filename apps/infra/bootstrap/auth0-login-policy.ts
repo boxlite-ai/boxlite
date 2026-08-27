@@ -43,6 +43,8 @@ const LOGIN_POLICY_MANAGEMENT_SCOPES = [
   'read:email_templates',
   'read:prompts',
   'update:prompts',
+  'read:tenant_settings',
+  'update:tenant_settings',
   'read:actions',
   'create:actions',
   'update:actions',
@@ -173,6 +175,20 @@ export function buildPromptUpdate(prompt: JsonObject): JsonObject {
     ...structuredClone(prompt),
     universal_login_experience: 'new',
     identifier_first: true,
+  }
+}
+
+/*
+ * A tenant that answers a duplicate signup generically leaves Universal Login
+ * nothing to say but its `auth0-users-validation` text ("Something went wrong,
+ * please try again later"); with the flag on, Auth0 names the real cause on the
+ * screen that caught the duplicate. The cost is that the public signup API
+ * confirms which emails have an account; brute_force_protection and the signup
+ * rate limit remain the defense.
+ */
+export function buildTenantSettingsUpdate(settings: JsonObject): JsonObject {
+  return {
+    flags: { ...(settings.flags ?? {}), enable_public_signup_user_exists_error: true },
   }
 }
 
@@ -308,6 +324,7 @@ interface PolicyState {
   verifyTemplate: JsonObject | null
   resetTemplate: JsonObject | null
   prompt: JsonObject
+  tenantSettings: JsonObject
   managementClient: JsonObject | null
   clientGrant: JsonObject | null
   vaultConnection: JsonObject | null
@@ -423,6 +440,7 @@ export class Auth0LoginPolicyConfigurator {
       this.updateDatabaseConnection(connection)
       this.enableConnectionForClient(connection, state.clientConnections)
       this.updatePrompt(state.prompt)
+      this.updateTenantSettings(state.tenantSettings)
       const action = this.ensureAction(requireResourceId('verification form', form), state.action)
       if (!state.action) this.deployAction(action)
       this.bindAction(action, state.bindings)
@@ -503,6 +521,7 @@ export class Auth0LoginPolicyConfigurator {
       this.client.request('get', 'email-templates/reset_email_by_code', { allowNotFound: true }),
     )
     const prompt = requireObject('prompt settings', this.client.request('get', 'prompts'))
+    const tenantSettings = requireObject('tenant settings', this.client.request('get', 'tenants/settings'))
     const clients = this.readAllResources('clients', 'clients')
     const managementClientSummary = uniqueNamed(clients, RESOURCE_NAMES.managementClient, 'management client')
     const managementClient = managementClientSummary
@@ -537,6 +556,7 @@ export class Auth0LoginPolicyConfigurator {
       verifyTemplate,
       resetTemplate,
       prompt,
+      tenantSettings,
       managementClient,
       clientGrant,
       vaultConnection: this.readResourceDetail(
@@ -893,6 +913,19 @@ export class Auth0LoginPolicyConfigurator {
     this.client.request('patch', 'prompts', { data: buildPromptUpdate(existing) })
   }
 
+  /*
+   * Only the one flag is journalled: tenant settings carry read-only fields
+   * that a rollback PATCH would be rejected for, and an absent flag means Auth0
+   * is answering generically, which is what restoring `false` reproduces.
+   */
+  private updateTenantSettings(existing: JsonObject): void {
+    const wasRevealed = existing.flags?.enable_public_signup_user_exists_error === true
+    this.recordAdopted('tenant settings', 'tenants/settings', undefined, {
+      flags: { enable_public_signup_user_exists_error: wasRevealed },
+    })
+    this.client.request('patch', 'tenants/settings', { data: buildTenantSettingsUpdate(existing) })
+  }
+
   private ensureAction(formId: string, existing: JsonObject | null): JsonObject {
     const payload = this.actionPayload(formId)
     if (!existing) {
@@ -959,6 +992,9 @@ export class Auth0LoginPolicyConfigurator {
     }
     if (state.prompt.identifier_first !== true || state.prompt.universal_login_experience !== 'new') {
       throw new Error('Auth0 prompt read-back is not Identifier First New Universal Login')
+    }
+    if (state.tenantSettings.flags?.enable_public_signup_user_exists_error !== true) {
+      throw new Error('Auth0 tenant read-back still answers a duplicate signup with a generic error')
     }
     this.assertManagementClientCompatible(state.managementClient)
     if (
