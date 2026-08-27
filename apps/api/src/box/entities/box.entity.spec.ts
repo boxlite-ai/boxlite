@@ -34,14 +34,14 @@ describe('Box entity destroy invariant', () => {
 })
 
 describe('Box entity secret redaction', () => {
-  it('omits secret values from JSON.stringify output', () => {
+  it('omits the secrets field from JSON.stringify output', () => {
     const box = new Box('us', 'secret-box')
     box.secrets = [{ name: 'openai', value: 'sk-super-secret', hosts: ['api.openai.com'] }]
 
     const serialized = JSON.stringify(box)
 
     expect(serialized).not.toContain('sk-super-secret')
-    expect(serialized).toContain('[1 secrets]')
+    expect(JSON.parse(serialized)).not.toHaveProperty('secrets')
   })
 
   it('keeps the secrets field absent when empty', () => {

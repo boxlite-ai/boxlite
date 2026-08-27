@@ -184,6 +184,7 @@ export class SecretSpecDto {
   name: string
 
   @IsString()
+  @IsNotEmpty()
   value: string
 
   @IsOptional()

@@ -305,13 +305,15 @@ export class Box {
   }
 
   /**
-   * Redacts secret values whenever the entity is serialized with
+   * Drops the secrets field whenever the entity is serialized with
    * JSON.stringify — analytics debug logs and the Redis box-event channel both
-   * do this. Secrets are plaintext in this column by design (POL-303), so they
-   * must never ride a JSON dump out of the API process.
+   * do this. Secrets are plaintext in this column by design (POL-303), so the
+   * field must never ride a JSON dump out of the API process, not even as a
+   * count placeholder: consumers of the event channel expect the key to be
+   * absent.
    */
   toJSON() {
     const { secrets, ...rest } = this
-    return { ...rest, secrets: secrets?.length ? `[${secrets.length} secrets]` : undefined }
+    return rest
   }
 }
