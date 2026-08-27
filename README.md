@@ -245,6 +245,7 @@ How BoxLite embeds a runtime and runs OCI containers inside micro-VMs. Details �
 
 - [GitHub Issues](https://github.com/boxlite-ai/boxlite/issues) — Bug reports and feature requests
 - [Discord](https://go.boxlite.ai/discord) — Questions and community support
+- [Status page](https://status.boxlite.ai) — Live platform status and incident history
 - [Security Policy](./SECURITY.md) — How to privately report a vulnerability
 
 ## Contributing

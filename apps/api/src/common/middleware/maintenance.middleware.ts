@@ -8,6 +8,8 @@ import { Injectable, NestMiddleware, HttpException, HttpStatus } from '@nestjs/c
 import { Request, Response, NextFunction } from 'express'
 import { TypedConfigService } from '../../config/typed-config.service'
 
+const STATUS_PAGE_URL = 'https://status.boxlite.ai'
+
 @Injectable()
 export class MaintenanceMiddleware implements NestMiddleware {
   constructor(private readonly configService: TypedConfigService) {}
@@ -19,7 +21,7 @@ export class MaintenanceMiddleware implements NestMiddleware {
       throw new HttpException(
         {
           statusCode: HttpStatus.SERVICE_UNAVAILABLE,
-          message: 'Service is currently under maintenance. Please try again later.',
+          message: `Service is currently under maintenance. Check ${STATUS_PAGE_URL} for updates, or try again later.`,
           error: 'Service Unavailable',
         },
         HttpStatus.SERVICE_UNAVAILABLE,

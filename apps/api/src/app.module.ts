@@ -33,6 +33,7 @@ import { CustomNamingStrategy } from './common/utils/naming-strategy.util'
 import { MaintenanceMiddleware } from './common/middleware/maintenance.middleware'
 import { AuditModule } from './audit/audit.module'
 import { HealthModule } from './health/health.module'
+import { StatusSyncModule } from './status-sync/status-sync.module'
 import { OpenFeatureModule } from '@openfeature/nestjs-sdk'
 import { OpenFeaturePostHogProvider } from './common/providers/openfeature-posthog.provider'
 import { LoggerModule } from 'nestjs-pino'
@@ -198,6 +199,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     ObjectStorageModule,
     AuditModule,
     HealthModule,
+    StatusSyncModule,
     ClickHouseModule,
     BoxTelemetryModule,
     BoxliteRestModule,
