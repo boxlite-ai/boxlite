@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use boxlite_shared::layout::BIN_DIR;
 use boxlite_shared::Filesystem;
 use nix::libc;
 use nix::mount::{mount, MsFlags};
@@ -200,7 +201,9 @@ impl BlockDeviceMount {
         // leaving us with ECHILD. See reaper::reap_fence.
         let output = {
             let _fence = crate::reaper::reap_fence();
-            Command::new("resize2fs").arg(device).output()
+            Command::new(format!("{BIN_DIR}/resize2fs"))
+                .arg(device)
+                .output()
         }
         .map_err(|e| BoxliteError::Storage(format!("Failed to execute resize2fs: {}", e)))?;
 
@@ -243,7 +246,7 @@ impl BlockDeviceMount {
             );
         }
 
-        let mkfs_cmd = format!("mkfs.{}", filesystem);
+        let mkfs_cmd = format!("{BIN_DIR}/mkfs.{}", filesystem);
         // Fence the reaper across spawn-and-wait (see reap_fence): output()
         // self-waits and would otherwise race waitpid(-1) into ECHILD.
         let output = {

@@ -5,7 +5,6 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**backupErrorReason** | **string** |  | [optional] [default to undefined]
 **cpuQuota** | **number** |  | [optional] [default to undefined]
 **env** | **{ [key: string]: string; }** |  | [optional] [default to undefined]
 **errorReason** | **string** |  | [default to undefined]
@@ -15,9 +14,7 @@ Name | Type | Description | Notes
 **networkAllowList** | **string** |  | [optional] [default to undefined]
 **networkBlockAll** | **boolean** |  | [optional] [default to undefined]
 **osUser** | **string** |  | [default to undefined]
-**snapshot** | **string** |  | [optional] [default to undefined]
 **storageQuota** | **number** |  | [optional] [default to undefined]
-**userId** | **string** |  | [default to undefined]
 **volumes** | [**Array&lt;DtoVolumeDTO&gt;**](DtoVolumeDTO.md) |  | [optional] [default to undefined]
 
 ## Example
@@ -26,7 +23,6 @@ Name | Type | Description | Notes
 import { RecoverBoxDTO } from './api';
 
 const instance: RecoverBoxDTO = {
-    backupErrorReason,
     cpuQuota,
     env,
     errorReason,
@@ -36,9 +32,7 @@ const instance: RecoverBoxDTO = {
     networkAllowList,
     networkBlockAll,
     osUser,
-    snapshot,
     storageQuota,
-    userId,
     volumes,
 };
 ```

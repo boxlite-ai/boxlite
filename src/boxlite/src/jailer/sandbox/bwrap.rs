@@ -34,12 +34,14 @@ impl Sandbox for BwrapSandbox {
         if bwrap::is_available()
             && let Err(diagnostic) = bwrap::can_create_user_namespace()
         {
-            return Err(BoxliteError::Config(format!(
-                "Sandbox preflight failed: bwrap cannot create user namespaces.\n\n\
-                 {diagnostic}\n\n\
-                 To skip the sandbox (development only):\n  \
-                   SecurityOptions::disabled()"
-            )));
+            // The fix commands and the `SecurityOptions::disabled()` escape hatch
+            // need a host shell — operator-only. The tenant gets one sentence.
+            tracing::error!(
+                "Sandbox preflight failed: bwrap cannot create user namespaces.\n{}\n\
+                 To skip the sandbox (development only): SecurityOptions::disabled()",
+                diagnostic.operator()
+            );
+            return Err(BoxliteError::Config(diagnostic.into_client()));
         }
 
         let cgroup_config = cgroup::CgroupConfig::from(ctx.resource_limits);

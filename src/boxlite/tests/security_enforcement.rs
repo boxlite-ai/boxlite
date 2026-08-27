@@ -3,6 +3,7 @@
 //! 1. Read-only virtiofs volumes enforced at hypervisor level
 //! 2. Dangerous capabilities excluded (CAP_SYS_ADMIN etc.)
 //! 3. TSI network isolation when network disabled
+//! 4. Protected-link sysctls block unprivileged hardlink attacks
 //!
 //! Run with:
 //!
@@ -54,7 +55,7 @@ async fn exec_exit_code(bx: &LiteBox, cmd: BoxCommand) -> i32 {
 }
 
 // ============================================================================
-// TEST SUITE: single VM for virtiofs + capabilities tests
+// TEST SUITE: single VM for virtiofs + capabilities + protected-links tests
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
@@ -76,11 +77,13 @@ async fn virtiofs_readonly_and_capabilities() {
             BoxOptions {
                 volumes: vec![
                     VolumeSpec {
+                        managed_volume: None,
                         host_path: ro_dir.path().to_str().unwrap().into(),
                         guest_path: "/data/readonly".into(),
                         read_only: true,
                     },
                     VolumeSpec {
+                        managed_volume: None,
                         host_path: rw_dir.path().to_str().unwrap().into(),
                         guest_path: "/data/writable".into(),
                         read_only: false,
@@ -96,17 +99,110 @@ async fn virtiofs_readonly_and_capabilities() {
         .expect("create box");
     bx.start().await.expect("start box");
 
+    protected_links_block_unprivileged_hardlinks(&bx).await;
     readonly_volume_readable(&bx).await;
     readonly_volume_blocks_write(&bx).await;
     readonly_volume_blocks_remount(&bx).await;
     rw_volume_allows_write(&bx).await;
-    guest_root_is_sealed_read_only(&bx).await;
     sealed_root_leaves_container_rootfs_writable(&bx).await;
     capabilities_exclude_sys_admin(&bx).await;
     capabilities_match_docker_defaults(&bx).await;
 
     bx.stop().await.expect("stop box");
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
+}
+
+/// Protected-link sysctls must be active before the first unprivileged workload.
+async fn protected_links_block_unprivileged_hardlinks(bx: &LiteBox) {
+    let security_state = exec_stdout(
+        bx,
+        BoxCommand::new("sh")
+            .args([
+                "-c",
+                "id -u; cat /proc/sys/fs/protected_hardlinks; \
+                 cat /proc/sys/fs/protected_symlinks; grep '^CapEff:' /proc/self/status",
+            ])
+            .user("1000:1000"),
+    )
+    .await;
+
+    let mut lines = security_state.lines();
+    assert_eq!(
+        lines.next(),
+        Some("1000"),
+        "security probe must run as the unprivileged uid"
+    );
+    assert_eq!(
+        lines.next(),
+        Some("1"),
+        "fs.protected_hardlinks must be enabled before workloads start"
+    );
+    assert_eq!(
+        lines.next(),
+        Some("1"),
+        "fs.protected_symlinks must be enabled before workloads start"
+    );
+
+    let cap_eff_line = lines.next().expect("security probe should report CapEff");
+    let cap_eff_hex = cap_eff_line
+        .strip_prefix("CapEff:")
+        .expect("security probe should emit a CapEff line")
+        .trim();
+    let cap_eff = u64::from_str_radix(cap_eff_hex, 16).expect("CapEff should be hexadecimal");
+
+    // CAP_FOWNER = bit 3. If it leaked across exec, it would bypass protected_hardlinks.
+    let cap_fowner = 1u64 << 3;
+    assert_eq!(
+        cap_eff & cap_fowner,
+        0,
+        "unprivileged workload must not retain CAP_FOWNER, CapEff=0x{cap_eff:x}"
+    );
+
+    exec_stdout(
+        bx,
+        BoxCommand::new("sh").args([
+            "-c",
+            "set -eu; base=/tmp/boxlite-protected-links; \
+             mkdir \"$base\" \"$base/attacker\"; \
+             printf 'classified\\n' > \"$base/source\"; \
+             chmod 0444 \"$base/source\"; chown 0:0 \"$base/source\"; \
+             chown 1000:1000 \"$base/attacker\"",
+        ]),
+    )
+    .await;
+
+    let (exit, output) = exec_full(
+        bx,
+        BoxCommand::new("sh")
+            .args([
+                "-c",
+                "ln /tmp/boxlite-protected-links/source \
+                 /tmp/boxlite-protected-links/attacker/link 2>&1",
+            ])
+            .user("1000:1000"),
+    )
+    .await;
+    assert_ne!(
+        exit, 0,
+        "unprivileged user must not hardlink a root-owned, non-writable file"
+    );
+    assert!(
+        output
+            .to_ascii_lowercase()
+            .contains("operation not permitted"),
+        "hardlink denial should report EPERM, got: {output}"
+    );
+
+    let link_count = exec_stdout(
+        bx,
+        BoxCommand::new("stat").args(["-c", "%h", "/tmp/boxlite-protected-links/source"]),
+    )
+    .await;
+    assert_eq!(
+        link_count.trim(),
+        "1",
+        "failed hardlink attempt must not change the source link count"
+    );
 }
 
 /// Read-only virtiofs volume can be read.
@@ -150,37 +246,8 @@ async fn readonly_volume_blocks_remount(bx: &LiteBox) {
     );
 }
 
-/// Run a shell script on the guest VM itself rather than inside the container.
-///
-/// `LiteBox::exec` only injects the container executor when the caller has not
-/// already chosen one, so setting it here reaches the guest's own mount
-/// namespace — the only vantage point from which the guest root is visible.
-fn guest_sh(script: &str) -> BoxCommand {
-    BoxCommand::new("sh")
-        .args(["-c", script])
-        .env("BOXLITE_EXECUTOR", "guest")
-}
-
-/// The guest agent remounts its own root read-only at boot
-/// (`mounts::seal_root_readonly`). That is what stops a container process from
-/// reopening the agent binary through the `/proc/<pid>/exe` a forked-not-exec'd
-/// SSH workload leaves behind, so the guest root must reject writes.
-async fn guest_root_is_sealed_read_only(bx: &LiteBox) {
-    // Positive control: /tmp is tmpfs, so a failure below is the seal and not a
-    // broken guest-executor path.
-    let writable = exec_exit_code(bx, guest_sh("echo probe > /tmp/boxlite-seal-probe")).await;
-    assert_eq!(writable, 0, "guest tmpfs should still accept writes");
-
-    // Assert on the file, not on the shell's exit code: a full guest rootfs
-    // fails the write with ENOSPC after `creat` has already made the entry, so
-    // a non-zero exit does not distinguish a sealed root from a full one.
-    let _ = exec_exit_code(bx, guest_sh("echo probe > /boxlite-seal-probe 2>&1")).await;
-    let exists = exec_exit_code(bx, guest_sh("test -e /boxlite-seal-probe")).await;
-    assert_ne!(exists, 0, "probe file should not exist on the sealed root");
-}
-
-/// The seal covers the guest's root superblock only. Container rootfs writes
-/// outside the tmpfs mounts must keep working.
+/// The guest rootfs is read-only by construction; the container rootfs
+/// (writes outside the tmpfs mounts) must stay writable.
 async fn sealed_root_leaves_container_rootfs_writable(bx: &LiteBox) {
     let exit = exec_exit_code(
         bx,

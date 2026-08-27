@@ -24,6 +24,9 @@ type AllowNetFilter struct {
 	exactHosts       map[string]bool  // "api.openai.com" → true
 	wildcardSuffixes []string         // ".example.com"
 	hasHostnameRules bool
+
+	exactHostIPs      map[string][]net.IP // "api.openai.com" → resolved IPv4 set (egress pin)
+	wildcardSuffixIPs map[string][]net.IP // ".example.com" → resolved IPv4 set (egress pin)
 }
 
 // NewAllowNetFilter parses allow_net rules into IP/CIDR and hostname categories.
@@ -145,6 +148,51 @@ func (f *AllowNetFilter) MatchesHostname(hostname string) bool {
 // HasHostnameRules returns true if any hostname/wildcard rules exist.
 func (f *AllowNetFilter) HasHostnameRules() bool {
 	return f.hasHostnameRules
+}
+
+// SetResolvedHostIPs installs the gateway DNS resolution results for hostname
+// rules, keyed the same way as exactHosts/wildcardSuffixes. The TCP forwarder
+// uses these to pin the dialed IP to the hostname's own resolution.
+func (f *AllowNetFilter) SetResolvedHostIPs(exact, wildcard map[string][]net.IP) {
+	f.exactHostIPs = exact
+	f.wildcardSuffixIPs = wildcard
+}
+
+// AllowHostToIP reports whether hostname is allow-listed AND destIP is one of
+// the IPs the gateway DNS resolved for it (the egress pin). It is the single
+// point that ties the guest-supplied hostname to the dialed IP, closing the
+// domain-fronting decoupling that MatchesHostname alone leaves open. A
+// hostname can be covered by an exact rule and one or more wildcards (or
+// overlapping wildcards), so the check unions across every matching rule:
+// destIP is allowed when any matching rule resolves it, independent of rule
+// order, and fails closed only when none do.
+func (f *AllowNetFilter) AllowHostToIP(hostname string, destIP net.IP) bool {
+	hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
+	if hostname == "" {
+		return false
+	}
+	ip4 := destIP.To4()
+	if ip4 == nil {
+		return false
+	}
+	if f.exactHosts[hostname] && containsIPv4(f.exactHostIPs[hostname], ip4) {
+		return true
+	}
+	for _, suffix := range f.wildcardSuffixes {
+		if strings.HasSuffix(hostname, suffix) && containsIPv4(f.wildcardSuffixIPs[suffix], ip4) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsIPv4(ips []net.IP, target net.IP) bool {
+	for _, ip := range ips {
+		if ip.Equal(target) {
+			return true
+		}
+	}
+	return false
 }
 
 func toIPv4Key(ip net.IP) [4]byte {

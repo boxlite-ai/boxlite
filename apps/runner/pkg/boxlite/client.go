@@ -248,12 +248,30 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithEntrypoint(boxDto.Entrypoint...))
 	}
 
+	if len(boxDto.Cmd) > 0 {
+		opts = append(opts, boxlite.WithCmd(boxDto.Cmd...))
+	}
+
+	if boxDto.WorkingDir != "" {
+		opts = append(opts, boxlite.WithWorkDir(boxDto.WorkingDir))
+	}
+
+	// Only when the caller asked. 16d9248bb removed the unconditional
+	// WithUser(OsUser) because the default landed a USER override on images
+	// that never defined that account; an explicit RunAsUser is the caller's
+	// own choice and their image's problem if it is wrong.
+	if boxDto.RunAsUser != "" {
+		opts = append(opts, boxlite.WithUser(boxDto.RunAsUser))
+	}
+
 	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Volumes)
 	if err != nil {
 		return "", "", err
 	}
 	for _, vol := range volumeMounts {
-		opts = append(opts, boxlite.WithVolume(vol.hostPath, vol.mountPath))
+		// The bucket is already FUSE-mounted on this host, so the runner is a
+		// host-bind consumer even though the box is mounting a managed volume.
+		opts = append(opts, boxlite.WithBindMount(vol.hostPath, vol.mountPath))
 	}
 
 	if len(volumeMounts) > 0 {

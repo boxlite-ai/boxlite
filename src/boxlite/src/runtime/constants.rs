@@ -12,7 +12,7 @@ pub use boxlite_shared::constants::{container, mount_tags, network};
 /// All other guest paths are determined by the guest based on tags.
 pub mod guest_paths {
     /// Guest binary directory (for guest entrypoint executable)
-    pub const BIN_DIR: &str = "/boxlite/bin";
+    pub const BIN_DIR: &str = boxlite_shared::layout::BIN_DIR;
 }
 
 pub mod envs {

@@ -20,7 +20,11 @@ export NEXTEST_FILTER_EXPR
 NEXTEST_FILTER   = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',))
 NEXTEST_CLI_FILTER = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',-E 'not binary(stress_disk)'))
 CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),)
-REST_CLIENT_CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),rest::client::tests::)
+# The `--features rest` pass below is the only one that compiles the `rest`
+# module at all — the two passes above build --no-default-features — so every
+# rest-gated test lives or dies by this filter. It covers the whole module:
+# scoped to one test module it silently skipped the other six.
+REST_CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),rest::)
 PYTEST_FILTER    = $(if $(FILTER),-k '$(FILTER)',)
 VITEST_FILTER    = $(if $(FILTER),-t '$(FILTER)',)
 CTEST_FILTER     = $(if $(FILTER),-R '$(FILTER)',)
@@ -111,7 +115,13 @@ else
 endif
 
 # Per-component test dispatch targets (map component tag → existing test targets).
+#
+# rust runs the reference-server suite first: its error table is keyed on the
+# Display text of `BoxliteError` (src/shared/src/errors.rs, this component), so
+# a new variant leaves the reference server answering the caller's mistake as a
+# server fault. It costs milliseconds and fails before the long suites start.
 test\:changed\:rust:
+	@$(MAKE) test:unit:openapi
 	@$(MAKE) test:unit:rust
 	@$(MAKE) test:integration:rust
 
@@ -136,6 +146,10 @@ test\:changed\:go:
 
 test\:changed\:apps:
 	@$(MAKE) test:apps
+
+# The Box API contract and the reference server that implements it.
+test\:changed\:openapi:
+	@$(MAKE) test:unit:openapi
 
 # Workflow and composite-action changes. Runs the infra suite rather than the whole apps matrix:
 # that suite is what asserts across .github (caller/callee permissions, Environment allowlists,
@@ -189,8 +203,8 @@ test\:stress:
 
 # Core unit suites: Rust unit + FFI unit + gvproxy bridge unit.
 test\:unit\:core:
-	@echo "── Core unit suites (rust, ffi, gvproxy) ──"
-	$(call run_suites,test:unit:rust test:unit:ffi test:unit:gvproxy)
+	@echo "── Core unit suites (rust, openapi, ffi, gvproxy) ──"
+	$(call run_suites,test:unit:rust test:unit:openapi test:unit:ffi test:unit:gvproxy)
 
 # Core integration suites: Rust integration + CLI integration.
 test\:integration\:core:
@@ -224,7 +238,7 @@ test\:unit\:rust:
 		cargo test -p boxlite --no-default-features --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 		cargo test -p boxlite-shared --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 	fi; \
-	cargo test -p boxlite --no-default-features --features rest --lib -- --test-threads=1 $(REST_CLIENT_CARGOTEST_FILTER) || rc=$$?; \
+	cargo test -p boxlite --no-default-features --features rest --lib -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	exit $$rc
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
@@ -232,7 +246,7 @@ test\:unit\:rust:
 # nextest's process-per-test isolation is what makes the whole crate runnable:
 # several suites assert on process-global state (raw fd numbers, waitpid), so
 # they can interfere under a shared process. The cargo fallback has no such
-# isolation, so it stays on the two modules that are pure logic.
+# isolation, so it stays on the modules that are pure logic.
 test\:unit\:guest:
 	@if [ "$$(uname)" != "Linux" ]; then \
 		echo "⏭️  Guest unit tests require Linux"; \
@@ -242,7 +256,7 @@ test\:unit\:guest:
 	if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run --no-tests=fail -p boxlite-guest; \
 	else \
-		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests; \
+		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests sysctl::tests; \
 	fi
 
 # Keep ordinary ownership tests unprivileged. Only explicitly ignored tests
@@ -350,6 +364,22 @@ test\:unit\:gvproxy:
 	@echo "🧪 Running gvproxy bridge unit tests..."
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && go test ./... $(GOTEST_FILTER)
 
+# OpenAPI reference-server unit tests: the error class the server answers with
+# must be one openapi/box.openapi.yaml declares, and must match the triple
+# `BoxliteError::http()` (src/shared/src/errors.rs) gives the same failure —
+# the reference server is what src/boxlite/tests/rest_integration.rs points the
+# Rust client at, so a class it gets wrong is a class every conformance run
+# gets wrong.
+#
+# Discovery is restricted to the modules that import only the stdlib
+# (openapi/reference-server/errors.py, like config.py). The rest of that
+# directory needs python-dotenv, fastapi and pydantic, which no setup target
+# here installs — discovering the whole directory would fail this suite on
+# every checkout that does not intend to run the server.
+test\:unit\:openapi:
+	@echo "🧪 Running OpenAPI reference-server unit tests..."
+	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
+
 # CLI integration tests.
 test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🧪 Running CLI integration tests..."
@@ -379,6 +409,10 @@ test\:stress\:disk: $(if $(SETUP_DONE),,runtime\:debug)
 test\:unit\:python: _ensure-python-deps
 	@echo "🧪 Running Python SDK unit tests..."
 	@. .venv/bin/activate && cd sdks/python && python -m pytest tests/ -v -m "not integration" $(PYTEST_FILTER)
+	@echo "🧪 Running Python binding (Rust) unit tests..."
+	@# --no-default-features drops pyo3's extension-module so the test binary can
+	@# link libpython; see sdks/python/Cargo.toml.
+	@cargo test -p boxlite-python --no-default-features --lib $(CARGOTEST_FILTER)
 
 # Python SDK integration tests.
 test\:integration\:python:
@@ -396,6 +430,8 @@ test\:all\:python:
 test\:unit\:node: _ensure-node-deps
 	@echo "🧪 Running Node.js SDK unit tests..."
 	@cd sdks/node && npm test -- $(VITEST_FILTER)
+	@echo "🧪 Running Node.js binding (Rust) unit tests..."
+	@cargo test -p boxlite-node --lib $(CARGOTEST_FILTER)
 
 # Node.js SDK integration tests (requires VM environment).
 test\:integration\:node:

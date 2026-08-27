@@ -1,8 +1,12 @@
 mod binary_finder;
+mod diagnostic;
 mod pid_file;
 pub mod process;
 
 pub use binary_finder::{RuntimeBinaryFinder, find_binary};
+pub(crate) use diagnostic::HostDiagnostic;
+#[cfg(test)]
+pub(crate) use diagnostic::assert_client_safe;
 pub use pid_file::{PidFileReader, PidRecord, ProcessIdentity};
 pub(crate) use pid_file::{PidFileWriter, ShimPidRecord};
 

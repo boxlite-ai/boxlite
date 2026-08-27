@@ -22,7 +22,6 @@ export interface RunnerMetrics {
     'currentCpuUsagePercentage'?: number;
     'currentDiskUsagePercentage'?: number;
     'currentMemoryUsagePercentage'?: number;
-    'currentSnapshotCount'?: number;
     'currentStartedBoxes'?: number;
 }
 

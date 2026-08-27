@@ -9,7 +9,25 @@
 use boxlite_shared::errors::BoxliteError;
 use reqwest::StatusCode;
 
-use super::types::ErrorModel;
+use super::types::{ErrorModel, ErrorResponse, FlatErrorResponse};
+
+/// Decode a failed response's body into the `BoxliteError` the server named.
+///
+/// The one place that knows the two envelope shapes and the bare-status
+/// fallback. Callers that read the body themselves — the file-transfer routes,
+/// which need the raw bytes on success — must come through here too, or a
+/// refusal the server spelled out arrives as a server fault: a 500 for a 400
+/// the caller caused, which is the whole reason the guest's own status codes
+/// are preserved on the other backend.
+pub(crate) fn map_http_body(status: StatusCode, text: &str) -> BoxliteError {
+    if let Ok(err_resp) = serde_json::from_str::<ErrorResponse>(text) {
+        map_http_error(status, &err_resp.error)
+    } else if let Ok(err_resp) = serde_json::from_str::<FlatErrorResponse>(text) {
+        map_http_error(status, &err_resp.into_error_model())
+    } else {
+        map_http_status(status, text)
+    }
+}
 
 /// Map a parsed structured error body to a `BoxliteError`.
 ///

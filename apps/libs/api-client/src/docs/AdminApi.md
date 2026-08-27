@@ -77,7 +77,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new AdminApi(configuration);
 
-let id: string; //Runner ID (default to undefined)
+let id: string; //Runner ID
 
 const { status, data } = await apiInstance.adminDeleteRunner(
     id
@@ -88,7 +88,7 @@ const { status, data } = await apiInstance.adminDeleteRunner(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] | Runner ID | defaults to undefined|
+| **id** | [**string**] | Runner ID | |
 
 
 ### Return type
@@ -127,7 +127,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new AdminApi(configuration);
 
-let id: string; //Runner ID (default to undefined)
+let id: string; //Runner ID
 
 const { status, data } = await apiInstance.adminGetRunnerById(
     id
@@ -138,7 +138,7 @@ const { status, data } = await apiInstance.adminGetRunnerById(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] | Runner ID | defaults to undefined|
+| **id** | [**string**] | Runner ID | |
 
 
 ### Return type
@@ -227,7 +227,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new AdminApi(configuration);
 
-let boxId: string; //ID of the box (default to undefined)
+let boxId: string; //ID of the box
 
 const { status, data } = await apiInstance.adminRecoverBox(
     boxId
@@ -238,7 +238,7 @@ const { status, data } = await apiInstance.adminRecoverBox(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] | ID of the box | defaults to undefined|
+| **boxId** | [**string**] | ID of the box | |
 
 
 ### Return type
@@ -277,7 +277,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new AdminApi(configuration);
 
-let id: string; // (default to undefined)
+let id: string; //
 
 const { status, data } = await apiInstance.adminUpdateRunnerScheduling(
     id
@@ -288,7 +288,7 @@ const { status, data } = await apiInstance.adminUpdateRunnerScheduling(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] |  | defaults to undefined|
+| **id** | [**string**] |  | |
 
 
 ### Return type

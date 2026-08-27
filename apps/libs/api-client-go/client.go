@@ -76,6 +76,8 @@ type APIClient struct {
 
 	RunnersAPI RunnersAPI
 
+	UsageAPI UsageAPI
+
 	UsersAPI UsersAPI
 
 	VolumesAPI VolumesAPI
@@ -112,6 +114,7 @@ func NewAPIClient(cfg *Configuration) *APIClient {
 	c.PreviewAPI = (*PreviewAPIService)(&c.common)
 	c.RegionsAPI = (*RegionsAPIService)(&c.common)
 	c.RunnersAPI = (*RunnersAPIService)(&c.common)
+	c.UsageAPI = (*UsageAPIService)(&c.common)
 	c.UsersAPI = (*UsersAPIService)(&c.common)
 	c.VolumesAPI = (*VolumesAPIService)(&c.common)
 	c.WebhooksAPI = (*WebhooksAPIService)(&c.common)

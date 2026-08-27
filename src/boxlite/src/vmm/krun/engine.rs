@@ -460,9 +460,9 @@ impl Vmm for Krun {
                 ..
             } = &config.guest_rootfs.strategy
             {
-                // Disk-based boot: use set_root_disk_remount
+                // Disk-based boot: use set_root_disk_remount, mounting read-only.
                 tracing::info!("Configuring guest rootfs disk remount: {}", device_path);
-                ctx.set_root_disk_remount(device_path, Some("ext4"), None)?;
+                ctx.set_root_disk_remount(device_path, Some("ext4"), Some("ro"))?;
             } else {
                 // Virtiofs-based boot: use set_rootfs
                 let rootfs_str = config.guest_rootfs.path.to_str().ok_or_else(|| {

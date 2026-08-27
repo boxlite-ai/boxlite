@@ -342,6 +342,47 @@ Resources:
                   - ssm:GetParameters
                 Resource:
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/sst/passphrase/boxlite/_fallback
+              # Outbound mail (stack/mail.ts): the SES domain identity and its configuration set,
+              # over the create/read/update/delete calls the two sesv2 resources make. The
+              # configuration set is stage-scoped because stack/mail.ts names it boxlite-<stage>-mail
+              # rather than letting Pulumi autoname it. The identity cannot be: its ARN carries the
+              # sender domain and nothing else, so scoping it would mean teaching this template the
+              # stage's MAIL_DOMAIN. Recorded in docs/security.md instead.
+              #
+              # `ses:*` is deliberately NOT in BoxLiteAwsControlPlane above: that wildcard would carry
+              # SendEmail and SendRawEmail for every identity in the account, letting a deploy job send
+              # mail as the product. Sending is not the deploy's job — it belongs to the send-only IAM
+              # user bootstrap provisions, whose policy is pinned to one From address.
+              - Sid: BoxLiteMailIdentity
+                Effect: Allow
+                Action:
+                  - ses:CreateEmailIdentity
+                  - ses:DeleteEmailIdentity
+                  - ses:GetEmailIdentity
+                  - ses:PutEmailIdentityConfigurationSetAttributes
+                  - ses:PutEmailIdentityDkimSigningAttributes
+                  - ses:CreateConfigurationSet
+                  - ses:DeleteConfigurationSet
+                  - ses:GetConfigurationSet
+                  - ses:PutConfigurationSetDeliveryOptions
+                  - ses:PutConfigurationSetReputationOptions
+                  - ses:PutConfigurationSetSendingOptions
+                  - ses:PutConfigurationSetSuppressionOptions
+                  - ses:PutConfigurationSetTrackingOptions
+                  - ses:PutConfigurationSetVdmOptions
+                  - ses:ListTagsForResource
+                  - ses:TagResource
+                  - ses:UntagResource
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*
+                  - !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/boxlite-${GitHubEnvironment}-*
+              # The deploy blocks until SES reports the domain verified, and that poll runs on the
+              # classic API, whose verification read takes no resource ARN.
+              - Sid: ReadMailIdentityVerification
+                Effect: Allow
+                Action:
+                  - ses:GetIdentityVerificationAttributes
+                Resource: '*'
               # Runner binary upgrades run as SSM commands against the stage's instances
               # (runner/update.ts). SendCommand takes instance and document ARNs; the describe and
               # invocation reads are list-shaped and have no resource of their own.

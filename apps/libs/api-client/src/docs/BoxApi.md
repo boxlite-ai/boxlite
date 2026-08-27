@@ -39,9 +39,9 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxIdOrName: string; //ID or name of the box (default to undefined)
-let port: number; //Port number to expire signed preview URL for (default to undefined)
-let token: string; //Token to expire signed preview URL for (default to undefined)
+let boxIdOrName: string; //ID or name of the box
+let port: number; //Port number to expire signed preview URL for
+let token: string; //Token to expire signed preview URL for
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.expireSignedPortPreviewUrl(
@@ -56,9 +56,9 @@ const { status, data } = await apiInstance.expireSignedPortPreviewUrl(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **port** | [**number**] | Port number to expire signed preview URL for | defaults to undefined|
-| **token** | [**string**] | Token to expire signed preview URL for | defaults to undefined|
+| **boxIdOrName** | [**string**] | ID or name of the box | |
+| **port** | [**number**] | Port number to expire signed preview URL for | |
+| **token** | [**string**] | Token to expire signed preview URL for | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -98,7 +98,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxIdOrName: string; //ID or name of the box (default to undefined)
+let boxIdOrName: string; //ID or name of the box
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 let verbose: boolean; //Include verbose output (optional) (default to undefined)
 
@@ -113,7 +113,7 @@ const { status, data } = await apiInstance.getBox(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
+| **boxIdOrName** | [**string**] | ID or name of the box | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 | **verbose** | [**boolean**] | Include verbose output | (optional) defaults to undefined|
 
@@ -155,9 +155,9 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxId: string; //ID of the box (default to undefined)
-let from: Date; //Start of time range (ISO 8601) (default to undefined)
-let to: Date; //End of time range (ISO 8601) (default to undefined)
+let boxId: string; //ID of the box
+let from: Date; //Start of time range (ISO 8601)
+let to: Date; //End of time range (ISO 8601)
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 let page: number; //Page number (1-indexed) (optional) (default to 1)
 let limit: number; //Number of items per page (optional) (default to 100)
@@ -180,9 +180,9 @@ const { status, data } = await apiInstance.getBoxLogs(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] | ID of the box | defaults to undefined|
-| **from** | [**Date**] | Start of time range (ISO 8601) | defaults to undefined|
-| **to** | [**Date**] | End of time range (ISO 8601) | defaults to undefined|
+| **boxId** | [**string**] | ID of the box | |
+| **from** | [**Date**] | Start of time range (ISO 8601) | |
+| **to** | [**Date**] | End of time range (ISO 8601) | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 | **page** | [**number**] | Page number (1-indexed) | (optional) defaults to 1|
 | **limit** | [**number**] | Number of items per page | (optional) defaults to 100|
@@ -227,9 +227,9 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxId: string; //ID of the box (default to undefined)
-let from: Date; //Start of time range (ISO 8601) (default to undefined)
-let to: Date; //End of time range (ISO 8601) (default to undefined)
+let boxId: string; //ID of the box
+let from: Date; //Start of time range (ISO 8601)
+let to: Date; //End of time range (ISO 8601)
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 let metricNames: Array<string>; //Filter by metric names (optional) (default to undefined)
 
@@ -246,9 +246,9 @@ const { status, data } = await apiInstance.getBoxMetrics(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] | ID of the box | defaults to undefined|
-| **from** | [**Date**] | Start of time range (ISO 8601) | defaults to undefined|
-| **to** | [**Date**] | End of time range (ISO 8601) | defaults to undefined|
+| **boxId** | [**string**] | ID of the box | |
+| **from** | [**Date**] | Start of time range (ISO 8601) | |
+| **to** | [**Date**] | End of time range (ISO 8601) | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 | **metricNames** | **Array&lt;string&gt;** | Filter by metric names | (optional) defaults to undefined|
 
@@ -290,8 +290,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxId: string; //ID of the box (default to undefined)
-let traceId: string; //ID of the trace (default to undefined)
+let boxId: string; //ID of the box
+let traceId: string; //ID of the trace
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.getBoxTraceSpans(
@@ -305,8 +305,8 @@ const { status, data } = await apiInstance.getBoxTraceSpans(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] | ID of the box | defaults to undefined|
-| **traceId** | [**string**] | ID of the trace | defaults to undefined|
+| **boxId** | [**string**] | ID of the box | |
+| **traceId** | [**string**] | ID of the trace | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -347,9 +347,9 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxId: string; //ID of the box (default to undefined)
-let from: Date; //Start of time range (ISO 8601) (default to undefined)
-let to: Date; //End of time range (ISO 8601) (default to undefined)
+let boxId: string; //ID of the box
+let from: Date; //Start of time range (ISO 8601)
+let to: Date; //End of time range (ISO 8601)
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 let page: number; //Page number (1-indexed) (optional) (default to 1)
 let limit: number; //Number of items per page (optional) (default to 100)
@@ -368,9 +368,9 @@ const { status, data } = await apiInstance.getBoxTraces(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] | ID of the box | defaults to undefined|
-| **from** | [**Date**] | Start of time range (ISO 8601) | defaults to undefined|
-| **to** | [**Date**] | End of time range (ISO 8601) | defaults to undefined|
+| **boxId** | [**string**] | ID of the box | |
+| **from** | [**Date**] | Start of time range (ISO 8601) | |
+| **to** | [**Date**] | End of time range (ISO 8601) | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 | **page** | [**number**] | Page number (1-indexed) | (optional) defaults to 1|
 | **limit** | [**number**] | Number of items per page | (optional) defaults to 100|
@@ -468,8 +468,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxIdOrName: string; //ID or name of the box (default to undefined)
-let port: number; //Port number to get preview URL for (default to undefined)
+let boxIdOrName: string; //ID or name of the box
+let port: number; //Port number to get preview URL for
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.getPortPreviewUrl(
@@ -483,8 +483,8 @@ const { status, data } = await apiInstance.getPortPreviewUrl(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **port** | [**number**] | Port number to get preview URL for | defaults to undefined|
+| **boxIdOrName** | [**string**] | ID or name of the box | |
+| **port** | [**number**] | Port number to get preview URL for | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -524,8 +524,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxIdOrName: string; //ID or name of the box (default to undefined)
-let port: number; //Port number to get signed preview URL for (default to undefined)
+let boxIdOrName: string; //ID or name of the box
+let port: number; //Port number to get signed preview URL for
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 let expiresInSeconds: number; //Expiration time in seconds (default: 60 seconds) (optional) (default to undefined)
 
@@ -541,8 +541,8 @@ const { status, data } = await apiInstance.getSignedPortPreviewUrl(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **port** | [**number**] | Port number to get signed preview URL for | defaults to undefined|
+| **boxIdOrName** | [**string**] | ID or name of the box | |
+| **port** | [**number**] | Port number to get signed preview URL for | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 | **expiresInSeconds** | [**number**] | Expiration time in seconds (default: 60 seconds) | (optional) defaults to undefined|
 
@@ -583,7 +583,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxId: string; //ID of the box (default to undefined)
+let boxId: string; //ID of the box
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.getToolboxProxyUrl(
@@ -596,7 +596,7 @@ const { status, data } = await apiInstance.getToolboxProxyUrl(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] | ID of the box | defaults to undefined|
+| **boxId** | [**string**] | ID of the box | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -749,7 +749,7 @@ const { status, data } = await apiInstance.listBoxesPaginated(
 | **name** | [**string**] | Filter by partial name match | (optional) defaults to undefined|
 | **labels** | [**string**] | JSON encoded labels to filter by | (optional) defaults to undefined|
 | **includeErroredDeleted** | [**boolean**] | Include results with errored state and deleted desired state | (optional) defaults to false|
-| **states** | **Array<&#39;creating&#39; &#124; &#39;restoring&#39; &#124; &#39;destroying&#39; &#124; &#39;started&#39; &#124; &#39;stopped&#39; &#124; &#39;starting&#39; &#124; &#39;stopping&#39; &#124; &#39;error&#39; &#124; &#39;unknown&#39; &#124; &#39;archived&#39; &#124; &#39;archiving&#39; &#124; &#39;resizing&#39; &#124; &#39;11184809&#39;>** | List of states to filter by | (optional) defaults to undefined|
+| **states** | **Array<&#39;creating&#39; &#124; &#39;restoring&#39; &#124; &#39;destroying&#39; &#124; &#39;started&#39; &#124; &#39;stopped&#39; &#124; &#39;starting&#39; &#124; &#39;stopping&#39; &#124; &#39;error&#39; &#124; &#39;unknown&#39; &#124; &#39;archived&#39; &#124; &#39;archiving&#39; &#124; &#39;resizing&#39;>** | List of states to filter by | (optional) defaults to undefined|
 | **regions** | **Array&lt;string&gt;** | List of regions to filter by | (optional) defaults to undefined|
 | **minCpu** | [**number**] | Minimum CPU | (optional) defaults to undefined|
 | **maxCpu** | [**number**] | Maximum CPU | (optional) defaults to undefined|
@@ -759,8 +759,8 @@ const { status, data } = await apiInstance.listBoxesPaginated(
 | **maxDiskGiB** | [**number**] | Maximum disk space in GiB | (optional) defaults to undefined|
 | **lastEventAfter** | [**Date**] | Include items with last event after this timestamp | (optional) defaults to undefined|
 | **lastEventBefore** | [**Date**] | Include items with last event before this timestamp | (optional) defaults to undefined|
-| **sort** | [**&#39;id&#39; | &#39;name&#39; | &#39;state&#39; | &#39;region&#39; | &#39;updatedAt&#39; | &#39;createdAt&#39;**]**Array<&#39;id&#39; &#124; &#39;name&#39; &#124; &#39;state&#39; &#124; &#39;region&#39; &#124; &#39;updatedAt&#39; &#124; &#39;createdAt&#39; &#124; &#39;11184809&#39;>** | Field to sort by | (optional) defaults to 'createdAt'|
-| **order** | [**&#39;asc&#39; | &#39;desc&#39;**]**Array<&#39;asc&#39; &#124; &#39;desc&#39; &#124; &#39;11184809&#39;>** | Direction to sort by | (optional) defaults to 'desc'|
+| **sort** | [**&#39;id&#39; &#124; &#39;name&#39; &#124; &#39;state&#39; &#124; &#39;region&#39; &#124; &#39;updatedAt&#39; &#124; &#39;createdAt&#39;**] | Field to sort by | (optional) defaults to 'createdAt'|
+| **order** | [**&#39;asc&#39; &#124; &#39;desc&#39;**] | Direction to sort by | (optional) defaults to 'desc'|
 
 
 ### Return type
@@ -799,7 +799,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxIdOrName: string; //ID or name of the box (default to undefined)
+let boxIdOrName: string; //ID or name of the box
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.recoverBox(
@@ -812,7 +812,7 @@ const { status, data } = await apiInstance.recoverBox(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
+| **boxIdOrName** | [**string**] | ID or name of the box | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -853,7 +853,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxIdOrName: string; //ID or name of the box (default to undefined)
+let boxIdOrName: string; //ID or name of the box
 let boxLabels: BoxLabels; //
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
@@ -869,7 +869,7 @@ const { status, data } = await apiInstance.replaceLabels(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **boxLabels** | **BoxLabels**|  | |
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
+| **boxIdOrName** | [**string**] | ID or name of the box | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -909,8 +909,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxIdOrName: string; //ID or name of the box (default to undefined)
-let interval: number; //Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete. (default to undefined)
+let boxIdOrName: string; //ID or name of the box
+let interval: number; //Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete.
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.setAutoDeleteInterval(
@@ -924,8 +924,8 @@ const { status, data } = await apiInstance.setAutoDeleteInterval(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **interval** | [**number**] | Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete. | defaults to undefined|
+| **boxIdOrName** | [**string**] | ID or name of the box | |
+| **interval** | [**number**] | Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete. | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -965,8 +965,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxIdOrName: string; //ID or name of the box (default to undefined)
-let interval: number; //Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval. (default to undefined)
+let boxIdOrName: string; //ID or name of the box
+let interval: number; //Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval.
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.setAutostopInterval(
@@ -980,8 +980,8 @@ const { status, data } = await apiInstance.setAutostopInterval(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **interval** | [**number**] | Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval. | defaults to undefined|
+| **boxIdOrName** | [**string**] | ID or name of the box | |
+| **interval** | [**number**] | Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval. | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -1022,7 +1022,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxId: string; //ID of the box (default to undefined)
+let boxId: string; //ID of the box
 let updateBoxStateDto: UpdateBoxStateDto; //
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
@@ -1038,7 +1038,7 @@ const { status, data } = await apiInstance.updateBoxState(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **updateBoxStateDto** | **UpdateBoxStateDto**|  | |
-| **boxId** | [**string**] | ID of the box | defaults to undefined|
+| **boxId** | [**string**] | ID of the box | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -1078,7 +1078,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxId: string; //ID of the box (default to undefined)
+let boxId: string; //ID of the box
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.updateLastActivity(
@@ -1091,7 +1091,7 @@ const { status, data } = await apiInstance.updateLastActivity(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] | ID of the box | defaults to undefined|
+| **boxId** | [**string**] | ID of the box | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -1131,8 +1131,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
-let boxIdOrName: string; //ID or name of the box (default to undefined)
-let isPublic: boolean; //Public status to set (default to undefined)
+let boxIdOrName: string; //ID or name of the box
+let isPublic: boolean; //Public status to set
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.updatePublicStatus(
@@ -1146,8 +1146,8 @@ const { status, data } = await apiInstance.updatePublicStatus(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **isPublic** | [**boolean**] | Public status to set | defaults to undefined|
+| **boxIdOrName** | [**string**] | ID or name of the box | |
+| **isPublic** | [**boolean**] | Public status to set | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 

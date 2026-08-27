@@ -216,7 +216,7 @@ export interface SimpleBoxOptions {
   /** Environment variables */
   env?: Record<string, string>;
 
-  /** Volume mounts: local hostPath or managed source such as volume://vol_123. */
+  /** Volume mounts: a local hostPath, or a managedVolume by id or name. */
   volumes?: JsVolumeSpec[];
 
   /** Port mappings */
@@ -725,9 +725,13 @@ export class SimpleBox {
   /**
    * Copy a file or directory from the host into the container.
    *
-   * **Note:** Destinations under tmpfs mounts (e.g. `/tmp`, `/dev/shm`) will
-   * silently fail — files land behind the mount and are invisible to the
-   * container. Use a non-tmpfs path like `/root/` instead.
+   * **Note:** Destinations under a container mount (e.g. `/tmp`, `/dev/shm`,
+   * volumes) are refused with an error naming the mount — files written there
+   * would land behind it and be invisible to the container. Use a path outside
+   * the mount, like `/root/`, or pipe a tar through `exec`.
+   *
+   * Files land owned by the box's exec user, so the workload can read them
+   * without any chmod/chown of its own.
    *
    * @param hostPath - Absolute path on the host
    * @param containerDest - Absolute path inside the container
@@ -744,6 +748,12 @@ export class SimpleBox {
 
   /**
    * Copy a file or directory from the container to the host.
+   *
+   * **Note:** a source at or under a container mount (e.g. `/tmp`,
+   * `/dev/shm`, volumes), or a directory containing one, is refused with an
+   * error naming the mount — the archive would carry the files underneath it
+   * rather than the ones the container sees. Copy a path outside the mount,
+   * or pipe a tar through `exec`.
    *
    * @param containerSrc - Absolute path inside the container
    * @param hostDest - Absolute path on the host

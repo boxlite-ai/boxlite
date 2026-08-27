@@ -74,7 +74,15 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
                         box_id.as_str(),
                         None,
                     );
-                    report.user_message
+                    // This path logged nothing before: the crash cause reached
+                    // the caller and nowhere else. Route the detail to the host
+                    // log so it survives the terse caller-facing message.
+                    tracing::error!(
+                        box_id = %box_id,
+                        "Box crashed in a prior lifecycle:\n{}",
+                        report.operator_report
+                    );
+                    report.client_message
                 } else {
                     "Box process is no longer running (PID file missing, process dead, \
                      or start-time mismatch indicating PID reuse)"

@@ -290,7 +290,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     if (TEST === 'all' || TEST === 'copyout_missing') {
       let threw = false;
       try {
-        await box.copyOut('/tmp/does-not-exist-xyz', path.join(tmpDir, 'nope'));
+        await box.copyOut('/workspace/does-not-exist-xyz', path.join(tmpDir, 'nope'));
       } catch { threw = true; }
       if (!threw) die(`copyOut of a missing path did not reject`);
       console.log('COPYOUT_MISSING=ok');
@@ -302,8 +302,8 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
       const dst = path.join(tmpDir, 'rt-out.txt');
       const content = 'hello-from-node-copy\nline2\n';
       fs.writeFileSync(src, content);
-      await box.copyIn(src, '/tmp/rt.txt');
-      await box.copyOut('/tmp/rt.txt', dst);
+      await box.copyIn(src, '/workspace/rt.txt');
+      await box.copyOut('/workspace/rt.txt', dst);
       const got = fs.readFileSync(dst, 'utf-8');
       if (got !== content) die(`copy roundtrip mismatch: ${JSON.stringify(got)}`);
       console.log('COPY_ROUNDTRIP=ok');
@@ -316,8 +316,8 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
       const buf = Buffer.alloc(256);
       for (let i = 0; i < 256; i++) buf[i] = i;
       fs.writeFileSync(src, buf);
-      await box.copyIn(src, '/tmp/bin');
-      await box.copyOut('/tmp/bin', dst);
+      await box.copyIn(src, '/workspace/bin');
+      await box.copyOut('/workspace/bin', dst);
       const got = fs.readFileSync(dst);
       if (sha256(got) !== sha256(buf)) die(`binary mismatch: ${got.length} bytes, sha ${sha256(got)}`);
       console.log('COPY_BINARY=ok');
@@ -329,8 +329,8 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
       const dst = path.join(tmpDir, 'big-out');
       const buf = crypto.randomBytes(1024 * 1024);
       fs.writeFileSync(src, buf);
-      await box.copyIn(src, '/tmp/big');
-      await box.copyOut('/tmp/big', dst);
+      await box.copyIn(src, '/workspace/big');
+      await box.copyOut('/workspace/big', dst);
       const got = fs.readFileSync(dst);
       if (got.length !== buf.length) die(`large file size mismatch: ${got.length} != ${buf.length}`);
       if (sha256(got) !== sha256(buf)) die(`large file sha mismatch`);
@@ -344,10 +344,10 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
       const content = 'nested-payload\n';
       fs.writeFileSync(src, content);
       // Create the destination tree first (copyIn does not mkdir -p).
-      const mk = await box.exec('mkdir', ['-p', '/tmp/a/b/c/d'], null, false);
+      const mk = await box.exec('mkdir', ['-p', '/workspace/a/b/c/d'], null, false);
       await mk.wait();
-      await box.copyIn(src, '/tmp/a/b/c/d/f.txt');
-      await box.copyOut('/tmp/a/b/c/d/f.txt', dst);
+      await box.copyIn(src, '/workspace/a/b/c/d/f.txt');
+      await box.copyOut('/workspace/a/b/c/d/f.txt', dst);
       if (fs.readFileSync(dst, 'utf-8') !== content) die(`nested copy mismatch`);
       console.log('COPY_NESTED=ok');
     }

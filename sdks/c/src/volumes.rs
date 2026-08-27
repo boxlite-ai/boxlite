@@ -44,6 +44,8 @@ pub struct VolumeHandle {
 #[repr(C)]
 pub struct CVolumeInfo {
     pub id: *mut c_char,
+    /// Volume name, mountable in place of the id. Defaults to the id.
+    pub name: *mut c_char,
     pub created_at: *mut c_char,
     pub size_bytes: u64,
     pub has_size: c_int,
@@ -76,6 +78,7 @@ impl CVolumeInfo {
 
         CVolumeInfo {
             id: to_c_str(&info.id),
+            name: to_c_str(&info.name),
             created_at: to_c_str(&info.created_at.to_rfc3339()),
             size_bytes,
             has_size,
@@ -90,6 +93,7 @@ pub unsafe fn free_volume_info(info: *mut CVolumeInfo) {
         }
         let info_ref = &mut *info;
         free_str(info_ref.id);
+        free_str(info_ref.name);
         free_str(info_ref.created_at);
         drop(Box::from_raw(info));
     }
@@ -104,6 +108,7 @@ pub unsafe fn free_volume_info_list(list: *mut CVolumeInfoList) {
         for idx in 0..list_ref.count {
             let item = &mut *list_ref.items.add(idx as usize);
             free_str(item.id);
+            free_str(item.name);
             free_str(item.created_at);
         }
         if !list_ref.items.is_null() {
@@ -143,11 +148,12 @@ unsafe fn free_str(s: *mut c_char) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_volume_create(
     handle: *mut CBoxliteVolumeHandle,
+    name: *const c_char,
     cb: CBoxVolumeCreateCb,
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    volume_create(handle, cb, user_data, out_error)
+    unsafe { volume_create(handle, name, cb, user_data, out_error) }
 }
 
 /// Queue asynchronous volume listing with the same dispatch, concurrency, and
@@ -245,6 +251,7 @@ pub unsafe extern "C" fn boxlite_free_volume_info_list(list: *mut CVolumeInfoLis
 
 unsafe fn volume_create(
     handle: *mut VolumeHandle,
+    name: *const c_char,
     cb: CBoxVolumeCreateCb,
     user_data: *mut c_void,
     out_error: *mut FFIError,
@@ -266,9 +273,25 @@ unsafe fn volume_create(
         let core_handle = handle_ref.handle.clone();
         let queue = handle_ref.queue.clone();
         let user_data_addr = user_data as usize;
+        // Copied before the spawn: the caller owns the string only until this
+        // function returns. Invalid UTF-8 is refused rather than dropped —
+        // swallowing it would silently create an *unnamed* volume, and the
+        // caller would never learn the name they asked for was discarded.
+        let name = if name.is_null() {
+            None
+        } else {
+            match crate::util::c_str_to_string(name) {
+                Ok(name) => Some(name),
+                Err(e) => {
+                    let code = error_to_code(&e);
+                    write_error(out_error, e);
+                    return code;
+                }
+            }
+        };
 
         handle_ref.tokio_rt.spawn(async move {
-            let result = core_handle.create().await.map(|info| {
+            let result = core_handle.create(name.as_deref()).await.map(|info| {
                 crate::event_queue::OwnedFfiPtr::new_with(
                     Box::new(CVolumeInfo::from_volume_info(&info)),
                     free_volume_info,

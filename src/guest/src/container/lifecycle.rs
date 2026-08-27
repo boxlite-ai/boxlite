@@ -64,6 +64,8 @@ pub struct Container {
     env: HashMap<String, String>,
     /// Resolved (uid, gid) from image USER directive, propagated to exec commands.
     user: (u32, u32),
+    /// Destinations of every mount the applied OCI spec declares.
+    mount_destinations: Vec<PathBuf>,
     /// Resolved capability set shared by init and every exec process.
     capabilities: CapabilitySet,
     /// Stdio pipes that keep init process alive.
@@ -180,7 +182,7 @@ impl Container {
 
         // Create OCI bundle at /run/boxlite/containers/{cid}/
         // create_oci_bundle creates bundle_root/{cid}/, so pass containers_dir
-        let bundle_path = start::create_oci_bundle(
+        let bundle = start::create_oci_bundle(
             container_id,
             rootfs,
             &entrypoint,
@@ -206,7 +208,7 @@ impl Container {
             start::create_container_with_stdio(
                 container_id,
                 &state_root,
-                &bundle_path,
+                &bundle.path,
                 start::InitIoSetup::Console(socket.path().to_string()),
             )?;
             ContainerStdio::pty(socket.receive_pty_master()?)
@@ -217,7 +219,7 @@ impl Container {
             start::create_container_with_stdio(
                 container_id,
                 &state_root,
-                &bundle_path,
+                &bundle.path,
                 start::InitIoSetup::Pipes(init_fds),
             )?;
             stdio
@@ -229,9 +231,10 @@ impl Container {
         Ok(Self {
             id: container_id.to_string(),
             state_root,
-            bundle_path,
+            bundle_path: bundle.path,
             env: env_map,
             user: (uid, gid),
+            mount_destinations: bundle.mount_destinations,
             capabilities,
             stdio,
             is_shutdown: std::sync::atomic::AtomicBool::new(false),
@@ -302,6 +305,37 @@ impl Container {
     #[allow(dead_code)] // API completeness, may be used by future RPC handlers
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// The (uid, gid) every process in this container runs as.
+    ///
+    /// Resolved once at creation from the image's `USER` directive (or the
+    /// box-level override) and handed to init and every exec alike, so anything
+    /// that wants to match what the workload can read should ask here rather
+    /// than guessing.
+    pub fn user(&self) -> (u32, u32) {
+        self.user
+    }
+
+    /// Destinations of every mount the container was created with.
+    ///
+    /// Taken from the OCI spec that was actually applied — the same object
+    /// `config.json` was written from — so it covers the standard tmpfs/pseudo
+    /// mounts and user volumes alike and cannot drift from what the runtime
+    /// did. Callers use this to tell whether a path inside the container is
+    /// reachable through the rootfs directory: anything at or below one of
+    /// these destinations is covered by a mount in the container's own
+    /// namespace and is *not* the file a process in the box would see at that
+    /// path.
+    ///
+    /// Resolved once at creation, like [`Self::user`], rather than re-read per
+    /// question: the bundle is written once and never rewritten, and the
+    /// callers are RPC handlers on the guest's async runtime — which on a
+    /// single-vCPU box is a single worker thread — so a `Spec::load` here
+    /// stalled every other in-flight RPC for the length of a file read and a
+    /// deserialize.
+    pub fn mount_destinations(&self) -> &[PathBuf] {
+        &self.mount_destinations
     }
 
     /// PID of the container's init process, from libcontainer state.

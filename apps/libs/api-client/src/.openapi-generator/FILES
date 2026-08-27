@@ -15,6 +15,7 @@ api/organizations-api.ts
 api/preview-api.ts
 api/regions-api.ts
 api/runners-api.ts
+api/usage-api.ts
 api/users-api.ts
 api/volumes-api.ts
 api/webhooks-api.ts
@@ -110,6 +111,9 @@ docs/UpdateOrganizationMemberAccess.md
 docs/UpdateOrganizationName.md
 docs/UpdateOrganizationRole.md
 docs/UpdateRegion.md
+docs/UsageApi.md
+docs/UsageConcurrencyPointDto.md
+docs/UsageConcurrencySeriesDto.md
 docs/User.md
 docs/UserPublicKey.md
 docs/UsersApi.md
@@ -200,6 +204,8 @@ models/update-organization-member-access.ts
 models/update-organization-name.ts
 models/update-organization-role.ts
 models/update-region.ts
+models/usage-concurrency-point-dto.ts
+models/usage-concurrency-series-dto.ts
 models/user-public-key.ts
 models/user.ts
 models/volume-dto.ts

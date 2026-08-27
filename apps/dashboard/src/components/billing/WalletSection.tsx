@@ -18,17 +18,39 @@ import {
   useIsOwnerCheckoutUrlFetching,
   useOwnerBillingPortalUrlQuery,
   useOwnerInvoicesQuery,
+  useOwnerPaymentMethodsQuery,
   useOwnerWalletQuery,
 } from '@/hooks/queries/billingQueries'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { formatAmount } from '@/lib/utils'
-import { ArrowUpRight, CheckCircleIcon } from '@/components/ui/icon'
+import { ArrowUpRight } from '@/components/ui/icon'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { NumericFormat } from 'react-number-format'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
+import { PaymentMethodsPanel } from './PaymentMethodsPanel'
 
 const DEFAULT_PAGE_SIZE = 10
+
+/** Commerce rejects anything smaller, so the form says so before the round trip. */
+export const MIN_TOP_UP_DOLLARS = 10
+
+/**
+ * What an unconfigured auto-reload starts at, so switching it on is one click
+ * rather than a policy decision the user has to invent.
+ */
+const DEFAULT_AUTO_RELOAD: AutomaticTopUp = { thresholdAmount: 20, targetAmount: 100 }
+
+/** Whether Top up can run, and why not when it cannot. */
+export function topUpGate(amountDollars: number | undefined): { enabled: boolean; reason: string | null } {
+  if (!amountDollars) {
+    return { enabled: false, reason: null }
+  }
+  if (amountDollars < MIN_TOP_UP_DOLLARS) {
+    return { enabled: false, reason: `Minimum top-up is $${MIN_TOP_UP_DOLLARS}.` }
+  }
+  return { enabled: true, reason: null }
+}
 
 export function WalletSection() {
   const { selectedOrganization } = useSelectedOrganization()
@@ -39,6 +61,10 @@ export function WalletSection() {
   const [redeemCouponSuccess, setRedeemCouponSuccess] = useState<string | null>(null)
   const [oneTimeTopUpAmount, setOneTimeTopUpAmount] = useState<number | undefined>(undefined)
   const [selectedPreset, setSelectedPreset] = useState<number | null>(100)
+  // Both are folded by default: one is a setting you touch once, the other a
+  // one-shot action. Neither earns six rows of the panel on every visit.
+  const [autoReloadOpen, setAutoReloadOpen] = useState(false)
+  const [couponOpen, setCouponOpen] = useState(false)
   const [invoicesPagination, setInvoicesPagination] = useState({
     pageIndex: 0,
     pageSize: DEFAULT_PAGE_SIZE,
@@ -46,6 +72,7 @@ export function WalletSection() {
   const walletQuery = useOwnerWalletQuery({ refetchOnMount: 'always' })
   const billingPortalUrlQuery = useOwnerBillingPortalUrlQuery()
   const invoicesQuery = useOwnerInvoicesQuery(invoicesPagination.pageIndex + 1, invoicesPagination.pageSize)
+  const paymentMethodsQuery = useOwnerPaymentMethodsQuery()
 
   const isCheckoutUrlLoading = useIsOwnerCheckoutUrlFetching()
   const fetchCheckoutUrl = useFetchOwnerCheckoutUrlQuery()
@@ -56,9 +83,10 @@ export function WalletSection() {
   const topUpWalletMutation = useTopUpWalletMutation()
 
   useEffect(() => {
-    if (wallet?.automaticTopUp) {
-      setAutomaticTopUp(wallet.automaticTopUp)
+    if (!wallet) {
+      return
     }
+    setAutomaticTopUp(wallet.automaticTopUp ?? DEFAULT_AUTO_RELOAD)
   }, [wallet])
 
   const handleUpdatePaymentMethod = useCallback(async () => {
@@ -159,7 +187,7 @@ export function WalletSection() {
     try {
       const result = await topUpWalletMutation.mutateAsync({
         organizationId: selectedOrganization.id,
-        amountCents: amount * 100,
+        amountCents: Math.round(amount * 100),
       })
       if (newWindow) {
         newWindow.location.href = result.url
@@ -173,9 +201,12 @@ export function WalletSection() {
   }, [selectedOrganization, selectedPreset, oneTimeTopUpAmount, topUpWalletMutation])
 
   const isBillingLoading = walletQuery.isLoading && billingPortalUrlQuery.isLoading
-  const topUpEnabled =
-    wallet?.creditCardConnected && !topUpWalletMutation.isPending && (selectedPreset || oneTimeTopUpAmount)
-  const autoReloadEnabled = (automaticTopUp?.thresholdAmount ?? 0) > 0 || (automaticTopUp?.targetAmount ?? 0) > 0
+  const cardConnected = Boolean(wallet?.creditCardConnected)
+  const topUp = topUpGate(selectedPreset ?? oneTimeTopUpAmount)
+  // Read the indicator off the saved wallet, not the form: the form is
+  // pre-filled with defaults, which would otherwise read as already on.
+  const autoReloadActive =
+    (wallet?.automaticTopUp?.thresholdAmount ?? 0) > 0 || (wallet?.automaticTopUp?.targetAmount ?? 0) > 0
 
   return (
     <div className="flex flex-col gap-8">
@@ -203,7 +234,16 @@ export function WalletSection() {
 
       {wallet && (
         <div className="flex flex-col gap-8">
-          {/* Wallet balance — one panel of divided rows: balance, add funds, auto-reload, coupon */}
+          {/* Card enumeration is its own read model; checkout remains the one action. */}
+          <PaymentMethodsPanel
+            paymentMethods={paymentMethodsQuery.data ?? []}
+            isLoading={paymentMethodsQuery.isLoading}
+            isError={paymentMethodsQuery.isError}
+            hasConnectedCard={cardConnected}
+            isActionLoading={isCheckoutUrlLoading}
+            onAction={handleUpdatePaymentMethod}
+          />
+
           <section>
             <SectionTitle title="Wallet Balance" />
             <Panel className="px-[22px] py-5">
@@ -215,15 +255,24 @@ export function WalletSection() {
               </div>
 
               <div className="mt-4">
-                {wallet.creditGrantedCents !== undefined && wallet.creditRemainingCents !== undefined && (
+                {/* Only when a grant exists. A $0.00 / $0.00 row is not a fact
+                    about promotional credit, it is the absence of one. */}
+                {(wallet.creditGrantedCents ?? 0) > 0 && (
                   <>
                     <div className="mb-1.5 flex items-center justify-between font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
                       <span>Promotional credit remaining</span>
                       <span className="tabular-nums">
-                        {formatAmount(wallet.creditRemainingCents)} / {formatAmount(wallet.creditGrantedCents)}
+                        {formatAmount(wallet.creditRemainingCents ?? 0)} /{' '}
+                        {formatAmount(wallet.creditGrantedCents ?? 0)}
                       </span>
                     </div>
-                    <SegmentedBar used={wallet.creditRemainingCents} limit={wallet.creditGrantedCents} />
+                    {/* Fill the spent part, not the remaining one: SegmentedBar
+                        turns amber past 80% and red past 90%, so passing the
+                        remainder painted a freshly granted, untouched credit red. */}
+                    <SegmentedBar
+                      used={Math.max(0, (wallet.creditGrantedCents ?? 0) - (wallet.creditRemainingCents ?? 0))}
+                      limit={wallet.creditGrantedCents ?? 0}
+                    />
                   </>
                 )}
                 {billingPortalUrlQuery.isLoading ? (
@@ -283,36 +332,58 @@ export function WalletSection() {
                 <AsciiButton
                   variant="primary"
                   onClick={handleTopUpWallet}
-                  disabled={!topUpEnabled}
+                  disabled={!topUp.enabled || topUpWalletMutation.isPending}
                   className="inline-flex w-full items-center justify-center gap-2 sm:ml-auto sm:w-auto"
                 >
                   {topUpWalletMutation.isPending && <Spinner />}
                   Top up →
                 </AsciiButton>
               </div>
-              <PanelNote>You will be redirected to Stripe to complete the payment.</PanelNote>
+              {topUp.reason && (
+                <p className="mt-3 font-mono text-[11px] leading-relaxed text-warning">{topUp.reason}</p>
+              )}
+              <PanelNote>
+                Minimum ${MIN_TOP_UP_DOLLARS} · you will be redirected to Stripe to complete the payment.
+              </PanelNote>
 
-              {wallet.creditCardConnected && (
-                <>
-                  <div className="my-5 h-px bg-border" />
+              {/* Auto-reload stays on the page without a card, disabled and
+                  labelled: hiding it is why nobody knew it existed, and it is
+                  also the only thing that arms the low-balance warning. */}
+              <>
+                <div className="my-5 h-px bg-border" />
 
-                  {/* Auto-reload — one row. Both API fields stay inline: the endpoint takes a
-                      threshold and a target, not a top-up amount. */}
-                  <div className="flex flex-wrap items-center justify-between gap-3">
+                <button
+                  type="button"
+                  aria-expanded={autoReloadOpen}
+                  aria-controls="auto-reload-settings"
+                  onClick={() => setAutoReloadOpen((wasOpen) => !wasOpen)}
+                  className="flex w-full items-center gap-2 font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <span style={{ color: BRAND }}>{autoReloadOpen ? '▾' : '▸'}</span>
+                  Auto-reload
+                  <span
+                    className="size-[6px] rounded-full"
+                    style={{ background: autoReloadActive ? BRAND : 'hsl(var(--muted-foreground))' }}
+                  />
+                  {/* Folded, the row still answers the only question it is asked:
+                      is it on, and at what numbers. */}
+                  <span className="ml-auto normal-case tracking-normal">
+                    {autoReloadActive && wallet.automaticTopUp
+                      ? `Below $${wallet.automaticTopUp.thresholdAmount.toFixed(2)} → $${wallet.automaticTopUp.targetAmount.toFixed(2)}`
+                      : 'Off'}
+                  </span>
+                </button>
+
+                {autoReloadOpen && (
+                  <div id="auto-reload-settings" className="mt-3 flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-col gap-1.5">
-                      <span className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
-                        Auto-reload
-                        <span
-                          className="size-[6px] rounded-full"
-                          style={{ background: autoReloadEnabled ? BRAND : 'hsl(var(--muted-foreground))' }}
-                        />
-                      </span>
                       <div className="flex flex-wrap items-center gap-2 font-mono text-[13px] text-foreground">
                         <span>when balance &lt;</span>
                         <span className="inline-flex items-center border border-border px-2 py-1 transition-colors focus-within:border-brand">
                           <span className="text-muted-foreground">$</span>
                           <NumericFormat
                             id="thresholdAmount"
+                            disabled={!cardConnected}
                             placeholder="0.00"
                             inputMode="decimal"
                             thousandSeparator
@@ -339,6 +410,7 @@ export function WalletSection() {
                           <span className="text-muted-foreground">$</span>
                           <NumericFormat
                             id="targetAmount"
+                            disabled={!cardConnected}
                             placeholder="0.00"
                             inputMode="decimal"
                             thousandSeparator
@@ -369,77 +441,73 @@ export function WalletSection() {
                     </div>
                     <AsciiButton
                       onClick={handleSetAutomaticTopUp}
-                      disabled={saveAutomaticTopUpDisabled || walletQuery.isLoading || !wallet}
+                      disabled={!cardConnected || saveAutomaticTopUpDisabled || walletQuery.isLoading || !wallet}
                       className="inline-flex items-center gap-2"
                     >
                       {setAutomaticTopUpMutation.isPending && <Spinner />} Save
                     </AsciiButton>
                   </div>
-                  <PanelNote>Target must be at least $10 above the threshold · set both to 0 to disable</PanelNote>
-                </>
-              )}
+                )}
+                {autoReloadOpen &&
+                  (cardConnected ? (
+                    <PanelNote>Target must be at least $10 above the threshold · set both to 0 to disable</PanelNote>
+                  ) : (
+                    <p className="mt-3 font-mono text-[11px] leading-relaxed text-warning">
+                      Connect a payment method above to turn auto-reload on. Until it is set, nothing warns you before
+                      the balance runs out.
+                    </p>
+                  ))}
+              </>
 
               {user?.profile.email_verified && (
                 <>
                   <div className="my-5 h-px bg-border" />
 
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-col gap-1.5">
-                      <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
-                        Redeem coupon
-                      </span>
-                      {redeemCouponError ? (
-                        <span className="font-mono text-[12px] text-destructive">{redeemCouponError}</span>
-                      ) : redeemCouponSuccess ? (
-                        <span className="font-mono text-[12px] text-success">{redeemCouponSuccess}</span>
-                      ) : (
-                        <span className="font-mono text-[12px] text-muted-foreground">
-                          Enter a coupon code to redeem your credits.
+                  {/* A one-shot action with no state to summarise, so it gets a
+                      link rather than a settings row — the checkout convention. */}
+                  {!couponOpen ? (
+                    <button
+                      type="button"
+                      onClick={() => setCouponOpen(true)}
+                      className="font-mono text-[11px] text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+                    >
+                      Have a coupon code?
+                    </button>
+                  ) : (
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-col gap-1.5">
+                        <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+                          Redeem coupon
                         </span>
-                      )}
+                        {redeemCouponError ? (
+                          <span className="font-mono text-[12px] text-destructive">{redeemCouponError}</span>
+                        ) : redeemCouponSuccess ? (
+                          <span className="font-mono text-[12px] text-success">{redeemCouponSuccess}</span>
+                        ) : (
+                          <span className="font-mono text-[12px] text-muted-foreground">
+                            Enter a coupon code to redeem your credits.
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex w-full items-center gap-2 sm:w-auto">
+                        <Input
+                          placeholder="Enter coupon code"
+                          value={couponCode}
+                          onChange={(e) => setCouponCode(e.target.value)}
+                          className="h-9 w-full font-mono text-[13px] sm:w-[200px]"
+                        />
+                        <AsciiButton
+                          onClick={handleRedeemCoupon}
+                          disabled={redeemCouponMutation.isPending}
+                          className="inline-flex shrink-0 items-center gap-2"
+                        >
+                          {redeemCouponMutation.isPending && <Spinner />} Redeem
+                        </AsciiButton>
+                      </div>
                     </div>
-                    <div className="flex w-full items-center gap-2 sm:w-auto">
-                      <Input
-                        placeholder="Enter coupon code"
-                        value={couponCode}
-                        onChange={(e) => setCouponCode(e.target.value)}
-                        className="h-9 w-full font-mono text-[13px] sm:w-[200px]"
-                      />
-                      <AsciiButton
-                        onClick={handleRedeemCoupon}
-                        disabled={redeemCouponMutation.isPending}
-                        className="inline-flex shrink-0 items-center gap-2"
-                      >
-                        {redeemCouponMutation.isPending && <Spinner />} Redeem
-                      </AsciiButton>
-                    </div>
-                  </div>
+                  )}
                 </>
               )}
-            </Panel>
-          </section>
-
-          <section>
-            <SectionTitle title="Payment Method" />
-            <Panel className="px-[22px] py-4">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                {!wallet.creditCardConnected ? (
-                  <span className="font-mono text-[13px] text-muted-foreground">Payment method not connected</span>
-                ) : (
-                  <span className="flex items-center gap-2 font-mono text-[13px] text-foreground">
-                    <CheckCircleIcon className="size-4 shrink-0" /> Credit card connected
-                  </span>
-                )}
-                <AsciiButton
-                  variant={wallet.creditCardConnected ? 'secondary' : 'primary'}
-                  onClick={handleUpdatePaymentMethod}
-                  disabled={isCheckoutUrlLoading}
-                  className="inline-flex items-center gap-2"
-                >
-                  {isCheckoutUrlLoading && <Spinner />} {wallet.creditCardConnected ? 'Update card' : 'Connect'}
-                </AsciiButton>
-              </div>
-              <PanelNote>Used for top-up charges · card details are held by Stripe</PanelNote>
             </Panel>
           </section>
 

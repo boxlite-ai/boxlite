@@ -17,5 +17,4 @@
 export * from './api/box-api';
 export * from './api/boxlite-api';
 export * from './api/default-api';
-export * from './api/snapshots-api';
 

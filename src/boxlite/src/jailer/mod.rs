@@ -305,6 +305,12 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         .map(|home| home.join("bases"))
         .filter(|p| p.exists())
     {
+        // The directly-mounted rootfs ext4 is addressed by its *canonical* bases
+        // path (BaseDiskManager::new canonicalizes at construction). Grant the
+        // canonical path too, or a symlinked BOXLITE_HOME / bases/ leaves bwrap
+        // mounting the logical path while libkrun opens the canonical one —
+        // "Disk image not found" inside the sandbox.
+        let bases_dir = bases_dir.canonicalize().unwrap_or(bases_dir);
         paths.push(PathAccess {
             path: bases_dir,
             writable: false,
@@ -326,7 +332,12 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
     // User volumes. Directories are shared directly, so grant the VMM access.
     // Single files are staged under shared_dir (granted above), so they need no
     // grant here — this also keeps the file's host siblings out of the sandbox.
+    // A managed volume names no host path, so there is nothing to grant; the
+    // local runtime rejects one before boot anyway (`resolve_user_volumes`).
     for vol in volumes {
+        if vol.managed_volume.is_some() {
+            continue;
+        }
         let p = PathBuf::from(&vol.host_path);
         if let Some(VolumeShare::Dir(dir)) = classify_volume_share(&p) {
             paths.push(PathAccess {
@@ -736,9 +747,48 @@ mod tests {
 
         let paths = build_path_access(&layout, &[]);
 
-        let bases_paths: Vec<_> = paths.iter().filter(|p| p.path == bases_dir).collect();
+        // bases/ is granted by its canonical path; compare canonical forms so the
+        // assertion holds even when $TMPDIR itself contains a symlink.
+        let expected = bases_dir
+            .canonicalize()
+            .unwrap_or_else(|_| bases_dir.clone());
+        let bases_paths: Vec<_> = paths
+            .iter()
+            .filter(|p| p.path.canonicalize().unwrap_or_else(|_| p.path.clone()) == expected)
+            .collect();
         assert_eq!(bases_paths.len(), 1, "Should include home_dir/bases/");
         assert!(!bases_paths[0].writable);
+    }
+
+    #[test]
+    fn test_build_path_access_canonicalizes_bases_dir_through_symlink() {
+        // A symlinked BOXLITE_HOME (or bases/) makes the logical home/bases path
+        // diverge from the canonical path the block device opens. The grant must
+        // be canonical, or bwrap mounts the logical path while libkrun opens the
+        // canonical one and fails with "Disk image not found".
+        let real_home = tempdir().unwrap();
+        let real_home = real_home.path().to_path_buf();
+        let link_root = tempdir().unwrap();
+        let link_home = link_root.path().join("boxlite-home-link");
+        std::os::unix::fs::symlink(&real_home, &link_home).unwrap();
+
+        // box_dir lives under the symlinked home.
+        let box_dir = link_home.join("boxes").join("test-box");
+        std::fs::create_dir_all(&box_dir).unwrap();
+
+        // bases/ under the real (canonical) home.
+        let real_bases = real_home.join("bases");
+        std::fs::create_dir_all(&real_bases).unwrap();
+
+        let layout = test_layout(box_dir);
+        let paths = build_path_access(&layout, &[]);
+
+        let expected = real_bases.canonicalize().unwrap();
+        assert!(
+            paths.iter().any(|p| p.path == expected && !p.writable),
+            "bases/ must be granted by its canonical path ({}), not the logical symlink path",
+            expected.display()
+        );
     }
 
     #[test]
@@ -828,11 +878,13 @@ mod tests {
 
         let volumes = vec![
             VolumeSpec {
+                managed_volume: None,
                 host_path: vol_ro.to_string_lossy().to_string(),
                 guest_path: "/mnt/input".to_string(),
                 read_only: true,
             },
             VolumeSpec {
+                managed_volume: None,
                 host_path: vol_rw.to_string_lossy().to_string(),
                 guest_path: "/mnt/output".to_string(),
                 read_only: false,
@@ -860,6 +912,7 @@ mod tests {
         let layout = test_layout(dir.path().to_path_buf());
 
         let volumes = vec![VolumeSpec {
+            managed_volume: None,
             host_path: "/does/not/exist".to_string(),
             guest_path: "/mnt/data".to_string(),
             read_only: true,
@@ -884,6 +937,7 @@ mod tests {
         std::fs::write(&file, "k=v\n").unwrap();
 
         let volumes = vec![VolumeSpec {
+            managed_volume: None,
             host_path: file.to_string_lossy().to_string(),
             guest_path: "/etc/app.conf".to_string(),
             read_only: true,
@@ -1021,6 +1075,7 @@ mod tests {
             .with_layout(layout.clone())
             .with_security(security)
             .with_volumes(vec![VolumeSpec {
+                managed_volume: None,
                 host_path: vol_dir.to_string_lossy().to_string(),
                 guest_path: "/mnt/data".to_string(),
                 read_only: false,

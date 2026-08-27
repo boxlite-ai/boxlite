@@ -1,21 +1,29 @@
-//! Crash report formatting for user-friendly error messages.
+//! Crash report formatting, split by audience.
 //!
-//! Transforms raw [`ExitInfo`] into human-readable crash reports
-//! with context-aware troubleshooting suggestions.
+//! Transforms raw [`ExitInfo`] into a terse client-facing sentence and a rich
+//! operator report. Only the former may cross the API boundary — see
+//! [`CrashReport`] and [`crate::util`]'s diagnostic module for why.
 
 use crate::vmm::{ExitInfo, exit_info::ExitErrorKind};
 use std::path::Path;
 
-/// Formatted crash report for user-friendly error messages.
+/// A box-start failure, split by audience.
 ///
-/// Combines parsed exit information with formatted messages suitable
-/// for displaying to users.
+/// The same crash has two readers with opposite needs. An engineer on the host
+/// wants the console path, the shim stderr and the exit code; an API tenant must
+/// see none of it — those paths are on someone else's machine. So the rich text
+/// is not discarded, it is *routed*: callers log [`operator_report`] and pass
+/// only [`client_message`] to the `BoxliteError` payload that crosses the wire.
+///
+/// [`operator_report`]: CrashReport::operator_report
+/// [`client_message`]: CrashReport::client_message
 #[derive(Debug)]
 pub struct CrashReport {
-    /// User-friendly error message with troubleshooting hints.
-    pub user_message: String,
-    /// Raw debug info (stderr content for signals).
-    pub debug_info: String,
+    /// Terse, caller-safe sentence. The only field allowed past the API boundary.
+    pub client_message: String,
+    /// Full diagnostic: paths, shim stderr, exit code, troubleshooting hints.
+    /// Log this; never return it to a caller.
+    pub operator_report: String,
     /// Category the shim recorded, so callers can pick the matching
     /// [`BoxliteError`](boxlite_shared::errors::BoxliteError) variant.
     pub error_kind: ExitErrorKind,
@@ -24,14 +32,14 @@ pub struct CrashReport {
 impl CrashReport {
     /// Create a crash report from exit file and context.
     ///
-    /// Parses the JSON exit file and formats a user-friendly message
-    /// with context-specific troubleshooting suggestions.
+    /// Parses the JSON exit file and formats both audiences' messages with
+    /// context-specific troubleshooting suggestions.
     ///
     /// # Arguments
     /// * `exit_file` - Path to the JSON exit file written by shim
-    /// * `console_log` - Path to console log (for error message)
-    /// * `stderr_file` - Path to stderr file (for error message)
-    /// * `box_id` - Box identifier (for error message)
+    /// * `console_log` - Path to console log (operator report only)
+    /// * `stderr_file` - Path to stderr file (operator report only)
+    /// * `box_id` - Box identifier (operator report only)
     /// * `exit_code` - Exit code from waitpid (if available)
     pub fn from_exit_file(
         exit_file: &Path,
@@ -61,104 +69,138 @@ impl CrashReport {
             );
         };
 
-        // Use stderr_content we already read from file (single source of truth)
-        let debug_info = stderr_content;
-
-        // Build user-friendly message based on crash type
-        let mut user_message = match &info {
+        // Build both audiences' messages based on crash type.
+        let (client_message, mut operator_report) = match &info {
             ExitInfo::Signal { signal, .. } => match signal.as_str() {
-                "SIGABRT" => format!(
-                    "Box {box_id} failed to start: internal error (SIGABRT)\n\n\
-                     The VM crashed during initialization.\n\n\
-                     Common causes:\n\
-                     • Missing or incompatible native libraries\n\
-                     • Invalid VM configuration (memory, CPU)\n\
-                     • Resource limits exceeded\n\n\
-                     Debug files:\n\
-                     • Console: {console_display}\n\
-                     • Stderr:  {stderr_display}"
+                "SIGABRT" => (
+                    "The VM failed to start: internal error (SIGABRT).".to_string(),
+                    format!(
+                        "Box {box_id} failed to start: internal error (SIGABRT)\n\n\
+                         The VM crashed during initialization.\n\n\
+                         Common causes:\n\
+                         • Missing or incompatible native libraries\n\
+                         • Invalid VM configuration (memory, CPU)\n\
+                         • Resource limits exceeded\n\n\
+                         Debug files:\n\
+                         • Console: {console_display}\n\
+                         • Stderr:  {stderr_display}"
+                    ),
                 ),
-                "SIGSEGV" | "SIGBUS" => format!(
-                    "Box {box_id} failed to start: memory error ({signal})\n\n\
-                     The VM encountered a memory access error.\n\n\
-                     Common causes:\n\
-                     • Insufficient memory available\n\
-                     • Library version mismatch\n\
-                     • Corrupted binary or library\n\n\
-                     Debug files:\n\
-                     • Console: {console_display}\n\
-                     • Stderr:  {stderr_display}"
+                "SIGSEGV" | "SIGBUS" => (
+                    format!("The VM failed to start: memory error ({signal})."),
+                    format!(
+                        "Box {box_id} failed to start: memory error ({signal})\n\n\
+                         The VM encountered a memory access error.\n\n\
+                         Common causes:\n\
+                         • Insufficient memory available\n\
+                         • Library version mismatch\n\
+                         • Corrupted binary or library\n\n\
+                         Debug files:\n\
+                         • Console: {console_display}\n\
+                         • Stderr:  {stderr_display}"
+                    ),
                 ),
-                "SIGILL" => format!(
-                    "Box {box_id} failed to start: invalid instruction (SIGILL)\n\n\
-                     The VM encountered an unsupported CPU instruction.\n\n\
-                     Common causes:\n\
-                     • CPU compatibility issue\n\
-                     • Binary compiled for different architecture\n\n\
-                     Debug files:\n\
-                     • Console: {console_display}\n\
-                     • Stderr:  {stderr_display}"
+                "SIGILL" => (
+                    "The VM failed to start: invalid instruction (SIGILL).".to_string(),
+                    format!(
+                        "Box {box_id} failed to start: invalid instruction (SIGILL)\n\n\
+                         The VM encountered an unsupported CPU instruction.\n\n\
+                         Common causes:\n\
+                         • CPU compatibility issue\n\
+                         • Binary compiled for different architecture\n\n\
+                         Debug files:\n\
+                         • Console: {console_display}\n\
+                         • Stderr:  {stderr_display}"
+                    ),
                 ),
-                "SIGSYS" => format!(
-                    "Box {box_id} failed to start: seccomp violation (SIGSYS)\n\n\
-                     The VM was killed by a seccomp filter blocking a required syscall.\n\n\
-                     Common causes:\n\
-                     • Seccomp filter missing syscalls needed by gvproxy (Go runtime)\n\
-                     • Custom seccomp profile too restrictive\n\n\
-                     Debug files:\n\
-                     • Console: {console_display}\n\
-                     • Stderr:  {stderr_display}\n\n\
-                     Tip: Run with RUST_LOG=debug or strace to identify the blocked syscall"
+                "SIGSYS" => (
+                    "The VM failed to start: seccomp violation (SIGSYS).".to_string(),
+                    format!(
+                        "Box {box_id} failed to start: seccomp violation (SIGSYS)\n\n\
+                         The VM was killed by a seccomp filter blocking a required syscall.\n\n\
+                         Common causes:\n\
+                         • Seccomp filter missing syscalls needed by gvproxy (Go runtime)\n\
+                         • Custom seccomp profile too restrictive\n\n\
+                         Debug files:\n\
+                         • Console: {console_display}\n\
+                         • Stderr:  {stderr_display}\n\n\
+                         Tip: Run with RUST_LOG=debug or strace to identify the blocked syscall"
+                    ),
                 ),
-                _ => format!(
-                    "Box {box_id} failed to start\n\n\
-                     The VM exited unexpectedly during startup.\n\n\
-                     Debug files:\n\
-                     • Console: {console_display}\n\
-                     • Stderr:  {stderr_display}"
+                _ => (
+                    "The VM failed to start.".to_string(),
+                    format!(
+                        "Box {box_id} failed to start\n\n\
+                         The VM exited unexpectedly during startup.\n\n\
+                         Debug files:\n\
+                         • Console: {console_display}\n\
+                         • Stderr:  {stderr_display}"
+                    ),
                 ),
             },
             ExitInfo::Panic {
                 message, location, ..
-            } => format!(
-                "Box {box_id} failed to start: panic\n\n\
-                 The shim process panicked during initialization.\n\n\
-                 Panic: {message}\n\
-                 Location: {location}\n\n\
-                 Debug files:\n\
-                 • Console: {console_display}\n\
-                 • Stderr:  {stderr_display}"
+            } => (
+                // The panic message and its source location name BoxLite
+                // internals, so they stay operator-side.
+                "The VM failed to start: internal panic.".to_string(),
+                format!(
+                    "Box {box_id} failed to start: panic\n\n\
+                     The shim process panicked during initialization.\n\n\
+                     Panic: {message}\n\
+                     Location: {location}\n\n\
+                     Debug files:\n\
+                     • Console: {console_display}\n\
+                     • Stderr:  {stderr_display}"
+                ),
             ),
-            ExitInfo::Error { message, .. } => format!(
-                "Box {box_id} failed to start: error\n\n\
-                 The shim process exited with an error.\n\n\
-                 Error: {message}\n\n\
-                 Debug files:\n\
-                 • Console: {console_display}\n\
-                 • Stderr:  {stderr_display}"
+            ExitInfo::Error {
+                message,
+                error_kind,
+                ..
+            } => (
+                // `Unsupported` is the one category whose text is curated for
+                // callers — a host-capability statement ("nested virtualization
+                // is unavailable") with no path, command or component in it.
+                // See `ExitErrorKind::of`. Everything else is an engine failure
+                // whose text is shim-internal.
+                match error_kind {
+                    ExitErrorKind::Unsupported => format!("Unsupported host capability: {message}"),
+                    ExitErrorKind::Engine => "The VM failed to start.".to_string(),
+                },
+                format!(
+                    "Box {box_id} failed to start: error\n\n\
+                     The shim process exited with an error.\n\n\
+                     Error: {message}\n\n\
+                     Debug files:\n\
+                     • Console: {console_display}\n\
+                     • Stderr:  {stderr_display}"
+                ),
             ),
         };
 
         // Include brief debug info if available (first 5 lines)
-        if !debug_info.is_empty() {
-            let brief_debug: Vec<&str> = debug_info.lines().take(5).collect();
-            user_message.push_str("\n\nError output:\n");
-            user_message.push_str(&brief_debug.join("\n"));
-            if debug_info.lines().count() > 5 {
-                user_message.push_str("\n... (see stderr file for full output)");
+        if !stderr_content.is_empty() {
+            let brief_debug: Vec<&str> = stderr_content.lines().take(5).collect();
+            operator_report.push_str("\n\nError output:\n");
+            operator_report.push_str(&brief_debug.join("\n"));
+            if stderr_content.lines().count() > 5 {
+                operator_report.push_str("\n... (see stderr file for full output)");
             }
         }
 
         Self {
-            user_message,
-            debug_info,
+            client_message,
+            operator_report,
             error_kind: info.error_kind(),
         }
     }
 
     /// Create crash report when no exit file exists (pre-main crash).
     ///
-    /// Uses exit code and raw stderr content to provide diagnostic info.
+    /// Uses exit code and raw stderr content to build the operator report. The
+    /// client message stays generic: nothing about a pre-main crash is
+    /// actionable without host access.
     fn from_raw_exit(
         box_id: &str,
         exit_code: Option<i32>,
@@ -240,8 +282,8 @@ impl CrashReport {
         ));
 
         Self {
-            user_message: msg,
-            debug_info: stderr_content.to_string(),
+            client_message: "The VM failed to start.".to_string(),
+            operator_report: msg,
             // No exit file means the shim died before it could categorize.
             error_kind: ExitErrorKind::Engine,
         }
@@ -317,10 +359,11 @@ mod tests {
             Some(1),
         );
 
-        assert!(report.user_message.contains("test-box failed to start"));
-        assert!(report.user_message.contains("Exit code: 1"));
-        assert!(report.user_message.contains("dyld: Library not loaded"));
-        assert!(report.user_message.contains("Diagnostic commands"));
+        assert!(report.operator_report.contains("test-box failed to start"));
+        assert!(!report.client_message.contains("test-box"));
+        assert!(report.operator_report.contains("Exit code: 1"));
+        assert!(report.operator_report.contains("dyld: Library not loaded"));
+        assert!(report.operator_report.contains("Diagnostic commands"));
     }
 
     #[test]
@@ -338,7 +381,7 @@ mod tests {
             Some(134), // 128 + 6 (SIGABRT)
         );
 
-        assert!(report.user_message.contains("Exit code: 134 (SIGABRT)"));
+        assert!(report.operator_report.contains("Exit code: 134 (SIGABRT)"));
     }
 
     #[test]
@@ -364,9 +407,9 @@ mod tests {
             Some(134),
         );
 
-        assert!(report.user_message.contains("SIGABRT"));
-        assert!(report.user_message.contains("internal error"));
-        assert_eq!(report.debug_info, "error details");
+        assert!(report.client_message.contains("SIGABRT"));
+        assert!(report.client_message.contains("internal error"));
+        assert!(report.operator_report.contains("error details"));
     }
 
     #[test]
@@ -390,9 +433,11 @@ mod tests {
             Some(101),
         );
 
-        assert!(report.user_message.contains("panic"));
-        assert!(report.user_message.contains("assertion failed"));
-        assert!(report.user_message.contains("main.rs:42:5"));
+        assert!(report.client_message.contains("panic"));
+        // Panic text and source location stay operator-side.
+        assert!(report.operator_report.contains("assertion failed"));
+        assert!(report.operator_report.contains("main.rs:42:5"));
+        assert!(!report.client_message.contains("main.rs:42:5"));
     }
 
     #[test]
@@ -416,8 +461,12 @@ mod tests {
             Some(1),
         );
 
-        assert!(report.user_message.contains("error"));
-        assert!(report.user_message.contains("Failed to create VM instance"));
+        assert!(report.operator_report.contains("error"));
+        assert!(
+            report
+                .operator_report
+                .contains("Failed to create VM instance")
+        );
     }
 
     #[test]
@@ -441,13 +490,15 @@ mod tests {
             Some(159),
         );
 
-        assert!(report.user_message.contains("SIGSYS"));
-        assert!(report.user_message.contains("seccomp violation"));
-        assert!(report.user_message.contains("strace"));
+        assert!(report.client_message.contains("SIGSYS"));
+        assert!(report.client_message.contains("seccomp violation"));
+        // The strace hint needs a host shell — operator-side only.
+        assert!(report.operator_report.contains("strace"));
+        assert!(!report.client_message.contains("strace"));
     }
 
     #[test]
-    fn test_debug_info_truncation() {
+    fn test_stderr_truncation_in_operator_report() {
         let dir = tempfile::tempdir().unwrap();
         let exit_file = dir.path().join("exit");
         let console_log = dir.path().join("console.log");
@@ -474,14 +525,14 @@ mod tests {
             Some(134),
         );
 
-        assert!(report.user_message.contains("line 1"));
-        assert!(report.user_message.contains("line 5"));
+        assert!(report.operator_report.contains("line 1"));
+        assert!(report.operator_report.contains("line 5"));
         assert!(
             report
-                .user_message
+                .operator_report
                 .contains("... (see stderr file for full output)")
         );
-        assert!(!report.user_message.contains("line 6")); // Truncated
+        assert!(!report.operator_report.contains("line 6")); // Truncated
     }
 
     #[test]
@@ -515,16 +566,16 @@ mod tests {
 
         assert!(
             report
-                .user_message
+                .operator_report
                 .contains("Exit code: 0 (clean shutdown)")
         );
         assert!(
             report
-                .user_message
+                .operator_report
                 .contains("guest agent exited immediately")
         );
-        assert!(report.user_message.contains("Console output: empty"));
-        assert!(report.user_message.contains("Diagnostic commands"));
+        assert!(report.operator_report.contains("Console output: empty"));
+        assert!(report.operator_report.contains("Diagnostic commands"));
     }
 
     #[test]
@@ -547,10 +598,10 @@ mod tests {
 
         assert!(
             report
-                .user_message
+                .operator_report
                 .contains("Exit code: 0 (clean shutdown)")
         );
-        assert!(report.user_message.contains("kernel messages only"));
+        assert!(report.operator_report.contains("kernel messages only"));
     }
 
     #[test]
@@ -573,11 +624,113 @@ mod tests {
 
         assert!(
             report
-                .user_message
+                .operator_report
                 .contains("Exit code: 0 (clean shutdown)")
         );
         // Should NOT contain the empty/kernel annotations
-        assert!(!report.user_message.contains("Console output:"));
+        assert!(!report.operator_report.contains("Console output:"));
+    }
+
+    /// Every crash-report template must keep host diagnostics out of the
+    /// client-facing message. Regression guard for POL-329, where the 400 body
+    /// of `POST /v1/boxes` carried console paths, shim stderr and `dmesg`.
+    #[test]
+    fn test_client_message_never_leaks_host_diagnostics() {
+        // (label, exit-file JSON or None for the no-exit-file path, exit code)
+        let cases: &[(&str, Option<&str>, Option<i32>)] = &[
+            (
+                "sigabrt",
+                Some(r#"{"type":"signal","exit_code":134,"signal":"SIGABRT"}"#),
+                Some(134),
+            ),
+            (
+                "sigsegv",
+                Some(r#"{"type":"signal","exit_code":139,"signal":"SIGSEGV"}"#),
+                Some(139),
+            ),
+            (
+                "sigbus",
+                Some(r#"{"type":"signal","exit_code":138,"signal":"SIGBUS"}"#),
+                Some(138),
+            ),
+            (
+                "sigill",
+                Some(r#"{"type":"signal","exit_code":132,"signal":"SIGILL"}"#),
+                Some(132),
+            ),
+            (
+                "sigsys",
+                Some(r#"{"type":"signal","exit_code":159,"signal":"SIGSYS"}"#),
+                Some(159),
+            ),
+            (
+                "signal_other",
+                Some(r#"{"type":"signal","exit_code":143,"signal":"SIGTERM"}"#),
+                Some(143),
+            ),
+            (
+                "panic",
+                Some(
+                    r#"{"type":"panic","exit_code":101,"message":"assertion failed","location":"/home/dev/src/main.rs:42:5"}"#,
+                ),
+                Some(101),
+            ),
+            (
+                "error_engine",
+                Some(r#"{"type":"error","exit_code":1,"message":"Failed to create VM instance"}"#),
+                Some(1),
+            ),
+            (
+                "error_unsupported",
+                Some(
+                    r#"{"type":"error","exit_code":1,"message":"nested virtualization is unavailable","error_kind":"unsupported"}"#,
+                ),
+                Some(1),
+            ),
+            ("no_exit_file", None, Some(159)),
+            ("no_exit_file_clean", None, Some(0)),
+            ("no_exit_file_unknown_code", None, None),
+        ];
+
+        for (label, exit_json, exit_code) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let exit_file = dir.path().join("exit");
+            let console_log = dir.path().join("logs").join("console.log");
+            let stderr_file = dir.path().join("shim.stderr");
+            std::fs::create_dir_all(console_log.parent().unwrap()).unwrap();
+
+            if let Some(json) = exit_json {
+                std::fs::write(&exit_file, json).unwrap();
+            }
+            // Shim stderr as it looks in production: internal component timing.
+            std::fs::write(
+                &stderr_file,
+                "[shim] T+0ms: main() entered\n[krun] krun_start_enter called\n",
+            )
+            .unwrap();
+            std::fs::write(&console_log, "").unwrap();
+
+            let report = CrashReport::from_exit_file(
+                &exit_file,
+                &console_log,
+                &stderr_file,
+                "vIsLhQP34dQF",
+                *exit_code,
+            );
+
+            crate::util::assert_client_safe(&report.client_message, "vIsLhQP34dQF");
+
+            // The detail is routed, not dropped: the operator still gets the
+            // box id and the console path this case would have leaked.
+            assert!(
+                report.operator_report.contains("vIsLhQP34dQF"),
+                "{label}: operator report lost the box id"
+            );
+            assert!(
+                report.operator_report.contains("console.log"),
+                "{label}: operator report lost the console path"
+            );
+        }
     }
 
     #[test]
