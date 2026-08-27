@@ -17,6 +17,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { DataSource, FindOptionsWhere, In, MoreThanOrEqual, Not, Repository, UpdateResult } from 'typeorm'
+import { Box } from '../entities/box.entity'
 import { Runner } from '../entities/runner.entity'
 import { CreateRunnerInternalDto } from '../dto/create-runner-internal.dto'
 import { BoxClass } from '../enums/box-class.enum'
@@ -25,7 +26,7 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerAdapterFactory, RunnerInfo } from '../runner-adapter/runnerAdapter'
-import { RedisLockProvider, withRedisLockLease } from '../common/redis-lock.provider'
+import { RedisLockProvider } from '../common/redis-lock.provider'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
@@ -43,7 +44,6 @@ import Redis from 'ioredis'
 import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/runner-lookup-cache.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
-import { getRunnerAssignmentLockKey } from '../utils/lock-key.util'
 
 @Injectable()
 export class RunnerService {
@@ -681,37 +681,52 @@ export class RunnerService {
               const count = currentCount ? parseInt(currentCount, 10) + 1 : 1
 
               if (count >= 3) {
-                const assignmentLockKey = getRunnerAssignmentLockKey(runner.id)
-                const assignmentLease = await this.redisLockProvider.acquireLease(assignmentLockKey, 30)
-                if (!assignmentLease) {
-                  return
-                }
-
-                await withRedisLockLease(assignmentLease, async (signal) => {
-                  const currentRunner = await this.findOneUncachedOrFail(runner.id)
-                  if (!currentRunner.draining || currentRunner.state === RunnerState.DECOMMISSIONED) {
-                    await this.redis.del(redisKey)
-                    return
+                // FOR UPDATE serialises this against updateDrainingStatus,
+                // whose full-entity save would otherwise write a stale `state`
+                // back over this one.
+                //
+                // Box assignment takes no lock on this row (see
+                // BoxService.persistOnAvailableRunner), so the re-count is a
+                // snapshot rather than a fence. It still catches every box the
+                // drain is waiting out: a create commits its insert
+                // milliseconds after picking a runner, and this transition sits
+                // three 10s checks behind the drain that started it.
+                //
+                // Unbounded on purpose: the only conflicting holder is that one
+                // other writer, holding for a single read-modify-write.
+                const decommissioned = await this.dataSource.transaction(async (entityManager) => {
+                  const currentRunner = await entityManager.findOne(Runner, {
+                    where: { id: runner.id },
+                    lock: { mode: 'pessimistic_write' },
+                    loadEagerRelations: false,
+                  })
+                  if (!currentRunner || !currentRunner.draining || currentRunner.state === RunnerState.DECOMMISSIONED) {
+                    return 'abandoned'
                   }
 
-                  const finalAssignedBoxCount = await this.boxRepository.count({
+                  const finalAssignedBoxCount = await entityManager.count(Box, {
                     where: { runnerId: runner.id },
                   })
                   if (finalAssignedBoxCount > 0) {
-                    await this.redis.set(redisKey, '0', 'EX', 600)
                     this.logger.warn(
                       `Runner ${runner.id} received ${finalAssignedBoxCount} box assignments during decommission verification`,
                     )
-                    return
+                    return 'reset'
                   }
 
-                  signal.throwIfAborted()
-                  await this.updateRunner(runner.id, {
-                    state: RunnerState.DECOMMISSIONED,
-                  })
-                  await this.redis.del(redisKey)
-                  this.logger.log(`Runner ${runner.id} has been decommissioned after 3 successful draining checks`)
+                  await entityManager.update(Runner, runner.id, { state: RunnerState.DECOMMISSIONED })
+                  return 'decommissioned'
                 })
+
+                if (decommissioned === 'reset') {
+                  await this.redis.set(redisKey, '0', 'EX', 600)
+                } else {
+                  await this.redis.del(redisKey)
+                }
+                if (decommissioned === 'decommissioned') {
+                  this.invalidateRunnerCache(runner.id)
+                  this.logger.log(`Runner ${runner.id} has been decommissioned after 3 successful draining checks`)
+                }
               } else {
                 await this.redis.set(redisKey, count.toString(), 'EX', 600) // 10 minute TTL
                 this.logger.debug(`Runner ${runner.id} draining check passed (${count}/3), no boxes remain assigned`)
@@ -735,28 +750,36 @@ export class RunnerService {
   }
 
   async updateDrainingStatus(id: string, draining: boolean): Promise<Runner> {
-    const lease = await this.redisLockProvider.waitForLease(
-      getRunnerAssignmentLockKey(id),
-      30,
-      new AbortController().signal,
-    )
-    return withRedisLockLease(lease, async (signal) => {
-      const runner = await this.findOneUncachedOrFail(id)
-      if (runner.state === RunnerState.DECOMMISSIONED) {
+    // FOR UPDATE against the decommission transition: the save below writes the
+    // whole entity, so without it the `state` read here could be written back
+    // over a DECOMMISSIONED that landed in between. Assignments hold no lock on
+    // this row, so nothing else waits on this.
+    const runner = await this.dataSource.transaction(async (entityManager) => {
+      const current = await entityManager.findOne(Runner, {
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+        loadEagerRelations: false,
+      })
+      if (!current) {
+        throw new NotFoundException(`Runner with ID ${id} not found`)
+      }
+      if (current.state === RunnerState.DECOMMISSIONED) {
         throw new ConflictException('Cannot update draining status of a decommissioned runner')
       }
-      signal.throwIfAborted()
-      await this.redis.del(`runner:draining-check:${id}`)
-      runner.draining = draining
-      return this.runnerRepository.save(runner)
+      current.draining = draining
+      return entityManager.save(Runner, current)
     })
+
+    await this.redis.del(`runner:draining-check:${id}`)
+    this.invalidateRunnerCache(id)
+    return runner
   }
 
   async getRandomAvailableRunner(params: GetRunnerParams): Promise<Runner> {
     const availableRunners = await this.findAvailableRunners(params)
 
     if (availableRunners.length === 0) {
-      throw new BadRequestError('No available runners')
+      throw new BadRequestError(NO_AVAILABLE_RUNNERS)
     }
 
     // Get random runner from the best available runners
@@ -950,6 +973,13 @@ export class RunnerService {
     }
   }
 }
+
+/**
+ * The message `getRandomAvailableRunner` raises when the candidate query comes
+ * back empty. Exported because callers key retry semantics off exactly this
+ * condition, and must not re-spell the string to recognise it.
+ */
+export const NO_AVAILABLE_RUNNERS = 'No available runners'
 
 export class GetRunnerParams {
   regions?: string[]

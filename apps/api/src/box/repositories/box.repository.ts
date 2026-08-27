@@ -23,6 +23,10 @@ import { BoxPublicStatusUpdatedEvent } from '../events/box-public-status-updated
 import { BoxOrganizationUpdatedEvent } from '../events/box-organization-updated.event'
 import { BoxLookupCacheInvalidationService } from '../services/box-lookup-cache-invalidation.service'
 
+// SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
+// acquire a lock.
+const PG_LOCK_TIMEOUT_CODE = '55P03'
+
 // Cap how long the proxy auto-start UPDATE waits to acquire the box row's
 // write lock. Concurrent start/stop/sync go through updateWhere(), which holds
 // a pessimistic_write lock on the same row; there is no global statement/lock
@@ -32,10 +36,6 @@ import { BoxLookupCacheInvalidationService } from '../services/box-lookup-cache-
 // race-lost no-op. Aligned with the caller-side wait cap in
 // boxlite-proxy.controller.ts (PROXY_START_HINT_TIMEOUT_MS).
 const PROXY_START_LOCK_TIMEOUT_MS = 2000
-
-// SQLSTATE for `lock_not_available` — raised when a statement waits longer than
-// lock_timeout to acquire a lock.
-const PG_LOCK_TIMEOUT_CODE = '55P03'
 
 // A box the migration marker may claim, with the stamp its claim copies.
 type ParkedBox = { id: string; updatedAt: Date }
