@@ -368,8 +368,13 @@ test('a change under .github reaches this suite locally, not only in CI', () => 
   }
   // quality.mk expands fmt:<comp>/lint:<comp> per tag and there is no formatter for workflow
   // YAML, so `ci` must not survive into FMT_COMPONENTS or `make lint:fix` breaks outright.
-  assert.ok(
-    changes.includes('FMT_COMPONENTS := $(sort $(filter-out ci,'),
+  // Matched as a pattern, not a literal: more than one tag has no formatter (openapi is
+  // the Box API contract), and every one of them has to be filtered out here. Anchoring on
+  // the exact one-tag spelling broke the moment a second was added, while the thing worth
+  // holding — `ci` never reaching a fmt:/lint: expansion — was still true.
+  assert.match(
+    changes,
+    /FMT_COMPONENTS := \$\(sort \$\(filter-out (?:[a-z]+ )*ci(?: [a-z]+)*,/,
     'the ci tag is not filtered out of FMT_COMPONENTS',
   )
 
