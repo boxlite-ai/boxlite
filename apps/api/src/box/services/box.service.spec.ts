@@ -329,6 +329,9 @@ describe('BoxService public defaults', () => {
 
   it('creates a fresh box instead of claiming a warm box when secrets are present', async () => {
     const { service, boxRepository, warmPoolService } = makeCreateService()
+    // Default exists=1 would skip the warm-pool branch outright; clear it so
+    // the assertion below actually guards the secrets needsFreshBox path.
+    ;(service as any).redis.exists.mockResolvedValue(0)
 
     await service.create(
       { name: 'secret-box', image: 'base', secrets: [{ name: 'openai', value: 'sk-test' }] } as any,
