@@ -55,6 +55,74 @@ aws ssm start-session --target "$INSTANCE_ID" \
 Open `http://127.0.0.1:18123/clickstack` and use the `otel_reader` secret. The embedded UI is for
 search and debugging; saved HyperDX state is not retained.
 
+## Backoffice ClickStack gateway
+
+The optional gateway makes the self-hosted ClickStack UI available without an
+operator workstation tunnel. ClickHouse port 8123 stays private. A logged-in
+Backoffice employee opens ClickStack in a new tab with a 30-second, single-use
+handoff code. The gateway redeems that code for an opaque server-side session
+identifier and the parent Backoffice session's absolute expiry. Its signed
+HttpOnly cookie contains only that binding, never Backoffice or ClickHouse
+credentials. Before admitting a request, the gateway uses a Backoffice status
+confirmation no more than one minute old, refreshing it when stale, then strips
+browser-supplied credentials and injects the server-side `otel_reader`
+password. A Backoffice logout or lost-presence revocation therefore blocks new
+ClickStack requests within one minute. A response or upgraded connection that
+was already admitted is not interrupted mid-stream. Deploying this protocol
+invalidates the former unbound five-minute cookies and redirects those tabs
+through Backoffice once.
+
+Configure the public Backoffice endpoints in the BoxLite stage configuration:
+
+```dotenv
+CLICKSTACK_GATEWAY_ENABLED=true
+CLICKSTACK_BACKOFFICE_REDEEM_URL=https://backoffice.dev.boxlite.ai/api/backoffice/v1/observability/clickstack/redeem
+CLICKSTACK_BACKOFFICE_INTROSPECT_URL=https://backoffice.dev.boxlite.ai/api/backoffice/v1/observability/clickstack/introspect
+CLICKSTACK_BACKOFFICE_ENTRY_URL=https://backoffice.dev.boxlite.ai/platform/observability
+```
+
+Set both secrets through SST's non-echoing secret prompt. `CLICKSTACK_REDEEM_TOKEN`
+is JSON containing current and optional previous 32-byte base64url tokens used
+only for Gateway-to-Backoffice authentication. A legacy single token remains
+accepted for initial compatibility, but production rotation uses the JSON form.
+`CLICKSTACK_SESSION_KEYS` is JSON containing a current signing
+key and, during rotation, an optional previous key:
+
+```json
+{ "current": "BASE64URL_32_BYTE_KEY", "previous": "OPTIONAL_PREVIOUS_BASE64URL_32_BYTE_KEY" }
+```
+
+```bash
+cd apps/infra
+npm run sst -- secret set CLICKSTACK_REDEEM_TOKEN --stage <stage>
+npm run sst -- secret set CLICKSTACK_SESSION_KEYS --stage <stage>
+npm run deploy -- --stage <stage>
+```
+
+Rotate session keys in three deployments so mixed ECS revisions accept each
+other's cookies: deploy `{current: old, previous: new}` and wait for convergence;
+then deploy `{current: new, previous: old}`; after another convergence plus the
+maximum accepted binding lifetime (currently one hour and 30 seconds, including
+clock skew), deploy `{current: new}`. Skipping the first phase can make old tasks
+reject cookies issued by new tasks, and removing the previous key early
+invalidates still-active bindings.
+
+Rotate the redeem token with the same three phases. Unlike session cookies, no
+session-lifetime wait is needed before phase 3, but both Gateway and Backoffice must
+have fully converged on phase 2 before removing the previous token. Its stable
+Secrets Manager copy remains in the stack while the gateway flag is off, so a
+normal disable/re-enable cannot collide with a secret pending recovery.
+The disabled stack stores only an invalid non-empty sentinel in that runtime
+copy; enabling the gateway removes the fallback and requires a real key set at
+deployment planning time.
+
+Then configure Backoffice's `BACKOFFICE_CLICKSTACK_URL` as
+`https://clickstack.<STACK_DOMAIN>/clickstack` and deploy the matching
+Backoffice handoff implementation. Keep `CLICKSTACK_GATEWAY_ENABLED=false`
+until both sides, the redeem token, and the session keys are ready. The gateway supports only the
+self-hosted backend because managed ClickHouse does not provide this embedded
+UI. The SSM tunnel remains the break-glass path.
+
 The EC2 instance may be replaced by bootstrap changes, but its data volume is retained and
 reattached. Switching to managed or disabled mode detaches and retains the old volume outside SST;
 take an EBS snapshot before deleting or restoring that retained data.

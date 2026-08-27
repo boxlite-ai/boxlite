@@ -4,8 +4,21 @@
 /// <reference path="../.sst/platform/config.d.ts" />
 
 import type { ApiResources } from './api.js'
+import type { ClickHouseResources } from './clickhouse.js'
 import type { FoundationResources } from './foundation.js'
-import { PORTS, envOr } from './settings.js'
+import { PORTS, envOr, httpHealth } from './settings.js'
+
+type SelfHostedClickHouseResources = Extract<ClickHouseResources, { mode: 'self-hosted' }>
+
+interface ClickStackGatewayInputs {
+  clickHouse: SelfHostedClickHouseResources
+  writerReady: any
+  domain: { name: string; dns: ReturnType<typeof sst.cloudflare.dns> }
+  backofficeRedeemUrl: string
+  backofficeIntrospectUrl: string
+  backofficeEntryUrl: string
+  sessionKeys: sst.Secret
+}
 
 export interface EdgeInputs {
   foundation: FoundationResources
@@ -20,6 +33,8 @@ export interface EdgeInputs {
   publicOidcIssuer: string | undefined
   otelCollectorOtlpHttpUrl: $util.Output<string>
   stripTrailingSlash: (url: $util.Output<string>) => $util.Output<string>
+  clickStackRedeemToken: sst.Secret
+  clickStackGateway?: ClickStackGatewayInputs
 }
 
 export function buildEdge(input: EdgeInputs): void {
@@ -36,7 +51,11 @@ export function buildEdge(input: EdgeInputs): void {
     publicOidcIssuer,
     otelCollectorOtlpHttpUrl,
     stripTrailingSlash,
+    clickStackRedeemToken,
+    clickStackGateway,
   } = input
+
+const proxyImage = { context: '../..', dockerfile: 'apps/proxy/Dockerfile', cache: false }
 
 // Proxy: routes `<port>-<boxid>.<proxyDomain>` to the box port.
 // SST terminates TLS on the NLB listener and manages the proxy + wildcard
@@ -47,7 +66,7 @@ export function buildEdge(input: EdgeInputs): void {
 
 new sst.aws.Service('Proxy', {
   cluster,
-  image: { context: '../..', dockerfile: 'apps/proxy/Dockerfile', cache: false },
+  image: proxyImage,
   wait: true,
   loadBalancer: {
     domain: {
@@ -97,6 +116,66 @@ new sst.aws.Service('Proxy', {
     },
   },
 })
+
+const redeemSecret = new aws.secretsmanager.Secret('ClickStackRedeemSecret', {
+  name: `${$app.name}-${$app.stage}-clickstack-redeem`,
+  recoveryWindowInDays: 7,
+})
+const redeemSecretVersion = new aws.secretsmanager.SecretVersion('ClickStackRedeemSecretValue', {
+  secretId: redeemSecret.id,
+  secretString: clickStackRedeemToken.value,
+})
+
+if (clickStackGateway) {
+  const sessionSecret = new aws.secretsmanager.Secret('ClickStackSessionSecret', {
+    namePrefix: `${$app.name}-${$app.stage}-clickstack-session-`,
+    recoveryWindowInDays: 7,
+  })
+  const sessionSecretVersion = new aws.secretsmanager.SecretVersion('ClickStackSessionSecretValue', {
+    secretId: sessionSecret.id,
+    secretString: clickStackGateway.sessionKeys.value,
+  })
+  new sst.aws.Service(
+    'ClickStackGateway',
+    {
+      cluster,
+      wait: true,
+      image: proxyImage,
+      loadBalancer: {
+        domain: clickStackGateway.domain,
+        rules: [{ listen: '443/https', forward: `${PORTS.PROXY}/http` }],
+        health: { [`${PORTS.PROXY}/http`]: httpHealth('/ready') },
+      },
+      ssm: {
+        CLICKSTACK_PASSWORD: clickStackGateway.clickHouse.readerSecretArn,
+        CLICKSTACK_REDEEM_TOKEN: redeemSecret.arn,
+        CLICKSTACK_SESSION_KEYS: sessionSecret.arn,
+      },
+      environment: {
+        PROXY_PORT: String(PORTS.PROXY),
+        CLICKSTACK_UPSTREAM_URL: clickStackGateway.clickHouse.url,
+        CLICKSTACK_USERNAME: 'otel_reader',
+        CLICKSTACK_CREDENTIAL_VERSION: clickStackGateway.clickHouse.readerSecretVersionId,
+        CLICKSTACK_REDEEM_TOKEN_VERSION: redeemSecretVersion.versionId,
+        CLICKSTACK_SESSION_KEY_VERSION: sessionSecretVersion.versionId,
+        CLICKSTACK_BACKOFFICE_REDEEM_URL: clickStackGateway.backofficeRedeemUrl,
+        CLICKSTACK_BACKOFFICE_INTROSPECT_URL: clickStackGateway.backofficeIntrospectUrl,
+        CLICKSTACK_BACKOFFICE_ENTRY_URL: clickStackGateway.backofficeEntryUrl,
+      },
+      transform: {
+        loadBalancer: (lbArgs: any) => { lbArgs.loadBalancerType = 'application' },
+      },
+    },
+    {
+      dependsOn: [
+        clickStackGateway.clickHouse.ready,
+        clickStackGateway.writerReady,
+        redeemSecretVersion,
+        sessionSecretVersion,
+      ],
+    },
+  )
+}
 
 // ─── 9. CDN ROUTES ───────────────────────────────────────────────────────
 // Router (declared in section 4) fronts the Api with HTTPS.
