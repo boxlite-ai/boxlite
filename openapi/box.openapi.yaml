@@ -719,6 +719,53 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
 
+  /{prefix}/boxes/{box_id}/attach:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    get:
+      operationId: attachBox
+      summary: Attach to the box's main command session (WebSocket)
+      description: |
+        Opens a WebSocket on the box's **main command session** — the container
+        init, which is what `run IMAGE COMMAND` starts. Docker's
+        `POST /containers/{id}/attach`, as distinct from its exec-attach.
+
+        The session is opened lazily on the first attach. Its execution id rides
+        back on the upgrade response in the `x-boxlite-execution-id` header,
+        after which the client can address it through the ordinary
+        `/executions/{exec_id}/…` routes.
+
+        The frame protocol, single-attach rule and keepalive are identical to
+        [`attachExecution`](#operation/attachExecution).
+      tags: [Execution]
+      parameters:
+        - name: stdin
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["0", "1", "false", "true"]
+            default: "1"
+          description: |
+            Identical to `attachExecution`'s `stdin`: `0` or `false` opens a
+            **read-only attach** — docker's `--no-stdin` — and a value outside
+            this enum is rejected with `400`, never treated as the writable
+            default.
+      responses:
+        "101":
+          description: WebSocket upgrade successful; bidirectional protocol begins.
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          description: Another client is already attached to this box's main session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /{prefix}/boxes/{box_id}/executions/{exec_id}/attach:
     parameters:
       - $ref: "#/components/parameters/prefix"

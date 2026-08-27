@@ -80,8 +80,12 @@ impl RestBox {
     ) -> Execution {
         let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
         let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
-        let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (result_tx, result_rx) = mpsc::unbounded_channel::<ExecResult>();
+        let stdin = wire_stdin.then(mpsc::unbounded_channel::<Vec<u8>>);
+        let (stdin_tx, stdin_rx) = match stdin {
+            Some((tx, rx)) => (Some(tx), Some(rx)),
+            None => (None, None),
+        };
 
         let ws_client = self.client.clone();
         let ws_box_id = box_id.clone();
@@ -92,7 +96,6 @@ impl RestBox {
                 &ws_box_id,
                 &ws_exec_id,
                 stream,
-                wire_stdin,
                 stdin_rx,
                 stdout_tx,
                 stderr_tx,
@@ -106,9 +109,7 @@ impl RestBox {
             execution_id,
             Box::new(control),
             result_rx,
-            // The pump keeps its receiver either way; with no ExecStdin handed
-            // out, nothing can send into it.
-            wire_stdin.then(|| ExecStdin::new(stdin_tx)),
+            stdin_tx.map(ExecStdin::new),
             Some(ExecStdout::new(stdout_rx)),
             Some(ExecStderr::new(stderr_rx)),
         )
@@ -659,8 +660,7 @@ async fn attach_ws(
         stream,
         // exec() creates the session it attaches to, so it is always writable;
         // read-only is only reachable through attach().
-        true,
-        stdin_rx,
+        Some(stdin_rx),
         stdout_tx,
         stderr_tx,
         result_tx,
@@ -683,8 +683,8 @@ async fn attach_ws_pump(
     box_id: &str,
     execution_id: &str,
     initial_stream: WsStream,
-    wire_stdin: bool,
-    mut stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    // `None` for a read-only attach: there is no writer, so no channel exists.
+    mut stdin_rx: Option<mpsc::UnboundedReceiver<Vec<u8>>>,
     stdout_tx: mpsc::UnboundedSender<String>,
     stderr_tx: mpsc::UnboundedSender<String>,
     result_tx: mpsc::UnboundedSender<ExecResult>,
@@ -692,6 +692,10 @@ async fn attach_ws_pump(
     use futures::{SinkExt, StreamExt};
     use std::time::Instant;
     use tokio_tungstenite::tungstenite::Message;
+
+    // One source of truth for read-only, so the query and the stdin gates below
+    // cannot drift from whether a channel actually exists.
+    let wire_stdin = stdin_rx.is_some();
 
     // The query rides every reconnect: a replacement socket opened without it
     // would be writable, and the server's refusal only binds the socket it was
@@ -754,7 +758,8 @@ async fn attach_ws_pump(
                 // Forward stdin bytes from the SDK consumer to the WS sink.
                 // Disabled once we've observed stdin EOF — the WS reader is
                 // still running so we keep waiting for the exit frame.
-                stdin_msg = stdin_rx.recv(), if wire_stdin && !user_closed_stdin => {
+                stdin_msg = async { stdin_rx.as_mut().expect("guarded by wire_stdin").recv().await },
+                    if wire_stdin && !user_closed_stdin => {
                     match stdin_msg {
                         Some(bytes) => {
                             if sink.send(Message::Binary(bytes)).await.is_err() {
