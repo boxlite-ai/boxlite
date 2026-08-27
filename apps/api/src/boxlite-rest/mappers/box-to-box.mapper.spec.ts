@@ -51,6 +51,26 @@ describe('BoxLite lifecycle policy mapper', () => {
     expect(mapped.volumes).toEqual([{ volumeId: 'customer-data', mountPath: '/data' }])
   })
 
+  it('maps REST secret specs to secret placeholder rules', () => {
+    const mapped = createBoxToCreateBox({
+      secrets: [
+        { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+      ],
+    })
+
+    expect(mapped.secrets).toEqual([
+      { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+    ])
+  })
+
+  it('passes a secret without hosts/placeholder through untouched', () => {
+    const mapped = createBoxToCreateBox({
+      secrets: [{ name: 'openai', value: 'sk-test' }],
+    })
+
+    expect(mapped.secrets).toEqual([{ name: 'openai', value: 'sk-test' }])
+  })
+
   it('returns the effective second-based policy', () => {
     const response = boxToBoxResponse({
       id: 'box-1',

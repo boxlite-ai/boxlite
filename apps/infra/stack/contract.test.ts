@@ -769,3 +769,24 @@ test("the mail configuration set falls inside the deploy role's stage-scoped SES
     `the configuration set '${composed}' falls outside the deploy role's configuration-set/boxlite-<stage>-* grant`,
   )
 })
+
+// The status sync is armed by a credential, not a flag, for the same reason usage export is:
+// configuration.ts refuses to boot when STATUS_SYNC_ENABLED is true without a token, so a stage
+// holding an alert source id but no secret must come up dark instead of crash-looping. The dedup
+// prefix is derived from the SST stage because the ENVIRONMENT env var is a constant 'production'
+// on every deployed stage — reusing it would collapse every stage's alerts into one identity on
+// the incident.io side.
+test('status sync arms on its secret and keys alerts by stage', () => {
+  assert.match(liveConfig, /const incidentIoToken = new sst\.Secret\('INCIDENT_IO_TOKEN', ''\)/)
+  assert.match(liveConfig, /INCIDENT_IO_TOKEN: incidentIoToken\.value/)
+  assert.match(
+    liveConfig,
+    /STATUS_SYNC_ENABLED: incidentIoToken\.value\.apply\(\(token(?:: string)?\) => \(token\.trim\(\) \? 'true' : 'false'\)\)/,
+  )
+  assert.match(liveConfig, /STATUS_SYNC_DEDUP_PREFIX: envOr\('STATUS_SYNC_DEDUP_PREFIX', `boxlite-\$\{\$app\.stage\}`\)/)
+
+  // The operator-facing note is the only place the token's scope and set-procedure live; the id
+  // must stay documented and the secret's value must never gain a literal line in the example.
+  assert.match(environmentExample, /^# INCIDENT_IO_ALERT_SOURCE_CONFIG_ID=/m)
+  assert.doesNotMatch(environmentExample, /^INCIDENT_IO_TOKEN=/m)
+})

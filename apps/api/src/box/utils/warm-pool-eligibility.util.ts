@@ -23,7 +23,7 @@ import { CreateBoxDto } from '../dto/create-box.dto'
 export function requiresFreshBox(
   createBoxDto: Pick<
     CreateBoxDto,
-    'networkBlockAll' | 'networkAllowList' | 'runAsUser' | 'workingDir' | 'entrypoint' | 'cmd'
+    'networkBlockAll' | 'networkAllowList' | 'runAsUser' | 'workingDir' | 'entrypoint' | 'cmd' | 'secrets'
   >,
   organization: { boxLimitedNetworkEgress?: boolean },
 ): boolean {
@@ -41,5 +41,10 @@ export function requiresFreshBox(
     createBoxDto.entrypoint !== undefined ||
     createBoxDto.cmd !== undefined
 
-  return overridesNetworkPolicy || overridesContainerProcess
+  // Secrets become placeholder env vars and an MITM CA at box-build time; a
+  // warm box was built without the caller's secrets, so claiming one would
+  // silently drop them.
+  const overridesSecrets = (createBoxDto.secrets?.length ?? 0) > 0
+
+  return overridesNetworkPolicy || overridesContainerProcess || overridesSecrets
 }

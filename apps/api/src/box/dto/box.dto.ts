@@ -33,6 +33,35 @@ export class BoxVolume {
   subpath?: string
 }
 
+@ApiSchema({ name: 'BoxSecret' })
+export class BoxSecret {
+  @ApiProperty({
+    description: 'Human-readable secret name',
+    example: 'openai',
+  })
+  name: string
+
+  @ApiProperty({
+    description: 'Real secret value. Never enters the guest VM.',
+    example: 'sk-...',
+  })
+  value: string
+
+  @ApiPropertyOptional({
+    description: 'Matching hosts for this secret. Empty means no host restriction.',
+    example: ['api.openai.com'],
+    isArray: true,
+    type: String,
+  })
+  hosts?: string[]
+
+  @ApiPropertyOptional({
+    description: 'Placeholder visible inside the guest. Defaults to `<BOXLITE_SECRET:{name}>` when omitted.',
+    example: '<BOXLITE_SECRET:openai>',
+  })
+  placeholder?: string
+}
+
 @ApiSchema({ name: 'Box' })
 export class BoxDto {
   @ApiProperty({

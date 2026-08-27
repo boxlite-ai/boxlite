@@ -85,6 +85,10 @@ export async function deployStack() {
     const oidcMgmtClientSecret = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_SECRET')
     const posthogApiKey = new sst.Secret('POSTHOG_API_KEY', '')
     const svixAuthToken = new sst.Secret('SVIX_AUTH_TOKEN', '')
+    // The API key the status sync presents to incident.io — scoped to alert
+    // events + heartbeat pings only. Empty means the sync stays off; see
+    // STATUS_SYNC_ENABLED below.
+    const incidentIoToken = new sst.Secret('INCIDENT_IO_TOKEN', '')
     // The credential the usage exporter presents to Commerce's ingest route:
     // half of a shared secret whose other half is a Secrets Manager container
     // owned by boxlite-commerce's own stack, so both ends are set out of band
@@ -265,6 +269,7 @@ export async function deployStack() {
       posthogApiKey,
       svixAuthToken,
       usageExportToken,
+      incidentIoToken,
       oidcIssuer,
       publicOidcIssuer,
       otelCollectorOtlpHttpUrl,

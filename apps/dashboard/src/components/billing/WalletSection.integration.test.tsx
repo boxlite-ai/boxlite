@@ -7,6 +7,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
 import { WalletSection } from './WalletSection'
 
 const mocks = vi.hoisted(() => ({
@@ -22,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   setAutomaticTopUp: vi.fn(),
   topUpWallet: vi.fn(),
   wallet: {
+    automaticTopUp: undefined as AutomaticTopUp | undefined,
     balanceCents: 0,
     ongoingBalanceCents: 0,
     name: 'Wallet',
@@ -43,6 +45,7 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
   useOwnerBillingPortalUrlQuery: () => ({ data: undefined, isLoading: false }),
   useOwnerInvoicesQuery: () => ({ data: { items: [], totalItems: 0, totalPages: 0 }, isLoading: false }),
   useOwnerPaymentMethodsQuery: () => ({ data: mocks.paymentMethods, isLoading: false, isError: false }),
+  useOwnerPlanQuery: () => ({ data: { quotaRemainingCents: 0 } }),
   useOwnerWalletQuery: () => ({ data: mocks.wallet, isLoading: false }),
 }))
 
@@ -80,6 +83,8 @@ describe('WalletSection top-up checkout', () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     mocks.paymentMethods = []
+    mocks.wallet.automaticTopUp = undefined
+    mocks.wallet.ongoingBalanceCents = 0
     mocks.wallet.creditCardConnected = false
     mocks.topUpWallet.mockClear()
     mocks.topUpWallet.mockResolvedValue({ url: 'https://checkout.stripe.com/pay/cs_top_up' })
@@ -209,5 +214,30 @@ describe('WalletSection top-up checkout', () => {
     // divider reach the panel's right edge instead of stopping at an action rail.
     expect(rows[0].contains(updateButtons[0])).toBe(true)
     expect(document.body.textContent).not.toContain('pm_default')
+  })
+
+  it('fits the threshold warning below Auto-reload inside Wallet Balance', async () => {
+    mocks.wallet.ongoingBalanceCents = 1_999
+    mocks.wallet.automaticTopUp = { thresholdAmount: 20, targetAmount: 100 }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection />)
+    })
+    await flush()
+
+    const autoReload = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+      button.textContent?.includes('Auto-reload'),
+    )
+    const banner = document.querySelector<HTMLElement>('[data-balance-warning-level="below-threshold"]')
+
+    expect(autoReload).toBeDefined()
+    expect(banner).not.toBeNull()
+    expect(banner?.parentElement).toBe(autoReload?.parentElement)
+    expect(autoReload?.compareDocumentPosition(banner as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(banner?.classList.contains('w-full')).toBe(true)
+    expect(banner?.classList.contains('min-w-0')).toBe(true)
   })
 })

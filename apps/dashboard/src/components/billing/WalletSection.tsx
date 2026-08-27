@@ -6,6 +6,7 @@
 
 import { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
 import { AsciiButton, AsciiChip, BRAND, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
+import { BalanceThresholdBanner } from '@/components/billing/BalanceLowBanner'
 import { InvoicesTable } from '@/components/Invoices'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -19,6 +20,7 @@ import {
   useOwnerBillingPortalUrlQuery,
   useOwnerInvoicesQuery,
   useOwnerPaymentMethodsQuery,
+  useOwnerPlanQuery,
   useOwnerWalletQuery,
 } from '@/hooks/queries/billingQueries'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
@@ -73,6 +75,7 @@ export function WalletSection() {
   const billingPortalUrlQuery = useOwnerBillingPortalUrlQuery()
   const invoicesQuery = useOwnerInvoicesQuery(invoicesPagination.pageIndex + 1, invoicesPagination.pageSize)
   const paymentMethodsQuery = useOwnerPaymentMethodsQuery()
+  const planQuery = useOwnerPlanQuery()
 
   const isCheckoutUrlLoading = useIsOwnerCheckoutUrlFetching()
   const fetchCheckoutUrl = useFetchOwnerCheckoutUrlQuery()
@@ -458,6 +461,8 @@ export function WalletSection() {
                     </p>
                   ))}
               </>
+
+              <BalanceThresholdBanner wallet={wallet} plan={planQuery.data} />
 
               {user?.profile.email_verified && (
                 <>

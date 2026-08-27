@@ -5,7 +5,11 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { Auth0EmailProviderConfigurator, parseAuth0EmailProviderOptions } from './auth0-email-provider.js'
+import {
+  Auth0EmailProviderConfigurator,
+  parseAuth0EmailProviderOptions,
+  readAuth0CodeEmailTemplates,
+} from './auth0-email-provider.js'
 import { Auth0CliManagementClient } from './auth0-login-policy.js'
 import { promptSecret, requireNonEmptySecret } from './secret-prompt.js'
 
@@ -13,9 +17,7 @@ const bootstrapRoot = dirname(fileURLToPath(import.meta.url))
 
 function sources() {
   return {
-    templates: ['verify-email-by-code.json', 'reset-email-by-code.json'].map((name) =>
-      JSON.parse(readFileSync(join(bootstrapRoot, 'auth0', 'email-templates', name), 'utf8')),
-    ),
+    templates: readAuth0CodeEmailTemplates(join(bootstrapRoot, 'auth0', 'email-templates.json')),
     receiptDirectory: join(bootstrapRoot, '..', '.sst', 'auth0-backups'),
   }
 }

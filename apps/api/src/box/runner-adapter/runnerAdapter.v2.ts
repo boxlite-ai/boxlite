@@ -136,6 +136,12 @@ export class RunnerAdapterV2 implements RunnerAdapter {
         mountPath: volume.mountPath,
         subpath: volume.subpath,
       })),
+      secrets: box.secrets?.map((secret) => ({
+        name: secret.name,
+        value: secret.value,
+        hosts: secret.hosts,
+        placeholder: secret.placeholder,
+      })),
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
       metadata,

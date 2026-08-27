@@ -5,6 +5,7 @@
  */
 
 import { BILLING_PAGE_CONTAINER } from '@/components/billing/billingLayout'
+import { BalanceLowBanner } from '@/components/billing/BalanceLowBanner'
 import { BillingAlerts } from '@/components/billing/BillingAlerts'
 import { PlanSection } from '@/components/billing/PlanSection'
 import { UsageSection } from '@/components/billing/UsageSection'
@@ -82,13 +83,12 @@ function BillingComingSoon() {
 
 /**
  * One page, three tabs — the arrangement in the design. Each tab is a section
- * that keeps its own hooks; this only composes and switches them. Alerts sit
- * inside Overview, where identity and payment-setup guidance belongs.
+ * that keeps its own hooks; this only composes and switches them. Critical wallet
+ * warnings stay above the tabs; identity and payment guidance stays in Overview.
  */
 function Billing() {
   const config = useConfig()
-  // Controlled, so a section can send the user to a sibling tab — the usage
-  // tab's low-balance banner tops up in the wallet tab.
+  // Controlled, so the page-level balance warning can send the user to Wallet.
   const [tab, setTab] = useState('overview')
 
   if (!config.billingApiUrl) {
@@ -100,6 +100,9 @@ function Billing() {
       <div className={BILLING_PAGE_CONTAINER}>
         <div className="pt-6">
           <h1 className="font-display text-2xl font-semibold leading-none tracking-tight">Billing</h1>
+          <div className="mt-4 w-full empty:hidden">
+            <BalanceLowBanner onGoToWallet={() => setTab('wallet')} />
+          </div>
           <TabsList className="mt-5 h-9 gap-0 rounded-none border border-border bg-transparent p-0">
             <TabsTrigger value="overview" className={TAB_TRIGGER}>
               Overview
@@ -122,7 +125,7 @@ function Billing() {
         </TabsContent>
         <TabsContent value="usage">
           <div className={TAB_PANE}>
-            <UsageSection onGoToWallet={() => setTab('wallet')} />
+            <UsageSection />
           </div>
         </TabsContent>
         <TabsContent value="wallet">
