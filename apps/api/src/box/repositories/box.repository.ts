@@ -40,6 +40,13 @@ const PG_LOCK_TIMEOUT_CODE = '55P03'
 // A box the migration marker may claim, with the stamp its claim copies.
 type ParkedBox = { id: string; updatedAt: Date }
 
+type BoxUpdateParams = {
+  updateData: Partial<Box>
+  entity?: Box
+  /** Runs after the box and last-activity writes, before their transaction commits. */
+  afterUpdateInTransaction?: (entityManager: EntityManager, updatedBox: Box) => Promise<void>
+}
+
 @Injectable()
 export class BoxRepository extends BaseRepository<Box> {
   private readonly logger = new Logger(BoxRepository.name)
@@ -85,12 +92,13 @@ export class BoxRepository extends BaseRepository<Box> {
    * @param id - The ID of the box to update.
    * @param params.updateData - The partial data to update.
    * @param params.entity - Optional pre-fetched box to use instead of fetching from the database.
+   * @param params.afterUpdateInTransaction - Optional internal work that must commit atomically with the box update.
    *
    * @returns The updated box.
    */
-  async update(id: string, params: { updateData: Partial<Box>; entity?: Box }, raw?: false): Promise<Box>
-  async update(id: string, params: { updateData: Partial<Box>; entity?: Box }, raw = false): Promise<Box | void> {
-    const { updateData, entity } = params
+  async update(id: string, params: BoxUpdateParams, raw?: false): Promise<Box>
+  async update(id: string, params: BoxUpdateParams, raw = false): Promise<Box | void> {
+    const { updateData, entity, afterUpdateInTransaction } = params
 
     if (raw) {
       await this.repository.update(id, updateData)
@@ -128,6 +136,8 @@ export class BoxRepository extends BaseRepository<Box> {
       if (previousBox.state !== box.state || previousBox.organizationId !== box.organizationId) {
         await this.upsertLastActivity(entityManager, id, box.updatedAt)
       }
+
+      await afterUpdateInTransaction?.(entityManager, box)
     })
 
     this.emitUpdateEvents(box, previousBox)

@@ -85,6 +85,7 @@ import {
   DEFAULT_AUTO_STOP_SECONDS,
   DEFAULT_AUTO_RESUME,
 } from '../constants/box-lifecycle.constants'
+import { UsageService } from '../../usage/services/usage.service'
 
 // TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
 // these mirror the Box entity column defaults until image resolution is rebuilt.
@@ -117,6 +118,7 @@ export class BoxService {
     @InjectRepository(Job)
     private readonly jobRepository: Repository<Job>,
     private readonly jobService: JobService,
+    private readonly usageService: UsageService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -385,12 +387,12 @@ export class BoxService {
     // the row — reusing the mutated entity would corrupt the optimistic-update
     // guard.
     const updatedBox = createBoxDto.name
-      ? await this.boxRepository.update(warmPoolBox.id, {
+      ? await this.usageService.claimWarmPoolBox(warmPoolBox.id, {
           updateData: { ...updateData, name: createBoxDto.name },
           entity: warmPoolBox,
         })
       : await persistWithGeneratedBoxName(warmPoolBox.id, (name) =>
-          this.boxRepository.update(warmPoolBox.id, { updateData: { ...updateData, name } }),
+          this.usageService.claimWarmPoolBox(warmPoolBox.id, { updateData: { ...updateData, name } }),
         )
 
     // Defensive invalidation of orgId cache since the box moved from unassigned to a real organization

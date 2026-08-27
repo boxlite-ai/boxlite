@@ -51,12 +51,14 @@ import { BoxActivityService } from './services/box-activity.service'
 import { BoxStateWaiterService } from './services/box-state-waiter.service'
 import { BoxMigrationService } from './services/box-migration.service'
 import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.service'
+import { UsageModule } from '../usage/usage.module'
 
 @Module({
   imports: [
     UserModule,
     OrganizationModule,
     RegionModule,
+    UsageModule,
     TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, Region, Job, BoxLastActivity, BoxMigration]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],

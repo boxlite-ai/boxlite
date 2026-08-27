@@ -120,6 +120,12 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   @OnEvent(BoxEvents.STATE_UPDATED)
   @TrackJobExecution()
   async handleBoxStateUpdate(event: BoxStateUpdatedEvent) {
+    // Warm-pool claims deliberately publish a synthetic STARTED event for
+    // downstream observers. Its billing cutover already committed with the box.
+    if (event.oldState === event.newState) {
+      return
+    }
+
     const lease = await this.waitForLock(event.box.id)
 
     await this.withLease(
@@ -170,6 +176,71 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   }
 
   /**
+   * Claims a warm-pool box and moves its open usage period to the new owner in
+   * the same database transaction as the box update.
+   */
+  async claimWarmPoolBox(id: string, params: { updateData: Partial<Box>; entity?: Box }): Promise<Box> {
+    const lease = await this.waitForLock(id)
+    let committedBox: Box | null = null
+
+    try {
+      return await this.withLease(
+        lease,
+        async (signal) => {
+          signal.throwIfAborted()
+          const updatedBox = await this.boxRepository.update(id, {
+            ...params,
+            afterUpdateInTransaction: async (entityManager, transactionalBox) => {
+              signal.throwIfAborted()
+              await this.switchWarmPoolUsagePeriod(entityManager, transactionalBox, signal)
+              signal.throwIfAborted()
+            },
+          })
+          committedBox = updatedBox
+          return updatedBox
+        },
+        `warm-pool claim ${id}`,
+      )
+    } catch (error) {
+      // The database is already authoritative at this point. Returning success
+      // prevents a client retry from claiming another warm-pool box merely
+      // because lease renewal or release failed after commit.
+      if (committedBox) {
+        this.logger.error(
+          `Usage lease failed after warm-pool claim ${id} committed; returning the committed box`,
+          error,
+        )
+        return committedBox
+      }
+      throw error
+    }
+  }
+
+  private async switchWarmPoolUsagePeriod(entityManager: EntityManager, box: Box, signal: AbortSignal): Promise<void> {
+    const expected = expectedOpenPeriod(box)
+    if (expected === null) {
+      throw new Error(`Cannot claim warm-pool box ${box.id}: state ${box.state} has no billable usage period`)
+    }
+
+    // The box UPDATE has already locked its row. Lock the ledger second so all
+    // claim writers use the same Box -> BoxUsagePeriod ordering.
+    const openPeriod = await entityManager.findOne(BoxUsagePeriod, {
+      where: { boxId: box.id, endAt: IsNull() },
+      lock: { mode: 'pessimistic_write' },
+    })
+    signal.throwIfAborted()
+
+    const transitionAt = new Date()
+    if (openPeriod) {
+      openPeriod.endAt = transitionAt
+      await entityManager.save(openPeriod)
+      signal.throwIfAborted()
+    }
+
+    await this.createUsagePeriod(box, expected, entityManager, transitionAt)
+  }
+
+  /**
    * Opens the period the box's current state calls for. A box that bills nothing
    * (terminal) or whose state is still in flight gets none — the caller has
    * already closed whatever was open.
@@ -189,10 +260,11 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     box: Pick<Box, 'id' | 'organizationId' | 'region'>,
     shape: UsagePeriodShape,
     entityManager?: EntityManager,
+    startAt = new Date(),
   ) {
     const usagePeriod = new BoxUsagePeriod()
     usagePeriod.boxId = box.id
-    usagePeriod.startAt = new Date()
+    usagePeriod.startAt = startAt
     usagePeriod.endAt = null
     usagePeriod.cpu = shape.cpu
     usagePeriod.gpu = shape.gpu

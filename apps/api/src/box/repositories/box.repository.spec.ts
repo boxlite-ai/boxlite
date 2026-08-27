@@ -7,6 +7,7 @@ import { BoxRepository } from './box.repository'
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 
 // A chainable UPDATE query-builder stub whose terminal execute() is supplied
 // per-test. update/set/where/andWhere/returning all return the same builder.
@@ -100,5 +101,50 @@ describe('BoxRepository.conditionalStartForProxy', () => {
     const { repo } = makeRepository(execute)
 
     await expect(repo.conditionalStartForProxy('box-1', 'org-1')).resolves.toBeNull()
+  })
+})
+
+describe('BoxRepository.update transaction callback', () => {
+  it('runs warm-pool usage attribution after the box writes and before post-commit work', async () => {
+    const update = jest.fn().mockResolvedValue({ affected: 1 })
+    const upsert = jest.fn().mockResolvedValue(undefined)
+    const entityManager = { update, upsert }
+    const transaction = jest.fn(async (callback: (manager: typeof entityManager) => Promise<unknown>) =>
+      callback(entityManager),
+    )
+    const eventEmitter = { emit: jest.fn() }
+    const cacheInvalidation = { invalidate: jest.fn() }
+    const dataSource = {
+      getRepository: jest.fn(() => ({})),
+      transaction,
+    }
+    const repository = new BoxRepository(dataSource as any, eventEmitter as any, cacheInvalidation as any)
+    const box = {
+      id: 'warm-box',
+      organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+      name: 'warm-box',
+      authToken: 'redacted',
+      state: BoxState.STARTED,
+      desiredState: BoxDesiredState.STARTED,
+      pending: false,
+      public: false,
+      assertValid: jest.fn(),
+      enforceInvariants: jest.fn().mockReturnValue({}),
+    } as unknown as Box
+    const attributionError = new Error('injected usage-period creation failure')
+    const afterUpdateInTransaction = jest.fn().mockRejectedValue(attributionError)
+
+    await expect(
+      repository.update(box.id, {
+        updateData: { organizationId: 'org-target' },
+        entity: box,
+        afterUpdateInTransaction,
+      }),
+    ).rejects.toBe(attributionError)
+
+    expect(update.mock.invocationCallOrder[0]).toBeLessThan(upsert.mock.invocationCallOrder[0])
+    expect(upsert.mock.invocationCallOrder[0]).toBeLessThan(afterUpdateInTransaction.mock.invocationCallOrder[0])
+    expect(eventEmitter.emit).not.toHaveBeenCalled()
+    expect(cacheInvalidation.invalidate).not.toHaveBeenCalled()
   })
 })

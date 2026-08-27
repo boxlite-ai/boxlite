@@ -9,6 +9,9 @@ import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
 import { BoxEvents } from '../constants/box-events.constants'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
+import { UsageService } from '../../usage/services/usage.service'
+import { BoxUsagePeriod } from '../../usage/entities/box-usage-period.entity'
 
 // ensureStartedForProxy only touches boxRepository + eventEmitter +
 // organizationService; every other injected dependency is irrelevant.
@@ -45,6 +48,7 @@ function makeService() {
     noop, // boxActivityService
     noop, // jobRepository
     noop, // jobService
+    noop, // usageService
   )
   return { service, boxRepository, eventEmitter, organizationService }
 }
@@ -87,6 +91,7 @@ function makePreviewUrlService() {
     noop, // boxActivityService
     noop, // jobRepository
     noop, // jobService
+    noop, // usageService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -237,6 +242,7 @@ function makeNetworkTunnelService() {
     noop,
     noop, // jobRepository
     noop, // jobService
+    noop, // usageService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -377,10 +383,10 @@ describe('BoxService public defaults', () => {
     [false, false],
   ])('defaults an assigned warm-pool box to public=%s', async (requestedPublic, expectedPublic) => {
     const warmPoolBox = { id: 'warm-box', runnerId: 'runner-1', name: 'warm-box' } as any
-    const update = jest.fn().mockResolvedValue(warmPoolBox)
+    const claimWarmPoolBox = jest.fn().mockResolvedValue(warmPoolBox)
     const service = Object.create(BoxService.prototype) as BoxService
     Object.assign(service as any, {
-      boxRepository: { update },
+      usageService: { claimWarmPoolBox },
       boxLookupCacheInvalidationService: { invalidateOrgId: jest.fn() },
       eventEmitter: { emit: jest.fn() },
       toBoxDto: jest.fn((box) => box),
@@ -392,9 +398,115 @@ describe('BoxService public defaults', () => {
       { id: 'org-1' },
     )
 
-    expect(update).toHaveBeenCalledWith(
+    expect(claimWarmPoolBox).toHaveBeenCalledWith(
       'warm-box',
-      expect.objectContaining({ updateData: expect.objectContaining({ public: expectedPublic }) }),
+      expect.objectContaining({
+        updateData: expect.objectContaining({ public: expectedPublic }),
+        entity: warmPoolBox,
+      }),
     )
+  })
+
+  it('preserves generated-name retry behavior while claiming warm-pool usage attribution', async () => {
+    const warmPoolBox = { id: 'warm-box', runnerId: 'runner-1', name: 'warm-box' } as any
+    const duplicateNameError = Object.assign(new Error('duplicate name'), { code: '23505' })
+    const claimWarmPoolBox = jest.fn().mockRejectedValueOnce(duplicateNameError).mockResolvedValueOnce(warmPoolBox)
+    const service = Object.create(BoxService.prototype) as BoxService
+    Object.assign(service as any, {
+      usageService: { claimWarmPoolBox },
+      boxLookupCacheInvalidationService: { invalidateOrgId: jest.fn() },
+      eventEmitter: { emit: jest.fn() },
+      toBoxDto: jest.fn((box) => box),
+    })
+
+    await (service as any).assignWarmPoolBox(warmPoolBox, {}, { id: 'org-1' })
+
+    expect(claimWarmPoolBox).toHaveBeenCalledTimes(2)
+    const firstParams = claimWarmPoolBox.mock.calls[0][1]
+    const retryParams = claimWarmPoolBox.mock.calls[1][1]
+    expect(firstParams.entity).toBeUndefined()
+    expect(retryParams.entity).toBeUndefined()
+    expect(retryParams.updateData.name).toBe(`${firstParams.updateData.name}-${warmPoolBox.id}`)
+  })
+
+  it('keeps warm-pool usage attribution billable when the state event is dropped', async () => {
+    const targetOrganizationId = 'org-1'
+    const warmPoolBox = {
+      id: 'warm-box',
+      runnerId: 'runner-1',
+      name: 'warm-box',
+      organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+      state: BoxState.STARTED,
+      region: 'us',
+      cpu: 2,
+      gpu: 1,
+      mem: 4,
+      disk: 10,
+    } as any
+    const warmPoolPeriod = Object.assign(new BoxUsagePeriod(), {
+      id: 'warm-period',
+      boxId: warmPoolBox.id,
+      organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+      region: warmPoolBox.region,
+      cpu: warmPoolBox.cpu,
+      gpu: warmPoolBox.gpu,
+      mem: warmPoolBox.mem,
+      disk: warmPoolBox.disk,
+      startAt: new Date('2026-08-01T00:00:00.000Z'),
+      endAt: null,
+    })
+    const storedPeriods = [warmPoolPeriod]
+    const transactionalEntityManager = {
+      findOne: jest.fn(async () => storedPeriods.find((period) => period.endAt === null)),
+      save: jest.fn(async (period: BoxUsagePeriod) => {
+        if (!storedPeriods.includes(period)) {
+          storedPeriods.push(period)
+        }
+        return period
+      }),
+    }
+    const boxRepository = {
+      update: jest.fn(async (_id: string, params: any) => {
+        Object.assign(warmPoolBox, params.updateData)
+        await params.afterUpdateInTransaction?.(transactionalEntityManager, warmPoolBox)
+        return warmPoolBox
+      }),
+    }
+    const lease = {
+      signal: new AbortController().signal,
+      release: jest.fn().mockResolvedValue(undefined),
+    }
+    const usageService = new UsageService(
+      { manager: { transaction: jest.fn() } } as any,
+      { waitForLease: jest.fn().mockResolvedValue(lease) } as any,
+      boxRepository as any,
+      {} as any,
+      {} as any,
+    )
+    const eventEmitter = { emit: jest.fn() }
+    const service = Object.create(BoxService.prototype) as BoxService
+    Object.assign(service as any, {
+      boxRepository,
+      usageService,
+      boxLookupCacheInvalidationService: { invalidateOrgId: jest.fn() },
+      // A process exit or listener failure has the same billing effect as this
+      // deliberately dropped in-process notification.
+      eventEmitter,
+      toBoxDto: jest.fn((box) => box),
+    })
+
+    await (service as any).assignWarmPoolBox(warmPoolBox, { name: 'assigned-box' }, { id: targetOrganizationId })
+
+    const openPeriods = storedPeriods.filter((period) => period.endAt === null)
+    expect(warmPoolPeriod.endAt).toBeInstanceOf(Date)
+    expect(openPeriods).toEqual([
+      expect.objectContaining({
+        boxId: warmPoolBox.id,
+        organizationId: targetOrganizationId,
+        region: warmPoolBox.region,
+      }),
+    ])
+    expect(openPeriods[0].startAt).toEqual(warmPoolPeriod.endAt)
+    expect(eventEmitter.emit).toHaveBeenCalledWith(BoxEvents.STATE_UPDATED, expect.anything())
   })
 })

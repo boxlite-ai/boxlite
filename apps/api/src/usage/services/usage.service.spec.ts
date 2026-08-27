@@ -69,7 +69,7 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
     acquireLease: jest.fn().mockResolvedValue(lease),
     waitForLease: jest.fn().mockResolvedValue(lease),
   }
-  const boxRepository = { findOne: jest.fn() }
+  const boxRepository = { findOne: jest.fn(), update: jest.fn() }
   const usageExportOutboxService = { enqueue: jest.fn().mockResolvedValue(0) }
   // The reconcile pass builds a left join through the query builder, which this
   // fake cannot stand in for; its behaviour is covered in
@@ -88,6 +88,7 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
     service,
     usagePeriodRepository,
     redisLockProvider,
+    boxRepository,
     usageExportOutboxService,
     lease,
     transactionalEntityManager,
@@ -113,6 +114,16 @@ describe('UsageService event subscriptions', () => {
 })
 
 describe('UsageService.handleBoxStateUpdate', () => {
+  it('ignores a same-state synthetic event without touching usage periods', async () => {
+    const { service, usagePeriodRepository, redisLockProvider } = makeService([openPeriod()])
+
+    await service.handleBoxStateUpdate(new BoxStateUpdatedEvent(box, BoxState.STARTED, BoxState.STARTED))
+
+    expect(redisLockProvider.waitForLease).not.toHaveBeenCalled()
+    expect(usagePeriodRepository.findOne).not.toHaveBeenCalled()
+    expect(usagePeriodRepository.save).not.toHaveBeenCalled()
+  })
+
   it('cancels a pending lock wait during application shutdown', async () => {
     const { service, redisLockProvider } = makeService()
     redisLockProvider.waitForLease.mockImplementation(
@@ -302,6 +313,41 @@ describe('UsageService.handleBoxStateUpdate', () => {
     expect(usagePeriodRepository.save).toHaveBeenCalledTimes(1)
     expect(usagePeriodRepository.save).toHaveBeenCalledWith(open)
     expect(lease.release).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('UsageService.claimWarmPoolBox', () => {
+  it('creates warm-pool usage attribution without an old period and returns the committed box when lease release fails', async () => {
+    const { service, boxRepository, redisLockProvider, lease } = makeService()
+    const logError = jest.spyOn((service as any).logger, 'error').mockImplementation(() => undefined)
+    const updatedBox = { ...box, state: BoxState.STARTED, organizationId: 'org-target' } as Box
+    const transactionalEntityManager = {
+      findOne: jest.fn().mockResolvedValue(null),
+      save: jest.fn().mockImplementation(async (value) => value),
+    }
+    boxRepository.update.mockImplementation(async (_id, params) => {
+      await params.afterUpdateInTransaction(transactionalEntityManager, updatedBox)
+      return updatedBox
+    })
+    lease.release.mockRejectedValue(new Error('Redis unavailable during release'))
+
+    await expect(
+      service.claimWarmPoolBox(box.id, { updateData: { organizationId: updatedBox.organizationId } }),
+    ).resolves.toBe(updatedBox)
+
+    expect(redisLockProvider.waitForLease).toHaveBeenCalledWith(`usage-period-${box.id}`, 60, expect.any(AbortSignal))
+    expect(transactionalEntityManager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        boxId: box.id,
+        organizationId: updatedBox.organizationId,
+        startAt: expect.any(Date),
+        endAt: null,
+      }),
+    )
+    expect(logError).toHaveBeenCalledWith(
+      expect.stringContaining(`warm-pool claim ${box.id} committed`),
+      expect.any(Error),
+    )
   })
 })
 

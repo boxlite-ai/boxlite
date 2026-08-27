@@ -29,6 +29,7 @@ import { UsageService } from './usage.service'
 import { expectedOpenPeriod } from './expected-usage-period'
 import { UsageConcurrencyService } from './usage-concurrency.service'
 import { UsageConcurrencyGranularity } from '../dto/usage-concurrency.dto'
+import { BoxRepository } from '../../box/repositories/box.repository'
 
 // The three cron jobs are a destructive archive transaction, a roll-over that
 // rewrites resources, and a reconcile pass built on a left join from box to the
@@ -60,7 +61,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   // organizationId is a uuid on the box table, so it has to be a real one here
   // even though the ledger stores it as text.
   const box = {
-    id: 'box-int-1',
+    id: 'BoxIntTest01',
     organizationId: '5c2f6a48-8f2b-4a1e-9d31-2b7e6f0c1a45',
     region: 'us',
     cpu: 2,
@@ -170,6 +171,24 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       outboxService(exportEnabled),
       { find: async () => [] } as any,
     )
+
+  const serviceForWarmPoolClaim = () => {
+    const eventEmitter = { emit: jest.fn() }
+    const boxRepository = new BoxRepository(
+      dataSource,
+      eventEmitter as any,
+      {
+        invalidate: jest.fn(),
+      } as any,
+    )
+    return {
+      service: new UsageService(periods, new RedisLockProvider(redis), boxRepository, outboxService(), {
+        find: async () => [],
+      } as any),
+      boxRepository,
+      eventEmitter,
+    }
+  }
 
   const quoted = TABLES.map((table) => `"${table}"`).join(', ')
   // CASCADE because box_last_activity references box.
@@ -381,6 +400,63 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     await serviceForBoxState(BoxState.STARTED).closeAndReopenUsagePeriods()
 
     expect(await periods.find()).toEqual([expect.objectContaining({ id: warmPool.id, endAt: null })])
+  })
+
+  it('switches warm-pool usage attribution in the same transaction as ownership', async () => {
+    const targetOrganizationId = box.organizationId
+    const assignedShape = { region: 'eu', cpu: 6, gpu: 2, mem: 12, disk: 80 }
+    await insertBox({
+      state: BoxState.STARTED,
+      organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+      ...assignedShape,
+    })
+    const oldPeriod = await openPeriod({
+      organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+      ...assignedShape,
+    })
+    const { service, boxRepository } = serviceForWarmPoolClaim()
+    const warmPoolBox = await boxRepository.findOneByOrFail({ id: box.id })
+
+    await service.claimWarmPoolBox(box.id, {
+      updateData: { organizationId: targetOrganizationId },
+      entity: warmPoolBox,
+    })
+
+    const persistedBox = await dataSource.getRepository(Box).findOneByOrFail({ id: box.id })
+    const closed = await periods.findOneByOrFail({ id: oldPeriod.id })
+    const open = await periods.findOneByOrFail({ boxId: box.id, endAt: IsNull() })
+    expect(persistedBox.organizationId).toBe(targetOrganizationId)
+    expect(closed.endAt).toBeInstanceOf(Date)
+    expect(open.startAt).toEqual(closed.endAt)
+    expect(open).toEqual(
+      expect.objectContaining({
+        organizationId: targetOrganizationId,
+        ...assignedShape,
+      }),
+    )
+  })
+
+  it('rolls back box ownership when creating warm-pool usage attribution fails', async () => {
+    await insertBox({ state: BoxState.STARTED, organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION })
+    const oldPeriod = await openPeriod({ organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION })
+    const { service, boxRepository, eventEmitter } = serviceForWarmPoolClaim()
+    const warmPoolBox = await boxRepository.findOneByOrFail({ id: box.id })
+    const creationError = new Error('injected usage-period creation failure')
+    const createUsagePeriod = jest.spyOn(service as any, 'createUsagePeriod').mockRejectedValue(creationError)
+
+    await expect(
+      service.claimWarmPoolBox(box.id, {
+        updateData: { organizationId: box.organizationId },
+        entity: warmPoolBox,
+      }),
+    ).rejects.toBe(creationError)
+    createUsagePeriod.mockRestore()
+
+    expect(await dataSource.getRepository(Box).findOneByOrFail({ id: box.id })).toEqual(
+      expect.objectContaining({ organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION }),
+    )
+    expect(await periods.find()).toEqual([expect.objectContaining({ id: oldPeriod.id, endAt: null })])
+    expect(eventEmitter.emit).not.toHaveBeenCalled()
   })
 
   it('starts the reopened period exactly where the closed one ended, with the same attribution', async () => {
