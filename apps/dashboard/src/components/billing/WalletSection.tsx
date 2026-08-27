@@ -187,7 +187,7 @@ export function WalletSection() {
     try {
       const result = await topUpWalletMutation.mutateAsync({
         organizationId: selectedOrganization.id,
-        amountCents: amount * 100,
+        amountCents: Math.round(amount * 100),
       })
       if (newWindow) {
         newWindow.location.href = result.url

@@ -61,6 +61,12 @@ vi.mock('@/hooks/mutations/useTopUpWalletMutation', () => ({
 vi.mock('@/components/Invoices', () => ({ InvoicesTable: () => null }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
+function typeInto(element: HTMLInputElement, value: string) {
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
+  descriptor?.set?.call(element, value)
+  element.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
 async function flush() {
   await act(async () => {
     await Promise.resolve()
@@ -75,6 +81,7 @@ describe('WalletSection top-up checkout', () => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     mocks.paymentMethods = []
     mocks.wallet.creditCardConnected = false
+    mocks.topUpWallet.mockClear()
     mocks.topUpWallet.mockResolvedValue({ url: 'https://checkout.stripe.com/pay/cs_top_up' })
   })
 
@@ -113,6 +120,38 @@ describe('WalletSection top-up checkout', () => {
     expect(open).toHaveBeenCalledWith('', '_blank')
     expect(mocks.topUpWallet).toHaveBeenCalledWith({ organizationId: 'org-without-card', amountCents: 10_000 })
     expect(checkoutWindow.location.href).toBe('https://checkout.stripe.com/pay/cs_top_up')
+  })
+
+  it('rounds a custom two-decimal dollar amount to integer cents', async () => {
+    const checkoutWindow = { location: { href: '' }, close: vi.fn() }
+    vi.spyOn(window, 'open').mockReturnValue(checkoutWindow as unknown as Window)
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection />)
+    })
+    await flush()
+
+    const customAmount = document.querySelector<HTMLInputElement>('#customTopUpAmount')
+    expect(customAmount).not.toBeNull()
+
+    await act(async () => {
+      customAmount?.focus()
+      if (customAmount) typeInto(customAmount, '10.13')
+    })
+    await flush()
+
+    const topUpButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'Top up →',
+    )
+    expect(topUpButton?.disabled).toBe(false)
+
+    await act(async () => topUpButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flush()
+
+    expect(mocks.topUpWallet).toHaveBeenCalledWith({ organizationId: 'org-without-card', amountCents: 1013 })
   })
 
   it('renders every stored method and marks only the API default as chargeable', async () => {
