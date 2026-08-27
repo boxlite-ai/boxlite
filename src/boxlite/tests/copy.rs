@@ -67,7 +67,7 @@ async fn streaming_single_file_into_existing_dir(bx: &LiteBox, tmp: &Path) {
     assert!(!source_is_dir);
 
     // `/root` already exists as a directory; the file must go inside it.
-    bx.copy_in_tar_stream(tar, "/root", source_is_dir, CopyOptions::default())
+    bx.copy_in_tar_stream(tar, "/root", Some(source_is_dir), CopyOptions::default())
         .await
         .expect("copy_in_tar_stream into existing directory");
 
@@ -103,7 +103,7 @@ async fn streaming_roundtrip(bx: &LiteBox, tmp: &Path) {
     bx.copy_in_tar_stream(
         tar,
         "/root/stream-src.txt",
-        source_is_dir,
+        Some(source_is_dir),
         CopyOptions::default(),
     )
     .await
@@ -131,6 +131,83 @@ async fn streaming_roundtrip(bx: &LiteBox, tmp: &Path) {
     .await
     .expect("unpack_stream");
     assert_eq!(std::fs::read_to_string(&dest).unwrap(), "streaming hello");
+}
+
+/// A single-file tar streamed WITHOUT a shape hint must land as that exact
+/// file — the guest's hintless path spools the archive and peeks it to decide
+/// (the pre-hint behavior). This is what an old-client upload looks like
+/// after the runner relays the body with hint=Unknown.
+async fn streaming_hintless_single_file(bx: &LiteBox, tmp: &Path) {
+    let host_src = tmp.join("hintless-src.txt");
+    std::fs::write(&host_src, b"hintless single\n").unwrap();
+
+    let (_, tar) = boxlite_shared::tar::pack_stream(
+        host_src.clone(),
+        boxlite_shared::tar::PackContext {
+            follow_symlinks: false,
+            include_parent: false,
+        },
+    )
+    .await
+    .expect("pack_stream");
+
+    bx.copy_in_tar_stream(tar, "/root/hintless-file.txt", None, CopyOptions::default())
+        .await
+        .expect("hintless copy_in_tar_stream");
+
+    let out = exec_stdout(
+        bx,
+        BoxCommand::new("cat").args(["/root/hintless-file.txt"]),
+    )
+    .await;
+    assert_eq!(out, "hintless single\n");
+}
+
+/// A directory tree streamed WITHOUT a hint must unpack as a tree. A
+/// regression that treated `None` as `Some(false)` would force file mode and
+/// fail to unpack the directory — the behavior this test pins.
+async fn streaming_hintless_directory(bx: &LiteBox, tmp: &Path) {
+    let host_dir = tmp.join("hintless-src-dir");
+    std::fs::create_dir_all(host_dir.join("sub")).unwrap();
+    std::fs::write(host_dir.join("a.txt"), b"hintless dir a\n").unwrap();
+    std::fs::write(host_dir.join("sub").join("b.txt"), b"hintless dir b\n").unwrap();
+
+    let (_, tar) = boxlite_shared::tar::pack_stream(
+        host_dir.clone(),
+        boxlite_shared::tar::PackContext {
+            follow_symlinks: false,
+            include_parent: true,
+        },
+    )
+    .await
+    .expect("pack_stream");
+
+    // Fresh dest, no trailing slash — only the guest's peek can decide.
+    bx.copy_in_tar_stream(tar, "/root/hintless-dir", None, CopyOptions::default())
+        .await
+        .expect("hintless directory copy_in_tar_stream");
+
+    let out = exec_stdout(
+        bx,
+        BoxCommand::new("cat").args(["/root/hintless-dir/hintless-src-dir/a.txt"]),
+    )
+    .await;
+    assert_eq!(out, "hintless dir a\n");
+}
+
+/// A failed hintless upload surfaces as an error through the streaming path.
+/// The streamed bytes are not a tar archive, so the guest's peek/extract
+/// fails after spooling. (The spool cleanup itself is asserted by the guest
+/// crate's `TempUploadGuard` unit tests — the container cannot see the
+/// agent's own /tmp.)
+async fn streaming_hintless_corrupt_archive_fails(bx: &LiteBox, _tmp: &Path) {
+    let tar: boxlite_shared::BoxTarStream =
+        Box::pin(tokio_stream::iter(vec![Ok(b"not a tar archive".to_vec())]));
+
+    let result = bx
+        .copy_in_tar_stream(tar, "/root/hintless-fail.txt", None, CopyOptions::default())
+        .await;
+    assert!(result.is_err(), "corrupt archive must fail the copy");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -177,6 +254,9 @@ async fn copy_integration() {
     copy_out_of_a_dir_containing_a_mount_is_refused(&bx, tmp.path()).await;
     streaming_roundtrip(&bx, tmp.path()).await;
     streaming_single_file_into_existing_dir(&bx, tmp.path()).await;
+    streaming_hintless_single_file(&bx, tmp.path()).await;
+    streaming_hintless_directory(&bx, tmp.path()).await;
+    streaming_hintless_corrupt_archive_fails(&bx, tmp.path()).await;
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }

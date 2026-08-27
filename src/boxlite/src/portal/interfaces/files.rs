@@ -139,9 +139,9 @@ impl FilesInterface {
 
     /// Upload a tar byte stream to the guest and extract at `dest_path`.
     ///
-    /// `source_is_dir` is the authoritative archive shape (dir tree vs single
-    /// file); it is attached to the first chunk so the guest never has to peek
-    /// the tar to decide extraction mode.
+    /// `source_is_dir` is the archive shape (dir tree vs single file); `None`
+    /// when the caller cannot tell — the guest then peeks the tar to decide
+    /// extraction mode. It is attached to the first chunk only.
     pub async fn upload_tar_stream<S>(
         &mut self,
         tar: S,
@@ -149,7 +149,7 @@ impl FilesInterface {
         container_id: Option<&str>,
         mkdir_parents: bool,
         overwrite: bool,
-        source_is_dir: bool,
+        source_is_dir: Option<bool>,
     ) -> BoxliteResult<()>
     where
         S: futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static,
@@ -172,7 +172,7 @@ impl FilesInterface {
                             data,
                             mkdir_parents,
                             overwrite,
-                            source_is_dir: if first { Some(source_is_dir) } else { None },
+                            source_is_dir: if first { source_is_dir } else { None },
                         };
                         first = false;
                     }

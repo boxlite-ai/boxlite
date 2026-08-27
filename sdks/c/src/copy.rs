@@ -157,6 +157,29 @@ unsafe fn box_copy_out(
 
 // ─── Streaming copy ────────────────────────────────────────────────────────
 
+/// Copy-in source shape. `Unknown` when the caller cannot tell (older
+/// clients); the guest peeks the archive to decide. Mirrors the guest
+/// protocol's `optional bool source_is_dir`: `File` = Some(false),
+/// `Dir` = Some(true), `Unknown` = None.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoxliteCopySourceKind {
+    Unknown = 0,
+    File = 1,
+    Dir = 2,
+}
+
+/// Maps the C tri-state to the guest protocol's optional bool. Takes the raw
+/// integer because C callers can pass any value, and unrecognized values
+/// must behave as Unknown rather than guess.
+fn source_kind_to_hint(kind: i32) -> Option<bool> {
+    match kind {
+        1 => Some(false),
+        2 => Some(true),
+        _ => None,
+    }
+}
+
 /// Opaque handle for a streaming copy-in (push raw tar bytes into the guest).
 pub struct CBoxCopyInStream {
     tx: Option<mpsc::Sender<io::Result<Vec<u8>>>>,
@@ -279,11 +302,14 @@ pub unsafe extern "C" fn boxlite_copy_out_stream(
 }
 
 /// Begin a streaming copy-in, returning an opaque transfer handle.
+///
+/// `source_kind` describes the archive shape; `Unknown` when the caller
+/// cannot tell (older clients) — the guest then peeks the archive to decide.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_copy_in_start(
     handle: *mut CBoxHandle,
     guest_dst: *const c_char,
-    source_is_dir: bool,
+    source_kind: BoxliteCopySourceKind,
     copy_cb: CBoxCopyCb,
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
@@ -304,6 +330,8 @@ pub unsafe extern "C" fn boxlite_copy_in_start(
             write_error(out_error, null_pointer_error("copy_cb"));
             return std::ptr::null_mut();
         };
+
+        let source_is_dir = source_kind_to_hint(source_kind as i32);
 
         let handle_ref = &*handle;
         let lite = handle_ref.handle.clone();
@@ -408,5 +436,31 @@ pub unsafe extern "C" fn boxlite_copy_in_free(stream: *mut CBoxCopyInStream) {
         if !stream.is_null() {
             drop(Box::from_raw(stream));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_kind_maps_to_guest_hint() {
+        assert_eq!(source_kind_to_hint(BoxliteCopySourceKind::Unknown as i32), None);
+        assert_eq!(
+            source_kind_to_hint(BoxliteCopySourceKind::File as i32),
+            Some(false)
+        );
+        assert_eq!(
+            source_kind_to_hint(BoxliteCopySourceKind::Dir as i32),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn unrecognized_kind_behaves_as_unknown() {
+        // C callers can cast any integer to the enum; out-of-range values
+        // must not be guessed into a shape.
+        assert_eq!(source_kind_to_hint(7), None);
+        assert_eq!(source_kind_to_hint(-1), None);
     }
 }

@@ -64,6 +64,16 @@ typedef enum BoxliteErrorCode {
   SessionReaped = 21,
 } BoxliteErrorCode;
 
+// Copy-in source shape. `Unknown` when the caller cannot tell (older
+// clients); the guest peeks the archive to decide. Mirrors the guest
+// protocol's `optional bool source_is_dir`: `File` = Some(false),
+// `Dir` = Some(true), `Unknown` = None.
+typedef enum BoxliteCopySourceKind {
+  Unknown = 0,
+  File = 1,
+  Dir = 2,
+} BoxliteCopySourceKind;
+
 // Network mode exposed by [`CNetworkInfo`].
 typedef enum BoxliteNetworkMode {
   BoxliteNetworkModeEnabled = 0,
@@ -626,9 +636,12 @@ enum BoxliteErrorCode boxlite_copy_out_stream(CBoxHandle *handle,
                                               CBoxliteError *out_error);
 
 // Begin a streaming copy-in, returning an opaque transfer handle.
+//
+// `source_kind` describes the archive shape; `Unknown` when the caller
+// cannot tell (older clients) — the guest then peeks the archive to decide.
 struct CBoxCopyInStream *boxlite_copy_in_start(CBoxHandle *handle,
                                                const char *guest_dst,
-                                               bool source_is_dir,
+                                               enum BoxliteCopySourceKind source_kind,
                                                CBoxCopyCb copy_cb,
                                                void *user_data,
                                                CBoxliteError *out_error);

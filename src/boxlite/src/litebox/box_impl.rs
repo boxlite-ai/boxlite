@@ -988,13 +988,14 @@ impl BoxImpl {
 
     /// Stream a tar byte stream into the guest at `container_dst`.
     ///
-    /// `source_is_dir` is the authoritative archive shape. This is the
+    /// `source_is_dir` is the archive shape; `None` when the caller cannot
+    /// tell — the guest then peeks the archive to decide. This is the
     /// streaming counterpart to [`Self::copy_into`] — no temp tar file.
     pub(crate) async fn copy_in_tar_stream<S>(
         self: std::sync::Arc<Self>,
         tar: S,
         container_dst: String,
-        source_is_dir: bool,
+        source_is_dir: Option<bool>,
         opts: CopyOptions,
     ) -> BoxliteResult<()>
     where

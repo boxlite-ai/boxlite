@@ -426,6 +426,7 @@ impl CopyTarget {
     }
 }
 
+
 #[tonic::async_trait]
 impl Files for GuestServer {
     async fn upload(
@@ -1083,5 +1084,40 @@ mod tests {
         );
         assert_eq!(to_container_path("tmp/x").unwrap(), PathBuf::from("/tmp/x"));
         assert!(to_container_path("/a/../b").is_err());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StagedTar;
+    use std::path::PathBuf;
+
+    /// The spool tar must be removed on drop — covering every error path of
+    /// the hintless upload arm, not just the success path. The guest agent's
+    /// /tmp is not visible to container processes, so this is asserted here
+    /// rather than from the copy integration tests.
+    #[test]
+    fn staged_tar_removes_file_on_drop() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path: PathBuf = dir.path().join("spool.tar");
+        std::fs::write(&path, b"partial tar").unwrap();
+
+        {
+            let _guard = StagedTar::new(path.clone());
+            assert!(path.exists(), "guard must not remove the file while alive");
+        }
+
+        assert!(!path.exists(), "guard must remove the file on drop");
+    }
+
+    /// Dropping a guard whose file was already removed (or never created) is
+    /// harmless — the error-path cleanup must not panic.
+    #[test]
+    fn staged_tar_tolerates_missing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path: PathBuf = dir.path().join("never-created.tar");
+
+        let _guard = StagedTar::new(path);
+        // Dropping happens at end of scope; no panic is the assertion.
     }
 }

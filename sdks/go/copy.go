@@ -184,11 +184,26 @@ func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer, o
 	}
 }
 
+// CopySourceKind describes the archive shape streamed into a box by
+// CopyInStream.
+type CopySourceKind int
+
+const (
+	// CopySourceUnknown means the caller cannot tell (older clients); the
+	// guest peeks the archive to decide.
+	CopySourceUnknown CopySourceKind = iota
+	// CopySourceFile is a single regular file archive.
+	CopySourceFile
+	// CopySourceDir is a directory tree archive.
+	CopySourceDir
+)
+
 // CopyInStream streams r (raw tar) into guestDst without staging to disk.
 //
-// sourceIsDir is the authoritative archive shape (directory tree vs single
-// file), carried to the guest so it never has to peek the tar.
-func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceIsDir bool, r io.Reader) error {
+// sourceKind is the archive shape (directory tree vs single file); use
+// CopySourceUnknown when the caller cannot tell — the guest then peeks the
+// tar to decide.
+func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind CopySourceKind, r io.Reader) error {
 	b.runtime.ensureDrainRunning()
 
 	cDst := toCString(guestDst)
@@ -198,7 +213,10 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceIsDir boo
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	stream := C.boxlite_copy_in_start(b.handle, cDst, C.bool(sourceIsDir), C.cbCopy(), handleToPtr(h), &cerr)
+	// The cgo wrapper types this parameter as plain uint32, and Go does not
+	// implicitly convert between two named types — go through uint32.
+	kind := uint32(C.BoxliteCopySourceKind(sourceKind))
+	stream := C.boxlite_copy_in_start(b.handle, cDst, kind, C.cbCopy(), handleToPtr(h), &cerr)
 	if stream == nil {
 		deleteHandleForDispatch(h)
 		return freeError(&cerr)

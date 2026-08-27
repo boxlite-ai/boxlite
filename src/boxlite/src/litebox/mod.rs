@@ -161,8 +161,9 @@ impl LiteBox {
 
     /// Stream a tar byte stream into the container at `container_dst`.
     ///
-    /// `source_is_dir` is the authoritative archive shape (directory tree vs
-    /// single file). Only the local backend supports this.
+    /// `source_is_dir` is the archive shape (directory tree vs single file);
+    /// `None` when the caller cannot tell — the guest then peeks the archive
+    /// to decide. Only the local backend supports this.
     ///
     /// Returns a `BoxFuture` (rather than being an `async fn`) so the future
     /// owns the downcast backend and never borrows `&self` across an await —
@@ -171,7 +172,7 @@ impl LiteBox {
         &self,
         tar: S,
         container_dst: &str,
-        source_is_dir: bool,
+        source_is_dir: Option<bool>,
         opts: copy::CopyOptions,
     ) -> futures::future::BoxFuture<'static, BoxliteResult<()>>
     where
