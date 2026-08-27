@@ -213,14 +213,18 @@ impl<'a> LayerExtractor<'a> {
                 continue;
             }
 
-            // Fail before this entry mutates anything once the budget is
-            // spent: no parent dirs created, no overwrite cleanup, nothing
-            // truncated by this entry. Whiteouts still apply (they run
-            // before this check and consume no budget), and a layer may
-            // still carry dirs/symlinks/hardlinks after the data budget is
-            // exhausted.
-            if self.remaining == 0
-                && matches!(entry_type, EntryType::Regular | EntryType::GNUSparse)
+            // Fail before this entry mutates anything once its declared size
+            // exceeds the remaining budget: no parent dirs created, no
+            // overwrite cleanup, nothing truncated by this entry. This is the
+            // common-case fast path; the copy arm still enforces the budget
+            // on bytes actually written (a PAX `size` extension can make an
+            // entry yield more than header().size() reports). A size-0 entry
+            // writes nothing and passes even with an exhausted budget.
+            // Whiteouts apply regardless (they run before this check and
+            // consume no budget), and a layer may still carry
+            // dirs/symlinks/hardlinks after the data budget is exhausted.
+            if matches!(entry_type, EntryType::Regular | EntryType::GNUSparse)
+                && entry.header().size().unwrap_or(0) > self.remaining
             {
                 return Err(decompressed_size_error(self.limit, &normalized));
             }
@@ -297,12 +301,16 @@ impl<'a> LayerExtractor<'a> {
                                 ))
                             })?;
                     if copied > self.remaining {
-                        // The +1 probe read lets a single oversized entry trip
-                        // the budget instead of being silently truncated at the
-                        // cap (franz-go pkg/kgo/compression.go:411:
-                        // io.Copy(LimitReader(max+1)); n > max => err).
-                        // Best-effort removal so the budget error always
-                        // surfaces; callers that extract into a temp dir clean
+                        // Byte-counted guard (all builds): a PAX `size`
+                        // extension can make an entry yield more bytes than
+                        // header().size() reports (tar-rs caps reads by
+                        // EntryFields.size, which pax overrides without
+                        // touching the octal field the pre-check reads). The
+                        // +1 probe read trips the budget instead of silently
+                        // truncating at the cap (franz-go
+                        // pkg/kgo/compression.go:411: io.Copy(LimitReader(
+                        // max+1)); n > max => err). Best-effort removal so the
+                        // budget error always surfaces; temp-dir callers clean
                         // the rest.
                         let _ = Self::remove_nofollow(&safe_path, false);
                         return Err(decompressed_size_error(self.limit, &normalized));
@@ -2464,5 +2472,114 @@ mod tests {
         );
 
         extractor.finalize().unwrap();
+    }
+
+    /// A size-0 entry writes no bytes, so it must pass even with the budget
+    /// exactly exhausted — the early check keys off declared size, not just
+    /// `remaining == 0`.
+    #[test]
+    fn decompressed_size_budget_allows_empty_file_after_exhaustion() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+        let mut extractor = LayerExtractor::with_budget(&dest, 5);
+
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&[raw_file(
+                "f", b"hello",
+            )])))
+            .unwrap();
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&[raw_file(
+                "empty", b"",
+            )])))
+            .unwrap();
+        extractor.finalize().unwrap();
+
+        assert_eq!(std::fs::metadata(dest.join("empty")).unwrap().len(), 0);
+    }
+
+    /// An entry whose declared size exceeds a *non-zero* remaining budget
+    /// must fail before any filesystem mutation: the parent dir is never
+    /// created. The previous `remaining == 0`-only check let the copy arm
+    /// run first, creating parents before tripping the budget.
+    #[test]
+    fn decompressed_size_budget_oversized_entry_fails_before_parent_creation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+        let mut extractor = LayerExtractor::with_budget(&dest, 5);
+
+        let err = extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&[raw_file(
+                "newdir/f", b"hellox",
+            )])))
+            .unwrap_err();
+        assert!(
+            format!("{}", err).contains("BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE")
+        );
+        assert!(
+            !dest.join("newdir").exists(),
+            "an oversized entry must fail before creating parent directories"
+        );
+    }
+
+    /// Hand-rolled tar where a PAX `size` extension overrides the octal
+    /// header size: the file record declares size 0 but carries 6 data bytes,
+    /// and the preceding PAX record sets size=6. tar-rs consumes the PAX
+    /// record internally and caps what the entry yields by the PAX value,
+    /// while header().size() keeps reporting the octal 0.
+    fn create_pax_size_override_tar() -> Vec<u8> {
+        let mut data = Vec::new();
+
+        let mut pax = tar::Header::new_gnu();
+        pax.set_path("PaxHeaders.0/pax-bomb").unwrap();
+        pax.set_entry_type(tar::EntryType::XHeader);
+        let payload = b"9 size=6\n";
+        pax.set_size(payload.len() as u64);
+        pax.set_cksum();
+        data.extend_from_slice(pax.as_bytes());
+        data.extend_from_slice(payload);
+        data.extend(std::iter::repeat(0u8).take(512 - payload.len()));
+
+        let mut file_h = tar::Header::new_gnu();
+        file_h.set_path("pax-bomb").unwrap();
+        file_h.set_mode(0o644);
+        file_h.set_entry_type(tar::EntryType::Regular);
+        file_h.set_size(0); // lies: 6 bytes of data follow
+        file_h.set_cksum();
+        data.extend_from_slice(file_h.as_bytes());
+        data.extend_from_slice(b"hellox");
+        data.extend(std::iter::repeat(0u8).take(512 - 6));
+
+        data.extend(std::iter::repeat(0u8).take(1024)); // end-of-archive
+        data
+    }
+
+    /// A PAX `size` extension makes tar-rs yield more bytes than
+    /// header().size() reports, bypassing the pre-check; the copy-arm guard
+    /// must still trip the budget.
+    #[test]
+    fn decompressed_size_budget_catches_pax_size_override() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+        let mut extractor = LayerExtractor::with_budget(&dest, 5);
+
+        let err = extractor
+            .extract_reader(std::io::Cursor::new(create_pax_size_override_tar()))
+            .unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE"),
+            "budget error should mention the env-var override: {}",
+            msg
+        );
+        assert!(
+            msg.contains("pax-bomb"),
+            "budget error should name the entry path: {}",
+            msg
+        );
+        assert!(
+            !dest.join("pax-bomb").exists(),
+            "partial file must not remain after a budget breach"
+        );
     }
 }
