@@ -47,6 +47,8 @@ describe('Box entity secret redaction', () => {
   it('keeps the secrets field absent when empty', () => {
     const box = new Box('us', 'no-secrets')
 
-    expect(JSON.stringify(box)).not.toContain('secrets')
+    // Check the field directly: a substring scan would false-positive on a
+    // name like "no-secrets".
+    expect(JSON.parse(JSON.stringify(box))).not.toHaveProperty('secrets')
   })
 })

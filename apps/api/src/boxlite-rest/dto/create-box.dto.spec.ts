@@ -394,13 +394,16 @@ describe('CreateBoxDto secrets', () => {
     const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ value: 'sk-test' }] }))
 
     expect(errors).not.toHaveLength(0)
-    expect(errors[0]?.children?.[0]?.constraints).toHaveProperty('isNotEmpty')
+    // @ValidateNested({ each: true }) reports one child per array slot, and the
+    // slot's children hold the per-property errors, so constraints sit two
+    // levels below the top-level secrets error.
+    expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isNotEmpty')
   })
 
   it('rejects a secret missing its value', async () => {
     const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai' }] }))
 
     expect(errors).not.toHaveLength(0)
-    expect(errors[0]?.children?.[0]?.constraints).toHaveProperty('isString')
+    expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isString')
   })
 })
