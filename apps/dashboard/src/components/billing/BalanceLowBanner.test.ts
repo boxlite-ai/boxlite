@@ -1,5 +1,18 @@
-import { describe, expect, it } from 'vitest'
-import { balanceWarning } from './BalanceLowBanner'
+import type { OrganizationPlan, OrganizationWallet } from '@/billing-api'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { balanceWarning, BalanceLowBanner } from './BalanceLowBanner'
+
+const queryMocks = vi.hoisted(() => ({
+  plan: undefined as OrganizationPlan | undefined,
+  wallet: undefined as OrganizationWallet | undefined,
+}))
+
+vi.mock('@/hooks/queries/billingQueries', () => ({
+  useOwnerPlanQuery: () => ({ data: queryMocks.plan }),
+  useOwnerWalletQuery: () => ({ data: queryMocks.wallet }),
+}))
 
 const autoTopUp = { thresholdAmount: 20, targetAmount: 100 }
 const spentQuota = { quotaRemainingCents: 0 }
@@ -52,5 +65,32 @@ describe('balanceWarning', () => {
 
   it('stays silent without a wallet', () => {
     expect(balanceWarning(undefined)).toBeNull()
+  })
+})
+
+describe('BalanceLowBanner placement', () => {
+  beforeEach(() => {
+    queryMocks.plan = undefined
+    queryMocks.wallet = undefined
+  })
+
+  it('keeps below-threshold warnings out of the page-level banner', () => {
+    queryMocks.wallet = {
+      ongoingBalanceCents: 1_999,
+      automaticTopUp: autoTopUp,
+    } as OrganizationWallet
+
+    expect(renderToStaticMarkup(createElement(BalanceLowBanner, { onGoToWallet: vi.fn() }))).toBe('')
+  })
+
+  it('keeps overdrawn and empty warnings in the page-level banner', () => {
+    queryMocks.wallet = { ongoingBalanceCents: -1 } as OrganizationWallet
+    expect(renderToStaticMarkup(createElement(BalanceLowBanner, { onGoToWallet: vi.fn() }))).toContain(
+      'Wallet overdrawn',
+    )
+
+    queryMocks.wallet = { ongoingBalanceCents: 0 } as OrganizationWallet
+    queryMocks.plan = { quotaRemainingCents: 0 } as OrganizationPlan
+    expect(renderToStaticMarkup(createElement(BalanceLowBanner, { onGoToWallet: vi.fn() }))).toContain('Wallet empty')
   })
 })

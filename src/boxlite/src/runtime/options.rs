@@ -573,6 +573,8 @@ impl BoxOptions {
     ///   with `detach=true` is invalid
     /// - `advanced.isolate_mounts=true` is only supported on Linux
     /// - `advanced.capabilities` contains well-formed Linux capability names
+    /// - `advanced.security.network_enabled=false` is not mistaken for a
+    ///   guest-networking switch (it gates host jailer grants only)
     pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::Config(
@@ -608,6 +610,26 @@ impl BoxOptions {
             return Err(boxlite_shared::errors::BoxliteError::Config(
                 "inbound.allow_net is not supported yet; remove it \
                  (inbound access is controlled by mode only)"
+                    .to_string(),
+            ));
+        }
+
+        // `advanced.security.network_enabled` reads like a guest-networking
+        // switch but only gates the HOST jailer's own network grants (macOS
+        // seatbelt, Linux Landlock). Left alone with the default
+        // `network.mode="enabled"` it does not take the guest offline — it
+        // starves the running network backend instead, so the box either
+        // fails to start or, with the jailer off, keeps full internet access
+        // while the config reads as network-free. Name the real option rather
+        // than let either outcome through.
+        if !self.advanced.security.network_enabled
+            && matches!(self.network, NetworkSpec::Enabled { .. })
+        {
+            return Err(boxlite_shared::errors::BoxliteError::Config(
+                "advanced.security.network_enabled=false does not disable guest networking — \
+                 it only drops the host sandbox's network grants. Set network.mode=\"disabled\" \
+                 to create a box with no network interface, or leave \
+                 advanced.security.network_enabled at its default."
                     .to_string(),
             ));
         }
@@ -1350,6 +1372,59 @@ mod tests {
         assert!(value["advanced"]["kernel"].is_object());
         let restored: BoxOptions = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.advanced.kernel, opts.advanced.kernel);
+    }
+
+    /// #1072: `security.network_enabled=false` with the default
+    /// `network.mode="enabled"` neither disables the guest network nor starts
+    /// a usable box. Reject it and point at the option that does the job.
+    #[test]
+    fn host_network_grants_off_with_guest_network_on_is_rejected() {
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.security = SecurityOptions {
+            network_enabled: false,
+            ..SecurityOptions::default()
+        };
+        let opts = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+        assert!(
+            matches!(opts.network, NetworkSpec::Enabled { .. }),
+            "guard assumes the default network mode is enabled"
+        );
+
+        let error = opts.sanitize_common().unwrap_err().to_string();
+
+        assert!(
+            error.contains("network.mode=\"disabled\""),
+            "error must name the option that disables guest networking: {error}"
+        );
+        assert!(
+            error.contains("advanced.security.network_enabled"),
+            "error must name the option the caller actually set: {error}"
+        );
+    }
+
+    /// The pairing that genuinely means "no network" stays valid, and so does
+    /// leaving the host grants at their default.
+    #[test]
+    fn network_disabled_pairs_with_either_host_grant_setting() {
+        for network_enabled in [true, false] {
+            let mut advanced = AdvancedBoxOptions::default();
+            advanced.security = SecurityOptions {
+                network_enabled,
+                ..SecurityOptions::default()
+            };
+            let opts = BoxOptions {
+                network: NetworkSpec::Disabled,
+                advanced,
+                ..Default::default()
+            };
+
+            opts.sanitize_common().unwrap_or_else(|e| {
+                panic!("network.mode=disabled + network_enabled={network_enabled} rejected: {e}")
+            });
+        }
     }
 
     #[test]

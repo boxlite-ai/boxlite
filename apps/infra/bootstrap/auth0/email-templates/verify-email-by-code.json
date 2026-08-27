@@ -1,7 +1,0 @@
-{
-  "template": "verify_email_by_code",
-  "subject": "Verify your BoxLite email",
-  "syntax": "liquid",
-  "enabled": true,
-  "body": "<h2>Verify your email</h2><p>Your BoxLite verification code is:</p><p style=\"font-size: 28px; font-weight: 700; letter-spacing: 0.16em;\">{{ code }}</p><p>Enter this code in the BoxLite sign-up window. If you did not request this code, you can ignore this email.</p>"
-}

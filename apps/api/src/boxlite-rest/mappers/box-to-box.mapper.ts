@@ -61,6 +61,12 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
     volumeId: volume.managed_volume,
     mountPath: volume.guest_path,
   }))
+  createDto.secrets = dto.secrets?.map((secret) => ({
+    name: secret.name,
+    value: secret.value,
+    hosts: secret.hosts,
+    placeholder: secret.placeholder,
+  }))
   if (dto.network) {
     const allowNet = dto.network.outbound?.allow_net?.map((entry) => entry.trim()).filter(Boolean)
     createDto.networkBlockAll = dto.network.outbound?.mode === 'disabled'

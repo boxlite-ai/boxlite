@@ -102,6 +102,19 @@ pub struct PathAccess {
     pub writable: bool,
 }
 
+/// Exact Unix-domain socket endpoints needed by the confined process.
+///
+/// Seatbelt distinguishes creating a listener from connecting to one, so the
+/// jailer keeps the two capabilities separate instead of granting both to an
+/// entire writable directory.
+#[derive(Debug, Clone, Default)]
+pub struct UnixSocketAccess {
+    /// Socket paths the confined process may bind.
+    pub bind: Vec<PathBuf>,
+    /// Socket paths the confined process may connect or send to.
+    pub connect: Vec<PathBuf>,
+}
+
 // ============================================================================
 // SandboxContext
 // ============================================================================
@@ -119,6 +132,8 @@ pub struct SandboxContext<'a> {
     pub id: &'a str,
     /// Pre-computed filesystem path access rules.
     pub paths: Vec<PathAccess>,
+    /// Pre-computed exact AF_UNIX socket access rules.
+    pub unix_sockets: UnixSocketAccess,
     /// Resource limits (for cgroup configuration).
     pub resource_limits: &'a ResourceLimits,
     /// Whether network access is enabled.

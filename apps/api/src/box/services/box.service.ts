@@ -279,6 +279,7 @@ export class BoxService {
       box.entrypoint = createBoxDto.entrypoint
       box.cmd = createBoxDto.cmd
       box.env = createBoxDto.env || {}
+      box.secrets = createBoxDto.secrets || []
       box.labels = createBoxDto.labels || {}
 
       box.image = image

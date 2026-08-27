@@ -52,6 +52,17 @@ pub(super) struct CreateBoxRequest {
     pub auto_resume: Option<bool>,
     #[serde(default)]
     pub detach: Option<bool>,
+    /// Secret placeholder rules for outbound HTTP(S) requests. Placeholder
+    /// defaults to `<BOXLITE_SECRET:{name}>` when omitted — applied in
+    /// `build_box_options`, matching the Go SDK's own default.
+    #[serde(default)]
+    pub secrets: Option<Vec<SecretSpecRequest>>,
+    /// Managed volumes are not supported by `boxlite serve` (no volume
+    /// backend). Accepted here only so a combined secrets+volumes request does
+    /// not fail deserialization on an unrelated field; rejected explicitly in
+    /// `build_box_options` when non-empty.
+    #[serde(default)]
+    pub volumes: Option<Vec<serde_json::Value>>,
     // `security` / `security_settings` are intentionally absent from
     // the REST wire schema. Sandbox security is the operator's
     // policy, set server-side. Because the struct carries
@@ -60,6 +71,17 @@ pub(super) struct CreateBoxRequest {
     // serde_json::from_str — there is no quiet fall-through. See
     // `build_box_options_rejects_client_supplied_security_*` tests
     // below for the wire-shape pin.
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SecretSpecRequest {
+    pub name: String,
+    pub value: String,
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    #[serde(default)]
+    pub placeholder: Option<String>,
 }
 
 #[derive(Default, Deserialize)]

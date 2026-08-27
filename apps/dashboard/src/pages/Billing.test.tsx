@@ -14,11 +14,20 @@ vi.mock('@/hooks/useConfig', () => ({
 }))
 
 vi.mock('@/components/billing/BillingAlerts', () => ({ BillingAlerts: () => null }))
+vi.mock('@/components/billing/BalanceLowBanner', () => ({
+  BalanceLowBanner: ({ onGoToWallet }: { onGoToWallet: () => void }) => (
+    <button data-testid="critical-balance-banner" onClick={onGoToWallet}>
+      Critical balance warning
+    </button>
+  ),
+}))
 vi.mock('@/components/billing/PlanSection', () => ({
   PlanSection: () => <div data-testid="plan-section">Plan section</div>,
 }))
 vi.mock('@/components/billing/UsageSection', () => ({ UsageSection: () => <div>Usage section</div> }))
-vi.mock('@/components/billing/WalletSection', () => ({ WalletSection: () => <div>Wallet section</div> }))
+vi.mock('@/components/billing/WalletSection', () => ({
+  WalletSection: () => <div data-testid="wallet-section">Wallet section</div>,
+}))
 
 function closestMaxWidthContainer(element: Element | null): Element | null {
   let current = element
@@ -63,5 +72,33 @@ describe('Billing layout', () => {
     expect(headingContainer).not.toBeNull()
     expect(closestMaxWidthContainer(tabs)).toBe(headingContainer)
     expect(closestMaxWidthContainer(activePanel)).toBe(headingContainer)
+  })
+
+  it('keeps critical balance warnings between the title and tabs in the wide-page container', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+
+    act(() => {
+      root = createRoot(host)
+      root.render(<Billing />)
+    })
+
+    const heading = Array.from(document.querySelectorAll('h1')).find((element) => element.textContent === 'Billing')
+    const banner = document.querySelector('[data-testid="critical-balance-banner"]')
+    const tabs = document.querySelector('[data-slot="tabs-list"]')
+    const headingContainer = closestMaxWidthContainer(heading ?? null)
+
+    expect(banner).not.toBeNull()
+    expect(closestMaxWidthContainer(banner)).toBe(headingContainer)
+    expect(heading?.compareDocumentPosition(banner as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(banner?.compareDocumentPosition(tabs as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(banner?.parentElement?.classList.contains('mt-4')).toBe(true)
+    expect(banner?.parentElement?.classList.contains('w-full')).toBe(true)
+    expect(tabs?.classList.contains('mt-5')).toBe(true)
+
+    act(() => {
+      ;(banner as HTMLElement).click()
+    })
+    expect(document.querySelector('[data-testid="wallet-section"]')).not.toBeNull()
   })
 })

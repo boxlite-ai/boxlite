@@ -167,10 +167,11 @@ pub struct SecurityOptions {
     /// If None, uses the built-in modular sandbox profile.
     pub sandbox_profile: Option<PathBuf>,
 
-    /// Allow network access inside the sandbox profile.
+    /// Allow host-side IP networking grants in the jailer profile.
     ///
-    /// Cross-platform: feeds the macOS seatbelt network policy and the Linux
-    /// landlock TCP rules (false = deny all TCP).
+    /// This is not the guest-networking switch; use `network.mode` for that.
+    /// The shim's AF_UNIX control plane is granted separately.
+    ///
     /// Default: true (needed for gvproxy VM networking).
     pub network_enabled: bool,
 }
@@ -542,8 +543,9 @@ impl SecurityOptionsBuilder {
         self
     }
 
-    /// Allow or deny network access inside the sandbox profile (Linux landlock
-    /// + macOS seatbelt).
+    /// Allow or deny host-side IP networking grants in the jailer profile.
+    ///
+    /// This does not disable guest networking; use `network.mode` for that.
     pub fn network_enabled(&mut self, enabled: bool) -> &mut Self {
         self.inner.network_enabled = enabled;
         self

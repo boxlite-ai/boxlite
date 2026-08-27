@@ -8,8 +8,8 @@
  * have separate previewable reconcilers in auth0-email-provider.ts and
  * auth0-login-policy.ts.
  *
- * RP-initiated-logout discovery has no first-class CLI verb and goes through
- * `auth0 api`, the raw Management API passthrough.
+ * Tenant settings have no first-class CLI verb and go through `auth0 api`,
+ * the raw Management API passthrough.
  *
  * Creating the tenant itself has no Management API and stays manual.
  */
@@ -54,15 +54,24 @@ export function customApiArgs({ stackDomain, name = 'boxlite-api' }: any) {
   return ['apis', 'create', '--name', name, '--identifier', `https://${stackDomain}/api`, '--json']
 }
 
-// Without this the dashboard's "Sign out" only clears BoxLite's own session:
-// the still-live Auth0 cookie silently re-authenticates and logout looks like
-// a page refresh.
-export function enableRpLogoutDiscoveryArgs() {
+/*
+ * Without rp_logout_end_session_endpoint_discovery the dashboard's "Sign out"
+ * only clears BoxLite's own session: the still-live Auth0 cookie silently
+ * re-authenticates and logout looks like a page refresh.
+ *
+ * enable_public_signup_user_exists_error stays off so /dbconnections/signup
+ * answers a duplicate address with the generic invalid_signup rather than
+ * user_exists, which would let anyone enumerate registered emails.
+ */
+export function tenantSettingsArgs() {
   return [
     'api',
     'patch',
     'tenants/settings',
     '--data',
-    JSON.stringify({ oidc_logout: { rp_logout_end_session_endpoint_discovery: true } }),
+    JSON.stringify({
+      oidc_logout: { rp_logout_end_session_endpoint_discovery: true },
+      flags: { enable_public_signup_user_exists_error: false },
+    }),
   ]
 }

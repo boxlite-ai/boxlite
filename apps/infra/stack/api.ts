@@ -37,6 +37,7 @@ export interface ApiInputs {
   posthogApiKey: sst.Secret
   svixAuthToken: sst.Secret
   usageExportToken: sst.Secret
+  incidentIoToken: sst.Secret
   oidcIssuer: string
   publicOidcIssuer: string | undefined
   otelCollectorOtlpHttpUrl: $util.Output<string>
@@ -71,6 +72,7 @@ export function buildApi(input: ApiInputs) {
     posthogApiKey,
     svixAuthToken,
     usageExportToken,
+    incidentIoToken,
     oidcIssuer,
     publicOidcIssuer,
     otelCollectorOtlpHttpUrl,
@@ -362,6 +364,23 @@ const api = new sst.aws.Service('Api', {
       USAGE_ALLOCATION_SNAPSHOT_ENABLED: usageExportToken.value.apply((token: string) =>
         (token.trim() ? 'true' : 'false'),
       ),
+    }),
+
+    // Status sync (incident.io) — pushes component health to the public status
+    // page (apps/infra/docs/status-page.md). Gated on the alert source id so a
+    // stage that never configured incident.io carries none of these keys.
+    ...(process.env.INCIDENT_IO_ALERT_SOURCE_CONFIG_ID && {
+      INCIDENT_IO_ALERT_SOURCE_CONFIG_ID: process.env.INCIDENT_IO_ALERT_SOURCE_CONFIG_ID,
+      ...(process.env.INCIDENT_IO_HEARTBEAT_ID && { INCIDENT_IO_HEARTBEAT_ID: process.env.INCIDENT_IO_HEARTBEAT_ID }),
+      INCIDENT_IO_TOKEN: incidentIoToken.value,
+      // Derived from the credential rather than set outright, because
+      // configuration.ts refuses to boot when sync is on without a token: a
+      // stage holding a source id but no secret must come up dark instead of
+      // crash-looping. Setting the secret is what turns the sync on.
+      STATUS_SYNC_ENABLED: incidentIoToken.value.apply((token: string) => (token.trim() ? 'true' : 'false')),
+      // ENVIRONMENT above is a constant 'production' on every deployed stage,
+      // so the per-stage alert identity comes from the SST stage name instead.
+      STATUS_SYNC_DEDUP_PREFIX: envOr('STATUS_SYNC_DEDUP_PREFIX', `boxlite-${$app.stage}`),
     }),
   },
 }, {
