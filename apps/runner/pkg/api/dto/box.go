@@ -25,7 +25,7 @@ type CreateBoxDTO struct {
 	WorkingDir       string            `json:"workingDir,omitempty"`
 	RunAsUser        string            `json:"runAsUser,omitempty"`
 	Volumes          []VolumeDTO       `json:"volumes,omitempty"`
-	Secrets          []SecretDTO       `json:"secrets,omitempty"`
+	Secrets          []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
 	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
 	NetworkAllowList *string           `json:"networkAllowList,omitempty"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
@@ -53,7 +53,7 @@ type RecoverBoxDTO struct {
 	StorageQuota     int64             `json:"storageQuota" validate:"min=1"`
 	Env              map[string]string `json:"env,omitempty"`
 	Volumes          []VolumeDTO       `json:"volumes,omitempty"`
-	Secrets          []SecretDTO       `json:"secrets,omitempty"`
+	Secrets          []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
 	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
 	NetworkAllowList *string           `json:"networkAllowList,omitempty"`
 	ErrorReason      string            `json:"errorReason" validate:"required"`
