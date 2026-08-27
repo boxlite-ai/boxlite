@@ -367,6 +367,26 @@ impl Container {
         }
     }
 
+    /// Test-only constructor: a container whose libcontainer state must be
+    /// written separately by the test (see `run_init_is_noop_when_init_already_running`
+    /// and the exec `failed_spawn_on_a_running_container_is_not_retried` test,
+    /// which save a Running state file first). `is_shutdown` is set so Drop
+    /// never signals the recorded pid — tests point it at their own process.
+    #[cfg(test)]
+    pub(crate) fn for_unit_test(id: &str, state_root: PathBuf, bundle_path: PathBuf) -> Self {
+        Self {
+            id: id.to_string(),
+            state_root,
+            bundle_path,
+            env: HashMap::new(),
+            user: (0, 0),
+            mount_destinations: Vec::new(),
+            capabilities: CapabilitySet::default(),
+            stdio: ContainerStdio::pipes().expect("create stdio pipes").0,
+            is_shutdown: std::sync::atomic::AtomicBool::new(true),
+        }
+    }
+
     /// Build the exec-session handle for the container's init process — the
     /// session the host attaches to as the box's *main command*.
     ///
