@@ -204,15 +204,18 @@ export class StatusSyncService implements TrackableJobExecutions, OnApplicationS
     // INITIALIZING is the birth state (fleet expansion must not page) and
     // DISABLED/DECOMMISSIONED/unschedulable/draining are operator intent —
     // only runners meant to carry traffic count.
-    const runners = await this.runnerRepository.find({
-      select: ['region', 'state'],
-      where: {
-        region: In(sharedRegionIds),
-        state: In([RunnerState.READY, RunnerState.UNRESPONSIVE]),
-        unschedulable: false,
-        draining: false,
-      },
-    })
+    const runners = await this.withDeadline(
+      this.runnerRepository.find({
+        select: ['region', 'state'],
+        where: {
+          region: In(sharedRegionIds),
+          state: In([RunnerState.READY, RunnerState.UNRESPONSIVE]),
+          unschedulable: false,
+          draining: false,
+        },
+      }),
+      'runner query',
+    )
 
     const byRegion = new Map<string, { total: number; unresponsive: number }>()
     for (const runner of runners) {
@@ -253,7 +256,26 @@ export class StatusSyncService implements TrackableJobExecutions, OnApplicationS
 
   /** Dedicated/custom regions are org-scoped — never on the public page. */
   private sharedRegions(): Promise<Region[]> {
-    return this.regionRepository.find({ where: { regionType: RegionType.SHARED } })
+    return this.withDeadline(this.regionRepository.find({ where: { regionType: RegionType.SHARED } }), 'region query')
+  }
+
+  /**
+   * TypeORM sets no statement timeout, and the tick's lease renews itself for
+   * as long as work runs — so a stalled read would block every later tick
+   * forever. A deadline turns the stall into a rejected evaluator (logged,
+   * skipped, sweep withheld) instead.
+   */
+  private async withDeadline<T>(operation: Promise<T>, label: string): Promise<T> {
+    const timeoutMs = this.configService.get('incidentIo.probeTimeoutMs')
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(`${label} exceeded ${timeoutMs}ms`)), timeoutMs)
+    })
+    try {
+      return await Promise.race([operation, deadline])
+    } finally {
+      clearTimeout(timeout)
+    }
   }
 
   /**
@@ -275,6 +297,10 @@ export class StatusSyncService implements TrackableJobExecutions, OnApplicationS
 
   private async reconcile(observation: ComponentObservation): Promise<void> {
     const observed: AlertStatus = observation.healthy ? 'resolved' : 'firing'
+    // Registered before any send: if the send lands but the state write then
+    // fails and the component vanishes, the retirement sweep still knows this
+    // id exists and can resolve the orphaned alert.
+    await this.redis.sadd(STATE_SET_KEY, observation.id)
     const state = await this.readState(observation.id)
 
     // Unknown last-sent state (first tick, or Redis lost it) is asymmetric on
@@ -327,15 +353,17 @@ export class StatusSyncService implements TrackableJobExecutions, OnApplicationS
         continue
       }
       signal.throwIfAborted()
-      const state = await this.readState(id)
-      if (state?.sent === 'firing') {
-        const retired = {
-          ...this.observationShape(id),
-          detail: 'Component no longer observed (region removed or fleet emptied); retiring.',
-        }
-        if (!(await this.send(retired, 'resolved'))) {
-          continue // keep the state; next tick retries the retirement
-        }
+      // Resolved unconditionally: stored state can lag reality by one failed
+      // write (a firing send that landed whose state write did not), so the
+      // stored value cannot prove the alert is not firing. A resolved event
+      // for an alert that never fired is an idempotent no-op under the
+      // dedup key.
+      const retired = {
+        ...this.observationShape(id),
+        detail: 'Component no longer observed (region removed or fleet emptied); retiring.',
+      }
+      if (!(await this.send(retired, 'resolved'))) {
+        continue // keep the state; next tick retries the retirement
       }
       await this.redis.del(`${STATE_KEY_PREFIX}${id}`)
       await this.redis.srem(STATE_SET_KEY, id)
@@ -383,9 +411,9 @@ export class StatusSyncService implements TrackableJobExecutions, OnApplicationS
     return null
   }
 
+  /** Membership in STATE_SET_KEY is written by reconcile before any send. */
   private async writeState(id: string, state: ComponentSendState): Promise<void> {
     await this.redis.set(`${STATE_KEY_PREFIX}${id}`, JSON.stringify(state), 'EX', STATE_TTL_SECONDS)
-    await this.redis.sadd(STATE_SET_KEY, id)
   }
 
   private async pingHeartbeat(): Promise<void> {

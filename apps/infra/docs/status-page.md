@@ -65,7 +65,7 @@ Do these in order; the stage stays dark until the final step.
    ```sh
    read -rs INCIDENT_IO_KEY   # paste the key; no echo
    printf 'header = "Authorization: Bearer %s"\n' "$INCIDENT_IO_KEY" \
-     | curl -X POST https://api.incident.io/v2/heartbeat/<id>/ping -K -
+     | curl --fail --show-error -X POST https://api.incident.io/v2/heartbeat/<id>/ping -K -
    ```
 
    (a wrong path announces itself as an immediate heartbeat alarm).

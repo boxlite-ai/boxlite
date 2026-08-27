@@ -457,16 +457,86 @@ describe('StatusSyncService', () => {
     expect(harness.knownIds.has('box-ingress-eu')).toBe(false)
   })
 
-  it('drops a vanished component that was already resolved without sending', async () => {
+  // Resolved-state orphans get the resolve too: stored state can lag reality
+  // by one failed write, and a redundant resolved event is an idempotent
+  // no-op under the dedup key.
+  it('retires a vanished component even when its stored state says resolved', async () => {
     const harness = makeService()
     seedAllResolved(harness)
     seed(harness, 'boxes-eu', 'resolved')
 
     await harness.service.syncStatus()
 
-    expect(harness.incidentIoClient.sendAlertEvent).not.toHaveBeenCalled()
+    expect(harness.incidentIoClient.sendAlertEvent).toHaveBeenCalledTimes(1)
+    expect(harness.incidentIoClient.sendAlertEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'resolved', deduplicationKey: 'boxlite-test-boxes-eu' }),
+    )
     expect(harness.store.has('status-sync:component:boxes-eu')).toBe(false)
     expect(harness.knownIds.has('boxes-eu')).toBe(false)
+  })
+
+  // A stalled DB read must reject the evaluator instead of holding the
+  // self-renewing lease forever and blocking every later tick.
+  it('deadlines a hung runner query and keeps the rest of the tick alive', async () => {
+    const harness = makeService({ 'incidentIo.probeTimeoutMs': 20 })
+    seed(harness, 'boxes-eu', 'firing') // must NOT be retired on a partial tick
+    harness.runnerRepository.find.mockReturnValue(new Promise(() => undefined))
+
+    await harness.service.syncStatus()
+
+    const keys = harness.incidentIoClient.sendAlertEvent.mock.calls.map(([event]) => event.deduplicationKey)
+    expect(keys).toEqual(['boxlite-test-api', 'boxlite-test-box-ingress-us'])
+    expect(harness.redis.smembers).not.toHaveBeenCalled()
+    expect(harness.store.has('status-sync:component:boxes-eu')).toBe(true)
+    expect(harness.incidentIoClient.pingHeartbeat).toHaveBeenCalledTimes(1)
+  })
+
+  // The send-lands-but-state-write-fails corner: the id is registered before
+  // the send, so when the component then vanishes, the sweep can still
+  // resolve the orphaned alert even though no state was ever written.
+  it('retires a component whose firing send landed but whose state write failed', async () => {
+    const harness = makeService()
+    seed(harness, 'api', 'resolved')
+    seed(harness, 'boxes-us', 'resolved')
+    seed(harness, 'box-ingress-us', 'resolved')
+    seed(harness, 'box-ingress-eu', 'resolved', 2) // one bad tick from the threshold
+    harness.regionRepository.find.mockResolvedValueOnce([usRegion, euRegion]) // boxes evaluator
+    harness.regionRepository.find.mockResolvedValueOnce([usRegion, euRegion]) // ingress evaluator
+    probeGet.mockImplementation(async (url: string) => {
+      if (url === 'https://proxy.eu.test/health') {
+        throw Object.assign(new Error('timeout'), { isAxiosError: true, code: 'ECONNABORTED' })
+      }
+      return { status: 200 }
+    })
+    // The firing send succeeds, then that component's state write fails.
+    harness.redis.set.mockImplementation(async (key: string, value: string) => {
+      if (key === 'status-sync:component:box-ingress-eu') {
+        throw new Error('redis write failed')
+      }
+      harness.store.set(key, value)
+      return 'OK'
+    })
+
+    await expect(harness.service.syncStatus()).rejects.toThrow('redis write failed')
+    expect(harness.incidentIoClient.sendAlertEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'firing', deduplicationKey: 'boxlite-test-box-ingress-eu' }),
+    )
+    // The failed write leaves the stale pre-send state behind; only the
+    // pre-send set registration reflects reality.
+    expect(harness.store.get('status-sync:component:box-ingress-eu')).toBe(
+      JSON.stringify({ sent: 'resolved', streak: 2 }),
+    )
+    expect(harness.knownIds.has('box-ingress-eu')).toBe(true)
+
+    // Next tick: the eu region is gone — the sweep must resolve the orphan.
+    harness.incidentIoClient.sendAlertEvent.mockClear()
+    harness.regionRepository.find.mockResolvedValue([usRegion])
+    await harness.service.syncStatus()
+
+    expect(harness.incidentIoClient.sendAlertEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'resolved', deduplicationKey: 'boxlite-test-box-ingress-eu' }),
+    )
+    expect(harness.knownIds.has('box-ingress-eu')).toBe(false)
   })
 
   it('keeps a vanished firing component when the retirement send fails', async () => {
