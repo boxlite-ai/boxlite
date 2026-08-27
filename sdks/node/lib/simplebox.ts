@@ -216,7 +216,7 @@ export interface SimpleBoxOptions {
   /** Environment variables */
   env?: Record<string, string>;
 
-  /** Volume mounts: local hostPath or managed source such as volume://vol_123. */
+  /** Volume mounts: a local hostPath, or a managedVolume by id or name. */
   volumes?: JsVolumeSpec[];
 
   /** Port mappings */

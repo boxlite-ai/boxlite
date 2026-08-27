@@ -178,8 +178,16 @@ class CreateBoxRequest(BaseModel):
     auto_delete: Optional[int] = Field(default=None, ge=0)
     auto_resume: Optional[bool] = None
     detach: Optional[bool] = False
+    tty: Optional[bool] = None
     advanced: Optional[CreateBoxAdvancedOptions] = None
-    security: Optional[str] = None
+    # `security` is deliberately absent. Sandbox isolation is the operator's
+    # policy, set server-side; a client that could pick a preset would be
+    # choosing its own isolation level, and `development` turns jailer,
+    # seccomp and close_fds off. `extra="forbid"` above makes any attempt to
+    # smuggle one in a validation error rather than a quiet fall-through. See
+    # `test_create_request_rejects_client_supplied_security_policy`, and the
+    # same refusal in src/boxlite/src/rest/types.rs and
+    # src/cli/src/commands/serve/types.rs.
 
 
 class StopBoxRequest(BaseModel):
@@ -396,19 +404,20 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
         kwargs["auto_resume"] = req.auto_resume
     if req.detach is not None:
         kwargs["detach"] = req.detach
+    if req.tty is not None:
+        kwargs["tty"] = req.tty
     if req.volumes:
+        # The wire carries managed volumes only; a host path would name this
+        # server's filesystem rather than the caller's. Dict form, because a
+        # tuple is always a host bind in the Python SDK.
         kwargs["volumes"] = [
-            (v["host_path"], v["guest_path"], v.get("read_only", False))
+            {
+                "managed_volume": v["managed_volume"],
+                "guest_path": v["guest_path"],
+                "read_only": v.get("read_only", False),
+            }
             for v in req.volumes
         ]
-    if req.security:
-        presets = {
-            "development": boxlite.SecurityOptions.development,
-            "standard": boxlite.SecurityOptions.standard,
-            "maximum": boxlite.SecurityOptions.maximum,
-        }
-        if req.security in presets:
-            kwargs["security"] = presets[req.security]()
 
     return boxlite.BoxOptions(**kwargs)
 
@@ -550,7 +559,6 @@ async def get_config():
             "cpus": 2,
             "memory_mib": 512,
             "disk_size_gb": 10,
-            "security_preset": "standard",
             "auto_delete": 0,
         },
         "overrides": {},
@@ -569,7 +577,6 @@ async def get_config():
             "clone_enabled": True,
             "export_enabled": True,
             "import_enabled": True,
-            "supported_security_presets": ["development", "standard", "maximum"],
             "idempotency_key_lifetime": "PT24H",
         },
     }

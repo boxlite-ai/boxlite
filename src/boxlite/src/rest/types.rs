@@ -220,9 +220,12 @@ pub(crate) struct CreateBoxAdvancedOptions {
     pub capabilities: ContainerCapabilities,
 }
 
+/// A mount on the wire. Only managed volumes exist here — a REST server has no
+/// host filesystem to bind from, so `BoxOptions::sanitize_remote` refuses a host
+/// bind at create and this type has no field for one.
 #[derive(Debug, Serialize)]
 pub(crate) struct CreateBoxVolumeSpec {
-    pub source: String,
+    pub managed_volume: String,
     pub guest_path: String,
     pub read_only: bool,
 }
@@ -230,18 +233,15 @@ pub(crate) struct CreateBoxVolumeSpec {
 impl From<&crate::runtime::options::VolumeSpec> for CreateBoxVolumeSpec {
     fn from(volume: &crate::runtime::options::VolumeSpec) -> Self {
         Self {
-            source: managed_volume_source(&volume.host_path),
+            // `BoxOptions::sanitize_remote` runs first and refuses any mount whose
+            // `managed_volume` is unset, so the default is unreachable rather
+            // than a fallback: an empty string would be a selector the server
+            // can never resolve. `From` cannot report that, which is why the
+            // check lives at create instead of here.
+            managed_volume: volume.managed_volume.clone().unwrap_or_default(),
             guest_path: volume.guest_path.clone(),
             read_only: volume.read_only,
         }
-    }
-}
-
-fn managed_volume_source(source: &str) -> String {
-    if source.starts_with("volume://") {
-        source.to_string()
-    } else {
-        format!("volume://{source}")
     }
 }
 
@@ -385,15 +385,23 @@ pub(crate) struct ListBoxesResponse {
 // Named volumes (`/v1/volumes`)
 // ============================================================================
 
-/// Body for `POST /v1/volumes`. Volume creation takes no parameters — the
-/// server assigns the id — so the body is empty.
+/// Body for `POST /v1/volumes`.
+///
+/// `name` is omitted from the wire when unset, so an unnamed create still sends
+/// `{}` and the server falls back to the assigned id.
 #[derive(Debug, Serialize)]
-pub(crate) struct CreateVolumeRequest {}
+pub(crate) struct CreateVolumeRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
 
 /// A single volume as returned by the REST API.
 #[derive(Debug, Deserialize)]
 pub(crate) struct VolumeResponse {
     pub id: String,
+    /// Required by the spec, but defaulted so a pre-name server still parses.
+    #[serde(default)]
+    pub name: String,
     pub created_at: String,
     #[serde(default)]
     pub size_bytes: Option<u64>,
@@ -407,6 +415,13 @@ impl VolumeResponse {
 
         crate::volumes::VolumeInfo {
             id: self.id.clone(),
+            // A server that predates the name field leaves it blank; fall back
+            // to the id, which is what an unnamed volume is called anyway.
+            name: if self.name.is_empty() {
+                self.id.clone()
+            } else {
+                self.name.clone()
+            },
             created_at,
             size_bytes: self.size_bytes,
         }
@@ -686,11 +701,7 @@ mod tests {
                 hosts: vec!["api.openai.com".into()],
                 placeholder: "<BOXLITE_SECRET:openai>".into(),
             }],
-            volumes: vec![VolumeSpec {
-                host_path: "volume-123".into(),
-                guest_path: "/data".into(),
-                read_only: false,
-            }],
+            volumes: vec![VolumeSpec::managed_volume("volume-123", "/data")],
             auto_stop: Some(1800),
             auto_delete: Some(604800),
             ..Default::default()
@@ -711,14 +722,14 @@ mod tests {
         );
         assert_eq!(req.secrets.as_ref().map(Vec::len), Some(1));
         let volume = &req.volumes.as_ref().unwrap()[0];
-        assert_eq!(volume.source, "volume://volume-123");
+        assert_eq!(volume.managed_volume, "volume-123");
         assert_eq!(volume.guest_path, "/data");
         assert!(!volume.read_only);
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(
             json["volumes"],
             serde_json::json!([{
-                "source": "volume://volume-123",
+                "managed_volume": "volume-123",
                 "guest_path": "/data",
                 "read_only": false
             }])
@@ -785,22 +796,64 @@ mod tests {
         assert!(json.get("advanced").is_some());
     }
 
+    /// An unnamed create must not put `"name": null` on the wire — the spec
+    /// marks the body optional and its schema `additionalProperties: false`.
     #[test]
-    fn test_create_box_request_preserves_scheme_volume_source() {
+    fn unnamed_volume_create_omits_the_name_key() {
+        let json = serde_json::to_value(CreateVolumeRequest { name: None }).unwrap();
+        assert_eq!(json, serde_json::json!({}));
+
+        let named = serde_json::to_value(CreateVolumeRequest {
+            name: Some("my-data".into()),
+        })
+        .unwrap();
+        assert_eq!(named, serde_json::json!({"name": "my-data"}));
+    }
+
+    /// A server that predates the name field sends no `name`. Falling back to
+    /// the id keeps `VolumeInfo.name` mountable rather than empty — an unnamed
+    /// volume is called by its id server-side anyway.
+    #[test]
+    fn volume_response_without_a_name_falls_back_to_the_id() {
+        let response: VolumeResponse =
+            serde_json::from_str(r#"{"id":"vol_01K2EXAMPLE","created_at":"2026-08-26T00:00:00Z"}"#)
+                .expect("a pre-name server response must still parse");
+        assert_eq!(response.to_volume_info().name, "vol_01K2EXAMPLE");
+
+        let named: VolumeResponse = serde_json::from_str(
+            r#"{"id":"vol_01K2EXAMPLE","name":"my-data","created_at":"2026-08-26T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(named.to_volume_info().name, "my-data");
+    }
+
+    /// The reference reaches the wire byte-for-byte as the caller wrote it,
+    /// whether it is a server-assigned id or a name. The server resolves both,
+    /// so the client neither narrows nor decorates it — there is no scheme to
+    /// add, and nothing here may rewrite the value.
+    #[test]
+    fn managed_volume_reaches_wire_verbatim_by_id_or_by_name() {
         use crate::runtime::options::{BoxOptions, VolumeSpec};
 
-        let opts = BoxOptions {
-            volumes: vec![VolumeSpec {
-                host_path: "volume://volume-123".into(),
-                guest_path: "/data".into(),
-                read_only: false,
-            }],
-            ..Default::default()
-        };
+        for reference in ["vol_01K2EXAMPLE", "my-data"] {
+            let opts = BoxOptions {
+                volumes: vec![VolumeSpec::managed_volume(reference, "/data")],
+                ..Default::default()
+            };
 
-        let req = CreateBoxRequest::from_options(&opts, None);
-        let volume = &req.volumes.as_ref().unwrap()[0];
-        assert_eq!(volume.source, "volume://volume-123");
+            let req = CreateBoxRequest::from_options(&opts, None);
+            let volume = &req.volumes.as_ref().unwrap()[0];
+            assert_eq!(volume.managed_volume, reference);
+            assert_eq!(volume.guest_path, "/data");
+
+            let json = serde_json::to_value(&req).unwrap();
+            assert_eq!(json["volumes"][0]["managed_volume"], reference);
+            assert!(
+                json["volumes"][0].get("source").is_none(),
+                "the wire has no `source` field any more: {}",
+                json["volumes"][0]
+            );
+        }
     }
 
     #[test]

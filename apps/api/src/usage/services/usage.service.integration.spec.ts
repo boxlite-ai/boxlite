@@ -18,6 +18,7 @@ import { AddBoxLifecycleSeconds1784250000000 } from '../../migrations/pre-deploy
 import { AddBoxUsagePeriods1785250000000 } from '../../migrations/pre-deploy/1785250000000-add-box-usage-periods-migration'
 import { AddBoxUsageExportOutbox1786100000000 } from '../../migrations/pre-deploy/1786100000000-add-box-usage-export-outbox-migration'
 import { AddUsageConcurrencyIndexes1786340000000 } from '../../migrations/pre-deploy/1786340000000-add-usage-concurrency-indexes-migration'
+import { AddBoxContainerProcessOptions1786400000000 } from '../../migrations/pre-deploy/1786400000000-add-box-container-process-options-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
@@ -219,6 +220,11 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       await new AddBoxUsagePeriods1785250000000().up(queryRunner)
       await new AddBoxUsageExportOutbox1786100000000().up(queryRunner)
       await new AddUsageConcurrencyIndexes1786340000000().up(queryRunner)
+      // `Box` is in `entities` above, so its repository SELECTs every column the
+      // entity declares. Any migration that adds one has to be listed here too,
+      // or the reconcile pass queries a column this database does not have and
+      // silently finds no boxes.
+      await new AddBoxContainerProcessOptions1786400000000().up(queryRunner)
       ownsTables = true
     } finally {
       await queryRunner.release()

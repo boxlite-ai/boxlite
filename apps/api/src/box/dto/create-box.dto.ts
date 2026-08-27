@@ -37,6 +37,44 @@ export class CreateBoxDto {
   user?: string
 
   @ApiPropertyOptional({
+    description:
+      'User the container process runs as (OCI process.user), as <name|uid>[:<group|gid>]. ' +
+      "Omit to keep the image's USER directive. Distinct from `user`, which is a warm-pool label.",
+    example: '1000:1000',
+  })
+  @IsOptional()
+  @IsString()
+  runAsUser?: string
+
+  @ApiPropertyOptional({
+    description: 'Working directory inside the container',
+    example: '/workspace',
+  })
+  @IsOptional()
+  @IsString()
+  workingDir?: string
+
+  @ApiPropertyOptional({
+    description: "Override the image's ENTRYPOINT",
+    type: [String],
+    example: ['python'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  entrypoint?: string[]
+
+  @ApiPropertyOptional({
+    description: "Override the image's CMD",
+    type: [String],
+    example: ['-c', 'print(1)'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  cmd?: string[]
+
+  @ApiPropertyOptional({
     description: 'Environment variables for the box',
     type: 'object',
     additionalProperties: { type: 'string' },

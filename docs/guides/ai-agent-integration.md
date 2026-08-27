@@ -191,8 +191,8 @@ Use read-only volumes to provide data to the sandbox without risk of modificatio
 options = boxlite.BoxOptions(
     image="python:slim",
     volumes=[
-        ("/host/datasets", "/mnt/data", "ro"),     # Agent can read but not write
-        ("/host/config", "/etc/app/config", "ro"),  # Configuration files
+        ("/host/datasets", "/mnt/data", True),     # Agent can read but not write
+        ("/host/config", "/etc/app/config", True),  # Configuration files
     ],
 )
 ```
@@ -329,8 +329,8 @@ For datasets or configuration that should be available immediately:
 options = boxlite.BoxOptions(
     image="python:slim",
     volumes=[
-        ("/host/datasets", "/mnt/data", "ro"),   # Input data
-        ("/host/results", "/mnt/results", "rw"),  # Output directory
+        ("/host/datasets", "/mnt/data", True),   # Input data
+        ("/host/results", "/mnt/results", False),  # Output directory
     ],
 )
 ```
@@ -400,7 +400,7 @@ async def main():
         memory_mib=1024,
         working_dir="/workspace",
         volumes=[
-            ("/host/datasets", "/mnt/data", "ro"),
+            ("/host/datasets", "/mnt/data", True),
         ],
         security=boxlite.SecurityOptions.maximum(),
     ))

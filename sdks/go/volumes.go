@@ -19,7 +19,9 @@ import (
 // time as a string, mirroring the Node/Python SDKs). SizeBytes is nil when the
 // payload size could not be computed.
 type VolumeInfo struct {
-	Id        string
+	Id string
+	// Name is mountable in place of Id. The server defaults it to Id.
+	Name      string
 	CreatedAt string
 	SizeBytes *uint64
 }
@@ -52,7 +54,10 @@ func (r *Runtime) Volumes() (*Volumes, error) {
 }
 
 // Create creates a volume and returns its metadata.
-func (v *Volumes) Create(ctx context.Context) (*VolumeInfo, error) {
+//
+// name may be mounted in place of the volume's id; pass "" to let the server
+// name the volume after its id.
+func (v *Volumes) Create(ctx context.Context, name string) (*VolumeInfo, error) {
 	if v == nil {
 		return nil, closedVolumesError()
 	}
@@ -66,8 +71,14 @@ func (v *Volumes) Create(ctx context.Context) (*VolumeInfo, error) {
 	ch := make(chan volumeResult, 1)
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
+	var cName *C.char
+	if name != "" {
+		cName = toCString(name)
+		defer C.free(unsafe.Pointer(cName))
+	}
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_volume_create(v.handle, C.cbVolumeCreate(), handleToPtr(h), &cerr)
+	code := C.boxlite_volume_create(v.handle, cName, C.cbVolumeCreate(), handleToPtr(h), &cerr)
 	v.mu.RUnlock()
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
@@ -225,6 +236,7 @@ func cVolumeInfoToGo(info *C.CVolumeInfo) VolumeInfo {
 	}
 	return VolumeInfo{
 		Id:        cString(info.id),
+		Name:      cString(info.name),
 		CreatedAt: cString(info.created_at),
 		SizeBytes: size,
 	}

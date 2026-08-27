@@ -409,6 +409,10 @@ test\:stress\:disk: $(if $(SETUP_DONE),,runtime\:debug)
 test\:unit\:python: _ensure-python-deps
 	@echo "🧪 Running Python SDK unit tests..."
 	@. .venv/bin/activate && cd sdks/python && python -m pytest tests/ -v -m "not integration" $(PYTEST_FILTER)
+	@echo "🧪 Running Python binding (Rust) unit tests..."
+	@# --no-default-features drops pyo3's extension-module so the test binary can
+	@# link libpython; see sdks/python/Cargo.toml.
+	@cargo test -p boxlite-python --no-default-features --lib $(CARGOTEST_FILTER)
 
 # Python SDK integration tests.
 test\:integration\:python:
@@ -426,6 +430,8 @@ test\:all\:python:
 test\:unit\:node: _ensure-node-deps
 	@echo "🧪 Running Node.js SDK unit tests..."
 	@cd sdks/node && npm test -- $(VITEST_FILTER)
+	@echo "🧪 Running Node.js binding (Rust) unit tests..."
+	@cargo test -p boxlite-node --lib $(CARGOTEST_FILTER)
 
 # Node.js SDK integration tests (requires VM environment).
 test\:integration\:node:

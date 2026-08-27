@@ -15,15 +15,9 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
-import type { EnumsBackupState } from './enums-backup-state';
-// May contain unused imports in some cases
-// @ts-ignore
 import type { EnumsBoxState } from './enums-box-state';
 
 export interface BoxInfoResponse {
-    'backupError'?: string;
-    'backupSnapshot'?: string;
-    'backupState'?: EnumsBackupState;
     'daemonVersion'?: string;
     'state'?: EnumsBoxState;
 }

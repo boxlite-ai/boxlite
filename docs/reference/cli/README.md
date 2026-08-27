@@ -34,6 +34,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite stats`](#boxlite-stats)
   - [`boxlite network tunnel`](#boxlite-network-tunnel)
   - [`boxlite serve`](#boxlite-serve)
+  - [`boxlite volume`](#boxlite-volume)
   - [`boxlite completion`](#boxlite-completion)
 - [Shared Flag Groups](#shared-flag-groups)
 - [Volume Mount Syntax](#volume-mount-syntax)
@@ -610,6 +611,42 @@ boxlite serve --host 127.0.0.1 --port 9000
 
 ---
 
+### `boxlite volume`
+
+**Synopsis:** `boxlite volume <create|ls|get|rm>`
+
+Manage managed persistent volumes. Volumes are a REST-runtime capability — the
+local runtime has no volume backend, so every subcommand returns
+`named volumes are not supported yet` against it. See
+[Connecting to the cloud](#connecting-to-the-cloud).
+
+| Subcommand | Synopsis | Notes |
+|---|---|---|
+| `create` | `boxlite volume create [--name NAME]` | Prints the new id |
+| `ls` (`list`) | `boxlite volume ls [-q] [--format FORMAT]` | Columns: ID, NAME, CREATED, SIZE |
+| `get` (`inspect`) | `boxlite volume get ID [--format FORMAT]` | By id |
+| `rm` (`delete`) | `boxlite volume rm ID... [--force]` | By id |
+
+**`--name`** is mountable in place of the id, so a box can ask for the volume it
+wants without knowing the id:
+
+```bash
+boxlite volume create --name my-data       # prints e.g. vol_01K2EXAMPLE
+boxlite run -v my-data:/data alpine        # by name
+boxlite run -v vol_01K2EXAMPLE:/data alpine # or by id
+```
+
+Names must be at least two characters of `[a-zA-Z0-9][a-zA-Z0-9_.-]` — Docker's
+rule, and for the same reason: the name has to survive
+[`-v` parsing](#volume-mount-syntax). A leading `.`, `/` or `~` would classify
+the source as a host path; a `:` would split the spec into the wrong fields.
+Neither name could ever be mounted. Without `--name` the server names the
+volume after its id, which stays mountable.
+
+`get` and `rm` take an id only; mounting is what accepts either.
+
+---
+
 ### `boxlite completion`
 
 **Synopsis:** `boxlite completion <SHELL>`
@@ -705,22 +742,51 @@ Used by `run` and `create` (defined at `src/cli/src/cli.rs:584-604`).
 
 ## Volume Mount Syntax
 
-`-v`/`--volume` accepts the grammar implemented at `src/cli/src/cli.rs:442-519`:
+`-v`/`--volume` accepts the grammar implemented in `src/cli/src/volumespec.rs`:
 
 ```
-VOLUME := HOST_PATH ':' BOX_PATH [':' OPTIONS]          # bind mount
+VOLUME := SOURCE ':' BOX_PATH [':' OPTIONS]             # managed volume or bind mount
         | BOX_PATH [':' OPTIONS]                         # anonymous volume
 ```
+
+`SOURCE` is classified by its **first character**, the same rule Docker uses
+(`docker/cli/internal/volumespec`). Nothing inspects the filesystem, so a spec
+means the same thing on every machine:
+
+| `SOURCE` starts with | Meaning |
+|---|---|
+| `/`, `./`, `../`, `~` | Host path |
+| `\\` (UNC / named pipe) | Host path |
+| A drive letter, e.g. `C:\` or `D:/` | Host path |
+| Anything else | **Managed volume**, by id or by name |
 
 | Form | Example | Behavior |
 |------|---------|----------|
 | `BOX_PATH` | `/data` | Anonymous volume stored under `{home}/volumes/anonymous/<ulid>` |
 | `BOX_PATH:ro` / `BOX_PATH:rw` | `/data:ro` | Anonymous volume with explicit mode |
+| `VOLUME:BOX_PATH` | `my-data:/data` | Managed volume by name |
+| `VOLUME:BOX_PATH` | `vol_01K2EXAMPLE:/data` | Managed volume by server-assigned id |
 | `HOST_PATH:BOX_PATH` | `/host/data:/data` | Bind mount (host directory must exist) |
-| `HOST_PATH:BOX_PATH:OPTIONS` | `/host/data:/data:ro` | Bind mount with options |
+| `HOST_PATH:BOX_PATH:OPTIONS` | `./data:/data:ro` | Bind mount with options |
 | `C:\HOST\PATH:/BOX_PATH[:OPTIONS]` | `C:\data:/app/data:ro` | Windows drive paths are handled — the drive-letter colon is not treated as a separator |
 
 **Options:** `ro` (read-only) or `rw` (read-write, default). Other options are ignored. Relative host paths are canonicalized at parse time; missing host paths fail with `volume host path ...`.
+
+**Runtime support.** Managed volumes require a REST runtime — the local runtime
+has no volume backend and rejects them at create. Host binds are the mirror
+image: they name a path on the machine running the box, so a REST runtime
+refuses them. Manage volumes with [`boxlite volume`](#boxlite-volume).
+
+> **Behavior change.** A bare relative source is no longer a bind mount:
+> `-v data:/app` now means the managed volume `data`, not `./data`. Write
+> `./data:/app` for the bind. Unlike Docker, a mistyped name cannot silently
+> create an empty volume — boxlite never auto-creates, so an unknown reference
+> fails with "Volume 'data' not found".
+
+**Single-character names are not addressable via `-v`.** The parser cannot
+distinguish `a:` from a drive letter, so `-v a:/data` is read as one field and
+fails. Docker has the same limitation and rejects one-character volume names
+outright.
 
 The anonymous-volume base directory is resolved as: `--home`, else `$BOXLITE_HOME`, else `~/.boxlite`, else the system temp dir.
 

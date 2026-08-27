@@ -163,13 +163,13 @@ lint\:c:
 	@echo "🔍 Linting C SDK..."
 	@# Banned unsafe C functions — platform-independent check.
 	@# macOS clang-tidy skips DeprecatedOrUnsafeBufferHandling (no Annex K),
-	@# so this grep catches memcpy/sprintf/strcpy etc. on all platforms.
-	@if grep -rn 'memcpy\|memmove\|sprintf\b\|strcat\|strcpy\|gets\b\|strtok' \
+	@# so this grep catches memcpy/memset/sprintf/strcpy etc. on all platforms.
+	@if grep -rn 'memcpy\|memmove\|memset\|sprintf\b\|strcat\|strcpy\|gets\b\|strtok' \
 		--include='*.c' sdks/c/tests/ sdks/c/src/ 2>/dev/null | \
 		grep -v '// NOLINT' ; then \
 		echo ""; \
 		echo "❌ Banned unsafe C functions found above."; \
-		echo "   Use bounded alternatives (char loops, strlcpy, snprintf)."; \
+		echo "   Use bounded alternatives (= {0} init, char loops, strlcpy, snprintf)."; \
 		echo "   Add '// NOLINT' comment to suppress if intentional."; \
 		exit 1; \
 	fi

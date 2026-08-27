@@ -191,7 +191,7 @@ impl BoxStore {
             SELECT c.json as config_json, s.json as state_json
             FROM box_config c
             JOIN box_state s ON c.id = s.id
-            ORDER BY c.created_at DESC
+            ORDER BY c.created_at DESC, c.rowid DESC
             "#
         ))?;
 
@@ -226,7 +226,7 @@ impl BoxStore {
             FROM box_config c
             JOIN box_state s ON c.id = s.id
             WHERE s.status IN ('starting', 'running', 'detached')
-            ORDER BY c.created_at DESC
+            ORDER BY c.created_at DESC, c.rowid DESC
             "#
         ))?;
 
@@ -482,6 +482,11 @@ mod tests {
 
         let all = store.list_all().unwrap();
         assert_eq!(all.len(), 3);
+        // `create_test_config` stamps `Utc::now()` and the column is
+        // whole-second, so all three tie — the documented newest-first order
+        // has to survive that, not fall back to insertion order.
+        let listed: Vec<&str> = all.iter().map(|(c, _)| c.id.as_str()).collect();
+        assert_eq!(listed, [TEST_ID_3, TEST_ID_2, TEST_ID_1]);
     }
 
     #[test]

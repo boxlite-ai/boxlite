@@ -6,13 +6,16 @@ use pyo3::prelude::*;
 
 use crate::util::map_err;
 
-/// Metadata for a named volume.
+/// Metadata for a managed volume.
 #[pyclass(name = "VolumeInfo")]
 #[derive(Clone)]
 pub(crate) struct PyVolumeInfo {
     /// Server-assigned volume id used by get and remove operations.
     #[pyo3(get)]
     pub(crate) id: String,
+    /// Volume name, mountable in place of the id. Defaults to the id.
+    #[pyo3(get)]
+    pub(crate) name: String,
     /// Creation timestamp formatted as an RFC 3339 string.
     #[pyo3(get)]
     pub(crate) created_at: String,
@@ -25,8 +28,8 @@ pub(crate) struct PyVolumeInfo {
 impl PyVolumeInfo {
     fn __repr__(&self) -> String {
         format!(
-            "VolumeInfo(id={:?}, created_at={:?})",
-            self.id, self.created_at
+            "VolumeInfo(id={:?}, name={:?}, created_at={:?})",
+            self.id, self.name, self.created_at
         )
     }
 }
@@ -35,6 +38,7 @@ impl From<VolumeInfo> for PyVolumeInfo {
     fn from(info: VolumeInfo) -> Self {
         Self {
             id: info.id,
+            name: info.name,
             created_at: info.created_at.to_rfc3339(),
             size_bytes: info.size_bytes,
         }
@@ -49,14 +53,17 @@ pub(crate) struct PyVolumeHandle {
 
 #[pymethods]
 impl PyVolumeHandle {
-    /// Create a named volume.
+    /// Create a volume.
     ///
-    /// Returns an awaitable that resolves to the new `VolumeInfo`. Backend
-    /// failures are raised when the awaitable is awaited.
-    fn create<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    /// `name` is optional and can be mounted in place of the volume's id; the
+    /// server names the volume after its id when omitted. Returns an awaitable
+    /// that resolves to the new `VolumeInfo`. Backend failures are raised when
+    /// the awaitable is awaited.
+    #[pyo3(signature = (name=None))]
+    fn create<'py>(&self, py: Python<'py>, name: Option<String>) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let info = handle.create().await.map_err(map_err)?;
+            let info = handle.create(name.as_deref()).await.map_err(map_err)?;
             Ok(PyVolumeInfo::from(info))
         })
     }

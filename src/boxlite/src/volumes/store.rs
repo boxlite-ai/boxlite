@@ -19,6 +19,11 @@ pub struct VolumeInfo {
     /// Server-assigned volume id — the addressing key for get/remove.
     pub id: String,
 
+    /// Volume name, unique within the owning scope. Mountable in place of the
+    /// id, so a box can name the volume it wants without knowing the id. The
+    /// server defaults it to the id when the caller supplies none.
+    pub name: String,
+
     /// When the volume was created.
     pub created_at: DateTime<Utc>,
 

@@ -408,6 +408,13 @@ pub(crate) struct PyBoxOptions {
     #[pyo3(get, set)]
     pub(crate) user: Option<String>,
 
+    /// Run the box's main command on a terminal (docker `run -t`).
+    ///
+    /// A property of the box, not of an attach: the main command is the
+    /// container's init, so whether it gets a terminal is fixed at create time.
+    #[pyo3(get, set)]
+    pub(crate) tty: Option<bool>,
+
     /// Advanced options for expert users (capabilities, security, mount isolation, health check).
     #[pyo3(get, set)]
     pub(crate) advanced: Option<PyAdvancedBoxOptions>,
@@ -439,6 +446,7 @@ impl PyBoxOptions {
         entrypoint=None,
         cmd=None,
         user=None,
+        tty=None,
         advanced=None,
         secrets=vec![],
     ))]
@@ -462,6 +470,7 @@ impl PyBoxOptions {
         entrypoint: Option<Vec<String>>,
         cmd: Option<Vec<String>>,
         user: Option<String>,
+        tty: Option<bool>,
         advanced: Option<PyAdvancedBoxOptions>,
         secrets: Vec<PySecret>,
     ) -> Self {
@@ -484,6 +493,7 @@ impl PyBoxOptions {
             entrypoint,
             cmd,
             user,
+            tty,
             advanced,
             secrets,
         }
@@ -557,6 +567,10 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
             opts.detach = detach;
         }
 
+        if let Some(tty) = py_opts.tty {
+            opts.tty = tty;
+        }
+
         if let Some(advanced) = py_opts.advanced {
             if let Some(security) = advanced.security {
                 opts.advanced.security = SecurityOptions::from(security);
@@ -587,19 +601,30 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
     }
 }
 
+/// One entry of the `volumes=` argument, before it becomes a [`VolumeSpec`].
+///
+/// `managed_volume` holds a volume id or name from the `managed_volume` key;
+/// `host_path` holds a bind path from a tuple or the `host_path` key. Exactly
+/// one is set. The dict keys are the core field names verbatim, so one
+/// vocabulary spans Python, the Rust core and the wire.
 #[derive(Clone, Debug)]
 pub(crate) struct PyVolumeSpec {
-    host: String,
-    guest: String,
+    managed_volume: Option<String>,
+    host_path: String,
+    guest_path: String,
     read_only: bool,
 }
 
 impl From<PyVolumeSpec> for VolumeSpec {
     fn from(v: PyVolumeSpec) -> Self {
+        let spec = match v.managed_volume {
+            Some(managed_volume) => VolumeSpec::managed_volume(managed_volume, v.guest_path),
+            None => VolumeSpec::bind_mount(v.host_path, v.guest_path),
+        };
+
         VolumeSpec {
-            host_path: v.host,
-            guest_path: v.guest,
             read_only: v.read_only,
+            ..spec
         }
     }
 }
@@ -610,75 +635,94 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
     fn extract(ob: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
         let obj = ob.to_owned();
 
+        // Tuple form is a host bind, and only a host bind: it predates managed
+        // volumes and has no slot to say which origin it means.
         if let Ok(t) = obj.cast::<PyTuple>() {
             let len = t.len();
-            let err =
-                || PyRuntimeError::new_err("volumes tuples must be (host, guest[, read_only])");
-            let host: String;
-            let guest: String;
+            let err = || {
+                PyRuntimeError::new_err(
+                    "volumes tuples must be (host_path, guest_path[, read_only])",
+                )
+            };
+            let host_path: String;
+            let guest_path: String;
             let read_only: bool;
 
             match len {
                 2 => {
-                    host = t.get_item(0)?.extract()?;
-                    guest = t.get_item(1)?.extract()?;
+                    host_path = t.get_item(0)?.extract()?;
+                    guest_path = t.get_item(1)?.extract()?;
                     read_only = false;
                 }
                 3 => {
-                    host = t.get_item(0)?.extract()?;
-                    guest = t.get_item(1)?.extract()?;
+                    host_path = t.get_item(0)?.extract()?;
+                    guest_path = t.get_item(1)?.extract()?;
                     read_only = t.get_item(2)?.extract()?;
                 }
                 _ => return Err(err()),
             }
 
             return Ok(PyVolumeSpec {
-                host,
-                guest,
+                managed_volume: None,
+                host_path,
+                guest_path,
                 read_only,
             });
         }
 
         if let Ok(d) = obj.cast::<PyDict>() {
-            let host: String = if let Ok(Some(v)) = d.get_item("source") {
-                let source: String = v.extract()?;
-                if !source.starts_with("volume://") {
+            // Unknown keys are an error, not noise. `ro` and `guest` used to be
+            // accepted aliases; ignoring them now would silently hand back a
+            // read-write mount to a caller who asked for read-only.
+            const KEYS: [&str; 4] = ["managed_volume", "host_path", "guest_path", "read_only"];
+            for key in d.keys() {
+                let key: String = key.extract()?;
+                if !KEYS.contains(&key.as_str()) {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "unknown volume dict key {key:?}; expected one of {}",
+                        KEYS.join(", ")
+                    )));
+                }
+            }
+
+            let managed_volume: Option<String> = match d.get_item("managed_volume") {
+                Ok(Some(v)) => Some(v.extract()?),
+                _ => None,
+            };
+            let host_path: Option<String> = match d.get_item("host_path") {
+                Ok(Some(v)) => Some(v.extract()?),
+                _ => None,
+            };
+
+            let (managed_volume, host_path) = match (managed_volume, host_path) {
+                (Some(_), Some(_)) => {
                     return Err(PyRuntimeError::new_err(
-                        "volume source must use the volume:// scheme",
+                        "volume dict takes managed_volume or host_path, not both",
                     ));
                 }
-                source
-            } else if let Ok(Some(v)) = d.get_item("host") {
-                v.extract()?
-            } else if let Ok(Some(v)) = d.get_item("host_path") {
-                v.extract()?
-            } else {
-                return Err(PyRuntimeError::new_err(
-                    "volume dict missing source/host/host_path",
-                ));
+                (Some(managed_volume), None) => (Some(managed_volume), String::new()),
+                (None, Some(host_path)) => (None, host_path),
+                (None, None) => {
+                    return Err(PyRuntimeError::new_err(
+                        "volume dict requires managed_volume or host_path",
+                    ));
+                }
             };
 
-            let guest: String = if let Ok(Some(v)) = d.get_item("guest") {
-                v.extract()?
-            } else if let Ok(Some(v)) = d.get_item("guest_path") {
-                v.extract()?
-            } else {
-                return Err(PyRuntimeError::new_err(
-                    "volume dict missing guest/guest_path",
-                ));
+            let guest_path: String = match d.get_item("guest_path") {
+                Ok(Some(v)) => v.extract()?,
+                _ => return Err(PyRuntimeError::new_err("volume dict missing guest_path")),
             };
 
-            let read_only: bool = if let Ok(Some(v)) = d.get_item("read_only") {
-                v.extract()?
-            } else if let Ok(Some(v)) = d.get_item("ro") {
-                v.extract()?
-            } else {
-                false
+            let read_only: bool = match d.get_item("read_only") {
+                Ok(Some(v)) => v.extract()?,
+                _ => false,
             };
 
             return Ok(PyVolumeSpec {
-                host,
-                guest,
+                managed_volume,
+                host_path,
+                guest_path,
                 read_only,
             });
         }
@@ -995,7 +1039,36 @@ mod tests {
             entrypoint: None,
             cmd: None,
             user: None,
+            tty: None,
             advanced: Some(advanced),
+            secrets: vec![],
+        }
+    }
+
+    /// Same "untouched defaults" shape as above, parameterised on `tty` — the
+    /// field the reference server forwards into `boxlite.BoxOptions(**kwargs)`.
+    fn py_box_options_with_tty(tty: Option<bool>) -> PyBoxOptions {
+        PyBoxOptions {
+            image: None,
+            rootfs_path: None,
+            cpus: None,
+            memory_mib: None,
+            disk_size_gb: None,
+            working_dir: None,
+            env: vec![],
+            volumes: vec![],
+            network: None,
+            ports: vec![],
+            auto_remove: None,
+            auto_stop: None,
+            auto_delete: None,
+            auto_resume: None,
+            detach: None,
+            entrypoint: None,
+            cmd: None,
+            user: None,
+            tty,
+            advanced: None,
             secrets: vec![],
         }
     }
@@ -1062,24 +1135,107 @@ mod tests {
         assert_eq!(capabilities.add, ["SYS_ADMIN"]);
     }
 
+    /// A managed volume is taken verbatim — by id or by name alike. The server
+    /// resolves either, so the SDK must not narrow it or rewrite it.
     #[test]
-    fn py_volume_source_requires_volume_scheme() {
+    fn py_managed_volume_is_taken_verbatim() {
         Python::attach(|py| {
-            let valid = PyDict::new(py);
-            valid.set_item("source", "volume://vol_123").unwrap();
-            valid.set_item("guest_path", "/data").unwrap();
+            for reference in ["vol_01K2EXAMPLE", "my-data"] {
+                let dict = PyDict::new(py);
+                dict.set_item("managed_volume", reference).unwrap();
+                dict.set_item("guest_path", "/data").unwrap();
+                dict.set_item("read_only", true).unwrap();
 
-            let volume = valid.extract::<PyVolumeSpec>().unwrap();
-            assert_eq!(volume.host, "volume://vol_123");
-            assert_eq!(volume.guest, "/data");
-            assert!(!volume.read_only);
-
-            let invalid = PyDict::new(py);
-            invalid.set_item("source", "vol_123").unwrap();
-            invalid.set_item("guest_path", "/data").unwrap();
-
-            let err = invalid.extract::<PyVolumeSpec>().unwrap_err();
-            assert!(err.to_string().contains("volume:// scheme"));
+                let spec = VolumeSpec::from(dict.extract::<PyVolumeSpec>().unwrap());
+                assert_eq!(spec.managed_volume.as_deref(), Some(reference));
+                assert_eq!(spec.host_path, "");
+                assert_eq!(spec.guest_path, "/data");
+                assert!(spec.read_only);
+            }
         });
+    }
+
+    /// A dropped alias must fail loudly. `ro` was accepted before the rename;
+    /// ignoring it as an unknown key would silently turn a read-only mount
+    /// into a read-write one — a permission downgrade the caller never sees.
+    #[test]
+    fn py_volume_dict_rejects_unknown_keys() {
+        Python::attach(|py| {
+            for (key, value) in [("ro", "true"), ("guest", "/d"), ("source", "my-data")] {
+                let dict = PyDict::new(py);
+                dict.set_item("host_path", "/tmp/data").unwrap();
+                dict.set_item("guest_path", "/data").unwrap();
+                dict.set_item(key, value).unwrap();
+
+                let err = dict.extract::<PyVolumeSpec>().unwrap_err();
+                let message = err.to_string();
+                assert!(message.contains("unknown volume dict key"), "{message}");
+                assert!(message.contains(key), "{message}");
+            }
+        });
+    }
+
+    #[test]
+    fn py_volume_dict_requires_exactly_one_origin() {
+        Python::attach(|py| {
+            let both = PyDict::new(py);
+            both.set_item("managed_volume", "my-data").unwrap();
+            both.set_item("host_path", "/tmp/data").unwrap();
+            both.set_item("guest_path", "/data").unwrap();
+
+            let err = both.extract::<PyVolumeSpec>().unwrap_err();
+            assert!(err.to_string().contains("not both"), "{err}");
+
+            let neither = PyDict::new(py);
+            neither.set_item("guest_path", "/data").unwrap();
+
+            let err = neither.extract::<PyVolumeSpec>().unwrap_err();
+            assert!(
+                err.to_string().contains("managed_volume or host_path"),
+                "{err}"
+            );
+        });
+    }
+
+    /// Tuples stay host binds. They predate managed volumes and have no slot
+    /// to say which origin they mean, so a first element that merely looks
+    /// like a volume name must not be promoted to a managed volume.
+    #[test]
+    fn py_volume_tuple_stays_a_host_bind() {
+        Python::attach(|py| {
+            let tuple = PyTuple::new(py, ["/tmp/data", "/data"]).unwrap();
+            let spec = VolumeSpec::from(tuple.extract::<PyVolumeSpec>().unwrap());
+
+            assert_eq!(spec.managed_volume, None);
+            assert_eq!(spec.host_path, "/tmp/data");
+            assert_eq!(spec.guest_path, "/data");
+        });
+    }
+
+    /// `tty` is a concrete `bool` on core `BoxOptions`, not an `Option`, so the
+    /// conversion has to distinguish "caller asked" from "caller said nothing".
+    /// Without the `if let Some(tty)` arm this silently stays false and
+    /// `boxlite run -t` against the reference server produces a box with no
+    /// terminal — the same class of silent drop this whole change closes.
+    #[test]
+    fn explicit_tty_reaches_core_box_options() {
+        let opts = BoxOptions::try_from(py_box_options_with_tty(Some(true)))
+            .expect("tty=True should convert");
+
+        assert!(opts.tty, "expected tty to reach core BoxOptions");
+    }
+
+    /// The other side: an unset `tty` must leave the core default alone rather
+    /// than writing `false` over whatever the core decides.
+    #[test]
+    fn unset_tty_preserves_the_core_default() {
+        let opts =
+            BoxOptions::try_from(py_box_options_with_tty(None)).expect("tty=None should convert");
+
+        assert_eq!(
+            opts.tty,
+            BoxOptions::default().tty,
+            "an unset tty must not overwrite the core default"
+        );
     }
 }

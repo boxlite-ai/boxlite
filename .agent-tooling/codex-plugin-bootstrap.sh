@@ -147,22 +147,62 @@ codex_plugin_catalog() {
     return 1
   fi
   jq -e '
-    (.installed | type == "array") and
-    (.available | type == "array") and
-    ([(.installed[], .available[]) | select(
-      .pluginId == "boxlite-agent-tooling@boxlite-agent-tooling" and
+    def target:
+      .pluginId == "boxlite-agent-tooling@boxlite-agent-tooling";
+    def valid_metadata:
       .name == "boxlite-agent-tooling" and
       .marketplaceName == "boxlite-agent-tooling" and
-      (.version | type == "string" and length > 0) and
       (.enabled | type == "boolean") and
       .installPolicy == "INSTALLED_BY_DEFAULT" and
-      .authPolicy == "ON_INSTALL"
-    )] | length == 1)
+      .authPolicy == "ON_INSTALL";
+    (.installed | type == "array") and
+    (.available | type == "array") and
+    ([(.installed[], .available[]) | select(target)] | length == 1) and
+    all(.installed[];
+      (target | not) or
+      (valid_metadata and .installed == true and
+       (.version | type == "string" and length > 0))) and
+    all(.available[];
+      (target | not) or
+      (valid_metadata and .installed == false and
+       has("version") and
+       ((.version == null) or (.version | type == "string" and length > 0))))
   ' <<< "$catalog" >/dev/null || {
     printf 'agent-tooling: Codex marketplace boxlite-agent-tooling does not advertise the expected plugin at ref %s\n' "$tooling_ref" >&2
     return 1
   }
   printf '%s' "$catalog"
+}
+
+read_catalog_plugin_state() {
+  local available_plugin_version
+  installed_count="$(jq -r '[.installed[] | select(
+    .pluginId == "boxlite-agent-tooling@boxlite-agent-tooling" and .installed == true
+  )] | length' <<< "$catalog")"
+  if [[ "$installed_count" == 1 ]]; then
+    catalog_plugin_version="$(jq -er '.installed[] | select(
+      .pluginId == "boxlite-agent-tooling@boxlite-agent-tooling" and .installed == true
+    ) | .version' <<< "$catalog")" || {
+      printf 'agent-tooling: Codex installed plugin has no usable version\n' >&2
+      return 1
+    }
+    return 0
+  fi
+  [[ "$installed_count" == 0 ]] || {
+    printf 'agent-tooling: Codex reported an ambiguous boxlite-agent-tooling installation\n' >&2
+    return 1
+  }
+
+  available_plugin_version="$(jq -r '.available[] | select(
+    .pluginId == "boxlite-agent-tooling@boxlite-agent-tooling" and .installed == false
+  ) | .version // ""' <<< "$catalog")"
+  if [[ -n "$available_plugin_version" &&
+        "$available_plugin_version" != "$configured_plugin_version" ]]; then
+    printf 'agent-tooling: Codex available plugin version %s does not match configured marketplace manifest version %s\n' \
+      "$available_plugin_version" "$configured_plugin_version" >&2
+    return 1
+  fi
+  catalog_plugin_version="$configured_plugin_version"
 }
 
 marketplaces="$(codex plugin marketplace list --json)" || {
@@ -253,17 +293,21 @@ validate_codex_marketplace_file "$configured_marketplace_file" || {
     "$tooling_ref" "$configured_marketplace_file" >&2
   exit 1
 }
+configured_plugin_manifest="$marketplace_root/plugins/boxlite-agent-tooling/.codex-plugin/plugin.json"
+read_configured_plugin_version() {
+  configured_plugin_version="$(jq -er '
+    select(.name == "boxlite-agent-tooling") |
+    .version | select(type == "string" and length > 0)
+  ' "$configured_plugin_manifest" 2>/dev/null)" || {
+    printf 'agent-tooling: configured Codex marketplace has no valid plugin version: %s\n' \
+      "$configured_plugin_manifest" >&2
+    return 1
+  }
+}
+read_configured_plugin_version || exit 1
 
 catalog="$(codex_plugin_catalog)" || exit 1
-installed_count="$(jq -r '[.installed[] | select(
-  .pluginId == "boxlite-agent-tooling@boxlite-agent-tooling" and .installed == true
-)] | length' <<< "$catalog")"
-catalog_plugin_version="$(jq -er '(.installed[], .available[]) | select(
-  .pluginId == "boxlite-agent-tooling@boxlite-agent-tooling"
-) | .version' <<< "$catalog")" || {
-  printf 'agent-tooling: Codex catalog has no usable boxlite-agent-tooling version\n' >&2
-  exit 1
-}
+read_catalog_plugin_state || exit 1
 
 if [[ "$catalog_plugin_version" != "$expected_plugin_version" ]]; then
   [[ -z "$hold_sha" ]] || {
@@ -302,16 +346,14 @@ if [[ "$catalog_plugin_version" != "$expected_plugin_version" ]]; then
     exit 1
   }
 
-  catalog="$(codex_plugin_catalog)" || exit 1
-  installed_count="$(jq -r '[.installed[] | select(
-    .pluginId == "boxlite-agent-tooling@boxlite-agent-tooling" and .installed == true
-  )] | length' <<< "$catalog")"
-  catalog_plugin_version="$(jq -er '(.installed[], .available[]) | select(
-    .pluginId == "boxlite-agent-tooling@boxlite-agent-tooling"
-  ) | .version' <<< "$catalog")" || {
-    printf 'agent-tooling: Codex catalog has no usable version after marketplace upgrade\n' >&2
+  read_configured_plugin_version || exit 1
+  [[ "$configured_plugin_version" == "$expected_plugin_version" ]] || {
+    printf 'agent-tooling: configured Codex marketplace stayed at %s after upgrade; expected %s\n' \
+      "$configured_plugin_version" "$expected_plugin_version" >&2
     exit 1
   }
+  catalog="$(codex_plugin_catalog)" || exit 1
+  read_catalog_plugin_state || exit 1
   [[ "$catalog_plugin_version" == "$expected_plugin_version" ]] || {
     printf 'agent-tooling: Codex plugin stayed at %s after upgrade; expected %s\n' \
       "$catalog_plugin_version" "$expected_plugin_version" >&2

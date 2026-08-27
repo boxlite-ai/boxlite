@@ -26,6 +26,9 @@ pub struct VolumePresenter {
     #[tabled(rename = "ID")]
     #[serde(rename = "Id")]
     pub id: String,
+    #[tabled(rename = "NAME")]
+    #[serde(rename = "Name")]
+    pub name: String,
     #[tabled(rename = "CREATED")]
     #[serde(rename = "CreatedAt")]
     pub created: String,
@@ -38,6 +41,7 @@ impl From<&VolumeInfo> for VolumePresenter {
     fn from(info: &VolumeInfo) -> Self {
         Self {
             id: info.id.clone(),
+            name: info.name.clone(),
             created: formatter::format_time(&info.created_at),
             size: format_size(info.size_bytes),
         }

@@ -755,3 +755,57 @@ fn add_port_rejects_zero_guest_port_and_null_options() {
     assert!(ports.is_empty(), "rejected spec must not be stored");
     unsafe { boxlite_options_free(opts) };
 }
+
+// `boxlite_options_set_user` is the FFI hop the Go SDK's `WithUser` rides on,
+// and the cloud runner is its only caller today. Crossing it here proves the
+// C string actually lands on `BoxOptions.user` rather than being dropped —
+// which is what `user` did for its whole life before this: accepted by the
+// API, stored as `osUser`, and never applied.
+#[test]
+fn options_set_user_lands_on_box_options() {
+    let image = CString::new("alpine:latest").expect("image cstring");
+    let user = CString::new("1000:1000").expect("user cstring");
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+
+    let code =
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
+    assert_eq!(code, BoxliteErrorCode::Ok, "options_new must succeed");
+
+    assert!(
+        unsafe { (*opts).options.user.is_none() },
+        "a fresh BoxOptions must leave the image's USER directive in force"
+    );
+
+    unsafe { boxlite_options_set_user(opts, user.as_ptr()) };
+
+    assert_eq!(
+        unsafe { (*opts).options.user.as_deref() },
+        Some("1000:1000"),
+        "the user spec must reach BoxOptions"
+    );
+
+    unsafe { boxlite_options_free(opts) };
+}
+
+// A null user is a no-op, not a panic or a silent overwrite of an already-set
+// value — the same contract every other nullable string setter here keeps.
+#[test]
+fn options_set_user_ignores_a_null_pointer() {
+    let image = CString::new("alpine:latest").expect("image cstring");
+    let user = CString::new("nobody").expect("user cstring");
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+
+    unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
+    unsafe { boxlite_options_set_user(opts, user.as_ptr()) };
+    unsafe { boxlite_options_set_user(opts, ptr::null()) };
+
+    assert_eq!(
+        unsafe { (*opts).options.user.as_deref() },
+        Some("nobody"),
+        "a null user must not clear an already-set value"
+    );
+
+    unsafe { boxlite_options_free(opts) };
+}
