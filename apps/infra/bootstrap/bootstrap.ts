@@ -93,11 +93,7 @@ import {
 } from './environment.js'
 import { validateDotenvSyntax } from '../deployment/key-policy.js'
 import { promptSecret, requireNonEmptySecret } from './secret-prompt.js'
-import {
-  customApiArgs,
-  enableRpLogoutDiscoveryArgs,
-  spaApplicationArgs,
-} from './auth0.js'
+import { customApiArgs, spaApplicationArgs, tenantSettingsArgs } from './auth0.js'
 import {
   environmentApiPath,
   githubEnvironmentPayload,
@@ -648,8 +644,8 @@ function provisionAuth0({ stackDomain }: any) {
   const api = auth0Json(customApiArgs({ stackDomain }))
   console.log(`[${SCRIPT_NAME}] Auth0 custom API ... created (audience ${api.identifier})`)
 
-  auth0Run(enableRpLogoutDiscoveryArgs())
-  console.log(`[${SCRIPT_NAME}] Auth0 RP-initiated logout discovery ... enabled`)
+  auth0Run(tenantSettingsArgs())
+  console.log(`[${SCRIPT_NAME}] Auth0 tenant settings ... applied (logout discovery, public-signup error)`)
 
   const tenants = auth0Json(['tenants', 'list', '--json'])
   const activeTenants = tenants.filter((tenant: any) => tenant.active)

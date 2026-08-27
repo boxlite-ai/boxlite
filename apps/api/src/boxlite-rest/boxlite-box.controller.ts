@@ -87,6 +87,11 @@ export class BoxliteBoxController {
         env: req.body?.env
           ? Object.fromEntries(Object.keys(req.body?.env).map((key) => [key, MASKED_AUDIT_VALUE]))
           : undefined,
+        secrets: req.body?.secrets?.map((s) => ({
+          name: s.name,
+          hosts: s.hosts,
+          value: MASKED_AUDIT_VALUE,
+        })),
         cpus: req.body?.cpus,
         memory_mib: req.body?.memory_mib,
         disk_size_gb: req.body?.disk_size_gb,

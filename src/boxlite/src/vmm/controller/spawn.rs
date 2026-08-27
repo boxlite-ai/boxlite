@@ -7,7 +7,7 @@ use std::{
 
 use crate::jailer::{Jail, JailerBuilder, PathAccess};
 use crate::runtime::layout::BoxFilesystemLayout;
-use crate::runtime::options::BoxOptions;
+use crate::runtime::options::{BoxOptions, NetworkSpec};
 use crate::util::configure_library_env;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -121,6 +121,10 @@ impl<'a> ShimSpawner<'a> {
             .with_security(self.options.advanced.security.clone())
             .with_volumes(self.options.volumes.clone())
             .with_additional_path_access(self.additional_path_access())
+            .with_network_backend_enabled(matches!(
+                &self.options.network,
+                NetworkSpec::Enabled { .. }
+            ))
             .with_detach(detach);
 
         if let Some(ref setup) = child_setup {

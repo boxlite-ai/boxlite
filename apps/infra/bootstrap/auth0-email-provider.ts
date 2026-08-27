@@ -3,7 +3,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { parseArgs } from 'node:util'
 
 import { assertJournalSnapshotSafe } from './auth0-login-policy.js'
@@ -94,6 +94,33 @@ export function buildSesEmailProvider(options: Pick<Auth0EmailProviderOptions, '
   }
 }
 
+export function readAuth0CodeEmailTemplates(manifestPath: string): JsonObject[] {
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  if (!Array.isArray(manifest)) throw new Error(`Auth0 email-template manifest '${manifestPath}' must be a JSON array`)
+  const manifestRoot = dirname(manifestPath)
+
+  return manifest.map(({ render_html: renderHtml, ...template }) => {
+    const name = template.template ?? 'unknown'
+    if (typeof renderHtml !== 'string' || renderHtml.trim() === '') {
+      throw new Error(`Auth0 email template '${name}' must point render_html at an HTML body file`)
+    }
+    const bodyPath = join(manifestRoot, renderHtml)
+    try {
+      // Auth0 stores the body verbatim and never echoes render_html back, so the manifest
+      // reference is resolved away here to keep desired state comparable to tenant state.
+      return { ...template, body: readFileSync(bodyPath, 'utf8').trim() }
+    } catch (cause) {
+      throw new Error(`Auth0 email template '${name}' cannot read render_html '${bodyPath}'`, { cause })
+    }
+  })
+}
+
+// Liquid permits filters and whitespace control on an interpolation, so the
+// stock Auth0 bodies write `{{ code | escape }}`. Match the variable itself
+// rather than one spelling of it, while still rejecting a body that never
+// renders the code at all.
+const CODE_VARIABLE = /\{\{-?\s*code\s*(?:\||-?\}\})/
+
 export function buildAuth0CodeEmailTemplates(fromAddress: string, templates: JsonObject[]): JsonObject[] {
   const expectedNames = new Set(['verify_email_by_code', 'reset_email_by_code'])
   if (templates.length !== expectedNames.size) throw new Error('exactly two Auth0 code-email templates are required')
@@ -102,7 +129,7 @@ export function buildAuth0CodeEmailTemplates(fromAddress: string, templates: Jso
     if (!expectedNames.delete(template.template)) {
       throw new Error(`unexpected or duplicate Auth0 email template '${template.template ?? 'unknown'}'`)
     }
-    if (!template.body?.includes('{{ code }}')) {
+    if (!CODE_VARIABLE.test(template.body ?? '')) {
       throw new Error(`Auth0 email template '${template.template}' must render the code variable`)
     }
     return { ...structuredClone(template), from: fromAddress }

@@ -5,7 +5,6 @@
  */
 
 import { Panel, SectionTitle } from '@/components/ascii'
-import { BalanceLowBanner } from '@/components/billing/BalanceLowBanner'
 import { CostOverTime } from '@/components/billing/CostOverTime'
 import { ThisCycleCard } from '@/components/billing/ThisCycleCard'
 import { ConcurrencyTimeline } from '@/components/billing/ConcurrencyTimeline'
@@ -32,12 +31,12 @@ const analyticsQuickRanges: QuickRangesConfig = {
 
 /**
  * The Usage tab, on the billing service's own numbers (Subscription.md v2):
- * a low-balance warning, the current cycle's quota meter, and cost split by
- * who funded it — then the analytics-backed resource sections when an
- * analytics deployment exists. Everything shown is served state; sections
- * whose data has no API stay absent rather than invented.
+ * the current cycle's quota meter and cost split by who funded it — then the
+ * analytics-backed resource sections when an analytics deployment exists.
+ * Everything shown is served state; sections whose data has no API stay absent
+ * rather than invented.
  */
-export function UsageSection({ onGoToWallet }: { onGoToWallet: () => void }) {
+export function UsageSection() {
   const { selectedOrganization } = useSelectedOrganization()
   const config = useConfig()
   const spendingEnabled = useFeatureFlagEnabled(FeatureFlags.BOX_SPENDING)
@@ -80,7 +79,6 @@ export function UsageSection({ onGoToWallet }: { onGoToWallet: () => void }) {
 
   return (
     <div className="flex flex-col gap-8">
-      <BalanceLowBanner onGoToWallet={onGoToWallet} />
       <ThisCycleCard />
       <CostOverTime />
       <ConcurrencyTimeline />

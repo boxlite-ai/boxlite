@@ -43,7 +43,6 @@ describe('BoxliteBoxController request validation', () => {
   // assertion is on the message, so deleting a constraint and falling back to
   // the generic whitelist error is a failure, not a silent pass.
   it.each([
-    ['secrets', { secrets: [{ name: 'openai', value: 'sk-real', placeholder: '<X>' }] }, 'not supported for cloud'],
     ['rootfs_path', { rootfs_path: '/srv/rootfs' }, 'local-only'],
     ['advanced', { advanced: { capabilities: { add: ['SYS_ADMIN'] } } }, 'not supported for cloud'],
     ['tty', { tty: true }, 'not supported for cloud'],

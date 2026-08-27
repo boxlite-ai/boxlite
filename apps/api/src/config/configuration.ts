@@ -147,6 +147,64 @@ export function usageExportConfig(env: NodeJS.ProcessEnv = process.env) {
   return { ...settings, url: requiredHttpUrl(rawUrl, 'USAGE_EXPORT_URL') }
 }
 
+/**
+ * Status sync: pushes component health to incident.io as alert events plus a
+ * heartbeat ping (see status-sync/). Off by default; a stage arms it by
+ * setting the token, and infra derives STATUS_SYNC_ENABLED from that secret so
+ * a stage holding a source id but no token boots dark instead of crash-looping.
+ *
+ * Exported so its rules can be tested directly rather than through an import
+ * whose side effect is reading the process environment.
+ */
+export function incidentIoConfig(env: NodeJS.ProcessEnv = process.env) {
+  const enabled = env.STATUS_SYNC_ENABLED === 'true'
+  const token = env.INCIDENT_IO_TOKEN?.trim()
+  const alertSourceConfigId = env.INCIDENT_IO_ALERT_SOURCE_CONFIG_ID?.trim()
+  const heartbeatId = env.INCIDENT_IO_HEARTBEAT_ID?.trim()
+  const rawApiUrl = env.INCIDENT_IO_API_URL?.trim() || 'https://api.incident.io'
+  const dedupPrefix = env.STATUS_SYNC_DEDUP_PREFIX?.trim() || `boxlite-${env.ENVIRONMENT?.trim() || 'dev'}`
+
+  // Counts are checked whether or not sync is on — same rationale as
+  // usageExportConfig: a malformed number is wrong in every state.
+  const settings = {
+    enabled,
+    token,
+    alertSourceConfigId,
+    heartbeatId,
+    dedupPrefix,
+    apiUrl: rawApiUrl,
+    timeoutMs: requiredCount(env.INCIDENT_IO_TIMEOUT_MS, 10_000, 'INCIDENT_IO_TIMEOUT_MS'),
+    probeTimeoutMs: requiredCount(env.STATUS_SYNC_PROBE_TIMEOUT_MS, 5_000, 'STATUS_SYNC_PROBE_TIMEOUT_MS'),
+  }
+
+  if (!enabled) {
+    return settings
+  }
+
+  // Enabled without credentials would push every tick into a 401 and page
+  // nobody; refusing at boot is the only point where that is still visible.
+  if (!token) {
+    throw new Error('INCIDENT_IO_TOKEN is required when STATUS_SYNC_ENABLED is true')
+  }
+  if (!alertSourceConfigId) {
+    throw new Error('INCIDENT_IO_ALERT_SOURCE_CONFIG_ID is required when STATUS_SYNC_ENABLED is true')
+  }
+  // The prefix leads every deduplication key; a stray space or capital would
+  // fork new alert identities on the incident.io side instead of updating the
+  // existing ones.
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(dedupPrefix)) {
+    throw new Error(`STATUS_SYNC_DEDUP_PREFIX must be a lowercase slug, got "${dedupPrefix}"`)
+  }
+
+  const apiUrl = requiredHttpUrl(rawApiUrl, 'INCIDENT_IO_API_URL')
+  // The client presents INCIDENT_IO_TOKEN as a bearer header on this URL;
+  // plaintext transport would hand the credential to the network (CWE-319).
+  if (new URL(apiUrl).protocol !== 'https:') {
+    throw new Error('INCIDENT_IO_API_URL must use https')
+  }
+  return { ...settings, apiUrl }
+}
+
 // The object-store key namespace migration archives land in by default, inside
 // whichever bucket each runner is configured with.
 const DEFAULT_MIGRATION_ARCHIVE_PREFIX = 'box-migrations/'
@@ -353,6 +411,7 @@ const configuration = {
   billingApiUrl: process.env.BILLING_API_URL,
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
   usageExport: usageExportConfig(),
+  incidentIo: incidentIoConfig(),
   defaultRunner: {
     domain: process.env.DEFAULT_RUNNER_DOMAIN,
     apiKey: process.env.DEFAULT_RUNNER_API_KEY,

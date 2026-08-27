@@ -15,6 +15,9 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
+import type { DtoSecretDTO } from './dto-secret-dto';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { DtoVolumeDTO } from './dto-volume-dto';
 // May contain unused imports in some cases
 // @ts-ignore
@@ -43,6 +46,7 @@ export interface CreateBoxDTO {
     'regionId'?: string;
     'registry'?: RegistryDTO;
     'runAsUser'?: string;
+    'secrets'?: Array<DtoSecretDTO>;
     'skipStart'?: boolean;
     'storageQuota'?: number;
     'volumes'?: Array<DtoVolumeDTO>;

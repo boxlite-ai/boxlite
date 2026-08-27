@@ -130,6 +130,15 @@ impl BoxSockets {
         self.binding_dir().join(NET_SOCK)
     }
 
+    /// libkrun's side of the macOS Unix datagram network pair.
+    ///
+    /// This path is derived by vendored libkrun from [`Self::net_backend_sock`]
+    /// and is exposed here so path-length checks and sandbox policy share the
+    /// same authority for the derived endpoint.
+    pub fn net_backend_peer_sock(&self) -> PathBuf {
+        self.binding_dir().join(LONGEST_SOCKET_NAME)
+    }
+
     /// Ensure the binding symlink exists and is correct. Idempotent;
     /// tolerates concurrent callers for the same box.
     pub fn ensure(&self) -> BoxliteResult<()> {
@@ -326,8 +335,14 @@ mod tests {
         assert_eq!(s.box_sock(), expect.join("box.sock"));
         assert_eq!(s.ready_sock(), expect.join("ready.sock"));
         assert_eq!(s.net_backend_sock(), expect.join("net.sock"));
-        for p in [s.box_sock(), s.ready_sock(), s.net_backend_sock()] {
-            assert!(p.as_os_str().len() + "-krun.sock".len() < MAX_SUN_PATH);
+        assert_eq!(s.net_backend_peer_sock(), expect.join("net.sock-krun.sock"));
+        for p in [
+            s.box_sock(),
+            s.ready_sock(),
+            s.net_backend_sock(),
+            s.net_backend_peer_sock(),
+        ] {
+            assert!(p.as_os_str().len() < MAX_SUN_PATH);
         }
     }
 
@@ -351,7 +366,7 @@ mod tests {
         let s = BoxSockets::new("deadzone1", &deep);
         s.ensure().unwrap();
         assert!(
-            s.net_backend_sock().as_os_str().len() + "-krun.sock".len() < MAX_SUN_PATH,
+            s.net_backend_peer_sock().as_os_str().len() < MAX_SUN_PATH,
             "binding path must fit with krun's derived suffix"
         );
         assert_eq!(std::fs::read_link(s.binding_dir()).unwrap(), deep);
