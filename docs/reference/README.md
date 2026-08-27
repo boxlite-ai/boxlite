@@ -461,6 +461,22 @@ export BOXLITE_TMPDIR=/custom/tmp
 python script.py
 ```
 
+#### `BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE`
+
+Cap on total decompressed bytes written while extracting OCI image layers.
+A single extractor used for a whole image enforces this as a per-image cap;
+per-layer extraction enforces it per layer. Exceeding the cap aborts the
+pull with a `resource_exhausted` error (HTTP 429).
+
+**Default:** `21474836480` (20 GiB)
+
+**Example:**
+```bash
+# Allow larger images (e.g. ML images with huge layers)
+export BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE=53687091200
+boxlite pull my-image:latest
+```
+
 ## Error Codes & Handling
 
 ### Error Types
