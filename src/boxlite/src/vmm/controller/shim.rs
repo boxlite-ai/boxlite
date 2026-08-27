@@ -38,6 +38,15 @@ pub struct ShimHandler {
     /// handler closes this, triggering shim cleanup automatically.
     #[allow(dead_code)]
     keepalive: Option<watchdog::Keepalive>,
+    /// `/proc` start-time of `pid`, captured when this handler was built.
+    ///
+    /// The reap sweep enumerates the process tree below `self.pid`, so a pid
+    /// recycled to an unrelated process would have us signal a stranger's
+    /// children. Attach already rejects a reused pid when it reads the PID
+    /// file, but that check ages; this is the same fingerprint, re-read at the
+    /// moment it is acted on. `None` when the OS reading is unavailable, which
+    /// keeps the sweep's previous behaviour rather than skipping it blindly.
+    start_time: Option<u64>,
     /// Shared System instance for CPU metrics calculation across calls.
     /// CPU usage requires comparing snapshots over time, so we must reuse the same System.
     metrics_sys: Mutex<sysinfo::System>,
@@ -54,6 +63,7 @@ impl ShimHandler {
         Self {
             pid,
             box_id,
+            start_time: crate::util::process_start_time(pid),
             process: Some(spawned.child),
             keepalive: spawned.keepalive,
             metrics_sys: Mutex::new(sysinfo::System::new()),
@@ -72,9 +82,24 @@ impl ShimHandler {
         Self {
             pid,
             box_id,
+            start_time: crate::util::process_start_time(pid),
             process: None,
             keepalive: None,
             metrics_sys: Mutex::new(sysinfo::System::new()),
+        }
+    }
+
+    /// Whether `self.pid` is still the process this handler was built for.
+    ///
+    /// Compares the live `/proc` start-time against the one captured at
+    /// construction. A dead pid reads `None` and fails the comparison, which is
+    /// correct: there is no tree left to sweep. Returns `true` when no
+    /// fingerprint was captured — identity cannot be disproven, so the sweep
+    /// keeps the behaviour it had before this guard existed.
+    fn pid_identity_holds(&self) -> bool {
+        match self.start_time {
+            Some(captured) => crate::util::process_start_time(self.pid) == Some(captured),
+            None => true,
         }
     }
 
@@ -125,7 +150,22 @@ impl ShimHandler {
             }
         } else {
             // Attached mode: use SIGTERM then SIGKILL with polling
-            // We don't have a Child handle, so we use waitpid/kill directly
+            // We don't have a Child handle, so we use waitpid/kill directly.
+            //
+            // Without a `Child` nothing pins the pid, so it is the one shape
+            // that can have been recycled since this handler was built. Signal
+            // it only while its start-time still matches: otherwise these two
+            // kills land on whatever process inherited the number.
+            if !self.pid_identity_holds() {
+                tracing::warn!(
+                    box_id = %self.box_id,
+                    pid = self.pid,
+                    "Shim pid no longer matches its recorded start-time; \
+                     not signalling it"
+                );
+                return Ok(());
+            }
+
             unsafe {
                 libc::kill(self.pid as i32, libc::SIGTERM);
             }
@@ -179,7 +219,24 @@ impl VmmHandlerTrait for ShimHandler {
         // detached boxes. Snapshot that tree *before* shutdown: once the launcher
         // exits its children are reparented and can no longer be found from
         // `self.pid`.
-        let box_tree = crate::jailer::collect_descendants(self.pid);
+        //
+        // Only when `self.pid` is still the process this handler was built for:
+        // the walk trusts that pid as the tree's root, so a pid recycled since
+        // then would hand us a stranger's children to SIGTERM and SIGKILL.
+        // `graceful_stop` carries the same guard for the root itself, leaving
+        // `reap_box` — keyed by box id, not pid — as the only thing that still
+        // runs, which is exactly what is safe to run against a stale pid.
+        let box_tree = if self.pid_identity_holds() {
+            crate::jailer::collect_descendants(self.pid)
+        } else {
+            tracing::warn!(
+                box_id = %self.box_id,
+                pid = self.pid,
+                "Shim pid no longer matches its recorded start-time (exited, or \
+                 reused by another process); skipping the process-tree sweep"
+            );
+            Vec::new()
+        };
 
         // Stop the recorded launcher (SIGTERM, wait, SIGKILL).
         let result = self.graceful_stop();
@@ -497,6 +554,93 @@ mod tests {
             output.contains(&format!("json_bytes={expected_len}")),
             "json_bytes redacted summary should appear: {output}"
         );
+    }
+
+    /// The reap sweep's root guard. A live pid whose recorded start-time still
+    /// matches is the box's own shim and its tree may be swept; the same pid
+    /// carrying a stale fingerprint is a recycled number whose children belong
+    /// to someone else. The fingerprints come from the OS via
+    /// `process_start_time`, not from the test, so the matching case proves the
+    /// comparison actually reads `/proc` rather than trivially agreeing.
+    #[test]
+    fn pid_identity_guard_rejects_a_recycled_pid() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+
+        let live = ShimHandler::from_pid(pid, BoxID::parse("pidguardtest").expect("valid id"));
+        assert!(
+            live.start_time.is_some(),
+            "the OS must report a start-time for a process we just spawned"
+        );
+        assert!(
+            live.pid_identity_holds(),
+            "a live pid with its own recorded start-time must pass the guard"
+        );
+
+        // Same pid, a fingerprint that cannot be its own: what a recycled pid
+        // looks like from here.
+        let recycled = ShimHandler {
+            start_time: live.start_time.map(|t| t.wrapping_add(1)),
+            ..ShimHandler::from_pid(pid, BoxID::parse("pidguardtest").expect("valid id"))
+        };
+        assert!(
+            !recycled.pid_identity_holds(),
+            "a start-time mismatch must fail the guard, so the sweep is skipped"
+        );
+
+        // No fingerprint: identity cannot be disproven, so the sweep keeps the
+        // behaviour it had before the guard existed.
+        let legacy = ShimHandler {
+            start_time: None,
+            ..ShimHandler::from_pid(pid, BoxID::parse("pidguardtest").expect("valid id"))
+        };
+        assert!(
+            legacy.pid_identity_holds(),
+            "an unfingerprinted handler must not have its sweep suppressed"
+        );
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// End-to-end counterpart to the predicate test: a handler holding a stale
+    /// fingerprint must not signal the process that now owns its pid. The
+    /// predicate alone does not pin this — `stop()` reaches the pid twice, once
+    /// through the sweep and once through `graceful_stop`, and guarding only
+    /// the first still leaves the second to SIGTERM and SIGKILL a stranger.
+    #[test]
+    fn stop_does_not_signal_a_process_that_reused_the_pid() {
+        let mut bystander = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = bystander.id();
+
+        // Attached shape (`process: None`) carrying a fingerprint that cannot
+        // be this pid's — what a recycled pid looks like at stop() time.
+        let mut handler = ShimHandler {
+            start_time: crate::util::process_start_time(pid).map(|t| t.wrapping_add(1)),
+            ..ShimHandler::from_pid(pid, BoxID::parse("pidguardtest").expect("valid id"))
+        };
+        assert!(
+            handler.start_time.is_some(),
+            "the OS must report a start-time for a process we just spawned"
+        );
+
+        let _ = handler.stop();
+
+        // SIGTERM would have killed `sleep` outright, so survival is the
+        // observable that separates guarded from unguarded.
+        assert!(
+            crate::util::is_process_alive(pid),
+            "stop() signalled a process whose start-time did not match the handler's"
+        );
+
+        let _ = bystander.kill();
+        let _ = bystander.wait();
     }
 
     /// Workspace-wide regression: the behavioral test above pins the helper
