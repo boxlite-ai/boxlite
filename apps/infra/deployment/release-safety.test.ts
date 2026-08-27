@@ -663,6 +663,7 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
     ['sst-asset-', 'deployment assets are content-addressed; the key is the content hash'],
     ['boxlite-volume-', 'the bucket name carries no stage — scoping it is a rename'],
     [':instance/*', 'an EC2 instance ARN carries no stage; narrowing needs a tag Condition'],
+    ['identity/*', 'an SES identity ARN carries the sender domain, not the stage'],
   ]
   /*
    * The rest predate this change and are accounted for here rather than in the prose.
@@ -691,6 +692,7 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
     ['BoxLiteAwsControlPlane', 'the control-plane calls SST makes have no resource-level ARNs'],
     ['RunnerCommandStatus', 'SSM command-history APIs are list-shaped and take no resource'],
     ['ReadIamAndAccountMetadata', 'account and IAM reads SST performs before it knows any resource'],
+    ['ReadMailIdentityVerification', 'the classic SES verification read takes no resource ARN'],
   ]
 
   /*

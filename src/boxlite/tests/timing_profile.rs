@@ -182,16 +182,15 @@ async fn boot_timing_profile_no_jailer() {
     })
     .expect("create runtime");
 
+    let mut advanced = boxlite::AdvancedBoxOptions::default();
+    advanced.security = boxlite::SecurityOptions {
+        jailer_enabled: false,
+        ..Default::default()
+    };
     let opts = BoxOptions {
         rootfs: boxlite::runtime::options::RootfsSpec::Image("alpine:latest".into()),
         auto_delete: Some(0),
-        advanced: boxlite::AdvancedBoxOptions {
-            security: boxlite::SecurityOptions {
-                jailer_enabled: false,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
+        advanced,
         ..Default::default()
     };
 

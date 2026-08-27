@@ -194,6 +194,12 @@ paths:
       summary: Create a managed persistent volume
       description: Creates a volume and waits until its backing object storage is ready.
       tags: [Volumes]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVolumeRequest"
       responses:
         "201":
           description: Volume created and ready for use
@@ -840,6 +846,12 @@ paths:
       description: |
         Uploads a tar archive and extracts it at the specified path
         inside the container. The box must be running.
+
+        Transfer operates on the container's root filesystem. A destination
+        at or under a mount inside the container, or an archive entry that
+        would land on one, is rejected with `400` — such a write would not be
+        visible to processes in the box. Extracted files are owned by the
+        container's configured user.
       tags: [Files]
       parameters:
         - name: path
@@ -866,6 +878,8 @@ paths:
       responses:
         "204":
           description: Upload successful
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
@@ -877,6 +891,11 @@ paths:
       description: |
         Downloads files from the specified path inside the container
         as a tar archive. The box must be running.
+
+        Transfer operates on the container's root filesystem. A source at or
+        under a mount inside the container, or a directory containing one, is
+        rejected with `400` — the archive would carry the underlying files
+        rather than the ones processes in the box see.
       tags: [Files]
       parameters:
         - name: path
@@ -900,6 +919,8 @@ paths:
               schema:
                 type: string
                 format: binary
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
@@ -1337,10 +1358,6 @@ components:
               type: integer
               description: Default disk size in GB
               example: 10
-            security_preset:
-              type: string
-              description: Default security preset
-              example: standard
             auto_delete:
               type: integer
               description: Default AutoDelete interval in seconds; 0 disables AutoDelete
@@ -1406,11 +1423,6 @@ components:
               type: boolean
               description: Whether box export is supported
               example: true
-            supported_security_presets:
-              type: array
-              items:
-                type: string
-              example: [development, standard, maximum]
             idempotency_key_lifetime:
               type: string
               description: How long idempotency keys are retained (ISO 8601 duration)
@@ -1532,7 +1544,7 @@ components:
             - UnsupportedError
             - AuthError
             - NotFoundError
-            - SessionReaped
+            - SessionReapedError
             - AlreadyExistsError
             - InvalidStateError
             - StoppedError
@@ -1691,12 +1703,16 @@ components:
         REST-supported configuration for creating a new box. Host port
         publication is intentionally absent; use the box network tunnel
         endpoint for remote service access.
+
+        Sandbox isolation is likewise absent, and deliberately so: it is the
+        operator's policy, set server-side. A client able to select a preset
+        would be choosing its own isolation level, so `additionalProperties:
+        false` above makes any attempt to supply one an error rather than a
+        quiet fall-through.
       additionalProperties: false
       properties:
         advanced:
           $ref: "#/components/schemas/CreateBoxAdvancedOptions"
-        security:
-          $ref: "#/components/schemas/SecurityPreset"
         name:
           type: string
           description: Unique name within the workspace
@@ -1771,6 +1787,15 @@ components:
           type: boolean
           description: Box survives parent process exit
           default: false
+        tty:
+          type: boolean
+          default: false
+          description: |
+            Run the box's main command on a pseudo-terminal (docker `run -t`).
+            A property of the box, not of an attach: the main command is the
+            container's init, so whether it gets a terminal is fixed at create
+            time and no later client can add one. The terminal's size is set by
+            the attaching client, since a box outlives any one client.
         auto_stop:
           type: integer
           minimum: 0
@@ -1821,31 +1846,30 @@ components:
     VolumeSpec:
       type: object
       description: |
-        Filesystem mount attached to a box. One of `source` or the deprecated
-        `host_path` is required.
-      required: [guest_path]
+        Managed volume mounted into a box. Host bind mounts have no
+        representation here: the path would name the server's filesystem, not
+        the caller's, so the only mount source this API accepts is a managed
+        volume.
+      additionalProperties: false
+      required: [managed_volume, guest_path]
       properties:
-        source:
+        managed_volume:
           type: string
+          minLength: 1
           description: |
-            Scheme-qualified mount source. Use `volume://<volume_id>` for managed
-            volumes.
-          example: volume://vol_01K2EXAMPLE
-        host_path:
-          type: string
-          deprecated: true
-          description: |
-            Deprecated alias for `source`, kept for backward compatibility with
-            existing /v1 clients built against the pre-managed-volumes schema.
-            Use `source` with the `volume://<volume_id>` scheme instead; this
-            field will be removed in a future API version.
-          example: volume://vol_01K2EXAMPLE
+            The volume's server-assigned `id` or its `name` — both resolve to
+            the same volume, and a name is unique within the owning scope.
+          example: vol_01K2EXAMPLE
         guest_path:
           type: string
           description: Mount point inside the container
         read_only:
           type: boolean
           default: false
+          enum: [false]
+          description: |
+            Read-only managed mounts are not implemented yet; `true` is
+            rejected rather than silently downgraded to read-write.
 
     VolumeState:
       type: string
@@ -1870,6 +1894,20 @@ components:
           type: string
           format: date-time
           description: Volume creation timestamp (UTC)
+
+    CreateVolumeRequest:
+      type: object
+      description: Body for volume creation. Omit entirely to create an unnamed volume.
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: |
+            Volume name, unique within the owning scope. Mountable in place of
+            the volume's id. Defaults to the server-assigned id when omitted.
+          pattern: "^[a-zA-Z0-9][a-zA-Z0-9_.-]+$"
+          minLength: 2
+          example: my-data
 
     Volume:
       type: object
@@ -2007,19 +2045,6 @@ components:
           description: |
             Placeholder string visible inside the guest.
             Defaults to `<BOXLITE_SECRET:{name}>` when omitted.
-
-    SecurityPreset:
-      type: string
-      description: |
-        Security isolation preset:
-        - `development`: Minimal isolation for debugging
-        - `standard`: Recommended for most use cases (jailer + seccomp on Linux)
-        - `maximum`: All isolation features enabled (untrusted workloads)
-      enum:
-        - development
-        - standard
-        - maximum
-      default: standard
 
     Snapshot:
       type: object

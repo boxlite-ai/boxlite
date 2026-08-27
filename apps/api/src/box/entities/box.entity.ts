@@ -93,8 +93,29 @@ export class Box {
   })
   desiredState = BoxDesiredState.STARTED
 
+  // Daytona-era provisioning label. It only ever surfaced as a
+  // DAYTONA_SANDBOX_USER env var for a computer-use daemon that never read it;
+  // today it keys the warm pool (see warm_pool_find_idx) and is echoed back as
+  // `user` by box.dto.ts. It is NOT the container's process user — that is
+  // `runAsUser` below.
   @Column()
   osUser: string
+
+  // OCI process.user override (docker `-u`), resolved inside the guest against
+  // the container image's /etc/passwd. Null leaves the image's USER directive
+  // in force, which is the default the runner has had since 16d9248bb
+  // ("VM provides isolation, run as root").
+  @Column({ nullable: true })
+  runAsUser?: string
+
+  @Column({ nullable: true })
+  workingDir?: string
+
+  @Column({ type: 'jsonb', nullable: true })
+  entrypoint?: string[]
+
+  @Column({ type: 'jsonb', nullable: true })
+  cmd?: string[]
 
   @Column({ nullable: true })
   errorReason?: string

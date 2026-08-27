@@ -643,6 +643,10 @@
         "comment": "libkrun: precise sleep (glibc maps nanosleep to clock_nanosleep). Required at steady-state."
       },
       {
+        "syscall": "time",
+        "comment": "glibc: get_nprocs() ages its CPU-count cache with time(NULL), reached during vCPU thread init. A blocked time SIGSYS-kills the VMM."
+      },
+      {
         "syscall": "getpid",
         "comment": "libkrun: get process ID. Required at steady-state."
       },

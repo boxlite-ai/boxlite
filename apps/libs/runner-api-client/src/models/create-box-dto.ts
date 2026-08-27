@@ -22,12 +22,14 @@ import type { RegistryDTO } from './registry-dto';
 
 export interface CreateBoxDTO {
     'authToken'?: string;
+    'cmd'?: Array<string>;
     'cpuQuota'?: number;
     'entrypoint'?: Array<string>;
     'env'?: { [key: string]: string; };
     'fromVolumeId'?: string;
     'gpuQuota'?: number;
     'id': string;
+    'image': string;
     'memoryQuota'?: number;
     'metadata'?: { [key: string]: string; };
     'networkAllowList'?: string;
@@ -40,9 +42,10 @@ export interface CreateBoxDTO {
     'otelEndpoint'?: string;
     'regionId'?: string;
     'registry'?: RegistryDTO;
+    'runAsUser'?: string;
     'skipStart'?: boolean;
-    'image': string;
     'storageQuota'?: number;
     'volumes'?: Array<DtoVolumeDTO>;
+    'workingDir'?: string;
 }
 

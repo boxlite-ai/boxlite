@@ -1,10 +1,13 @@
 //! `boxlite volume {create,ls,get,rm}` — manage volumes.
 //!
-//! Volumes are addressed by a server-assigned id (like boxes): `create` takes
-//! no arguments and prints the new id, and get/rm operate on ids. Each leaf
-//! module owns its own `Args` struct and `run()`; this module holds the
-//! subcommand enum and dispatches. The backend is not implemented yet, so every
-//! command currently returns "not supported".
+//! Volumes carry a server-assigned id and a name; `create` prints the new id
+//! and takes an optional `--name`, while get/rm operate on ids. A name is
+//! mountable in place of the id (`-v my-data:/data`).
+//!
+//! Each leaf module owns its own `Args` struct and `run()`; this module holds
+//! the subcommand enum and dispatches. Volumes are a REST-runtime capability:
+//! the local runtime has no volume backend and every command returns
+//! "not supported" against it.
 
 use clap::{Args, Subcommand};
 
@@ -23,7 +26,7 @@ pub struct VolumeArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum VolumeCommand {
-    /// Create a volume (prints the new id).
+    /// Create a volume, optionally named (prints the new id).
     Create(create::CreateArgs),
 
     /// List volumes.

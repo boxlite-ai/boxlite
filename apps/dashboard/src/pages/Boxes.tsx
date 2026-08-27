@@ -47,6 +47,8 @@ import {
   readOnboardingProgress,
   type OnboardingProgress,
 } from '@/lib/onboarding-progress'
+import { shouldAutoOpenOnboarding } from '@/lib/onboarding-visibility'
+import { useApiKeysQuery } from '@/hooks/queries/useApiKeysQuery'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { pluralize } from '@/lib/utils'
 import {
@@ -633,20 +635,6 @@ const Boxes: React.FC = () => {
     result.successfulIds.forEach(removeBoxFromCache)
   }
 
-  useEffect(() => {
-    if (!selectedOrganization || !user?.profile.sub) {
-      return
-    }
-
-    const skipOnboardingKey = `${LocalStorageKey.SkipOnboardingPrefix}${user.profile.sub}`
-    const shouldOpenFromUrl = searchParams.get('onboarding') === '1'
-    const shouldSkipOnboarding = getLocalStorageItem(skipOnboardingKey) === 'true'
-
-    if (shouldOpenFromUrl || !shouldSkipOnboarding) {
-      setShowOnboardingDialog(true)
-    }
-  }, [searchParams, selectedOrganization, user?.profile.sub])
-
   const clearOnboardingUrlParam = useCallback(() => {
     if (searchParams.get('onboarding') !== '1') {
       return
@@ -724,6 +712,39 @@ const Boxes: React.FC = () => {
     enabled: !!orgId,
     staleTime: 10_000,
   })
+
+  // Onboarding auto-open. Deliberately placed below the fleet-count query: the local "skip"
+  // flag only remembers one browser, so whether this account is actually new is decided by
+  // account state (an API key or any box), which follows the user to a new browser or device.
+  const apiKeysQuery = useApiKeysQuery(orgId)
+
+  useEffect(() => {
+    if (!selectedOrganization || !userId) {
+      return
+    }
+
+    const skipOnboardingKey = `${LocalStorageKey.SkipOnboardingPrefix}${userId}`
+
+    if (
+      shouldAutoOpenOnboarding({
+        requestedByUrl: searchParams.get('onboarding') === '1',
+        dismissedInThisBrowser: getLocalStorageItem(skipOnboardingKey) === 'true',
+        accountStateLoaded: apiKeysQuery.isSuccess && totalBoxesQuery.isSuccess,
+        hasApiKeys: (apiKeysQuery.data?.length ?? 0) > 0,
+        hasBoxes: (totalBoxesQuery.data ?? 0) > 0,
+      })
+    ) {
+      setShowOnboardingDialog(true)
+    }
+  }, [
+    apiKeysQuery.data,
+    apiKeysQuery.isSuccess,
+    searchParams,
+    selectedOrganization,
+    totalBoxesQuery.data,
+    totalBoxesQuery.isSuccess,
+    userId,
+  ])
 
   const totalBoxesDisplay = totalBoxesQuery.data != null ? totalBoxesQuery.data.toLocaleString('en-US') : '…'
   const runningBoxesDisplay = runningBoxesQuery.data != null ? runningBoxesQuery.data.toLocaleString('en-US') : '…'

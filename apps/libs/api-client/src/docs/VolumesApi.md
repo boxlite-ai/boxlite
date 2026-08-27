@@ -79,7 +79,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new VolumesApi(configuration);
 
-let volumeId: string; //ID of the volume (default to undefined)
+let volumeId: string; //ID of the volume
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.deleteVolume(
@@ -92,7 +92,7 @@ const { status, data } = await apiInstance.deleteVolume(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **volumeId** | [**string**] | ID of the volume | defaults to undefined|
+| **volumeId** | [**string**] | ID of the volume | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -133,7 +133,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new VolumesApi(configuration);
 
-let volumeId: string; //ID of the volume (default to undefined)
+let volumeId: string; //ID of the volume
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.getVolume(
@@ -146,7 +146,7 @@ const { status, data } = await apiInstance.getVolume(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **volumeId** | [**string**] | ID of the volume | defaults to undefined|
+| **volumeId** | [**string**] | ID of the volume | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -186,7 +186,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new VolumesApi(configuration);
 
-let name: string; //Name of the volume (default to undefined)
+let name: string; //Name of the volume
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.getVolumeByName(
@@ -199,7 +199,7 @@ const { status, data } = await apiInstance.getVolumeByName(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **name** | [**string**] | Name of the volume | defaults to undefined|
+| **name** | [**string**] | Name of the volume | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 

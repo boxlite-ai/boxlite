@@ -21,6 +21,8 @@ mod reaper;
 mod service;
 #[cfg(target_os = "linux")]
 mod storage;
+#[cfg(target_os = "linux")]
+mod sysctl;
 
 #[cfg(target_os = "linux")]
 use boxlite_shared::errors::BoxliteResult;
@@ -100,6 +102,14 @@ fn main() -> BoxliteResult<()> {
     eprintln!("[guest] T+{}ms: tracing initialized", boot_elapsed_ms());
 
     info!("BoxLite Guest Agent starting");
+
+    // libkrun's minimal init mounts /proc but does not apply a distro's sysctl
+    // defaults. Harden the guest before it can spawn any workload processes.
+    sysctl::apply_boot_hardening()?;
+    eprintln!(
+        "[guest] T+{}ms: kernel hardening applied",
+        boot_elapsed_ms()
+    );
 
     // Start zygote BEFORE tokio creates any threads.
     // The zygote handles all clone3() calls in a single-threaded context,

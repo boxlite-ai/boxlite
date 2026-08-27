@@ -62,13 +62,10 @@ export type BoxApiCreateRequest = {
   auto_stop?: number
   auto_delete?: number
   auto_resume?: boolean
-  // The REST boundary takes a source URI + guest path, not the internal
+  // The REST boundary takes a managed volume + guest path, not the internal
   // {volumeId, mountPath} pair the API maps it onto (box-to-box.mapper.ts).
-  volumes?: { source: string; guest_path: string }[]
+  volumes?: { managed_volume: string; guest_path: string }[]
 }
-
-/** Scheme the REST boundary requires for a managed volume source. */
-const VOLUME_SOURCE_SCHEME = 'volume://'
 
 export type BoxApiBoxResponse = {
   box_id: string
@@ -102,9 +99,8 @@ export function toBoxApiCreateRequest(params?: CreateBoxParams): BoxApiCreateReq
     auto_resume: p.autoResume ?? true,
     volumes: p.volumes?.length
       ? p.volumes.map((mount) => ({
-          // `volumeId` may be an id or a name; the API resolves either once
-          // the scheme prefix is stripped.
-          source: `${VOLUME_SOURCE_SCHEME}${mount.volumeId}`,
+          // `volumeId` may be an id or a name; the API resolves either.
+          managed_volume: mount.volumeId,
           guest_path: mount.mountPath,
         }))
       : undefined,

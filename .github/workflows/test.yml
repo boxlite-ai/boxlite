@@ -171,6 +171,12 @@ jobs:
         # Only test boxlite-shared - boxlite requires libkrun/libgvproxy not available in CI
         run: cargo llvm-cov nextest -p boxlite-shared --lib --profile ci --lcov --output-path lcov.info
 
+      - name: Run OpenAPI reference-server unit tests
+        # Keyed on BoxliteError's Display text (src/shared/src/errors.rs, in this
+        # filter), so a new variant must add its row there before the reference
+        # server can name the class. stdlib only — no extra setup.
+        run: make test:unit:openapi
+
       - name: Run guest unit tests
         if: runner.os == 'Linux'
         run: make test:unit:guest

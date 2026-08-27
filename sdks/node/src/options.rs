@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use boxlite::runtime::advanced_options::{AdvancedBoxOptions, HealthCheckOptions, SecurityOptions};
+use boxlite::runtime::advanced_options::{
+    AdvancedBoxOptions, ContainerCapabilities, HealthCheckOptions, SecurityOptions,
+};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
     BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, NetworkMode, NetworkSpec,
@@ -256,12 +258,14 @@ pub struct JsEnvVar {
 
 /// Volume mount specification.
 ///
-/// Maps a host directory to a guest path inside the container.
+/// Maps either a managed volume or a host directory to a guest path inside the
+/// container. Exactly one origin may be set.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsVolumeSpec {
-    /// Scheme-qualified source such as `volume://vol_123`.
-    pub source: Option<String>,
+    /// Managed volume, by server-assigned id **or** by name — the server
+    /// resolves either.
+    pub managed_volume: Option<String>,
 
     /// Path on host machine for local host-path mounts.
     pub host_path: Option<String>,
@@ -277,27 +281,26 @@ impl TryFrom<JsVolumeSpec> for VolumeSpec {
     type Error = boxlite_shared::errors::BoxliteError;
 
     fn try_from(v: JsVolumeSpec) -> Result<Self, Self::Error> {
-        let host_path = match (v.source, v.host_path) {
-            (Some(source), _) => {
-                if !source.starts_with("volume://") {
-                    return Err(Self::Error::InvalidArgument(
-                        "volume source must use the volume:// scheme".into(),
-                    ));
-                }
-                source
+        let spec = match (v.managed_volume, v.host_path) {
+            (Some(_), Some(_)) => {
+                return Err(Self::Error::InvalidArgument(
+                    "volume takes managedVolume or hostPath, not both".into(),
+                ));
             }
-            (None, Some(host_path)) => host_path,
+            (Some(managed_volume), None) => {
+                VolumeSpec::managed_volume(managed_volume, v.guest_path)
+            }
+            (None, Some(host_path)) => VolumeSpec::bind_mount(host_path, v.guest_path),
             (None, None) => {
                 return Err(Self::Error::InvalidArgument(
-                    "volume source or hostPath is required".into(),
+                    "volume requires managedVolume or hostPath".into(),
                 ));
             }
         };
 
         Ok(VolumeSpec {
-            host_path,
-            guest_path: v.guest_path,
             read_only: v.read_only.unwrap_or(false),
+            ..spec
         })
     }
 }
@@ -455,11 +458,10 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .unwrap_or_default();
 
         let health_check = js_opts.health_check.map(HealthCheckOptions::from);
-        let capabilities = js_opts
+        let capabilities: Option<ContainerCapabilities> = js_opts
             .advanced
             .and_then(|advanced| advanced.capabilities)
-            .map(Into::into)
-            .unwrap_or_default();
+            .map(Into::into);
         let secrets = js_opts
             .secrets
             .unwrap_or_default()
@@ -474,6 +476,11 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             })
             .collect();
 
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.set_capabilities(capabilities)?;
+        advanced.security = security;
+        advanced.health_check = health_check;
+
         Ok(BoxOptions {
             cpus: js_opts.cpus,
             memory_mib: js_opts.memory_mib,
@@ -486,12 +493,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             inbound_network: Default::default(),
             ports,
             auto_remove,
-            advanced: AdvancedBoxOptions {
-                capabilities,
-                security,
-                health_check,
-                ..Default::default()
-            },
+            advanced,
             auto_stop: js_opts.auto_stop,
             auto_delete,
             auto_resume: js_opts.auto_resume,
@@ -500,8 +502,11 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             cmd: js_opts.cmd,
             user: js_opts.user,
             // Not surfaced on JsBoxOptions yet: a TTY is only useful to a
-            // client that attaches to the main command, which the SDKs cannot
-            // do until they grow `attach()` (see sdk-run-semantics-api.md).
+            // client that attaches to the main command, which this SDK cannot
+            // do until it grows `attach()` (see sdk-run-semantics-api.md).
+            // Python does surface it, because the reference server builds
+            // BoxOptions through PyBoxOptions and the REST wire schema carries
+            // `tty`; Node has no such caller yet.
             tty: false,
             secrets,
         })
@@ -721,39 +726,50 @@ mod tests {
         }
     }
 
+    /// A managed volume is taken verbatim — by id or by name, no scheme, no
+    /// rewriting. Whatever the caller wrote is what the server resolves.
     #[test]
-    fn js_volume_source_requires_volume_scheme() {
-        let volume = VolumeSpec::try_from(JsVolumeSpec {
-            source: Some("volume://vol_123".into()),
-            host_path: None,
+    fn js_managed_volume_is_taken_verbatim() {
+        for reference in ["vol_01K2EXAMPLE", "my-data"] {
+            let volume = VolumeSpec::try_from(JsVolumeSpec {
+                managed_volume: Some(reference.into()),
+                host_path: None,
+                guest_path: "/data".into(),
+                read_only: None,
+            })
+            .unwrap();
+
+            assert_eq!(volume.managed_volume.as_deref(), Some(reference));
+            assert_eq!(volume.host_path, "");
+            assert_eq!(volume.guest_path, "/data");
+            assert!(!volume.read_only);
+        }
+    }
+
+    #[test]
+    fn js_volume_requires_exactly_one_origin() {
+        let err = VolumeSpec::try_from(JsVolumeSpec {
+            managed_volume: Some("my-data".into()),
+            host_path: Some("/tmp/data".into()),
             guest_path: "/data".into(),
             read_only: None,
         })
-        .unwrap();
+        .unwrap_err();
 
-        assert_eq!(volume.host_path, "volume://vol_123");
-        assert_eq!(volume.guest_path, "/data");
-        assert!(!volume.read_only);
+        assert!(err.to_string().contains("not both"), "{err}");
 
         let err = VolumeSpec::try_from(JsVolumeSpec {
-            source: Some("vol_123".into()),
+            managed_volume: None,
             host_path: None,
             guest_path: "/data".into(),
             read_only: None,
         })
         .unwrap_err();
 
-        assert!(err.to_string().contains("volume:// scheme"));
-
-        let err = VolumeSpec::try_from(JsVolumeSpec {
-            source: None,
-            host_path: None,
-            guest_path: "/data".into(),
-            read_only: None,
-        })
-        .unwrap_err();
-
-        assert!(err.to_string().contains("source or hostPath is required"));
+        assert!(
+            err.to_string().contains("managedVolume or hostPath"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -844,20 +860,17 @@ mod tests {
             }),
         });
         let with_capabilities = BoxOptions::try_from(with_capabilities).unwrap();
-        assert_eq!(
-            with_capabilities.advanced.capabilities.add,
-            ["NET_ADMIN", "SYS_PTRACE"]
-        );
-        assert_eq!(
-            with_capabilities.advanced.capabilities.drop,
-            ["MKNOD", "NET_RAW"]
-        );
+        let capabilities = with_capabilities
+            .advanced
+            .capabilities()
+            .expect("capabilities set");
+        assert_eq!(capabilities.add, ["NET_ADMIN", "SYS_PTRACE"]);
+        assert_eq!(capabilities.drop, ["MKNOD", "NET_RAW"]);
 
         let opts = BoxOptions::try_from(js).unwrap();
         assert!(!opts.auto_remove);
         assert_eq!(opts.auto_delete, None);
-        assert!(opts.advanced.capabilities.add.is_empty());
-        assert!(opts.advanced.capabilities.drop.is_empty());
+        assert!(opts.advanced.capabilities().is_none());
         match opts.network {
             NetworkSpec::Enabled { allow_net } => {
                 assert_eq!(allow_net, vec!["example.com", "*.openai.com"]);

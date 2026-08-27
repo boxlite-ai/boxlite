@@ -29,29 +29,58 @@ def _install_boxlite_stub() -> None:
         def __init__(self, *args, **kwargs):
             pass
 
-    class _SecurityOptions:
-        @staticmethod
-        def development():
-            return object()
+    # BoxOptions does NOT get the permissive stub. The real thing is PyBoxOptions,
+    # whose #[pyo3(signature = (...))] enumerates every accepted keyword and has
+    # no **kwargs catch-all — so a name the SDK does not declare is a TypeError
+    # at the call site, not a silently ignored kwarg. A `**kwargs` stub here
+    # cannot see that, which is exactly how build_box_options came to forward a
+    # `tty` the SDK had no parameter for.
+    #
+    # Keep this list in sync with the signature in sdks/python/src/options.rs.
+    _BOX_OPTIONS_KWARGS = frozenset(
+        {
+            "image",
+            "rootfs_path",
+            "cpus",
+            "memory_mib",
+            "disk_size_gb",
+            "working_dir",
+            "env",
+            "volumes",
+            "network",
+            "ports",
+            "auto_remove",
+            "auto_stop",
+            "auto_delete",
+            "auto_resume",
+            "detach",
+            "entrypoint",
+            "cmd",
+            "user",
+            "tty",
+            "advanced",
+            "secrets",
+        }
+    )
 
-        @staticmethod
-        def standard():
-            return object()
-
-        @staticmethod
-        def maximum():
-            return object()
+    class _BoxOptions:
+        def __init__(self, **kwargs):
+            unknown = sorted(set(kwargs) - _BOX_OPTIONS_KWARGS)
+            if unknown:
+                raise TypeError(
+                    f"BoxOptions() got an unexpected keyword argument {unknown[0]!r}"
+                )
+            self.kwargs = kwargs
 
     module.Boxlite = _Noop
     module.Options = _Noop
-    module.BoxOptions = _Noop
+    module.BoxOptions = _BoxOptions
     module.AdvancedBoxOptions = _Noop
     module.ContainerCapabilities = _Noop
     module.CloneOptions = _Noop
     module.ExportOptions = _Noop
     module.SnapshotOptions = _Noop
     module.CopyOptions = _Noop
-    module.SecurityOptions = _SecurityOptions
     sys.modules["boxlite"] = module
 
 
@@ -164,6 +193,41 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
             SERVER.CreateBoxRequest.model_validate(
                 {"ports": [{"guest_port": 3000}]}
             )
+
+    def test_create_request_rejects_client_supplied_security_policy(self) -> None:
+        # Sandbox security is the operator's policy, set server-side. A client
+        # that could pick a preset would be choosing its own isolation level --
+        # `development` turns jailer, seccomp and close_fds off. The field is
+        # absent from the schema, and `extra="forbid"` turns any attempt into a
+        # validation error. The Rust core (src/boxlite/src/rest/types.rs) and
+        # `boxlite serve` (src/cli/src/commands/serve/types.rs) refuse it the
+        # same way and for the same reason.
+        for preset in ("development", "standard", "maximum"):
+            with self.assertRaises(ValidationError):
+                SERVER.CreateBoxRequest.model_validate({"security": preset})
+
+    def test_create_request_carries_tty_to_box_options(self) -> None:
+        # `boxlite serve` has implemented tty since it existed and the Rust
+        # client sends it (rest/types.rs), but this server forbids unknown
+        # fields — so `boxlite run -t` against it was a 422 until the field was
+        # declared here and in openapi/box.openapi.yaml.
+        request = SERVER.CreateBoxRequest.model_validate(
+            {"image": "alpine:latest", "tty": True}
+        )
+
+        # No patching: the stub BoxOptions rejects a keyword the real
+        # PyBoxOptions does not declare, so this crosses the boundary that
+        # decides whether `boxlite run -t` works or raises TypeError.
+        options = SERVER.build_box_options(request)
+
+        self.assertEqual(options.kwargs.get("tty"), True)
+
+    def test_create_request_omits_tty_when_not_asked_for(self) -> None:
+        request = SERVER.CreateBoxRequest.model_validate({"image": "alpine:latest"})
+
+        options = SERVER.build_box_options(request)
+
+        self.assertNotIn("tty", options.kwargs)
 
     def test_dedicated_ports_route_is_removed(self) -> None:
         paths = {route.path for route in SERVER.app.routes}

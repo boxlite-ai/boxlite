@@ -11,17 +11,20 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
-use super::super::types::{ListVolumesResponse, RemoveQuery};
+use super::super::types::{CreateVolumeRequest, ListVolumesResponse, RemoveQuery};
 use super::super::{AppState, error_from_boxlite, volume_info_to_response};
 
 pub(in crate::commands::serve) async fn create_volume(
     State(state): State<Arc<AppState>>,
+    // Optional so a caller may POST with no body at all, which the spec allows.
+    body: Option<Json<CreateVolumeRequest>>,
 ) -> Response {
     let handle = match state.runtime.volumes() {
         Ok(h) => h,
         Err(e) => return error_from_boxlite(&e),
     };
-    match handle.create().await {
+    let name = body.and_then(|Json(request)| request.name);
+    match handle.create(name.as_deref()).await {
         Ok(info) => (StatusCode::CREATED, Json(volume_info_to_response(&info))).into_response(),
         Err(e) => error_from_boxlite(&e),
     }

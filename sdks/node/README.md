@@ -190,7 +190,10 @@ const box = new SimpleBox({
   },
   env: { FOO: 'bar' },
   volumes: [
-    { hostPath: '/tmp/data', guestPath: '/data', readOnly: false }
+    // A host bind (local runtimes only)...
+    { hostPath: '/tmp/data', guestPath: '/data', readOnly: false },
+    // ...or a managed volume, by id or by name (REST runtimes).
+    { managedVolume: 'my-data', guestPath: '/cache' }
   ],
   ports: [
     { hostPort: 8080, guestPort: 80 }

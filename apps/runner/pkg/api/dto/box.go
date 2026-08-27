@@ -4,6 +4,11 @@
 
 package dto
 
+// CreateBoxDTO carries two unrelated "user" fields. OsUser is a Daytona-era
+// provisioning label: it only ever became a DAYTONA_SANDBOX_USER env var for a
+// computer-use daemon that never read it, and nothing acts on it today.
+// RunAsUser is the OCI process.user override (docker `-u`), empty when the
+// caller did not ask for one so the image's own USER directive stands.
 type CreateBoxDTO struct {
 	Id               string            `json:"id" validate:"required"`
 	FromVolumeId     string            `json:"fromVolumeId,omitempty"`
@@ -16,6 +21,9 @@ type CreateBoxDTO struct {
 	Env              map[string]string `json:"env,omitempty"`
 	Registry         *RegistryDTO      `json:"registry,omitempty"`
 	Entrypoint       []string          `json:"entrypoint,omitempty"`
+	Cmd              []string          `json:"cmd,omitempty"`
+	WorkingDir       string            `json:"workingDir,omitempty"`
+	RunAsUser        string            `json:"runAsUser,omitempty"`
 	Volumes          []VolumeDTO       `json:"volumes,omitempty"`
 	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
 	NetworkAllowList *string           `json:"networkAllowList,omitempty"`

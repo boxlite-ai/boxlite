@@ -14,7 +14,9 @@ import {
   requireIamPermissionsBoundaryStage,
   requireOidcIssuer,
   resolveAwsRegion,
+  resolveMailDomain,
   resolvePublicDeploymentConfig,
+  sesSmtpEndpoint,
   resolveReleaseVersion,
   resolveSstStage,
   runtimeBoundaryPolicyArn,
@@ -40,6 +42,29 @@ test('loads the deployment dotenv before resolving wrapper-side AWS settings', (
 test('uses one AWS region resolver for the wrapper and SST config', () => {
   assert.equal(resolveAwsRegion({}), 'ap-southeast-1')
   assert.equal(resolveAwsRegion({ AWS_REGION: ' us-east-2 ' }), 'us-east-2')
+})
+
+test('resolves one sender domain for the deploy and for bootstrap', () => {
+  // bootstrap pins the SMTP user's IAM policy to this identity's ARN and the stack
+  // verifies it, so a disagreement between the two mints a credential whose every
+  // send is refused — with nothing failing until the first invitation.
+  assert.equal(resolveMailDomain({}), 'mail.boxlite.ai')
+  assert.equal(resolveMailDomain({ MAIL_DOMAIN: ' mail.dev.boxlite.ai ' }), 'mail.dev.boxlite.ai')
+
+  // The Api sends as no-reply@<MAIL_DOMAIN>, so an address or a URL here would build
+  // a From that SES refuses, and an empty value would silently take the default.
+  assert.throws(() => resolveMailDomain({ MAIL_DOMAIN: 'no-reply@mail.boxlite.ai' }), /MAIL_DOMAIN/)
+  assert.throws(() => resolveMailDomain({ MAIL_DOMAIN: 'https://mail.boxlite.ai' }), /MAIL_DOMAIN/)
+  assert.equal(resolveMailDomain({ MAIL_DOMAIN: '' }), 'mail.boxlite.ai')
+})
+
+test('addresses one regional SMTP endpoint for the deploy and for bootstrap', () => {
+  // The SMTP password is derived per region, so a host from one region and a
+  // credential from another authenticate nowhere — the stack and bootstrap have to
+  // build this the same way.
+  assert.equal(sesSmtpEndpoint('ap-southeast-1'), 'email-smtp.ap-southeast-1.amazonaws.com')
+  assert.notEqual(sesSmtpEndpoint('us-west-1'), sesSmtpEndpoint('ap-southeast-1'))
+  assert.throws(() => sesSmtpEndpoint(''), /region/)
 })
 
 test('finds the workspace version when SST runs a bundle below .sst/platform', () => {

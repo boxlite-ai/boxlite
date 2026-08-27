@@ -6,10 +6,18 @@ import { BillingApiClient } from './billingApiClient'
 // locally, so the wire mapping is exercised without a server. Each test sets
 // the JSON the "server" returns and reads back what URL was requested.
 let requestedUrl = ''
-function serve(data: unknown): BillingApiClient {
-  axios.defaults.adapter = (async (cfg: { url?: string; baseURL?: string }) => {
+let requestedUrls: string[] = []
+let requestedMethod = ''
+let requestedData: unknown
+function serve(data: unknown | ((url: string) => unknown)): BillingApiClient {
+  requestedUrls = []
+  axios.defaults.adapter = (async (cfg: { url?: string; baseURL?: string; method?: string; data?: unknown }) => {
     requestedUrl = `${cfg.baseURL ?? ''}${cfg.url ?? ''}`
-    return { data, status: 200, statusText: 'OK', headers: {}, config: cfg }
+    requestedUrls.push(requestedUrl)
+    requestedMethod = cfg.method ?? ''
+    requestedData = cfg.data
+    const responseData = typeof data === 'function' ? data(requestedUrl) : data
+    return { data: responseData, status: 200, statusText: 'OK', headers: {}, config: cfg }
   }) as never
   return new BillingApiClient('http://billing.test/api/billing', 'tok')
 }
@@ -80,6 +88,66 @@ describe('upgradePlan', () => {
     const api = serve(undefined)
     const url = await api.upgradePlan('org-1', 'max')
     expect(url).toBeUndefined()
+  })
+})
+
+describe('withdrawPendingPlan', () => {
+  it('deletes the queued plan without resubmitting the effective plan', async () => {
+    const api = serve(undefined)
+
+    await api.withdrawPendingPlan('org-1')
+
+    expect(requestedMethod).toBe('delete')
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/plan/pending')
+    expect(requestedData).toBeUndefined()
+  })
+})
+
+describe('listAllPaymentMethods', () => {
+  it('walks every page and returns every stored method', async () => {
+    const firstPageMethod = {
+      id: 'card-1',
+      isDefault: true,
+      paymentProviderType: 'stripe',
+      providerMethodId: 'pm_1',
+      details: { brand: 'visa', last4: '4242', expMonth: 8, expYear: 2027 },
+    }
+    const secondPageMethod = {
+      id: 'card-2',
+      isDefault: false,
+      paymentProviderType: 'stripe',
+      providerMethodId: 'pm_2',
+      details: { brand: 'mastercard', last4: '4444', expMonth: 12, expYear: 2029 },
+    }
+    const api = serve((url) =>
+      url.endsWith('?page=1&perPage=100')
+        ? {
+            paymentMethods: [firstPageMethod],
+            meta: { currentPage: 1, totalPages: 2, totalCount: 2, nextPage: 2, prevPage: null },
+          }
+        : {
+            paymentMethods: [secondPageMethod],
+            meta: { currentPage: 2, totalPages: 2, totalCount: 2, nextPage: null, prevPage: 1 },
+          },
+    )
+
+    await expect(api.listAllPaymentMethods('org-1')).resolves.toEqual([firstPageMethod, secondPageMethod])
+    expect(requestedUrls).toEqual([
+      'http://billing.test/api/billing/organization/org-1/payment-methods?page=1&perPage=100',
+      'http://billing.test/api/billing/organization/org-1/payment-methods?page=2&perPage=100',
+    ])
+  })
+})
+
+describe('topUpWallet', () => {
+  it('posts the amount and returns the hosted payment URL', async () => {
+    const payment = { url: 'https://checkout.stripe.com/pay/cs_top_up' }
+    const api = serve(payment)
+
+    await expect(api.topUpWallet('org-without-card', 10_000)).resolves.toEqual(payment)
+    expect(requestedMethod).toBe('post')
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-without-card/wallet/top-up')
+    expect(JSON.parse(String(requestedData))).toEqual({ amountCents: 10_000 })
   })
 })
 

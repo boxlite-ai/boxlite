@@ -28,7 +28,7 @@ func TestVirtualNetworkNewWithinLatencyBudget(t *testing.T) {
 
 	// Warm up once: the first construction pays one-time lazy-init costs
 	// that are not representative of the steady-state per-box cost.
-	if vn, err := virtualnetwork.New(buildTapConfig(testGvproxyConfig(), types.QemuProtocol)); err != nil {
+	if vn, err := virtualnetwork.New(buildTapConfig(testGvproxyConfig(), types.QemuProtocol, nil)); err != nil {
 		t.Fatalf("warmup virtualnetwork.New failed: %v", err)
 	} else {
 		_ = vn
@@ -36,7 +36,7 @@ func TestVirtualNetworkNewWithinLatencyBudget(t *testing.T) {
 
 	samples := make([]time.Duration, 0, iters)
 	for i := 0; i < iters; i++ {
-		cfg := buildTapConfig(testGvproxyConfig(), types.QemuProtocol)
+		cfg := buildTapConfig(testGvproxyConfig(), types.QemuProtocol, nil)
 		start := time.Now()
 		vn, err := virtualnetwork.New(cfg)
 		elapsed := time.Since(start)

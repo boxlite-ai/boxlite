@@ -84,7 +84,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new AuditApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 let page: number; //Page number of the results (optional) (default to 1)
 let limit: number; //Number of results per page (optional) (default to 100)
 let from: Date; //From date (ISO 8601 format) (optional) (default to undefined)
@@ -105,7 +105,7 @@ const { status, data } = await apiInstance.getOrganizationAuditLogs(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 | **page** | [**number**] | Page number of the results | (optional) defaults to 1|
 | **limit** | [**number**] | Number of results per page | (optional) defaults to 100|
 | **from** | [**Date**] | From date (ISO 8601 format) | (optional) defaults to undefined|

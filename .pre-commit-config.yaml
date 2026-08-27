@@ -46,6 +46,7 @@ repos:
             src/ffi/|
             src/guest/|
             sdks/|
+            openapi/|
             \.github/workflows/|
             \.github/actions/|
             apps/.*|

@@ -66,15 +66,6 @@ def test_node_exec(node_env):
     assert "EXIT_CODE=42" in r.stdout
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Node SDK exec stdout comes back empty — same drain race as #563. "
-        "The copy-in succeeds but the verification exec returns no stdout, "
-        "so the driver exits with FATAL. When #563 lands, this xfail flips "
-        "xpass-strict — drop the marker then."
-    ),
-)
 def test_node_copy(node_env):
     """Copy in/out round-trip with content verification."""
     r = _run_driver(node_env, "e2e_copy.ts")

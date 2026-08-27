@@ -238,6 +238,47 @@ pub fn create_oci_spec(
         .map_err(|e| BoxliteError::Internal(format!("Failed to build OCI spec: {}", e)))
 }
 
+/// Destinations of every mount `spec` declares, in spec order.
+///
+/// Kept next to the builder so the two cannot drift: a mount added above is
+/// reported here without anyone having to remember to.
+pub(super) fn mount_destinations(spec: &Spec) -> Vec<PathBuf> {
+    spec.mounts()
+        .iter()
+        .flatten()
+        .map(|mount| canonical_destination(mount.destination()))
+        .collect()
+}
+
+/// A mount destination as the path it actually covers.
+///
+/// `UserMount::destination` is caller-supplied text that reaches the spec
+/// unchanged, and the runtime resolves it against the rootfs when it mounts —
+/// so `/workspace/../tmp` mounts over `/tmp`. Cached verbatim it would compare
+/// equal to neither, and the copy path's reachability check would wave through
+/// a write that lands under the mount after all. Collapsing the path here is
+/// what keeps that check honest about what is mounted where.
+///
+/// Lexical on purpose: the kernel's own resolution of a `..` that crosses a
+/// symlink can differ, so a destination is normalized, never trusted as proof
+/// the mount is where it claims.
+fn canonical_destination(destination: &Path) -> PathBuf {
+    let mut out = PathBuf::from("/");
+    for component in destination.components() {
+        match component {
+            Component::Normal(part) => out.push(part),
+            // `/..` has nowhere to go: the runtime cannot mount above the
+            // rootfs, so the destination clamps at the root rather than
+            // escaping it.
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir | Component::RootDir | Component::Prefix(_) => continue,
+        }
+    }
+    out
+}
+
 // ====================
 // User Resolution
 // ====================
@@ -1378,5 +1419,92 @@ mod tests {
             .expect("/dev mount");
         assert_eq!(dev_mount.typ().as_deref(), Some("tmpfs"));
         assert_eq!(dev_mount.source().as_deref(), Some(Path::new("tmpfs")));
+    }
+
+    /// A `..` or `.` in a mount destination reaches the spec unchanged — it is
+    /// caller-supplied text — and the runtime resolves it when it mounts. The
+    /// cached list has to name the path actually covered, or file transfer's
+    /// reachability check compares a request against a destination nothing is
+    /// mounted on and waves the write through into the shadow.
+    #[test]
+    fn a_mount_destination_names_the_path_the_runtime_covers() {
+        assert_eq!(
+            canonical_destination(Path::new("/workspace/../tmp")),
+            PathBuf::from("/tmp")
+        );
+        assert_eq!(
+            canonical_destination(Path::new("/tmp/./inner")),
+            PathBuf::from("/tmp/inner")
+        );
+        // Nowhere above the rootfs to go, so it clamps rather than escapes.
+        assert_eq!(
+            canonical_destination(Path::new("/../../etc")),
+            PathBuf::from("/etc")
+        );
+        // A destination already canonical is returned unchanged.
+        assert_eq!(
+            canonical_destination(Path::new("/dev/shm")),
+            PathBuf::from("/dev/shm")
+        );
+    }
+
+    /// A container answers `mount_destinations()` from the spec object it built,
+    /// not by re-reading `config.json`. The two must name the same mounts, or
+    /// file transfer would guard a mount list the runtime never applied.
+    ///
+    /// Round-tripped through `save`/`load` rather than compared to a literal:
+    /// the risk is a field that survives in memory but not on disk, which only
+    /// a real serialize/deserialize can show.
+    #[test]
+    fn mount_destinations_survive_the_config_json_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path();
+        let user_mounts = [UserMount {
+            source: "/run/boxlite/volumes/data".to_string(),
+            destination: "/workspace/data".to_string(),
+            read_only: false,
+            owner_uid: 0,
+            owner_gid: 0,
+        }];
+
+        let spec = create_oci_spec(
+            "c",
+            "/rootfs",
+            &["/bin/sh".to_string()],
+            &[],
+            "/",
+            0,
+            0,
+            &CapabilitySet::default(),
+            &[],
+            &MountOverride {
+                source: "/sys".to_string(),
+                options: vec!["rbind".to_string(), "rro".to_string()],
+            },
+            bundle,
+            &user_mounts,
+            false,
+            &ContainerDevices::default(),
+        )
+        .expect("spec builds");
+
+        let config_path = bundle.join("config.json");
+        spec.save(&config_path).expect("spec saves");
+        let reloaded = Spec::load(&config_path).expect("spec loads");
+
+        assert_eq!(
+            mount_destinations(&spec),
+            mount_destinations(&reloaded),
+            "the cached list must equal what reading config.json back gives"
+        );
+        // Both halves of what file transfer guards: the standard mounts the
+        // guest always applies, and the volume the caller asked for.
+        for expected in ["/tmp", "/dev/shm", "/proc", "/sys", "/workspace/data"] {
+            assert!(
+                mount_destinations(&spec).contains(&PathBuf::from(expected)),
+                "{expected} missing from {:?}",
+                mount_destinations(&spec)
+            );
+        }
     }
 }

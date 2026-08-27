@@ -286,17 +286,26 @@ fn tokens_from_response(resp: &openidconnect::core::CoreTokenResponse) -> OidcTo
 // Two embedded HTML pages: one for success, one for the rare hit-this-then-
 // something-failed case. Keeping them inline (vs. include_str!) means
 // reviewers see the full surface in one file.
+//
+// These are the last screen of `boxlite auth login`, sitting directly after
+// the hosted login, so they carry the console's tokens: #13161B page, #1A1D24
+// card, #2A2F3A hairline, square corners, 13px/1.45 mono. No webfont link —
+// the page is served from loopback during authentication and must not depend
+// on the network, so it rides the local mono stack and degrades to whatever
+// the OS has.
 const SUCCESS_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <title>BoxLite — Login complete</title>
   <style>
-    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-         display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0f172a;color:#e2e8f0}
-    .card{background:#1e293b;padding:2.5rem 3rem;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);text-align:center;max-width:32rem}
-    h1{margin:0 0 .75rem;font-size:1.5rem;font-weight:600}
-    p{margin:0;color:#94a3b8}
+    body{font-family:'IBM Plex Mono',ui-monospace,'SFMono-Regular','SF Mono',monospace;
+         font-size:13px;line-height:1.45;
+         display:flex;align-items:center;justify-content:center;
+         height:100vh;margin:0;background:#13161B;color:#FFFFFF}
+    .card{background:#1A1D24;border:1px solid #2A2F3A;padding:32px;text-align:center;max-width:400px}
+    h1{margin:0 0 8px;font-size:16px;font-weight:500;letter-spacing:-0.025em}
+    p{margin:0;color:#8C919C}
   </style>
 </head>
 <body>
@@ -313,11 +322,13 @@ const FAILURE_HTML: &str = r#"<!DOCTYPE html>
   <meta charset="utf-8">
   <title>BoxLite — Login failed</title>
   <style>
-    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-         display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0f172a;color:#fecaca}
-    .card{background:#1e293b;padding:2.5rem 3rem;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);text-align:center;max-width:32rem}
-    h1{margin:0 0 .75rem;font-size:1.5rem;font-weight:600;color:#f87171}
-    p{margin:0;color:#cbd5e1}
+    body{font-family:'IBM Plex Mono',ui-monospace,'SFMono-Regular','SF Mono',monospace;
+         font-size:13px;line-height:1.45;
+         display:flex;align-items:center;justify-content:center;
+         height:100vh;margin:0;background:#13161B;color:#FFFFFF}
+    .card{background:#1A1D24;border:1px solid #2A2F3A;padding:32px;text-align:center;max-width:400px}
+    h1{margin:0 0 8px;font-size:16px;font-weight:500;letter-spacing:-0.025em;color:#E05548}
+    p{margin:0;color:#8C919C}
   </style>
 </head>
 <body>

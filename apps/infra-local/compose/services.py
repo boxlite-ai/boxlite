@@ -1,8 +1,8 @@
 """Declarative registry of services the orchestrator manages.
 
-10 daemon boxes + 1 one-shot bootstrap:
+11 daemon boxes + 1 one-shot bootstrap:
   postgres, redis, minio (+ minio-init one-shot), registry, dex, jaeger,
-  pgadmin, registry-ui, otel-collector, caddy.
+  pgadmin, registry-ui, maildev, otel-collector, caddy.
 
 otel-collector runs the upstream `otel/opentelemetry-collector` image and
 forwards traces to the jaeger box; see `_otel_config()`. caddy is the
@@ -329,6 +329,35 @@ SPEC_REGISTRY_UI = ServiceSpec(
 )
 
 
+# The API's only outbound mail is the organization-invitation email
+# (apps/api email.service.ts). Catching it here is what makes that path
+# exercisable locally: without an SMTP host the API disables the transporter
+# at boot and the invite is created but never sent. The deployed stacks point
+# SMTP_* at a real provider instead — a catcher has no place on the internet.
+SPEC_MAILDEV = ServiceSpec(
+    name="maildev",
+    image="maildev/maildev:2.2.1",
+    cpus=1,
+    memory_mib=256,
+    ports=[
+        (25053, 1080),    # web UI
+        (25054, 1025),    # SMTP — apps/api connects here (see infra-local/api.env)
+    ],
+    env=lambda cfg: {
+        # Force IPv4 bind: MailDev's --ip defaults to `::` and --web-ip
+        # follows it, which leaves both listeners dual-stack only. Same fix
+        # pgadmin needs above.
+        "MAILDEV_IP": "0.0.0.0",
+    },
+    depends_on=[],
+    healthcheck=HealthCheck(
+        http_url="http://127.0.0.1:25053/healthz",
+        interval_s=2.0,
+        retries=30,
+    ),
+)
+
+
 # ─── 3c services ──────────────────────────────────────────────────────────
 
 def _otel_config(cfg) -> str:
@@ -452,6 +481,9 @@ def _caddyfile(cfg) -> str:
 \thandle_path /registry/* {{
 \t\treverse_proxy {cfg.host_hub}:{cfg.registry_host_port}
 \t}}
+\thandle_path /maildev/* {{
+\t\treverse_proxy {cfg.host_hub}:{cfg.maildev_ui_host_port}
+\t}}
 
 \thandle / {{
 \t\trespond `boxlite-local Caddy reverse proxy
@@ -464,6 +496,7 @@ routes:
   /minio-console/  -> minio console UI
   /registry-ui/    -> registry UI
   /registry/       -> docker registry v2
+  /maildev/        -> maildev (caught mail)
 `
 \t}}
 }}
@@ -492,7 +525,7 @@ SPEC_CADDY = ServiceSpec(
     ],
     entrypoint=["sh"],
     cmd=lambda cfg: ["-c", _CADDY_ENTRYPOINT_TEMPLATE.format(caddyfile=_caddyfile(cfg))],
-    depends_on=["dex", "jaeger", "pgadmin", "minio", "registry", "registry-ui"],
+    depends_on=["dex", "jaeger", "pgadmin", "minio", "registry", "registry-ui", "maildev"],
     healthcheck=HealthCheck(
         # Caddy admin API on :2019/config/ returns 200 once config loaded.
         http_url="http://127.0.0.1:12019/config/",
@@ -512,6 +545,7 @@ SERVICES: dict[str, ServiceSpec] = {
     "jaeger":      SPEC_JAEGER,
     "pgadmin":     SPEC_PGADMIN,
     "registry-ui": SPEC_REGISTRY_UI,
+    "maildev":     SPEC_MAILDEV,
     "otel":        SPEC_OTEL,
     "caddy":       SPEC_CADDY,
 }

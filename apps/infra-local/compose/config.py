@@ -97,6 +97,7 @@ class InfraConfig:
     jaeger_host_port: int = 26686
     pgadmin_host_port: int = 25051
     registry_ui_host_port: int = 25052
+    maildev_ui_host_port: int = 25053
     caddy_http_port: int = 28080
     otel_http_port: int = 24318
     otel_health_port: int = 23133

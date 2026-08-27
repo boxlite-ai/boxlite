@@ -84,27 +84,25 @@ impl JailerHome {
 }
 
 fn jailer_enabled_options() -> BoxOptions {
+    let mut advanced = AdvancedBoxOptions::default();
+    advanced.security = SecurityOptions {
+        jailer_enabled: true,
+        ..SecurityOptions::default()
+    };
     BoxOptions {
-        advanced: AdvancedBoxOptions {
-            security: SecurityOptions {
-                jailer_enabled: true,
-                ..SecurityOptions::default()
-            },
-            ..Default::default()
-        },
+        advanced,
         ..common::alpine_opts()
     }
 }
 
 fn jailer_disabled_options() -> BoxOptions {
+    let mut advanced = AdvancedBoxOptions::default();
+    advanced.security = SecurityOptions {
+        jailer_enabled: false,
+        ..SecurityOptions::default()
+    };
     BoxOptions {
-        advanced: AdvancedBoxOptions {
-            security: SecurityOptions {
-                jailer_enabled: false,
-                ..SecurityOptions::default()
-            },
-            ..Default::default()
-        },
+        advanced,
         ..common::alpine_opts()
     }
 }

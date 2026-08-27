@@ -53,24 +53,21 @@ describe('toBoxApiCreateRequest', () => {
     expect(toBoxApiCreateRequest().memory_mib).toBeUndefined()
   })
 
-  // The REST boundary takes {source, guest_path} — NOT the internal
-  // {volumeId, mountPath} pair it maps onto. `guest_path` is required and the
-  // source must carry the volume:// scheme, so sending the internal shape is a
-  // 400 (guest_path missing + "volume source must use the volume:// scheme"),
-  // not a silent no-op.
-  it('maps volume mounts to the REST volume:// source shape', () => {
+  // The REST boundary takes {managed_volume, guest_path} — NOT the internal
+  // {volumeId, mountPath} pair it maps onto. Both fields are required, so
+  // sending the internal shape is a 400, not a silent no-op.
+  it('maps volume mounts to the REST managed_volume shape', () => {
     const request = toBoxApiCreateRequest({
       volumes: [
         { volumeId: 'vol-a1b2c3d4', mountPath: '/models' },
-        // Names are accepted too: the API resolves id-or-name after stripping
-        // the scheme prefix.
+        // Names are accepted too: the API resolves id-or-name.
         { volumeId: 'customer-data', mountPath: '/data' },
       ],
     })
 
     expect(request.volumes).toEqual([
-      { source: 'volume://vol-a1b2c3d4', guest_path: '/models' },
-      { source: 'volume://customer-data', guest_path: '/data' },
+      { managed_volume: 'vol-a1b2c3d4', guest_path: '/models' },
+      { managed_volume: 'customer-data', guest_path: '/data' },
     ])
   })
 

@@ -55,9 +55,10 @@ impl SnapshotStore {
     /// List all snapshots for a box. Newest first.
     pub(crate) fn list(&self, box_id: &str) -> BoxliteResult<Vec<SnapshotInfo>> {
         let conn = self.db.conn();
-        let mut stmt = db_err!(
-            conn.prepare("SELECT json FROM snapshot WHERE box_id = ?1 ORDER BY created_at DESC")
-        )?;
+        let mut stmt = db_err!(conn.prepare(
+            "SELECT json FROM snapshot WHERE box_id = ?1 \
+             ORDER BY created_at DESC, rowid DESC"
+        ))?;
         let rows =
             db_err!(stmt.query_map(rusqlite::params![box_id], |row| { row.get::<_, String>(0) }))?;
 
@@ -180,6 +181,34 @@ mod tests {
         assert_eq!(list[0].name, "snap-c");
         assert_eq!(list[1].name, "snap-b");
         assert_eq!(list[2].name, "snap-a");
+    }
+
+    /// Snapshots taken inside one second share a `created_at` (the column is
+    /// whole-second), so ordering on it alone leaves them in an order SQLite
+    /// does not define — in practice insertion order, the exact inverse of the
+    /// documented "newest first".
+    #[test]
+    fn test_list_breaks_created_at_ties_newest_first() {
+        let db = test_db();
+        let store = SnapshotStore::new(db);
+
+        for (id, name) in [("s1", "v1"), ("s2", "v2"), ("s3", "v3")] {
+            let mut snap = make_snapshot(id, "box-1", name);
+            snap.created_at = 1000;
+            store.save(&snap).unwrap();
+        }
+
+        let names: Vec<String> = store
+            .list("box-1")
+            .unwrap()
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(
+            names,
+            ["v3", "v2", "v1"],
+            "same-second snapshots must still list newest first"
+        );
     }
 
     #[test]

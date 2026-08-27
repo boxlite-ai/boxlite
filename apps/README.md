@@ -31,11 +31,7 @@ flowchart TB
                 api["API + Dashboard · NestJS<br/>:3000"]
                 proxy["Proxy<br/>:4000"]
 
-                subgraph obs["internal observability + tools"]
-                    otel["OTel Collector<br/>:4318"]
-                    jaeger["Jaeger<br/>:16686"]
-                    ops["PgAdmin + MailDev<br/>internal only"]
-                end
+                otel["OTel Collector<br/>:4318<br/>internal only"]
             end
 
             subgraph state["state · VPC private"]
@@ -88,7 +84,6 @@ flowchart TB
     boxlite_core boxlite_to_s3@-->|"mount volumes"| s3
     boxlite_core boxlite_to_ghcr@-->|"pull images"| ghcr
 
-    otel otel_to_jaeger@-->|"traces"| jaeger
     otel otel_to_telemetry@-.->|"configured export"| telemetry
 ```
 

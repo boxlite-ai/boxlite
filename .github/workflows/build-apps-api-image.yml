@@ -9,7 +9,7 @@ name: Build apps/api image
 # Named per service because it is one of three the stack builds from source — apps/proxy and
 # apps/otel-collector are the others (sst.config.ts) and have no published-image path yet, so a
 # release deploy still compiles them from the deployed checkout. A sibling workflow per service
-# is the intended shape; jaeger/pgadmin/maildev need none, they run pinned public tags.
+# is the intended shape.
 #
 # A released image is built once into the dev repository, then promoted: promotion copies that
 # exact manifest registry-side, addressed by digest, and verifies the digest survived — it never

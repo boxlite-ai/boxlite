@@ -186,7 +186,8 @@ mod tests {
         let opts = args
             .to_box_options(&cli.global)
             .expect("options should build");
-        assert_eq!(opts.advanced.capabilities.add, vec!["SYS_ADMIN"]);
-        assert_eq!(opts.advanced.capabilities.drop, vec!["CAP_NET_RAW"]);
+        let capabilities = opts.advanced.capabilities().expect("capabilities set");
+        assert_eq!(capabilities.add, vec!["SYS_ADMIN"]);
+        assert_eq!(capabilities.drop, vec!["CAP_NET_RAW"]);
     }
 }

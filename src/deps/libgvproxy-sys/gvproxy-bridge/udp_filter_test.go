@@ -57,7 +57,15 @@ func startNetwork(t *testing.T, allowNet []string) *guestTap {
 
 	cfg := testGvproxyConfig()
 	cfg.AllowNet = allowNet
-	tapConfig := buildTapConfig(cfg, types.QemuProtocol)
+	// Mirror gvproxy_create: only resolve hostname rules when an allow_net is
+	// present. An empty allow_net is the common case and needs no resolution;
+	// the nil zones/maps are safe because buildDNSZones and newAllowNetFilter
+	// already gate on len(cfg.AllowNet) > 0.
+	var resolved allowNetResolution
+	if len(cfg.AllowNet) > 0 {
+		resolved = buildAllowNet(cfg.AllowNet)
+	}
+	tapConfig := buildTapConfig(cfg, types.QemuProtocol, resolved.zones)
 	// Route the unlisted TEST-NET destination to a test-owned loopback
 	// listener. The forwarders dial the NAT-translated address; the allowlist
 	// still sees 198.51.100.9.
@@ -69,7 +77,7 @@ func startNetwork(t *testing.T, allowNet []string) *guestTap {
 	}
 
 	if len(cfg.AllowNet) > 0 {
-		filter := newAllowNetFilter(cfg)
+		filter := newAllowNetFilter(cfg, resolved.exactIPs, resolved.suffixIPs)
 		if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, filter, nil, nil); err != nil {
 			t.Fatalf("installAllowNetHandlers: %v", err)
 		}

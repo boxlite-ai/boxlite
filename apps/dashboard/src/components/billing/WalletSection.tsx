@@ -18,15 +18,17 @@ import {
   useIsOwnerCheckoutUrlFetching,
   useOwnerBillingPortalUrlQuery,
   useOwnerInvoicesQuery,
+  useOwnerPaymentMethodsQuery,
   useOwnerWalletQuery,
 } from '@/hooks/queries/billingQueries'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { formatAmount } from '@/lib/utils'
-import { ArrowUpRight, CheckCircleIcon } from '@/components/ui/icon'
+import { ArrowUpRight } from '@/components/ui/icon'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { NumericFormat } from 'react-number-format'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
+import { PaymentMethodsPanel } from './PaymentMethodsPanel'
 
 const DEFAULT_PAGE_SIZE = 10
 
@@ -39,20 +41,8 @@ export const MIN_TOP_UP_DOLLARS = 10
  */
 const DEFAULT_AUTO_RELOAD: AutomaticTopUp = { thresholdAmount: 20, targetAmount: 100 }
 
-/**
- * Whether Top up can run, and why not when it cannot.
- *
- * A silently disabled button was the whole problem here: the real blocker is a
- * missing card, which the control itself never said. `reason` is null only when
- * there is nothing to say yet — no amount picked — which needs no explanation.
- */
-export function topUpGate(
-  creditCardConnected: boolean,
-  amountDollars: number | undefined,
-): { enabled: boolean; reason: string | null } {
-  if (!creditCardConnected) {
-    return { enabled: false, reason: 'Connect a payment method above to add funds.' }
-  }
+/** Whether Top up can run, and why not when it cannot. */
+export function topUpGate(amountDollars: number | undefined): { enabled: boolean; reason: string | null } {
   if (!amountDollars) {
     return { enabled: false, reason: null }
   }
@@ -82,6 +72,7 @@ export function WalletSection() {
   const walletQuery = useOwnerWalletQuery({ refetchOnMount: 'always' })
   const billingPortalUrlQuery = useOwnerBillingPortalUrlQuery()
   const invoicesQuery = useOwnerInvoicesQuery(invoicesPagination.pageIndex + 1, invoicesPagination.pageSize)
+  const paymentMethodsQuery = useOwnerPaymentMethodsQuery()
 
   const isCheckoutUrlLoading = useIsOwnerCheckoutUrlFetching()
   const fetchCheckoutUrl = useFetchOwnerCheckoutUrlQuery()
@@ -196,7 +187,7 @@ export function WalletSection() {
     try {
       const result = await topUpWalletMutation.mutateAsync({
         organizationId: selectedOrganization.id,
-        amountCents: amount * 100,
+        amountCents: Math.round(amount * 100),
       })
       if (newWindow) {
         newWindow.location.href = result.url
@@ -211,7 +202,7 @@ export function WalletSection() {
 
   const isBillingLoading = walletQuery.isLoading && billingPortalUrlQuery.isLoading
   const cardConnected = Boolean(wallet?.creditCardConnected)
-  const topUp = topUpGate(cardConnected, selectedPreset ?? oneTimeTopUpAmount)
+  const topUp = topUpGate(selectedPreset ?? oneTimeTopUpAmount)
   // Read the indicator off the saved wallet, not the form: the form is
   // pre-filled with defaults, which would otherwise read as already on.
   const autoReloadActive =
@@ -243,30 +234,15 @@ export function WalletSection() {
 
       {wallet && (
         <div className="flex flex-col gap-8">
-          {/* Wallet balance — one panel of divided rows: balance, add funds, auto-reload, coupon */}
-          <section>
-            <SectionTitle title="Payment Method" />
-            <Panel className="px-[22px] py-4">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                {!wallet.creditCardConnected ? (
-                  <span className="font-mono text-[13px] text-muted-foreground">Payment method not connected</span>
-                ) : (
-                  <span className="flex items-center gap-2 font-mono text-[13px] text-foreground">
-                    <CheckCircleIcon className="size-4 shrink-0" /> Credit card connected
-                  </span>
-                )}
-                <AsciiButton
-                  variant={wallet.creditCardConnected ? 'secondary' : 'primary'}
-                  onClick={handleUpdatePaymentMethod}
-                  disabled={isCheckoutUrlLoading}
-                  className="inline-flex items-center gap-2"
-                >
-                  {isCheckoutUrlLoading && <Spinner />} {wallet.creditCardConnected ? 'Update card' : 'Connect'}
-                </AsciiButton>
-              </div>
-              <PanelNote>Used for top-up charges · card details are held by Stripe</PanelNote>
-            </Panel>
-          </section>
+          {/* Card enumeration is its own read model; checkout remains the one action. */}
+          <PaymentMethodsPanel
+            paymentMethods={paymentMethodsQuery.data ?? []}
+            isLoading={paymentMethodsQuery.isLoading}
+            isError={paymentMethodsQuery.isError}
+            hasConnectedCard={cardConnected}
+            isActionLoading={isCheckoutUrlLoading}
+            onAction={handleUpdatePaymentMethod}
+          />
 
           <section>
             <SectionTitle title="Wallet Balance" />

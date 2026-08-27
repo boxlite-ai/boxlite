@@ -26,7 +26,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new WebhooksApi(configuration);
 
-let organizationId: string; // (default to undefined)
+let organizationId: string; //
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.webhookControllerGetAppPortalAccess(
@@ -39,7 +39,7 @@ const { status, data } = await apiInstance.webhookControllerGetAppPortalAccess(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] |  | defaults to undefined|
+| **organizationId** | [**string**] |  | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -79,7 +79,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new WebhooksApi(configuration);
 
-let organizationId: string; // (default to undefined)
+let organizationId: string; //
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.webhookControllerGetInitializationStatus(
@@ -92,7 +92,7 @@ const { status, data } = await apiInstance.webhookControllerGetInitializationSta
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] |  | defaults to undefined|
+| **organizationId** | [**string**] |  | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -133,8 +133,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new WebhooksApi(configuration);
 
-let organizationId: string; // (default to undefined)
-let messageId: string; // (default to undefined)
+let organizationId: string; //
+let messageId: string; //
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.webhookControllerGetMessageAttempts(
@@ -148,8 +148,8 @@ const { status, data } = await apiInstance.webhookControllerGetMessageAttempts(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] |  | defaults to undefined|
-| **messageId** | [**string**] |  | defaults to undefined|
+| **organizationId** | [**string**] |  | |
+| **messageId** | [**string**] |  | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -239,7 +239,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new WebhooksApi(configuration);
 
-let organizationId: string; // (default to undefined)
+let organizationId: string; //
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.webhookControllerInitializeWebhooks(
@@ -252,7 +252,7 @@ const { status, data } = await apiInstance.webhookControllerInitializeWebhooks(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] |  | defaults to undefined|
+| **organizationId** | [**string**] |  | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -295,7 +295,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new WebhooksApi(configuration);
 
-let organizationId: string; // (default to undefined)
+let organizationId: string; //
 let sendWebhookDto: SendWebhookDto; //
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
@@ -311,7 +311,7 @@ const { status, data } = await apiInstance.webhookControllerSendWebhook(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **sendWebhookDto** | **SendWebhookDto**|  | |
-| **organizationId** | [**string**] |  | defaults to undefined|
+| **organizationId** | [**string**] |  | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 

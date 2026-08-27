@@ -325,14 +325,13 @@ mod tests {
             FsLayoutConfig::without_bind_mount(),
             false,
         );
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.security = SecurityOptions {
+            jailer_enabled: true,
+            ..SecurityOptions::default()
+        };
         let options = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                security: SecurityOptions {
-                    jailer_enabled: true,
-                    ..SecurityOptions::default()
-                },
-                ..AdvancedBoxOptions::default()
-            },
+            advanced,
             ..BoxOptions::default()
         };
 
@@ -378,15 +377,14 @@ mod tests {
             FsLayoutConfig::without_bind_mount(),
             false,
         );
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.security = SecurityOptions {
+            jailer_enabled: true,
+            sandbox_profile: Some(PathBuf::from("/tmp/custom.sbpl")),
+            ..SecurityOptions::default()
+        };
         let options = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                security: SecurityOptions {
-                    jailer_enabled: true,
-                    sandbox_profile: Some(PathBuf::from("/tmp/custom.sbpl")),
-                    ..SecurityOptions::default()
-                },
-                ..AdvancedBoxOptions::default()
-            },
+            advanced,
             ..BoxOptions::default()
         };
 
