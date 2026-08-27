@@ -2513,9 +2513,7 @@ mod tests {
                 "newdir/f", b"hellox",
             )])))
             .unwrap_err();
-        assert!(
-            format!("{}", err).contains("BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE")
-        );
+        assert!(format!("{}", err).contains("BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE"));
         assert!(
             !dest.join("newdir").exists(),
             "an oversized entry must fail before creating parent directories"
@@ -2538,7 +2536,7 @@ mod tests {
         pax.set_cksum();
         data.extend_from_slice(pax.as_bytes());
         data.extend_from_slice(payload);
-        data.extend(std::iter::repeat(0u8).take(512 - payload.len()));
+        data.resize(data.len() + (512 - payload.len()), 0u8);
 
         let mut file_h = tar::Header::new_gnu();
         file_h.set_path("pax-bomb").unwrap();
@@ -2548,9 +2546,9 @@ mod tests {
         file_h.set_cksum();
         data.extend_from_slice(file_h.as_bytes());
         data.extend_from_slice(b"hellox");
-        data.extend(std::iter::repeat(0u8).take(512 - 6));
+        data.resize(data.len() + (512 - 6), 0u8);
 
-        data.extend(std::iter::repeat(0u8).take(1024)); // end-of-archive
+        data.resize(data.len() + 1024, 0u8); // end-of-archive
         data
     }
 
