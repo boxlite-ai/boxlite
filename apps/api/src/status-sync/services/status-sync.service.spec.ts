@@ -295,7 +295,9 @@ describe('StatusSyncService', () => {
       { region: 'eu', state: RunnerState.READY },
     ])
     probeGet.mockImplementation(async (url: string) => {
-      if (url.startsWith('https://proxy.eu.test')) {
+      // Exact match, not startsWith: a prefix check on a URL is the CodeQL
+      // "incomplete URL substring sanitization" pattern even in a fixture.
+      if (url === 'https://proxy.eu.test/health') {
         throw Object.assign(new Error('timeout'), { isAxiosError: true, code: 'ECONNABORTED' })
       }
       return { status: 200 }
