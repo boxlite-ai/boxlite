@@ -23,7 +23,6 @@ import {
   type OnboardingInterface,
 } from '@/lib/onboarding-code-examples'
 import type { QuickstartGroup, QuickstartIconName, QuickstartInterfaceDefinition } from '@/lib/quickstart/types'
-import { setLocalStorageItem } from '@/lib/local-storage'
 import { cn } from '@/lib/utils'
 import type { OnboardingProgress } from '@/lib/onboarding-progress'
 import {
@@ -255,7 +254,6 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
       const next = [...prev] as [boolean, boolean, boolean]
       next[i] = true
       if (next.every(Boolean)) {
-        setLocalStorageItem('boxlite-quickstart-done', '1')
         onProgressChange({ boxCreated: true, sdkConnected: true })
       }
       return next

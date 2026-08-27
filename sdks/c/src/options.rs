@@ -62,6 +62,11 @@ pub unsafe extern "C" fn boxlite_options_set_workdir(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_user(opts: *mut CBoxliteOptions, user: *const c_char) {
+    options_set_user(opts, user)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_add_env(
     opts: *mut CBoxliteOptions,
     key: *const c_char,
@@ -70,14 +75,37 @@ pub unsafe extern "C" fn boxlite_options_add_env(
     options_add_env(opts, key, val)
 }
 
+/// Bind a host directory or file into the box.
+///
+/// Host bind mounts are local-runtime only; a REST runtime rejects them at
+/// create. Use [`boxlite_options_add_managed_volume`] against a REST runtime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_options_add_volume(
+pub unsafe extern "C" fn boxlite_options_add_bind_mount(
     opts: *mut CBoxliteOptions,
     host_path: *const c_char,
     guest_path: *const c_char,
     read_only: c_int,
 ) {
-    options_add_volume(opts, host_path, guest_path, read_only)
+    options_add_bind_mount(opts, host_path, guest_path, read_only)
+}
+
+/// Mount a managed volume, addressed by its server-assigned id **or** by its
+/// name — the server resolves either.
+///
+/// `managed_volume` is the volume's id or name (`"my-data"`, `"vol_01K2…"`).
+/// Managed volumes need a REST runtime; the local runtime has no volume backend
+/// and rejects one at create.
+///
+/// A NULL `opts`, `managed_volume`, or `guest_path` is ignored, matching
+/// [`boxlite_options_add_bind_mount`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_add_managed_volume(
+    opts: *mut CBoxliteOptions,
+    managed_volume: *const c_char,
+    guest_path: *const c_char,
+    read_only: c_int,
+) {
+    options_add_managed_volume(opts, managed_volume, guest_path, read_only)
 }
 
 /// Transport protocol for a port forwarding rule.
@@ -332,6 +360,19 @@ pub unsafe fn options_set_workdir(handle: *mut OptionsHandle, workdir: *const c_
     }
 }
 
+/// Set the user the container process runs as (`<name|uid>[:<group|gid>]`).
+/// `None` leaves the image's USER directive in force.
+pub unsafe fn options_set_user(handle: *mut OptionsHandle, user: *const c_char) {
+    unsafe {
+        if handle.is_null() || user.is_null() {
+            return;
+        }
+        if let Ok(s) = c_str_to_string(user) {
+            (*handle).options.user = Some(s);
+        }
+    }
+}
+
 pub unsafe fn options_add_env(handle: *mut OptionsHandle, key: *const c_char, val: *const c_char) {
     unsafe {
         if handle.is_null() || key.is_null() || val.is_null() {
@@ -343,7 +384,7 @@ pub unsafe fn options_add_env(handle: *mut OptionsHandle, key: *const c_char, va
     }
 }
 
-pub unsafe fn options_add_volume(
+pub unsafe fn options_add_bind_mount(
     handle: *mut OptionsHandle,
     host_path: *const c_char,
     guest_path: *const c_char,
@@ -355,9 +396,27 @@ pub unsafe fn options_add_volume(
         }
         if let (Ok(h), Ok(g)) = (c_str_to_string(host_path), c_str_to_string(guest_path)) {
             (*handle).options.volumes.push(VolumeSpec {
-                host_path: h,
-                guest_path: g,
                 read_only: read_only != 0,
+                ..VolumeSpec::bind_mount(h, g)
+            });
+        }
+    }
+}
+
+pub unsafe fn options_add_managed_volume(
+    handle: *mut OptionsHandle,
+    managed_volume: *const c_char,
+    guest_path: *const c_char,
+    read_only: c_int,
+) {
+    unsafe {
+        if handle.is_null() || managed_volume.is_null() || guest_path.is_null() {
+            return;
+        }
+        if let (Ok(v), Ok(g)) = (c_str_to_string(managed_volume), c_str_to_string(guest_path)) {
+            (*handle).options.volumes.push(VolumeSpec {
+                read_only: read_only != 0,
+                ..VolumeSpec::managed_volume(v, g)
             });
         }
     }

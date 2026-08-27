@@ -14,13 +14,19 @@
  *
  * The HTML shell must NOT be cached long-term: it is the only file that points
  * at the current hashed bundle, so caching it would pin a client to a stale
- * deploy. Everything else falls back to revalidate-always.
+ * deploy. Auth0 branding assets also carry content hashes in their filenames,
+ * so they share the immutable policy without depending on Vite's /assets path.
+ * Everything else falls back to revalidate-always.
  */
+function isAuth0BrandingAsset(filePath: string): boolean {
+  return /[\\/]auth0[\\/]/.test(filePath)
+}
+
 export function dashboardStaticCacheControl(filePath: string): string {
   if (/\.html?$/i.test(filePath)) {
     return 'no-cache'
   }
-  if (filePath.includes('/assets/')) {
+  if (filePath.includes('/assets/') || isAuth0BrandingAsset(filePath)) {
     return 'public, max-age=31536000, immutable'
   }
   return 'public, max-age=0, must-revalidate'
@@ -35,4 +41,10 @@ export function setDashboardStaticHeaders(
   filePath: string,
 ): void {
   res.setHeader('Cache-Control', dashboardStaticCacheControl(filePath))
+  if (isAuth0BrandingAsset(filePath)) {
+    // Auth0 hosts the HTML, so these browser requests are cross-origin. The
+    // files are public, immutable brand assets and contain no user data.
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+  }
 }

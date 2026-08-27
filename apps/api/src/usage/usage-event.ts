@@ -138,7 +138,9 @@ export function timestampString(value: Date, field: string): string {
 
 export function identityString(value: string, field: string): string {
   if (typeof value !== 'string' || !value.trim() || value.length > MAX_IDENTITY_LENGTH) {
-    throw new InvalidUsagePeriodError(`${field} must be a non-empty string of at most ${MAX_IDENTITY_LENGTH} characters`)
+    throw new InvalidUsagePeriodError(
+      `${field} must be a non-empty string of at most ${MAX_IDENTITY_LENGTH} characters`,
+    )
   }
   return value
 }

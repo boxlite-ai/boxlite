@@ -507,10 +507,7 @@ const configuration = {
     // runner reporting the box as started is allowed to close it out. This is
     // a backstop for a lost job-completion callback, not a fast path: raise it
     // if legitimate startups ever get closed out ahead of their own callback.
-    startConfirmationStallSeconds: parseInt(
-      process.env.BOX_SYNC_START_CONFIRMATION_STALL_SECONDS || '60',
-      10,
-    ),
+    startConfirmationStallSeconds: parseInt(process.env.BOX_SYNC_START_CONFIRMATION_STALL_SECONDS || '60', 10),
   },
   encryption: {
     key: process.env.ENCRYPTION_KEY,

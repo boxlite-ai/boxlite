@@ -23,6 +23,14 @@ pub mod qcow2 {
     /// Default disk size in GB (sparse, grows as needed)
     pub const DEFAULT_DISK_SIZE_GB: u64 = 10;
 
+    /// How many times the box's disk size the jailed shim's `RLIMIT_FSIZE` is
+    /// set to. Not a qcow2 format parameter: the shim is the sole writer of
+    /// these disks, so its per-file limit has to clear the disk it grows, and
+    /// this is the slack over it. Deliberately loose — the limit is a
+    /// runaway-write backstop, not a capacity policy (capacity is the qcow2
+    /// virtual size, where a full disk gives the guest a clean `ENOSPC`).
+    pub const FSIZE_DISK_MULTIPLIER: u64 = 2;
+
     /// QCOW2 cluster size in bits (64KB = 2^16)
     pub const CLUSTER_BITS: usize = 16;
 

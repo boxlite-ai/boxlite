@@ -24,7 +24,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new JobsApi(configuration);
 
-let jobId: string; //ID of the job (default to undefined)
+let jobId: string; //ID of the job
 
 const { status, data } = await apiInstance.getJob(
     jobId
@@ -35,7 +35,7 @@ const { status, data } = await apiInstance.getJob(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **jobId** | [**string**] | ID of the job | defaults to undefined|
+| **jobId** | [**string**] | ID of the job | |
 
 
 ### Return type
@@ -189,7 +189,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new JobsApi(configuration);
 
-let jobId: string; //ID of the job (default to undefined)
+let jobId: string; //ID of the job
 let updateJobStatus: UpdateJobStatus; //
 
 const { status, data } = await apiInstance.updateJobStatus(
@@ -203,7 +203,7 @@ const { status, data } = await apiInstance.updateJobStatus(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **updateJobStatus** | **UpdateJobStatus**|  | |
-| **jobId** | [**string**] | ID of the job | defaults to undefined|
+| **jobId** | [**string**] | ID of the job | |
 
 
 ### Return type

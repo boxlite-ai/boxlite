@@ -212,7 +212,7 @@ type GvproxyInstance struct {
 	secretMatcher *SecretHostMatcher             // Hostname→secrets lookup (nil if no secrets)
 }
 
-func buildDNSZones(config GvproxyConfig) []types.Zone {
+func buildDNSZones(config GvproxyConfig, allowNetZones []types.Zone) []types.Zone {
 	dnsZones := make([]types.Zone, 0, len(config.DNSZones)+1)
 	for _, zone := range config.DNSZones {
 		dnsZone := types.Zone{
@@ -229,7 +229,6 @@ func buildDNSZones(config GvproxyConfig) []types.Zone {
 	}
 
 	if len(config.AllowNet) > 0 {
-		allowNetZones := buildAllowNetDNSZones(config.AllowNet)
 		dnsZones = append(dnsZones, allowNetZones...)
 		logrus.WithField("rules", len(config.AllowNet)).Info("Network allowlist enabled (DNS sinkhole)")
 	}
@@ -250,11 +249,15 @@ func buildDNSZones(config GvproxyConfig) []types.Zone {
 //
 // Returns nil when allow_net is empty, which the transport handlers read as
 // "forward everything".
-func newAllowNetFilter(config GvproxyConfig) *AllowNetFilter {
-	return NewAllowNetFilter(config.AllowNet, config.GatewayIP, config.GuestIP)
+func newAllowNetFilter(config GvproxyConfig, exactIPs, suffixIPs map[string][]net.IP) *AllowNetFilter {
+	f := NewAllowNetFilter(config.AllowNet, config.GatewayIP, config.GuestIP)
+	if f != nil {
+		f.SetResolvedHostIPs(exactIPs, suffixIPs)
+	}
+	return f
 }
 
-func buildTapConfig(config GvproxyConfig, protocol types.Protocol) *types.Configuration {
+func buildTapConfig(config GvproxyConfig, protocol types.Protocol, allowNetZones []types.Zone) *types.Configuration {
 	nat := make(map[string]string)
 	gatewayVirtualIPs := []string{config.GatewayIP}
 	if config.HostIP != "" {
@@ -277,7 +280,7 @@ func buildTapConfig(config GvproxyConfig, protocol types.Protocol) *types.Config
 		NAT:               nat,
 		GatewayVirtualIPs: gatewayVirtualIPs,
 		Protocol:          protocol,
-		DNS:               buildDNSZones(config),
+		DNS:               buildDNSZones(config, allowNetZones),
 		DNSSearchDomains:  config.DNSSearchDomains,
 		CaptureFile:       "",
 	}
@@ -339,8 +342,22 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		protocol = types.QemuProtocol
 	}
 
+	// Resolve hostname rules once so the gateway DNS zones and the TCP egress
+	// pin share the same IP set (see allow_net_filter.AllowHostToIP). This
+	// resolution is frozen for the box's lifetime: a domain that changes IP
+	// after startup is unreachable until the box is recreated. If re-resolution
+	// is ever added, it must refresh the pin from the same source.
+	// Skipped for an empty allow_net (the common case): building it would only
+	// allocate a root sinkhole zone and log "DNS sinkhole configured" for a box
+	// with no egress policy. buildDNSZones and newAllowNetFilter both already
+	// gate on len(config.AllowNet) > 0, so a nil resolution is safe to pass.
+	var resolved allowNetResolution
+	if len(config.AllowNet) > 0 {
+		resolved = buildAllowNet(config.AllowNet)
+	}
+
 	// Create gvisor-tap-vsock configuration from provided config
-	tapConfig := buildTapConfig(config, protocol)
+	tapConfig := buildTapConfig(config, protocol, resolved.zones)
 
 	// Set CaptureFile if provided
 	if config.CaptureFile != nil && *config.CaptureFile != "" {
@@ -449,7 +466,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		if len(config.AllowNet) > 0 || instance.secretMatcher != nil {
 			var allowNetFilter *AllowNetFilter
 			if len(config.AllowNet) > 0 {
-				allowNetFilter = newAllowNetFilter(config)
+				allowNetFilter = newAllowNetFilter(config, resolved.exactIPs, resolved.suffixIPs)
 			}
 			// Fatal on purpose: the handlers left behind are upstream's
 			// unfiltered forwarders, so a box that starts anyway would carry

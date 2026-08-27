@@ -14,6 +14,16 @@ const plan: OrganizationPlan = {
   quotaRemainingCents: 18750,
 }
 const now = new Date('2026-08-14T12:00:00.000Z')
+const catalog = [
+  {
+    id: 'starter',
+    name: 'Starter',
+    priceMonthlyCents: 1_900,
+    includedQuotaCents: 3_000,
+    concurrencyLimit: 20,
+    selfServe: true,
+  },
+]
 
 describe('cycleFacts', () => {
   it('counts the days to the roll and states the window', () => {
@@ -37,9 +47,34 @@ describe('cycleFacts', () => {
   })
 
   it('notes a queued downgrade with the roll date, cancellation taking precedence', () => {
-    expect(cycleFacts({ ...plan, pendingPlanId: 'starter' }, now).note).toBe(
-      'Downgrades to starter when the cycle rolls on Sep 5',
+    expect(cycleFacts({ ...plan, pendingPlanId: 'starter' }, now, catalog).note).toBe(
+      'Downgrades to Starter when the cycle rolls on Sep 5',
     )
-    expect(cycleFacts({ ...plan, status: 'canceled', pendingPlanId: 'starter' }, now).note).toMatch(/^Canceled/)
+    expect(cycleFacts({ ...plan, status: 'canceled', pendingPlanId: 'starter' }, now, catalog).note).toMatch(
+      /^Canceled/,
+    )
+  })
+
+  // The Overview panel states the subscription is ending; this tab must not
+  // simultaneously promise the queued downgrade happens at the same roll.
+  it('lets a cancellation outrank the downgrade queued behind it', () => {
+    expect(cycleFacts({ ...plan, pendingPlanId: 'starter', cancelAtPeriodEnd: true }, now, catalog).note).toBe(
+      'Ends Sep 5 — quota stays usable until the roll, then pay-as-you-go from the wallet',
+    )
+  })
+
+  // New copy: this state used to produce no note at all.
+  it('states a scheduled cancellation even with no downgrade queued behind it', () => {
+    expect(cycleFacts({ ...plan, cancelAtPeriodEnd: true }, now, catalog).note).toBe(
+      'Ends Sep 5 — quota stays usable until the roll, then pay-as-you-go from the wallet',
+    )
+  })
+
+  // A negotiated plan never appears in the public catalog, so there is no name
+  // to resolve — but the note still has to say something.
+  it('falls back to the id only when the catalog cannot name the queued plan', () => {
+    expect(cycleFacts({ ...plan, pendingPlanId: 'negotiated' }, now, catalog).note).toBe(
+      'Downgrades to negotiated when the cycle rolls on Sep 5',
+    )
   })
 })

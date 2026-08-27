@@ -6,10 +6,11 @@ facade because SST initializes providers before it evaluates the resource graph.
 The intended declaration order is stable:
 
 1. foundation: VPC, database, Redis, storage, cluster, and shared IAM setup
-2. observability: Jaeger and OpenTelemetry
-3. API: the control-plane API and its artifact selection
-4. edge: Proxy, admin tools, CDN, DNS, and routing
-5. runners: protected EC2 Runner instances, registration, and in-place binary updates
+2. observability: OpenTelemetry into ClickHouse
+3. mail: the verified SES sender the API's invitations go out through
+4. API: the control-plane API and its artifact selection
+5. edge: Proxy, CDN, DNS, and routing
+6. runners: protected EC2 Runner instances, registration, and in-place binary updates
 
 Operational code is grouped separately:
 

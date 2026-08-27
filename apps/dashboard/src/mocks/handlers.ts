@@ -4,10 +4,18 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { OrganizationEmail, OrganizationPlan, OrganizationWallet, UsagePrices } from '@/billing-api'
+import {
+  OrganizationEmail,
+  OrganizationPlan,
+  OrganizationWallet,
+  PaginatedPaymentMethods,
+  PaymentMethod,
+  UsagePrices,
+} from '@/billing-api'
 import { Invoice, PaginatedInvoices } from '@/billing-api/types/Invoice'
 import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
 import { Plan } from '@/billing-api/types/Plan'
+import type { UsageConcurrencySeriesDto } from '@boxlite-ai/api-client'
 import { http, HttpResponse } from 'msw'
 import {
   MOCK_BOXES,
@@ -27,13 +35,41 @@ export const handlers = [
   // backend and no login (see MockAuthProvider for the fake session).
   http.get(`${API_URL}/config`, () => HttpResponse.json(buildMockConfig(BILLING_API_URL))),
   http.get(`${API_URL}/organizations`, () => HttpResponse.json([MOCK_ORGANIZATION])),
+  http.get(`${API_URL}/organizations/:organizationId/concurrency`, ({ request }) => {
+    const url = new URL(request.url)
+    const to = new Date(url.searchParams.get('to') ?? Date.now())
+    const from = new Date(url.searchParams.get('from') ?? to.getTime() - 30 * 86_400_000)
+    const dayMs = 86_400_000
+    const pointCount = Math.max(2, Math.floor((to.getTime() - from.getTime()) / dayMs) + 1)
+    const points = Array.from({ length: pointCount }, (_, index) => {
+      const progress = index / (pointCount - 1)
+      const wave = Math.sin(progress * Math.PI * 2) * 18
+      const capacityRun = Math.max(0, 1 - Math.abs(progress - 0.78) / 0.12) * 55
+      return {
+        observedAt: new Date(from.getTime() + index * dayMs),
+        runningBoxes: Math.max(0, Math.round(48 + wave + capacityRun)),
+      }
+    })
+    points[points.length - 1] = { observedAt: to, runningBoxes: 62 }
+
+    return HttpResponse.json<UsageConcurrencySeriesDto>({
+      from,
+      to,
+      granularity: 'day',
+      current: points.at(-1)?.runningBoxes ?? 0,
+      points,
+    })
+  }),
   http.get(`${API_URL}/organizations/:organizationId/users`, () => HttpResponse.json([MOCK_ORGANIZATION_MEMBER])),
   http.get(`${API_URL}/box/paginated`, ({ request }) => {
     // Respect the ?states=… filter so the fleet count cards (running / stopped)
     // show real per-state counts in mock, not just the unfiltered total.
-    const states = new URL(request.url).searchParams.getAll('states').flatMap((s) => s.split(','))
+    const searchParams = new URL(request.url).searchParams
+    const states = searchParams.getAll('states').flatMap((s) => s.split(','))
     if (states.length === 0) return HttpResponse.json(MOCK_PAGINATED_BOXES)
     const items = MOCK_BOXES.filter((b) => b.state != null && states.includes(b.state))
+    const isRunningCount = states.length === 1 && states[0] === 'started' && searchParams.get('limit') === '1'
+    if (isRunningCount) return HttpResponse.json({ items: items.slice(0, 1), total: 62, page: 1, totalPages: 62 })
     return HttpResponse.json({ items, total: items.length, page: 1, totalPages: 1 })
   }),
   http.get(`${API_URL}/box/:boxIdOrName`, ({ params }) => {
@@ -156,10 +192,45 @@ export const handlers = [
       balanceCents: 1000,
       ongoingBalanceCents: 1000,
       name: 'Wallet',
-      creditCardConnected: false,
+      creditCardConnected: true,
       automaticTopUp: undefined,
       creditGrantedCents: 10_000,
       creditRemainingCents: 1_000,
+    })
+  }),
+  http.get(`${BILLING_API_URL}/organization/:organizationId/payment-methods`, async ({ request }) => {
+    const url = new URL(request.url)
+    const page = parseInt(url.searchParams.get('page') || '1', 10)
+    const perPage = Math.min(parseInt(url.searchParams.get('perPage') || '20', 10), 100)
+    const paymentMethods: PaymentMethod[] = [
+      {
+        id: '0f04d55c-7d77-4a19-af78-f4a18b2d5f91',
+        isDefault: true,
+        paymentProviderType: 'stripe',
+        providerMethodId: 'pm_mock_visa',
+        details: { brand: 'visa', last4: '4242', expMonth: 8, expYear: 2027 },
+      },
+      {
+        id: 'bce26ca7-771d-47c4-898c-b73c93fd52a7',
+        isDefault: false,
+        paymentProviderType: 'stripe',
+        providerMethodId: 'pm_mock_mastercard',
+        details: { brand: 'mastercard', last4: '4444', expMonth: 12, expYear: 2029 },
+      },
+    ]
+    const totalCount = paymentMethods.length
+    const totalPages = Math.ceil(totalCount / perPage)
+    const start = (page - 1) * perPage
+
+    return HttpResponse.json<PaginatedPaymentMethods>({
+      paymentMethods: paymentMethods.slice(start, start + perPage),
+      meta: {
+        currentPage: page,
+        totalPages,
+        totalCount,
+        nextPage: page < totalPages ? page + 1 : null,
+        prevPage: page > 1 ? page - 1 : null,
+      },
     })
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/plan`, async () => {
@@ -184,6 +255,9 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
   http.post(`${BILLING_API_URL}/organization/:organizationId/plan/downgrade`, async () => {
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.delete(`${BILLING_API_URL}/organization/:organizationId/plan/pending`, async () => {
     return new HttpResponse(null, { status: 204 })
   }),
   // Deterministic funding series: quota-first against the seeded remaining

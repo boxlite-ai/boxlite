@@ -12,6 +12,8 @@ import {
   OrganizationPlan,
   OrganizationWallet,
   PaginatedInvoices,
+  PaginatedPaymentMethods,
+  PaymentMethod,
   PaymentUrl,
   Plan,
   SeriesGranularity,
@@ -110,6 +112,27 @@ export class BillingApiClient {
     await this.axiosInstance.post(`/organization/${organizationId}/plan/downgrade`, { planId })
   }
 
+  public async withdrawPendingPlan(organizationId: string): Promise<void> {
+    await this.axiosInstance.delete(`/organization/${organizationId}/plan/pending`)
+  }
+
+  /**
+   * Commerce caps a page at 100 methods, while the wallet presents one complete
+   * saved-card ledger. Bound the walk by the first page's total so a malformed
+   * nextPage cannot turn a read into an unbounded request loop.
+   */
+  public async listAllPaymentMethods(organizationId: string): Promise<PaymentMethod[]> {
+    const firstPage = await this.listPaymentMethodsPage(organizationId, 1)
+    const paymentMethods = [...firstPage.paymentMethods]
+
+    for (let page = 2; page <= firstPage.meta.totalPages; page += 1) {
+      const response = await this.listPaymentMethodsPage(organizationId, page)
+      paymentMethods.push(...response.paymentMethods)
+    }
+
+    return paymentMethods
+  }
+
   public async listPlans(): Promise<Plan[]> {
     const response = await this.axiosInstance.get('/plan')
     return response.data
@@ -167,6 +190,14 @@ export class BillingApiClient {
     const response = await this.axiosInstance.post(`/organization/${organizationId}/wallet/top-up`, {
       amountCents,
     } as WalletTopUpRequest)
+    return response.data
+  }
+
+  private async listPaymentMethodsPage(organizationId: string, page: number): Promise<PaginatedPaymentMethods> {
+    const params = new URLSearchParams({ page: page.toString(), perPage: '100' })
+    const response = await this.axiosInstance.get(
+      `/organization/${organizationId}/payment-methods?${params.toString()}`,
+    )
     return response.data
   }
 }

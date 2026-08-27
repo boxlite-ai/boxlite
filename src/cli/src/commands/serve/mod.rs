@@ -720,6 +720,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
 fn volume_info_to_response(info: &boxlite::runtime::types::VolumeInfo) -> types::VolumeResponse {
     types::VolumeResponse {
         id: info.id.clone(),
+        name: info.name.clone(),
         created_at: info.created_at.to_rfc3339(),
         size_bytes: info.size_bytes,
     }
@@ -787,12 +788,16 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         cmd: req.cmd.clone(),
         user: req.user.clone(),
         tty: req.tty.unwrap_or(false),
-        advanced: boxlite::AdvancedBoxOptions {
-            capabilities: boxlite::ContainerCapabilities {
-                add: req.advanced.capabilities.add.clone(),
-                drop: req.advanced.capabilities.drop.clone(),
-            },
-            ..Default::default()
+        advanced: {
+            let mut advanced = boxlite::AdvancedBoxOptions::default();
+            let capabilities = req.advanced.capabilities.as_ref().map(|capabilities| {
+                boxlite::ContainerCapabilities {
+                    add: capabilities.add.clone(),
+                    drop: capabilities.drop.clone(),
+                }
+            });
+            advanced.set_capabilities(capabilities)?;
+            advanced
         },
         auto_stop: req.auto_stop,
         auto_delete: Some(auto_delete),
@@ -1366,8 +1371,26 @@ mod tests {
         .expect("capability request must deserialize");
 
         let opts = build_box_options(&req).expect("build capability options");
-        assert_eq!(opts.advanced.capabilities.add, vec!["SYS_ADMIN"]);
-        assert_eq!(opts.advanced.capabilities.drop, vec!["CAP_NET_RAW"]);
+        let capabilities = opts.advanced.capabilities().expect("capabilities set");
+        assert_eq!(capabilities.add, vec!["SYS_ADMIN"]);
+        assert_eq!(capabilities.drop, vec!["CAP_NET_RAW"]);
+    }
+
+    /// A request that never mentions `advanced`/`capabilities` at all must
+    /// resolve to `None` (unspecified), not an explicit empty policy — that
+    /// distinction is what a privileged request needs, and what an older
+    /// archive importer needs (`archive_version_for_options` keys off it).
+    #[test]
+    fn build_box_options_leaves_capabilities_unspecified_when_the_wire_omits_them() {
+        let req: super::types::CreateBoxRequest =
+            serde_json::from_str(r#"{"image":"alpine:latest"}"#)
+                .expect("ordinary request must deserialize");
+
+        let opts = build_box_options(&req).expect("build ordinary options");
+        assert!(
+            opts.advanced.capabilities().is_none(),
+            "omitting capabilities on the wire must not become an explicit empty policy"
+        );
     }
 
     #[test]
@@ -1664,7 +1687,25 @@ mod tests {
                     "read_only": false
                 }]
             }),
-            "host volume mounts",
+            "volume mounts",
+        )
+        .await;
+    }
+
+    /// The managed-volume shape is refused by the same gate, and reaches it
+    /// through the same deserialization — an archive naming someone else's
+    /// volume must not provision a box either.
+    #[tokio::test]
+    async fn serve_import_rejects_managed_volume_archive_before_provisioning() {
+        assert_uploaded_archive_rejected_before_provisioning(
+            serde_json::json!({
+                "volumes": [{
+                    "managed_volume": "someone-elses-data",
+                    "guest_path": "/data",
+                    "read_only": false
+                }]
+            }),
+            "volume mounts",
         )
         .await;
     }

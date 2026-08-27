@@ -65,13 +65,12 @@ export function useSuspensionBanner(suspension?: Suspension | null) {
           title: 'Setup Required',
           description: 'Add a payment method to start creating Boxes.',
           icon: <CreditCardIcon className="h-4 w-4 flex-shrink-0 text-current" />,
-          action:
-            path !== RoutePath.BILLING
-              ? {
-                  label: 'Go to Billing',
-                  onClick: () => navigate(RoutePath.BILLING),
-                }
-              : undefined,
+          action: !path?.startsWith(RoutePath.BILLING)
+            ? {
+                label: 'Go to Billing',
+                onClick: () => navigate(RoutePath.BILLING),
+              }
+            : undefined,
           isDismissible: false,
         })
       } else if (reason === VERIFY_EMAIL_REASON) {
@@ -106,13 +105,12 @@ export function useSuspensionBanner(suspension?: Suspension | null) {
         variant: 'error',
         title: 'Credits depleted',
         description: cleanupText,
-        action:
-          path !== RoutePath.BILLING
-            ? {
-                label: 'Go to Billing',
-                onClick: () => navigate(RoutePath.BILLING),
-              }
-            : undefined,
+        action: !path?.startsWith(RoutePath.BILLING)
+          ? {
+              label: 'Go to Billing',
+              onClick: () => navigate(RoutePath.BILLING),
+            }
+          : undefined,
         isDismissible: false,
       })
       return

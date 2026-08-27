@@ -15,6 +15,6 @@
 
 
 export interface CreateVolume {
-    'name': string;
+    'name'?: string;
 }
 

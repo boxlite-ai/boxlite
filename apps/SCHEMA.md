@@ -579,7 +579,8 @@ closed and moved to the archive on stop, resize, or destroy.
 | `region` | `character varying` | |
 
 **Partial unique:** `(boxId)` where `endAt IS NULL`.
-**Index:** `(boxId, endAt)`.
+**Indexes:** `(boxId, endAt)`; `(organizationId, startAt) INCLUDE (boxId, endAt)`
+for compute-bearing periods.
 
 ### `box_usage_periods_archive`
 
@@ -594,6 +595,9 @@ periods, so the live table stays small. `endAt` is `NOT NULL` here.
 | `startAt` / `endAt` | `timestamptz` | both non-null |
 | `cpu` / `gpu` / `mem` / `disk` | `double precision` | |
 | `region` | `character varying` | |
+
+**Index:** `(organizationId, endAt) INCLUDE (boxId, startAt)` for
+compute-bearing periods.
 
 ### `box_usage_export_outbox`
 

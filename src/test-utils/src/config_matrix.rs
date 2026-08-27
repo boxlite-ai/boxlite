@@ -98,9 +98,10 @@ pub fn default_configs() -> Vec<BoxConfig> {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 auto_delete: Some(0),
-                advanced: AdvancedBoxOptions {
-                    security: SecurityOptions::enabled(),
-                    ..Default::default()
+                advanced: {
+                    let mut advanced = AdvancedBoxOptions::default();
+                    advanced.security = SecurityOptions::enabled();
+                    advanced
                 },
                 ..Default::default()
             },
@@ -111,9 +112,10 @@ pub fn default_configs() -> Vec<BoxConfig> {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 auto_delete: Some(0),
-                advanced: AdvancedBoxOptions {
-                    security: SecurityOptions::disabled(),
-                    ..Default::default()
+                advanced: {
+                    let mut advanced = AdvancedBoxOptions::default();
+                    advanced.security = SecurityOptions::disabled();
+                    advanced
                 },
                 ..Default::default()
             },
@@ -163,9 +165,10 @@ pub fn default_configs() -> Vec<BoxConfig> {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 auto_delete: Some(0),
-                advanced: AdvancedBoxOptions {
-                    security: SecurityOptions::enabled(),
-                    ..Default::default()
+                advanced: {
+                    let mut advanced = AdvancedBoxOptions::default();
+                    advanced.security = SecurityOptions::enabled();
+                    advanced
                 },
                 ..Default::default()
             },

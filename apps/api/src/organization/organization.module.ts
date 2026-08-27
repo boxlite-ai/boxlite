@@ -30,6 +30,8 @@ import { RegionModule } from '../region/region.module'
 import { OrganizationRegionController } from './controllers/organization-region.controller'
 import { Region } from '../region/entities/region.entity'
 import { EncryptionModule } from '../encryption/encryption.module'
+import { UsageModule } from '../usage/usage.module'
+import { UsageController } from '../usage/controllers/usage.controller'
 
 @Module({
   imports: [
@@ -45,6 +47,7 @@ import { EncryptionModule } from '../encryption/encryption.module'
       Region,
     ]),
     EncryptionModule,
+    UsageModule,
   ],
   controllers: [
     OrganizationController,
@@ -52,6 +55,7 @@ import { EncryptionModule } from '../encryption/encryption.module'
     OrganizationUserController,
     OrganizationInvitationController,
     OrganizationRegionController,
+    UsageController,
   ],
   providers: [
     OrganizationService,

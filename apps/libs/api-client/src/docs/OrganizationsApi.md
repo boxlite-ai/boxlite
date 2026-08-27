@@ -54,7 +54,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let invitationId: string; //Invitation ID (default to undefined)
+let invitationId: string; //Invitation ID
 
 const { status, data } = await apiInstance.acceptOrganizationInvitation(
     invitationId
@@ -65,7 +65,7 @@ const { status, data } = await apiInstance.acceptOrganizationInvitation(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **invitationId** | [**string**] | Invitation ID | defaults to undefined|
+| **invitationId** | [**string**] | Invitation ID | |
 
 
 ### Return type
@@ -104,8 +104,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
-let invitationId: string; //Invitation ID (default to undefined)
+let organizationId: string; //Organization ID
+let invitationId: string; //Invitation ID
 
 const { status, data } = await apiInstance.cancelOrganizationInvitation(
     organizationId,
@@ -117,8 +117,8 @@ const { status, data } = await apiInstance.cancelOrganizationInvitation(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
-| **invitationId** | [**string**] | Invitation ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
+| **invitationId** | [**string**] | Invitation ID | |
 
 
 ### Return type
@@ -209,7 +209,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 let createOrganizationInvitation: CreateOrganizationInvitation; //
 
 const { status, data } = await apiInstance.createOrganizationInvitation(
@@ -223,7 +223,7 @@ const { status, data } = await apiInstance.createOrganizationInvitation(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **createOrganizationInvitation** | **CreateOrganizationInvitation**|  | |
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 
 
 ### Return type
@@ -263,7 +263,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 let createOrganizationRole: CreateOrganizationRole; //
 
 const { status, data } = await apiInstance.createOrganizationRole(
@@ -277,7 +277,7 @@ const { status, data } = await apiInstance.createOrganizationRole(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **createOrganizationRole** | **CreateOrganizationRole**|  | |
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 
 
 ### Return type
@@ -370,7 +370,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let invitationId: string; //Invitation ID (default to undefined)
+let invitationId: string; //Invitation ID
 
 const { status, data } = await apiInstance.declineOrganizationInvitation(
     invitationId
@@ -381,7 +381,7 @@ const { status, data } = await apiInstance.declineOrganizationInvitation(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **invitationId** | [**string**] | Invitation ID | defaults to undefined|
+| **invitationId** | [**string**] | Invitation ID | |
 
 
 ### Return type
@@ -420,7 +420,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 
 const { status, data } = await apiInstance.deleteOrganization(
     organizationId
@@ -431,7 +431,7 @@ const { status, data } = await apiInstance.deleteOrganization(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 
 
 ### Return type
@@ -470,8 +470,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
-let userId: string; //User ID (default to undefined)
+let organizationId: string; //Organization ID
+let userId: string; //User ID
 
 const { status, data } = await apiInstance.deleteOrganizationMember(
     organizationId,
@@ -483,8 +483,8 @@ const { status, data } = await apiInstance.deleteOrganizationMember(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
-| **userId** | [**string**] | User ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
+| **userId** | [**string**] | User ID | |
 
 
 ### Return type
@@ -523,8 +523,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
-let roleId: string; //Role ID (default to undefined)
+let organizationId: string; //Organization ID
+let roleId: string; //Role ID
 
 const { status, data } = await apiInstance.deleteOrganizationRole(
     organizationId,
@@ -536,8 +536,8 @@ const { status, data } = await apiInstance.deleteOrganizationRole(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
-| **roleId** | [**string**] | Role ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
+| **roleId** | [**string**] | Role ID | |
 
 
 ### Return type
@@ -576,7 +576,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let id: string; //Region ID (default to undefined)
+let id: string; //Region ID
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.deleteRegion(
@@ -589,7 +589,7 @@ const { status, data } = await apiInstance.deleteRegion(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] | Region ID | defaults to undefined|
+| **id** | [**string**] | Region ID | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -629,7 +629,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 
 const { status, data } = await apiInstance.getOrganization(
     organizationId
@@ -640,7 +640,7 @@ const { status, data } = await apiInstance.getOrganization(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 
 
 ### Return type
@@ -679,7 +679,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let boxId: string; //Box ID (default to undefined)
+let boxId: string; //Box ID
 
 const { status, data } = await apiInstance.getOrganizationByBoxId(
     boxId
@@ -690,7 +690,7 @@ const { status, data } = await apiInstance.getOrganizationByBoxId(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] | Box ID | defaults to undefined|
+| **boxId** | [**string**] | Box ID | |
 
 
 ### Return type
@@ -772,7 +772,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let authToken: string; //Box Auth Token (default to undefined)
+let authToken: string; //Box Auth Token
 
 const { status, data } = await apiInstance.getOrganizationOtelConfigByBoxAuthToken(
     authToken
@@ -783,7 +783,7 @@ const { status, data } = await apiInstance.getOrganizationOtelConfigByBoxAuthTok
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **authToken** | [**string**] | Box Auth Token | defaults to undefined|
+| **authToken** | [**string**] | Box Auth Token | |
 
 
 ### Return type
@@ -822,7 +822,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let id: string; //Region ID (default to undefined)
+let id: string; //Region ID
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.getRegionById(
@@ -835,7 +835,7 @@ const { status, data } = await apiInstance.getRegionById(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] | Region ID | defaults to undefined|
+| **id** | [**string**] | Region ID | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -875,7 +875,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 
 const { status, data } = await apiInstance.leaveOrganization(
     organizationId
@@ -886,7 +886,7 @@ const { status, data } = await apiInstance.leaveOrganization(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 
 
 ### Return type
@@ -975,7 +975,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 
 const { status, data } = await apiInstance.listOrganizationInvitations(
     organizationId
@@ -986,7 +986,7 @@ const { status, data } = await apiInstance.listOrganizationInvitations(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 
 
 ### Return type
@@ -1068,7 +1068,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 
 const { status, data } = await apiInstance.listOrganizationMembers(
     organizationId
@@ -1079,7 +1079,7 @@ const { status, data } = await apiInstance.listOrganizationMembers(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 
 
 ### Return type
@@ -1118,7 +1118,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 
 const { status, data } = await apiInstance.listOrganizationRoles(
     organizationId
@@ -1129,7 +1129,7 @@ const { status, data } = await apiInstance.listOrganizationRoles(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 
 
 ### Return type
@@ -1211,7 +1211,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let id: string; //Region ID (default to undefined)
+let id: string; //Region ID
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.regenerateProxyApiKey(
@@ -1224,7 +1224,7 @@ const { status, data } = await apiInstance.regenerateProxyApiKey(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] | Region ID | defaults to undefined|
+| **id** | [**string**] | Region ID | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -1265,7 +1265,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 let updateOrganizationDefaultRegion: UpdateOrganizationDefaultRegion; //
 
 const { status, data } = await apiInstance.setOrganizationDefaultRegion(
@@ -1279,7 +1279,7 @@ const { status, data } = await apiInstance.setOrganizationDefaultRegion(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **updateOrganizationDefaultRegion** | **UpdateOrganizationDefaultRegion**|  | |
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 
 
 ### Return type
@@ -1319,7 +1319,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 let organizationSuspension: OrganizationSuspension; // (optional)
 
 const { status, data } = await apiInstance.suspendOrganization(
@@ -1333,7 +1333,7 @@ const { status, data } = await apiInstance.suspendOrganization(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **organizationSuspension** | **OrganizationSuspension**|  | |
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 
 
 ### Return type
@@ -1373,7 +1373,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 let organizationUnsuspension: OrganizationUnsuspension; // (optional)
 
 const { status, data } = await apiInstance.unsuspendOrganization(
@@ -1387,7 +1387,7 @@ const { status, data } = await apiInstance.unsuspendOrganization(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **organizationUnsuspension** | **OrganizationUnsuspension**|  | |
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 
 
 ### Return type
@@ -1428,8 +1428,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
-let userId: string; //User ID (default to undefined)
+let organizationId: string; //Organization ID
+let userId: string; //User ID
 let updateOrganizationMemberAccess: UpdateOrganizationMemberAccess; //
 
 const { status, data } = await apiInstance.updateAccessForOrganizationMember(
@@ -1444,8 +1444,8 @@ const { status, data } = await apiInstance.updateAccessForOrganizationMember(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **updateOrganizationMemberAccess** | **UpdateOrganizationMemberAccess**|  | |
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
-| **userId** | [**string**] | User ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
+| **userId** | [**string**] | User ID | |
 
 
 ### Return type
@@ -1485,7 +1485,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 let organizationBoxDefaultLimitedNetworkEgress: OrganizationBoxDefaultLimitedNetworkEgress; //
 
 const { status, data } = await apiInstance.updateBoxDefaultLimitedNetworkEgress(
@@ -1499,7 +1499,7 @@ const { status, data } = await apiInstance.updateBoxDefaultLimitedNetworkEgress(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **organizationBoxDefaultLimitedNetworkEgress** | **OrganizationBoxDefaultLimitedNetworkEgress**|  | |
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 
 
 ### Return type
@@ -1538,7 +1538,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 let requestBody: { [key: string]: any; }; //Experimental configuration as a JSON object. Set to null to clear the configuration. (optional)
 
 const { status, data } = await apiInstance.updateExperimentalConfig(
@@ -1552,7 +1552,7 @@ const { status, data } = await apiInstance.updateExperimentalConfig(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **requestBody** | **{ [key: string]: any; }**| Experimental configuration as a JSON object. Set to null to clear the configuration. | |
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 
 
 ### Return type
@@ -1592,8 +1592,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
-let invitationId: string; //Invitation ID (default to undefined)
+let organizationId: string; //Organization ID
+let invitationId: string; //Invitation ID
 let updateOrganizationInvitation: UpdateOrganizationInvitation; //
 
 const { status, data } = await apiInstance.updateOrganizationInvitation(
@@ -1608,8 +1608,8 @@ const { status, data } = await apiInstance.updateOrganizationInvitation(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **updateOrganizationInvitation** | **UpdateOrganizationInvitation**|  | |
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
-| **invitationId** | [**string**] | Invitation ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
+| **invitationId** | [**string**] | Invitation ID | |
 
 
 ### Return type
@@ -1649,7 +1649,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 let updateOrganizationName: UpdateOrganizationName; //
 
 const { status, data } = await apiInstance.updateOrganizationName(
@@ -1663,7 +1663,7 @@ const { status, data } = await apiInstance.updateOrganizationName(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **updateOrganizationName** | **UpdateOrganizationName**|  | |
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 
 
 ### Return type
@@ -1703,8 +1703,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
-let roleId: string; //Role ID (default to undefined)
+let organizationId: string; //Organization ID
+let roleId: string; //Role ID
 let updateOrganizationRole: UpdateOrganizationRole; //
 
 const { status, data } = await apiInstance.updateOrganizationRole(
@@ -1719,8 +1719,8 @@ const { status, data } = await apiInstance.updateOrganizationRole(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **updateOrganizationRole** | **UpdateOrganizationRole**|  | |
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
-| **roleId** | [**string**] | Role ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
+| **roleId** | [**string**] | Role ID | |
 
 
 ### Return type
@@ -1760,7 +1760,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-let id: string; //Region ID (default to undefined)
+let id: string; //Region ID
 let updateRegion: UpdateRegion; //
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
@@ -1776,7 +1776,7 @@ const { status, data } = await apiInstance.updateRegion(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **updateRegion** | **UpdateRegion**|  | |
-| **id** | [**string**] | Region ID | defaults to undefined|
+| **id** | [**string**] | Region ID | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 

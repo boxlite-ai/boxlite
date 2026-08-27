@@ -19,9 +19,9 @@ import { queryKeys } from './queryKeys'
  *
  * Read from the LIST endpoint's own `total` with `limit: 1`, so the answer
  * costs one row rather than a page of boxes nobody renders. It is a
- * point-in-time number and nothing more: there is no concurrency series
- * anywhere in the platform, so this can say what is running now and can never
- * say what was running an hour ago.
+ * point-in-time number and nothing more. The usage concurrency endpoint owns
+ * historical sampling; this lightweight count keeps summary cards independent
+ * from a 30-day series query.
  */
 export const useRunningBoxCountQuery = ({
   organizationId,

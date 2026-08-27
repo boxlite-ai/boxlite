@@ -127,6 +127,10 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       memoryQuota: box.mem,
       storageQuota: box.disk,
       env: box.env,
+      runAsUser: box.runAsUser,
+      workingDir: box.workingDir,
+      entrypoint: box.entrypoint,
+      cmd: box.cmd,
       volumes: box.volumes?.map((volume) => ({
         volumeId: volume.volumeId,
         mountPath: volume.mountPath,

@@ -27,7 +27,6 @@ export const EnumsBoxState = {
     BoxStateResizing: 'resizing',
     BoxStateError: 'error',
     BoxStateUnknown: 'unknown',
-    BoxStatePullingSnapshot: 'pulling_snapshot',
 } as const;
 
 export type EnumsBoxState = typeof EnumsBoxState[keyof typeof EnumsBoxState];

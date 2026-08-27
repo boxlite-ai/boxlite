@@ -29,7 +29,6 @@ futures = "0.3"
 async-stream = "0.3"
 clap = { version = "4.5", features = ["derive"] }
 rayon = "1.10"
-tar = "0.4"
 russh = { version = "0.62.4", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.3.0"
 

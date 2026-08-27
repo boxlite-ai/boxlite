@@ -65,7 +65,12 @@ pub(super) struct CreateBoxRequest {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct CreateBoxAdvancedOptions {
-    pub capabilities: ContainerCapabilitiesRequest,
+    /// `None` when the wire omits `capabilities` (or sends `null`) — distinct
+    /// from `Some` of an empty policy, the same distinction the core
+    /// `AdvancedBoxOptions.capabilities` makes and for the same reason: an
+    /// explicit empty policy conflicts with `privileged`, an unspecified one
+    /// doesn't, and `archive_version_for_options` keys off which one this is.
+    pub capabilities: Option<ContainerCapabilitiesRequest>,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -141,8 +146,16 @@ pub(super) struct ListBoxesResponse {
 #[derive(Serialize)]
 pub(super) struct VolumeResponse {
     pub id: String,
+    pub name: String,
     pub created_at: String,
     pub size_bytes: Option<u64>,
+}
+
+/// Body for `POST /v1/volumes`. An absent body means an unnamed volume.
+#[derive(Deserialize, Default)]
+pub(super) struct CreateVolumeRequest {
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Serialize)]

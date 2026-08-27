@@ -67,6 +67,7 @@ export function parseBootstrapOptions(args: readonly string[]) {
     options: {
       force: { type: 'boolean' },
       'provision-auth0': { type: 'boolean' },
+      'provision-ses': { type: 'boolean' },
       repo: { type: 'string' },
       reviewers: { type: 'string' },
       stage: { type: 'string' },

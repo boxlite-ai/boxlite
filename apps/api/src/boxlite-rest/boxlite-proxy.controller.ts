@@ -16,6 +16,7 @@ import {
   UseGuards,
   Logger,
   NotFoundException,
+  ConflictException,
   ForbiddenException,
   HttpCode,
   HttpStatus,
@@ -33,6 +34,7 @@ import { OrganizationAuthContext } from '../common/interfaces/auth-context.inter
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import { BoxAutoResumeService } from './box-auto-resume.service'
+import { BoxState } from '../box/enums/box-state.enum'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -206,6 +208,21 @@ export class BoxliteProxyController {
     @Param('boxId') boxId: string,
     @Query('port', ParseIntPipe) port: number,
   ) {
+    // findOneByIdOrName already 404s for a missing/destroyed box. Unlike
+    // proxyToRunner's other routes, this endpoint just resolves a URL — it
+    // never reaches the runner, so a non-running box would otherwise hand
+    // back a tunnel URI that CONNECTs successfully and then goes silently
+    // dead. Whitelist STARTED rather than blacklist STOPPED: a box that's
+    // still CREATING/STARTING/ERROR/ARCHIVED/etc. isn't reachable either.
+    //
+    // No auto-resume here, even for autoResume boxes: wake-on-CONNECT is
+    // out of scope for POL-214 and tracked separately.
+    const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+
+    if (box.state !== BoxState.STARTED) {
+      throw new ConflictException(`Box ${boxId} is not running (state: ${box.state})`)
+    }
+
     const uri = await this.boxService.getNetworkTunnelUrl(boxId, authContext.organizationId, port)
     return { uri }
   }

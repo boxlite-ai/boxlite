@@ -174,7 +174,7 @@ impl BaseDiskStore {
                 "SELECT id, source_box_id, name, kind, base_path, \
                  created_at, json FROM base_disk \
                  WHERE source_box_id = ?1 AND kind = ?2 \
-                 ORDER BY created_at DESC"
+                 ORDER BY created_at DESC, rowid DESC"
                     .to_string(),
                 vec![
                     Box::new(source_box_id.to_string()),
@@ -185,7 +185,7 @@ impl BaseDiskStore {
                 "SELECT id, source_box_id, name, kind, base_path, \
                  created_at, json FROM base_disk \
                  WHERE source_box_id = ?1 \
-                 ORDER BY created_at DESC"
+                 ORDER BY created_at DESC, rowid DESC"
                     .to_string(),
                 vec![Box::new(source_box_id.to_string())],
             ),
@@ -449,6 +449,10 @@ mod tests {
 
         let all = store.list_by_box("box-1", None).unwrap();
         assert_eq!(all.len(), 2);
+        // Both disks are stamped in the same whole second, so newest-first has
+        // to come from the insertion tiebreaker rather than `created_at`.
+        let listed: Vec<&str> = all.iter().map(|d| d.id().as_str()).collect();
+        assert_eq!(listed, ["base0001", "snap0001"]);
     }
 
     #[test]

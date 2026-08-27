@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
+use crate::disk::constants::qcow2::{DEFAULT_DISK_SIZE_GB, FSIZE_DISK_MULTIPLIER};
 use crate::runtime::advanced_options::AdvancedBoxOptions;
+use crate::runtime::types::Bytes;
 use std::fmt;
 
 // ============================================================================
@@ -588,7 +590,9 @@ impl BoxOptions {
         }
 
         self.advanced.validate_privileged_capability_conflict()?;
-        self.advanced.capabilities.validate()?;
+        if let Some(capabilities) = self.advanced.capabilities() {
+            capabilities.validate()?;
+        }
 
         if matches!(self.network, NetworkSpec::Disabled) && !self.ports.is_empty() {
             return Err(boxlite_shared::errors::BoxliteError::Config(
@@ -612,6 +616,10 @@ impl BoxOptions {
             port.validate_publishable()?;
         }
 
+        for volume in &self.volumes {
+            volume.validate()?;
+        }
+
         Ok(())
     }
 
@@ -625,12 +633,34 @@ impl BoxOptions {
         Ok(())
     }
 
-    pub fn sanitize(&self) -> BoxliteResult<()> {
+    pub fn sanitize(&mut self) -> BoxliteResult<()> {
         self.sanitize_common()?;
 
         if let Some(kernel) = &self.advanced.kernel {
             kernel.sanitize()?;
         }
+
+        // The jailed shim is the sole writer of this box's qcow2 disks, so its
+        // per-file RLIMIT_FSIZE caps their growth: a write past it fails with
+        // `EFBIG` and takes the guest down. `SecurityOptions::default()` cannot
+        // pick that number — it runs for a box that does not exist yet and
+        // cannot see `disk_size_gb` — which is how a fixed 1 GiB ceiling ended
+        // up contradicting every larger disk (#1152). Derive it here, next to
+        // the size it comes from.
+        //
+        // `FSIZE_DISK_MULTIPLIER` is deliberately loose: this is a
+        // runaway-write backstop, not a capacity policy. Capacity is the qcow2
+        // virtual size, where a guest that fills its disk gets a clean `ENOSPC`
+        // inside the box rather than a host-side `SIGXFSZ` that kills the VM.
+        self.advanced.security.resource_limits.max_file_size = Some(
+            Bytes::from_gib(
+                self.disk_size_gb
+                    .unwrap_or(DEFAULT_DISK_SIZE_GB)
+                    .saturating_mul(FSIZE_DISK_MULTIPLIER),
+            )
+            .as_bytes(),
+        );
+
         Ok(())
     }
 }
@@ -651,11 +681,87 @@ impl Default for RootfsSpec {
 }
 
 /// Filesystem mount specification.
+///
+/// A mount has exactly one origin: `managed_volume` for a server-side managed
+/// volume, or `host_path` for a bind mount from the machine running the box.
+/// Build one with [`VolumeSpec::managed_volume`] or [`VolumeSpec::bind_mount`]
+/// instead of filling the fields by hand.
+///
+/// The `host_path` field keeps its name because it is persisted box config:
+/// boxes on disk carry a `host_path` key, so renaming the field — not the
+/// constructor — would strand every box written before such a rename.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct VolumeSpec {
+    /// Managed volume to mount, addressed by its server-assigned id **or** by
+    /// its name — the server resolves either.
+    ///
+    /// Managed volumes need a REST runtime, since the local runtime has no
+    /// volume backend to resolve a reference against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_volume: Option<String>,
+
+    /// Host directory or file to bind into the box. Empty when
+    /// `managed_volume` is set.
+    #[serde(default)]
     pub host_path: String,
+
+    /// Mount point inside the box.
     pub guest_path: String,
+
+    /// Mount without write access.
     pub read_only: bool,
+}
+
+impl VolumeSpec {
+    /// Bind a host directory or file into the box.
+    pub fn bind_mount(host_path: impl Into<String>, guest_path: impl Into<String>) -> Self {
+        Self {
+            managed_volume: None,
+            host_path: host_path.into(),
+            guest_path: guest_path.into(),
+            read_only: false,
+        }
+    }
+
+    /// Mount a managed volume, addressed by server-assigned id or by name.
+    pub fn managed_volume(volume: impl Into<String>, guest_path: impl Into<String>) -> Self {
+        Self {
+            managed_volume: Some(volume.into()),
+            host_path: String::new(),
+            guest_path: guest_path.into(),
+            read_only: false,
+        }
+    }
+
+    /// Reject a mount that names no origin, both origins, or an empty one.
+    ///
+    /// FFI callers (C/Go) and hand-built literals can reach either invalid
+    /// shape, so this runs at create rather than only in the constructors.
+    pub fn validate(&self) -> BoxliteResult<()> {
+        let guest_path = &self.guest_path;
+        match &self.managed_volume {
+            Some(volume) if !self.host_path.is_empty() => {
+                Err(boxlite_shared::errors::BoxliteError::Config(format!(
+                    "volume mount {guest_path:?} sets both managed_volume ({volume:?}) and \
+                     host_path; use exactly one"
+                )))
+            }
+            Some(volume) if volume.trim().is_empty() => {
+                Err(boxlite_shared::errors::BoxliteError::Config(format!(
+                    "volume mount {guest_path:?} has an empty managed_volume; pass a volume id \
+                     or name"
+                )))
+            }
+            Some(_) => Ok(()),
+            None if self.host_path.is_empty() => {
+                Err(boxlite_shared::errors::BoxliteError::Config(format!(
+                    "volume mount {guest_path:?} needs a managed_volume (volume id or name) or \
+                     a host_path"
+                )))
+            }
+            None => Ok(()),
+        }
+    }
 }
 
 /// Network mode for public box configuration surfaces.
@@ -1001,6 +1107,7 @@ mod tests {
     use crate::runtime::advanced_options::{
         ContainerCapabilities, SecurityOptions, SecurityOptionsBuilder,
     };
+    use crate::runtime::types::Bytes;
 
     #[test]
     fn legacy_ports_keep_old_same_port_and_last_write_wins_semantics() {
@@ -1077,8 +1184,8 @@ mod tests {
         );
         assert!(!opts.detach, "detach should default to false");
         assert!(
-            opts.advanced.capabilities.is_empty(),
-            "advanced capabilities should default to empty"
+            opts.advanced.capabilities().is_none(),
+            "advanced capabilities should default to unspecified"
         );
     }
 
@@ -1094,30 +1201,50 @@ mod tests {
         }"#;
 
         let opts: BoxOptions = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            opts.advanced.capabilities.add,
-            ["SYS_ADMIN", "CAP_NET_ADMIN"]
-        );
-        assert_eq!(opts.advanced.capabilities.drop, ["NET_RAW"]);
+        let capabilities = opts.advanced.capabilities().expect("capabilities set");
+        assert_eq!(capabilities.add, ["SYS_ADMIN", "CAP_NET_ADMIN"]);
+        assert_eq!(capabilities.drop, ["NET_RAW"]);
 
         let serialized = serde_json::to_string(&opts).unwrap();
         let roundtripped: BoxOptions = serde_json::from_str(&serialized).unwrap();
         assert_eq!(
-            roundtripped.advanced.capabilities,
-            opts.advanced.capabilities
+            roundtripped.advanced.capabilities(),
+            opts.advanced.capabilities()
+        );
+    }
+
+    /// An ordinary box (no explicit capability policy) must serialize with
+    /// the `capabilities` key absent, not present-as-`null` — a pre-#1296
+    /// build's plain, non-Option `capabilities` field parses an absent key
+    /// via its own `#[serde(default)]`, but rejects an explicit `null` with
+    /// "invalid type: null, expected struct ContainerCapabilities" (reproduced
+    /// standalone against that exact field shape before this test was added).
+    /// `archive_version_for_options` leaves this case at `ARCHIVE_VERSION`
+    /// specifically because it assumes the wire shape matches what a v3
+    /// importer already handles; this test is what keeps that true.
+    #[test]
+    fn box_options_omits_capabilities_key_when_unspecified() {
+        let json = serde_json::to_string(&BoxOptions::default()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let advanced = parsed.get("advanced").unwrap();
+
+        assert!(
+            !advanced.as_object().unwrap().contains_key("capabilities"),
+            "unspecified capabilities must omit the key, not serialize null: {advanced}"
         );
     }
 
     #[test]
     fn box_options_sanitize_accepts_valid_capability_names() {
-        let opts = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                capabilities: ContainerCapabilities {
-                    add: vec!["sys_admin".into(), "CAP_NET_ADMIN".into()],
-                    drop: vec!["NET_RAW".into()],
-                },
-                ..Default::default()
-            },
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced
+            .set_capabilities(Some(ContainerCapabilities {
+                add: vec!["sys_admin".into(), "CAP_NET_ADMIN".into()],
+                drop: vec!["NET_RAW".into()],
+            }))
+            .unwrap();
+        let mut opts = BoxOptions {
+            advanced,
             ..Default::default()
         };
 
@@ -1127,14 +1254,15 @@ mod tests {
 
     #[test]
     fn box_options_sanitize_accepts_future_capability_names() {
-        let opts = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                capabilities: ContainerCapabilities {
-                    add: vec!["FUTURE_KERNEL_FEATURE".into()],
-                    ..Default::default()
-                },
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced
+            .set_capabilities(Some(ContainerCapabilities {
+                add: vec!["FUTURE_KERNEL_FEATURE".into()],
                 ..Default::default()
-            },
+            }))
+            .unwrap();
+        let mut opts = BoxOptions {
+            advanced,
             ..Default::default()
         };
 
@@ -1144,48 +1272,33 @@ mod tests {
 
     #[test]
     fn box_options_sanitize_rejects_malformed_capability_names() {
-        for opts in [
-            BoxOptions {
-                advanced: AdvancedBoxOptions {
-                    capabilities: ContainerCapabilities {
-                        add: vec!["".into()],
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
+        let malformed = [
+            ContainerCapabilities {
+                add: vec!["".into()],
                 ..Default::default()
             },
-            BoxOptions {
-                advanced: AdvancedBoxOptions {
-                    capabilities: ContainerCapabilities {
-                        drop: vec!["NET-ADMIN".into()],
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
+            ContainerCapabilities {
+                drop: vec!["NET-ADMIN".into()],
                 ..Default::default()
             },
-            BoxOptions {
-                advanced: AdvancedBoxOptions {
-                    capabilities: ContainerCapabilities {
-                        add: vec!["123".into()],
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
+            ContainerCapabilities {
+                add: vec!["123".into()],
                 ..Default::default()
             },
-            BoxOptions {
-                advanced: AdvancedBoxOptions {
-                    capabilities: ContainerCapabilities {
-                        add: vec!["ß".into()],
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
+            ContainerCapabilities {
+                add: vec!["ß".into()],
                 ..Default::default()
             },
-        ] {
+        ];
+
+        for capabilities in malformed {
+            let mut advanced = AdvancedBoxOptions::default();
+            advanced.set_capabilities(Some(capabilities)).unwrap();
+            let mut opts = BoxOptions {
+                advanced,
+                ..Default::default()
+            };
+
             let err = opts
                 .sanitize()
                 .expect_err("malformed capability should be rejected");
@@ -1218,16 +1331,15 @@ mod tests {
         #[cfg(target_arch = "aarch64")]
         let format = KernelFormat::PeGz;
 
-        let opts = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                kernel: Some(
-                    KernelOptions::new(&kernel)
-                        .with_format(format)
-                        .with_initramfs(&initramfs)
-                        .with_command_line("console=ttyS0 panic=-1"),
-                ),
-                ..Default::default()
-            },
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.kernel = Some(
+            KernelOptions::new(&kernel)
+                .with_format(format)
+                .with_initramfs(&initramfs)
+                .with_command_line("console=ttyS0 panic=-1"),
+        );
+        let mut opts = BoxOptions {
+            advanced,
             ..Default::default()
         };
 
@@ -1242,11 +1354,10 @@ mod tests {
 
     #[test]
     fn custom_kernel_must_be_a_file() {
-        let opts = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                kernel: Some(KernelOptions::new("/definitely/missing/vmlinux")),
-                ..Default::default()
-            },
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.kernel = Some(KernelOptions::new("/definitely/missing/vmlinux"));
+        let mut opts = BoxOptions {
+            advanced,
             ..Default::default()
         };
 
@@ -1262,15 +1373,14 @@ mod tests {
         let format = KernelFormat::Elf;
         #[cfg(target_arch = "aarch64")]
         let format = KernelFormat::PeGz;
-        let opts = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                kernel: Some(
-                    KernelOptions::new("/source/removed/after-create")
-                        .with_format(format)
-                        .with_command_line("console=ttyS0"),
-                ),
-                ..Default::default()
-            },
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.kernel = Some(
+            KernelOptions::new("/source/removed/after-create")
+                .with_format(format)
+                .with_command_line("console=ttyS0"),
+        );
+        let mut opts = BoxOptions {
+            advanced,
             ..Default::default()
         };
 
@@ -1283,15 +1393,14 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let kernel = temp.path().join("vmlinux");
         std::fs::write(&kernel, b"\x7fELFcustom kernel").unwrap();
-        let opts = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                kernel: Some(
-                    KernelOptions::new(&kernel)
-                        .with_format(KernelFormat::Elf)
-                        .with_initramfs(temp.path().join("missing-initramfs")),
-                ),
-                ..Default::default()
-            },
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.kernel = Some(
+            KernelOptions::new(&kernel)
+                .with_format(KernelFormat::Elf)
+                .with_initramfs(temp.path().join("missing-initramfs")),
+        );
+        let mut opts = BoxOptions {
+            advanced,
             ..Default::default()
         };
 
@@ -1403,9 +1512,13 @@ mod tests {
         assert!(error.to_string().contains("cannot be combined"));
     }
 
+    /// The canonical shape is accepted, not rewritten: unlike an earlier
+    /// version of this option, `capabilities` is never mutated by
+    /// `privileged` — this exists for a box persisted by that earlier
+    /// version, whose stored `capabilities` already looks like this.
     #[test]
     fn privileged_canonical_capability_shape_remains_accepted() {
-        let mut options: BoxOptions = serde_json::from_str(
+        let options: BoxOptions = serde_json::from_str(
             r#"{"advanced":{"privileged":true,"capabilities":{"add":["ALL"],"drop":[]}}}"#,
         )
         .unwrap();
@@ -1413,20 +1526,19 @@ mod tests {
         options
             .advanced
             .validate_privileged_capability_conflict()
-            .expect("normalized privileged shape should be accepted");
-        options.advanced.normalize_privileged();
+            .expect("canonical privileged shape should be accepted");
 
-        assert_eq!(options.advanced.capabilities.add, ["ALL"]);
-        assert!(options.advanced.capabilities.drop.is_empty());
+        let capabilities = options.advanced.capabilities().expect("capabilities set");
+        assert_eq!(capabilities.add, ["ALL"]);
+        assert!(capabilities.drop.is_empty());
     }
 
     #[test]
     fn privileged_security_is_resolved_before_guest_init() {
+        let mut advanced = crate::AdvancedBoxOptions::default();
+        advanced.privileged = true;
         let options = BoxOptions {
-            advanced: crate::AdvancedBoxOptions {
-                privileged: true,
-                ..Default::default()
-            },
+            advanced,
             ..Default::default()
         };
 
@@ -1516,7 +1628,7 @@ mod tests {
     fn test_sanitize_rejects_unsupported_inbound_allow_net() {
         // FFI callers (C/Go) set the spec directly, bypassing try_from —
         // sanitize() is the create-time backstop for those paths.
-        let opts = BoxOptions {
+        let mut opts = BoxOptions {
             inbound_network: NetworkSpec::Enabled {
                 allow_net: vec!["10.0.0.0/8".to_string()],
             },
@@ -1524,6 +1636,77 @@ mod tests {
         };
         let err = opts.sanitize().unwrap_err().to_string();
         assert!(err.contains("not supported yet"));
+    }
+
+    /// `VolumeSpec::managed_volume` and `VolumeSpec::bind_mount` cannot produce a mount
+    /// with two origins or none, but a struct literal and the C/Go FFI both
+    /// can, so sanitize() is the create-time backstop for those paths.
+    #[test]
+    fn test_sanitize_rejects_ambiguous_volume_origin() {
+        let mut both = BoxOptions {
+            volumes: vec![VolumeSpec {
+                managed_volume: Some("my-data".into()),
+                host_path: "/tmp/data".into(),
+                guest_path: "/data".into(),
+                read_only: false,
+            }],
+            ..Default::default()
+        };
+        let err = both.sanitize().unwrap_err().to_string();
+        assert!(err.contains("exactly one"), "{err}");
+
+        let mut neither = BoxOptions {
+            volumes: vec![VolumeSpec {
+                guest_path: "/data".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let err = neither.sanitize().unwrap_err().to_string();
+        assert!(err.contains("volume id or name"), "{err}");
+
+        let mut empty_reference = BoxOptions {
+            volumes: vec![VolumeSpec::managed_volume("   ", "/data")],
+            ..Default::default()
+        };
+        let err = empty_reference.sanitize().unwrap_err().to_string();
+        assert!(err.contains("empty managed_volume"), "{err}");
+    }
+
+    /// A box persisted before `managed_volume` existed carries only
+    /// `host_path`; it must still load, as a host bind, without a migration.
+    #[test]
+    fn legacy_volume_json_without_managed_volume_still_loads() {
+        let mut opts: BoxOptions = serde_json::from_str(
+            r#"{"volumes":[{"host_path":"/tmp/data","guest_path":"/data","read_only":true}]}"#,
+        )
+        .expect("pre-managed_volume box config must still deserialize");
+
+        let volume = &opts.volumes[0];
+        assert_eq!(volume.managed_volume, None);
+        assert_eq!(volume.host_path, "/tmp/data");
+        assert!(volume.read_only);
+        opts.sanitize().expect("a legacy host bind is still valid");
+    }
+
+    /// An ordinary host bind must not start writing a `managed_volume` key
+    /// into persisted configs and archives — an older reader has no field for
+    /// it. Same reasoning as `box_options_omits_capabilities_key_when_unspecified`.
+    #[test]
+    fn host_volume_omits_managed_volume_key() {
+        let opts = BoxOptions {
+            volumes: vec![VolumeSpec::bind_mount("/tmp/data", "/data")],
+            ..Default::default()
+        };
+
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&opts).unwrap()).unwrap();
+        let volume = &json["volumes"][0];
+
+        assert!(
+            !volume.as_object().unwrap().contains_key("managed_volume"),
+            "a host bind must omit the key, not serialize null: {volume}"
+        );
     }
 
     #[test]
@@ -1553,7 +1736,7 @@ mod tests {
 
     #[test]
     fn test_sanitize_remove_on_stop_detach_incompatible() {
-        let opts = BoxOptions {
+        let mut opts = BoxOptions {
             auto_delete: Some(1),
             detach: true,
             ..Default::default()
@@ -1564,20 +1747,20 @@ mod tests {
 
     #[test]
     fn test_sanitize_valid_combinations() {
-        let remove = BoxOptions {
+        let mut remove = BoxOptions {
             auto_delete: Some(1),
             ..Default::default()
         };
         assert!(remove.sanitize().is_ok());
 
-        let keep_detached = BoxOptions {
+        let mut keep_detached = BoxOptions {
             auto_delete: Some(0),
             detach: true,
             ..Default::default()
         };
         assert!(keep_detached.sanitize().is_ok());
 
-        let keep_attached = BoxOptions {
+        let mut keep_attached = BoxOptions {
             auto_delete: Some(0),
             ..Default::default()
         };
@@ -1592,7 +1775,7 @@ mod tests {
             protocol: PortProtocol::Tcp,
             host_ip: None,
         };
-        let opts = BoxOptions {
+        let mut opts = BoxOptions {
             ports: vec![
                 duplicate.clone(),
                 PortSpec {
@@ -2105,5 +2288,36 @@ mod tests {
         // Only opts2 should have max_processes
         assert!(opts1.resource_limits.max_processes.is_none());
         assert_eq!(opts2.resource_limits.max_processes, Some(50));
+    }
+
+    /// The whole point of #1152: the ceiling has to follow the box's own
+    /// `--disk-size`, not a constant picked before the box existed.
+    #[test]
+    fn sanitize_scales_fsize_with_the_requested_disk() {
+        let mut options = BoxOptions {
+            disk_size_gb: Some(20),
+            ..BoxOptions::default()
+        };
+        options.sanitize().unwrap();
+
+        assert_eq!(
+            options.advanced.security.resource_limits.max_file_size,
+            Some(Bytes::from_gib(40).as_bytes()),
+            "a 20 GiB box gets a 40 GiB ceiling"
+        );
+    }
+
+    /// No explicit size: the disk is created at `DEFAULT_DISK_SIZE_GB`, so the
+    /// ceiling tracks that.
+    #[test]
+    fn sanitize_falls_back_to_the_default_disk_size() {
+        let mut options = BoxOptions::default();
+        options.sanitize().unwrap();
+
+        assert_eq!(
+            options.advanced.security.resource_limits.max_file_size,
+            Some(Bytes::from_gib(20).as_bytes()),
+            "the default 10 GiB disk gets a 20 GiB ceiling"
+        );
     }
 }

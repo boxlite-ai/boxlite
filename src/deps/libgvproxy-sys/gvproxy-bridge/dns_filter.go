@@ -15,18 +15,39 @@ import (
 	logrus "github.com/sirupsen/logrus"
 )
 
-// buildAllowNetDNSZones creates DNS zones that implement allowlist filtering.
+// allowNetResolution bundles the DNS zones and the hostname→IP maps produced by
+// one pass over the allow_net rules. Sharing that single resolution between the
+// gateway DNS and the TCP egress pin guarantees the guest and the pin see the
+// same IPs (same DNS, same moment) — see allow_net_filter.AllowHostToIP.
 //
-// Strategy:
-//   - For each allowed hostname: resolve to IPs, create a zone with A records
-//   - For wildcard patterns (*.example.com): create zone with Regexp records
-//   - Add catch-all root zone "" with DefaultIP 0.0.0.0 (sinkhole)
+// The resolution is FROZEN at box build time: buildAllowNet runs once in
+// gvproxy_create and is never re-resolved for the box's lifetime. A domain that
+// changes its IP after the box starts therefore becomes unreachable until the
+// box is recreated — a known, accepted limitation of hostname allow_net.
 //
-// Zone matching is first-match-wins with suffix matching. Specific zones
-// are added before the root zone, so allowed hosts resolve normally while
-// everything else gets sinkholed.
-func buildAllowNetDNSZones(allowNet []string) []types.Zone {
+// Coupling contract: the egress pin (exactIPs/suffixIPs) must always be fed
+// from the SAME resolution as the DNS zones. If a future change adds runtime
+// re-resolution (e.g. to pick up IP changes), it must refresh the pin map from
+// that same re-resolution too — otherwise AllowHostToIP keeps enforcing the
+// stale IPs and would block the freshly-resolved destination.
+type allowNetResolution struct {
+	zones     []types.Zone
+	exactIPs  map[string][]net.IP // "api.openai.com" → resolved IPv4 set
+	suffixIPs map[string][]net.IP // ".example.com" → resolved base-domain IPv4 set
+}
+
+// buildAllowNet resolves every hostname rule once and returns the DNS zones
+// plus the hostname→IP maps used to pin TCP egress.
+func buildAllowNet(allowNet []string) allowNetResolution {
+	return buildAllowNetWithResolver(allowNet, systemLookupIPAddr)
+}
+
+// buildAllowNetWithResolver is the testable core of buildAllowNet: the resolver
+// is injected so tests can pin a deterministic resolution.
+func buildAllowNetWithResolver(allowNet []string, lookup func(context.Context, string) ([]net.IP, error)) allowNetResolution {
 	zoneRecords := make(map[string][]types.Record)
+	exactIPs := make(map[string][]net.IP)
+	suffixIPs := make(map[string][]net.IP)
 
 	for _, rule := range allowNet {
 		rule = strings.TrimSpace(rule)
@@ -48,14 +69,14 @@ func buildAllowNetDNSZones(allowNet []string) []types.Zone {
 			host = h
 		}
 
-		// Wildcard: *.example.com
+		// Wildcard: *.example.com — pinned to the base domain's resolution.
 		if strings.HasPrefix(host, "*.") {
 			domain := host[2:]
 			zoneName := domain + "."
 			zoneRecords[zoneName] = append(zoneRecords[zoneName], types.Record{
 				Regexp: regexp.MustCompile(".*"),
 			})
-			resolveAndAddRecords(domain, domain+".", zoneRecords)
+			suffixIPs["."+strings.ToLower(domain)] = resolveAndAddRecords(domain, zoneName, zoneRecords, lookup)
 			continue
 		}
 
@@ -63,9 +84,9 @@ func buildAllowNetDNSZones(allowNet []string) []types.Zone {
 		parts := strings.SplitN(host, ".", 2)
 		if len(parts) == 2 {
 			zoneName := parts[1] + "."
-			resolveAndAddRecords(host, zoneName, zoneRecords)
+			exactIPs[strings.ToLower(host)] = resolveAndAddRecords(host, zoneName, zoneRecords, lookup)
 		} else {
-			resolveAndAddRecords(host, host+".", zoneRecords)
+			exactIPs[strings.ToLower(host)] = resolveAndAddRecords(host, host+".", zoneRecords, lookup)
 		}
 	}
 
@@ -93,37 +114,70 @@ func buildAllowNetDNSZones(allowNet []string) []types.Zone {
 		"total_zones": len(zones),
 	}).Info("allowNet: DNS sinkhole configured")
 
-	return zones
+	return allowNetResolution{zones: zones, exactIPs: exactIPs, suffixIPs: suffixIPs}
 }
 
-// resolveAndAddRecords resolves a hostname and adds A records to the zone.
-func resolveAndAddRecords(hostname, zoneName string, zoneRecords map[string][]types.Record) {
-	ctx := context.Background()
+// buildAllowNetDNSZones creates DNS zones that implement allowlist filtering.
+//
+// Strategy:
+//   - For each allowed hostname: resolve to IPs, create a zone with A records
+//   - For wildcard patterns (*.example.com): create zone with Regexp records
+//   - Add catch-all root zone "" with DefaultIP 0.0.0.0 (sinkhole)
+//
+// Zone matching is first-match-wins with suffix matching. Specific zones
+// are added before the root zone, so allowed hosts resolve normally while
+// everything else gets sinkholed.
+func buildAllowNetDNSZones(allowNet []string) []types.Zone {
+	return buildAllowNet(allowNet).zones
+}
+
+// systemLookupIPAddr resolves a hostname via the host's system DNS. It is the
+// production resolver behind the buildAllowNet seam.
+func systemLookupIPAddr(ctx context.Context, host string) ([]net.IP, error) {
 	resolver := &net.Resolver{PreferGo: false}
-	ips, err := resolver.LookupIPAddr(ctx, hostname)
+	addrs, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	ips := make([]net.IP, 0, len(addrs))
+	for _, a := range addrs {
+		ips = append(ips, a.IP)
+	}
+	return ips, nil
+}
+
+// resolveAndAddRecords resolves a hostname, adds A records to the zone, and
+// returns the resolved IPv4 set so callers can pin egress to the same IPs.
+func resolveAndAddRecords(hostname, zoneName string, zoneRecords map[string][]types.Record, lookup func(context.Context, string) ([]net.IP, error)) []net.IP {
+	ctx := context.Background()
+	ips, err := lookup(ctx, hostname)
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
 			"hostname": hostname,
 			"error":    err,
 		}).Warn("allowNet: DNS resolution failed for allowed host")
-		return
+		return nil
 	}
 
 	trimmed := strings.TrimSuffix(hostname+".", "."+zoneName)
 
+	var v4 []net.IP
 	for _, ip := range ips {
-		if ip.IP.To4() == nil {
+		if ip.To4() == nil {
 			continue // Skip IPv6 for now
 		}
+		ip4 := ip.To4()
+		v4 = append(v4, ip4)
 		zoneRecords[zoneName] = append(zoneRecords[zoneName], types.Record{
 			Name: trimmed,
-			IP:   ip.IP.To4(),
+			IP:   ip4,
 		})
 		logrus.WithFields(logrus.Fields{
 			"hostname": hostname,
-			"ip":       ip.IP,
+			"ip":       ip,
 			"zone":     zoneName,
 			"label":    trimmed,
 		}).Debug("allowNet: resolved and added DNS record")
 	}
+	return v4
 }

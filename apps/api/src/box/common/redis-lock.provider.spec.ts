@@ -131,9 +131,9 @@ describe('RedisLockProvider leases', () => {
       }),
     )
 
-    const waiting = expect(
-      provider.waitForLease('usage-period-box-1', 60, controller.signal),
-    ).rejects.toThrow('service is shutting down')
+    const waiting = expect(provider.waitForLease('usage-period-box-1', 60, controller.signal)).rejects.toThrow(
+      'service is shutting down',
+    )
     controller.abort(new Error('service is shutting down'))
     await waiting
 

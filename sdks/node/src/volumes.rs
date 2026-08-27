@@ -12,6 +12,8 @@ use crate::util::map_err;
 #[derive(Clone, Debug)]
 pub struct JsVolumeInfo {
     pub id: String,
+    /// Volume name, mountable in place of the id. Defaults to the id.
+    pub name: String,
     #[napi(js_name = "createdAt")]
     pub created_at: String,
     #[napi(js_name = "sizeBytes")]
@@ -22,6 +24,7 @@ impl From<&VolumeInfo> for JsVolumeInfo {
     fn from(info: &VolumeInfo) -> Self {
         Self {
             id: info.id.clone(),
+            name: info.name.clone(),
             created_at: info.created_at.to_rfc3339(),
             // Saturating cast preserves a stable JS number surface if a future
             // backend ever reports a value beyond signed 64-bit range.
@@ -47,10 +50,13 @@ pub struct JsVolumeHandle {
 #[napi]
 impl JsVolumeHandle {
     /// Create a volume and return its metadata.
+    ///
+    /// `name` is optional and can be mounted in place of the volume's id. The
+    /// server names the volume after its id when omitted.
     #[napi]
-    pub async fn create(&self) -> Result<JsVolumeInfo> {
+    pub async fn create(&self, name: Option<String>) -> Result<JsVolumeInfo> {
         let handle = Arc::clone(&self.handle);
-        let info = handle.create().await.map_err(map_err)?;
+        let info = handle.create(name.as_deref()).await.map_err(map_err)?;
         Ok(JsVolumeInfo::from(&info))
     }
 
