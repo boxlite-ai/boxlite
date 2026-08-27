@@ -159,7 +159,13 @@ impl FilesInterface {
 
         // tonic client-streaming yields the message directly (no per-item
         // `Result`); a mid-stream error is signalled by ending the stream, and
-        // the guest reports the failure in `UploadResponse`.
+        // the guest reports the failure in `UploadResponse`. The generator
+        // parks the first source-stream error in a shared slot: the guest may
+        // still report success on the truncated archive it received, and the
+        // caller must not see that as a successful copy.
+        let stream_err: std::sync::Arc<tokio::sync::Mutex<Option<std::io::Error>>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(None));
+        let stream_err_slot = stream_err.clone();
         let stream = async_stream::stream! {
             futures::pin_mut!(tar);
             let mut first = true;
@@ -176,7 +182,10 @@ impl FilesInterface {
                         };
                         first = false;
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        *stream_err_slot.lock().await = Some(e);
+                        break;
+                    }
                 }
             }
         };
@@ -187,6 +196,15 @@ impl FilesInterface {
             .await
             .map_err(map_tonic_err)?
             .into_inner();
+
+        // Prefer the source-stream failure over the guest's verdict: a pack or
+        // read failure (or an explicit abort) must never surface as a
+        // successful copy of a truncated archive.
+        if let Some(e) = stream_err.lock().await.take() {
+            return Err(BoxliteError::Internal(format!(
+                "tar stream failed during upload: {e}"
+            )));
+        }
 
         if response.success {
             Ok(())

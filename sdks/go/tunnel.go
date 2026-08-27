@@ -170,10 +170,10 @@ func (f *TunnelForwarder) Wait(ctx context.Context) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, runtimeHandle.closing)
+		abandonAsyncErr(ch, h, runtimeHandle.closing, runtimeHandle.drainDone)
 		return ctx.Err()
 	case <-runtimeHandle.closing:
-		abandonAsyncErr(ch, h, runtimeHandle.closing)
+		abandonAsyncErr(ch, h, runtimeHandle.closing, runtimeHandle.drainDone)
 		return ErrRuntimeClosed
 	}
 }
@@ -209,7 +209,7 @@ func (f *TunnelForwarder) Close() error {
 	case err := <-ch:
 		return err
 	case <-runtimeHandle.closing:
-		abandonAsyncErr(ch, h, runtimeHandle.closing)
+		abandonAsyncErr(ch, h, runtimeHandle.closing, runtimeHandle.drainDone)
 		return ErrRuntimeClosed
 	}
 }

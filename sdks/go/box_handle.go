@@ -57,10 +57,10 @@ func (b *Box) Start(ctx context.Context) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, b.runtime.closing)
+		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
 		return ctx.Err()
 	case <-b.runtime.closing:
-		abandonAsyncErr(ch, h, b.runtime.closing)
+		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
 		return ErrRuntimeClosed
 	}
 }
@@ -83,10 +83,10 @@ func (b *Box) Stop(ctx context.Context) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, b.runtime.closing)
+		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
 		return ctx.Err()
 	case <-b.runtime.closing:
-		abandonAsyncErr(ch, h, b.runtime.closing)
+		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
 		return ErrRuntimeClosed
 	}
 }

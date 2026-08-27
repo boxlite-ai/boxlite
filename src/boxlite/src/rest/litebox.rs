@@ -376,10 +376,12 @@ impl BoxBackend for RestBox {
             let bytes = read_capped(resp, FALLBACK_CAP_BYTES).await?;
             return extract_tar_to_path(&bytes, host_dst);
         };
-        // The header carries the *source* shape; an existing destination
-        // directory must still win for a single file, matching the legacy
+        // The header carries the *source* shape; the destination's own
+        // signals — an existing directory, or a trailing slash naming one —
+        // must still win for a single file, matching the legacy
         // `detect_extraction_mode` and Unix cp semantics.
-        let force_directory = source_is_dir || host_dst.is_dir();
+        let dest_wants_dir = host_dst.as_os_str().to_string_lossy().ends_with('/');
+        let force_directory = source_is_dir || host_dst.is_dir() || dest_wants_dir;
 
         // A severed body must stay classified as a transport fault so callers
         // retry instead of filing a bug. `unpack_stream` flattens the byte
@@ -413,7 +415,7 @@ impl BoxBackend for RestBox {
         .await;
 
         match unpacked {
-            Ok(()) => Ok(()),
+            Ok(_) => Ok(()),
             Err(unpack_err) => {
                 let fault = transport_fault.lock().ok().and_then(|mut s| s.take());
                 Err(fault.unwrap_or(unpack_err))
@@ -1665,6 +1667,74 @@ mod tests {
             std::fs::read_to_string(&landed).unwrap(),
             "inside-dir\n",
             "single file must land inside the destination directory"
+        );
+        server.await.unwrap();
+    }
+
+    /// A destination with a trailing slash names a directory even when it
+    /// does not exist yet: a single-file source must land *inside* it (the
+    /// legacy `detect_extraction_mode` trailing-slash rule), not fail to
+    /// unpack at the directory-designated path.
+    #[tokio::test]
+    async fn copy_out_trailing_slash_forces_directory_mode() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // A single-file tar: one regular entry "file.txt".
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            let content = b"trailing-slash\n";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(content.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "file.txt", &content[..])
+                .unwrap();
+            builder.finish().unwrap();
+        }
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                head.push(socket.read_u8().await.unwrap());
+            }
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\n\
+                         Content-Type: application/x-tar\r\n\
+                         X-Boxlite-Source-Is-Dir: false\r\n\
+                         Content-Length: {}\r\n\
+                         Connection: close\r\n\r\n",
+                        tar_bytes.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            socket.write_all(&tar_bytes).await.unwrap();
+        });
+
+        let rest_box = rest_box_for(port, "box1");
+        let dir = tempfile::tempdir().unwrap();
+
+        // The trailing slash makes this a directory even though it does not
+        // exist yet (mkdir_parents creates it).
+        let dest_with_slash =
+            std::path::PathBuf::from(format!("{}/", dir.path().join("newdir").display()));
+        rest_box
+            .copy_out("/tmp/file.txt", &dest_with_slash, CopyOptions::default())
+            .await
+            .expect("copy_out with trailing-slash destination");
+
+        let landed = dir.path().join("newdir").join("file.txt");
+        assert_eq!(
+            std::fs::read_to_string(&landed).unwrap(),
+            "trailing-slash\n",
+            "single file must land inside the trailing-slash directory"
         );
         server.await.unwrap();
     }

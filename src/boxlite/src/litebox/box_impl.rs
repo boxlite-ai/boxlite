@@ -1012,6 +1012,11 @@ impl BoxImpl {
                 "destination path cannot be empty".into(),
             ));
         }
+        // Match the path-based copy_into contract: a directory tree with
+        // recursive=false is rejected before anything is streamed.
+        if source_is_dir == Some(true) {
+            opts.validate_for_dir()?;
+        }
         // Materialise borrowed strings before the first await so the future
         // never holds `&BoxImpl` across an await point (avoids an HRTB `Send`
         // bound that trips tokio::spawn).

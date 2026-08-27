@@ -1,7 +1,7 @@
 package controllers
 
 import (
-	"fmt"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -40,14 +40,14 @@ func BoxliteFileUpload(ctx *gin.Context) {
 func BoxliteFileDownload(ctx *gin.Context) {
 	r, err := runner.GetInstance(nil)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(ctx, http.StatusInternalServerError, err.Error(), "InternalError", "internal")
 		return
 	}
 
 	boxId := ctx.Param("boxId")
 	srcPath := ctx.Query("path")
 	if srcPath == "" {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "path query parameter required"})
+		respondError(ctx, http.StatusBadRequest, "path query parameter required", "InvalidArgumentError", "invalid_argument")
 		return
 	}
 
@@ -66,7 +66,7 @@ func BoxliteFileDownload(ctx *gin.Context) {
 		// The copy failed before any body byte was produced (e.g. the source
 		// does not exist) — the response is not yet committed, so we can still
 		// surface an error status.
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("copy failed: %s", err)})
+		respondCopyError(ctx, err)
 		return
 	}
 	// A 200 is already on the wire and the archive is incomplete. Returning

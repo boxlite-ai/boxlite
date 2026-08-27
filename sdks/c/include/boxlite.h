@@ -64,16 +64,6 @@ typedef enum BoxliteErrorCode {
   SessionReaped = 21,
 } BoxliteErrorCode;
 
-// Copy-in source shape. `Unknown` when the caller cannot tell (older
-// clients); the guest peeks the archive to decide. Mirrors the guest
-// protocol's `optional bool source_is_dir`: `File` = Some(false),
-// `Dir` = Some(true), `Unknown` = None.
-typedef enum BoxliteCopySourceKind {
-  Unknown = 0,
-  File = 1,
-  Dir = 2,
-} BoxliteCopySourceKind;
-
 // Network mode exposed by [`CNetworkInfo`].
 typedef enum BoxliteNetworkMode {
   BoxliteNetworkModeEnabled = 0,
@@ -90,6 +80,16 @@ typedef enum BoxliteRegistryTransport {
   BoxliteRegistryTransportHttps = 0,
   BoxliteRegistryTransportHttp = 1,
 } BoxliteRegistryTransport;
+
+// Copy-in source shape. `Unknown` when the caller cannot tell (older
+// clients); the guest peeks the archive to decide. Mirrors the guest
+// protocol's `optional bool source_is_dir`: `File` = Some(false),
+// `Dir` = Some(true), `Unknown` = None.
+typedef enum BoxliteCopySourceKind {
+  Unknown = 0,
+  File = 1,
+  Dir = 2,
+} BoxliteCopySourceKind;
 
 // Opaque handle wrapping an `AdvancedBoxOptions`. Allocated via
 // `boxlite_advanced_options_new`, freed via `boxlite_advanced_options_free`.
@@ -623,10 +623,10 @@ enum BoxliteErrorCode boxlite_copy_out(CBoxHandle *handle,
 
 // Download `guest_src` as a tar byte stream.
 //
-// The `data_cb` receives raw tar chunks; `meta_cb` (optional) fires exactly
-// once — before the first `data_cb` — with the archive-shape hint
-// (`source_is_dir`), and `copy_cb` fires strictly last with the completion
-// result. All callbacks share `user_data`.
+// The `data_cb` receives raw tar chunks; `meta_cb` (optional) fires at most
+// once — only when the source's archive-shape hint is available (older
+// peers omit it), and always before the first `data_cb`; `copy_cb` fires
+// strictly last with the completion result. All callbacks share `user_data`.
 enum BoxliteErrorCode boxlite_copy_out_stream(CBoxHandle *handle,
                                               const char *guest_src,
                                               CBoxCopyMetaCb meta_cb,
@@ -637,11 +637,15 @@ enum BoxliteErrorCode boxlite_copy_out_stream(CBoxHandle *handle,
 
 // Begin a streaming copy-in, returning an opaque transfer handle.
 //
-// `source_kind` describes the archive shape; `Unknown` when the caller
+// `source_kind` describes the archive shape: `BoxliteCopySourceKind`'s
+// discriminant (`Unknown`=0, `File`=1, `Dir`=2), or 0 when the caller
 // cannot tell (older clients) — the guest then peeks the archive to decide.
+// Taken as an integer because C callers can pass any value, and
+// out-of-range discriminants must behave as Unknown rather than as an
+// invalid Rust enum.
 struct CBoxCopyInStream *boxlite_copy_in_start(CBoxHandle *handle,
                                                const char *guest_dst,
-                                               enum BoxliteCopySourceKind source_kind,
+                                               int32_t source_kind,
                                                CBoxCopyCb copy_cb,
                                                void *user_data,
                                                CBoxliteError *out_error);
@@ -655,6 +659,14 @@ enum BoxliteErrorCode boxlite_copy_in_write(struct CBoxCopyInStream *stream,
 
 // Close the copy-in stream, signalling EOF to the guest. Idempotent.
 enum BoxliteErrorCode boxlite_copy_in_close(struct CBoxCopyInStream *stream,
+                                            CBoxliteError *out_error);
+
+// Abort the copy-in stream: deliver a terminal error to the guest and then
+// close the channel. Unlike [`boxlite_copy_in_close`], the guest sees a
+// failed stream — a truncated upload can never pass as a clean EOF. Call
+// this when the source read failed mid-transfer. Idempotent: after the
+// first call (abort or close) the stream reports InvalidState.
+enum BoxliteErrorCode boxlite_copy_in_abort(struct CBoxCopyInStream *stream,
                                             CBoxliteError *out_error);
 
 // Reclaim a copy-in stream handle.

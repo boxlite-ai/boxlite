@@ -119,7 +119,7 @@ async fn streaming_roundtrip(bx: &LiteBox, tmp: &Path) {
     assert_eq!(hint, Some(false), "guest must report source_is_dir=false");
 
     let dest = tmp.join("stream-dest.txt");
-    boxlite_shared::tar::unpack_stream(
+    let created = boxlite_shared::tar::unpack_stream(
         tar,
         dest.clone(),
         boxlite_shared::tar::UnpackContext {
@@ -131,6 +131,7 @@ async fn streaming_roundtrip(bx: &LiteBox, tmp: &Path) {
     .await
     .expect("unpack_stream");
     assert_eq!(std::fs::read_to_string(&dest).unwrap(), "streaming hello");
+    assert_eq!(created, vec![std::path::PathBuf::from("stream-src.txt")]);
 }
 
 /// A single-file tar streamed WITHOUT a shape hint must land as that exact
@@ -191,6 +192,77 @@ async fn streaming_hintless_directory(bx: &LiteBox, tmp: &Path) {
     assert_eq!(out, "hintless dir a\n");
 }
 
+/// A tar stream that fails AFTER delivering a complete archive must not
+/// surface as a successful copy: the guest extracts the complete prefix and
+/// reports success, so the host-side upload has to prefer the source-stream
+/// error over the guest's verdict.
+async fn streaming_stream_error_after_data_fails(bx: &LiteBox, tmp: &Path) {
+    let host_src = tmp.join("stream-err-after-data.txt");
+    std::fs::write(&host_src, b"complete archive\n").unwrap();
+
+    let (source_is_dir, mut tar) = boxlite_shared::tar::pack_stream(
+        host_src.clone(),
+        boxlite_shared::tar::PackContext {
+            follow_symlinks: false,
+            include_parent: false,
+        },
+    )
+    .await
+    .expect("pack_stream");
+
+    let mut items: Vec<std::io::Result<Vec<u8>>> = Vec::new();
+    while let Some(item) = tar.next().await {
+        items.push(item);
+    }
+    items.push(Err(std::io::Error::other("injected stream failure")));
+    let poisoned: boxlite_shared::BoxTarStream = Box::pin(tokio_stream::iter(items));
+
+    let result = bx
+        .copy_in_tar_stream(
+            poisoned,
+            "/root/stream-err.txt",
+            Some(source_is_dir),
+            CopyOptions::default(),
+        )
+        .await;
+    assert!(
+        result.is_err(),
+        "a stream error after a complete archive must fail the copy"
+    );
+}
+
+/// Streaming a directory with recursive=false must be rejected before any
+/// data flows, matching the path-based copy_into contract.
+async fn streaming_dir_rejects_non_recursive(bx: &LiteBox, tmp: &Path) {
+    let host_dir = tmp.join("nonrec-dir");
+    std::fs::create_dir_all(host_dir.join("sub")).unwrap();
+    std::fs::write(host_dir.join("a.txt"), b"x").unwrap();
+
+    let (source_is_dir, tar) = boxlite_shared::tar::pack_stream(
+        host_dir.clone(),
+        boxlite_shared::tar::PackContext {
+            follow_symlinks: false,
+            include_parent: false,
+        },
+    )
+    .await
+    .expect("pack_stream");
+    assert!(source_is_dir);
+
+    let result = bx
+        .copy_in_tar_stream(
+            tar,
+            "/root/nonrec",
+            Some(source_is_dir),
+            CopyOptions::default().non_recursive(),
+        )
+        .await;
+    assert!(
+        result.is_err(),
+        "streaming a directory with recursive=false must be rejected"
+    );
+}
+
 /// A failed hintless upload surfaces as an error through the streaming path.
 /// The streamed bytes are not a tar archive, so the guest's peek/extract
 /// fails after spooling. (The spool cleanup itself is asserted by the guest
@@ -204,6 +276,44 @@ async fn streaming_hintless_corrupt_archive_fails(bx: &LiteBox, _tmp: &Path) {
         .copy_in_tar_stream(tar, "/root/hintless-fail.txt", None, CopyOptions::default())
         .await;
     assert!(result.is_err(), "corrupt archive must fail the copy");
+}
+
+/// A hinted (streaming) upload whose archive names an entry under a mount
+/// must be refused — post-hoc for the stream (it cannot be pre-scanned
+/// without spooling), but the failure must surface instead of silently
+/// writing beneath the mount.
+async fn streaming_payload_under_mount_is_refused(bx: &LiteBox, tmp: &Path) {
+    let host_src = tmp.join("stream-mount-payload.txt");
+    std::fs::write(&host_src, "PAYLOAD-STREAM-MOUNT\n").unwrap();
+
+    // The entry lands under the guest's /tmp tmpfs mount: destination root
+    // is reachable, only the payload entry is shadowed — exactly the case
+    // the staged arm refuses via entry_paths pre-scan.
+    let mut tar_bytes = Vec::new();
+    {
+        let mut builder = tar::Builder::new(&mut tar_bytes);
+        let content = std::fs::read(&host_src).unwrap();
+        let mut header = tar::Header::new_gnu();
+        header.set_size(content.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "tmp/stream-mount-payload.txt", &content[..])
+            .unwrap();
+        builder.finish().unwrap();
+    }
+    let poisoned: boxlite_shared::BoxTarStream = Box::pin(tokio_stream::iter(vec![Ok(tar_bytes)]));
+
+    let err = bx
+        .copy_in_tar_stream(poisoned, "/", Some(true), CopyOptions::default())
+        .await
+        .expect_err("a payload under a mount must be refused, not silently shadowed");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("'/tmp' mount"),
+        "refusal should name the mount that blocks it, got: {msg}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -250,9 +360,13 @@ async fn copy_integration() {
     copy_out_of_a_dir_containing_a_mount_is_refused(&bx, tmp.path()).await;
     streaming_roundtrip(&bx, tmp.path()).await;
     streaming_single_file_into_existing_dir(&bx, tmp.path()).await;
+
     streaming_hintless_single_file(&bx, tmp.path()).await;
+    streaming_payload_under_mount_is_refused(&bx, tmp.path()).await;
     streaming_hintless_directory(&bx, tmp.path()).await;
     streaming_hintless_corrupt_archive_fails(&bx, tmp.path()).await;
+    streaming_stream_error_after_data_fails(&bx, tmp.path()).await;
+    streaming_dir_rejects_non_recursive(&bx, tmp.path()).await;
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }

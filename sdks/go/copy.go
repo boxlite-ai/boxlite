@@ -43,10 +43,10 @@ func (b *Box) CopyInto(ctx context.Context, hostSrc, guestDst string) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, b.runtime.closing)
+		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
 		return ctx.Err()
 	case <-b.runtime.closing:
-		abandonAsyncErr(ch, h, b.runtime.closing)
+		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
 		return ErrRuntimeClosed
 	}
 }
@@ -78,10 +78,10 @@ func (b *Box) CopyOut(ctx context.Context, guestSrc, hostDst string) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, b.runtime.closing)
+		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
 		return ctx.Err()
 	case <-b.runtime.closing:
-		abandonAsyncErr(ch, h, b.runtime.closing)
+		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
 		return ErrRuntimeClosed
 	}
 }
@@ -176,10 +176,10 @@ func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer, o
 	case err := <-state.done:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(state.done, h, b.runtime.closing)
+		abandonAsyncErr(state.done, h, b.runtime.closing, b.runtime.drainDone)
 		return ctx.Err()
 	case <-b.runtime.closing:
-		abandonAsyncErr(state.done, h, b.runtime.closing)
+		abandonAsyncErr(state.done, h, b.runtime.closing, b.runtime.drainDone)
 		return ErrRuntimeClosed
 	}
 }
@@ -213,9 +213,10 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	// The cgo wrapper types this parameter as plain uint32, and Go does not
-	// implicitly convert between two named types — go through uint32.
-	kind := uint32(C.BoxliteCopySourceKind(sourceKind))
+	// The C ABI takes the discriminant as int32_t (an out-of-range value a
+	// C caller might pass must map to Unknown, not an invalid Rust enum);
+	// cgo needs the explicit conversion.
+	kind := C.int32_t(sourceKind)
 	stream := C.boxlite_copy_in_start(b.handle, cDst, kind, C.cbCopy(), handleToPtr(h), &cerr)
 	if stream == nil {
 		deleteHandleForDispatch(h)
@@ -223,10 +224,12 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 	}
 
 	var writeErr error
+	noProgress := 0
 	buf := make([]byte, 1<<20) // 1 MiB chunks
 	for {
 		n, readErr := r.Read(buf)
 		if n > 0 {
+			noProgress = 0
 			var werr C.CBoxliteError
 			if code := C.boxlite_copy_in_write(stream, (*C.uint8_t)(unsafe.Pointer(&buf[0])), C.size_t(n), &werr); code != C.Ok {
 				writeErr = freeError(&werr)
@@ -239,10 +242,28 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 			}
 			break
 		}
+		if n == 0 {
+			// A reader may return (0, nil) transiently, but never
+			// indefinitely — bail instead of spinning forever.
+			noProgress++
+			if noProgress >= 100 {
+				writeErr = io.ErrNoProgress
+				break
+			}
+		}
 	}
 
 	var cerrClose C.CBoxliteError
-	if code := C.boxlite_copy_in_close(stream, &cerrClose); code != C.Ok && writeErr == nil {
+	if writeErr != nil {
+		// The source failed mid-transfer: abort rather than close so the
+		// guest sees a failed stream, never a clean EOF that it would
+		// unpack (and report success) as a truncated archive. The source
+		// error is the primary failure; free any C error the abort wrote
+		// so it cannot leak.
+		if code := C.boxlite_copy_in_abort(stream, &cerrClose); code != C.Ok {
+			_ = freeError(&cerrClose)
+		}
+	} else if code := C.boxlite_copy_in_close(stream, &cerrClose); code != C.Ok {
 		writeErr = freeError(&cerrClose)
 	}
 	C.boxlite_copy_in_free(stream)
@@ -256,10 +277,10 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, b.runtime.closing)
+		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
 		return ctx.Err()
 	case <-b.runtime.closing:
-		abandonAsyncErr(ch, h, b.runtime.closing)
+		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
 		return ErrRuntimeClosed
 	}
 }

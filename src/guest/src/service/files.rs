@@ -171,6 +171,21 @@ struct DestBefore {
 }
 
 impl DestBefore {
+    /// The streamed-arm variant: the caller captures the two pre-extraction
+    /// facts (which ancestors mkdir_parents still has to conjure, and whether
+    /// the destination already existed) and passes them in, because
+    /// extraction records exactly what the archive made. Consequence:
+    /// pre-existing directories the archive also names are handed over too
+    /// (the post-hoc tree cannot tell them apart); files always are,
+    /// matching the sampled arm.
+    fn recorded(created_dirs: Vec<PathBuf>, dest_existed: bool) -> Self {
+        Self {
+            created_dirs,
+            dest_existed,
+            existing_dirs: HashSet::new(),
+        }
+    }
+
     /// Sample off the async worker: one `stat` per archive entry, and the
     /// caller chooses how many entries there are — the same reason
     /// [`boxlite_shared::tar::entry_paths`] runs on a blocking thread.
@@ -426,7 +441,6 @@ impl CopyTarget {
     }
 }
 
-
 #[tonic::async_trait]
 impl Files for GuestServer {
     async fn upload(
@@ -462,14 +476,6 @@ impl Files for GuestServer {
         let source_is_dir = first.source_is_dir;
         let first_data = first.data;
 
-        // Temp file to hold tar stream. `StagedTar` owns the deletion, because
-        // every step from here to the end can leave through a `?`. Created
-        // only on the hintless path — the hinted path streams straight into
-        // extraction and never stages.
-        let staged = StagedTar::new(
-            std::env::temp_dir().join(format!("boxlite-upload-{}.tar", uuid::Uuid::new_v4())),
-        );
-
         match source_is_dir {
             // Streaming path: unpack directly from the byte stream. The hint
             // carries the *source* shape, but the destination can still force
@@ -500,7 +506,14 @@ impl Files for GuestServer {
                     }
                 });
 
-                boxlite_shared::tar::unpack_stream(
+                // The two pre-extraction facts the streamed path can still
+                // sample — whether the destination existed, and which
+                // ancestors mkdir_parents still has to conjure. Both must be
+                // captured BEFORE extraction: afterwards the ancestors exist
+                // and are indistinguishable from ones the image shipped.
+                let dest_existed = dest_root.exists();
+                let created_dirs = missing_ancestors(&dest_root);
+                let created = boxlite_shared::tar::unpack_stream(
                     tar_stream,
                     dest_root.clone(),
                     boxlite_shared::tar::UnpackContext {
@@ -511,10 +524,38 @@ impl Files for GuestServer {
                 )
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?;
+                let entry_paths: Arc<[PathBuf]> = created.into();
+
+                // The stream cannot be pre-scanned without spooling, so the
+                // mount-shadow refusal runs after extraction: weaker than the
+                // hintless arm's refuse-before (a refused copy may have
+                // partially landed), but the failure surfaces instead of a
+                // silent write beneath the mount.
+                dest.refuse_shadowed_payload(&entry_paths)?;
+
+                // Hand the recorded paths to the box user, plus the
+                // ancestors captured above — the recording names what the
+                // archive made, the pre-sampled ancestors name what
+                // mkdir_parents made.
+                self.chown_to_container_user(
+                    &container_id,
+                    dest_root.clone(),
+                    Arc::clone(&entry_paths),
+                    DestBefore::recorded(created_dirs, dest_existed),
+                )
+                .await;
             }
             // Legacy fallback for older hosts/runners that omit the hint:
             // buffer to a size-capped temp file and detect the shape by peeking.
             None => {
+                // Temp file to hold the tar stream. `StagedTar` owns the
+                // deletion, because every step from here to the end can leave
+                // through a `?`. Created only here — the hinted arm streams
+                // straight into extraction and never stages.
+                let staged = StagedTar::new(
+                    std::env::temp_dir()
+                        .join(format!("boxlite-upload-{}.tar", uuid::Uuid::new_v4())),
+                );
                 let mut file = File::create(staged.path())
                     .await
                     .map_err(|e| Status::internal(format!("failed to create temp file: {}", e)))?;
@@ -591,7 +632,7 @@ impl Files for GuestServer {
             }
         }
 
-
+        info!(
             dest = %dest_root.display(),
             container_id = %container_id,
             "upload completed"
@@ -1087,37 +1128,31 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::StagedTar;
-    use std::path::PathBuf;
+/// The spool tar must be removed on drop — covering every error path of
+/// the hintless upload arm, not just the success path. The guest agent's
+/// /tmp is not visible to container processes, so this is asserted here
+/// rather than from the copy integration tests.
+#[test]
+fn staged_tar_removes_file_on_drop() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path: std::path::PathBuf = dir.path().join("spool.tar");
+    std::fs::write(&path, b"partial tar").unwrap();
 
-    /// The spool tar must be removed on drop — covering every error path of
-    /// the hintless upload arm, not just the success path. The guest agent's
-    /// /tmp is not visible to container processes, so this is asserted here
-    /// rather than from the copy integration tests.
-    #[test]
-    fn staged_tar_removes_file_on_drop() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path: PathBuf = dir.path().join("spool.tar");
-        std::fs::write(&path, b"partial tar").unwrap();
-
-        {
-            let _guard = StagedTar::new(path.clone());
-            assert!(path.exists(), "guard must not remove the file while alive");
-        }
-
-        assert!(!path.exists(), "guard must remove the file on drop");
+    {
+        let _guard = StagedTar::new(path.clone());
+        assert!(path.exists(), "guard must not remove the file while alive");
     }
 
-    /// Dropping a guard whose file was already removed (or never created) is
-    /// harmless — the error-path cleanup must not panic.
-    #[test]
-    fn staged_tar_tolerates_missing_file() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path: PathBuf = dir.path().join("never-created.tar");
+    assert!(!path.exists(), "guard must remove the file on drop");
+}
 
-        let _guard = StagedTar::new(path);
-        // Dropping happens at end of scope; no panic is the assertion.
-    }
+/// Dropping a guard whose file was already removed (or never created) is
+/// harmless — the error-path cleanup must not panic.
+#[test]
+fn staged_tar_tolerates_missing_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path: std::path::PathBuf = dir.path().join("never-created.tar");
+
+    let _guard = StagedTar::new(path);
+    // Dropping happens at end of scope; no panic is the assertion.
 }

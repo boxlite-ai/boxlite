@@ -188,10 +188,10 @@ pub struct CBoxCopyInStream {
 
 /// Download `guest_src` as a tar byte stream.
 ///
-/// The `data_cb` receives raw tar chunks; `meta_cb` (optional) fires exactly
-/// once — before the first `data_cb` — with the archive-shape hint
-/// (`source_is_dir`), and `copy_cb` fires strictly last with the completion
-/// result. All callbacks share `user_data`.
+/// The `data_cb` receives raw tar chunks; `meta_cb` (optional) fires at most
+/// once — only when the source's archive-shape hint is available (older
+/// peers omit it), and always before the first `data_cb`; `copy_cb` fires
+/// strictly last with the completion result. All callbacks share `user_data`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_copy_out_stream(
     handle: *mut CBoxHandle,
@@ -303,13 +303,17 @@ pub unsafe extern "C" fn boxlite_copy_out_stream(
 
 /// Begin a streaming copy-in, returning an opaque transfer handle.
 ///
-/// `source_kind` describes the archive shape; `Unknown` when the caller
+/// `source_kind` describes the archive shape: `BoxliteCopySourceKind`'s
+/// discriminant (`Unknown`=0, `File`=1, `Dir`=2), or 0 when the caller
 /// cannot tell (older clients) — the guest then peeks the archive to decide.
+/// Taken as an integer because C callers can pass any value, and
+/// out-of-range discriminants must behave as Unknown rather than as an
+/// invalid Rust enum.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_copy_in_start(
     handle: *mut CBoxHandle,
     guest_dst: *const c_char,
-    source_kind: BoxliteCopySourceKind,
+    source_kind: i32,
     copy_cb: CBoxCopyCb,
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
@@ -331,7 +335,7 @@ pub unsafe extern "C" fn boxlite_copy_in_start(
             return std::ptr::null_mut();
         };
 
-        let source_is_dir = source_kind_to_hint(source_kind as i32);
+        let source_is_dir = source_kind_to_hint(source_kind);
 
         let handle_ref = &*handle;
         let lite = handle_ref.handle.clone();
@@ -429,6 +433,53 @@ pub unsafe extern "C" fn boxlite_copy_in_close(
     }
 }
 
+/// Abort the copy-in stream: deliver a terminal error to the guest and then
+/// close the channel. Unlike [`boxlite_copy_in_close`], the guest sees a
+/// failed stream — a truncated upload can never pass as a clean EOF. Call
+/// this when the source read failed mid-transfer. Idempotent: after the
+/// first call (abort or close) the stream reports InvalidState.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_copy_in_abort(
+    stream: *mut CBoxCopyInStream,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if stream.is_null() {
+            write_error(out_error, null_pointer_error("stream"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let stream_ref = &mut *stream;
+        let Some(tx) = stream_ref.tx.as_ref() else {
+            write_error(
+                out_error,
+                boxlite::BoxliteError::InvalidState("copy-in stream is closed".to_string()),
+            );
+            return BoxliteErrorCode::InvalidState;
+        };
+
+        let send = stream_ref
+            .tokio_rt
+            .block_on(tx.send(Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "copy-in aborted",
+            ))));
+        // Drop the sender either way: the terminal error (if the consumer is
+        // still alive) precedes EOF, and no further writes are accepted.
+        stream_ref.tx.take();
+        match send {
+            Ok(()) => BoxliteErrorCode::Ok,
+            Err(_) => {
+                // The guest consumer is already gone; nothing to signal.
+                write_error(
+                    out_error,
+                    boxlite::BoxliteError::Internal("guest upload aborted".to_string()),
+                );
+                BoxliteErrorCode::Internal
+            }
+        }
+    }
+}
+
 /// Reclaim a copy-in stream handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_copy_in_free(stream: *mut CBoxCopyInStream) {
@@ -457,6 +508,40 @@ mod tests {
             source_kind_to_hint(BoxliteCopySourceKind::Dir as i32),
             Some(true)
         );
+    }
+
+    /// The abort entrypoint must deliver a terminal error followed by EOF,
+    /// and the spent stream must reject further writes and a second abort.
+    #[test]
+    fn copy_in_abort_delivers_terminal_error_then_eof() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut stream = CBoxCopyInStream {
+            tx: Some(tx),
+            tokio_rt: Arc::new(rt),
+        };
+        let mut err = CBoxliteError::default();
+
+        let code = unsafe { boxlite_copy_in_abort(&mut stream, &mut err) };
+        assert_eq!(code, BoxliteErrorCode::Ok);
+
+        // First item is the terminal error, then EOF (channel closed).
+        let first = stream.tokio_rt.block_on(rx.recv()).expect("item");
+        assert_eq!(first.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+        assert!(
+            stream.tokio_rt.block_on(rx.recv()).is_none(),
+            "must signal EOF after the error"
+        );
+
+        // A spent stream rejects both writes and a second abort.
+        let mut err2 = CBoxliteError::default();
+        let data = [1u8; 4];
+        let code =
+            unsafe { boxlite_copy_in_write(&mut stream, data.as_ptr(), data.len(), &mut err2) };
+        assert_eq!(code, BoxliteErrorCode::InvalidState);
+        let mut err3 = CBoxliteError::default();
+        let code = unsafe { boxlite_copy_in_abort(&mut stream, &mut err3) };
+        assert_eq!(code, BoxliteErrorCode::InvalidState);
     }
 
     #[test]

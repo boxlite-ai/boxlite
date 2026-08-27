@@ -92,7 +92,18 @@ fn pack_blocking<W: Write>(src: &Path, writer: W, opts: &PackContext) -> Boxlite
 
     builder
         .finish()
-        .map_err(|e| BoxliteError::Storage(format!("failed to finish tar: {}", e)))
+        .map_err(|e| BoxliteError::Storage(format!("failed to finish tar: {}", e)))?;
+
+    // `finish` writes the trailer but not the writer's own pending buffer
+    // (PipeWriter coalesces the final sub-chunk-size bytes). Flush it here
+    // so a dropped consumer surfaces as an error instead of silently
+    // truncating the stream.
+    let mut inner = builder
+        .into_inner()
+        .map_err(|e| BoxliteError::Storage(format!("failed to finish tar: {}", e)))?;
+    inner
+        .flush()
+        .map_err(|e| BoxliteError::Storage(format!("failed to flush tar stream: {}", e)))
 }
 
 // ── Stream pack ──────────────────────────────────────────────────
@@ -162,15 +173,27 @@ pub async fn pack_stream(src: PathBuf, opts: PackContext) -> BoxliteResult<(bool
     };
     let task_tx = tx;
     tokio::task::spawn_blocking(move || {
-        let result = pack_blocking(&src, writer, &opts);
-        // `writer` is consumed (and its pending bytes flushed on drop) inside
-        // `pack_blocking`. Report a failure as a terminal stream error through
-        // the original sender, then drop it to signal EOF.
-        if let Err(e) = result {
+        let outcome = pack_task_body(&src, writer, &opts);
+        // Report a failure as a terminal stream error through the original
+        // sender, then drop it to signal EOF.
+        if let Err(e) = outcome {
             let _ = task_tx.blocking_send(Err(io::Error::other(e)));
         }
     });
     Ok((source_is_dir, Box::pin(ReceiverStream::new(rx))))
+}
+
+/// Body of the pack task: runs [`pack_blocking`] under `catch_unwind` so a
+/// panicking pack surfaces as an error (per the stream contract) instead of
+/// ending the stream on a clean EOF that consumers would read as a truncated
+/// archive.
+fn pack_task_body<W: Write>(src: &Path, writer: W, opts: &PackContext) -> BoxliteResult<()> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pack_blocking(src, writer, opts)
+    })) {
+        Ok(outcome) => outcome,
+        Err(_) => Err(BoxliteError::Internal("tar pack task panicked".into())),
+    }
 }
 
 // ── Unpack ────────────────────────────────────────────────────────
@@ -225,7 +248,7 @@ fn unpack_blocking(tar_path: &Path, dest: &Path, opts: &UnpackContext) -> Boxlit
     let tar_file = std::fs::File::open(tar_path).map_err(|e| {
         BoxliteError::Storage(format!("failed to open tar {}: {}", tar_path.display(), e))
     })?;
-    extract_from_reader(tar_file, dest, opts, mode)
+    extract_from_reader(tar_file, dest, opts, mode, None)
 }
 
 /// Extract a tar archive read from `reader` to `dest` using the given `mode`.
@@ -234,7 +257,14 @@ fn extract_from_reader<R: Read>(
     dest: &Path,
     opts: &UnpackContext,
     mode: ExtractionMode,
+    mut collected: Option<&mut Vec<PathBuf>>,
 ) -> BoxliteResult<()> {
+    let mut seen = HashSet::new();
+    let mut record = |path: &Path| {
+        if let Some(collected) = collected.as_deref_mut() {
+            record_paths(collected, &mut seen, path);
+        }
+    };
     match mode {
         ExtractionMode::FileToFile => {
             if let Some(parent) = dest.parent() {
@@ -267,6 +297,9 @@ fn extract_from_reader<R: Read>(
                 let mut entry = entry.map_err(|e| {
                     BoxliteError::Storage(format!("failed to read tar entry: {}", e))
                 })?;
+                if let Ok(path) = entry.path() {
+                    record(path.as_ref());
+                }
                 entry.unpack(dest).map_err(|e| {
                     BoxliteError::Storage(format!(
                         "failed to unpack file to {}: {}",
@@ -301,9 +334,56 @@ fn extract_from_reader<R: Read>(
                 )));
             }
             let mut archive = tar::Archive::new(reader);
-            archive.unpack(dest).map_err(|e| {
-                BoxliteError::Storage(format!("failed to extract archive: {}", with_causes(&e)))
-            })
+            // The same pass tar::Archive::unpack would run, with one
+            // addition: every extracted name is recorded (sanitized, with
+            // implied directories) so callers can hand the created paths to
+            // the box user and refuse entries the mounts shadow — without
+            // consuming the one-shot stream twice. Directory entries are
+            // delayed and sorted the way tar-rs does it (permissions).
+            let mut directories = Vec::new();
+            for entry in archive
+                .entries()
+                .map_err(|e| BoxliteError::Storage(format!("failed to read tar entries: {}", e)))?
+            {
+                let mut file = entry.map_err(|e| {
+                    BoxliteError::Storage(format!("failed to read tar entry: {}", e))
+                })?;
+                if let Ok(path) = file.path() {
+                    record(path.as_ref());
+                }
+                if file.header().entry_type() == tar::EntryType::Directory {
+                    directories.push(file);
+                } else {
+                    file.unpack_in(dest).map_err(|e| {
+                        BoxliteError::Storage(format!(
+                            "failed to extract archive: {}",
+                            with_causes(&e)
+                        ))
+                    })?;
+                }
+            }
+            directories.sort_by(|a, b| b.path_bytes().cmp(&a.path_bytes()));
+            for mut dir in directories {
+                dir.unpack_in(dest).map_err(|e| {
+                    BoxliteError::Storage(format!("failed to extract archive: {}", with_causes(&e)))
+                })?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Record `path` — sanitized, plus every directory its name implies,
+/// outermost first — in `collected`, deduplicated through `seen`. Mirrors
+/// [`entry_paths_blocking`] so the streamed extraction reports exactly the
+/// same shape the staged path's pre-scan does.
+fn record_paths(collected: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path: &Path) {
+    let Some(sanitized) = sanitize_entry_path(path) else {
+        return;
+    };
+    for step in implied_dirs_then_self(&sanitized) {
+        if seen.insert(step.clone()) {
+            collected.push(step);
         }
     }
 }
@@ -402,6 +482,8 @@ fn sanitize_entry_path(path: &Path) -> Option<PathBuf> {
         }
     }
     (!out.as_os_str().is_empty()).then_some(out)
+}
+
 // ── Stream unpack ────────────────────────────────────────────────
 
 /// Blocking `Read` adapter draining a bounded channel, used to feed a
@@ -445,11 +527,15 @@ impl Read for PipeReader {
 /// directory, `false` → single file). Callers must resolve that from the peer's
 /// `source_is_dir` hint; a missing hint must fall back to the file-based
 /// [`unpack`] path, never call here with a guessed bool.
+///
+/// Returns the extracted paths relative to `dest` (sanitized, implied
+/// directories included) so the caller can hand them to the box user and
+/// refuse entries the mounts shadow.
 pub async fn unpack_stream(
     mut stream: BoxTarStream,
     dest: PathBuf,
     opts: UnpackContext,
-) -> BoxliteResult<()> {
+) -> BoxliteResult<Vec<PathBuf>> {
     let (tx, rx) = mpsc::channel::<io::Result<Vec<u8>>>(PIPE_CHUNKS);
     let forward = tokio::spawn(async move {
         while let Some(item) = stream.next().await {
@@ -465,7 +551,9 @@ pub async fn unpack_stream(
         } else {
             ExtractionMode::FileToFile
         };
-        extract_from_reader(reader, &dest, &opts, mode)
+        let mut collected = Vec::new();
+        extract_from_reader(reader, &dest, &opts, mode, Some(&mut collected))?;
+        Ok(collected)
     });
     let result = unpack.await;
     // Abort the forwarder before mapping the join result, so a panicked
@@ -1463,6 +1551,88 @@ mod tests {
 
     // ── streaming pack/unpack round-trips ────────────────────────
 
+    // ── streaming failure-path machinery ──────────────────────────────
+
+    /// A writer that panics on its first write. Subsequent writes succeed so
+    /// the drop-time `Builder::finish` (tar::Builder::Drop calls finish, which
+    /// writes the trailer) cannot double-panic during the unwind.
+    struct PanicWriter(bool);
+    impl Write for PanicWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            if self.0 {
+                self.0 = false;
+                panic!("injected pack panic")
+            }
+            Ok(0)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn pack_task_body_surfaces_panic_as_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("p.txt");
+        std::fs::write(&src, b"x").unwrap();
+
+        let result = pack_task_body(
+            &src,
+            PanicWriter(true),
+            &PackContext {
+                follow_symlinks: true,
+                include_parent: false,
+            },
+        );
+        assert!(
+            matches!(result, Err(BoxliteError::Internal(_))),
+            "a panicking pack must surface as Internal, got {result:?}"
+        );
+    }
+
+    /// PipeWriter must deliver sub-chunk pending bytes on flush — the final
+    /// partial chunk of a small archive rides on this, not on Drop. Plain
+    /// (non-runtime) thread: `blocking_send` panics inside a tokio runtime.
+    #[test]
+    fn pipe_writer_flush_delivers_pending_bytes() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut writer = PipeWriter {
+            tx,
+            pending: Vec::with_capacity(PIPE_CHUNK_SIZE),
+        };
+        writer.write_all(b"tail bytes").unwrap();
+        writer.flush().unwrap();
+        drop(writer);
+
+        let chunk = rx
+            .blocking_recv()
+            .expect("flush must deliver the chunk")
+            .unwrap();
+        assert_eq!(chunk, b"tail bytes");
+        assert!(
+            rx.blocking_recv().is_none(),
+            "dropped sender must signal EOF"
+        );
+    }
+
+    /// A consumer that dropped the stream must surface as BrokenPipe from
+    /// flush — the pack task then reports a terminal Err instead of silently
+    /// truncating. Small writes stay buffered, so the failure only shows at
+    /// flush time (which is exactly what pack_blocking's explicit flush
+    /// after finish exists to observe).
+    #[test]
+    fn pipe_writer_reports_broken_pipe_on_dropped_consumer() {
+        let (tx, rx) = mpsc::channel(4);
+        drop(rx); // consumer gone before any send
+        let mut writer = PipeWriter {
+            tx,
+            pending: Vec::with_capacity(PIPE_CHUNK_SIZE),
+        };
+        writer.write_all(b"lost bytes").unwrap(); // buffered, no send yet
+        let err = writer.flush().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    }
+
     #[tokio::test]
     async fn stream_pack_reports_source_is_dir() {
         let tmp = TempDir::new().unwrap();
@@ -1504,10 +1674,15 @@ mod tests {
         assert!(!source_is_dir);
 
         let dest = tmp.path().join("dest.txt");
-        unpack_stream(stream, dest.clone(), uc(true, true, false))
+        let created = unpack_stream(stream, dest.clone(), uc(true, true, false))
             .await
             .unwrap();
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "streaming hello");
+        assert_eq!(
+            created,
+            vec![PathBuf::from("hello.txt")],
+            "streamed extraction must report the entry it created"
+        );
     }
 
     #[tokio::test]
@@ -1530,7 +1705,7 @@ mod tests {
         assert!(source_is_dir);
 
         let dest = tmp.path().join("out");
-        unpack_stream(stream, dest.clone(), uc(true, true, true))
+        let created = unpack_stream(stream, dest.clone(), uc(true, true, true))
             .await
             .unwrap();
         assert_eq!(
@@ -1541,5 +1716,11 @@ mod tests {
             std::fs::read_to_string(dest.join("s").join("sub").join("b.txt")).unwrap(),
             "bbb"
         );
+        for expected in ["s", "s/a.txt", "s/sub", "s/sub/b.txt"] {
+            assert!(
+                created.contains(&PathBuf::from(expected)),
+                "created paths missing {expected}: {created:?}"
+            );
+        }
     }
 }

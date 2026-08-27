@@ -205,10 +205,10 @@ func (v *Volumes) Remove(ctx context.Context, id string, force bool) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, v.runtime.closing)
+		abandonAsyncErr(ch, h, v.runtime.closing, v.runtime.drainDone)
 		return ctx.Err()
 	case <-v.runtime.closing:
-		abandonAsyncErr(ch, h, v.runtime.closing)
+		abandonAsyncErr(ch, h, v.runtime.closing, v.runtime.drainDone)
 		return ErrRuntimeClosed
 	}
 }
