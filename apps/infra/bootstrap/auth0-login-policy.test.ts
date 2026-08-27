@@ -12,17 +12,19 @@ import {
   Auth0CliManagementClient,
   Auth0LoginPolicyConfigurator,
   assertDatabaseConnectionCompatible,
+  assertEmailDeliveryReady,
   assertJournalSnapshotSafe,
   buildDatabaseConnectionUpdate,
   buildLoginPolicyBindings,
   buildPromptUpdate,
+  emailDeliveryReadiness,
   hydrateEmailVerificationTemplate,
   hydrateLoginPolicyAction,
   parseAuth0LoginPolicyOptions,
 } from './auth0-login-policy.js'
 import type { Auth0ManagementClient } from './auth0-login-policy.js'
 
-test('buildDatabaseConnectionUpdate preserves unrelated options and omits deprecated client bindings', () => {
+test('buildDatabaseConnectionUpdate configures verification OTP without adding an OTP login method', () => {
   const connection = {
     id: 'con_123',
     name: 'boxlite-users',
@@ -44,7 +46,6 @@ test('buildDatabaseConnectionUpdate preserves unrelated options and omits deprec
   assert.deepEqual(update.options.authentication_methods, {
     passkey: { enabled: false },
     password: { enabled: true, signup_behavior: 'allow' },
-    email_otp: { enabled: true },
   })
   assert.deepEqual(update.options.attributes, {
     email: {
@@ -66,6 +67,7 @@ test('buildDatabaseConnectionUpdate deep-merges inactive attributes and email se
       disable_self_service_change_password: true,
       authentication_methods: {
         password: { enabled: false, signup_behavior: 'block' },
+        email_otp: { enabled: false, custom_setting: 'keep' },
       },
       attributes: {
         username: { identifier: { active: false }, signup: { status: 'off' } },
@@ -87,10 +89,18 @@ test('buildDatabaseConnectionUpdate deep-merges inactive attributes and email se
     enabled: true,
     signup_behavior: 'allow',
   })
+  assert.deepEqual(update.options.authentication_methods.email_otp, {
+    enabled: false,
+    custom_setting: 'keep',
+  })
 })
 
 test('assertDatabaseConnectionCompatible rejects configurations that cannot safely migrate', () => {
   const base = { id: 'con_123', name: 'boxlite-users', strategy: 'auth0', options: {} }
+  const activatedBase = {
+    ...base,
+    options: { attributes: { email: { identifier: { active: true } } } },
+  }
 
   assert.throws(
     () => assertDatabaseConnectionCompatible({ ...base, strategy: 'google-oauth2' }, []),
@@ -101,6 +111,10 @@ test('assertDatabaseConnectionCompatible rejects configurations that cannot safe
     /custom database/,
   )
   assert.throws(
+    () => assertDatabaseConnectionCompatible(base, []),
+    /activate Auth0's New Attributes Configuration/,
+  )
+  assert.throws(
     () =>
       assertDatabaseConnectionCompatible(
         { ...base, options: { attributes: { username: { identifier: { active: true } } } } },
@@ -108,7 +122,10 @@ test('assertDatabaseConnectionCompatible rejects configurations that cannot safe
       ),
     /username identifier/,
   )
-  assert.throws(() => assertDatabaseConnectionCompatible(base, [{ user_id: 'auth0|missing-email' }]), /has no email/)
+  assert.throws(
+    () => assertDatabaseConnectionCompatible(activatedBase, [{ user_id: 'auth0|missing-email' }]),
+    /has no email/,
+  )
   assert.throws(
     () =>
       assertDatabaseConnectionCompatible(
@@ -176,6 +193,15 @@ test('buildLoginPolicyBindings replaces the legacy claims Action and preserves u
       { ref: { type: 'action_id', value: 'act_login_policy' }, display_name: 'boxlite-login-policy' },
     ],
   )
+})
+
+test('a disabled custom email provider never falls back to Auth0 built-in delivery', () => {
+  const readiness = emailDeliveryReadiness({ name: 'ses', enabled: false }, null, null, true)
+
+  assert.equal(readiness.externalEmailProvider, false)
+  assert.equal(readiness.auth0BuiltInEmailProvider, false)
+  assert.equal(readiness.readyToApply, false)
+  assert.throws(() => assertEmailDeliveryReady(readiness), /enabled external Auth0 email provider is required/)
 })
 
 test('hydrateEmailVerificationTemplate wires exact resource ids and leaves no placeholders', () => {
@@ -250,11 +276,62 @@ test('Auth0CliManagementClient sends sensitive bodies over stdin, never process 
   assert.match(capturedInput, /must-not-appear-on-argv/)
 })
 
+test('Auth0CliManagementClient encodes Auth0 search expressions but preserves comma-delimited fields', () => {
+  let capturedArgs: string[] = []
+  const client = new Auth0CliManagementClient('tenant.us.auth0.com', (_command, args) => {
+    capturedArgs = args
+    return '{"users":[],"total":0}'
+  })
+
+  client.request('get', 'users', {
+    query: {
+      q: 'identities.connection:"Username-Password-Authentication"',
+      search_engine: 'v3',
+      fields: 'name,enabled,credentials',
+    },
+  })
+
+  const queryArguments = capturedArgs.filter((_argument, index) => capturedArgs[index - 1] === '--query')
+  assert.ok(queryArguments.includes('q=identities.connection%3A%22Username-Password-Authentication%22'))
+  assert.ok(queryArguments.includes('search_engine=v3'))
+  assert.ok(queryArguments.includes('fields=name,enabled,credentials'))
+})
+
+test('Auth0CliManagementClient retains API error metadata without exposing the response in its message', () => {
+  const cliFailure: any = new Error('auth0 CLI failed')
+  cliFailure.status = 1
+  cliFailure.stderr = Buffer.from(`
+=== tenant.us.auth0.com error
+
+ ▸    400: API request failed: {"statusCode":400,"error":"Bad Request","message":"Email verification using otp is only compatible with Identifier First.","errorCode":"invalid_body"}.
+`)
+  const client = new Auth0CliManagementClient('tenant.us.auth0.com', () => {
+    throw cliFailure
+  })
+
+  let failure: any
+  try {
+    client.request('patch', 'connections/con_123', { data: { options: {} } })
+    assert.fail('request should propagate the Auth0 API failure')
+  } catch (error) {
+    failure = error
+  }
+
+  assert.equal(failure.statusCode, 400)
+  assert.equal(failure.errorCode, 'invalid_body')
+  assert.equal(failure.apiMessage, 'Email verification using otp is only compatible with Identifier First.')
+  assert.equal(failure.message.includes(failure.apiMessage), false)
+})
+
 test('Auth0LoginPolicyConfigurator preview is read-only and reports prerequisites/resources', () => {
   const calls: Array<{ method: string; path: string; page?: string }> = []
+  let usesBuiltInEmailProvider = false
   const client: Auth0ManagementClient = {
     request(method, path, options = {}) {
       calls.push({ method, path, page: options.query?.page })
+      if (path === 'actions/actions' && options.query?.include_totals) {
+        throw new Error("Query validation error: 'Additional properties not allowed: include_totals'")
+      }
       if (path === 'connections') {
         if (options.query?.page === '0') {
           return {
@@ -273,11 +350,14 @@ test('Auth0LoginPolicyConfigurator preview is read-only and reports prerequisite
               name: 'boxlite-users',
               strategy: 'auth0',
               enabled_clients: ['spa_123'],
-              options: {},
+              options: { attributes: { email: { identifier: { active: true } } } },
             },
           ],
           total: 101,
         }
+      }
+      if (usesBuiltInEmailProvider && (path === 'emails/provider' || path.startsWith('email-templates/'))) {
+        return null
       }
       const responses: Record<string, any> = {
         'clients/spa_123': { client_id: 'spa_123', name: 'boxlite-dashboard', app_type: 'spa' },
@@ -289,7 +369,7 @@ test('Auth0LoginPolicyConfigurator preview is read-only and reports prerequisite
           name: 'boxlite-users',
           strategy: 'auth0',
           enabled_clients: ['spa_123'],
-          options: {},
+          options: { attributes: { email: { identifier: { active: true } } } },
         },
         users: { users: [{ user_id: 'auth0|123', email: 'person@example.com' }], total: 1 },
         'emails/provider': { name: 'smtp', enabled: true },
@@ -336,12 +416,199 @@ test('Auth0LoginPolicyConfigurator preview is read-only and reports prerequisite
     calls.every((call) => call.method === 'get'),
     true,
   )
+
+  usesBuiltInEmailProvider = true
+  const builtInPreview = new Auth0LoginPolicyConfigurator(
+    {
+      tenant: 'tenant.us.auth0.com',
+      clientId: 'spa_123',
+      connectionName: 'boxlite-users',
+      apply: false,
+      allowTestEmailProvider: true,
+    },
+    client,
+    {
+      actionCode: 'exports.onExecutePostLogin = async () => {}',
+      emailVerificationTemplate: {},
+      journalDirectory: '/unused',
+    },
+  ).preview()
+
+  assert.equal(builtInPreview.prerequisites.externalEmailProvider, false)
+  assert.equal(builtInPreview.prerequisites.auth0BuiltInEmailProvider, true)
+  assert.equal(builtInPreview.readyToApply, true)
+})
+
+test('new client grants use explicit scopes without the mutually exclusive allow-all field', () => {
+  const journalDirectory = mkdtempSync(join(tmpdir(), 'boxlite-auth0-policy-grant-'))
+  let grantPayload: Record<string, any> | undefined
+  const connection = {
+    id: 'con_123',
+    name: 'boxlite-users',
+    strategy: 'auth0',
+    enabled_clients: ['spa_123'],
+    options: { attributes: { email: { identifier: { active: true } } } },
+  }
+  const client: Auth0ManagementClient = {
+    request(method, path, options = {}) {
+      if (method === 'post' && path === 'clients') {
+        return {
+          ...options.data,
+          client_id: 'm2m_123',
+          client_secret: 'vault-setup-only',
+        }
+      }
+      if (method === 'post' && path === 'client-grants') {
+        grantPayload = options.data
+        if (grantPayload && 'allow_all_scopes' in grantPayload) {
+          throw new Error('Auth0 rejected mutually exclusive client-grant fields')
+        }
+        throw new Error('client-grant payload accepted sentinel')
+      }
+      const responses: Record<string, any> = {
+        'clients/spa_123': { client_id: 'spa_123', name: 'boxlite-dashboard', app_type: 'spa' },
+        'clients/spa_123/connections': { connections: [connection] },
+        connections: [connection],
+        'connections/con_123': connection,
+        users: { users: [], total: 0 },
+        'emails/provider': null,
+        'email-templates/verify_email_by_code': null,
+        'email-templates/reset_email_by_code': null,
+        prompts: { universal_login_experience: 'new', identifier_first: false },
+        clients: [{ client_id: 'spa_123', name: 'boxlite-dashboard', app_type: 'spa' }],
+        'client-grants': [],
+        'flows/vault/connections': [],
+        flows: [],
+        forms: [],
+        'actions/actions': [],
+        'actions/triggers/post-login/bindings': { bindings: [] },
+      }
+      return responses[path]
+    },
+  }
+
+  try {
+    const configurator = new Auth0LoginPolicyConfigurator(
+      {
+        tenant: 'tenant.us.auth0.com',
+        clientId: 'spa_123',
+        connectionName: 'boxlite-users',
+        apply: true,
+        allowTestEmailProvider: true,
+      },
+      client,
+      {
+        actionCode: 'exports.onExecutePostLogin = async () => {}',
+        emailVerificationTemplate: {},
+        journalDirectory,
+      },
+    )
+
+    let failure: any
+    try {
+      configurator.apply()
+      assert.fail('apply should stop at the client-grant sentinel')
+    } catch (error) {
+      failure = error
+    }
+    assert.match(failure.cause?.message ?? '', /client-grant payload accepted sentinel/)
+    assert.deepEqual(grantPayload, {
+      client_id: 'm2m_123',
+      audience: 'https://tenant.us.auth0.com/api/v2/',
+      scope: ['update:users'],
+    })
+  } finally {
+    rmSync(journalDirectory, { recursive: true, force: true })
+  }
+})
+
+test('database connection setup retries Identifier First propagation without adding OTP login', () => {
+  const journalDirectory = mkdtempSync(join(tmpdir(), 'boxlite-auth0-policy-connection-'))
+  let isIdentifierFirst = false
+  let propagationFailures = 1
+  let connectionPayload: Record<string, any> | undefined
+  const calls: Array<{ method: string; path: string }> = []
+  const client: Auth0ManagementClient = {
+    request(method, path, options = {}) {
+      calls.push({ method, path })
+      if (method === 'patch' && path === 'prompts') {
+        isIdentifierFirst = !Array.isArray(options.data) && options.data?.identifier_first === true
+        return {}
+      }
+      if (method === 'post' && path === 'connections') {
+        if (!isIdentifierFirst || propagationFailures-- > 0) {
+          throw new Error('Email verification using otp is only compatible with Identifier First.')
+        }
+        connectionPayload = Array.isArray(options.data) ? undefined : options.data
+        return { id: 'con_123', ...connectionPayload }
+      }
+      if (method === 'post' && path === 'clients') throw new Error('management client sentinel')
+      const responses: Record<string, any> = {
+        'clients/spa_123': { client_id: 'spa_123', name: 'boxlite-dashboard', app_type: 'spa' },
+        'clients/spa_123/connections': { connections: [] },
+        connections: [],
+        'emails/provider': null,
+        'email-templates/verify_email_by_code': null,
+        'email-templates/reset_email_by_code': null,
+        prompts: { universal_login_experience: 'classic', identifier_first: false },
+        clients: [{ client_id: 'spa_123', name: 'boxlite-dashboard', app_type: 'spa' }],
+        'client-grants': [],
+        'flows/vault/connections': [],
+        flows: [],
+        forms: [],
+        'actions/actions': [],
+        'actions/triggers/post-login/bindings': { bindings: [] },
+      }
+      return responses[path]
+    },
+  }
+
+  try {
+    const configurator = new Auth0LoginPolicyConfigurator(
+      {
+        tenant: 'tenant.us.auth0.com',
+        clientId: 'spa_123',
+        connectionName: 'boxlite-users',
+        apply: true,
+        allowTestEmailProvider: true,
+      },
+      client,
+      {
+        actionCode: 'exports.onExecutePostLogin = async () => {}',
+        emailVerificationTemplate: {},
+        journalDirectory,
+      },
+    )
+
+    let failure: any
+    try {
+      configurator.apply()
+      assert.fail('apply should stop at the management client sentinel')
+    } catch (error) {
+      failure = error
+    }
+    assert.match(failure.cause?.message ?? '', /management client sentinel/)
+    assert.equal(connectionPayload?.options.attributes.email.verification_method, 'otp')
+    assert.equal(connectionPayload?.options.authentication_methods.email_otp, undefined)
+    assert.deepEqual(
+      calls
+        .filter((call) =>
+          (call.method === 'patch' && call.path === 'prompts') ||
+          (call.method === 'post' && call.path === 'connections'),
+        )
+        .map((call) => `${call.method} ${call.path}`),
+      ['patch prompts', 'post connections', 'post connections'],
+    )
+  } finally {
+    rmSync(journalDirectory, { recursive: true, force: true })
+  }
 })
 
 test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals without credentials', () => {
   const journalDirectory = mkdtempSync(join(tmpdir(), 'boxlite-auth0-policy-'))
   const template = JSON.parse(readFileSync(new URL('./auth0/email-verification-form.json', import.meta.url), 'utf8'))
   const calls: Array<{ method: string; path: string; data?: Record<string, any> }> = []
+  let propagationFailures = 1
   const state: Record<string, any> = {
     client: { client_id: 'spa_123', name: 'boxlite-dashboard', app_type: 'spa' },
     connection: {
@@ -349,10 +616,13 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
       name: 'boxlite-users',
       strategy: 'auth0',
       enabled_clients: ['spa_123'],
-      options: { passwordPolicy: 'good' },
+      options: {
+        passwordPolicy: 'good',
+        attributes: { email: { identifier: { active: true } } },
+      },
     },
     clientConnectionEnabled: false,
-    prompt: { universal_login_experience: 'classic', identifier_first: false },
+    prompt: { universal_login_experience: 'new' },
     managementClient: {
       client_id: 'm2m_123',
       name: 'boxlite-forms-email-verification',
@@ -447,7 +717,12 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
         }
         return reads[path]
       }
-      if (method === 'patch' && path === 'connections/con_123') Object.assign(state.connection, options.data)
+      if (method === 'patch' && path === 'connections/con_123') {
+        if (state.prompt.identifier_first !== true || propagationFailures-- > 0) {
+          throw new Error('Email verification using otp is only compatible with Identifier First.')
+        }
+        Object.assign(state.connection, options.data)
+      }
       if (method === 'patch' && path === 'connections/con_123/clients') {
         const update = options.data?.find((candidate: any) => candidate.client_id === 'spa_123')
         state.clientConnectionEnabled = update?.status === true
@@ -518,6 +793,13 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
     const bindingCall = calls.findIndex(
       (call) => call.path === 'actions/triggers/post-login/bindings' && call.method === 'patch',
     )
+    const promptCall = calls.findIndex((call) => call.path === 'prompts' && call.method === 'patch')
+    const connectionCall = calls.findIndex(
+      (call) => call.path === 'connections/con_123' && call.method === 'patch',
+    )
+    const grantCall = calls.findIndex(
+      (call) => call.path === 'client-grants/cgr_123' && call.method === 'patch',
+    )
     const connectionBindingCall = calls.find(
       (call) => call.path === 'connections/con_123/clients' && call.method === 'patch',
     )
@@ -533,6 +815,8 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
     assert.deepEqual(connectionBindingCall?.data, [{ client_id: 'spa_123', status: true }])
     assert.equal(state.clientConnectionEnabled, true)
     assert.equal(state.prompt.identifier_first, true)
+    assert.equal(promptCall < connectionCall, true)
+    assert.equal(connectionCall < grantCall, true)
     assert.equal(
       state.bindings.some((binding: any) => binding.action.id === 'act_policy'),
       true,
@@ -542,6 +826,17 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
     assert.equal(journal.includes('"kind": "flow"'), false)
     assert.equal(journal.includes('"kind": "verification form"'), false)
     assert.match(journal, /passwordPolicy/)
+
+    const reapplyStart = calls.length
+    const reapplied = configurator.apply()
+    const reapplyPrerequisiteWrites = calls.slice(reapplyStart).filter(
+      (call) =>
+        call.method === 'patch' &&
+        (call.path === 'prompts' || call.path === 'connections/con_123'),
+    )
+
+    assert.equal(reapplied.mode, 'applied')
+    assert.deepEqual(reapplyPrerequisiteWrites, [])
 
     const rollback = Auth0LoginPolicyConfigurator.rollback(journalPath, () => client)
 
