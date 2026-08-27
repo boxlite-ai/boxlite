@@ -246,7 +246,24 @@ impl VmmHandlerTrait for ShimHandler {
         // launcher's shutdown above never reached it — this is the shim's only
         // chance to flush libkrun's virtio-blk buffers. Reaping mid-flush risks
         // qcow2 corruption. Runs before `reap_box` so the cgroup path flushes too.
-        const REAP_GRACE: std::time::Duration = std::time::Duration::from_millis(2000);
+        //
+        // Sized from what the shim is allowed to take, not from a guess: its
+        // SIGTERM handler gives `Guest.Shutdown` `GUEST_SHUTDOWN_TIMEOUT_SECS`
+        // (3s, `shim/src/main.rs:292`) and only re-raises SIGTERM once that
+        // returns, so anything shorter can expire mid-flush — measured 2105,
+        // 2111 and 2131 ms on a detached box, all of which a 2s grace missed.
+        // The extra second covers the re-raise and process exit.
+        //
+        // This comment is the only thing tying the two values together; they
+        // live in different crates, so raising the shim's timeout without
+        // raising this one silently reintroduces the truncation.
+        //
+        // Scope: the measurements above are from a detached box, which is the
+        // case this sweep exists for. A foreground box carries
+        // `--die-with-parent` (`jailer/sandbox/bwrap.rs:78`), so its shim dies
+        // with the launcher inside `graceful_stop` and never reaches this wait —
+        // whether that path wants a flush window of its own is untouched here.
+        const REAP_GRACE: std::time::Duration = std::time::Duration::from_millis(4000);
         crate::jailer::terminate_and_wait(&box_tree, REAP_GRACE);
 
         // Reap survivors. `reap_box` uses cgroup.kill (atomic, fork-safe) when the
