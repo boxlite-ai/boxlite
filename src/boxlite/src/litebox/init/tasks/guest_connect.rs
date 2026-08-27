@@ -110,10 +110,14 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
 const DEFAULT_GUEST_READY_TIMEOUT_SECS: u64 = 30;
 const GUEST_READY_TIMEOUT_ENV: &str = "BOXLITE_GUEST_READY_TIMEOUT_SECS";
 
+/// Returns the configured timeout for the guest-ready handshake.
 fn guest_ready_timeout() -> Duration {
     guest_ready_timeout_from(std::env::var(GUEST_READY_TIMEOUT_ENV).ok().as_deref())
 }
 
+/// Resolves the guest-ready timeout from an optional environment value.
+///
+/// Invalid, missing, and zero values retain the production default.
 fn guest_ready_timeout_from(value: Option<&str>) -> Duration {
     let seconds = value
         .and_then(|value| value.parse::<u64>().ok())
