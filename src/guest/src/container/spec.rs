@@ -246,8 +246,37 @@ pub(super) fn mount_destinations(spec: &Spec) -> Vec<PathBuf> {
     spec.mounts()
         .iter()
         .flatten()
-        .map(|mount| mount.destination().clone())
+        .map(|mount| canonical_destination(mount.destination()))
         .collect()
+}
+
+/// A mount destination as the path it actually covers.
+///
+/// `UserMount::destination` is caller-supplied text that reaches the spec
+/// unchanged, and the runtime resolves it against the rootfs when it mounts —
+/// so `/workspace/../tmp` mounts over `/tmp`. Cached verbatim it would compare
+/// equal to neither, and the copy path's reachability check would wave through
+/// a write that lands under the mount after all. Collapsing the path here is
+/// what keeps that check honest about what is mounted where.
+///
+/// Lexical on purpose: the kernel's own resolution of a `..` that crosses a
+/// symlink can differ, so a destination is normalized, never trusted as proof
+/// the mount is where it claims.
+fn canonical_destination(destination: &Path) -> PathBuf {
+    let mut out = PathBuf::from("/");
+    for component in destination.components() {
+        match component {
+            Component::Normal(part) => out.push(part),
+            // `/..` has nowhere to go: the runtime cannot mount above the
+            // rootfs, so the destination clamps at the root rather than
+            // escaping it.
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir | Component::RootDir | Component::Prefix(_) => continue,
+        }
+    }
+    out
 }
 
 // ====================
@@ -1390,6 +1419,33 @@ mod tests {
             .expect("/dev mount");
         assert_eq!(dev_mount.typ().as_deref(), Some("tmpfs"));
         assert_eq!(dev_mount.source().as_deref(), Some(Path::new("tmpfs")));
+    }
+
+    /// A `..` or `.` in a mount destination reaches the spec unchanged — it is
+    /// caller-supplied text — and the runtime resolves it when it mounts. The
+    /// cached list has to name the path actually covered, or file transfer's
+    /// reachability check compares a request against a destination nothing is
+    /// mounted on and waves the write through into the shadow.
+    #[test]
+    fn a_mount_destination_names_the_path_the_runtime_covers() {
+        assert_eq!(
+            canonical_destination(Path::new("/workspace/../tmp")),
+            PathBuf::from("/tmp")
+        );
+        assert_eq!(
+            canonical_destination(Path::new("/tmp/./inner")),
+            PathBuf::from("/tmp/inner")
+        );
+        // Nowhere above the rootfs to go, so it clamps rather than escapes.
+        assert_eq!(
+            canonical_destination(Path::new("/../../etc")),
+            PathBuf::from("/etc")
+        );
+        // A destination already canonical is returned unchanged.
+        assert_eq!(
+            canonical_destination(Path::new("/dev/shm")),
+            PathBuf::from("/dev/shm")
+        );
     }
 
     /// A container answers `mount_destinations()` from the spec object it built,

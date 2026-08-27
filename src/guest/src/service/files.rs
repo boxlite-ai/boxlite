@@ -8,7 +8,9 @@ use crate::service::server::GuestServer;
 use boxlite_shared::{
     files_server::Files, DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
 };
+use nix::fcntl::OFlag;
 use std::collections::HashSet;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::File;
@@ -47,6 +49,91 @@ impl Drop for StagedTar {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
     }
+}
+
+/// Open `rel` under `root`, with every symlink confined to `root`.
+///
+/// `fchownat(None, "/abs/path", …, AT_SYMLINK_NOFOLLOW)` guards only the final
+/// component; every directory above it is resolved by the kernel, symlinks
+/// followed. So a workload that swaps a directory this copy just extracted for
+/// a symlink — after extraction, while the ownership hand-off is still working
+/// through its list — redirects the chown to whatever the link names. Naming a
+/// path and then acting on it is two operations, and the box gets to move the
+/// target in between; runc's CVE-2025-52565 is the same shape, and its fix was
+/// likewise to stop passing paths and start carrying descriptors.
+///
+/// `RESOLVE_IN_ROOT` is what makes the descriptor safe to chown through: the
+/// kernel resolves the whole path in one step and reinterprets every absolute
+/// symlink and `..` against `root`, so a swapped ancestor lands back inside the
+/// rootfs instead of outside it. Confining rather than refusing is deliberate —
+/// images ship symlinked directories (`/lib -> usr/lib` on `python:3-slim`,
+/// `/var/run -> ../run` on `redis:7.4-alpine`), and refusing those would leave
+/// a copy to `/lib/x` extracted but still root-owned, which is the ownership
+/// bug this hand-off exists to fix.
+///
+/// `O_PATH` because this fd is only ever a resolution anchor — never read,
+/// never written. `openat2` needs 5.6 and the guest kernel is vendored and
+/// pinned well past it (`src/deps/libkrun-sys/vendor/libkrunfw/Makefile`), so
+/// its absence is not a case this has to carry.
+fn open_dir_in_root(root: RawFd, rel: &Path) -> nix::Result<OwnedFd> {
+    let how = nix::fcntl::OpenHow::new()
+        .flags(OFlag::O_PATH | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC)
+        .resolve(nix::fcntl::ResolveFlag::RESOLVE_IN_ROOT);
+
+    // `openat2` rejects an empty path, so a target sitting directly in the
+    // rootfs anchors on the root itself.
+    let path = if rel.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        rel
+    };
+
+    // SAFETY: `openat2` returns a fresh descriptor this scope owns; wrapping it
+    // immediately is what closes it on every exit.
+    Ok(unsafe { OwnedFd::from_raw_fd(nix::fcntl::openat2(root, path, how)?) })
+}
+
+/// Give one path inside the rootfs to `uid:gid`, or refuse it.
+///
+/// The whole hand-off is this, once per target: prove the path is inside the
+/// boundary, reach its parent with every link confined to the rootfs, and
+/// change the leaf through that parent's descriptor. Kept as one function so
+/// the composition — and not merely [`open_dir_in_root`] underneath it — is
+/// what the tests hold.
+///
+/// What this bounds and what it does not: a swapped ancestor can no longer
+/// steer the chown out of the rootfs, but it can still steer it onto another
+/// path *within* the rootfs, so a workload can spend its own copy's hand-off on
+/// a file of its choosing inside its own filesystem. `RESOLVE_BENEATH` would
+/// refuse that too, and cannot be used: images ship absolute symlinked
+/// directories (`/var/run -> /run` on `python:3-slim`), which `BENEATH` rejects
+/// as an escape. Bounded to the box, in exchange for images working, is the
+/// trade — and it is why nothing here treats the resolved path as evidence of
+/// what the copy wrote.
+///
+/// `EXDEV` for a target outside the rootfs: [`DestBefore::created`] filters
+/// those lexically already, so reaching here means the two disagree, and the
+/// honest answer is to refuse rather than to chown on a lexical say-so.
+fn chown_within_rootfs(
+    anchor: RawFd,
+    rootfs_root: &Path,
+    target: &Path,
+    uid: u32,
+    gid: u32,
+) -> nix::Result<()> {
+    let rel = target
+        .strip_prefix(rootfs_root)
+        .map_err(|_| nix::errno::Errno::EXDEV)?;
+    let leaf = rel.file_name().ok_or(nix::errno::Errno::EINVAL)?;
+    let parent = open_dir_in_root(anchor, rel.parent().unwrap_or(Path::new("")))?;
+
+    nix::unistd::fchownat(
+        Some(parent.as_raw_fd()),
+        Path::new(leaf),
+        Some(nix::unistd::Uid::from_raw(uid)),
+        Some(nix::unistd::Gid::from_raw(gid)),
+        nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+    )
 }
 
 /// Ancestors of `path`, outermost first, that do not exist yet.
@@ -610,6 +697,12 @@ impl GuestServer {
         if (uid, gid) == (0, 0) {
             return;
         }
+        let rootfs_root = self
+            .layout
+            .shared()
+            .container(container_id)
+            .rootfs_dir()
+            .to_path_buf();
 
         // Scoping the targets and changing them are both one syscall per
         // archive entry, so this runs on a blocking thread for the same reason
@@ -617,14 +710,23 @@ impl GuestServer {
         let handoff = tokio::task::spawn_blocking(move || {
             let targets = before.created(&dest_root, &entry_paths);
             let (mut changed, mut failed) = (0usize, 0usize);
+
+            // Anchored at the rootfs rather than at `dest_root`: the parents
+            // `mkdir_parents` conjured sit above the destination, and the
+            // rootfs is the boundary none of them may cross.
+            let anchor = match std::fs::File::open(&rootfs_root) {
+                Ok(dir) => dir,
+                Err(e) => {
+                    tracing::warn!(
+                        rootfs = %rootfs_root.display(), error = %e,
+                        "copied paths could not be given to the container user"
+                    );
+                    return (0, targets.len());
+                }
+            };
+
             for target in &targets {
-                match nix::unistd::fchownat(
-                    None,
-                    target.as_path(),
-                    Some(nix::unistd::Uid::from_raw(uid)),
-                    Some(nix::unistd::Gid::from_raw(gid)),
-                    nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
-                ) {
+                match chown_within_rootfs(anchor.as_raw_fd(), &rootfs_root, target, uid, gid) {
                     Ok(()) => changed += 1,
                     Err(_) => failed += 1,
                 }
@@ -850,6 +952,102 @@ mod tests {
         let created = before.created(&dest, &entries);
         assert!(!created.is_empty());
         assert!(created.iter().all(|target| target == &dest), "{created:?}");
+    }
+
+    /// A symlinked directory the *image* shipped must still get the hand-off.
+    ///
+    /// `python:3-slim` ships `/lib -> usr/lib`, `redis:7.4-alpine` ships
+    /// `/var/run -> ../run`. Neither is a mount, so a copy to `/lib/x` is
+    /// reachable and extraction writes it — through the link, into `usr/lib`.
+    /// Refusing to follow that link would leave the file root-owned, which is
+    /// the ownership bug this hand-off exists to fix, so confining the
+    /// resolution has to mean following it, not rejecting it.
+    #[test]
+    fn a_symlink_ancestor_inside_the_rootfs_still_gets_the_hand_off() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        // Both shapes real images ship. The absolute one is the load-bearing
+        // case: `RESOLVE_BENEATH` refuses it as an escape, so it is the only
+        // form that fails if the resolver is ever "hardened" to BENEATH — the
+        // relative one resolves under either flag and would not notice.
+        std::fs::create_dir_all(rootfs.join("usr/lib")).unwrap();
+        std::os::unix::fs::symlink("usr/lib", rootfs.join("lib")).unwrap();
+        std::fs::write(rootfs.join("usr/lib/payload"), b"x").unwrap();
+
+        std::fs::create_dir_all(rootfs.join("run")).unwrap();
+        std::fs::create_dir_all(rootfs.join("var")).unwrap();
+        std::os::unix::fs::symlink("/run", rootfs.join("var/run")).unwrap();
+        std::fs::write(rootfs.join("run/payload"), b"x").unwrap();
+
+        let anchor = std::fs::File::open(&rootfs).unwrap();
+        let (uid, gid) = (
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        );
+
+        for through in ["lib/payload", "var/run/payload"] {
+            chown_within_rootfs(anchor.as_raw_fd(), &rootfs, &rootfs.join(through), uid, gid)
+                .unwrap_or_else(|e| {
+                    panic!("a copy through an image-shipped symlink ({through}) must still be handed over, got {e:?}")
+                });
+        }
+    }
+
+    /// The hand-off must not reach a file outside the rootfs through a
+    /// directory the workload swapped for a symlink after extraction.
+    ///
+    /// The discriminating assertion is the refusal itself: with the fix reverted
+    /// to `fchownat(None, target, …)` this call returns `Ok`, because
+    /// `AT_SYMLINK_NOFOLLOW` guards only the leaf. An unprivileged test cannot
+    /// observe a cross-uid change, so proving *where* it landed is not available
+    /// here — that the escape is refused at all is.
+    #[test]
+    fn the_hand_off_does_not_chown_through_a_swapped_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(rootfs.join("app")).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("passwd"), b"outside").unwrap();
+
+        let target = rootfs.join("app/passwd");
+        std::fs::write(&target, b"payload").unwrap();
+
+        let anchor = std::fs::File::open(&rootfs).unwrap();
+        let (uid, gid) = (
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        );
+
+        // The path extraction actually produced is handed over.
+        chown_within_rootfs(anchor.as_raw_fd(), &rootfs, &target, uid, gid)
+            .expect("a path this copy created is ours to hand over");
+
+        // The workload swaps the directory for a link out of the rootfs. The
+        // absolute target is reinterpreted against the rootfs, so the same
+        // request can no longer name the outside file.
+        std::fs::remove_file(&target).unwrap();
+        std::fs::remove_dir(rootfs.join("app")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, rootfs.join("app")).unwrap();
+
+        chown_within_rootfs(anchor.as_raw_fd(), &rootfs, &target, uid, gid)
+            .expect_err("the hand-off must not reach through a swapped directory");
+    }
+
+    /// A target the lexical filter should already have dropped is refused here
+    /// too, rather than chowned on a lexical say-so.
+    #[test]
+    fn a_target_outside_the_rootfs_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        std::fs::create_dir_all(&rootfs).unwrap();
+        let outside = tmp.path().join("outside.txt");
+        std::fs::write(&outside, b"x").unwrap();
+
+        let anchor = std::fs::File::open(&rootfs).unwrap();
+        let err = chown_within_rootfs(anchor.as_raw_fd(), &rootfs, &outside, 0, 0)
+            .expect_err("a target outside the rootfs must be refused");
+        assert_eq!(err, nix::errno::Errno::EXDEV, "{err:?}");
     }
 
     #[test]

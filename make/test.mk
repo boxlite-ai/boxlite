@@ -203,8 +203,8 @@ test\:stress:
 
 # Core unit suites: Rust unit + FFI unit + gvproxy bridge unit.
 test\:unit\:core:
-	@echo "── Core unit suites (rust, ffi, gvproxy) ──"
-	$(call run_suites,test:unit:rust test:unit:ffi test:unit:gvproxy)
+	@echo "── Core unit suites (rust, openapi, ffi, gvproxy) ──"
+	$(call run_suites,test:unit:rust test:unit:openapi test:unit:ffi test:unit:gvproxy)
 
 # Core integration suites: Rust integration + CLI integration.
 test\:integration\:core:
