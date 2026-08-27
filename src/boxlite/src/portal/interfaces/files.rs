@@ -137,16 +137,20 @@ impl FilesInterface {
 /// Preserve the guest's error class instead of flattening it to `Internal`.
 ///
 /// The guest rejects bad requests with real gRPC codes — an unreachable
-/// destination, a missing source, a malformed path. Collapsing all of them into
-/// `Internal` turned every one into a 500 and buried the reason inside a
-/// `status: …` string, which is exactly how a caller ends up thinking a
-/// deliberate refusal was a server fault.
+/// destination, a missing source, a malformed path, a payload over its size
+/// cap. Collapsing all of them into `Internal` turned every one into a 500 and
+/// buried the reason inside a `status: …` string, which is exactly how a caller
+/// ends up thinking a deliberate refusal was a server fault.
+///
+/// The arms are the complete set of codes `boxlite-guest`'s files service
+/// emits; anything else is genuinely unclassified and stays a server fault.
 fn map_tonic_err(err: tonic::Status) -> BoxliteError {
     let message = err.message().to_owned();
     match err.code() {
         tonic::Code::FailedPrecondition => BoxliteError::Unsupported(message),
         tonic::Code::InvalidArgument => BoxliteError::InvalidArgument(message),
         tonic::Code::NotFound => BoxliteError::NotFound(message),
+        tonic::Code::ResourceExhausted => BoxliteError::ResourceExhausted(message),
         _ => BoxliteError::Internal(err.to_string()),
     }
 }
@@ -182,6 +186,20 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::InvalidArgument(_)));
         assert_eq!(error.http().0, 400);
+    }
+
+    /// The guest caps an upload at 512 MiB and says so with `ResourceExhausted`.
+    /// Flattened to `Internal` it reaches the caller as a 500 — the server
+    /// blaming itself for a payload the caller chose.
+    #[test]
+    fn oversized_upload_maps_to_resource_exhausted() {
+        let error = map_tonic_err(Status::resource_exhausted("upload too large"));
+
+        assert!(
+            matches!(error, BoxliteError::ResourceExhausted(_)),
+            "{error:?}"
+        );
+        assert_eq!(error.http().0, 429);
     }
 
     /// Anything the guest did not classify stays a server fault, and keeps the

@@ -749,6 +749,12 @@ export class SimpleBox {
   /**
    * Copy a file or directory from the container to the host.
    *
+   * **Note:** a source at or under a container mount (e.g. `/tmp`,
+   * `/dev/shm`, volumes), or a directory containing one, is refused with an
+   * error naming the mount — the archive would carry the files underneath it
+   * rather than the ones the container sees. Copy a path outside the mount,
+   * or pipe a tar through `exec`.
+   *
    * @param containerSrc - Absolute path inside the container
    * @param hostDest - Absolute path on the host
    * @param options - Copy options (recursive, overwrite, etc.)

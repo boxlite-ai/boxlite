@@ -550,9 +550,12 @@ async fn copy_in_to_tmpfs_is_refused(bx: &LiteBox, tmp: &Path) {
         .await
         .expect_err("copy_into a tmpfs path must be refused, not silently shadowed");
 
+    // The exact fragment, not a bare "/tmp": examples/python/02_features/
+    // copy_files.py and examples/node/cp_tmpfs_workaround.js both fail closed on
+    // it, and the runtime's own staging tar path would satisfy a looser match.
     let msg = err.to_string();
     assert!(
-        msg.contains("/tmp"),
+        msg.contains("'/tmp' mount"),
         "refusal should name the mount that blocks it, got: {msg}"
     );
 
@@ -589,7 +592,7 @@ async fn copy_out_from_tmpfs_is_refused(bx: &LiteBox, tmp: &Path) {
 
     let msg = err.to_string();
     assert!(
-        msg.contains("/tmp"),
+        msg.contains("'/tmp' mount"),
         "refusal should name the mount that blocks it, got: {msg}"
     );
     assert!(!dst.exists(), "refused copy_out must not write a host file");
@@ -643,9 +646,12 @@ async fn copy_in_landing_on_a_file_mount_is_refused(bx: &LiteBox, tmp: &Path) {
         .await
         .expect_err("an entry landing on a bind mount must be refused");
 
+    // Same fragment the tmpfs cases pin: a caller taught to match `'<mount>'
+    // mount` meets this wording too, and `/etc/hosts` alone would still match a
+    // message that had stopped naming the mount as a mount.
     let msg = err.to_string();
     assert!(
-        msg.contains("/etc/hosts"),
+        msg.contains("'/etc/hosts' mount"),
         "refusal should name the mount the entry would land on, got: {msg}"
     );
 
@@ -670,9 +676,19 @@ async fn copy_out_of_a_dir_containing_a_mount_is_refused(bx: &LiteBox, tmp: &Pat
         .await
         .expect_err("copy_out of a directory containing a mount must be refused");
 
+    // Which of the three `/etc` binds is named depends on their order in the
+    // OCI spec, so accept any — but insist on the quoted `'<mount>' mount`
+    // fragment. A bare `/etc/` also appears in the remedy text, so it would
+    // hold even if the message stopped naming a mount at all.
     let msg = err.to_string();
     assert!(
-        msg.contains("/etc/"),
+        [
+            "'/etc/hosts' mount",
+            "'/etc/hostname' mount",
+            "'/etc/resolv.conf' mount"
+        ]
+        .iter()
+        .any(|fragment| msg.contains(fragment)),
         "refusal should name the mount inside it, got: {msg}"
     );
 }

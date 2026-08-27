@@ -22,6 +22,7 @@ use crate::runtime::id::BoxID;
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 
 use super::client::{ApiClient, WsStream};
+use super::error::map_http_body;
 use super::exec::RestExecControl;
 use super::types::{
     BoxMetricsResponse, BoxResponse, CloneBoxRequest, CreateSnapshotRequest, ExecRequest,
@@ -316,10 +317,7 @@ impl BoxBackend for RestBox {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(BoxliteError::Internal(format!(
-                "copy_into failed (HTTP {}): {}",
-                status, text
-            )));
+            return Err(map_http_body(status, &text));
         }
         Ok(())
     }
@@ -349,10 +347,7 @@ impl BoxBackend for RestBox {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(BoxliteError::Internal(format!(
-                "copy_out failed (HTTP {}): {}",
-                status, text
-            )));
+            return Err(map_http_body(status, &text));
         }
 
         let tar_bytes = resp
@@ -2039,5 +2034,98 @@ mod tests {
 
         attach.await.unwrap();
         server.abort();
+    }
+
+    /// Answer `requests` requests with the error envelope the server really
+    /// emits for a refused copy: `Unsupported` → HTTP 400, `code:
+    /// "unsupported"`.
+    ///
+    /// The request is drained before replying because `copy_into` sends a tar
+    /// body — answering mid-upload gives the client a transport error instead
+    /// of the status under test.
+    async fn serve_refusal_envelope(listener: TcpListener, requests: usize) {
+        const REFUSAL: &str = concat!(
+            r#"{"error":{"type":"UnsupportedError","code":"unsupported","message":"#,
+            r#""/tmp/x is under the container's '/tmp' mount, which file transfer cannot reach"}}"#
+        );
+
+        for _ in 0..requests {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                head.push(stream.read_u8().await.unwrap());
+            }
+            let content_length = String::from_utf8_lossy(&head)
+                .to_lowercase()
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("content-length:")
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            let mut body = vec![0u8; content_length];
+            stream.read_exact(&mut body).await.unwrap();
+
+            let resp = format!(
+                "HTTP/1.1 400 Bad Request\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\r\n{}",
+                REFUSAL.len(),
+                REFUSAL
+            );
+            let _ = stream.write_all(resp.as_bytes()).await;
+            let _ = stream.shutdown().await;
+        }
+    }
+
+    /// A refusal the server states plainly must not reach the caller as a
+    /// server fault.
+    ///
+    /// Every other REST call decodes a failed response through `ApiClient`,
+    /// which reconstructs the `BoxliteError` the server named. `copy_into` and
+    /// `copy_out` read the body themselves and flattened all of it to
+    /// `Internal` — a 500 for a 400 the caller caused. A mount-shadowed path is
+    /// the case that makes it matter: it is a routine outcome now, all three
+    /// SDKs document it as a refusal, and `Internal` is exactly what
+    /// `map_tonic_err` was fixed to stop producing for it on the FFI backend.
+    #[tokio::test]
+    async fn a_refused_copy_keeps_the_servers_error_class() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(serve_refusal_envelope(listener, 2));
+
+        let bx = rest_box_for(port, "box1");
+        let tmp = tempfile::tempdir().unwrap();
+
+        let out_err = bx
+            .copy_out(
+                "/tmp/x",
+                &tmp.path().join("out.txt"),
+                CopyOptions::default(),
+            )
+            .await
+            .expect_err("a 400 refusal must not read as success");
+        assert!(
+            matches!(out_err, BoxliteError::Unsupported(_)),
+            "copy_out flattened the refusal: {out_err:?}"
+        );
+        assert!(
+            out_err.to_string().contains("'/tmp' mount"),
+            "the refusal text must survive: {out_err}"
+        );
+
+        let src = tmp.path().join("payload.txt");
+        std::fs::write(&src, b"payload").unwrap();
+        let in_err = bx
+            .copy_into(&src, "/tmp/x", CopyOptions::default())
+            .await
+            .expect_err("a 400 refusal must not read as success");
+        assert!(
+            matches!(in_err, BoxliteError::Unsupported(_)),
+            "copy_into flattened the refusal: {in_err:?}"
+        );
+
+        server.await.unwrap();
     }
 }

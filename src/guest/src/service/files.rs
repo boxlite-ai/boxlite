@@ -8,7 +8,9 @@ use crate::service::server::GuestServer;
 use boxlite_shared::{
     files_server::Files, DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
 };
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -18,6 +20,34 @@ use tracing::info;
 
 const CHUNK_SIZE: usize = 1 << 20; // 1 MiB
 const MAX_UPLOAD_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB safety cap
+
+/// A staged upload, deleted whenever it goes out of scope.
+///
+/// The guest's temp dir is RAM-backed, and a request leaves through half a
+/// dozen `?`s between creating this file and finishing with it — the size cap,
+/// a write error, a mount refusal, a failed extraction. Deleting at the end of
+/// the happy path only meant every one of those stranded up to
+/// [`MAX_UPLOAD_BYTES`] of guest memory for the life of the VM.
+///
+/// Hand-rolled rather than `tempfile::TempPath`: `tempfile` is a dev-dependency
+/// here, and this is not worth adding to what ships inside the VM.
+struct StagedTar(PathBuf);
+
+impl StagedTar {
+    fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for StagedTar {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
 
 /// Ancestors of `path`, outermost first, that do not exist yet.
 ///
@@ -32,6 +62,138 @@ fn missing_ancestors(path: &Path) -> Vec<PathBuf> {
         .collect();
     missing.reverse();
     missing
+}
+
+/// What the destination looked like *before* anything was extracted onto it.
+///
+/// Sampled up front because afterwards there is no telling a directory this
+/// copy created from one the image already shipped — and only the former is
+/// ours to hand to the box user.
+struct DestBefore {
+    /// Ancestors of the destination that `mkdir_parents` had to conjure,
+    /// outermost first.
+    created_dirs: Vec<PathBuf>,
+    /// The destination itself was already there.
+    dest_existed: bool,
+    /// Absolute paths of archive entries that were already directories.
+    ///
+    /// A set, not a list: [`Self::created`] tests every target against it, and
+    /// the caller sizes both — as a list, re-copying a large tree over itself
+    /// made that scan `entries × existing directories`.
+    existing_dirs: HashSet<PathBuf>,
+}
+
+impl DestBefore {
+    /// Sample off the async worker: one `stat` per archive entry, and the
+    /// caller chooses how many entries there are — the same reason
+    /// [`boxlite_shared::tar::entry_paths`] runs on a blocking thread.
+    #[allow(clippy::result_large_err)]
+    async fn sample(dest_root: PathBuf, entry_paths: Arc<[PathBuf]>) -> Result<Self, Status> {
+        tokio::task::spawn_blocking(move || Self::sample_blocking(&dest_root, &entry_paths))
+            .await
+            .map_err(|e| Status::internal(format!("sample task join error: {e}")))
+    }
+
+    fn sample_blocking(dest_root: &Path, entry_paths: &[PathBuf]) -> Self {
+        Self {
+            created_dirs: missing_ancestors(dest_root),
+            dest_existed: dest_root.exists(),
+            existing_dirs: entry_paths
+                .iter()
+                .map(|rel| dest_root.join(rel))
+                .filter(|path| path.is_dir())
+                .collect(),
+        }
+    }
+
+    /// Absolute paths this upload created — exactly the set that may change
+    /// owner. Reads `dest_root` as it stands *after* extraction, so a
+    /// destination the copy conjured is classified by what it became.
+    ///
+    /// Every entry the archive carried, the parent directories extraction had
+    /// to make, and the destination itself when we made it. Directories the
+    /// image already shipped are left alone whether the request names one
+    /// (`copy_in("./x", "/usr/local/bin/")`) or the archive does
+    /// (`copy_in("./dist", "/usr/local")` carrying `bin/tool`) — handing either
+    /// to the box user is a permission change nobody asked for. Files are
+    /// always ours, existing or not: extraction just overwrote them.
+    fn created(&self, dest_root: &Path, entry_paths: &[PathBuf]) -> Vec<PathBuf> {
+        let dest_is_dir = dest_root.is_dir();
+        let mut targets = self.created_dirs.clone();
+        if !dest_is_dir || !self.dest_existed {
+            targets.push(dest_root.to_path_buf());
+        }
+        targets.extend(entry_paths.iter().map(|rel| {
+            if dest_is_dir {
+                dest_root.join(rel)
+            } else {
+                dest_root.to_path_buf()
+            }
+        }));
+
+        // Second line of defence behind sanitize_entry_path: nothing outside the
+        // destination gets chowned, whatever the archive claimed its names were.
+        targets.retain(|target| {
+            (target.starts_with(dest_root) || self.created_dirs.contains(target))
+                && !self.existing_dirs.contains(target)
+        });
+        targets
+    }
+}
+
+// ── Refusal wording ───────────────────────────────────────────────
+//
+// A copy meets a mount in three places — the path the request names, a path an
+// archive entry would land on, and a mount sitting inside a directory being read
+// out — and each says so differently. The phrasing is a shipped contract, not
+// decoration: `examples/python/02_features/copy_files.py` and
+// `examples/node/cp_tmpfs_workaround.js` both *fail closed* on the
+// `'<mount>' mount` fragment — matching a bare `/tmp` would also match the
+// runtime's own staging tar path — so a rewording that drops it turns both demos
+// into hard errors with nothing else going red. The three live together so a
+// rewording of one is read next to the others, and
+// [`tests::every_mount_refusal_names_the_mount_the_way_the_examples_match`] pins
+// the fragment in each.
+
+/// Why the path the request names cannot be transferred, and what to do instead.
+fn unreachable_mount_message(in_container: &Path, mount: &Path) -> String {
+    format!(
+        "{} is under the container's '{}' mount, which file transfer cannot reach; \
+         copy to a path outside '{}' (for example /workspace), or pipe a tar through \
+         exec: exec([\"tar\", \"xf\", \"-\", \"-C\", \"{}\"])",
+        in_container.display(),
+        mount.display(),
+        mount.display(),
+        mount.display(),
+    )
+}
+
+/// Why an archive entry cannot be written, when the destination root itself was
+/// reachable but the payload would land under a mount.
+fn unreachable_payload_message(landed: &Path, mount: &Path) -> String {
+    format!(
+        "this copy would write {} under the container's '{}' mount, which file \
+         transfer cannot reach; copy to a path outside '{}', or pipe a tar through \
+         exec: exec([\"tar\", \"xf\", \"-\", \"-C\", \"{}\"])",
+        landed.display(),
+        mount.display(),
+        mount.display(),
+        mount.display(),
+    )
+}
+
+/// Why a directory cannot be read out, when a mount sits somewhere inside it.
+fn unreadable_subtree_message(src_in_container: &Path, mount: &Path) -> String {
+    format!(
+        "{} contains the container's '{}' mount, which file transfer cannot read; \
+         copying it would return the image's file rather than the one the box sees. \
+         Copy a path that excludes '{}', or pipe a tar through exec: \
+         exec([\"tar\", \"cf\", \"-\", \"-C\", \"{}\", \".\"])",
+        src_in_container.display(),
+        mount.display(),
+        mount.display(),
+        src_in_container.display(),
+    )
 }
 
 /// Normalize a request path to how the container sees it: absolute, no `..`.
@@ -61,51 +223,120 @@ fn deepest_covering(path: &Path, mounts: &[PathBuf]) -> Option<PathBuf> {
         .cloned()
 }
 
-/// Paths the archive carries, relative to the extraction root.
+/// One request path resolved against one container.
 ///
-/// The tar comes from the caller, so its entry names are untrusted: an entry
-/// may be absolute (`/etc/shadow`) or climb out (`../../x`). Extraction already
-/// refuses both — tar-rs strips a leading `/` and drops `..` entries — so this
-/// applies the same rule, or a later `dest.join(rel)` would escape the
-/// destination entirely (`Path::join` discards the base when handed an absolute
-/// path) and hand a root-privileged chown a file nothing here wrote.
+/// Copying is only ever safe where the rootfs layer and the container's own
+/// mount namespace agree, so every question a transfer asks — may I write
+/// here, may I read this subtree, will this payload land somewhere the box
+/// cannot see — is a question about the same pair: the path, and the mounts
+/// that might hide it. Holding both together is what lets this answer them.
 ///
-/// Header-only pass — no payload is read. Returns empty on a malformed archive
-/// rather than failing: extraction has already succeeded by the time this runs,
-/// and the worst case is that ownership is left alone.
-fn archive_entry_paths(tar_path: &Path) -> Vec<PathBuf> {
-    let Ok(file) = std::fs::File::open(tar_path) else {
-        return Vec::new();
-    };
-    let mut archive = tar::Archive::new(file);
-    let Ok(entries) = archive.entries() else {
-        return Vec::new();
-    };
-    entries
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.path().ok().map(|p| p.into_owned()))
-        .filter_map(|path| sanitize_entry_path(&path))
-        .collect()
+/// Resolved once per request. Previously each check re-derived the container
+/// path and re-fetched the mount list behind two locks, and every call site
+/// had to destructure a different tuple and pick the matching message; a
+/// refusal now returns ready to `?`.
+struct CopyTarget {
+    /// The path as the container sees it: absolute, no `..`.
+    in_container: PathBuf,
+    /// Where that path lands on the guest-side rootfs directory.
+    on_rootfs: PathBuf,
+    /// Destinations of every mount the container was created with.
+    mounts: Vec<PathBuf>,
 }
 
-/// An archive entry name reduced to what extraction would actually create.
-///
-/// Mirrors tar-rs's own rule (`entry.rs`: `RootDir => continue`,
-/// `ParentDir => return Ok(false)`): drop the leading `/`, refuse anything
-/// containing `..`. `None` means extraction skipped it, so nothing downstream
-/// should touch it either.
-fn sanitize_entry_path(path: &Path) -> Option<PathBuf> {
-    use std::path::Component;
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(part) => out.push(part),
-            // Leading `/` and `.` are dropped by extraction, not rejected.
-            Component::RootDir | Component::CurDir => continue,
-            Component::ParentDir | Component::Prefix(_) => return None,
+impl CopyTarget {
+    /// Resolve `path` for `container_id`, refusing it outright when a mount
+    /// hides the path itself.
+    ///
+    /// File transfer works on the rootfs layer from outside the container's
+    /// mount namespace. The container mounts a tmpfs over `/tmp` (and binds
+    /// volumes elsewhere) *inside* that namespace, so a path at or below one of
+    /// those destinations resolves to a different inode than the one any
+    /// process in the box sees: writes land under the mount and are invisible
+    /// forever, reads come back stale or missing. Refusing is the only honest
+    /// answer available from out here — silently transferring the shadow is
+    /// what made this a bug rather than a limitation.
+    ///
+    /// Refusing during construction rather than at each caller is deliberate:
+    /// the rootfs path this hands back is only meaningful because it has
+    /// already been proven reachable, so there is no way to hold one without
+    /// the other.
+    #[allow(clippy::result_large_err)]
+    async fn resolve(server: &GuestServer, container_id: &str, path: &str) -> Result<Self, Status> {
+        let in_container = to_container_path(path)?;
+        let mounts = server.container_mounts(container_id).await?;
+
+        if let Some(mount) = deepest_covering(&in_container, &mounts) {
+            return Err(Status::failed_precondition(unreachable_mount_message(
+                &in_container,
+                &mount,
+            )));
+        }
+
+        let rel = in_container.strip_prefix("/").unwrap_or(&in_container);
+        let on_rootfs = server
+            .layout
+            .shared()
+            .container(container_id)
+            .rootfs_dir()
+            .join(rel);
+
+        Ok(Self {
+            in_container,
+            on_rootfs,
+            mounts,
+        })
+    }
+
+    /// Where to read or write on the guest-side rootfs.
+    fn on_rootfs(&self) -> &Path {
+        &self.on_rootfs
+    }
+
+    /// Refuse an upload whose payload would land under a mount.
+    ///
+    /// The root can be perfectly reachable while the payload is not:
+    /// `copy_in(dir, "/etc")` where `dir` contains `hosts` would write the
+    /// image's `/etc/hosts` beneath the bind, invisible to the box. Checked
+    /// against the archive's own entries so a single file to `/etc` — which
+    /// lands at `/etc/motd.txt`, under no mount — still works.
+    #[allow(clippy::result_large_err)]
+    fn refuse_shadowed_payload(&self, entry_paths: &[PathBuf]) -> Result<(), Status> {
+        for rel in entry_paths {
+            let landed = self.in_container.join(rel);
+            if let Some(mount) = deepest_covering(&landed, &self.mounts) {
+                return Err(Status::failed_precondition(unreachable_payload_message(
+                    &landed, &mount,
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuse a read-out whose subtree contains a mount.
+    ///
+    /// Packing walks the rootfs layer, so a mount anywhere inside the source
+    /// tree would be read through rather than seen — the archive would carry
+    /// the image's file where the workload has the mount's. Same bug as the
+    /// write direction, one level down, so it is refused the same way.
+    #[allow(clippy::result_large_err)]
+    fn refuse_shadowed_subtree(&self) -> Result<(), Status> {
+        let deepest_below = self
+            .mounts
+            .iter()
+            .filter(|mount| {
+                mount.as_path() != self.in_container && mount.starts_with(&self.in_container)
+            })
+            .max_by_key(|mount| mount.components().count());
+
+        match deepest_below {
+            Some(mount) => Err(Status::failed_precondition(unreadable_subtree_message(
+                &self.in_container,
+                mount,
+            ))),
+            None => Ok(()),
         }
     }
-    (!out.as_os_str().is_empty()).then_some(out)
 }
 
 #[tonic::async_trait]
@@ -133,18 +364,20 @@ impl Files for GuestServer {
             .await
             .map_err(Status::failed_precondition)?;
 
-        // Build absolute dest root under container rootfs
-        let in_container = to_container_path(&dest_path)?;
-        let dest_root = self.container_rootfs(&container_id, &dest_path).await?;
+        // Resolves the destination and refuses it if a mount hides it.
+        let dest = CopyTarget::resolve(self, &container_id, &dest_path).await?;
+        let dest_root = dest.on_rootfs().to_path_buf();
 
         // Overwrite / mkdir flags
         let mkdir_parents = first.mkdir_parents;
         let overwrite = first.overwrite;
 
-        // Temp file to hold tar stream
-        let temp_path =
-            std::env::temp_dir().join(format!("boxlite-upload-{}.tar", uuid::Uuid::new_v4()));
-        let mut file = File::create(&temp_path)
+        // Temp file to hold tar stream. `StagedTar` owns the deletion, because
+        // every step from here to the end can leave through a `?`.
+        let staged = StagedTar::new(
+            std::env::temp_dir().join(format!("boxlite-upload-{}.tar", uuid::Uuid::new_v4())),
+        );
+        let mut file = File::create(staged.path())
             .await
             .map_err(|e| Status::internal(format!("failed to create temp file: {}", e)))?;
 
@@ -176,38 +409,32 @@ impl Files for GuestServer {
             .await
             .map_err(|e| Status::internal(format!("failed to flush temp file: {}", e)))?;
 
+        // Names the archive carries, read once: the mount check below and the
+        // ownership hand-off afterwards must agree on what this copy wrote.
+        // Shared rather than cloned — an archive may carry a great many names.
+        let entry_paths: Arc<[PathBuf]> =
+            boxlite_shared::tar::entry_paths(staged.path().to_path_buf())
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?
+                .into();
+
         // The root cleared the mount check, but individual entries may still
         // land under one. Refuse before touching the rootfs — a partially
         // applied copy is worse than a refused one.
-        if let Some((landed, mount)) = self
-            .shadowed_payload(&container_id, &in_container, &temp_path)
-            .await?
-        {
-            let _ = tokio::fs::remove_file(&temp_path).await;
-            return Err(Status::failed_precondition(format!(
-                "this copy would write {} under the container's '{}' mount, which file \
-                 transfer cannot reach; copy to a path outside '{}', or pipe a tar through \
-                 exec: exec([\"tar\", \"xf\", \"-\", \"-C\", \"{}\"])",
-                landed.display(),
-                mount.display(),
-                mount.display(),
-                mount.display(),
-            )));
-        }
+        dest.refuse_shadowed_payload(&entry_paths)?;
 
-        // What does not exist yet — unpack is about to create it, and it needs
+        // What is not there yet — unpack is about to create it, and it needs
         // the same owner as the payload. Must be sampled *before* extraction,
         // since afterwards there is no way to tell what we made from what the
         // image already shipped.
-        let created_dirs = missing_ancestors(&dest_root);
-        let dest_root_existed = dest_root.exists();
+        let before = DestBefore::sample(dest_root.clone(), Arc::clone(&entry_paths)).await?;
 
         // Extract tar using shared logic
         // The original dest_path may have trailing '/' indicating directory mode,
         // but the resolved rootfs path won't. Use force_directory in that case.
         let force_directory = dest_path.ends_with('/');
         boxlite_shared::tar::unpack(
-            temp_path.clone(),
+            staged.path().to_path_buf(),
             dest_root.clone(),
             boxlite_shared::tar::UnpackContext {
                 overwrite,
@@ -222,16 +449,8 @@ impl Files for GuestServer {
         // neither owner (it extracts as this process, root) nor any notion of
         // who will read the file, so without this every copy_in lands
         // root-owned and a non-root workload cannot open it.
-        self.chown_to_container_user(
-            &container_id,
-            &dest_root,
-            &temp_path,
-            &created_dirs,
-            dest_root_existed,
-        )
-        .await;
-
-        let _ = tokio::fs::remove_file(&temp_path).await;
+        self.chown_to_container_user(&container_id, dest_root.clone(), entry_paths, before)
+            .await;
 
         info!(
             dest = %dest_root.display(),
@@ -261,43 +480,29 @@ impl Files for GuestServer {
             .await
             .map_err(Status::failed_precondition)?;
 
-        let src_path = self.container_rootfs(&container_id, &req.src_path).await?;
+        let src = CopyTarget::resolve(self, &container_id, &req.src_path).await?;
+        let src_path = src.on_rootfs().to_path_buf();
         if !src_path.exists() {
             return Err(Status::not_found("source path does not exist"));
         }
 
-        // Packing walks the rootfs layer, so a mount anywhere inside the source
-        // tree would be read through rather than seen — the archive would carry
-        // the image's file where the workload has the mount's.
-        let src_in_container = to_container_path(&req.src_path)?;
         if src_path.is_dir() {
-            if let Some(mount) = self
-                .shadowed_subtree(&container_id, &src_in_container)
-                .await?
-            {
-                return Err(Status::failed_precondition(format!(
-                    "{} contains the container's '{}' mount, which file transfer cannot read; \
-                     copying it would return the image's file rather than the one the box sees. \
-                     Copy a path that excludes '{}', or pipe a tar through exec: \
-                     exec([\"tar\", \"cf\", \"-\", \"-C\", \"{}\", \".\"])",
-                    src_in_container.display(),
-                    mount.display(),
-                    mount.display(),
-                    src_in_container.display(),
-                )));
-            }
+            src.refuse_shadowed_subtree()?;
         }
 
-        // Build tar into temp file
-        let temp_path =
-            std::env::temp_dir().join(format!("boxlite-download-{}.tar", uuid::Uuid::new_v4()));
+        // Build tar into temp file. `StagedTar` owns the deletion: a failed
+        // pack leaves through a `?` and the streaming task below moves it in so
+        // the file outlives this call exactly as long as it is being read.
+        let staged = StagedTar::new(
+            std::env::temp_dir().join(format!("boxlite-download-{}.tar", uuid::Uuid::new_v4())),
+        );
 
         let include_parent = req.include_parent;
         let follow_symlinks = req.follow_symlinks;
 
         boxlite_shared::tar::pack(
             src_path,
-            temp_path.clone(),
+            staged.path().to_path_buf(),
             boxlite_shared::tar::PackContext {
                 follow_symlinks,
                 include_parent,
@@ -309,7 +514,7 @@ impl Files for GuestServer {
         // Stream file contents
         let (tx, rx) = mpsc::channel::<Result<DownloadChunk, Status>>(4);
         tokio::spawn(async move {
-            let mut file = match File::open(&temp_path).await {
+            let mut file = match File::open(staged.path()).await {
                 Ok(f) => f,
                 Err(e) => {
                     let _ = tx
@@ -347,7 +552,6 @@ impl Files for GuestServer {
                     }
                 }
             }
-            let _ = tokio::fs::remove_file(&temp_path).await;
         });
 
         info!(
@@ -375,55 +579,18 @@ impl GuestServer {
         Err("container_id required when multiple containers present".into())
     }
 
-    /// Resolve a container path against the rootfs directory, refusing any path
-    /// a mount would hide.
-    ///
-    /// File transfer works on the rootfs layer from outside the container's
-    /// mount namespace. The container mounts a tmpfs over `/tmp` (and binds
-    /// volumes elsewhere) *inside* that namespace, so a path at or below one of
-    /// those destinations resolves to a different inode than the one any
-    /// process in the box sees: writes land under the mount and are invisible
-    /// forever, reads come back stale or missing. Refusing is the only honest
-    /// answer available from out here — silently transferring the shadow is
-    /// what made this a bug rather than a limitation.
-    #[allow(clippy::result_large_err)]
-    async fn container_rootfs(&self, container_id: &str, path: &str) -> Result<PathBuf, Status> {
-        let in_container = to_container_path(path)?;
-        let rel = in_container.strip_prefix("/").unwrap_or(&in_container);
-        if let Some(mount) = self.shadowing_mount(container_id, &in_container).await? {
-            return Err(Status::failed_precondition(format!(
-                "{} is under the container's '{}' mount, which file transfer cannot reach; \
-                 copy to a path outside '{}' (for example /workspace), or pipe a tar through \
-                 exec: exec([\"tar\", \"xf\", \"-\", \"-C\", \"{}\"])",
-                in_container.display(),
-                mount.display(),
-                mount.display(),
-                mount.display(),
-            )));
-        }
-
-        let guest_layout = self.layout.shared().container(container_id);
-        Ok(guest_layout.rootfs_dir().join(rel))
-    }
-
     /// Give everything this upload created to the container's own user.
     ///
-    /// Scope is exactly what we wrote: every entry the archive carried, the
-    /// parent directories extraction had to create, and the destination itself
-    /// only when we made it. A destination directory that the image already
-    /// shipped is left alone — `copy_in("./x", "/usr/local/bin/")` must not
-    /// hand `/usr/local/bin` to the box user. A destination *file* is always
-    /// ours, existing or not, because extraction just overwrote it.
+    /// [`DestBefore::created`] decides the scope; this only carries it out.
     ///
     /// Best-effort throughout: the bytes are already on disk by the time this
     /// runs, so a failure here must not be reported as the copy failing.
     async fn chown_to_container_user(
         &self,
         container_id: &str,
-        dest_root: &Path,
-        tar_path: &Path,
-        created_dirs: &[PathBuf],
-        dest_root_existed: bool,
+        dest_root: PathBuf,
+        entry_paths: Arc<[PathBuf]>,
+        before: DestBefore,
     ) {
         let container_arc = {
             let containers = self.containers.lock().await;
@@ -444,36 +611,39 @@ impl GuestServer {
             return;
         }
 
-        let mut targets: Vec<PathBuf> = created_dirs.to_vec();
-        let dest_is_dir = dest_root.is_dir();
-        if !dest_is_dir || !dest_root_existed {
-            targets.push(dest_root.to_path_buf());
-        }
-        targets.extend(archive_entry_paths(tar_path).into_iter().map(|rel| {
-            if dest_is_dir {
-                dest_root.join(rel)
-            } else {
-                dest_root.to_path_buf()
+        // Scoping the targets and changing them are both one syscall per
+        // archive entry, so this runs on a blocking thread for the same reason
+        // the sampling did.
+        let handoff = tokio::task::spawn_blocking(move || {
+            let targets = before.created(&dest_root, &entry_paths);
+            let (mut changed, mut failed) = (0usize, 0usize);
+            for target in &targets {
+                match nix::unistd::fchownat(
+                    None,
+                    target.as_path(),
+                    Some(nix::unistd::Uid::from_raw(uid)),
+                    Some(nix::unistd::Gid::from_raw(gid)),
+                    nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+                ) {
+                    Ok(()) => changed += 1,
+                    Err(_) => failed += 1,
+                }
             }
-        }));
+            (changed, failed)
+        })
+        .await;
 
-        // Second line of defence behind sanitize_entry_path: nothing outside the
-        // destination gets chowned, whatever the archive claimed its names were.
-        targets.retain(|target| target.starts_with(dest_root) || created_dirs.contains(target));
-
-        let (mut changed, mut failed) = (0usize, 0usize);
-        for target in &targets {
-            match nix::unistd::fchownat(
-                None,
-                target.as_path(),
-                Some(nix::unistd::Uid::from_raw(uid)),
-                Some(nix::unistd::Gid::from_raw(gid)),
-                nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
-            ) {
-                Ok(()) => changed += 1,
-                Err(_) => failed += 1,
+        let (changed, failed) = match handoff {
+            Ok(counts) => counts,
+            Err(e) => {
+                tracing::warn!(
+                    container_id = %container_id,
+                    uid, gid, error = %e,
+                    "copied paths could not be given to the container user"
+                );
+                return;
             }
-        }
+        };
         if failed > 0 {
             tracing::warn!(
                 container_id = %container_id,
@@ -483,63 +653,13 @@ impl GuestServer {
         }
     }
 
-    /// The mount, if any, that hides `in_container` itself.
+    /// Mount destinations of the container, from the OCI spec it was created
+    /// with.
     ///
-    /// Only paths *at or below* a mount. A path that merely contains one
-    /// (`/etc`, which holds the `/etc/hosts` bind) resolves to the right inode
-    /// and is fine to name — what crosses it is checked separately, per
-    /// direction, by [`Self::shadowed_payload`] and [`Self::shadowed_subtree`].
-    #[allow(clippy::result_large_err)]
-    async fn shadowing_mount(
-        &self,
-        container_id: &str,
-        in_container: &Path,
-    ) -> Result<Option<PathBuf>, Status> {
-        let mounts = self.container_mounts(container_id).await?;
-        Ok(deepest_covering(in_container, &mounts))
-    }
-
-    /// The mount, if any, that an *uploaded entry* would land under.
-    ///
-    /// The copy root can be perfectly reachable while the payload is not:
-    /// `copy_in(dir, "/etc")` where `dir` contains `hosts` would write the
-    /// image's `/etc/hosts` beneath the bind, invisible to the box. Checked
-    /// against the archive's own entries so a single file to `/etc` — which
-    /// lands at `/etc/motd.txt`, under no mount — still works.
-    #[allow(clippy::result_large_err)]
-    async fn shadowed_payload(
-        &self,
-        container_id: &str,
-        dest_in_container: &Path,
-        tar_path: &Path,
-    ) -> Result<Option<(PathBuf, PathBuf)>, Status> {
-        let mounts = self.container_mounts(container_id).await?;
-        Ok(archive_entry_paths(tar_path).into_iter().find_map(|rel| {
-            let landed = dest_in_container.join(&rel);
-            deepest_covering(&landed, &mounts).map(|mount| (landed, mount))
-        }))
-    }
-
-    /// The mount, if any, lying *strictly below* a path being read out.
-    ///
-    /// Packing `/etc` walks the rootfs layer, so it would tar the image's
-    /// shadowed `/etc/hosts` rather than the bind the workload sees — handing
-    /// back content no process in the box ever had. Same bug as POL-305, one
-    /// level down, so it is refused the same way.
-    #[allow(clippy::result_large_err)]
-    async fn shadowed_subtree(
-        &self,
-        container_id: &str,
-        src_in_container: &Path,
-    ) -> Result<Option<PathBuf>, Status> {
-        let mounts = self.container_mounts(container_id).await?;
-        Ok(mounts
-            .into_iter()
-            .filter(|mount| mount != src_in_container && mount.starts_with(src_in_container))
-            .max_by_key(|mount| mount.components().count()))
-    }
-
-    /// Mount destinations of the container, read from its applied OCI spec.
+    /// Asked once per copy, by [`CopyTarget::resolve`], which then answers
+    /// every later question from the list it holds. The answer costs only the
+    /// clone: `Container` resolved the list at creation, so nothing here reads
+    /// a file while holding the container's lock on the guest's async runtime.
     #[allow(clippy::result_large_err)]
     async fn container_mounts(&self, container_id: &str) -> Result<Vec<PathBuf>, Status> {
         let container_arc = {
@@ -549,45 +669,13 @@ impl GuestServer {
             })?
         };
         let container = container_arc.lock().await;
-        container
-            .mount_destinations()
-            .map_err(|e| Status::internal(format!("failed to read container mounts: {e}")))
+        Ok(container.mount_destinations().to_vec())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The tar is caller-supplied. An entry that is absolute or climbs out is
-    /// skipped by extraction, so it must be skipped here too — otherwise
-    /// `dest.join(entry)` escapes and a root chown lands on a file this copy
-    /// never created.
-    #[test]
-    fn entry_paths_that_escape_the_destination_are_dropped() {
-        assert_eq!(sanitize_entry_path(Path::new("../../etc/shadow")), None);
-        assert_eq!(sanitize_entry_path(Path::new("a/../../b")), None);
-        assert_eq!(sanitize_entry_path(Path::new("..")), None);
-    }
-
-    /// An absolute entry keeps its tail, matching extraction stripping the
-    /// leading `/` rather than refusing the entry outright.
-    #[test]
-    fn absolute_entry_paths_are_made_relative() {
-        assert_eq!(
-            sanitize_entry_path(Path::new("/etc/shadow")),
-            Some(PathBuf::from("etc/shadow"))
-        );
-    }
-
-    #[test]
-    fn ordinary_entry_paths_survive() {
-        assert_eq!(
-            sanitize_entry_path(Path::new("./dir/file.txt")),
-            Some(PathBuf::from("dir/file.txt"))
-        );
-        assert_eq!(sanitize_entry_path(Path::new(".")), None);
-    }
 
     /// `/etc` holds the `/etc/hosts` bind but is not itself a mount, so naming
     /// it is fine — only paths at or below a mount are unreachable.
@@ -612,6 +700,156 @@ mod tests {
             deepest_covering(Path::new("/dev/shm/x"), &mounts),
             Some(PathBuf::from("/dev/shm"))
         );
+    }
+
+    /// A `CopyTarget` for `in_container`, with no rootfs behind it — enough to
+    /// exercise the reachability checks, which read only the path and the mounts.
+    fn target(in_container: &str, mounts: &[&str]) -> CopyTarget {
+        CopyTarget {
+            in_container: PathBuf::from(in_container),
+            on_rootfs: PathBuf::from("/unused"),
+            mounts: mounts.iter().map(PathBuf::from).collect(),
+        }
+    }
+
+    /// A reachable destination does not make its payload reachable:
+    /// `copy_in(dir, "/etc")` carrying `hosts` lands on the image's shadowed
+    /// `/etc/hosts`, not the bind the workload reads.
+    #[test]
+    fn an_entry_landing_under_a_mount_is_refused_though_the_root_was_fine() {
+        let etc = target("/etc", &["/etc/hosts", "/tmp"]);
+
+        // The root itself is clear — `/etc` merely contains a mount.
+        assert!(deepest_covering(Path::new("/etc"), &etc.mounts).is_none());
+
+        let err = etc
+            .refuse_shadowed_payload(&[PathBuf::from("motd.txt"), PathBuf::from("hosts")])
+            .expect_err("an entry landing on the bind must be refused");
+        assert!(err.message().contains("'/etc/hosts' mount"), "{err:?}");
+
+        etc.refuse_shadowed_payload(&[PathBuf::from("motd.txt")])
+            .expect("an entry under no mount still copies");
+    }
+
+    /// Reading out a directory that *contains* a mount would tar the shadowed
+    /// image file. A path that IS a mount is the other check's job, so it must
+    /// not also trip this one — otherwise the two would report the same refusal
+    /// twice with different wording.
+    #[test]
+    fn a_directory_holding_a_mount_cannot_be_read_out() {
+        let err = target("/etc", &["/etc/hosts"])
+            .refuse_shadowed_subtree()
+            .expect_err("a mount inside the source tree must be refused");
+        assert!(err.message().contains("'/etc/hosts' mount"), "{err:?}");
+
+        target("/tmp", &["/tmp"])
+            .refuse_shadowed_subtree()
+            .expect("a path that is itself a mount is not a mount *below* it");
+
+        target("/workspace", &["/tmp"])
+            .refuse_shadowed_subtree()
+            .expect("an unrelated mount does not block the read");
+    }
+
+    /// The refusal wording is a shipped contract, not prose. Both copy examples
+    /// fail closed on the `'<mount>' mount` fragment (a bare `/tmp` would also
+    /// match the runtime's own staging tar path), so a rewording that drops it
+    /// breaks them with nothing else going red.
+    ///
+    /// All three refusals, not just the one the examples happen to trigger: a
+    /// caller taught to match that fragment meets whichever of the three its
+    /// copy runs into, and the payload and subtree wordings are the ones no
+    /// test had ever read.
+    #[test]
+    fn every_mount_refusal_names_the_mount_the_way_the_examples_match() {
+        let refusals = [
+            (
+                "request path",
+                unreachable_mount_message(Path::new("/tmp/ghost.txt"), Path::new("/tmp")),
+            ),
+            (
+                "archive entry",
+                unreachable_payload_message(Path::new("/tmp/ghost.txt"), Path::new("/tmp")),
+            ),
+            (
+                "subtree read out",
+                unreadable_subtree_message(Path::new("/"), Path::new("/tmp")),
+            ),
+        ];
+
+        for (site, message) in refusals {
+            assert!(
+                message.contains("'/tmp' mount"),
+                "the {site} refusal drops the fragment \
+                 examples/python/02_features/copy_files.py and \
+                 examples/node/cp_tmpfs_workaround.js match exactly: {message}"
+            );
+        }
+    }
+
+    /// Nothing the image shipped changes owner, however the copy reaches it.
+    ///
+    /// A destination directory is the shape the *request* names; an entry
+    /// directory is the shape the *archive* names, which
+    /// `copy_in("./dist", "/usr/local", include_parent=false)` produces. Only
+    /// the second was unguarded: `/usr/local/bin` is the image's, `bin/tool` is
+    /// ours.
+    #[test]
+    fn directories_the_image_shipped_keep_their_owner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("local");
+        std::fs::create_dir_all(dest.join("bin")).unwrap();
+        let entries = vec![PathBuf::from("bin"), PathBuf::from("bin/tool")];
+
+        let before = DestBefore::sample_blocking(&dest, &entries);
+        std::fs::write(dest.join("bin/tool"), b"payload").unwrap();
+
+        assert_eq!(
+            before.created(&dest, &entries),
+            vec![dest.join("bin/tool")],
+            "only the file this copy wrote is ours to hand over"
+        );
+    }
+
+    /// The other half: what the copy did conjure is all in scope — the
+    /// destination it made, the parents `mkdir_parents` made for it, and the
+    /// directories the archive named that were not there before.
+    #[test]
+    fn everything_the_copy_conjured_is_handed_over() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("srv/probe");
+        let entries = vec![PathBuf::from("pkg"), PathBuf::from("pkg/file.txt")];
+
+        let before = DestBefore::sample_blocking(&dest, &entries);
+        std::fs::create_dir_all(dest.join("pkg")).unwrap();
+        std::fs::write(dest.join("pkg/file.txt"), b"payload").unwrap();
+
+        assert_eq!(
+            before.created(&dest, &entries),
+            vec![
+                tmp.path().join("srv"),
+                dest.clone(),
+                dest.join("pkg"),
+                dest.join("pkg/file.txt"),
+            ]
+        );
+    }
+
+    /// A destination *file* is ours whether or not it was there: extraction
+    /// just overwrote it, and single-file mode lands every entry on it.
+    #[test]
+    fn an_existing_destination_file_is_still_ours() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("payload.txt");
+        std::fs::write(&dest, b"old").unwrap();
+        let entries = vec![PathBuf::from("payload.txt")];
+
+        let before = DestBefore::sample_blocking(&dest, &entries);
+        std::fs::write(&dest, b"new").unwrap();
+
+        let created = before.created(&dest, &entries);
+        assert!(!created.is_empty());
+        assert!(created.iter().all(|target| target == &dest), "{created:?}");
     }
 
     #[test]

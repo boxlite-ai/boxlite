@@ -460,6 +460,16 @@ class SimpleBox:
             follow_symlinks: If True, follow symlinks when copying (default: False)
             include_parent: If True, include parent directory in archive (default: True)
 
+        Note:
+            copy_out reads the container rootfs layer. A source at or under a
+            mount inside the guest (e.g. /tmp, /dev/shm, volumes), or a
+            directory containing one, is **refused** with an error naming the
+            mount, because the archive would carry the files underneath it
+            rather than the ones running processes see.
+
+            Workaround: use the low-level exec API to pipe a tar archive out
+            of the container (``tar cf - -C /tmp .``).
+
         Examples:
             Copy a single file::
 

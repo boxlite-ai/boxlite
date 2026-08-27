@@ -74,6 +74,7 @@ from config import (
     normalize_log_level,
     parse_bootstrap_env_file,
 )
+from errors import classify_error, error_envelope
 
 # ============================================================================
 # Configuration
@@ -91,7 +92,9 @@ logger = logging.getLogger("boxlite-server")
 class ErrorModel(BaseModel):
     message: str
     type: str
-    code: int
+    # Stable snake_case machine identifier, per box.openapi.yaml — not the HTTP
+    # status, which the status line already carries.
+    code: str
     stack: Optional[list[str]] = None
 
 
@@ -254,41 +257,13 @@ def get_server_config() -> ServerConfig:
 # Error Mapping
 # ============================================================================
 
-# Maps BoxliteError message prefixes to (HTTP status, error type)
-ERROR_MAP = [
-    ("box not found:", 404, "NotFoundError"),
-    ("already exists:", 409, "AlreadyExistsError"),
-    ("invalid state:", 409, "InvalidStateError"),
-    ("stopped:", 409, "StoppedError"),
-    ("invalid argument:", 400, "InvalidArgumentError"),
-    ("configuration error:", 400, "ConfigError"),
-    ("unsupported:", 400, "UnsupportedError"),
-    ("unsupported engine", 400, "UnsupportedError"),
-    ("images error:", 422, "ImageError"),
-    ("Execution error:", 422, "ExecutionError"),
-    ("storage error:", 500, "StorageError"),
-    ("internal error:", 500, "InternalError"),
-    ("engine reported an error:", 500, "EngineError"),
-    ("portal error:", 502, "PortalError"),
-    ("network error:", 502, "NetworkError"),
-    ("gRPC/tonic error:", 502, "RpcError"),
-    ("gRPC transport error:", 502, "RpcTransportError"),
-    ("database error:", 500, "DatabaseError"),
-    ("metadata error:", 500, "MetadataError"),
-]
 
-
-def classify_error(message: str) -> tuple[int, str]:
-    for prefix, status, error_type in ERROR_MAP:
-        if message.startswith(prefix):
-            return status, error_type
-    return 500, "InternalError"
-
-
-def error_response(status: int, message: str, error_type: str) -> JSONResponse:
+def error_response(
+    status: int, message: str, error_type: str, code: str
+) -> JSONResponse:
     return JSONResponse(
         status_code=status,
-        content={"error": {"message": message, "type": error_type, "code": status}},
+        content=error_envelope(message, error_type, code),
     )
 
 
@@ -328,13 +303,9 @@ async def require_auth(
     if credentials is None or not credentials.credentials:
         raise HTTPException(
             status_code=401,
-            detail={
-                "error": {
-                    "message": "missing authorization header",
-                    "type": "UnauthorizedError",
-                    "code": 401,
-                }
-            },
+            detail=error_envelope(
+                "missing authorization header", "AuthError", "unauthenticated"
+            ),
         )
     cfg = state.server_config
     expected = cfg.api_key if cfg is not None else None
@@ -344,13 +315,7 @@ async def require_auth(
         # Configured expected key + mismatch ⇒ reject (constant-time).
         raise HTTPException(
             status_code=401,
-            detail={
-                "error": {
-                    "message": "invalid api key",
-                    "type": "UnauthorizedError",
-                    "code": 401,
-                }
-            },
+            detail=error_envelope("invalid api key", "AuthError", "unauthenticated"),
         )
     # No expected key configured ⇒ accept any non-empty bearer (the
     # zero-config reference default). Configured ⇒ matched above.
@@ -508,13 +473,9 @@ async def get_box_or_404(box_id: str):
     if box_handle is None:
         raise HTTPException(
             status_code=404,
-            detail={
-                "error": {
-                    "message": f"box not found: {box_id}",
-                    "type": "NotFoundError",
-                    "code": 404,
-                }
-            },
+            detail=error_envelope(
+                f"box not found: {box_id}", "NotFoundError", "not_found"
+            ),
         )
     await cache_box_handle(box_handle)
     return box_handle
@@ -525,13 +486,9 @@ def get_active_execution_or_404(exec_id: str) -> ActiveExecution:
     if active is None:
         raise HTTPException(
             status_code=404,
-            detail={
-                "error": {
-                    "message": f"execution not found: {exec_id}",
-                    "type": "NotFoundError",
-                    "code": 404,
-                }
-            },
+            detail=error_envelope(
+                f"execution not found: {exec_id}", "NotFoundError", "not_found"
+            ),
         )
     return active
 
@@ -577,8 +534,8 @@ app = FastAPI(
 @app.exception_handler(RuntimeError)
 async def runtime_error_handler(request: Request, err: RuntimeError):
     message = str(err)
-    status, error_type = classify_error(message)
-    return error_response(status, message, error_type)
+    status, error_type, code = classify_error(message)
+    return error_response(status, message, error_type, code)
 
 
 # ============================================================================
@@ -670,7 +627,9 @@ async def get_box(
 ):
     info = await state.runtime.get_info(box_id)
     if info is None:
-        return error_response(404, f"box not found: {box_id}", "NotFoundError")
+        return error_response(
+            404, f"box not found: {box_id}", "NotFoundError", "not_found"
+        )
     return box_info_to_dict(info)
 
 
@@ -762,7 +721,7 @@ async def get_snapshot(
     info = await box_handle.snapshot.get(snapshot_name)
     if info is None:
         return error_response(
-            404, f"snapshot '{snapshot_name}' not found", "NotFoundError"
+            404, f"snapshot '{snapshot_name}' not found", "NotFoundError", "not_found"
         )
     return snapshot_info_to_dict(info)
 
@@ -840,7 +799,12 @@ async def import_box(
 ):
     payload = await request.body()
     if not payload:
-        return error_response(400, "archive payload is required", "ValidationError")
+        return error_response(
+            400,
+            "archive payload is required",
+            "InvalidArgumentError",
+            "invalid_argument",
+        )
 
     with tempfile.TemporaryDirectory() as tmpdir:
         archive_path = os.path.join(tmpdir, "import.boxlite")
@@ -967,7 +931,9 @@ async def signal_execution(
 ):
     active = get_active_execution_or_404(exec_id)
     if active.status != "running":
-        return error_response(409, "execution is not running", "InvalidStateError")
+        return error_response(
+            409, "execution is not running", "InvalidStateError", "invalid_state"
+        )
 
     # SDK only supports kill (SIGKILL)
     await active.the_execution.kill()
@@ -989,7 +955,7 @@ async def resize_execution_tty(
     active = get_active_execution_or_404(exec_id)
     if active.status != "running":
         return error_response(
-            409, "execution is not running", "InvalidStateError"
+            409, "execution is not running", "InvalidStateError", "invalid_state"
         )
 
     await active.the_execution.resize_tty(req.rows, req.cols)

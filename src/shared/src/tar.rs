@@ -4,6 +4,7 @@
 //! duplicating tar building/extraction logic.
 
 use crate::{BoxliteError, BoxliteResult};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 // ── Pack ──────────────────────────────────────────────────────────
@@ -84,6 +85,22 @@ fn pack_blocking(src: &Path, tar_path: &Path, opts: &PackContext) -> BoxliteResu
 
 // ── Unpack ────────────────────────────────────────────────────────
 
+/// An error's own message followed by every cause beneath it.
+///
+/// `tar`'s `Display` names the operation it was attempting and drops the errno
+/// that stopped it, so `failed to create \`/x/y\`` reaches the caller with no
+/// hint whether the disk was full, the path was not a directory, or permission
+/// was denied. Walking `source()` puts the reason back.
+fn with_causes(err: &dyn std::error::Error) -> String {
+    let mut detail = err.to_string();
+    let mut cause = err.source();
+    while let Some(next) = cause {
+        detail.push_str(&format!(": {}", next));
+        cause = next.source();
+    }
+    detail
+}
+
 /// Controls how a tar archive is unpacked to a destination.
 pub struct UnpackContext {
     /// Allow overwriting existing files/directories.
@@ -155,7 +172,7 @@ fn unpack_blocking(tar_path: &Path, dest: &Path, opts: &UnpackContext) -> Boxlit
                     BoxliteError::Storage(format!(
                         "failed to unpack file to {}: {}",
                         dest.display(),
-                        e
+                        with_causes(&e)
                     ))
                 })?;
             }
@@ -189,18 +206,106 @@ fn unpack_blocking(tar_path: &Path, dest: &Path, opts: &UnpackContext) -> Boxlit
             })?;
             let mut archive = tar::Archive::new(tar_file);
             archive.unpack(dest).map_err(|e| {
-                // tar's Display carries only the operation, not the errno that
-                // caused it — walk the source chain so the real failure survives.
-                let mut detail = e.to_string();
-                let mut cause: Option<&dyn std::error::Error> = std::error::Error::source(&e);
-                while let Some(err) = cause {
-                    detail.push_str(&format!(": {}", err));
-                    cause = err.source();
-                }
-                BoxliteError::Storage(format!("failed to extract archive: {}", detail))
+                BoxliteError::Storage(format!("failed to extract archive: {}", with_causes(&e)))
             })
         }
     }
+}
+
+// ── Entry names ───────────────────────────────────────────────────
+
+/// Paths extraction will create, relative to the extraction root.
+///
+/// Everything the archive names, plus every directory those names imply.
+/// A tar need not carry an entry for a directory it puts files in, and plenty
+/// of writers emit only leaves — `PUT /boxes/{id}/files` takes whatever
+/// `application/x-tar` the caller built. Extraction conjures the missing
+/// directories regardless (`tar-0.4.45/src/entry.rs`, `ensure_dir_created`),
+/// so stopping at the leaves under-reports what the copy made: the guest hands
+/// the box user only what this list names, and an unnamed directory stays
+/// root-owned around a file the workload does own.
+///
+/// The tar is caller-supplied, so its entry names are untrusted: an entry may
+/// be absolute (`/etc/shadow`) or climb out (`../../x`). Extraction already
+/// refuses both, so this applies the same rule — otherwise a later
+/// `dest.join(rel)` would escape the destination entirely, since `Path::join`
+/// discards the base when handed an absolute path.
+///
+/// Header-only in intent, but not in cost: `tar::Archive::entries()` leaves
+/// the reader's `Seek` impl unused, so stepping over an entry's payload reads
+/// it (`tar-0.4.45/src/archive.rs`, `fn skip`). Walking an archive costs the
+/// whole archive, which is why this runs on a blocking thread like [`pack`]
+/// and [`unpack`].
+///
+/// A malformed archive yields the names read so far rather than an error:
+/// extraction reads the same bytes moments later and reports the real parse
+/// error, and until then the worst case is that no names are found.
+pub async fn entry_paths(tar_path: PathBuf) -> BoxliteResult<Vec<PathBuf>> {
+    tokio::task::spawn_blocking(move || entry_paths_blocking(&tar_path))
+        .await
+        .map_err(|e| BoxliteError::Storage(format!("entry_paths task join error: {}", e)))
+}
+
+fn entry_paths_blocking(tar_path: &Path) -> Vec<PathBuf> {
+    let Ok(file) = std::fs::File::open(tar_path) else {
+        return Vec::new();
+    };
+    let mut archive = tar::Archive::new(file);
+    let Ok(entries) = archive.entries() else {
+        return Vec::new();
+    };
+
+    // Deduplicated because a directory is usually implied by many entries —
+    // and often named outright as well, once the archive carries it and again
+    // through each file inside it.
+    let mut created = Vec::new();
+    let mut seen = HashSet::new();
+    for path in entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.path().ok().map(|path| path.into_owned()))
+        .filter_map(|path| sanitize_entry_path(&path))
+    {
+        for step in implied_dirs_then_self(&path) {
+            if seen.insert(step.clone()) {
+                created.push(step);
+            }
+        }
+    }
+    created
+}
+
+/// `path` preceded by every directory its own name implies, outermost first.
+///
+/// `a/b/c.txt` yields `a`, `a/b`, `a/b/c.txt`. Outermost first so a caller
+/// walking the list meets a directory before whatever sits inside it.
+fn implied_dirs_then_self(path: &Path) -> Vec<PathBuf> {
+    let mut chain: Vec<PathBuf> = path
+        .ancestors()
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .collect();
+    chain.reverse();
+    chain
+}
+
+/// An archive entry name reduced to what extraction would actually create.
+///
+/// Mirrors tar-rs's own rule (`entry.rs`: `RootDir => continue`,
+/// `ParentDir => return Ok(false)`): drop the leading `/`, refuse anything
+/// containing `..`. `None` means extraction skipped it, so nothing downstream
+/// should touch it either.
+fn sanitize_entry_path(path: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => out.push(part),
+            // Leading `/` and `.` are dropped by extraction, not rejected.
+            Component::RootDir | Component::CurDir => continue,
+            Component::ParentDir | Component::Prefix(_) => return None,
+        }
+    }
+    (!out.as_os_str().is_empty()).then_some(out)
 }
 
 // ── Private ───────────────────────────────────────────────────────
@@ -285,6 +390,39 @@ mod tests {
             .append_data(&mut header, entry_name, content)
             .unwrap();
         builder.finish().unwrap();
+    }
+
+    /// Create a tar carrying only file entries — no entry for any directory
+    /// their names sit in, which is what plenty of tar writers emit.
+    fn create_leaf_only_tar(tar_path: &Path, entry_names: &[&str]) {
+        let tar_file = std::fs::File::create(tar_path).unwrap();
+        let mut builder = tar::Builder::new(tar_file);
+        for name in entry_names {
+            let content = name.as_bytes();
+            let mut header = tar::Header::new_gnu();
+            header.set_size(content.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, name, content).unwrap();
+        }
+        builder.finish().unwrap();
+    }
+
+    /// Every path under `root`, directories included — what extraction left
+    /// behind, read back off the disk rather than assumed.
+    fn extracted_paths(root: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path.clone());
+                }
+                found.push(path);
+            }
+        }
+        found
     }
 
     /// Create a tar containing a directory with files inside.
@@ -808,6 +946,184 @@ mod tests {
             .await
             .unwrap();
         assert!(dest.join("mydir").join("file.txt").is_file());
+    }
+
+    /// A failed extraction must carry the errno, not just the operation.
+    ///
+    /// `tar`'s own `Display` stops at "failed to create `<path>`", which is how
+    /// a real diagnosis once stalled: the message named the path and hid that
+    /// the cause was ENOTDIR. The reason has to survive into `BoxliteError`.
+    ///
+    /// The failure must originate *inside* `archive.unpack`, so `dest` is created
+    /// up front: that makes `if !dest.exists()` false and skips the arm's own
+    /// `create_dir_all`, whose `map_err` already formats the io::Error and would
+    /// mask what is being tested.
+    ///
+    /// `create_dir_tar` carries `mydir/file.txt`. tar defers directory entries to
+    /// the end of extraction, so the file is unpacked first, and `ensure_dir_created`
+    /// is a no-op because `dest/mydir` already exists — as a regular file. The
+    /// failure is therefore creating the *file* beneath a non-directory, which the
+    /// kernel refuses with ENOTDIR.
+    #[tokio::test]
+    async fn unpack_error_carries_the_cause_not_just_the_operation() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("dir.tar");
+        create_dir_tar(&tar_path);
+
+        let dest = tmp.path().join("dest");
+        std::fs::create_dir(&dest).unwrap();
+        // `mydir` must be a directory for the archive to extract; make it a file.
+        std::fs::write(dest.join("mydir"), b"blocker").unwrap();
+
+        let err = unpack(tar_path, dest, uc(true, true, true))
+            .await
+            .expect_err("extracting beneath a regular file must fail");
+
+        let msg = err.to_string();
+        // Reverted, this reads "failed to unpack `…/dest/mydir/file.txt`" and stops
+        // there — the operation named, the reason gone. ENOTDIR is 20 on both Linux
+        // and macOS; accept either rendering of it.
+        assert!(
+            msg.contains("Not a directory") || msg.contains("os error 20"),
+            "error must name ENOTDIR, not just the operation, got: {msg}"
+        );
+    }
+
+    // ── entry_paths ──────────────────────────────────────────────
+
+    /// The walk must not run on the caller's async worker.
+    ///
+    /// It reads the whole archive (see [`entry_paths`]), and the caller
+    /// chooses how big that is — `boxlite-guest` accepts uploads up to
+    /// 512 MiB. Run inline on the guest agent's runtime, one such copy stalls
+    /// every other RPC sharing that worker — exec output, health checks — for
+    /// as long as the read takes.
+    ///
+    /// A `current_thread` runtime makes the difference observable: one worker,
+    /// so `ticker` can only be polled if the walk yields. Called inline the
+    /// walk never yields and `ticker` is still pending when it returns.
+    #[tokio::test(flavor = "current_thread")]
+    async fn entry_paths_yields_the_worker_while_it_walks() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("big.tar");
+        // Large enough that the read cannot plausibly finish between handing
+        // the closure to the blocking pool and the first poll of its handle,
+        // so a passing assertion means the yield happened, not that it raced.
+        create_single_file_tar(&tar_path, "payload.bin", &vec![0u8; 4 << 20]);
+
+        let ticker = tokio::spawn(async {});
+        let paths = entry_paths(tar_path).await.unwrap();
+
+        assert_eq!(paths, vec![PathBuf::from("payload.bin")]);
+        assert!(
+            ticker.is_finished(),
+            "the walk held the only worker for the whole archive"
+        );
+    }
+
+    /// The tar is caller-supplied. An entry that is absolute or climbs out is
+    /// skipped by extraction, so it must be skipped here too — otherwise
+    /// `dest.join(entry)` escapes, and in the guest that hands a root-owned
+    /// chown a file this copy never created.
+    #[test]
+    fn entry_paths_that_escape_the_destination_are_dropped() {
+        assert_eq!(sanitize_entry_path(Path::new("../../etc/shadow")), None);
+        assert_eq!(sanitize_entry_path(Path::new("a/../../b")), None);
+        assert_eq!(sanitize_entry_path(Path::new("..")), None);
+    }
+
+    /// An absolute entry keeps its tail, matching extraction stripping the
+    /// leading `/` rather than refusing the entry outright.
+    #[test]
+    fn absolute_entry_paths_are_made_relative() {
+        assert_eq!(
+            sanitize_entry_path(Path::new("/etc/shadow")),
+            Some(PathBuf::from("etc/shadow"))
+        );
+    }
+
+    #[test]
+    fn ordinary_entry_paths_survive() {
+        assert_eq!(
+            sanitize_entry_path(Path::new("./dir/file.txt")),
+            Some(PathBuf::from("dir/file.txt"))
+        );
+        assert_eq!(sanitize_entry_path(Path::new(".")), None);
+    }
+
+    /// The names must be the ones extraction will actually create, or the
+    /// guest's mount check and its ownership hand-off both reason about a
+    /// layout that never existed.
+    #[tokio::test]
+    async fn entry_paths_match_what_extraction_creates() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("dir.tar");
+        create_dir_tar(&tar_path);
+
+        let names = entry_paths(tar_path.clone()).await.unwrap();
+
+        let dest = tmp.path().join("dest");
+        unpack(tar_path, dest.clone(), uc(true, true, true))
+            .await
+            .unwrap();
+        for name in &names {
+            assert!(
+                dest.join(name).exists(),
+                "{} was named but not extracted",
+                name.display()
+            );
+        }
+        assert_eq!(
+            names,
+            vec![PathBuf::from("mydir"), PathBuf::from("mydir/file.txt")]
+        );
+    }
+
+    /// The other half of the same contract: nothing extraction creates may go
+    /// unnamed.
+    ///
+    /// A tar need not carry an entry for a directory it puts files in, and
+    /// plenty of writers emit only leaves — `PUT /boxes/{id}/files` takes any
+    /// `application/x-tar` the caller built. Extraction still conjures the
+    /// directories (`tar-0.4.45/src/entry.rs`, `ensure_dir_created`), so a list
+    /// that stops at the leaves under-reports what this copy made, and the
+    /// guest hands the box user only what this list names: the file arrives
+    /// owned by the workload inside a directory still owned by root, which is
+    /// POL-304 again one level up.
+    #[tokio::test]
+    async fn entry_paths_name_the_directories_a_nested_entry_implies() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("leaves.tar");
+        create_leaf_only_tar(&tar_path, &["app/main.py", "app/util.py"]);
+
+        let names = entry_paths(tar_path.clone()).await.unwrap();
+
+        let dest = tmp.path().join("dest");
+        unpack(tar_path, dest.clone(), uc(true, true, false))
+            .await
+            .unwrap();
+
+        let named: std::collections::HashSet<PathBuf> =
+            names.iter().map(|rel| dest.join(rel)).collect();
+        for created in extracted_paths(&dest) {
+            assert!(
+                named.contains(&created),
+                "{} was created by extraction but never named; named: {:?}",
+                created.display(),
+                names
+            );
+        }
+    }
+
+    /// A truncated archive must not fail the walk: extraction reads the same
+    /// bytes moments later and reports the real parse error.
+    #[tokio::test]
+    async fn entry_paths_on_a_malformed_archive_is_empty_not_an_error() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("junk.tar");
+        std::fs::write(&tar_path, b"not a tar at all").unwrap();
+
+        assert_eq!(entry_paths(tar_path).await.unwrap(), Vec::<PathBuf>::new());
     }
 
     #[tokio::test]

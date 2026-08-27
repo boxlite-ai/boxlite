@@ -1547,7 +1547,7 @@ components:
             - UnsupportedError
             - AuthError
             - NotFoundError
-            - SessionReaped
+            - SessionReapedError
             - AlreadyExistsError
             - InvalidStateError
             - StoppedError

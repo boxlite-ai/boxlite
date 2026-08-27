@@ -20,7 +20,11 @@ export NEXTEST_FILTER_EXPR
 NEXTEST_FILTER   = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',))
 NEXTEST_CLI_FILTER = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',-E 'not binary(stress_disk)'))
 CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),)
-REST_CLIENT_CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),rest::client::tests::)
+# The `--features rest` pass below is the only one that compiles the `rest`
+# module at all — the two passes above build --no-default-features — so every
+# rest-gated test lives or dies by this filter. It covers the whole module:
+# scoped to one test module it silently skipped the other six.
+REST_CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),rest::)
 PYTEST_FILTER    = $(if $(FILTER),-k '$(FILTER)',)
 VITEST_FILTER    = $(if $(FILTER),-t '$(FILTER)',)
 CTEST_FILTER     = $(if $(FILTER),-R '$(FILTER)',)
@@ -111,7 +115,13 @@ else
 endif
 
 # Per-component test dispatch targets (map component tag → existing test targets).
+#
+# rust runs the reference-server suite first: its error table is keyed on the
+# Display text of `BoxliteError` (src/shared/src/errors.rs, this component), so
+# a new variant leaves the reference server answering the caller's mistake as a
+# server fault. It costs milliseconds and fails before the long suites start.
 test\:changed\:rust:
+	@$(MAKE) test:unit:openapi
 	@$(MAKE) test:unit:rust
 	@$(MAKE) test:integration:rust
 
@@ -136,6 +146,10 @@ test\:changed\:go:
 
 test\:changed\:apps:
 	@$(MAKE) test:apps
+
+# The Box API contract and the reference server that implements it.
+test\:changed\:openapi:
+	@$(MAKE) test:unit:openapi
 
 # Workflow and composite-action changes. Runs the infra suite rather than the whole apps matrix:
 # that suite is what asserts across .github (caller/callee permissions, Environment allowlists,
@@ -224,7 +238,7 @@ test\:unit\:rust:
 		cargo test -p boxlite --no-default-features --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 		cargo test -p boxlite-shared --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 	fi; \
-	cargo test -p boxlite --no-default-features --features rest --lib -- --test-threads=1 $(REST_CLIENT_CARGOTEST_FILTER) || rc=$$?; \
+	cargo test -p boxlite --no-default-features --features rest --lib -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	exit $$rc
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
@@ -349,6 +363,22 @@ test\:unit\:ffi:
 test\:unit\:gvproxy:
 	@echo "🧪 Running gvproxy bridge unit tests..."
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && go test ./... $(GOTEST_FILTER)
+
+# OpenAPI reference-server unit tests: the error class the server answers with
+# must be one openapi/box.openapi.yaml declares, and must match the triple
+# `BoxliteError::http()` (src/shared/src/errors.rs) gives the same failure —
+# the reference server is what src/boxlite/tests/rest_integration.rs points the
+# Rust client at, so a class it gets wrong is a class every conformance run
+# gets wrong.
+#
+# Discovery is restricted to the modules that import only the stdlib
+# (openapi/reference-server/errors.py, like config.py). The rest of that
+# directory needs python-dotenv, fastapi and pydantic, which no setup target
+# here installs — discovering the whole directory would fail this suite on
+# every checkout that does not intend to run the server.
+test\:unit\:openapi:
+	@echo "🧪 Running OpenAPI reference-server unit tests..."
+	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
 
 # CLI integration tests.
 test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)

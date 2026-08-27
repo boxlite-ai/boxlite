@@ -238,6 +238,18 @@ pub fn create_oci_spec(
         .map_err(|e| BoxliteError::Internal(format!("Failed to build OCI spec: {}", e)))
 }
 
+/// Destinations of every mount `spec` declares, in spec order.
+///
+/// Kept next to the builder so the two cannot drift: a mount added above is
+/// reported here without anyone having to remember to.
+pub(super) fn mount_destinations(spec: &Spec) -> Vec<PathBuf> {
+    spec.mounts()
+        .iter()
+        .flatten()
+        .map(|mount| mount.destination().clone())
+        .collect()
+}
+
 // ====================
 // User Resolution
 // ====================
@@ -1378,5 +1390,65 @@ mod tests {
             .expect("/dev mount");
         assert_eq!(dev_mount.typ().as_deref(), Some("tmpfs"));
         assert_eq!(dev_mount.source().as_deref(), Some(Path::new("tmpfs")));
+    }
+
+    /// A container answers `mount_destinations()` from the spec object it built,
+    /// not by re-reading `config.json`. The two must name the same mounts, or
+    /// file transfer would guard a mount list the runtime never applied.
+    ///
+    /// Round-tripped through `save`/`load` rather than compared to a literal:
+    /// the risk is a field that survives in memory but not on disk, which only
+    /// a real serialize/deserialize can show.
+    #[test]
+    fn mount_destinations_survive_the_config_json_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path();
+        let user_mounts = [UserMount {
+            source: "/run/boxlite/volumes/data".to_string(),
+            destination: "/workspace/data".to_string(),
+            read_only: false,
+            owner_uid: 0,
+            owner_gid: 0,
+        }];
+
+        let spec = create_oci_spec(
+            "c",
+            "/rootfs",
+            &["/bin/sh".to_string()],
+            &[],
+            "/",
+            0,
+            0,
+            &CapabilitySet::default(),
+            &[],
+            &MountOverride {
+                source: "/sys".to_string(),
+                options: vec!["rbind".to_string(), "rro".to_string()],
+            },
+            bundle,
+            &user_mounts,
+            false,
+            &ContainerDevices::default(),
+        )
+        .expect("spec builds");
+
+        let config_path = bundle.join("config.json");
+        spec.save(&config_path).expect("spec saves");
+        let reloaded = Spec::load(&config_path).expect("spec loads");
+
+        assert_eq!(
+            mount_destinations(&spec),
+            mount_destinations(&reloaded),
+            "the cached list must equal what reading config.json back gives"
+        );
+        // Both halves of what file transfer guards: the standard mounts the
+        // guest always applies, and the volume the caller asked for.
+        for expected in ["/tmp", "/dev/shm", "/proc", "/sys", "/workspace/data"] {
+            assert!(
+                mount_destinations(&spec).contains(&PathBuf::from(expected)),
+                "{expected} missing from {:?}",
+                mount_destinations(&spec)
+            );
+        }
     }
 }
