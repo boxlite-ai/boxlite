@@ -4,8 +4,9 @@
 /*
  * Pure argument/payload construction for provisioning the Auth0 application
  * and API identities reached through `npm run bootstrap -- --provision-auth0`.
- * The email-first database/Form/Action policy has a separate previewable
- * reconciler in auth0-login-policy.ts.
+ * The tenant-wide email provider and email-first database/Form/Action policy
+ * have separate previewable reconcilers in auth0-email-provider.ts and
+ * auth0-login-policy.ts.
  *
  * RP-initiated-logout discovery has no first-class CLI verb and goes through
  * `auth0 api`, the raw Management API passthrough.
