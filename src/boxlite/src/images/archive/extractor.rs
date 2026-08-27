@@ -213,18 +213,19 @@ impl<'a> LayerExtractor<'a> {
                 continue;
             }
 
-            // Fail before this entry mutates anything once its declared size
+            // Fail before this entry mutates anything once its logical size
             // exceeds the remaining budget: no parent dirs created, no
-            // overwrite cleanup, nothing truncated by this entry. This is the
-            // common-case fast path; the copy arm still enforces the budget
-            // on bytes actually written (a PAX `size` extension can make an
-            // entry yield more than header().size() reports). A size-0 entry
-            // writes nothing and passes even with an exhausted budget.
-            // Whiteouts apply regardless (they run before this check and
-            // consume no budget), and a layer may still carry
+            // overwrite cleanup, nothing truncated by this entry. entry.size()
+            // is the exact number of bytes tar-rs will yield — fields.size,
+            // PAX-overridden for `size` extensions and sparse-expanded for
+            // GNUSparse, the same value tar-rs caps reads with (take(size) in
+            // archive.rs) — so this check bounds every byte the copy arm can
+            // write. A size-0 entry writes nothing and passes even with an
+            // exhausted budget. Whiteouts apply regardless (they run before
+            // this check and consume no budget), and a layer may still carry
             // dirs/symlinks/hardlinks after the data budget is exhausted.
             if matches!(entry_type, EntryType::Regular | EntryType::GNUSparse)
-                && entry.header().size().unwrap_or(0) > self.remaining
+                && entry.size() > self.remaining
             {
                 return Err(decompressed_size_error(self.limit, &normalized));
             }
@@ -291,30 +292,17 @@ impl<'a> LayerExtractor<'a> {
                                 e
                             ))
                         })?;
-                    let copied =
-                        io::copy(&mut entry.take(self.remaining.saturating_add(1)), &mut file)
-                            .map_err(|e| {
-                                BoxliteError::Storage(format!(
-                                    "Failed to copy file data to {}: {}",
-                                    normalized.display(),
-                                    e
-                                ))
-                            })?;
-                    if copied > self.remaining {
-                        // Byte-counted guard (all builds): a PAX `size`
-                        // extension can make an entry yield more bytes than
-                        // header().size() reports (tar-rs caps reads by
-                        // EntryFields.size, which pax overrides without
-                        // touching the octal field the pre-check reads). The
-                        // +1 probe read trips the budget instead of silently
-                        // truncating at the cap (franz-go
-                        // pkg/kgo/compression.go:411: io.Copy(LimitReader(
-                        // max+1)); n > max => err). Best-effort removal so the
-                        // budget error always surfaces; temp-dir callers clean
-                        // the rest.
-                        let _ = Self::remove_nofollow(&safe_path, false);
-                        return Err(decompressed_size_error(self.limit, &normalized));
-                    }
+                    let copied = io::copy(&mut entry, &mut file).map_err(|e| {
+                        BoxliteError::Storage(format!(
+                            "Failed to copy file data to {}: {}",
+                            normalized.display(),
+                            e
+                        ))
+                    })?;
+                    // The pre-check guarantees entry.size() <= remaining, and
+                    // tar-rs yields at most entry.size() bytes, so `copied`
+                    // never exceeds the budget; subtract the real count so the
+                    // budget tracks bytes written, not declared header sizes.
                     self.remaining -= copied;
                 }
                 EntryType::Link => {
@@ -2529,7 +2517,7 @@ mod tests {
         let mut data = Vec::new();
 
         let mut pax = tar::Header::new_gnu();
-        pax.set_path("PaxHeaders.0/pax-bomb").unwrap();
+        pax.set_path("PaxHeaders.0/newdir/pax-bomb").unwrap();
         pax.set_entry_type(tar::EntryType::XHeader);
         let payload = b"9 size=6\n";
         pax.set_size(payload.len() as u64);
@@ -2539,7 +2527,7 @@ mod tests {
         data.resize(data.len() + (512 - payload.len()), 0u8);
 
         let mut file_h = tar::Header::new_gnu();
-        file_h.set_path("pax-bomb").unwrap();
+        file_h.set_path("newdir/pax-bomb").unwrap();
         file_h.set_mode(0o644);
         file_h.set_entry_type(tar::EntryType::Regular);
         file_h.set_size(0); // lies: 6 bytes of data follow
@@ -2552,9 +2540,9 @@ mod tests {
         data
     }
 
-    /// A PAX `size` extension makes tar-rs yield more bytes than
-    /// header().size() reports, bypassing the pre-check; the copy-arm guard
-    /// must still trip the budget.
+    /// A PAX `size` extension makes tar-rs yield more bytes than the octal
+    /// header size reports; the pre-check reads entry.size() (PAX-aware) and
+    /// must fail before any filesystem mutation.
     #[test]
     fn decompressed_size_budget_catches_pax_size_override() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2576,8 +2564,12 @@ mod tests {
             msg
         );
         assert!(
-            !dest.join("pax-bomb").exists(),
+            !dest.join("newdir/pax-bomb").exists(),
             "partial file must not remain after a budget breach"
+        );
+        assert!(
+            !dest.join("newdir").exists(),
+            "a pax-oversized entry must fail before creating parent directories"
         );
     }
 }
