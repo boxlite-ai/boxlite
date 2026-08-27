@@ -323,7 +323,7 @@ export async function deployStack() {
     })
 
     // ─── 7. EDGE SERVICES ────────────────────────────────────────────────────
-    buildEdge({
+    const edge = buildEdge({
       foundation,
       api,
       router,
@@ -344,7 +344,7 @@ export async function deployStack() {
             clickStackGateway: {
               clickHouse: clickHouseResources,
               writerReady: clickHouseWriterReadyDependency,
-              domain: serviceDomain('clickstack'),
+              consumerPrincipalArn: `arn:aws:iam::${accountId}:role/boxlite-backoffice-${$app.stage}-deploy`,
               backofficeRedeemUrl: clickStackGatewayConfig.backofficeRedeemUrl,
               backofficeIntrospectUrl: clickStackGatewayConfig.backofficeIntrospectUrl,
               backofficeEntryUrl: clickStackGatewayConfig.backofficeEntryUrl,
@@ -382,4 +382,5 @@ export async function deployStack() {
       adminApiKey,
       randomKey,
     })
+    return { clickStackEndpointServiceName: edge.clickStackEndpointServiceName }
 }

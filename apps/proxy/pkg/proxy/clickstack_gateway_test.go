@@ -104,14 +104,15 @@ func TestClickStackGatewayExchangesOneTimeHandoffForReaderSession(t *testing.T) 
 	handoff.Header.Set("Origin", "https://backoffice.example.test")
 	handoffResponse := httptest.NewRecorder()
 	handler.ServeHTTP(handoffResponse, handoff)
-	if handoffResponse.Code != http.StatusSeeOther || handoffResponse.Header().Get("Location") != "/clickstack" {
+	if handoffResponse.Code != http.StatusSeeOther || handoffResponse.Header().Get("Location") != "/clickstack/" {
 		t.Fatalf("unexpected handoff response: %d %q", handoffResponse.Code, handoffResponse.Header().Get("Location"))
 	}
 	if redeemCalls != 1 {
 		t.Fatalf("handoff was redeemed %d times", redeemCalls)
 	}
 	cookies := handoffResponse.Result().Cookies()
-	if len(cookies) != 1 || !cookies[0].HttpOnly || !cookies[0].Secure || cookies[0].SameSite != http.SameSiteLaxMode {
+	if len(cookies) != 1 || cookies[0].Name != "__Secure-boxlite_clickstack" || cookies[0].Path != "/clickstack" ||
+		!cookies[0].HttpOnly || !cookies[0].Secure || cookies[0].SameSite != http.SameSiteLaxMode {
 		t.Fatalf("unexpected gateway session cookie: %#v", cookies)
 	}
 

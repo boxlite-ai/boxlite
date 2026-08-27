@@ -57,8 +57,12 @@ search and debugging; saved HyperDX state is not retained.
 
 ## Backoffice ClickStack gateway
 
-The optional gateway makes the self-hosted ClickStack UI available without an
-operator workstation tunnel. ClickHouse port 8123 stays private. A logged-in
+The optional gateway makes the self-hosted ClickStack UI available through the
+existing Backoffice origin without an operator workstation tunnel. ClickHouse
+port 8123 and the Gateway both stay private. The Gateway listens on an internal
+NLB at TCP/4000 and publishes an AWS PrivateLink endpoint service authorized
+only for the stage's Backoffice deploy role. It creates no ClickStack DNS record
+or internet-facing listener. A logged-in
 Backoffice employee opens ClickStack in a new tab with a 30-second, single-use
 handoff code. The gateway redeems that code for an opaque server-side session
 identifier and the parent Backoffice session's absolute expiry. Its signed
@@ -116,12 +120,21 @@ The disabled stack stores only an invalid non-empty sentinel in that runtime
 copy; enabling the gateway removes the fallback and requires a real key set at
 deployment planning time.
 
-Then configure Backoffice's `BACKOFFICE_CLICKSTACK_URL` as
-`https://clickstack.<STACK_DOMAIN>/clickstack` and deploy the matching
-Backoffice handoff implementation. Keep `CLICKSTACK_GATEWAY_ENABLED=false`
-until both sides, the redeem token, and the session keys are ready. The gateway supports only the
-self-hosted backend because managed ClickHouse does not provide this embedded
-UI. The SSM tunnel remains the break-glass path.
+The deploy output `clickStackEndpointServiceName` is the value for Backoffice's
+`BACKOFFICE_CLICKSTACK_ENDPOINT_SERVICE_NAME` repository variable. Backoffice
+creates an interface endpoint in its private subnets and proxies only
+`https://backoffice.<stage>.boxlite.ai/clickstack/` to it. Copy the same redeem
+token into Backoffice's
+`/boxlite/backoffice/<stage>/clickstack-gateway-secret` Secrets Manager secret;
+the browser never receives it. The Gateway sets a distinct
+`__Secure-boxlite_clickstack` HttpOnly cookie with `Path=/clickstack`; `__Host-`
+cannot be used because that prefix requires `Path=/` and would send the child
+cookie to unrelated Backoffice routes.
+
+Keep `CLICKSTACK_GATEWAY_ENABLED=false` until both sides, the redeem token, and
+the session keys are ready. The gateway supports only the self-hosted backend
+because managed ClickHouse does not provide this embedded UI. The SSM tunnel
+remains the break-glass path.
 
 The EC2 instance may be replaced by bootstrap changes, but its data volume is retained and
 reattached. Switching to managed or disabled mode detaches and retains the old volume outside SST;

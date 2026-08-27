@@ -228,7 +228,7 @@ test('orders the API after ClickHouse writer readiness', () => {
   assert.doesNotMatch(liveConfig, /writerActivation|readerActivation|ClickHouseApiReaderReady/)
 })
 
-test('keeps the public ClickStack gateway default-off behind a Backoffice handoff', () => {
+test('keeps the private ClickStack gateway default-off behind Backoffice and PrivateLink', () => {
   const deploy = configSection('export async function deployStack()')
   const edge = liveText('scriptEmittingShell', readFileSync(new URL('./edge.ts', import.meta.url), 'utf8'))
 
@@ -255,6 +255,15 @@ test('keeps the public ClickStack gateway default-off behind a Backoffice handof
   assert.match(edge, /CLICKSTACK_BACKOFFICE_REDEEM_URL/)
   assert.match(edge, /CLICKSTACK_BACKOFFICE_INTROSPECT_URL/)
   assert.match(edge, /CLICKSTACK_BACKOFFICE_ENTRY_URL/)
+  assert.match(edge, /public: false/)
+  assert.match(edge, /listen: `\$\{PORTS\.PROXY\}\/tcp`/)
+  assert.match(edge, /loadBalancerType = 'network'/)
+  assert.match(edge, /new aws\.ec2\.VpcEndpointService\(\s*'ClickStackEndpointService'/)
+  assert.match(edge, /acceptanceRequired: false/)
+  assert.match(edge, /allowedPrincipals: \[clickStackGateway\.consumerPrincipalArn\]/)
+  assert.match(edge, /networkLoadBalancerArns: \[gateway\.nodes\.loadBalancer\.arn\]/)
+  assert.doesNotMatch(edge, /domain: clickStackGateway\.domain/)
+  assert.doesNotMatch(deploy, /domain: serviceDomain\('clickstack'\)/)
   assert.doesNotMatch(edge, /authenticate-oidc/)
 })
 

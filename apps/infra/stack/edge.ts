@@ -13,7 +13,7 @@ type SelfHostedClickHouseResources = Extract<ClickHouseResources, { mode: 'self-
 interface ClickStackGatewayInputs {
   clickHouse: SelfHostedClickHouseResources
   writerReady: any
-  domain: { name: string; dns: ReturnType<typeof sst.cloudflare.dns> }
+  consumerPrincipalArn: string
   backofficeRedeemUrl: string
   backofficeIntrospectUrl: string
   backofficeEntryUrl: string
@@ -37,7 +37,11 @@ export interface EdgeInputs {
   clickStackGateway?: ClickStackGatewayInputs
 }
 
-export function buildEdge(input: EdgeInputs): void {
+export interface EdgeResources {
+  clickStackEndpointServiceName?: $util.Output<string>
+}
+
+export function buildEdge(input: EdgeInputs): EdgeResources {
   const {
     foundation: { cluster },
     api,
@@ -126,6 +130,7 @@ const redeemSecretVersion = new aws.secretsmanager.SecretVersion('ClickStackRede
   secretString: clickStackRedeemToken.value,
 })
 
+let clickStackEndpointServiceName: $util.Output<string> | undefined
 if (clickStackGateway) {
   const sessionSecret = new aws.secretsmanager.Secret('ClickStackSessionSecret', {
     namePrefix: `${$app.name}-${$app.stage}-clickstack-session-`,
@@ -135,16 +140,16 @@ if (clickStackGateway) {
     secretId: sessionSecret.id,
     secretString: clickStackGateway.sessionKeys.value,
   })
-  new sst.aws.Service(
+  const gateway = new sst.aws.Service(
     'ClickStackGateway',
     {
       cluster,
       wait: true,
       image: proxyImage,
       loadBalancer: {
-        domain: clickStackGateway.domain,
-        rules: [{ listen: '443/https', forward: `${PORTS.PROXY}/http` }],
-        health: { [`${PORTS.PROXY}/http`]: httpHealth('/ready') },
+        public: false,
+        rules: [{ listen: `${PORTS.PROXY}/tcp`, forward: `${PORTS.PROXY}/tcp` }],
+        health: { [`${PORTS.PROXY}/tcp`]: httpHealth('/ready') },
       },
       ssm: {
         CLICKSTACK_PASSWORD: clickStackGateway.clickHouse.readerSecretArn,
@@ -163,7 +168,7 @@ if (clickStackGateway) {
         CLICKSTACK_BACKOFFICE_ENTRY_URL: clickStackGateway.backofficeEntryUrl,
       },
       transform: {
-        loadBalancer: (lbArgs: any) => { lbArgs.loadBalancerType = 'application' },
+        loadBalancer: (lbArgs: any) => { lbArgs.loadBalancerType = 'network' },
       },
     },
     {
@@ -175,9 +180,21 @@ if (clickStackGateway) {
       ],
     },
   )
+  const endpointService = new aws.ec2.VpcEndpointService(
+    'ClickStackEndpointService',
+    {
+      acceptanceRequired: false,
+      allowedPrincipals: [clickStackGateway.consumerPrincipalArn],
+      networkLoadBalancerArns: [gateway.nodes.loadBalancer.arn],
+      tags: { Name: `${$app.name}-${$app.stage}-clickstack` },
+    },
+    { dependsOn: [gateway] },
+  )
+  clickStackEndpointServiceName = endpointService.serviceName
 }
 
 // ─── 9. CDN ROUTES ───────────────────────────────────────────────────────
 // Router (declared in section 4) fronts the Api with HTTPS.
 router.route('/', api.url)
+return { clickStackEndpointServiceName }
 }

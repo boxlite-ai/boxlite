@@ -42,7 +42,7 @@ const (
 	clickStackSessionClockSkew          = 30 * time.Second
 	clickStackSessionValidationInterval = time.Minute
 	clickStackSessionCacheMaxEntries    = 1024
-	clickStackSessionCookie             = "__Host-boxlite_clickstack"
+	clickStackSessionCookie             = "__Secure-boxlite_clickstack"
 )
 
 var clickStackHandoffCodePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
@@ -260,7 +260,7 @@ func (sessions *clickStackSessionManager) Issue(binding clickStackSessionBinding
 	return &http.Cookie{
 		Name:     clickStackSessionCookie,
 		Value:    value,
-		Path:     "/",
+		Path:     "/clickstack",
 		Expires:  binding.ExpiresAt,
 		MaxAge:   maxAge,
 		Secure:   true,
@@ -312,7 +312,7 @@ func signClickStackSession(payload string, key []byte) string {
 func clearClickStackSessionCookie(writer http.ResponseWriter) {
 	http.SetCookie(writer, &http.Cookie{
 		Name:     clickStackSessionCookie,
-		Path:     "/",
+		Path:     "/clickstack",
 		MaxAge:   -1,
 		Expires:  time.Unix(1, 0),
 		Secure:   true,
@@ -677,7 +677,7 @@ func handleClickStackHandoff(
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Referrer-Policy", "no-referrer")
 	http.SetCookie(writer, cookie)
-	http.Redirect(writer, request, "/clickstack", http.StatusSeeOther)
+	http.Redirect(writer, request, "/clickstack/", http.StatusSeeOther)
 }
 
 func requireClickStackSession(
