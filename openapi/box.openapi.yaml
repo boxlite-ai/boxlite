@@ -755,6 +755,14 @@ paths:
       responses:
         "101":
           description: WebSocket upgrade successful; bidirectional protocol begins.
+          headers:
+            x-boxlite-execution-id:
+              description: |
+                The main command session's execution id, assigned when the
+                session is opened. Address it through the ordinary
+                `/executions/{exec_id}/…` routes.
+              schema:
+                type: string
         "400":
           $ref: "#/components/responses/BadRequestError"
         "404":
