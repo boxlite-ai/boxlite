@@ -445,7 +445,10 @@ mod tests {
 
     #[test]
     fn source_kind_maps_to_guest_hint() {
-        assert_eq!(source_kind_to_hint(BoxliteCopySourceKind::Unknown as i32), None);
+        assert_eq!(
+            source_kind_to_hint(BoxliteCopySourceKind::Unknown as i32),
+            None
+        );
         assert_eq!(
             source_kind_to_hint(BoxliteCopySourceKind::File as i32),
             Some(false)

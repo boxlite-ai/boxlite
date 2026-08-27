@@ -155,11 +155,7 @@ async fn streaming_hintless_single_file(bx: &LiteBox, tmp: &Path) {
         .await
         .expect("hintless copy_in_tar_stream");
 
-    let out = exec_stdout(
-        bx,
-        BoxCommand::new("cat").args(["/root/hintless-file.txt"]),
-    )
-    .await;
+    let out = exec_stdout(bx, BoxCommand::new("cat").args(["/root/hintless-file.txt"])).await;
     assert_eq!(out, "hintless single\n");
 }
 
