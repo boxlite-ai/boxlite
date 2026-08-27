@@ -616,30 +616,62 @@ async fn spawn_with_executor(
             };
             let executor = ContainerExecutor::new(container_arc);
             let container_ref = executor.container_ref();
-            let spawn = match ssh_workload {
-                Some(workload) => executor.spawn_ssh_workload(req, workload).await,
+            let spawn = match ssh_workload.as_ref() {
+                Some(workload) => executor.spawn_ssh_workload(req, workload.clone()).await,
                 None => executor.spawn(req).await,
             };
             let handle = match spawn {
                 Ok(h) => h,
                 Err(e) => {
-                    // Check if container init died — provide actionable diagnostics
-                    let mut container = container_ref.lock().await;
-                    if !container.is_running() {
-                        let (init_stdout, init_stderr) = container.drain_init_output();
-                        let mut msg = format!(
-                            "Container init process exited — cannot exec. Original error: {}",
-                            e
-                        );
-                        if !init_stdout.is_empty() {
-                            msg.push_str(&format!(". Init stdout: {}", init_stdout.trim()));
+                    // Zombie revival: run -d's Container.Start handoff can be
+                    // lost when the creating CLI process exits before the RPC
+                    // leaves the machine — the container sits in Created while
+                    // the host has already marked the box Running. Re-issue the
+                    // start here: run_init is idempotent, and a start still in
+                    // flight holds the per-container lock, so this call queues
+                    // behind it and then no-ops. On success, retry the spawn
+                    // once (the lock must be dropped first — spawn takes it).
+                    // Revive when the container is already running (a start in
+                    // flight completed between the first spawn failure and this
+                    // check) or when run_init starts it (the zombie case) —
+                    // either way the first failure was most likely just the
+                    // Created window, and one retry is warranted. A Stopped
+                    // container fails run_init and falls through to the
+                    // original diagnostic without a retry.
+                    let revive = {
+                        let container = container_ref.lock().await;
+                        container.is_running() || container.run_init().is_ok()
+                    };
+                    let retry = if revive {
+                        match ssh_workload {
+                            Some(workload) => executor.spawn_ssh_workload(req, workload).await,
+                            None => executor.spawn(req).await,
                         }
-                        if !init_stderr.is_empty() {
-                            msg.push_str(&format!(". Init stderr: {}", init_stderr.trim()));
+                    } else {
+                        Err(e)
+                    };
+                    match retry {
+                        Ok(h) => h,
+                        Err(e) => {
+                            // Check if container init died — provide actionable diagnostics
+                            let mut container = container_ref.lock().await;
+                            if !container.is_running() {
+                                let (init_stdout, init_stderr) = container.drain_init_output();
+                                let mut msg = format!(
+                                    "Container init process exited — cannot exec. Original error: {}",
+                                    e
+                                );
+                                if !init_stdout.is_empty() {
+                                    msg.push_str(&format!(". Init stdout: {}", init_stdout.trim()));
+                                }
+                                if !init_stderr.is_empty() {
+                                    msg.push_str(&format!(". Init stderr: {}", init_stderr.trim()));
+                                }
+                                return Err(spawn_error(execution_id, msg));
+                            }
+                            return Err(spawn_error(execution_id, e.to_string()));
                         }
-                        return Err(spawn_error(execution_id, msg));
                     }
-                    return Err(spawn_error(execution_id, e.to_string()));
                 }
             };
             Ok((handle, Some(container_ref)))
