@@ -783,6 +783,19 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         ));
     }
 
+    // An empty name or value can never substitute anything. Reject at the
+    // boundary so this server agrees with the Cloud API's IsNotEmpty and the
+    // runner's per-element `dive` required validation on what a secret is.
+    if let Some(secrets) = &req.secrets
+        && secrets
+            .iter()
+            .any(|s| s.name.is_empty() || s.value.is_empty())
+    {
+        return Err(boxlite::BoxliteError::InvalidArgument(
+            "secret name and value must be non-empty".into(),
+        ));
+    }
+
     // Map secrets onto the core `Secret` type and apply the placeholder
     // default. The local runtime does not synthesize `<BOXLITE_SECRET:{name}>`
     // for an empty placeholder (unlike the Go SDK), so defaulting here is what
@@ -1440,6 +1453,25 @@ mod tests {
             opts.secrets[0].placeholder, "<BOXLITE_SECRET:openai>",
             "an empty placeholder is as absent as an omitted one"
         );
+    }
+
+    #[test]
+    fn build_box_options_rejects_an_empty_secret_name_or_value() {
+        for secrets in [
+            r#"[{"name":"","value":"v"}]"#,
+            r#"[{"name":"n","value":""}]"#,
+        ] {
+            let req: super::types::CreateBoxRequest = serde_json::from_str(&format!(
+                r#"{{"image":"alpine:latest","secrets":{secrets}}}"#
+            ))
+            .expect("body with secrets must deserialize");
+
+            let err = build_box_options(&req).expect_err("empty secret fields must be rejected");
+            assert!(
+                matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("non-empty")),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[test]
