@@ -23,6 +23,8 @@ const LEGACY_ACTION_NAME = 'boxlite-custom-claims'
 const MANAGEMENT_AUDIENCE_SUFFIX = '/api/v2/'
 const MANAGEMENT_CLIENT_SCOPES = ['update:users']
 const MANAGEMENT_CLIENT_METADATA = { boxlite_login_policy: 'email-verification-v1' }
+const IDENTIFIER_FIRST_PROPAGATION_ERROR = 'Email verification using otp is only compatible with Identifier First.'
+const DATABASE_CONNECTION_WRITE_ATTEMPTS = 4
 const LOGIN_POLICY_MANAGEMENT_SCOPES = [
   'read:clients',
   'read:client_credentials',
@@ -40,7 +42,11 @@ const LOGIN_POLICY_MANAGEMENT_SCOPES = [
   'update:connections_options',
   'read:users',
   'read:email_provider',
+  'create:email_provider',
+  'delete:email_provider',
   'read:email_templates',
+  'create:email_templates',
+  'update:email_templates',
   'read:prompts',
   'update:prompts',
   'read:actions',
@@ -115,7 +121,6 @@ export function assertDatabaseConnectionCompatible(connection: JsonObject, users
       `connection '${connection.name}' is a custom database connection and cannot be migrated automatically`,
     )
   }
-
   const attributes = connection.options?.attributes ?? {}
   if (connection.options?.requires_username || attributes.username?.identifier?.active) {
     throw new Error(`connection '${connection.name}' has an active username identifier`)
@@ -125,6 +130,11 @@ export function assertDatabaseConnectionCompatible(connection: JsonObject, users
   }
   if (connection.options?.authentication_methods?.passkey?.enabled) {
     throw new Error(`connection '${connection.name}' has passkey authentication enabled`)
+  }
+  if (connection.options?.attributes == null) {
+    throw new Error(
+      `connection '${connection.name}' must activate Auth0's New Attributes Configuration in Dashboard > Authentication > Database > ${connection.name} > Attributes before applying`,
+    )
   }
 
   const userWithoutEmail = users.find((user) => !user.email)
@@ -145,7 +155,6 @@ export function buildDatabaseConnectionUpdate(connection: JsonObject): JsonObjec
       enabled: true,
       signup_behavior: 'allow',
     },
-    email_otp: { ...(options.authentication_methods?.email_otp ?? {}), enabled: true },
   }
   options.attributes = {
     ...(options.attributes ?? {}),
@@ -189,6 +198,50 @@ export function buildLoginPolicyBindings(actionId: string, existingBindings: Jso
     .map((binding) => ({ ref: { type: 'action_id', value: binding.action.id }, display_name: binding.display_name }))
 
   return [...preserved, { ref: { type: 'action_id', value: actionId }, display_name: RESOURCE_NAMES.action }]
+}
+
+export function emailDeliveryReadiness(
+  provider: JsonObject | null,
+  verifyTemplate: JsonObject | null,
+  resetTemplate: JsonObject | null,
+  allowTestEmailProvider: boolean,
+): {
+  externalEmailProvider: boolean
+  auth0BuiltInEmailProvider: boolean
+  verifyEmailByCodeTemplate: boolean
+  resetEmailByCodeTemplate: boolean
+  readyToApply: boolean
+} {
+  const externalEmailProvider = Boolean(
+    provider && provider.enabled !== false && provider.name && provider.name !== 'auth0',
+  )
+  const auth0BuiltInEmailProvider = Boolean(
+    allowTestEmailProvider && (provider === null || (provider.name === 'auth0' && provider.enabled !== false)),
+  )
+  const verifyEmailByCodeTemplate = verifyTemplate?.enabled === true
+  const resetEmailByCodeTemplate = resetTemplate?.enabled === true
+
+  return {
+    externalEmailProvider,
+    auth0BuiltInEmailProvider,
+    verifyEmailByCodeTemplate,
+    resetEmailByCodeTemplate,
+    readyToApply:
+      auth0BuiltInEmailProvider || (externalEmailProvider && verifyEmailByCodeTemplate && resetEmailByCodeTemplate),
+  }
+}
+
+export function assertEmailDeliveryReady(readiness: ReturnType<typeof emailDeliveryReadiness>): void {
+  if (readiness.readyToApply) return
+  if (!readiness.externalEmailProvider) {
+    throw new Error(
+      'an enabled external Auth0 email provider is required; use --allow-test-email-provider only for a non-production canary tenant',
+    )
+  }
+  if (!readiness.verifyEmailByCodeTemplate) {
+    throw new Error("Auth0 email template 'verify_email_by_code' must exist and be enabled")
+  }
+  throw new Error("Auth0 email template 'reset_email_by_code' must exist and be enabled")
 }
 
 interface EmailVerificationResourceIds {
@@ -250,6 +303,28 @@ type Auth0CommandRunner = (
   },
 ) => string
 
+class Auth0ManagementApiError extends Error {
+  readonly statusCode: number | undefined
+  readonly errorCode: string | undefined
+  readonly apiMessage: string | undefined
+
+  constructor(
+    message: string,
+    metadata: { statusCode?: number; errorCode?: string; apiMessage?: string },
+    cause: Error,
+  ) {
+    super(message, { cause })
+    this.name = 'Auth0ManagementApiError'
+    this.statusCode = metadata.statusCode
+    this.errorCode = metadata.errorCode
+    this.apiMessage = metadata.apiMessage
+    Object.defineProperty(this, 'apiMessage', {
+      value: metadata.apiMessage,
+      enumerable: false,
+    })
+  }
+}
+
 /** Authenticated Management API transport using the official Auth0 CLI session. */
 export class Auth0CliManagementClient implements Auth0ManagementClient {
   constructor(
@@ -263,7 +338,12 @@ export class Auth0CliManagementClient implements Auth0ManagementClient {
     options: { data?: JsonBody; query?: Record<string, string>; allowNotFound?: boolean } = {},
   ): JsonObject | JsonObject[] | null {
     const args = ['api', method, path, '--tenant', this.tenant, '--no-input', '--no-color']
-    for (const [name, value] of Object.entries(options.query ?? {})) args.push('--query', `${name}=${value}`)
+    for (const [name, value] of Object.entries(options.query ?? {})) {
+      // The Auth0 CLI requires Lucene search syntax to arrive encoded, but
+      // treats encoded comma-separated `fields` as a literal field name.
+      const cliValue = name === 'q' ? encodeURIComponent(value) : value
+      args.push('--query', `${name}=${cliValue}`)
+    }
     if (method === 'delete') args.push('--force')
 
     try {
@@ -278,17 +358,20 @@ export class Auth0CliManagementClient implements Auth0ManagementClient {
     } catch (cause: any) {
       const stderr = cause.stderr?.toString() ?? ''
       if (options.allowNotFound && /(?:404|not found)/i.test(stderr)) return null
-      const status = stderr.match(/(?:status code|status):?\s*(\d{3})/i)?.[1]
+      const apiFailure = parseAuth0CliApiFailure(stderr)
+      const status = apiFailure.statusCode ?? Number(stderr.match(/(?:status code|status):?\s*(\d{3})/i)?.[1])
       const scopeAdvice =
-        status === '403'
+        status === 403
           ? `; re-run \`npm run auth0:login-policy-login\` to request: ${LOGIN_POLICY_MANAGEMENT_SCOPES.join(',')}`
           : ''
       const safeCause = new Error(
         `auth0 CLI exited with ${typeof cause.status === 'number' ? `status ${cause.status}` : 'an execution error'}`,
       )
-      throw new Error(`Auth0 ${method.toUpperCase()} ${path} failed${status ? ` (${status})` : ''}${scopeAdvice}`, {
-        cause: safeCause,
-      })
+      throw new Auth0ManagementApiError(
+        `Auth0 ${method.toUpperCase()} ${path} failed${status ? ` (${status})` : ''}${scopeAdvice}`,
+        apiFailure,
+        safeCause,
+      )
     }
   }
 }
@@ -350,8 +433,12 @@ export class Auth0LoginPolicyConfigurator {
   preview(): JsonObject {
     const state = this.readState()
     this.assertStateAdoptable(state)
-    const emailProviderReady = this.isEmailProviderReady(state.provider)
-    const emailTemplatesReady = Boolean(state.verifyTemplate?.enabled && state.resetTemplate?.enabled)
+    const emailReadiness = emailDeliveryReadiness(
+      state.provider,
+      state.verifyTemplate,
+      state.resetTemplate,
+      this.options.allowTestEmailProvider,
+    )
 
     return {
       mode: 'preview',
@@ -368,9 +455,10 @@ export class Auth0LoginPolicyConfigurator {
         usersChecked: state.users.length,
       },
       prerequisites: {
-        externalEmailProvider: emailProviderReady,
-        verifyEmailByCodeTemplate: state.verifyTemplate?.enabled === true,
-        resetEmailByCodeTemplate: state.resetTemplate?.enabled === true,
+        externalEmailProvider: emailReadiness.externalEmailProvider,
+        auth0BuiltInEmailProvider: emailReadiness.auth0BuiltInEmailProvider,
+        verifyEmailByCodeTemplate: emailReadiness.verifyEmailByCodeTemplate,
+        resetEmailByCodeTemplate: emailReadiness.resetEmailByCodeTemplate,
       },
       resources: {
         managementClient: resourceStatus(state.managementClient),
@@ -382,7 +470,7 @@ export class Auth0LoginPolicyConfigurator {
         action: resourceStatus(state.action),
         actionBound: state.bindings.some((binding) => binding.action?.id === state.action?.id),
       },
-      readyToApply: emailProviderReady && emailTemplatesReady,
+      readyToApply: emailReadiness.readyToApply,
     }
   }
 
@@ -393,7 +481,9 @@ export class Auth0LoginPolicyConfigurator {
     this.beginJournal()
 
     try {
+      this.updatePrompt(state.prompt)
       const connection = this.ensureDatabaseConnection(state.connection)
+      this.updateDatabaseConnection(connection)
       const managementClient = this.ensureManagementClient(state.managementClient)
       this.ensureClientGrant(managementClient, state.clientGrant)
       const vaultConnection = this.ensureVaultConnection(managementClient, state.vaultConnection)
@@ -420,9 +510,7 @@ export class Auth0LoginPolicyConfigurator {
       })
       const form = this.ensureForm(hydratedTemplate.form, state.form)
 
-      this.updateDatabaseConnection(connection)
       this.enableConnectionForClient(connection, state.clientConnections)
-      this.updatePrompt(state.prompt)
       const action = this.ensureAction(requireResourceId('verification form', form), state.action)
       if (!state.action) this.deployAction(action)
       this.bindAction(action, state.bindings)
@@ -581,7 +669,7 @@ export class Auth0LoginPolicyConfigurator {
     const resources: JsonObject[] = []
     for (let page = 0; page < 10; page += 1) {
       const response = this.client.request('get', path, {
-        query: { per_page: '100', page: String(page), include_totals: 'true' },
+        query: { per_page: '100', page: String(page) },
       })
       const batch = collection(response, key)
       resources.push(...batch)
@@ -635,23 +723,15 @@ export class Auth0LoginPolicyConfigurator {
     throw new Error(`database user preflight exceeded Auth0's 1,000-user search window for '${connectionName}'`)
   }
 
-  private isEmailProviderReady(provider: JsonObject | null): boolean {
-    if (this.options.allowTestEmailProvider) return true
-    return Boolean(provider && provider.enabled !== false && provider.name && provider.name !== 'auth0')
-  }
-
   private assertProductionEmailReady(state: PolicyState): void {
-    if (!this.isEmailProviderReady(state.provider)) {
-      throw new Error(
-        'an enabled external Auth0 email provider is required; use --allow-test-email-provider only for a non-production canary tenant',
-      )
-    }
-    for (const [name, template] of [
-      ['verify_email_by_code', state.verifyTemplate],
-      ['reset_email_by_code', state.resetTemplate],
-    ] as const) {
-      if (!template?.enabled) throw new Error(`Auth0 email template '${name}' must exist and be enabled`)
-    }
+    assertEmailDeliveryReady(
+      emailDeliveryReadiness(
+        state.provider,
+        state.verifyTemplate,
+        state.resetTemplate,
+        this.options.allowTestEmailProvider,
+      ),
+    )
   }
 
   private assertStateAdoptable(state: PolicyState): void {
@@ -709,23 +789,39 @@ export class Auth0LoginPolicyConfigurator {
     if (existing) return existing
     const created = requireObject(
       'database connection',
-      this.client.request('post', 'connections', {
-        data: {
-          name: this.options.connectionName,
-          strategy: 'auth0',
-          ...buildDatabaseConnectionUpdate({ options: {} }),
-        },
+      this.writeDatabaseConnection('post', 'connections', {
+        name: this.options.connectionName,
+        strategy: 'auth0',
+        ...buildDatabaseConnectionUpdate({ options: {} }),
       }),
     )
     this.recordCreated('database connection', 'connections', requireResourceId('database connection', created))
     return created
   }
 
+  private writeDatabaseConnection(method: 'post' | 'patch', path: string, data: JsonObject): JsonObject | null {
+    for (let attempt = 1; attempt <= DATABASE_CONNECTION_WRITE_ATTEMPTS; attempt += 1) {
+      try {
+        return objectOrNull(this.client.request(method, path, { data }))
+      } catch (cause) {
+        if (!isIdentifierFirstPropagationError(cause) || attempt === DATABASE_CONNECTION_WRITE_ATTEMPTS) throw cause
+
+        // Auth0's prompt PATCH can become readable before database-connection
+        // validation observes it. Each bounded read-back is also the delay
+        // between retries; no other connection-write failure is retried.
+        this.client.request('get', 'prompts')
+      }
+    }
+    throw new Error(`Auth0 ${method.toUpperCase()} ${path} exhausted its retry budget`)
+  }
+
   private updateDatabaseConnection(connection: JsonObject): void {
     const id = requireResourceId('database connection', connection)
-    this.recordAdopted('database connection', 'connections', id, connectionUpdateSnapshot(connection))
     const update = buildDatabaseConnectionUpdate(connection)
-    this.client.request('patch', `connections/${id}`, { data: update })
+    if (containsJson(connectionUpdateSnapshot(connection), update)) return
+
+    this.recordAdopted('database connection', 'connections', id, connectionUpdateSnapshot(connection))
+    this.writeDatabaseConnection('patch', `connections/${id}`, update)
   }
 
   private enableConnectionForClient(connection: JsonObject, clientConnections: JsonObject[]): void {
@@ -783,7 +879,6 @@ export class Auth0LoginPolicyConfigurator {
             client_id: requireClientId(managementClient),
             audience,
             scope: MANAGEMENT_CLIENT_SCOPES,
-            allow_all_scopes: false,
           },
         }),
       )
@@ -889,8 +984,11 @@ export class Auth0LoginPolicyConfigurator {
   }
 
   private updatePrompt(existing: JsonObject): void {
-    this.recordAdopted('prompt settings', 'prompts', undefined, structuredClone(existing))
-    this.client.request('patch', 'prompts', { data: buildPromptUpdate(existing) })
+    const update = buildPromptUpdate(existing)
+    if (sameJson(existing, update)) return
+
+    this.recordAdopted('prompt settings', 'prompts', undefined, promptRollbackSnapshot(existing))
+    this.client.request('patch', 'prompts', { data: update })
   }
 
   private ensureAction(formId: string, existing: JsonObject | null): JsonObject {
@@ -1091,6 +1189,40 @@ function resourceStatus(resource: JsonObject | null): JsonObject {
   return resource ? { change: 'update', id: resource.id ?? resource.client_id } : { change: 'create', id: null }
 }
 
+function parseAuth0CliApiFailure(stderr: string): {
+  statusCode?: number
+  errorCode?: string
+  apiMessage?: string
+} {
+  const serialized = stderr.match(/API request failed:\s*(\{[^\r\n]*\})\.?/i)?.[1]
+  if (!serialized) return {}
+  try {
+    const response = JSON.parse(serialized)
+    return {
+      statusCode: typeof response.statusCode === 'number' ? response.statusCode : undefined,
+      errorCode: typeof response.errorCode === 'string' ? response.errorCode : undefined,
+      apiMessage: typeof response.message === 'string' ? response.message : undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
+function isIdentifierFirstPropagationError(cause: unknown): boolean {
+  if (!(cause instanceof Error)) return false
+  const apiFailure = cause as Error & {
+    statusCode?: number
+    errorCode?: string
+    apiMessage?: string
+  }
+  const message = apiFailure.apiMessage ?? apiFailure.message
+  return (
+    message === IDENTIFIER_FIRST_PROPAGATION_ERROR &&
+    (apiFailure.statusCode == null || apiFailure.statusCode === 400) &&
+    (apiFailure.errorCode == null || apiFailure.errorCode === 'invalid_body')
+  )
+}
+
 function collection(value: JsonObject | JsonObject[] | null | undefined, key: string): JsonObject[] {
   if (Array.isArray(value)) return value
   if (value && Array.isArray(value[key])) return value[key]
@@ -1140,6 +1272,13 @@ function hydrateForVault(value: JsonObject, vaultConnectionId: string): JsonObje
 function connectionUpdateSnapshot(connection: JsonObject): JsonObject {
   return {
     options: structuredClone(connection.options ?? {}),
+  }
+}
+
+function promptRollbackSnapshot(prompt: JsonObject): JsonObject {
+  return {
+    ...structuredClone(prompt),
+    identifier_first: prompt.identifier_first === true,
   }
 }
 

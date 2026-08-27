@@ -135,33 +135,74 @@ Existing unverified database users receive a hosted Auth0 verification Form on
 their next browser login. Social and enterprise connections, other Auth0
 applications, and non-`auth0` subjects are outside this policy.
 
-First configure an external Auth0 email provider and enable the
-`verify_email_by_code` and `reset_email_by_code` templates. Auth0's built-in
-provider is testing-only. The stack's own SES identity serves this: run
-`npm run bootstrap -- --stage <stage> --provision-ses` (see [Outbound mail](#outbound-mail)) and
-give Auth0's SMTP provider `email-smtp.<region>.amazonaws.com:465` with the
-`SMTP_USER` / `SMTP_PASSWORD` it stores. Then run the reconciler from this directory; preview
-is the default and performs no writes:
+This policy uses Auth0's email OTP verification for signup and password reset;
+it does not add email OTP as a passwordless login method. Password remains the
+returning-user authentication method. If the connection already has a separate
+email OTP login method, the reconciler leaves that operator-owned setting
+unchanged.
+
+For an existing database connection, first open Auth0 Dashboard > Authentication
+> Database > the selected connection > Attributes, select **Activate**, confirm
+the development-environment impact acknowledgement, and save the default email
+attribute. Auth0 requires this one-time New Attributes Configuration activation
+before the Management API can configure email verification OTP. Preview fails
+before any writes when the activation is absent.
+
+For production, use the stack's verified SES identity described in
+[Outbound mail](#outbound-mail). The Api's stored `SMTP_PASSWORD` is
+SigV4-derived and cannot be used as the raw AWS secret required by Auth0's SES
+provider. Create a separate send-only IAM access key for Auth0, scoped to that
+identity, then run the two reconcilers from this directory. Preview is the
+default and performs no writes:
 
 ```bash
 # Request the Management API scopes used by preview, apply, and rollback.
 npm run auth0:login-policy-login
 
+# Preview the tenant-wide SES provider and checked-in code templates.
+npm run auth0:configure-email -- \
+  --tenant <tenant.auth0.com> \
+  --from <verified-sender@example.com> \
+  --region <ses-aws-region>
+
+# Apply prompts for the SES access key ID and secret access key without echoing
+# either value. For non-interactive use, set AUTH0_EMAIL_SES_ACCESS_KEY_ID and
+# AUTH0_EMAIL_SES_SECRET_ACCESS_KEY only for this process.
+npm run auth0:configure-email -- \
+  --tenant <tenant.auth0.com> \
+  --from <verified-sender@example.com> \
+  --region <ses-aws-region> \
+  --apply
+
 npm run auth0:configure-login -- \
   --tenant <tenant.auth0.com> \
   --client-id <boxlite-spa-client-id> \
-  --connection boxlite-users
+  --connection <database-connection-name>
 
 # Inspect the exact tenant/client/connection/resource plan, then apply it:
 npm run auth0:configure-login -- \
   --tenant <tenant.auth0.com> \
   --client-id <boxlite-spa-client-id> \
-  --connection boxlite-users \
+  --connection <database-connection-name> \
   --apply
 ```
 
-For a non-production canary tenant only, add
-`--allow-test-email-provider`. Apply writes a mode-`0600` rollback journal under
+The email reconciler creates the SES provider only when none exists and creates
+the `verify_email_by_code` and `reset_email_by_code` templates only when they
+are absent. It refuses to replace a different provider or customized template.
+Its mode-`0600` receipt under `.sst/auth0-backups/` contains the SES region and
+sender but never the access key. Rollback disables templates created by the run
+and deletes the provider only when the run created it and its non-secret
+fingerprint is unchanged.
+
+For a non-production canary tenant only, skip `auth0:configure-email` and add
+`--allow-test-email-provider` to both `auth0:configure-login` commands. This
+uses Auth0's built-in sender and default templates; they do not appear as
+Management API provider/template resources. The built-in service sends from
+`no-reply@auth0user.net`, is limited to 10 messages per minute, and is not for
+production.
+
+Login-policy apply writes a mode-`0600` rollback journal under
 `.sst/auth0-backups/` without client secrets. If apply stops partway, use the
 exact rollback command printed in the error. The reconciler preserves unrelated
 connection options and post-login Actions; it unbinds the superseded
