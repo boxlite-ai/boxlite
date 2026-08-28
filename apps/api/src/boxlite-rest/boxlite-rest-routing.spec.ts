@@ -10,7 +10,6 @@ import type { INestApplication } from '@nestjs/common'
 import type { AddressInfo } from 'net'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
-import { RedisLockProvider } from '../box/common/redis-lock.provider'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
@@ -20,6 +19,7 @@ import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
 import { CommerceBoxLimitService } from './services/commerce-box-limit.service'
 import { RestBoxCreationService } from './services/rest-box-creation.service'
+import { BoxAdmissionReservationService } from './services/box-admission-reservation.service'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -61,8 +61,8 @@ describe('BoxLite REST routing', () => {
           useValue: { countQuotaBoxes: jest.fn() },
         },
         {
-          provide: RedisLockProvider,
-          useValue: { waitForLease: jest.fn().mockRejectedValue(new Error('Redis unavailable')) },
+          provide: BoxAdmissionReservationService,
+          useValue: { reserve: jest.fn().mockRejectedValue(new Error('Redis unavailable')) },
         },
       ],
     })
@@ -121,7 +121,7 @@ describe('BoxLite REST routing', () => {
     expect(await legacy.json()).toEqual({ boxes: [] })
   })
 
-  it('returns the 503 admission response when the creation lease is unavailable', async () => {
+  it('returns the 503 admission response when a reservation is unavailable', async () => {
     await startRoutingTestApp()
 
     const response = await post('/api/v1/boxes', { image: 'alpine:latest' })

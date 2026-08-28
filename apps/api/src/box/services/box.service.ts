@@ -94,6 +94,11 @@ const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
 const TERMINAL_PREVIEW_PORT = 22222
 
+interface BoxCreationAdmission {
+  inventoryLimit: number
+  signal: AbortSignal
+}
+
 @Injectable()
 export class BoxService {
   private readonly logger = new Logger(BoxService.name)
@@ -197,7 +202,21 @@ export class BoxService {
     )
   }
 
-  async create(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
+  private insertCreatedBox(box: Box, admission?: BoxCreationAdmission): Promise<Box> {
+    admission?.signal.throwIfAborted()
+    return admission
+      ? this.boxRepository.insert(box, {
+          inventoryLimit: admission.inventoryLimit,
+          admissionSignal: admission.signal,
+        })
+      : this.boxRepository.insert(box)
+  }
+
+  async create(
+    createBoxDto: CreateBoxDto,
+    organization: Organization,
+    admission?: BoxCreationAdmission,
+  ): Promise<BoxDto> {
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
 
     try {
@@ -258,7 +277,7 @@ export class BoxService {
           })
 
           if (warmPoolBox) {
-            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization)
+            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, admission)
           }
         }
       }
@@ -323,10 +342,10 @@ export class BoxService {
       // @Unique(['organizationId', 'name']) constraint.
       const insertedBox = await this.persistWithRunnerAssignmentFence(box, { regions: [region.id], boxClass }, () =>
         createBoxDto.name
-          ? this.boxRepository.insert(box)
+          ? this.insertCreatedBox(box, admission)
           : persistWithGeneratedBoxName(box.id, (name) => {
               box.name = name
-              return this.boxRepository.insert(box)
+              return this.insertCreatedBox(box, admission)
             }),
       )
 
@@ -352,6 +371,7 @@ export class BoxService {
     warmPoolBox: Box,
     createBoxDto: CreateBoxDto,
     organization: Organization,
+    admission?: BoxCreationAdmission,
   ): Promise<BoxDto> {
     const now = new Date()
     const updateData: Partial<Box> = {
@@ -389,12 +409,13 @@ export class BoxService {
     // the row — reusing the mutated entity would corrupt the optimistic-update
     // guard.
     const updatedBox = createBoxDto.name
-      ? await this.boxRepository.update(warmPoolBox.id, {
-          updateData: { ...updateData, name: createBoxDto.name },
-          entity: warmPoolBox,
-        })
+      ? await this.updateAssignedWarmPoolBox(
+          warmPoolBox.id,
+          { updateData: { ...updateData, name: createBoxDto.name }, entity: warmPoolBox },
+          admission,
+        )
       : await persistWithGeneratedBoxName(warmPoolBox.id, (name) =>
-          this.boxRepository.update(warmPoolBox.id, { updateData: { ...updateData, name } }),
+          this.updateAssignedWarmPoolBox(warmPoolBox.id, { updateData: { ...updateData, name } }, admission),
         )
 
     // Defensive invalidation of orgId cache since the box moved from unassigned to a real organization
@@ -411,6 +432,21 @@ export class BoxService {
       new BoxStateUpdatedEvent(updatedBox, BoxState.STARTED, BoxState.STARTED),
     )
     return this.toBoxDto(updatedBox)
+  }
+
+  private updateAssignedWarmPoolBox(
+    boxId: string,
+    params: { updateData: Partial<Box>; entity?: Box },
+    admission?: BoxCreationAdmission,
+  ): Promise<Box> {
+    admission?.signal.throwIfAborted()
+    return admission
+      ? this.boxRepository.update(boxId, {
+          ...params,
+          inventoryLimit: admission.inventoryLimit,
+          admissionSignal: admission.signal,
+        })
+      : this.boxRepository.update(boxId, params)
   }
 
   async findAllDeprecated(

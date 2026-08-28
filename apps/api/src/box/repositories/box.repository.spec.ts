@@ -73,6 +73,67 @@ describe('BoxRepository.countQuotaBoxes', () => {
   })
 })
 
+describe('BoxRepository inventory commit fence', () => {
+  function makeInventoryRepository(currentCount: number) {
+    const getCount = jest.fn().mockResolvedValue(currentCount)
+    const countQueryBuilder = makeQueryBuilder(jest.fn(), getCount)
+    const query = jest.fn().mockResolvedValue([{ pg_advisory_xact_lock: '' }])
+    const insert = jest.fn().mockResolvedValue(undefined)
+    const upsert = jest.fn().mockResolvedValue(undefined)
+    const entityManager = {
+      query,
+      createQueryBuilder: jest.fn(() => countQueryBuilder),
+      insert,
+      upsert,
+    }
+    const transaction = jest.fn(async (callback: (manager: typeof entityManager) => Promise<void>) =>
+      callback(entityManager),
+    )
+    const ormRepository = { createQueryBuilder: jest.fn(() => countQueryBuilder) }
+    const dataSource = { getRepository: () => ormRepository, transaction } as any
+    const repo = new BoxRepository(dataSource, {} as any, { invalidateOrgId: jest.fn() } as any)
+    const box = {
+      id: 'box-1',
+      name: 'box-1',
+      organizationId: 'org-1',
+      assertValid: jest.fn(),
+      enforceInvariants: jest.fn(),
+    } as any
+    return { repo, box, query, getCount, insert, upsert }
+  }
+
+  it('locks, recounts, and inserts in one short transaction', async () => {
+    const { repo, box, query, getCount, insert } = makeInventoryRepository(19)
+
+    await repo.insert(box, { inventoryLimit: 20 })
+
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('pg_advisory_xact_lock'), ['org-1'])
+    expect(query.mock.invocationCallOrder[0]).toBeLessThan(getCount.mock.invocationCallOrder[0])
+    expect(getCount.mock.invocationCallOrder[0]).toBeLessThan(insert.mock.invocationCallOrder[0])
+  })
+
+  it('does not insert after the fenced recount reaches the limit', async () => {
+    const { repo, box, insert } = makeInventoryRepository(20)
+
+    await expect(repo.insert(box, { inventoryLimit: 20 })).rejects.toMatchObject({
+      current: 20,
+      limit: 20,
+    })
+    expect(insert).not.toHaveBeenCalled()
+  })
+
+  it('rolls back when reservation ownership is lost during insert', async () => {
+    const { repo, box, insert, upsert } = makeInventoryRepository(19)
+    const controller = new AbortController()
+    insert.mockImplementation(async () => controller.abort(new Error('reservation lost')))
+
+    await expect(repo.insert(box, { inventoryLimit: 20, admissionSignal: controller.signal })).rejects.toThrow(
+      'reservation lost',
+    )
+    expect(upsert).not.toHaveBeenCalled()
+  })
+})
+
 describe('BoxRepository.conditionalStartForProxy', () => {
   it('bounds the row-lock wait with a lock_timeout before the UPDATE', async () => {
     const execute = jest.fn().mockResolvedValue({ raw: [startedRow] })

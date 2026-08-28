@@ -22,6 +22,7 @@ import { BoxDesiredStateUpdatedEvent } from '../events/box-desired-state-updated
 import { BoxPublicStatusUpdatedEvent } from '../events/box-public-status-updated.event'
 import { BoxOrganizationUpdatedEvent } from '../events/box-organization-updated.event'
 import { BoxLookupCacheInvalidationService } from '../services/box-lookup-cache-invalidation.service'
+import { BoxInventoryLimitExceededError } from '../errors/box-inventory-limit-exceeded.error'
 
 // Cap how long the proxy auto-start UPDATE waits to acquire the box row's
 // write lock. Concurrent start/stop/sync go through updateWhere(), which holds
@@ -36,6 +37,11 @@ const PROXY_START_LOCK_TIMEOUT_MS = 2000
 // SQLSTATE for `lock_not_available` — raised when a statement waits longer than
 // lock_timeout to acquire a lock.
 const PG_LOCK_TIMEOUT_CODE = '55P03'
+
+interface BoxInventoryCommitOptions {
+  inventoryLimit?: number
+  admissionSignal?: AbortSignal
+}
 
 // A box the migration marker may claim, with the stamp its claim copies.
 type ParkedBox = { id: string; updatedAt: Date }
@@ -62,7 +68,7 @@ export class BoxRepository extends BaseRepository<Box> {
       .getCount()
   }
 
-  async insert(box: Box): Promise<Box> {
+  async insert(box: Box, options: BoxInventoryCommitOptions = {}): Promise<Box> {
     const now = new Date()
     if (!box.createdAt) {
       box.createdAt = now
@@ -75,8 +81,18 @@ export class BoxRepository extends BaseRepository<Box> {
     box.enforceInvariants()
 
     await this.dataSource.transaction(async (entityManager) => {
+      if (options.inventoryLimit !== undefined) {
+        await this.assertInventoryAvailable(
+          entityManager,
+          box.organizationId,
+          options.inventoryLimit,
+          options.admissionSignal,
+        )
+      }
       await entityManager.insert(Box, box)
+      options.admissionSignal?.throwIfAborted()
       await this.upsertLastActivity(entityManager, box.id, box.createdAt)
+      options.admissionSignal?.throwIfAborted()
     })
 
     this.invalidateLookupCacheOnInsert(box)
@@ -98,9 +114,17 @@ export class BoxRepository extends BaseRepository<Box> {
    *
    * @returns The updated box.
    */
-  async update(id: string, params: { updateData: Partial<Box>; entity?: Box }, raw?: false): Promise<Box>
-  async update(id: string, params: { updateData: Partial<Box>; entity?: Box }, raw = false): Promise<Box | void> {
-    const { updateData, entity } = params
+  async update(
+    id: string,
+    params: { updateData: Partial<Box>; entity?: Box } & BoxInventoryCommitOptions,
+    raw?: false,
+  ): Promise<Box>
+  async update(
+    id: string,
+    params: { updateData: Partial<Box>; entity?: Box } & BoxInventoryCommitOptions,
+    raw = false,
+  ): Promise<Box | void> {
+    const { updateData, entity, inventoryLimit, admissionSignal } = params
 
     if (raw) {
       await this.repository.update(id, updateData)
@@ -119,6 +143,9 @@ export class BoxRepository extends BaseRepository<Box> {
     const invariantChanges = box.enforceInvariants()
 
     await this.dataSource.transaction(async (entityManager) => {
+      if (inventoryLimit !== undefined && previousBox.organizationId !== box.organizationId) {
+        await this.assertInventoryAvailable(entityManager, box.organizationId, inventoryLimit, admissionSignal)
+      }
       const result = await entityManager.update(
         Box,
         {
@@ -133,11 +160,13 @@ export class BoxRepository extends BaseRepository<Box> {
       if (!result.affected) {
         throw new BoxConflictError()
       }
+      admissionSignal?.throwIfAborted()
       box.updatedAt = new Date()
 
       if (previousBox.state !== box.state || previousBox.organizationId !== box.organizationId) {
         await this.upsertLastActivity(entityManager, id, box.updatedAt)
       }
+      admissionSignal?.throwIfAborted()
     })
 
     this.emitUpdateEvents(box, previousBox)
@@ -373,6 +402,34 @@ export class BoxRepository extends BaseRepository<Box> {
       .execute()
 
     return (claimed.raw as Array<{ boxId: string }>).length
+  }
+
+  private async assertInventoryAvailable(
+    entityManager: EntityManager,
+    organizationId: string,
+    limit: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    // Redis reservations reject excess work early, but Redis expiry/failover
+    // cannot be the final quota authority. Serialize only this recount + write
+    // transaction so concurrent BoxService.create calls still run in parallel.
+    await entityManager.query(`SELECT pg_advisory_xact_lock(hashtextextended('box-inventory:' || $1::text, 0))`, [
+      organizationId,
+    ])
+    signal?.throwIfAborted()
+
+    const current = await entityManager
+      .createQueryBuilder(Box, 'box')
+      .where('box.organizationId = :organizationId', { organizationId })
+      .andWhere('box.state NOT IN (:...excludedStates)', {
+        excludedStates: [BoxState.DESTROYED, BoxState.ARCHIVED],
+      })
+      .getCount()
+    signal?.throwIfAborted()
+
+    if (current >= limit) {
+      throw new BoxInventoryLimitExceededError(current, limit)
+    }
   }
 
   /**

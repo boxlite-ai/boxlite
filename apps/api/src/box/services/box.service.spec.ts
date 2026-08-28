@@ -372,6 +372,35 @@ describe('BoxService public defaults', () => {
     )
   })
 
+  it('passes the REST admission fence to a fresh-box insert', async () => {
+    const { service, boxRepository } = makeCreateService()
+    const signal = new AbortController().signal
+
+    await service.create({ name: 'admitted-box' } as any, { id: 'org-1' } as any, {
+      inventoryLimit: 20,
+      signal,
+    })
+
+    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ name: 'admitted-box' }), {
+      inventoryLimit: 20,
+      admissionSignal: signal,
+    })
+  })
+
+  it('does not insert when the REST admission reservation was lost', async () => {
+    const { service, boxRepository } = makeCreateService()
+    const controller = new AbortController()
+    controller.abort(new Error('reservation lost'))
+
+    await expect(
+      service.create({ name: 'rejected-box' } as any, { id: 'org-1' } as any, {
+        inventoryLimit: 20,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('reservation lost')
+    expect(boxRepository.insert).not.toHaveBeenCalled()
+  })
+
   it.each([
     [undefined, false],
     [true, true],
@@ -395,6 +424,31 @@ describe('BoxService public defaults', () => {
     expect(update).toHaveBeenCalledWith(
       'warm-box',
       expect.objectContaining({ updateData: expect.objectContaining({ public: expectedPublic }) }),
+    )
+  })
+
+  it('passes the REST admission fence to a warm-pool assignment', async () => {
+    const warmPoolBox = { id: 'warm-box', runnerId: 'runner-1', name: 'warm-box' } as any
+    const update = jest.fn().mockResolvedValue(warmPoolBox)
+    const service = Object.create(BoxService.prototype) as BoxService
+    Object.assign(service as any, {
+      boxRepository: { update },
+      boxLookupCacheInvalidationService: { invalidateOrgId: jest.fn() },
+      eventEmitter: { emit: jest.fn() },
+      toBoxDto: jest.fn((box) => box),
+    })
+    const signal = new AbortController().signal
+
+    await (service as any).assignWarmPoolBox(
+      warmPoolBox,
+      { name: 'assigned-box' },
+      { id: 'org-1' },
+      { inventoryLimit: 20, signal },
+    )
+
+    expect(update).toHaveBeenCalledWith(
+      'warm-box',
+      expect.objectContaining({ inventoryLimit: 20, admissionSignal: signal }),
     )
   })
 })

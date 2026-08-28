@@ -19,6 +19,7 @@ import { BoxAutoResumeService } from './box-auto-resume.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
 import { CommerceBoxLimitService } from './services/commerce-box-limit.service'
 import { RestBoxCreationService } from './services/rest-box-creation.service'
+import { BoxAdmissionReservationService } from './services/box-admission-reservation.service'
 
 @Module({
   imports: [HttpModule, BoxModule, AuthModule, ApiKeyModule, OrganizationModule],
@@ -29,7 +30,13 @@ import { RestBoxCreationService } from './services/rest-box-creation.service'
     BoxliteProxyController,
     BoxliteVolumeController,
   ],
-  providers: [BoxliteWsProxyService, BoxAutoResumeService, CommerceBoxLimitService, RestBoxCreationService],
+  providers: [
+    BoxliteWsProxyService,
+    BoxAutoResumeService,
+    CommerceBoxLimitService,
+    BoxAdmissionReservationService,
+    RestBoxCreationService,
+  ],
   exports: [BoxliteWsProxyService],
 })
 export class BoxliteRestModule {}

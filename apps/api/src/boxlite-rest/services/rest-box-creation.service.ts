@@ -6,14 +6,12 @@
 import { HttpException, HttpStatus, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { BoxDto } from '../../box/dto/box.dto'
 import { CreateBoxDto } from '../../box/dto/create-box.dto'
+import { BoxInventoryLimitExceededError } from '../../box/errors/box-inventory-limit-exceeded.error'
 import { Organization } from '../../organization/entities/organization.entity'
-import { RedisLockProvider, withRedisLockLease } from '../../box/common/redis-lock.provider'
 import { BoxRepository } from '../../box/repositories/box.repository'
 import { BoxService } from '../../box/services/box.service'
+import { BoxAdmissionReservationService, withBoxAdmissionReservation } from './box-admission-reservation.service'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
-
-const ADMISSION_LEASE_TTL_SECONDS = 30
-const ADMISSION_WAIT_TIMEOUT_MS = 10_000
 
 @Injectable()
 export class RestBoxCreationService {
@@ -23,7 +21,7 @@ export class RestBoxCreationService {
     private readonly limitService: CommerceBoxLimitService,
     private readonly boxRepository: BoxRepository,
     private readonly boxService: BoxService,
-    private readonly redisLockProvider: RedisLockProvider,
+    private readonly reservationService: BoxAdmissionReservationService,
   ) {}
 
   async create(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
@@ -32,13 +30,13 @@ export class RestBoxCreationService {
       return this.boxService.create(createBoxDto, organization)
     }
 
-    const lease = await this.acquireAdmissionLease(organization.id)
+    const reservation = await this.createReservation(organization.id)
     let createdBox: BoxDto | undefined
     let operationError: unknown
 
     try {
-      return await withRedisLockLease(
-        lease,
+      return await withBoxAdmissionReservation(
+        reservation,
         async (signal) => {
           signal.throwIfAborted()
 
@@ -46,33 +44,46 @@ export class RestBoxCreationService {
           try {
             currentBoxCount = await this.boxRepository.countQuotaBoxes(organization.id)
           } catch (error) {
-            operationError = error
+            if (!signal.aborted) {
+              operationError = error
+            }
             throw error
           }
 
-          if (currentBoxCount >= limit.value) {
-            throw this.limitExceeded(currentBoxCount, limit.value)
+          // pendingCount includes this request; only the other active
+          // reservations consume capacity before this request is admitted.
+          const effectiveBoxCount = currentBoxCount + reservation.pendingCount - 1
+          if (effectiveBoxCount >= limit.value) {
+            throw this.limitExceeded(effectiveBoxCount, limit.value)
           }
 
           signal.throwIfAborted()
           try {
-            createdBox = await this.boxService.create(createBoxDto, organization)
+            createdBox = await this.boxService.create(createBoxDto, organization, {
+              inventoryLimit: limit.value,
+              signal,
+            })
             return createdBox
           } catch (error) {
-            operationError = error
+            if (!signal.aborted) {
+              operationError = error
+            }
             throw error
           }
         },
-        (error) => this.logger.warn(`Failed to release box creation admission lease: ${this.errorSummary(error)}`),
+        (error) => this.logger.warn(`Failed to release box creation reservation: ${this.errorSummary(error)}`),
       )
     } catch (error) {
-      // The BoxService return means its database write committed. Do not turn a
-      // release/renewal failure into a retry that creates another box.
+      // A BoxService return means its database write committed. Do not turn a
+      // reservation failure into a retry that creates another box.
       if (createdBox) {
         this.logger.warn(
-          `Box ${createdBox.id} was created before its admission lease failed: ${this.errorSummary(error)}`,
+          `Box ${createdBox.id} was created before its admission reservation failed: ${this.errorSummary(error)}`,
         )
         return createdBox
+      }
+      if (error instanceof BoxInventoryLimitExceededError) {
+        throw this.limitExceeded(error.current, error.limit)
       }
       if (operationError !== undefined || error instanceof HttpException) {
         throw error
@@ -81,13 +92,9 @@ export class RestBoxCreationService {
     }
   }
 
-  private async acquireAdmissionLease(organizationId: string) {
+  private async createReservation(organizationId: string) {
     try {
-      return await this.redisLockProvider.waitForLease(
-        `box-create-admission:${organizationId}`,
-        ADMISSION_LEASE_TTL_SECONDS,
-        AbortSignal.timeout(ADMISSION_WAIT_TIMEOUT_MS),
-      )
+      return await this.reservationService.reserve(organizationId)
     } catch (error) {
       throw this.admissionUnavailable(error)
     }
