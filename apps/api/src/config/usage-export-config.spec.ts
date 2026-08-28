@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { usageExportConfig, USAGE_EXPORT_VISIBILITY_TIMEOUT_MS } from './configuration'
+import { commerceAdmissionConfig, usageExportConfig, USAGE_EXPORT_VISIBILITY_TIMEOUT_MS } from './configuration'
 
 const env = (overrides: Record<string, string> = {}) => ({ USAGE_EXPORT_ENABLED: 'true', ...overrides })
 
@@ -172,6 +172,36 @@ describe('usageExportConfig', () => {
   // it on its own.
   it('ships a default timeout inside the window', () => {
     expect(usageExportConfig(enabled()).timeoutMs).toBeLessThan(USAGE_EXPORT_VISIBILITY_TIMEOUT_MS)
+  })
+})
+
+describe('commerceAdmissionConfig', () => {
+  it('enables only when the shared Commerce URL and token are both present', () => {
+    expect(commerceAdmissionConfig({})).toEqual({
+      enabled: false,
+      url: undefined,
+      token: undefined,
+      timeoutMs: 500,
+    })
+    expect(commerceAdmissionConfig({ USAGE_EXPORT_URL: 'https://commerce.test', USAGE_EXPORT_TOKEN: '' })).toEqual(
+      expect.objectContaining({ enabled: false }),
+    )
+    expect(
+      commerceAdmissionConfig({ USAGE_EXPORT_URL: 'https://commerce.test/', USAGE_EXPORT_TOKEN: 'token' }),
+    ).toEqual({ enabled: true, url: 'https://commerce.test', token: 'token', timeoutMs: 500 })
+  })
+
+  it('validates its independent timeout', () => {
+    expect(() => commerceAdmissionConfig({ COMMERCE_ADMISSION_TIMEOUT_MS: '0' })).toThrow(
+      /COMMERCE_ADMISSION_TIMEOUT_MS/,
+    )
+    expect(
+      commerceAdmissionConfig({
+        USAGE_EXPORT_URL: 'https://commerce.test',
+        USAGE_EXPORT_TOKEN: 'token',
+        COMMERCE_ADMISSION_TIMEOUT_MS: '750',
+      }),
+    ).toEqual(expect.objectContaining({ timeoutMs: 750 }))
   })
 })
 

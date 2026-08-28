@@ -834,6 +834,8 @@ const { status, data } = await apiInstance.recoverBox(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | Recovery initiated |  -  |
+|**402** | Box recovered to STOPPED, but organization credit is insufficient to start it |  -  |
+|**503** | Box recovered to STOPPED, but Commerce cannot safely decide whether to start it |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

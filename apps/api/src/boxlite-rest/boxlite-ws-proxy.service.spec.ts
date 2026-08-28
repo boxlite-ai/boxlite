@@ -6,7 +6,12 @@
 
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import type { IncomingMessage } from 'http'
+import { ServiceUnavailableException } from '@nestjs/common'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
+import {
+  CommerceAdmissionException,
+  CommerceAdmissionUpstreamException,
+} from '../commerce-admission/commerce-admission.service'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(() => ({
@@ -119,6 +124,94 @@ describe('BoxliteWsProxyService', () => {
     expect(autoResume.ensureReady).toHaveBeenCalledWith('box-uuid', expect.objectContaining({ id: 'org-1' }))
     expect(proxyHandler.upgrade).not.toHaveBeenCalled()
     expect(socket.destroy).toHaveBeenCalled()
+  })
+
+  it.each([
+    ['INSUFFICIENT_AVAILABLE_CREDIT', 'HTTP/1.1 402 Payment Required'],
+    ['STALE_USAGE_SNAPSHOT', 'HTTP/1.1 503 Service Unavailable'],
+  ] as const)('returns the Commerce status when AutoResume rejects with %s', async (reason, statusLine) => {
+    const harness = buildAuthHarness()
+    const { service, apiKeyService, organizationUserService, autoResume } = harness
+    apiKeyService.getApiKeyByValue.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      expiresAt: null,
+    })
+    organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' })
+    harness.boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+    })
+    autoResume.ensureReady.mockRejectedValue(new CommerceAdmissionException(reason))
+    const socket = { write: jest.fn(), destroy: jest.fn() }
+    const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
+
+    await (service as unknown as BoxliteWsProxyService).upgrade(
+      authRequest('blk_live_test'),
+      socket as never,
+      Buffer.alloc(0),
+    )
+
+    expect(proxyHandler.upgrade).not.toHaveBeenCalled()
+    expect(socket.write).toHaveBeenCalledWith(expect.stringContaining(statusLine))
+    expect(socket.destroy).toHaveBeenCalled()
+  })
+
+  it.each([
+    [new CommerceAdmissionUpstreamException('contract'), 'HTTP/1.1 502 Bad Gateway'],
+    [new CommerceAdmissionUpstreamException('unavailable'), 'HTTP/1.1 503 Service Unavailable'],
+  ])('returns the Commerce upstream status instead of hiding it as not found', async (error, statusLine) => {
+    const harness = buildAuthHarness()
+    const { service, apiKeyService, organizationUserService, autoResume } = harness
+    apiKeyService.getApiKeyByValue.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      expiresAt: null,
+    })
+    organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' })
+    harness.boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+    })
+    autoResume.ensureReady.mockRejectedValue(error)
+    const socket = { write: jest.fn(), destroy: jest.fn() }
+
+    await (service as unknown as BoxliteWsProxyService).upgrade(
+      authRequest('blk_live_test'),
+      socket as never,
+      Buffer.alloc(0),
+    )
+
+    expect(socket.write).toHaveBeenCalledWith(expect.stringContaining(statusLine))
+    expect(socket.destroy).toHaveBeenCalled()
+  })
+
+  it('continues hiding non-Commerce 503 errors as not found', async () => {
+    const harness = buildAuthHarness()
+    const { service, apiKeyService, organizationUserService, autoResume } = harness
+    apiKeyService.getApiKeyByValue.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      expiresAt: null,
+    })
+    organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' })
+    harness.boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+    })
+    autoResume.ensureReady.mockRejectedValue(new ServiceUnavailableException('runner unavailable'))
+    const socket = { write: jest.fn(), destroy: jest.fn() }
+
+    await (service as unknown as BoxliteWsProxyService).upgrade(
+      authRequest('blk_live_test'),
+      socket as never,
+      Buffer.alloc(0),
+    )
+
+    expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('HTTP/1.1 404 Not Found'))
   })
 
   it('authenticates API key bearer tokens for websocket attach', async () => {

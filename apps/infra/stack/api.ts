@@ -364,6 +364,7 @@ const api = new sst.aws.Service('Api', {
       USAGE_ALLOCATION_SNAPSHOT_ENABLED: usageExportToken.value.apply((token: string) =>
         (token.trim() ? 'true' : 'false'),
       ),
+      COMMERCE_ADMISSION_TIMEOUT_MS: envOr('COMMERCE_ADMISSION_TIMEOUT_MS', '500'),
     }),
 
     // Status sync (incident.io) — pushes component health to the public status

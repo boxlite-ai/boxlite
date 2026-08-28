@@ -257,6 +257,20 @@ export function boxMigrationConfig(env: NodeJS.ProcessEnv = process.env) {
   return { archivePrefix: `${scheme}${segments.join('/')}/` }
 }
 
+/**
+ * Admission shares Commerce's origin and service credential with usage export,
+ * but has its own tight request budget. The deployed stack always supplies the
+ * URL while the secret may intentionally be empty, so only the complete pair
+ * enables calls.
+ */
+export function commerceAdmissionConfig(env: NodeJS.ProcessEnv = process.env) {
+  const rawUrl = env.USAGE_EXPORT_URL?.trim()
+  const token = env.USAGE_EXPORT_TOKEN?.trim()
+  const timeoutMs = requiredCount(env.COMMERCE_ADMISSION_TIMEOUT_MS, 500, 'COMMERCE_ADMISSION_TIMEOUT_MS')
+  if (!rawUrl || !token) return { enabled: false, url: rawUrl, token, timeoutMs }
+  return { enabled: true, url: requiredHttpUrl(rawUrl, 'USAGE_EXPORT_URL'), token, timeoutMs }
+}
+
 const configuration = {
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
@@ -412,6 +426,7 @@ const configuration = {
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
   usageExport: usageExportConfig(),
   incidentIo: incidentIoConfig(),
+  commerceAdmission: commerceAdmissionConfig(),
   defaultRunner: {
     domain: process.env.DEFAULT_RUNNER_DOMAIN,
     apiKey: process.env.DEFAULT_RUNNER_API_KEY,

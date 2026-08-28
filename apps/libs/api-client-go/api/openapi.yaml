@@ -1980,6 +1980,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/Box"
           description: Recovery initiated
+        "402":
+          description: "Box recovered to STOPPED, but organization credit is insufficient\
+            \ to start it"
+        "503":
+          description: "Box recovered to STOPPED, but Commerce cannot safely decide\
+            \ whether to start it"
       security:
       - bearer: []
       - oauth2:

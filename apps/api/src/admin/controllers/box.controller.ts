@@ -55,7 +55,7 @@ export class AdminBoxController {
     if (!organization) {
       throw new NotFoundException('Box not found')
     }
-    const recoveredBox = await this.boxService.recover(boxId, organization)
+    const recoveredBox = await this.boxService.recoverAsAdmin(boxId, organization)
     return this.boxService.toBoxDto(recoveredBox)
   }
 }

@@ -301,6 +301,14 @@ export class BoxController {
     description: 'Recovery initiated',
     type: BoxDto,
   })
+  @ApiResponse({
+    status: 402,
+    description: 'Box recovered to STOPPED, but organization credit is insufficient to start it',
+  })
+  @ApiResponse({
+    status: 503,
+    description: 'Box recovered to STOPPED, but Commerce cannot safely decide whether to start it',
+  })
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
   @Audit({

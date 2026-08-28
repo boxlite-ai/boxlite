@@ -85,6 +85,10 @@ import {
   DEFAULT_AUTO_STOP_SECONDS,
   DEFAULT_AUTO_RESUME,
 } from '../constants/box-lifecycle.constants'
+import {
+  CommerceAdmissionReservation,
+  CommerceAdmissionService,
+} from '../../commerce-admission/commerce-admission.service'
 
 // TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
 // these mirror the Box entity column defaults until image resolution is rebuilt.
@@ -117,6 +121,7 @@ export class BoxService {
     @InjectRepository(Job)
     private readonly jobRepository: Repository<Job>,
     private readonly jobService: JobService,
+    private readonly commerceAdmission: CommerceAdmissionService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -200,6 +205,10 @@ export class BoxService {
   async create(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
 
+    // Released while downstream creation remains uncommitted; retained once a
+    // warm-pool assignment or fresh insert commits and starts producing usage.
+    let commerceReservation: CommerceAdmissionReservation | null = null
+
     try {
       const boxClass = this.getValidatedOrDefaultClass(createBoxDto.class)
 
@@ -219,6 +228,12 @@ export class BoxService {
       const needsFreshBox = requiresFreshBox(createBoxDto, organization)
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
+
+      commerceReservation = await this.commerceAdmission.admit({
+        scenario: 'CREATE-BOX',
+        organizationId: organization.id,
+        resources: { cpu, gpu, mem, disk },
+      })
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
@@ -258,7 +273,9 @@ export class BoxService {
           })
 
           if (warmPoolBox) {
-            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization)
+            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, () => {
+              commerceReservation = null
+            })
           }
         }
       }
@@ -326,6 +343,9 @@ export class BoxService {
               return this.boxRepository.insert(box)
             }),
       )
+      // The box now exists and will produce usage even if response mapping or
+      // event dispatch fails; the Commerce reservation must bridge that usage.
+      commerceReservation = null
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
@@ -333,6 +353,9 @@ export class BoxService {
 
       return this.toBoxDto(insertedBox)
     } catch (error) {
+      if (commerceReservation) {
+        await this.commerceAdmission.release(commerceReservation)
+      }
       if (error.code === '23505') {
         throw new ConflictException(
           createBoxDto.name
@@ -349,6 +372,7 @@ export class BoxService {
     warmPoolBox: Box,
     createBoxDto: CreateBoxDto,
     organization: Organization,
+    onCommitted?: () => void,
   ): Promise<BoxDto> {
     const now = new Date()
     const updateData: Partial<Box> = {
@@ -392,6 +416,7 @@ export class BoxService {
       : await persistWithGeneratedBoxName(warmPoolBox.id, (name) =>
           this.boxRepository.update(warmPoolBox.id, { updateData: { ...updateData, name } }),
         )
+    onCommitted?.()
 
     // Defensive invalidation of orgId cache since the box moved from unassigned to a real organization
     this.boxLookupCacheInvalidationService.invalidateOrgId({
@@ -910,6 +935,35 @@ export class BoxService {
   }
 
   async start(boxIdOrName: string, organization: Organization): Promise<Box> {
+    const box = await this.findValidatedBoxForStart(boxIdOrName, organization)
+
+    if (this.isStarted(box)) return box
+
+    const reservation = await this.admitStart(box, organization.id)
+    let updatedBox: Box
+    try {
+      updatedBox = await this.persistStartIntent(box, organization.id)
+    } catch (error) {
+      if (reservation) await this.commerceAdmission.release(reservation)
+      throw error
+    }
+
+    this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
+
+    return updatedBox
+  }
+
+  private async startWithoutCommerceAdmission(boxIdOrName: string, organization: Organization): Promise<Box> {
+    const box = await this.findValidatedBoxForStart(boxIdOrName, organization)
+
+    if (this.isStarted(box)) return box
+
+    const updatedBox = await this.persistStartIntent(box, organization.id)
+    this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
+    return updatedBox
+  }
+
+  private async findValidatedBoxForStart(boxIdOrName: string, organization: Organization): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
 
     const region = await this.regionService.findOne(box.region)
@@ -917,9 +971,7 @@ export class BoxService {
       throw new NotFoundException(`Region with ID ${box.region} not found`)
     }
 
-    if (box.state === BoxState.STARTED && box.desiredState === BoxDesiredState.STARTED) {
-      return box
-    }
+    if (this.isStarted(box)) return box
 
     this.assertBoxNotErrored(box)
 
@@ -937,20 +989,37 @@ export class BoxService {
 
     this.organizationService.assertOrganizationIsNotSuspended(organization)
 
+    return box
+  }
+
+  private isStarted(box: Box): boolean {
+    return box.state === BoxState.STARTED && box.desiredState === BoxDesiredState.STARTED
+  }
+
+  private admitStart(box: Box, organizationId: string): Promise<CommerceAdmissionReservation | null> {
+    return this.commerceAdmission.admit({
+      scenario: 'START-BOX',
+      organizationId,
+      resources: { cpu: box.cpu, gpu: box.gpu, mem: box.mem, disk: box.disk },
+    })
+  }
+
+  private persistStartIntent(box: Box, organizationId: string): Promise<Box> {
     const updateData: Partial<Box> = {
       pending: true,
       desiredState: BoxDesiredState.STARTED,
       authToken: nanoid(32).toLocaleLowerCase(),
     }
 
-    const updatedBox = await this.boxRepository.updateWhere(box.id, {
+    return this.boxRepository.updateWhere(box.id, {
       updateData,
-      whereCondition: { pending: false, state: box.state },
+      whereCondition: {
+        organizationId,
+        state: BoxState.STOPPED,
+        desiredState: BoxDesiredState.STOPPED,
+        pending: false,
+      },
     })
-
-    this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
-
-    return updatedBox
   }
 
   /**
@@ -968,8 +1037,16 @@ export class BoxService {
       return box
     }
 
-    const updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
+    const reservation = await this.admitStart(box, organization.id)
+    let updated: Box | null
+    try {
+      updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
+    } catch (error) {
+      if (reservation) await this.commerceAdmission.release(reservation)
+      throw error
+    }
     if (!updated) {
+      if (reservation) await this.commerceAdmission.release(reservation)
       return this.findOneByIdOrName(box.id, organization.id)
     }
 
@@ -1014,6 +1091,16 @@ export class BoxService {
   }
 
   async recover(boxIdOrName: string, organization: Organization): Promise<Box> {
+    const recovered = await this.recoverToStopped(boxIdOrName, organization)
+    return this.start(recovered.id, organization)
+  }
+
+  async recoverAsAdmin(boxIdOrName: string, organization: Organization): Promise<Box> {
+    const recovered = await this.recoverToStopped(boxIdOrName, organization)
+    return this.startWithoutCommerceAdmission(recovered.id, organization)
+  }
+
+  private async recoverToStopped(boxIdOrName: string, organization: Organization): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
 
     if (box.state !== BoxState.ERROR) {
@@ -1055,14 +1142,10 @@ export class BoxService {
       recoverable: false,
     }
 
-    await this.boxRepository.updateWhere(box.id, {
+    return this.boxRepository.updateWhere(box.id, {
       updateData,
       whereCondition: { state: BoxState.ERROR },
     })
-
-    // Now that box is in STOPPED state, use the normal start flow
-    // This handles state validation and event emission.
-    return await this.start(box.id, organization)
   }
 
   async updatePublicStatus(boxIdOrName: string, isPublic: boolean, organizationId?: string): Promise<Box> {

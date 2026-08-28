@@ -301,10 +301,14 @@ paths:
                 $ref: "#/components/schemas/Box"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "402":
+          $ref: "#/components/responses/CommercePaymentRequiredError"
         "409":
           $ref: "#/components/responses/ConflictError"
         "422":
           $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/CommerceStaleUsageSnapshotError"
 
     get:
       operationId: listBoxes
@@ -400,16 +404,20 @@ paths:
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
       responses:
-        "200":
+        "201":
           description: Box started (or already running)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Box"
+        "402":
+          $ref: "#/components/responses/CommercePaymentRequiredError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/CommerceStaleUsageSnapshotError"
 
   /{prefix}/boxes/{box_id}/stop:
     parameters:
@@ -675,10 +683,14 @@ paths:
                 $ref: "#/components/schemas/ExecResponse"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "402":
+          $ref: "#/components/responses/CommercePaymentRequiredError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/CommerceStaleUsageSnapshotError"
 
   /{prefix}/boxes/{box_id}/executions/{exec_id}:
     parameters:
@@ -697,8 +709,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ExecutionInfo"
+        "402":
+          $ref: "#/components/responses/CommercePaymentRequiredError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "503":
+          $ref: "#/components/responses/CommerceStaleUsageSnapshotError"
     delete:
       operationId: killExecution
       summary: Kill execution (SIGKILL + evict)
@@ -716,8 +732,12 @@ paths:
       responses:
         "204":
           description: Execution killed and evicted.
+        "402":
+          $ref: "#/components/responses/CommercePaymentRequiredError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "503":
+          $ref: "#/components/responses/CommerceStaleUsageSnapshotError"
 
   /{prefix}/boxes/{box_id}/executions/{exec_id}/attach:
     parameters:
@@ -769,6 +789,8 @@ paths:
       responses:
         "101":
           description: WebSocket upgrade successful; bidirectional protocol begins.
+        "402":
+          $ref: "#/components/responses/CommercePaymentRequiredUpgradeError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
@@ -777,6 +799,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/CommerceStaleUsageSnapshotUpgradeError"
 
   /{prefix}/boxes/{box_id}/executions/{exec_id}/signal:
     parameters:
@@ -801,10 +825,14 @@ paths:
       responses:
         "204":
           description: Signal sent
+        "402":
+          $ref: "#/components/responses/CommercePaymentRequiredError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/CommerceStaleUsageSnapshotError"
 
   /{prefix}/boxes/{box_id}/executions/{exec_id}/resize:
     parameters:
@@ -827,10 +855,14 @@ paths:
       responses:
         "204":
           description: TTY resized
+        "402":
+          $ref: "#/components/responses/CommercePaymentRequiredError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/CommerceStaleUsageSnapshotError"
 
   # -------------------------------------------------------------------------
   # Files
@@ -880,10 +912,14 @@ paths:
           description: Upload successful
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "402":
+          $ref: "#/components/responses/CommercePaymentRequiredError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/CommerceStaleUsageSnapshotError"
 
     get:
       operationId: downloadFiles
@@ -921,10 +957,14 @@ paths:
                 format: binary
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "402":
+          $ref: "#/components/responses/CommercePaymentRequiredError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/CommerceStaleUsageSnapshotError"
 
   # -------------------------------------------------------------------------
   # Network
@@ -1322,6 +1362,48 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
+
+    CommercePaymentRequiredError:
+      description: Organization credit is insufficient to create or start the box
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [statusCode, message, error]
+            properties:
+              statusCode:
+                type: integer
+                const: 402
+              message:
+                type: string
+                const: INSUFFICIENT_AVAILABLE_CREDIT
+              error:
+                type: string
+                const: Payment Required
+
+    CommerceStaleUsageSnapshotError:
+      description: Commerce cannot make a safe admission decision from a stale usage snapshot
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [statusCode, message, error]
+            properties:
+              statusCode:
+                type: integer
+                const: 503
+              message:
+                type: string
+                const: STALE_USAGE_SNAPSHOT
+              error:
+                type: string
+                const: Service Unavailable
+
+    CommercePaymentRequiredUpgradeError:
+      description: WebSocket upgrade rejected because organization credit is insufficient to start the box; empty body
+
+    CommerceStaleUsageSnapshotUpgradeError:
+      description: WebSocket upgrade rejected because Commerce has a stale usage snapshot; empty body
 
     ServiceUnavailableError:
       description: A required backend service is not configured or available

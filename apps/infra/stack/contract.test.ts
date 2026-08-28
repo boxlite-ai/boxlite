@@ -23,6 +23,14 @@ const stackSource = [
 const source = `${entrypointSource}\n${stackSource}`
 const environmentExample = readFileSync(new URL('../.env.example', import.meta.url), 'utf8')
 const infraLocalNative = readFileSync(new URL('../../infra-local/compose/native.py', import.meta.url), 'utf8')
+const apiConfigurationSource = liveText(
+  'script',
+  readFileSync(new URL('../../api/src/config/configuration.ts', import.meta.url), 'utf8'),
+)
+const commerceAdmissionSource = liveText(
+  'script',
+  readFileSync(new URL('../../api/src/commerce-admission/commerce-admission.service.ts', import.meta.url), 'utf8'),
+)
 const readme = [
   readFileSync(new URL('../README.md', import.meta.url), 'utf8'),
   readFileSync(new URL('../docs/deployment.md', import.meta.url), 'utf8'),
@@ -768,6 +776,20 @@ test("the mail configuration set falls inside the deploy role's stage-scoped SES
     composed.startsWith('boxlite-dev-'),
     `the configuration set '${composed}' falls outside the deploy role's configuration-set/boxlite-<stage>-* grant`,
   )
+
+test('threads the Commerce admission timeout from stage config to the HTTP client', () => {
+  assert.match(
+    liveConfig,
+    /COMMERCE_ADMISSION_TIMEOUT_MS: envOr\('COMMERCE_ADMISSION_TIMEOUT_MS', '500'\)/,
+  )
+  assert.match(
+    apiConfigurationSource,
+    /requiredCount\(env\.COMMERCE_ADMISSION_TIMEOUT_MS, 500, 'COMMERCE_ADMISSION_TIMEOUT_MS'\)/,
+  )
+  assert.match(apiConfigurationSource, /commerceAdmission:\s*commerceAdmissionConfig\(\)/)
+  assert.match(commerceAdmissionSource, /const settings = this\.config\.get\('commerceAdmission'\)/)
+  assert.equal(commerceAdmissionSource.match(/timeout: settings\.timeoutMs/g)?.length, 2)
+  assert.match(environmentExample, /^# COMMERCE_ADMISSION_TIMEOUT_MS=500$/m)
 })
 
 // The status sync is armed by a credential, not a flag, for the same reason usage export is:

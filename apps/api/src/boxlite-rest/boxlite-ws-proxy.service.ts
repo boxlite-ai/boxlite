@@ -4,7 +4,7 @@
  */
 
 import { Inject, Injectable, Logger } from '@nestjs/common'
-import type { IncomingMessage } from 'http'
+import { STATUS_CODES, type IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { createProxyMiddleware, type RequestHandler } from 'http-proxy-middleware'
 import { ApiKeyService } from '../api-key/api-key.service'
@@ -15,6 +15,7 @@ import { Organization } from '../organization/entities/organization.entity'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import type { Runner } from '../box/entities/runner.entity'
+import { CommerceAdmissionHttpException } from '../commerce-admission/commerce-admission.service'
 import { BoxAutoResumeService } from './box-auto-resume.service'
 
 type RunnerUpgradeRequest = IncomingMessage & {
@@ -142,6 +143,11 @@ export class BoxliteWsProxyService {
       ).upgrade(req, socket, head)
     } catch (err) {
       this.logger.warn(`upgrade failed for ${req.url}: ${(err as Error).message}`)
+      if (err instanceof CommerceAdmissionHttpException) {
+        const status = err.getStatus()
+        this.respondAndClose(socket, status, STATUS_CODES[status] ?? 'Error')
+        return
+      }
       this.respondAndClose(socket, 404, 'Not Found')
     }
   }
