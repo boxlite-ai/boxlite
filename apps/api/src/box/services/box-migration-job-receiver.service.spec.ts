@@ -69,14 +69,25 @@ function makeJob(type: JobType, overrides: Partial<ConstructorParameters<typeof 
 }
 
 type RecordedWrite = { table: 'box' | 'migrate'; values: any; params: any }
+type RecordedDelete = { table: 'box' | 'migrate'; params: any }
 
-/** Collects the SET/WHERE of the receiver's conditional writes, per table. */
+/** Collects the SET/WHERE of the receiver's conditional writes and deletes. */
 function makeWriteRecorder() {
   const writes: RecordedWrite[] = []
+  const deletes: RecordedDelete[] = []
   const createQueryBuilder = () => {
     const recorded: RecordedWrite = { table: 'migrate', values: undefined, params: {} }
+    let removing = false
     const builder: any = {
       update: (target: any) => {
+        recorded.table = target === Box ? 'box' : 'migrate'
+        return builder
+      },
+      delete: () => {
+        removing = true
+        return builder
+      },
+      from: (target: any) => {
         recorded.table = target === Box ? 'box' : 'migrate'
         return builder
       },
@@ -93,17 +104,21 @@ function makeWriteRecorder() {
         return builder
       },
       execute: async () => {
-        writes.push(recorded)
+        if (removing) {
+          deletes.push({ table: recorded.table, params: recorded.params })
+        } else {
+          writes.push(recorded)
+        }
         return { affected: 1 }
       },
     }
     return builder
   }
-  return { writes, createQueryBuilder }
+  return { writes, deletes, createQueryBuilder }
 }
 
 function makeHarness(row?: { box?: Box | null; migration?: BoxMigration | null; sourceDraining?: boolean }) {
-  const { writes, createQueryBuilder } = makeWriteRecorder()
+  const { writes, deletes, createQueryBuilder } = makeWriteRecorder()
   const box = row?.box === undefined ? makeBox() : row.box
   const migration = row?.migration === undefined ? makeMigration(BoxMigrationState.PENDING_EXPORT) : row.migration
   // The marker only claims boxes off draining runners, so a migration that
@@ -133,6 +148,7 @@ function makeHarness(row?: { box?: Box | null; migration?: BoxMigration | null; 
   return {
     receiver: new BoxMigrationJobReceiver(dataSource, redisLockProvider, boxLookupCacheInvalidationService),
     writes,
+    deletes,
     redisLockProvider,
     boxLookupCacheInvalidationService,
   }
@@ -227,13 +243,20 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
     expect(h.writes[0].values).toEqual({ state: BoxMigrationState.PENDING_IMPORT, arcPath: '' })
   })
 
-  it('leaves the state alone when the job failed, so the submitter retries', async () => {
+  // A migration still in PENDING_EXPORT owns no artifact, so there is nothing to
+  // reclaim and nothing to keep the row for. Dropping it hands the box back to
+  // the marker, which re-opens a migration only if the box is still parked on a
+  // runner still draining — a retry in place would keep exporting regardless.
+  it('drops the migration when the export failed, so the marker decides afresh', async () => {
     const h = makeHarness()
     const job = makeExportJob({ status: JobStatus.FAILED, errorMessage: 'upload timed out' })
 
     await h.receiver.handleJobCompletion(job)
 
     expect(h.writes).toHaveLength(0)
+    expect(h.deletes).toEqual([
+      { table: 'migrate', params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_EXPORT } },
+    ])
     expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getMigrateJobLockKey(BOX_ID, JobType.EXPORT_BOX))
   })
 
@@ -282,6 +305,20 @@ describe('BoxMigrationJobReceiver IMPORT_BOX', () => {
     })
   })
 
+  // Only the export drops its migration on failure; every other leg still has
+  // the state its submitting loop reads to decide what to retry.
+  it('leaves the state alone when the import failed, so the submitter retries', async () => {
+    const h = makeHarness({ migration: makeMigration(BoxMigrationState.PENDING_IMPORT, { arcPath: ARC_PATH }) })
+
+    await h.receiver.handleJobCompletion(
+      makeJob(JobType.IMPORT_BOX, { status: JobStatus.FAILED, errorMessage: 'restore timed out' }),
+    )
+
+    expect(h.writes).toHaveLength(0)
+    expect(h.deletes).toHaveLength(0)
+    expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getMigrateJobLockKey(BOX_ID, JobType.IMPORT_BOX))
+  })
+
   it('records the copy on the target runner and rolls back when the box was touched', async () => {
     const h = makeHarness({
       box: makeBox({ desiredState: BoxDesiredState.STARTED, updatedAt: new Date('2026-01-01T00:05:00.000Z') }),
@@ -301,10 +338,10 @@ describe('BoxMigrationJobReceiver IMPORT_BOX', () => {
     expect(h.boxLookupCacheInvalidationService.invalidate).not.toHaveBeenCalled()
   })
 
-  // Past this point ownership would move for good, so a drain called off while
-  // the import ran has to be caught here — the copy on the target runner is
-  // recorded and reclaimed rather than becoming the box's new home.
-  it('records the copy on the target runner and rolls back when the runner stopped draining', async () => {
+  // The copy the drain asked for is already made, so a drain called off while
+  // the import ran does not undo it: rolling back here would destroy a good copy
+  // to put the box back where it started.
+  it('commits the move even though the runner stopped draining while the import ran', async () => {
     const h = makeHarness({
       migration: makeMigration(BoxMigrationState.PENDING_IMPORT, { arcPath: ARC_PATH }),
       sourceDraining: false,
@@ -314,12 +351,17 @@ describe('BoxMigrationJobReceiver IMPORT_BOX', () => {
 
     expect(h.writes).toEqual([
       {
+        table: 'box',
+        values: { runnerId: TARGET_RUNNER },
+        params: { id: BOX_ID },
+      },
+      {
         table: 'migrate',
-        values: { state: BoxMigrationState.PENDING_ROLLBACK, runnerId: TARGET_RUNNER },
+        values: { state: BoxMigrationState.PENDING_DISCARD_EXPORTED, runnerId: SOURCE_RUNNER },
         params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_IMPORT },
       },
     ])
-    expect(h.boxLookupCacheInvalidationService.invalidate).not.toHaveBeenCalled()
+    expect(h.boxLookupCacheInvalidationService.invalidate).toHaveBeenCalled()
   })
 })
 

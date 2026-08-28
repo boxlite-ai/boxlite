@@ -51,11 +51,6 @@ interface ValidatedMigration {
   //  ValidCheck: nothing outside the migration has touched the box since it was
   //  claimed, so the migration may still move it.
   undisturbed: boolean
-  //  DrainCheck: the runner still holding the box is still being emptied, which
-  //  is the migration's only reason to exist. An operator who calls the drain
-  //  off takes that reason away, so the result is turned around rather than
-  //  applied.
-  sourceDraining: boolean
 }
 
 /**
@@ -67,15 +62,19 @@ interface ValidatedMigration {
  * submitted from, so a status redelivered after a restart matches nothing and
  * applies once.
  *
- * The two legs that move real data — export and import — re-run ValidCheck and
- * DrainCheck in the transaction that records their result, because the box may
- * have been started, or its runner taken out of drain, while the runner was
- * working. Either turns the migration around rather than failing it: the
- * artifact is recorded either way, since it exists either way and the rollback
- * path needs the field to reclaim it.
+ * The two legs that move real data — export and import — re-run ValidCheck in
+ * the transaction that records their result, because the box may have been
+ * started while the runner was working. The export also re-runs DrainCheck,
+ * since the import it is about to ask for is only worth starting while the
+ * drain that asked for it is still on. Either check turns the migration around
+ * rather than failing it: the artifact is recorded either way, since it exists
+ * either way and the rollback path needs the field to reclaim it.
  *
- * Job failure is not this receiver's to repair. The state stays where it is,
- * the job's lock is released, and the loop that submitted it retries.
+ * Job failure is not this receiver's to repair either. Every leg but the export
+ * keeps its state, so the loop that submitted the job retries it; a failed
+ * export instead drops the migration, because a migration that has not exported
+ * yet owns nothing, and the marker is a better judge than a retry of whether the
+ * box should still be moved at all.
  */
 @Injectable()
 export class BoxMigrationJobReceiver {
@@ -100,14 +99,34 @@ export class BoxMigrationJobReceiver {
       if (job.status === JobStatus.COMPLETED) {
         await this.applySuccess(job)
       } else {
-        // Left where it is on purpose: the submitting loop reads the state to
-        // decide what to retry, and the job's own artifacts are unchanged.
-        this.logger.error(`${job.type} failed for box ${job.resourceId}: ${job.errorMessage ?? 'no error reported'}`)
+        await this.applyFailure(job)
       }
     } catch (error) {
       this.logger.error(`Error applying ${job.type} for box ${job.resourceId}:`, error)
     } finally {
       await this.releaseJobLock(job)
+    }
+  }
+
+  /**
+   * A failed job leaves the migration where it is, because the submitting loop
+   * reads the state to decide what to retry and the job's own artifacts are
+   * unchanged — with one exception.
+   *
+   * A failed EXPORT_BOX drops the migration instead. A row still in
+   * PENDING_EXPORT names no artifact — the archive key is recorded by the same
+   * write that leaves PENDING_EXPORT — so there is nothing to reclaim and
+   * nothing to keep the row for. Deleting it puts the box back among the
+   * unclaimed, and the marker re-opens a migration on its next tick only if the
+   * box is still parked on a runner still draining. Retrying in place would keep
+   * re-exporting a box whose drain may since have been called off, and would do
+   * so with the stamp of the claim that failed.
+   */
+  private async applyFailure(job: Job): Promise<void> {
+    this.logger.error(`${job.type} failed for box ${job.resourceId}: ${job.errorMessage ?? 'no error reported'}`)
+
+    if (job.type === JobType.EXPORT_BOX) {
+      await this.dropFailedExport(job.resourceId)
     }
   }
 
@@ -140,30 +159,33 @@ export class BoxMigrationJobReceiver {
       this.logger.error(`EXPORT_BOX for box ${job.resourceId} was submitted with no archive key`)
     }
 
-    await this.withMigration(
-      job,
-      BoxMigrationState.PENDING_EXPORT,
-      async ({ entityManager, box, undisturbed, sourceDraining }) => {
-        if (!undisturbed) {
-          this.logger.log(`Box ${box.id} was touched while it was exported; rolling back instead of importing`)
-        } else if (!sourceDraining) {
-          this.logger.log(
-            `Runner ${box.runnerId} stopped draining while box ${box.id} was exported; rolling back instead of importing`,
-          )
-        }
+    await this.withMigration(job, BoxMigrationState.PENDING_EXPORT, async ({ entityManager, box, undisturbed }) => {
+      const sourceDraining = await this.isDraining(entityManager, box.runnerId)
+      if (!undisturbed) {
+        this.logger.log(`Box ${box.id} was touched while it was exported; rolling back instead of importing`)
+      } else if (!sourceDraining) {
+        this.logger.log(
+          `Runner ${box.runnerId} stopped draining while box ${box.id} was exported; rolling back instead of importing`,
+        )
+      }
 
-        await this.updateMigration(entityManager, box.id, BoxMigrationState.PENDING_EXPORT, {
-          state: undisturbed && sourceDraining ? BoxMigrationState.PENDING_IMPORT : BoxMigrationState.PENDING_ROLLBACK,
-          arcPath,
-        })
-      },
-    )
+      await this.updateMigration(entityManager, box.id, BoxMigrationState.PENDING_EXPORT, {
+        state: undisturbed && sourceDraining ? BoxMigrationState.PENDING_IMPORT : BoxMigrationState.PENDING_ROLLBACK,
+        arcPath,
+      })
+    })
   }
 
   /**
    * The box now exists on the target runner. If it is still the migration's to
    * move, this is the commit point: ownership moves in the same transaction that
    * checks it, and what was the box's runner becomes the copy left to discard.
+   *
+   * DrainCheck is not re-run here, unlike on the export. The copy the drain
+   * asked for is already made, so a drain called off now would buy nothing but a
+   * rollback that destroys a good copy to put the box back where it started;
+   * committing costs a discard the migration owed anyway. The box is served off
+   * a runner that is up either way, so the finished move is the cheaper end.
    */
   private async receiveImport(job: Job): Promise<void> {
     //  The target runner is the runner this job was submitted to, so the runner
@@ -173,7 +195,7 @@ export class BoxMigrationJobReceiver {
     const moved = await this.withMigration(
       job,
       BoxMigrationState.PENDING_IMPORT,
-      async ({ entityManager, box, undisturbed, sourceDraining }) => {
+      async ({ entityManager, box, undisturbed }) => {
         //  A box with no runner has nothing to migrate away from, and moving
         //  ownership anyway would leave a discard that nothing can run. The
         //  marker only claims a box on a runner, so ValidCheck already rules
@@ -183,13 +205,9 @@ export class BoxMigrationJobReceiver {
           this.logger.error(`Box ${box.id} was imported onto runner ${targetRunnerId} but has no runner of its own`)
         } else if (!undisturbed) {
           this.logger.log(`Box ${box.id} was touched while it was imported; rolling back the copy on ${targetRunnerId}`)
-        } else if (!sourceDraining) {
-          this.logger.log(
-            `Runner ${sourceRunnerId} stopped draining while box ${box.id} was imported; rolling back the copy on ${targetRunnerId}`,
-          )
         }
 
-        if (!sourceRunnerId || !undisturbed || !sourceDraining) {
+        if (!sourceRunnerId || !undisturbed) {
           //  The copy on the target runner is what rollback reclaims.
           await this.updateMigration(entityManager, box.id, BoxMigrationState.PENDING_IMPORT, {
             state: BoxMigrationState.PENDING_ROLLBACK,
@@ -305,12 +323,7 @@ export class BoxMigrationJobReceiver {
         return null
       }
 
-      return apply({
-        entityManager,
-        box,
-        undisturbed: migration.isUndisturbedBy(box),
-        sourceDraining: await this.isDraining(entityManager, box.runnerId),
-      })
+      return apply({ entityManager, box, undisturbed: migration.isUndisturbedBy(box) })
     })
   }
 
@@ -319,10 +332,10 @@ export class BoxMigrationJobReceiver {
    *
    * A migration exists only because the marker found the box on a draining
    * runner, and an operator may call that drain off at any point, including
-   * while the job reporting here was running. Re-reading the flag where the
-   * result lands is what stops a called-off drain from moving boxes anyway, and
-   * it is the only place that can do so without stranding an artifact: the
-   * archive or the imported copy already exists by now, so the same transaction
+   * while the export reporting here was running. Re-reading the flag where the
+   * export lands is what stops a called-off drain from starting an import
+   * nothing asked for, and it is the only place that can do so without
+   * stranding the archive: it already exists by now, so the same transaction
    * records it and turns the migration around.
    *
    * Read rather than locked. The flag is the operator's to move, and the check
@@ -342,6 +355,29 @@ export class BoxMigrationJobReceiver {
     })
 
     return runner?.draining === true
+  }
+
+  /**
+   * Delete a migration whose export failed, conditional on PENDING_EXPORT the
+   * same way every other write here is conditional: a status redelivered after
+   * the migration moved on matches nothing and takes no row with it.
+   *
+   * The archive key a later migration derives is the same one this attempt used
+   * — both come from the box id — so whatever a half-finished export left on the
+   * object store is overwritten rather than stranded behind the deleted row.
+   */
+  private async dropFailedExport(boxId: string): Promise<void> {
+    const result = await this.dataSource.manager
+      .createQueryBuilder()
+      .delete()
+      .from(BoxMigration)
+      .where('"boxId" = :boxId', { boxId })
+      .andWhere('"state" = :expected', { expected: BoxMigrationState.PENDING_EXPORT })
+      .execute()
+
+    if (result.affected > 0) {
+      this.logger.log(`Dropped the migration of box ${boxId} after its export failed; the marker may claim it again`)
+    }
   }
 
   /**
