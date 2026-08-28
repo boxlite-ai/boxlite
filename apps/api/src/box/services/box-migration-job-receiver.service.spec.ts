@@ -7,6 +7,7 @@ import { BoxMigrationJobReceiver } from './box-migration-job-receiver.service'
 import { Box } from '../entities/box.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
 import { Job } from '../entities/job.entity'
+import { Runner } from '../entities/runner.entity'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxState } from '../enums/box-state.enum'
@@ -46,6 +47,13 @@ function makeMigration(state: BoxMigrationState, overrides: Partial<BoxMigration
   migration.updatedAt = STAMPED
   Object.assign(migration, overrides)
   return migration
+}
+
+function makeRunner(draining: boolean): Runner {
+  const runner = new Runner({ region: 'us-east', name: 'runner-a', apiKey: 'k', apiVersion: '1' })
+  runner.id = SOURCE_RUNNER
+  runner.draining = draining
+  return runner
 }
 
 function makeJob(type: JobType, overrides: Partial<ConstructorParameters<typeof Job>[0]> = {}): Job {
@@ -94,13 +102,21 @@ function makeWriteRecorder() {
   return { writes, createQueryBuilder }
 }
 
-function makeHarness(row?: { box?: Box | null; migration?: BoxMigration | null }) {
+function makeHarness(row?: { box?: Box | null; migration?: BoxMigration | null; sourceDraining?: boolean }) {
   const { writes, createQueryBuilder } = makeWriteRecorder()
   const box = row?.box === undefined ? makeBox() : row.box
   const migration = row?.migration === undefined ? makeMigration(BoxMigrationState.PENDING_EXPORT) : row.migration
+  // The marker only claims boxes off draining runners, so a migration that
+  // reaches its receiver started out on one.
+  const sourceRunner = makeRunner(row?.sourceDraining ?? true)
 
   const entityManager = {
-    findOne: jest.fn().mockImplementation(async (entity: any) => (entity === Box ? box : migration)),
+    findOne: jest.fn().mockImplementation(async (entity: any) => {
+      if (entity === Box) {
+        return box
+      }
+      return entity === Runner ? sourceRunner : migration
+    }),
     createQueryBuilder,
   }
   const dataSource = {
@@ -156,6 +172,25 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
     const h = makeHarness({
       box: makeBox({ desiredState: BoxDesiredState.STARTED, updatedAt: new Date('2026-01-01T00:05:00.000Z') }),
     })
+    const job = makeExportJob()
+    job.resultMetadata = JSON.stringify({ arcPath: ARC_PATH })
+
+    await h.receiver.handleJobCompletion(job)
+
+    expect(h.writes).toEqual([
+      {
+        table: 'migrate',
+        values: { state: BoxMigrationState.PENDING_ROLLBACK, arcPath: ARC_PATH },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_EXPORT },
+      },
+    ])
+  })
+
+  // The drain is the migration's only reason to exist; an operator calling it
+  // off mid-export takes that reason away, so the archive is recorded and the
+  // migration turned around instead of the box being moved anyway.
+  it('records the archive and turns the migration around when the runner stopped draining', async () => {
+    const h = makeHarness({ sourceDraining: false })
     const job = makeExportJob()
     job.resultMetadata = JSON.stringify({ arcPath: ARC_PATH })
 
@@ -256,6 +291,27 @@ describe('BoxMigrationJobReceiver IMPORT_BOX', () => {
     await h.receiver.handleJobCompletion(makeJob(JobType.IMPORT_BOX))
 
     // The box keeps its runner: ownership only moves on the validated branch.
+    expect(h.writes).toEqual([
+      {
+        table: 'migrate',
+        values: { state: BoxMigrationState.PENDING_ROLLBACK, runnerId: TARGET_RUNNER },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_IMPORT },
+      },
+    ])
+    expect(h.boxLookupCacheInvalidationService.invalidate).not.toHaveBeenCalled()
+  })
+
+  // Past this point ownership would move for good, so a drain called off while
+  // the import ran has to be caught here — the copy on the target runner is
+  // recorded and reclaimed rather than becoming the box's new home.
+  it('records the copy on the target runner and rolls back when the runner stopped draining', async () => {
+    const h = makeHarness({
+      migration: makeMigration(BoxMigrationState.PENDING_IMPORT, { arcPath: ARC_PATH }),
+      sourceDraining: false,
+    })
+
+    await h.receiver.handleJobCompletion(makeJob(JobType.IMPORT_BOX))
+
     expect(h.writes).toEqual([
       {
         table: 'migrate',

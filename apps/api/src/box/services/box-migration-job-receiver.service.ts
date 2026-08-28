@@ -11,6 +11,7 @@ import { RedisLockProvider } from '../common/redis-lock.provider'
 import { Box } from '../entities/box.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
 import { Job } from '../entities/job.entity'
+import { Runner } from '../entities/runner.entity'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { JobStatus } from '../enums/job-status.enum'
 import { JobType } from '../enums/job-type.enum'
@@ -50,6 +51,11 @@ interface ValidatedMigration {
   //  ValidCheck: nothing outside the migration has touched the box since it was
   //  claimed, so the migration may still move it.
   undisturbed: boolean
+  //  DrainCheck: the runner still holding the box is still being emptied, which
+  //  is the migration's only reason to exist. An operator who calls the drain
+  //  off takes that reason away, so the result is turned around rather than
+  //  applied.
+  sourceDraining: boolean
 }
 
 /**
@@ -61,11 +67,12 @@ interface ValidatedMigration {
  * submitted from, so a status redelivered after a restart matches nothing and
  * applies once.
  *
- * The two legs that move real data — export and import — re-run ValidCheck in
- * the transaction that records their result, because the box may have been
- * started while the runner was working. That turns the migration around rather
- * than failing it: the artifact is recorded either way, since it exists either
- * way and the rollback path needs the field to reclaim it.
+ * The two legs that move real data — export and import — re-run ValidCheck and
+ * DrainCheck in the transaction that records their result, because the box may
+ * have been started, or its runner taken out of drain, while the runner was
+ * working. Either turns the migration around rather than failing it: the
+ * artifact is recorded either way, since it exists either way and the rollback
+ * path needs the field to reclaim it.
  *
  * Job failure is not this receiver's to repair. The state stays where it is,
  * the job's lock is released, and the loop that submitted it retries.
@@ -133,16 +140,24 @@ export class BoxMigrationJobReceiver {
       this.logger.error(`EXPORT_BOX for box ${job.resourceId} was submitted with no archive key`)
     }
 
-    await this.withMigration(job, BoxMigrationState.PENDING_EXPORT, async ({ entityManager, box, undisturbed }) => {
-      if (!undisturbed) {
-        this.logger.log(`Box ${box.id} was touched while it was exported; rolling back instead of importing`)
-      }
+    await this.withMigration(
+      job,
+      BoxMigrationState.PENDING_EXPORT,
+      async ({ entityManager, box, undisturbed, sourceDraining }) => {
+        if (!undisturbed) {
+          this.logger.log(`Box ${box.id} was touched while it was exported; rolling back instead of importing`)
+        } else if (!sourceDraining) {
+          this.logger.log(
+            `Runner ${box.runnerId} stopped draining while box ${box.id} was exported; rolling back instead of importing`,
+          )
+        }
 
-      await this.updateMigration(entityManager, box.id, BoxMigrationState.PENDING_EXPORT, {
-        state: undisturbed ? BoxMigrationState.PENDING_IMPORT : BoxMigrationState.PENDING_ROLLBACK,
-        arcPath,
-      })
-    })
+        await this.updateMigration(entityManager, box.id, BoxMigrationState.PENDING_EXPORT, {
+          state: undisturbed && sourceDraining ? BoxMigrationState.PENDING_IMPORT : BoxMigrationState.PENDING_ROLLBACK,
+          arcPath,
+        })
+      },
+    )
   }
 
   /**
@@ -158,7 +173,7 @@ export class BoxMigrationJobReceiver {
     const moved = await this.withMigration(
       job,
       BoxMigrationState.PENDING_IMPORT,
-      async ({ entityManager, box, undisturbed }) => {
+      async ({ entityManager, box, undisturbed, sourceDraining }) => {
         //  A box with no runner has nothing to migrate away from, and moving
         //  ownership anyway would leave a discard that nothing can run. The
         //  marker only claims a box on a runner, so ValidCheck already rules
@@ -168,9 +183,13 @@ export class BoxMigrationJobReceiver {
           this.logger.error(`Box ${box.id} was imported onto runner ${targetRunnerId} but has no runner of its own`)
         } else if (!undisturbed) {
           this.logger.log(`Box ${box.id} was touched while it was imported; rolling back the copy on ${targetRunnerId}`)
+        } else if (!sourceDraining) {
+          this.logger.log(
+            `Runner ${sourceRunnerId} stopped draining while box ${box.id} was imported; rolling back the copy on ${targetRunnerId}`,
+          )
         }
 
-        if (!sourceRunnerId || !undisturbed) {
+        if (!sourceRunnerId || !undisturbed || !sourceDraining) {
           //  The copy on the target runner is what rollback reclaims.
           await this.updateMigration(entityManager, box.id, BoxMigrationState.PENDING_IMPORT, {
             state: BoxMigrationState.PENDING_ROLLBACK,
@@ -286,8 +305,43 @@ export class BoxMigrationJobReceiver {
         return null
       }
 
-      return apply({ entityManager, box, undisturbed: migration.isUndisturbedBy(box) })
+      return apply({
+        entityManager,
+        box,
+        undisturbed: migration.isUndisturbedBy(box),
+        sourceDraining: await this.isDraining(entityManager, box.runnerId),
+      })
     })
+  }
+
+  /**
+   * DrainCheck — whether the runner still holding the box is still being emptied.
+   *
+   * A migration exists only because the marker found the box on a draining
+   * runner, and an operator may call that drain off at any point, including
+   * while the job reporting here was running. Re-reading the flag where the
+   * result lands is what stops a called-off drain from moving boxes anyway, and
+   * it is the only place that can do so without stranding an artifact: the
+   * archive or the imported copy already exists by now, so the same transaction
+   * records it and turns the migration around.
+   *
+   * Read rather than locked. The flag is the operator's to move, and the check
+   * bounds how long a called-off drain keeps moving boxes rather than pinning an
+   * exact instant — a migration that reads the flag just before it flips is no
+   * worse off than one that read it just after.
+   */
+  private async isDraining(entityManager: EntityManager, runnerId: string | undefined): Promise<boolean> {
+    if (!runnerId) {
+      return false
+    }
+
+    const runner = await entityManager.findOne(Runner, {
+      where: { id: runnerId },
+      select: ['id', 'draining'],
+      loadEagerRelations: false,
+    })
+
+    return runner?.draining === true
   }
 
   /**
