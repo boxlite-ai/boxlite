@@ -96,7 +96,8 @@ fn revive_if_zombie(ctx: &common::TestContext, name: &str, poll: Duration) -> bo
     let _ = ctx
         .new_cmd()
         .args(["exec", name, "--", "echo", "revive"])
-        .output();
+        .output()
+        .expect("exec runs");
     true
 }
 

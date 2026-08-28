@@ -650,7 +650,7 @@ async fn spawn_with_executor(
                             if !container.is_running() {
                                 let (init_stdout, init_stderr) = container.drain_init_output();
                                 let mut msg = format!(
-                                    "Container init process exited — cannot exec. Original error: {}",
+                                    "Container init process exited — cannot exec. Error: {}",
                                     e
                                 );
                                 if !init_stdout.is_empty() {

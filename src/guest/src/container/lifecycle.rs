@@ -374,6 +374,9 @@ impl Container {
     /// never signals the recorded pid — tests point it at their own process.
     #[cfg(test)]
     pub(crate) fn for_unit_test(id: &str, state_root: PathBuf, bundle_path: PathBuf) -> Self {
+        // Drop removes the bundle directory; create it so cleanup is a
+        // silent no-op instead of warning on a NotFound during tests.
+        std::fs::create_dir_all(&bundle_path).expect("create bundle dir for unit test");
         Self {
             id: id.to_string(),
             state_root,
@@ -748,6 +751,9 @@ mod tests {
         );
         state.save(dir.path()).expect("save libcontainer state");
 
+        // Drop removes the bundle directory; create it so cleanup is a
+        // silent no-op instead of warning on a NotFound during tests.
+        std::fs::create_dir_all(dir.path().join("bundle")).expect("create bundle dir");
         let container = Container {
             id,
             state_root,
