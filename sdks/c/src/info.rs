@@ -7,9 +7,9 @@ use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 
-use boxlite::BoxliteError;
 use boxlite::runtime::options::{NetworkMode, PortProtocol};
 use boxlite::runtime::types::{BoxStatus, PublishedPort};
+use boxlite::{AdvancedBoxInfo, BoxliteError, ContainerCapabilities};
 
 use crate::box_handle::BoxHandle;
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
@@ -81,6 +81,25 @@ pub struct CNetworkInfo {
     pub inbound: CNetworkDirectionInfo,
 }
 
+/// Owned Linux capability policy reported for an existing box.
+///
+/// Both arrays and their strings are owned by the enclosing [`CBoxInfo`].
+#[repr(C)]
+pub struct CContainerCapabilities {
+    pub add: *mut *mut c_char,
+    pub add_count: c_int,
+    pub drop: *mut *mut c_char,
+    pub drop_count: c_int,
+}
+
+/// Reuse-relevant advanced policy owned by an enclosing [`CBoxInfo`].
+#[repr(C)]
+pub struct CAdvancedBoxInfo {
+    pub capabilities: CContainerCapabilities,
+    pub privileged: c_int,
+    pub nested_virtualization: c_int,
+}
+
 #[repr(C)]
 pub struct CBoxInfo {
     pub id: *mut c_char,
@@ -103,6 +122,9 @@ pub struct CBoxInfo {
     /// Milliseconds — not `created_at`'s seconds — preserve sub-second ordering
     /// against a job's timeline.
     pub started_at: i64,
+    /// Owned reuse-relevant advanced policy; null when unavailable.
+    /// Appended to preserve the offsets of every preceding field.
+    pub advanced: *mut CAdvancedBoxInfo,
 }
 
 #[repr(C)]
@@ -258,6 +280,72 @@ pub(crate) unsafe fn free_network_info(network: *mut CNetworkInfo) {
     }
 }
 
+impl CContainerCapabilities {
+    fn from_capabilities(capabilities: &ContainerCapabilities) -> Self {
+        let (add, add_count) = into_raw_slice(
+            capabilities
+                .add
+                .iter()
+                .map(|capability| to_c_str(capability))
+                .collect(),
+        );
+        let (drop, drop_count) = into_raw_slice(
+            capabilities
+                .drop
+                .iter()
+                .map(|capability| to_c_str(capability))
+                .collect(),
+        );
+        Self {
+            add,
+            add_count,
+            drop,
+            drop_count,
+        }
+    }
+}
+
+impl CAdvancedBoxInfo {
+    fn from_advanced_info(info: &AdvancedBoxInfo) -> Self {
+        Self {
+            capabilities: CContainerCapabilities::from_capabilities(&info.capabilities),
+            privileged: c_int::from(info.privileged),
+            nested_virtualization: c_int::from(info.nested_virtualization),
+        }
+    }
+}
+
+pub(crate) fn advanced_to_c_ptr(advanced: &Option<AdvancedBoxInfo>) -> *mut CAdvancedBoxInfo {
+    advanced
+        .as_ref()
+        .map(CAdvancedBoxInfo::from_advanced_info)
+        .map(Box::new)
+        .map(Box::into_raw)
+        .unwrap_or(ptr::null_mut())
+}
+
+unsafe fn free_string_list(items: *mut *mut c_char, count: c_int) {
+    unsafe {
+        if !items.is_null() && count >= 0 {
+            for index in 0..count as usize {
+                free_str(*items.add(index));
+            }
+        }
+        free_raw_slice(items, count);
+    }
+}
+
+pub(crate) unsafe fn free_advanced_info(advanced: *mut CAdvancedBoxInfo) {
+    if advanced.is_null() {
+        return;
+    }
+    unsafe {
+        let advanced = Box::from_raw(advanced);
+        free_string_list(advanced.capabilities.add, advanced.capabilities.add_count);
+        free_string_list(advanced.capabilities.drop, advanced.capabilities.drop_count);
+    }
+}
+
 fn status_to_str(status: BoxStatus) -> &'static str {
     match status {
         BoxStatus::Unknown => "unknown",
@@ -291,6 +379,7 @@ impl CBoxInfo {
             created_at: info.created_at.timestamp(),
             network: network_to_c_ptr(&info.network),
             started_at: info.started_at.map(|at| at.timestamp_millis()).unwrap_or(0),
+            advanced: advanced_to_c_ptr(&info.advanced),
         }
     }
 }
@@ -306,6 +395,7 @@ pub unsafe fn free_box_info(info: *mut CBoxInfo) {
         free_str(info_ref.image);
         free_str(info_ref.status);
         free_network_info(info_ref.network);
+        free_advanced_info(info_ref.advanced);
     }
 }
 
@@ -542,12 +632,17 @@ mod tests {
 
     use boxlite::runtime::options::PortProtocol;
     use boxlite::runtime::types::NetworkDirectionInfo;
-    use boxlite::{NetworkInfo, NetworkMode, PublishedPort};
+    use boxlite::{
+        AdvancedBoxInfo, ContainerCapabilities, NetworkInfo, NetworkMode, PublishedPort,
+    };
 
     use crate::options::BoxlitePortProtocol;
     use crate::{FREE_STR_CALLS, FREE_STR_LOCK};
 
-    use super::{BoxliteNetworkMode, CNetworkInfo, free_network_info, network_to_c_ptr};
+    use super::{
+        BoxliteNetworkMode, CBoxInfo, CNetworkInfo, advanced_to_c_ptr, free_advanced_info,
+        free_network_info, network_to_c_ptr,
+    };
     use std::ffi::c_char;
 
     /// Callers compiled against the pre-split header read `mode`,
@@ -574,6 +669,54 @@ mod tests {
         // The legacy prefix must sit ahead of the nested view, otherwise the
         // offsets above would only hold by accident.
         assert!(offset_of!(CNetworkInfo, outbound) > offset_of!(CNetworkInfo, published_ports));
+    }
+
+    #[test]
+    fn advanced_info_is_appended_after_the_legacy_box_info_fields() {
+        use std::mem::offset_of;
+
+        assert!(offset_of!(CBoxInfo, advanced) > offset_of!(CBoxInfo, started_at));
+    }
+
+    #[test]
+    fn advanced_info_preserves_policy_and_reclaims_capability_strings() {
+        let _guard = FREE_STR_LOCK.lock().unwrap();
+
+        assert!(advanced_to_c_ptr(&None).is_null());
+        let advanced = NonNull::new(advanced_to_c_ptr(&Some(AdvancedBoxInfo {
+            capabilities: ContainerCapabilities {
+                add: vec!["SYS_ADMIN".to_string()],
+                drop: vec!["NET_RAW".to_string()],
+            },
+            privileged: false,
+            nested_virtualization: true,
+        })))
+        .expect("Some advanced metadata must allocate CAdvancedBoxInfo");
+
+        let advanced_ref = unsafe { advanced.as_ref() };
+        assert_eq!(advanced_ref.capabilities.add_count, 1);
+        assert_eq!(advanced_ref.capabilities.drop_count, 1);
+        assert_eq!(
+            unsafe { CStr::from_ptr(*advanced_ref.capabilities.add) }
+                .to_str()
+                .unwrap(),
+            "SYS_ADMIN"
+        );
+        assert_eq!(
+            unsafe { CStr::from_ptr(*advanced_ref.capabilities.drop) }
+                .to_str()
+                .unwrap(),
+            "NET_RAW"
+        );
+        assert_eq!(advanced_ref.privileged, 0);
+        assert_eq!(advanced_ref.nested_virtualization, 1);
+
+        let before = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+        unsafe { free_advanced_info(advanced.as_ptr()) };
+        assert_eq!(
+            FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst) - before,
+            2
+        );
     }
 
     /// The legacy scalar fields alias `outbound`'s allocations, so they must

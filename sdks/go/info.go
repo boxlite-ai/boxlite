@@ -62,16 +62,26 @@ type NetworkInfo struct {
 	PublishedPorts []PublishedPort
 }
 
+// AdvancedBoxInfo is the reuse-relevant advanced policy reported for an
+// existing box.
+type AdvancedBoxInfo struct {
+	Capabilities         ContainerCapabilities
+	Privileged           bool
+	NestedVirtualization bool
+}
+
 // BoxInfo holds information about a box.
 type BoxInfo struct {
-	ID         string
-	Name       string
-	Image      string
-	State      State
-	Running    bool
-	PID        int
-	CPUs       int
-	MemoryMiB  int
+	ID        string
+	Name      string
+	Image     string
+	State     State
+	Running   bool
+	PID       int
+	CPUs      int
+	MemoryMiB int
+	// Advanced is nil when the runtime did not report reuse-relevant policy.
+	Advanced   *AdvancedBoxInfo
 	Network    *NetworkInfo
 	AutoStop   uint32
 	AutoDelete uint32
@@ -184,6 +194,7 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 		PID:        pid,
 		CPUs:       int(info.cpus),
 		MemoryMiB:  int(info.memory_mib),
+		Advanced:   cAdvancedBoxInfoToGo(info.advanced),
 		Network:    cNetworkInfoToGo(info.network),
 		AutoStop:   uint32(info.auto_stop),
 		AutoDelete: uint32(info.auto_delete),
@@ -226,6 +237,33 @@ func cNetworkDirectionInfoToGo(direction C.CNetworkDirectionInfo) NetworkDirecti
 	return NetworkDirectionInfo{
 		Mode:     networkModeFromCValue(direction.mode),
 		AllowNet: allowNet,
+	}
+}
+
+func cCapabilityListToGo(items **C.char, count C.int) []string {
+	if items == nil || count <= 0 {
+		return nil
+	}
+
+	capabilities := make([]string, 0, int(count))
+	for _, capability := range unsafe.Slice(items, int(count)) {
+		capabilities = append(capabilities, cString(capability))
+	}
+	return capabilities
+}
+
+func cAdvancedBoxInfoToGo(advanced *C.CAdvancedBoxInfo) *AdvancedBoxInfo {
+	if advanced == nil {
+		return nil
+	}
+
+	return &AdvancedBoxInfo{
+		Capabilities: ContainerCapabilities{
+			Add:  cCapabilityListToGo(advanced.capabilities.add, advanced.capabilities.add_count),
+			Drop: cCapabilityListToGo(advanced.capabilities.drop, advanced.capabilities.drop_count),
+		},
+		Privileged:           advanced.privileged != 0,
+		NestedVirtualization: advanced.nested_virtualization != 0,
 	}
 }
 

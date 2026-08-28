@@ -173,6 +173,12 @@ export interface JsAdvancedBoxOptions {
   capabilities?: JsContainerCapabilities;
 }
 
+export interface JsAdvancedBoxInfo {
+  capabilities: JsContainerCapabilities;
+  privileged: boolean;
+  nestedVirtualization: boolean;
+}
+
 export interface JsBoxOptions {
   image?: string;
   rootfsPath?: string;
@@ -303,6 +309,8 @@ export interface JsBoxInfo {
   image: string;
   cpus: number;
   memoryMib: number;
+  /** `null` means the runtime did not report reuse-relevant advanced policy. */
+  advanced: JsAdvancedBoxInfo | null;
   network: JsNetworkInfo | null;
   autoStop: number;
   autoDelete: number;

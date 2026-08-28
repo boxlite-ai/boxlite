@@ -25,6 +25,14 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     image: box.image || '',
     cpus: box.cpu || 1,
     memory_mib: (box.memory || 1) * 1024,
+    // The hosted API rejects advanced create options, so every cloud box has
+    // this effective policy. Reporting it lets REST clients verify named-box
+    // reuse instead of treating hosted metadata as unverifiable.
+    advanced: {
+      capabilities: { add: [], drop: [] },
+      privileged: false,
+      nested_virtualization: false,
+    },
     labels: box.labels || {},
     auto_stop: box.autoStop ?? DEFAULT_AUTO_STOP_SECONDS,
     auto_delete: box.autoDelete ?? AUTO_DELETE_DISABLED,

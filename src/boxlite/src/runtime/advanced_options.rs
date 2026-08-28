@@ -581,6 +581,25 @@ pub struct ContainerCapabilities {
     pub drop: Vec<String>,
 }
 
+/// Reuse-relevant advanced configuration recorded for an existing box.
+///
+/// This intentionally exposes the effective container security policy rather
+/// than the full [`AdvancedBoxOptions`]. Host-only implementation details such
+/// as jailer paths and custom kernels do not belong in public box metadata, but
+/// callers must be able to tell whether reusing a named box would silently
+/// change its requested privileges.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdvancedBoxInfo {
+    /// Effective Linux capability policy after privileged-mode resolution.
+    pub capabilities: ContainerCapabilities,
+
+    /// Whether the box was created in privileged mode.
+    pub privileged: bool,
+
+    /// Whether the box was created with nested virtualization enabled.
+    pub nested_virtualization: bool,
+}
+
 impl ContainerCapabilities {
     /// Whether this policy leaves the default capability set unchanged.
     pub fn is_empty(&self) -> bool {
@@ -881,6 +900,38 @@ impl AdvancedBoxOptions {
         }
     }
 
+    /// Reject reuse when this request disagrees with an existing box's policy.
+    pub(crate) fn check_reuse_compatibility(
+        &self,
+        actual: &AdvancedBoxInfo,
+        box_name: &str,
+    ) -> boxlite_shared::errors::BoxliteResult<()> {
+        // One-way: a nested-capable box satisfies any request, but a plain box
+        // cannot satisfy one that needs /dev/kvm. Reusing it would look like a
+        // success and defer the failure into the guest.
+        if self.nested_virtualization && !actual.nested_virtualization {
+            return Err(boxlite_shared::errors::BoxliteError::Unsupported(format!(
+                "box '{box_name}' was created without nested virtualization and cannot satisfy a required nested virtualization request; use a different name or recreate the box"
+            )));
+        }
+        if self.privileged && !actual.privileged {
+            return Err(boxlite_shared::errors::BoxliteError::Unsupported(format!(
+                "box '{box_name}' was created without privileged support and cannot satisfy a required privileged request; use a different name or recreate the box"
+            )));
+        }
+        // Privileged governs mount hardening as well as capabilities. A box
+        // can therefore look capability-compatible with a non-privileged
+        // request while granting more than that request asked for.
+        if !self.privileged && actual.privileged {
+            return Err(boxlite_shared::errors::BoxliteError::Unsupported(format!(
+                "box '{box_name}' was created with privileged mode and would grant more than the requested non-privileged security policy; use a different name or recreate the box"
+            )));
+        }
+
+        self.effective_capabilities()
+            .check_compatibility(&actual.capabilities, box_name)
+    }
+
     /// Resolve the container security request before it crosses into the guest.
     ///
     /// The host owns the public option semantics *and* the literal OCI values
@@ -918,6 +969,16 @@ impl AdvancedBoxOptions {
                 options: mount_options(self.privileged),
             },
         })
+    }
+}
+
+impl From<&AdvancedBoxOptions> for AdvancedBoxInfo {
+    fn from(options: &AdvancedBoxOptions) -> Self {
+        Self {
+            capabilities: options.effective_capabilities(),
+            privileged: options.privileged,
+            nested_virtualization: options.nested_virtualization,
+        }
     }
 }
 

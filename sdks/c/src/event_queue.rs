@@ -1233,7 +1233,9 @@ mod owned_ffi_ptr_nested_leak_tests {
     use crate::info::{CBoxInfo, CBoxInfoList};
     use boxlite::runtime::options::PortProtocol;
     use boxlite::runtime::types::NetworkDirectionInfo;
-    use boxlite::{NetworkInfo, NetworkMode, PublishedPort};
+    use boxlite::{
+        AdvancedBoxInfo, ContainerCapabilities, NetworkInfo, NetworkMode, PublishedPort,
+    };
     use std::ffi::CString;
     use std::sync::atomic::Ordering as AtomicOrdering;
 
@@ -1300,6 +1302,14 @@ mod owned_ffi_ptr_nested_leak_tests {
                 }]),
             ))),
             started_at: 0,
+            advanced: crate::info::advanced_to_c_ptr(&Some(AdvancedBoxInfo {
+                capabilities: ContainerCapabilities {
+                    add: vec!["SYS_ADMIN".to_string()],
+                    drop: vec!["NET_RAW".to_string()],
+                },
+                privileged: false,
+                nested_virtualization: true,
+            })),
         });
 
         let owned = OwnedFfiPtr::new_with(payload, crate::info::free_box_info_ptr);
@@ -1308,9 +1318,9 @@ mod owned_ffi_ptr_nested_leak_tests {
         let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
         assert_eq!(
             after - before,
-            6,
+            8,
             "OwnedFfiPtr<CBoxInfo>::drop reclaimed {} inner CStrings; \
-             expected 6 (four BoxInfo strings + allow_net + host_ip). Inner allocations leak.",
+             expected 8 (four BoxInfo strings + allow_net + host_ip + two capabilities). Inner allocations leak.",
             after - before
         );
     }
@@ -1372,6 +1382,7 @@ mod owned_ffi_ptr_nested_leak_tests {
             created_at: 0,
             network: std::ptr::null_mut(),
             started_at: 0,
+            advanced: std::ptr::null_mut(),
         }];
         let items_ptr = items_vec.as_mut_ptr();
         let items_len = items_vec.len();

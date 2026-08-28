@@ -14,6 +14,8 @@
 
 _Static_assert(offsetof(CBoxInfo, network) < offsetof(CBoxInfo, started_at),
                "CBoxInfo.started_at must follow network");
+_Static_assert(offsetof(CBoxInfo, started_at) < offsetof(CBoxInfo, advanced),
+               "CBoxInfo.advanced must be appended after started_at");
 
 /* The loopback REST server keeps this unit test VM-free. Its two distinct
  * responses prove boxlite_box_info fetches current metadata instead of
@@ -101,7 +103,10 @@ static pid_t start_info_server(uint16_t *port) {
         "{\"box_id\":\"box1\",\"name\":\"demo\",\"status\":\"stopped\","
         "\"created_at\":\"2026-07-14T00:00:00Z\","
         "\"updated_at\":\"2026-07-15T00:00:00Z\",\"pid\":null,"
-        "\"image\":\"alpine:latest\",\"cpus\":2,\"memory_mib\":512}";
+        "\"image\":\"alpine:latest\",\"cpus\":2,\"memory_mib\":512,"
+        "\"advanced\":{\"capabilities\":{\"add\":[\"SYS_ADMIN\"],"
+        "\"drop\":[\"NET_RAW\"]},\"privileged\":false,"
+        "\"nested_virtualization\":true}}";
     serve_box_response(listener, attached);
     serve_box_response(listener, current);
     close(listener);
@@ -123,10 +128,16 @@ static void on_info(CBoxInfo *info, CBoxliteError *error, void *user_data) {
   InfoRequest *request = user_data;
   request->error_code = error->code;
   if (info != NULL) {
+    const CAdvancedBoxInfo *advanced = info->advanced;
     request->saw_expected_info =
         strcmp(info->id, "box1") == 0 && strcmp(info->status, "stopped") == 0 &&
         info->running == 0 && info->pid == 0 && info->cpus == 2 &&
-        info->memory_mib == 512 && info->started_at == 0;
+        info->memory_mib == 512 && info->started_at == 0 && advanced != NULL &&
+        advanced->capabilities.add_count == 1 &&
+        strcmp(advanced->capabilities.add[0], "SYS_ADMIN") == 0 &&
+        advanced->capabilities.drop_count == 1 &&
+        strcmp(advanced->capabilities.drop[0], "NET_RAW") == 0 &&
+        advanced->privileged == 0 && advanced->nested_virtualization == 1;
     boxlite_free_box_info(info);
   }
   request->done = 1;

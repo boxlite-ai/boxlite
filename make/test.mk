@@ -371,14 +371,20 @@ test\:unit\:gvproxy:
 # Rust client at, so a class it gets wrong is a class every conformance run
 # gets wrong.
 #
-# Discovery is restricted to the modules that import only the stdlib
-# (openapi/reference-server/errors.py, like config.py). The rest of that
-# directory needs python-dotenv, fastapi and pydantic, which no setup target
-# here installs — discovering the whole directory would fail this suite on
-# every checkout that does not intend to run the server.
+# Run the whole reference-server suite in an isolated environment. Keep these
+# dependencies aligned with server.py's PEP 723 header: response-shape tests
+# import the real mapper, and skipping them lets a producer drift away from the
+# Rust client's wire contract while both local suites remain green.
 test\:unit\:openapi:
 	@echo "🧪 Running OpenAPI reference-server unit tests..."
-	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
+	@uv run --isolated --no-project --python 3.10 \
+		--with 'fastapi>=0.115' \
+		--with 'uvicorn>=0.34' \
+		--with 'sse-starlette>=2.0' \
+		--with 'PyJWT>=2.8' \
+		--with 'python-multipart>=0.0.9' \
+		--with 'python-dotenv>=1.0' \
+		python -m unittest discover -s openapi/reference-server/tests -p 'test_*.py' -v
 
 # CLI integration tests.
 test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)

@@ -293,6 +293,15 @@ impl From<PyContainerCapabilities> for ContainerCapabilities {
     }
 }
 
+impl From<ContainerCapabilities> for PyContainerCapabilities {
+    fn from(capabilities: ContainerCapabilities) -> Self {
+        Self {
+            add: capabilities.add,
+            drop: capabilities.drop,
+        }
+    }
+}
+
 /// Advanced options for expert users.
 ///
 /// Entry-level users can ignore this — defaults are compatibility-focused.

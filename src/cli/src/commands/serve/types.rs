@@ -159,6 +159,8 @@ pub(super) struct BoxResponse {
     pub image: String,
     pub cpus: u8,
     pub memory_mib: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advanced: Option<boxlite::AdvancedBoxInfo>,
     pub labels: HashMap<String, String>,
     pub auto_stop: u32,
     pub auto_delete: u32,

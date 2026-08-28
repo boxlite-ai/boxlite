@@ -266,7 +266,14 @@ Metadata about a box.
 | `image` | `str` | OCI image used |
 | `cpus` | `int` | Allocated CPU cores |
 | `memory_mib` | `int` | Allocated memory in MiB |
+| `advanced` | `AdvancedBoxInfo \| None` | Reuse-relevant capability, privileged-mode, and nested-virtualization policy; `None` when unavailable |
 | `network` | `NetworkInfo \| None` | Current network configuration and resolved local publications |
+
+`AdvancedBoxInfo` has `capabilities: ContainerCapabilities`, `privileged:
+bool`, and `nested_virtualization: bool`. When present, the capability
+`add` and `drop` lists report the effective policy, including empty lists.
+`advanced is None` means the runtime did not report enough metadata to
+describe the box's reuse-relevant policy.
 
 `NetworkInfo` has `outbound: NetworkDirectionInfo`, `inbound:
 NetworkDirectionInfo`, and `published_ports: List[PublishedPort] | None`; each

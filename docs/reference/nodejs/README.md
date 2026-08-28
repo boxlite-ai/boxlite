@@ -243,9 +243,19 @@ Metadata about a box.
 | `image` | `string` | OCI image reference or rootfs path |
 | `cpus` | `number` | Allocated CPU count |
 | `memoryMib` | `number` | Allocated memory in MiB |
+| `advanced` | `JsAdvancedBoxInfo \| null` | Reuse-relevant capability, privileged-mode, and nested-virtualization policy; `null` when unavailable |
 | `network` | `JsNetworkInfo \| null` | Current network configuration and resolved local publications |
 
 ```typescript
+interface JsAdvancedBoxInfo {
+  capabilities: {
+    add?: string[];
+    drop?: string[];
+  };
+  privileged: boolean;
+  nestedVirtualization: boolean;
+}
+
 interface JsNetworkDirectionInfo {
   mode: string;
   allowNet: string[];
@@ -268,6 +278,11 @@ interface JsPublishedPort {
   protocol: string;
 }
 ```
+
+`advanced === null` means the runtime did not report enough metadata to
+describe the box's reuse-relevant policy. When present, `capabilities.add` and
+`capabilities.drop` are populated arrays, including empty arrays when the
+corresponding policy set is empty.
 
 `network === null` means network information is unavailable. Within
 `JsNetworkInfo`, `publishedPorts === null` means the current handle does not know

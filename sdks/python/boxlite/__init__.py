@@ -10,6 +10,7 @@ import warnings
 try:
     from .boxlite import (
         AccessToken,
+        AdvancedBoxInfo,
         AdvancedBoxOptions,
         ApiKeyCredential,
         Box,
@@ -56,6 +57,7 @@ try:
     __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
         # Core Rust API
         "Options",
+        "AdvancedBoxInfo",
         "AdvancedBoxOptions",
         "ContainerCapabilities",
         "ImageRegistry",

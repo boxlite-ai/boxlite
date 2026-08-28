@@ -30,6 +30,21 @@ impl RestRuntime {
         let client = ApiClient::new(config)?;
         Ok(Self { client })
     }
+
+    async fn get_box_response(&self, id_or_name: &str) -> BoxliteResult<Option<BoxResponse>> {
+        let path = format!("/boxes/{id_or_name}");
+        match self.client.get(&path).await {
+            Ok(response) => Ok(Some(response)),
+            Err(BoxliteError::NotFound(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn box_from_response(&self, response: &BoxResponse) -> BoxliteResult<LiteBox> {
+        let info = response.to_box_info()?;
+        let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+        Ok(litebox_from_rest(rest_box))
+    }
 }
 
 #[async_trait::async_trait]
@@ -221,9 +236,7 @@ impl RuntimeBackend for RestRuntime {
 
         let req = CreateBoxRequest::from_options(&options, name);
         let resp: BoxResponse = self.client.post("/boxes", &req).await?;
-        let info = resp.to_box_info()?;
-        let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
-        Ok(litebox_from_rest(rest_box))
+        self.box_from_response(&resp)
     }
 
     async fn get_or_create(
@@ -233,11 +246,18 @@ impl RuntimeBackend for RestRuntime {
     ) -> BoxliteResult<(LiteBox, bool)> {
         options.sanitize_remote()?;
 
-        // Try to get existing box by name first
         if let Some(ref box_name) = name
-            && let Some(litebox) = self.get(box_name).await?
+            && let Some(response) = self.get_box_response(box_name).await?
         {
-            return Ok((litebox, false));
+            let actual = response.advanced.as_ref().ok_or_else(|| {
+                BoxliteError::Unsupported(format!(
+                    "REST server omitted advanced metadata for existing box '{box_name}', so its security policy cannot be verified before reuse; upgrade the server, use a different name, or recreate the box"
+                ))
+            })?;
+            options
+                .advanced
+                .check_reuse_compatibility(actual, box_name)?;
+            return Ok((self.box_from_response(&response)?, false));
         }
         // Create new box
         let litebox = self.create(options, name).await?;
@@ -245,24 +265,16 @@ impl RuntimeBackend for RestRuntime {
     }
 
     async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
-        let path = format!("/boxes/{id_or_name}");
-        match self.client.get::<BoxResponse>(&path).await {
-            Ok(resp) => {
-                let info = resp.to_box_info()?;
-                let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
-                Ok(Some(litebox_from_rest(rest_box)))
-            }
-            Err(BoxliteError::NotFound(_)) => Ok(None),
-            Err(e) => Err(e),
+        match self.get_box_response(id_or_name).await? {
+            Some(response) => Ok(Some(self.box_from_response(&response)?)),
+            None => Ok(None),
         }
     }
 
     async fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
-        let path = format!("/boxes/{id_or_name}");
-        match self.client.get::<BoxResponse>(&path).await {
-            Ok(resp) => Ok(Some(resp.to_box_info()?)),
-            Err(BoxliteError::NotFound(_)) => Ok(None),
-            Err(e) => Err(e),
+        match self.get_box_response(id_or_name).await? {
+            Some(response) => Ok(Some(response.to_box_info()?)),
+            None => Ok(None),
         }
     }
 
@@ -323,9 +335,7 @@ impl RuntimeBackend for RestRuntime {
             .post_bytes_for_json("/boxes/import", archive_bytes, &query)
             .await?;
 
-        let info = resp.to_box_info()?;
-        let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
-        Ok(litebox_from_rest(rest_box))
+        self.box_from_response(&resp)
     }
 }
 
@@ -546,6 +556,109 @@ mod tests {
             .expect("create without a capability policy");
 
         assert_eq!(server.await.unwrap(), ["POST /v1/boxes HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_an_existing_box_with_different_capabilities() {
+        let existing = r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{},"advanced":{"capabilities":{"add":["SYS_ADMIN"],"drop":[]},"privileged":false,"nested_virtualization":false}}"#;
+        let (port, server) = json_server(vec![existing]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let error = RuntimeBackend::get_or_create(
+            &runtime,
+            capability_options(),
+            Some("named".to_string()),
+        )
+        .await
+        .err()
+        .expect("an incompatible existing box must not be reused");
+
+        assert!(matches!(error, BoxliteError::InvalidArgument(_)));
+        assert!(error.to_string().contains("different capability policy"));
+        assert_eq!(server.await.unwrap(), ["GET /v1/boxes/named HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_an_existing_privileged_box_for_a_default_request() {
+        let existing = r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{},"advanced":{"capabilities":{"add":["ALL"],"drop":[]},"privileged":true,"nested_virtualization":false}}"#;
+        let (port, server) = json_server(vec![existing]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let error = RuntimeBackend::get_or_create(
+            &runtime,
+            BoxOptions::default(),
+            Some("named".to_string()),
+        )
+        .await
+        .err()
+        .expect("a default request must not adopt a privileged box");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("grant more than the requested"));
+        assert_eq!(server.await.unwrap(), ["GET /v1/boxes/named HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn get_or_create_reuses_an_existing_box_with_the_same_effective_policy() {
+        let existing = r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{},"advanced":{"capabilities":{"add":[],"drop":["cap_net_raw"]},"privileged":false,"nested_virtualization":false}}"#;
+        let (port, server) = json_server(vec![existing]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let (litebox, created) = RuntimeBackend::get_or_create(
+            &runtime,
+            capability_options(),
+            Some("named".to_string()),
+        )
+        .await
+        .expect("the same canonical capability policy should be reusable");
+
+        assert!(!created);
+        assert_eq!(litebox.name(), Some("named"));
+        assert_eq!(server.await.unwrap(), ["GET /v1/boxes/named HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_incomplete_advanced_metadata() {
+        let incomplete = r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{},"advanced":{}}"#;
+        let (port, server) = json_server(vec![incomplete]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let error = RuntimeBackend::get_or_create(
+            &runtime,
+            BoxOptions::default(),
+            Some("named".to_string()),
+        )
+        .await
+        .err()
+        .expect("an incomplete existing policy must not be reused");
+
+        assert!(matches!(error, BoxliteError::Internal(_)));
+        assert!(error.to_string().contains("missing field"));
+        assert_eq!(server.await.unwrap(), ["GET /v1/boxes/named HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn get_or_create_refuses_reuse_when_the_server_omits_advanced_metadata() {
+        let (port, server) = json_server(vec![BOX_RESPONSE]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let error = RuntimeBackend::get_or_create(
+            &runtime,
+            BoxOptions::default(),
+            Some("named".to_string()),
+        )
+        .await
+        .err()
+        .expect("an unverifiable existing policy must not be reused");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("omitted advanced metadata"));
+        assert_eq!(server.await.unwrap(), ["GET /v1/boxes/named HTTP/1.1"]);
     }
 
     /// Inspection reads the shared routes. Addressing a versioned variant here

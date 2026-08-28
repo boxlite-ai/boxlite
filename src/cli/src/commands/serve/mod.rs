@@ -709,6 +709,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         image: info.image.clone(),
         cpus: info.cpus,
         memory_mib: info.memory_mib,
+        advanced: info.advanced.clone(),
         labels: info.labels.clone(),
         auto_stop: info.auto_stop,
         auto_delete: info.auto_delete,
@@ -1367,6 +1368,49 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"abcd"));
         assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn box_response_reports_the_policy_needed_for_safe_reuse() {
+        let now = chrono::Utc::now();
+        let info = BoxInfo {
+            id: boxlite::BoxID::parse("reuse-policy").unwrap(),
+            name: Some("named".to_string()),
+            status: boxlite::BoxStatus::Configured,
+            created_at: now,
+            last_updated: now,
+            pid: None,
+            image: "alpine:latest".to_string(),
+            cpus: 1,
+            memory_mib: 512,
+            advanced: Some(boxlite::AdvancedBoxInfo {
+                capabilities: boxlite::ContainerCapabilities {
+                    add: vec!["SYS_ADMIN".to_string()],
+                    drop: Vec::new(),
+                },
+                privileged: false,
+                nested_virtualization: false,
+            }),
+            network: None,
+            labels: HashMap::new(),
+            auto_stop: 0,
+            auto_delete: 0,
+            auto_resume: true,
+            health_status: boxlite::HealthStatus::new(),
+            exit_code: None,
+            started_at: None,
+        };
+
+        let response = box_info_to_response(&info);
+        assert_eq!(response.advanced, info.advanced);
+        assert_eq!(
+            serde_json::to_value(response).unwrap()["advanced"],
+            serde_json::json!({
+                "capabilities": {"add": ["SYS_ADMIN"], "drop": []},
+                "privileged": false,
+                "nested_virtualization": false,
+            })
+        );
     }
 
     #[test]

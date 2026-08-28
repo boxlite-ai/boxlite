@@ -80,3 +80,27 @@ func cNetworkInfoTraversalTestFixtures() [4]*NetworkInfo {
 		cNetworkInfoToGo(&populated),
 	}
 }
+
+func cAdvancedBoxInfoTraversalTestFixtures() [2]*AdvancedBoxInfo {
+	addCapability := C.CString("SYS_ADMIN")
+	defer C.free(unsafe.Pointer(addCapability))
+	dropCapability := C.CString("NET_RAW")
+	defer C.free(unsafe.Pointer(dropCapability))
+	add := []*C.char{addCapability}
+	drop := []*C.char{dropCapability}
+	advanced := C.CAdvancedBoxInfo{
+		capabilities: C.CContainerCapabilities{
+			add:        (**C.char)(unsafe.Pointer(&add[0])),
+			add_count:  1,
+			drop:       (**C.char)(unsafe.Pointer(&drop[0])),
+			drop_count: 1,
+		},
+		privileged:            0,
+		nested_virtualization: 1,
+	}
+
+	return [2]*AdvancedBoxInfo{
+		cAdvancedBoxInfoToGo(nil),
+		cAdvancedBoxInfoToGo(&advanced),
+	}
+}

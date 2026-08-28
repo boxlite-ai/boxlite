@@ -336,7 +336,7 @@ async def require_auth(
 
 
 def box_info_to_dict(info) -> dict:
-    return {
+    response = {
         "box_id": info.id,
         "name": info.name,
         "status": info.state.status,
@@ -348,6 +348,17 @@ def box_info_to_dict(info) -> dict:
         "memory_mib": info.memory_mib,
         "labels": {},
     }
+    advanced = getattr(info, "advanced", None)
+    if advanced is not None:
+        response["advanced"] = {
+            "capabilities": {
+                "add": advanced.capabilities.add,
+                "drop": advanced.capabilities.drop,
+            },
+            "privileged": advanced.privileged,
+            "nested_virtualization": advanced.nested_virtualization,
+        }
+    return response
 
 
 def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:

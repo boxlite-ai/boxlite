@@ -39,6 +39,11 @@ class TestExports:
 
         assert BoxInfo is not None
 
+    def test_advanced_box_info_importable(self):
+        from boxlite import AdvancedBoxInfo
+
+        assert AdvancedBoxInfo is not None
+
     def test_image_handle_importable(self):
         from boxlite import ImageHandle
 
@@ -72,6 +77,7 @@ class TestExports:
             "Boxlite",
             "Box",
             "BoxInfo",
+            "AdvancedBoxInfo",
             "BoxStateInfo",
             "NetworkInfo",
             "PublishedPort",
@@ -112,6 +118,9 @@ class TestBoxInfoStructure:
 
     def test_has_memory_mib(self, box_info_cls):
         assert "memory_mib" in dir(box_info_cls)
+
+    def test_has_advanced(self, box_info_cls):
+        assert "advanced" in dir(box_info_cls)
 
     def test_has_network(self, box_info_cls):
         assert "network" in dir(box_info_cls)

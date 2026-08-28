@@ -1657,6 +1657,8 @@ components:
           minimum: 128
           description: Allocated memory in MiB
           example: 512
+        advanced:
+          $ref: "#/components/schemas/AdvancedBoxInfo"
         labels:
           type: object
           additionalProperties:
@@ -1818,6 +1820,25 @@ components:
       properties:
         capabilities:
           $ref: "#/components/schemas/CreateContainerCapabilities"
+
+    AdvancedBoxInfo:
+      type: object
+      description: |
+        Effective advanced policy needed to verify that reusing a named box
+        will not change the caller's requested privileges. Servers predating
+        this field may omit it; clients must not reuse such a box when they
+        cannot verify the policy.
+      additionalProperties: false
+      required: [capabilities, privileged, nested_virtualization]
+      properties:
+        capabilities:
+          $ref: "#/components/schemas/CreateContainerCapabilities"
+        privileged:
+          type: boolean
+          description: Whether the existing box was created in privileged mode
+        nested_virtualization:
+          type: boolean
+          description: Whether the existing box was created with nested virtualization
 
     CreateContainerCapabilities:
       type: object
