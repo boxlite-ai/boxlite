@@ -5,6 +5,7 @@ use super::metadata::EntryMetadata;
 use super::override_stat::{OverrideFileType, OverrideStat};
 use super::safe_root::SafeRoot;
 use super::time::{bound_time, latest_time};
+use super::whiteout::{self, Whiteout};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use filetime::{FileTime, set_file_times, set_symlink_file_times};
 use std::collections::{BTreeMap, HashSet};
@@ -554,34 +555,23 @@ impl<'a> LayerExtractor<'a> {
             None => return Ok(false),
         };
 
-        if base == ".wh..wh..opq" {
-            let parent_rel = rel.parent().unwrap_or(Path::new(""));
-            Self::apply_opaque_whiteout(root, parent_rel, unpacked)?;
-            return Ok(true);
-        }
+        let parent_rel = rel.parent().unwrap_or(Path::new(""));
 
-        if let Some(target_name) = base.strip_prefix(".wh.") {
-            Self::validate_whiteout_target(base, target_name)?;
-            let parent_rel = rel.parent().unwrap_or(Path::new(""));
-            // containerd: originalPath = filepath.Join(dir, originalBase)
-            // where dir = filepath.Dir(path) and path is already resolved.
-            let target_safe = root.resolve_or_root(parent_rel)?.join(target_name);
-            Self::remove_nofollow(&target_safe, false)?;
-            debug!("Whiteout removed {}", target_name);
-            return Ok(true);
+        match whiteout::classify(base)? {
+            None => Ok(false),
+            Some(Whiteout::Opaque) => {
+                Self::apply_opaque_whiteout(root, parent_rel, unpacked)?;
+                Ok(true)
+            }
+            Some(Whiteout::Remove(target_name)) => {
+                // containerd: originalPath = filepath.Join(dir, originalBase)
+                // where dir = filepath.Dir(path) and path is already resolved.
+                let target_safe = root.resolve_or_root(parent_rel)?.join(target_name);
+                Self::remove_nofollow(&target_safe, false)?;
+                debug!("Whiteout removed {}", target_name);
+                Ok(true)
+            }
         }
-
-        Ok(false)
-    }
-
-    fn validate_whiteout_target(base: &str, target_name: &str) -> BoxliteResult<()> {
-        if target_name.is_empty() || target_name == "." || target_name == ".." {
-            return Err(BoxliteError::Storage(format!(
-                "Invalid whiteout name: {}",
-                base
-            )));
-        }
-        Ok(())
     }
 
     fn apply_opaque_whiteout(

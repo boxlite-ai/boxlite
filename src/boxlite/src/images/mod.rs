@@ -7,7 +7,8 @@ mod object;
 mod storage;
 mod store;
 
-pub use archive::{LayerExtractor, OverrideFileType, OverrideStat};
+pub(crate) use archive::whiteout;
+pub use archive::{LayerExtractor, OverrideFileType, OverrideStat, SafeRoot};
 pub use config::ContainerImageConfig;
 pub use image_disk::ImageDiskManager;
 pub use manager::ImageManager;

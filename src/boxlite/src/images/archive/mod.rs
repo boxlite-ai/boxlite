@@ -10,10 +10,12 @@ mod compression;
 mod extractor;
 mod metadata;
 mod override_stat;
-mod safe_root;
+pub(crate) mod safe_root;
 mod time;
 mod verifier;
+pub(crate) mod whiteout;
 
 pub use extractor::LayerExtractor;
 pub use override_stat::{OverrideFileType, OverrideStat};
+pub use safe_root::SafeRoot;
 pub use verifier::LayerVerifier;

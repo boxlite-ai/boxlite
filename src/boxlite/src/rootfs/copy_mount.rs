@@ -14,7 +14,7 @@
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::collections::HashMap;
 use std::fs;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -417,12 +417,22 @@ fn dir_copy(src_dir: &Path, dst_dir: &Path, options: CopyMountOptions) -> Boxlit
     Ok(())
 }
 
-/// Copy a regular file's content from src to dst
-fn copy_regular_file(src: &Path, dst: &Path, _metadata: &fs::Metadata) -> BoxliteResult<()> {
-    // VFS tries: FICLONE ioctl -> copy_file_range -> legacy copy
-    // We'll use Rust's standard copy which is efficient enough
+/// Copy a regular file's content from src to dst.
+///
+/// `create_new` sets `O_EXCL`: the destination must not exist, so the write can
+/// never land on (or follow) an inherited symlink. Matches containers/storage
+/// `drivers/copy/copy_linux.go:77`, which opens layer files with `O_EXCL` too.
+fn copy_regular_file(src: &Path, dst: &Path, metadata: &fs::Metadata) -> BoxliteResult<()> {
+    let mut reader = fs::File::open(src)
+        .map_err(|e| BoxliteError::Storage(format!("Failed to open {}: {}", src.display(), e)))?;
+    let mut writer = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(metadata.mode() & 0o7777)
+        .open(dst)
+        .map_err(|e| BoxliteError::Storage(format!("Failed to create {}: {}", dst.display(), e)))?;
 
-    fs::copy(src, dst).map_err(|e| {
+    std::io::copy(&mut reader, &mut writer).map_err(|e| {
         BoxliteError::Storage(format!(
             "Failed to copy file {} -> {}: {}",
             src.display(),
@@ -435,7 +445,7 @@ fn copy_regular_file(src: &Path, dst: &Path, _metadata: &fs::Metadata) -> Boxlit
 }
 
 /// Copy metadata (permissions, ownership, timestamps, xattrs) from src to dst
-fn copy_metadata(
+pub(crate) fn copy_metadata(
     src: &Path,
     dst: &Path,
     metadata: &fs::Metadata,
@@ -531,7 +541,11 @@ fn set_times(path: &Path, atime: SystemTime, mtime: SystemTime) -> BoxliteResult
 }
 
 /// Set access and modification times on a symlink (does NOT follow symlinks)
-fn set_symlink_times(path: &Path, atime: SystemTime, mtime: SystemTime) -> BoxliteResult<()> {
+pub(crate) fn set_symlink_times(
+    path: &Path,
+    atime: SystemTime,
+    mtime: SystemTime,
+) -> BoxliteResult<()> {
     use filetime::FileTime;
 
     filetime::set_symlink_file_times(
@@ -550,7 +564,7 @@ fn set_symlink_times(path: &Path, atime: SystemTime, mtime: SystemTime) -> Boxli
 
 /// Create a FIFO (named pipe) at the given path
 #[cfg(target_os = "linux")]
-fn create_fifo(path: &Path, mode: u32) -> BoxliteResult<()> {
+pub(crate) fn create_fifo(path: &Path, mode: u32) -> BoxliteResult<()> {
     use std::ffi::CString;
 
     let c_path = CString::new(
