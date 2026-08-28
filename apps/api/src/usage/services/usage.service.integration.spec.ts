@@ -106,8 +106,8 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   const openPeriods = () => periods.find({ where: { endAt: IsNull() } })
 
   /**
-   * Inserts a real box row. The reconcile pass joins the box table, so these
-   * cases cannot use the stub above.
+   * Inserts a real box row. Reconcile joins the box table and rollover rereads
+   * it transactionally, so those cases cannot use a stub repository.
    */
   const insertBox = (
     overrides: Partial<typeof box> & { state: BoxState; runnerId?: string; pending?: boolean; updatedAtMsAgo?: number },
@@ -169,6 +169,15 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       new RedisLockProvider(redis),
       { findOne: async () => ({ ...box, state, ...boxOverrides }) } as any,
       outboxService(exportEnabled),
+      { find: async () => [] } as any,
+    )
+
+  const serviceForPersistedBox = () =>
+    new UsageService(
+      periods,
+      new RedisLockProvider(redis),
+      dataSource.getRepository(Box) as any,
+      outboxService(),
       { find: async () => [] } as any,
     )
 
@@ -363,9 +372,10 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   })
 
   it('rolls a day-old period over, carrying the resources of a running box', async () => {
+    await insertBox({ state: BoxState.STARTED })
     await openPeriod({ startAt: new Date(Date.now() - DAY_MS - 60_000) })
 
-    await serviceForBoxState(BoxState.STARTED).closeAndReopenUsagePeriods()
+    await serviceForPersistedBox().closeAndReopenUsagePeriods()
 
     const [closed, reopened] = await periods.find({ order: { startAt: 'ASC' } })
     expect(closed.endAt).toBeInstanceOf(Date)
@@ -375,9 +385,10 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   it('stops charging compute when it rolls over a period whose box is already stopped', async () => {
     // a box that reached STOPPED without passing through STOPPING keeps a
     // full-resource period open; the roll-over must not re-bill its cpu forever
+    await insertBox({ state: BoxState.STOPPED })
     await openPeriod({ startAt: new Date(Date.now() - DAY_MS - 60_000) })
 
-    await serviceForBoxState(BoxState.STOPPED).closeAndReopenUsagePeriods()
+    await serviceForPersistedBox().closeAndReopenUsagePeriods()
 
     const [, reopened] = await periods.find({ order: { startAt: 'ASC' } })
     expect(reopened).toEqual(expect.objectContaining({ endAt: null, cpu: 0, gpu: 0, mem: 0, disk: 10 }))
@@ -386,7 +397,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   it('leaves a period younger than a day alone', async () => {
     const fresh = await openPeriod({ startAt: new Date(Date.now() - 60 * 60 * 1000) })
 
-    await serviceForBoxState(BoxState.STARTED).closeAndReopenUsagePeriods()
+    await serviceForPersistedBox().closeAndReopenUsagePeriods()
 
     expect(await periods.find()).toEqual([expect.objectContaining({ id: fresh.id, endAt: null })])
   })
@@ -397,7 +408,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       startAt: new Date(Date.now() - DAY_MS - 60_000),
     })
 
-    await serviceForBoxState(BoxState.STARTED).closeAndReopenUsagePeriods()
+    await serviceForPersistedBox().closeAndReopenUsagePeriods()
 
     expect(await periods.find()).toEqual([expect.objectContaining({ id: warmPool.id, endAt: null })])
   })
@@ -460,9 +471,10 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   })
 
   it('starts the reopened period exactly where the closed one ended, with the same attribution', async () => {
+    await insertBox({ state: BoxState.STOPPING })
     await openPeriod({ startAt: new Date(Date.now() - DAY_MS - 60_000) })
 
-    await serviceForBoxState(BoxState.STOPPING).closeAndReopenUsagePeriods()
+    await serviceForPersistedBox().closeAndReopenUsagePeriods()
 
     const [closed, reopened] = await periods.find({ order: { startAt: 'ASC' } })
     // no gap and no overlap: an inherited startAt would bill the elapsed day twice
@@ -472,17 +484,37 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     )
   })
 
+  it('creates the reopened period from the box current attribution', async () => {
+    const previousOrganizationId = '7f33c512-a431-4a21-9efc-ff6924f9724c'
+    const currentShape = { region: 'eu', cpu: 6, gpu: 2, mem: 12, disk: 80 }
+    await insertBox({ state: BoxState.STARTED, ...currentShape })
+    const oldPeriod = await openPeriod({
+      organizationId: previousOrganizationId,
+      region: 'us',
+      cpu: 1,
+      gpu: 0,
+      mem: 2,
+      disk: 5,
+      startAt: new Date(Date.now() - DAY_MS - 60_000),
+    })
+
+    await serviceForPersistedBox().closeAndReopenUsagePeriods()
+
+    const closed = await periods.findOneByOrFail({ id: oldPeriod.id })
+    const reopened = await periods.findOneByOrFail({ boxId: box.id, endAt: IsNull() })
+    expect(closed).toEqual(
+      expect.objectContaining({ organizationId: previousOrganizationId, region: 'us', cpu: 1, disk: 5 }),
+    )
+    expect(reopened).toEqual(
+      expect.objectContaining({ organizationId: box.organizationId, ...currentShape, endAt: null }),
+    )
+    expect(reopened.startAt).toEqual(closed.endAt)
+  })
+
   it('closes without reopening when the box row no longer exists', async () => {
     await openPeriod({ startAt: new Date(Date.now() - DAY_MS - 60_000) })
-    const serviceWithoutBox = new UsageService(
-      periods,
-      new RedisLockProvider(redis),
-      { findOne: async () => null } as any,
-      outboxService(),
-      { find: async () => [] } as any,
-    )
 
-    await serviceWithoutBox.closeAndReopenUsagePeriods()
+    await serviceForPersistedBox().closeAndReopenUsagePeriods()
 
     // a missing box must not throw inside the transaction — that would roll the
     // close back and leave the period accruing forever
@@ -492,9 +524,10 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   })
 
   it('does not reopen a period for a box that is already gone', async () => {
+    await insertBox({ state: BoxState.DESTROYED })
     await openPeriod({ startAt: new Date(Date.now() - DAY_MS - 60_000) })
 
-    await serviceForBoxState(BoxState.DESTROYED).closeAndReopenUsagePeriods()
+    await serviceForPersistedBox().closeAndReopenUsagePeriods()
 
     const remaining = await periods.find()
     expect(remaining).toHaveLength(1)
@@ -650,8 +683,10 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   // it would paper over a roll-over that carried the wrong figures forward, and
   // the ledger would still churn out a wrong period every single day.
   describe('the daily roll-over on its own', () => {
-    const rollOver = (state: BoxState, boxOverrides: Partial<typeof box> = {}) =>
-      serviceForBoxState(state, false, boxOverrides).closeAndReopenUsagePeriods()
+    const rollOver = async (state: BoxState, boxOverrides: Partial<typeof box> = {}) => {
+      await insertBox({ state, ...boxOverrides })
+      await serviceForPersistedBox().closeAndReopenUsagePeriods()
+    }
 
     it('carries the resources the box has now, not the ones the closing period held', async () => {
       await openPeriod({ cpu: 0, gpu: 0, mem: 0, startAt: new Date(Date.now() - DAY_MS - 60_000) })

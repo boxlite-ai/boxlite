@@ -50,6 +50,7 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
   }
   const transactionalEntityManager = {
     find: jest.fn().mockResolvedValue([]),
+    findOne: jest.fn(),
     delete: jest.fn().mockResolvedValue(undefined),
     save: jest.fn().mockImplementation(async (value) => value),
   }
@@ -382,6 +383,61 @@ describe('UsageService.handleBoxDesiredStateUpdate', () => {
     )
 
     expect(lease.release).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('UsageService.closeAndReopenUsagePeriods', () => {
+  it('creates a rolled period from the Box reread at generation time', async () => {
+    const previousPeriod = Object.assign(new BoxUsagePeriod(), {
+      id: 'period-1',
+      boxId: box.id,
+      organizationId: 'org-previous',
+      region: 'us',
+      startAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+      endAt: null,
+      cpu: 1,
+      gpu: 0,
+      mem: 2,
+      disk: 5,
+    })
+    const currentBox = {
+      ...box,
+      organizationId: 'org-current',
+      region: 'eu',
+      state: BoxState.STARTED,
+      cpu: 6,
+      gpu: 2,
+      mem: 12,
+      disk: 80,
+    } as Box
+    const { service, usagePeriodRepository, boxRepository, transactionalEntityManager } = makeService()
+    usagePeriodRepository.find.mockResolvedValue([previousPeriod])
+    boxRepository.findOne.mockResolvedValue(currentBox)
+    transactionalEntityManager.findOne.mockResolvedValue(currentBox)
+
+    await service.closeAndReopenUsagePeriods()
+
+    const [closed, opened] = transactionalEntityManager.save.mock.calls.map(([period]) => period)
+    expect(closed).toBe(previousPeriod)
+    expect(closed).toEqual(expect.objectContaining({ organizationId: 'org-previous', region: 'us' }))
+    expect(opened).toEqual(
+      expect.objectContaining({
+        boxId: box.id,
+        organizationId: 'org-current',
+        region: 'eu',
+        cpu: 6,
+        gpu: 2,
+        mem: 12,
+        disk: 80,
+        endAt: null,
+      }),
+    )
+    expect(opened.startAt).toEqual(closed.endAt)
+    expect(transactionalEntityManager.findOne).toHaveBeenCalledWith(Box, {
+      where: { id: box.id },
+      loadEagerRelations: false,
+    })
+    expect(boxRepository.findOne).not.toHaveBeenCalled()
   })
 })
 

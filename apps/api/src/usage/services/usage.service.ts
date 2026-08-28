@@ -328,36 +328,27 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
           await this.withLease(
             boxLease,
             async (boxSignal) => {
-              const box = await this.boxRepository.findOne({
-                where: {
-                  id: usagePeriod.boxId,
-                },
-              })
-
               await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
                 boxSignal.throwIfAborted()
+                const box = await transactionalEntityManager.findOne(Box, {
+                  where: {
+                    id: usagePeriod.boxId,
+                  },
+                  loadEagerRelations: false,
+                })
+                boxSignal.throwIfAborted()
+
                 // Close usage period
                 const closeTime = new Date()
                 usagePeriod.endAt = closeTime
                 await transactionalEntityManager.save(usagePeriod)
 
-                // Roll over with the resources the box calls for *now*, not the ones
-                // the closing period happened to carry. Copying the old figures kept
-                // any drift alive forever: a period left charging no cpu for a running
-                // box was re-copied every day, and a disk resize that landed while the
-                // box was stopped never reached the ledger at all. A box that is gone
-                // or terminal yields no shape and so is not reopened, which is what
-                // stops a deleted box from accruing.
+                // Derive the entire new period from the box as it exists when the
+                // period is generated. The closing period is historical attribution
+                // and may no longer match the box's owner, region, or resources.
                 const expected = expectedOpenPeriod(box)
                 if (expected !== null) {
-                  const newUsagePeriod = BoxUsagePeriod.fromUsagePeriod(usagePeriod)
-                  newUsagePeriod.startAt = closeTime
-                  newUsagePeriod.endAt = null
-                  newUsagePeriod.cpu = expected.cpu
-                  newUsagePeriod.gpu = expected.gpu
-                  newUsagePeriod.mem = expected.mem
-                  newUsagePeriod.disk = expected.disk
-                  await transactionalEntityManager.save(newUsagePeriod)
+                  await this.createUsagePeriod(box, expected, transactionalEntityManager, closeTime)
                 }
                 boxSignal.throwIfAborted()
               })
