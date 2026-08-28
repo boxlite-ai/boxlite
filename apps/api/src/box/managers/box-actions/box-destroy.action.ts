@@ -14,6 +14,7 @@ import { RunnerAdapterFactory } from '../../runner-adapter/runnerAdapter'
 import { BoxRepository } from '../../repositories/box.repository'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
 import { WithSpan } from '../../../common/decorators/otel.decorator'
+import { UsageService } from '../../../usage/services/usage.service'
 
 @Injectable()
 export class BoxDestroyAction extends BoxAction {
@@ -22,8 +23,9 @@ export class BoxDestroyAction extends BoxAction {
     protected runnerAdapterFactory: RunnerAdapterFactory,
     protected boxRepository: BoxRepository,
     protected redisLockProvider: RedisLockProvider,
+    usageService: UsageService,
   ) {
-    super(runnerService, runnerAdapterFactory, boxRepository, redisLockProvider)
+    super(runnerService, runnerAdapterFactory, boxRepository, redisLockProvider, usageService)
   }
 
   @WithSpan()

@@ -50,7 +50,17 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
   }
   const transactionalEntityManager = {
     find: jest.fn().mockResolvedValue([]),
-    findOne: jest.fn(),
+    findOne: jest.fn(async (entity, { where }: any) => {
+      if (entity === Box) {
+        return { ...box, state: BoxState.STARTED }
+      }
+      if (entity === BoxUsagePeriod) {
+        return stored.find((period) =>
+          Object.entries(where).every(([column, condition]) => satisfies((period as any)[column], condition)),
+        )
+      }
+      return undefined
+    }),
     delete: jest.fn().mockResolvedValue(undefined),
     save: jest.fn().mockImplementation(async (value) => value),
   }
@@ -70,7 +80,7 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
     acquireLease: jest.fn().mockResolvedValue(lease),
     waitForLease: jest.fn().mockResolvedValue(lease),
   }
-  const boxRepository = { findOne: jest.fn(), update: jest.fn() }
+  const boxRepository = { findOne: jest.fn(), update: jest.fn(), updateWhere: jest.fn() }
   const usageExportOutboxService = { enqueue: jest.fn().mockResolvedValue(0) }
   // The reconcile pass builds a left join through the query builder, which this
   // fake cannot stand in for; its behaviour is covered in
@@ -143,12 +153,13 @@ describe('UsageService.handleBoxStateUpdate', () => {
   })
 
   it('opens a full-resource period when the box starts', async () => {
-    const { service, usagePeriodRepository } = makeService()
+    const { service, usagePeriodRepository, transactionalEntityManager } = makeService()
 
     await service.handleBoxStateUpdate(event(BoxState.STARTED))
 
-    expect(usagePeriodRepository.save).toHaveBeenCalledTimes(1)
-    expect(usagePeriodRepository.save).toHaveBeenCalledWith(
+    expect(usagePeriodRepository.save).not.toHaveBeenCalled()
+    expect(transactionalEntityManager.save).toHaveBeenCalledTimes(1)
+    expect(transactionalEntityManager.save).toHaveBeenCalledWith(
       expect.objectContaining({
         boxId: 'box-1',
         organizationId: 'org-1',
@@ -161,31 +172,134 @@ describe('UsageService.handleBoxStateUpdate', () => {
       }),
     )
     // billing starts now, not at some inherited timestamp
-    const [[opened]] = usagePeriodRepository.save.mock.calls
+    const [[opened]] = transactionalEntityManager.save.mock.calls
     expect(opened.startAt).toBeInstanceOf(Date)
     expect(Date.now() - opened.startAt.getTime()).toBeLessThan(5_000)
   })
 
   it('closes the previous period before opening a new one when the box starts', async () => {
     const stale = openPeriod()
-    const { service, usagePeriodRepository } = makeService([stale])
+    stale.organizationId = 'org-stale'
+    const { service, transactionalEntityManager } = makeService([stale])
 
     await service.handleBoxStateUpdate(event(BoxState.STARTED))
 
-    const [closed, opened] = usagePeriodRepository.save.mock.calls.map(([period]) => period)
+    const [closed, opened] = transactionalEntityManager.save.mock.calls.map(([period]) => period)
     expect(closed).toBe(stale)
     expect(stale.endAt).toBeInstanceOf(Date)
     expect(opened).toEqual(expect.objectContaining({ cpu: 2, endAt: null }))
   })
 
+  it('atomically replaces a stopped period from the persisted box when the box starts', async () => {
+    const diskOnly = Object.assign(new BoxUsagePeriod(), {
+      id: 'period-stopped',
+      boxId: box.id,
+      organizationId: 'org-previous',
+      region: 'us',
+      cpu: 0,
+      gpu: 0,
+      mem: 0,
+      disk: 10,
+      startAt: new Date(Date.now() - 60_000),
+      endAt: null,
+    })
+    const eventBox = { ...box, organizationId: 'org-event', state: BoxState.STARTED } as Box
+    const persistedBox = {
+      ...box,
+      organizationId: 'org-current',
+      region: 'eu',
+      state: BoxState.STARTED,
+      cpu: 6,
+      gpu: 2,
+      mem: 12,
+      disk: 80,
+    } as Box
+    const { service, usagePeriodRepository, transactionalEntityManager } = makeService([diskOnly])
+    transactionalEntityManager.findOne.mockImplementation(async (entity) =>
+      entity === Box ? persistedBox : diskOnly,
+    )
+
+    await service.handleBoxStateUpdate(
+      new BoxStateUpdatedEvent(eventBox, BoxState.STOPPED, BoxState.STARTED),
+    )
+
+    expect(usagePeriodRepository.manager.transaction).toHaveBeenCalledTimes(1)
+    expect(usagePeriodRepository.save).not.toHaveBeenCalled()
+    expect(transactionalEntityManager.findOne).toHaveBeenCalledWith(Box, {
+      where: { id: box.id },
+      lock: { mode: 'pessimistic_write' },
+      loadEagerRelations: false,
+    })
+    expect(transactionalEntityManager.findOne).toHaveBeenCalledWith(BoxUsagePeriod, {
+      where: { boxId: box.id, endAt: expect.anything() },
+      lock: { mode: 'pessimistic_write' },
+    })
+
+    const [closed, opened] = transactionalEntityManager.save.mock.calls.map(([period]) => period)
+    expect(closed).toBe(diskOnly)
+    expect(opened.startAt).toEqual(closed.endAt)
+    expect(opened).toEqual(
+      expect.objectContaining({
+        boxId: box.id,
+        organizationId: 'org-current',
+        region: 'eu',
+        cpu: 6,
+        gpu: 2,
+        mem: 12,
+        disk: 80,
+        endAt: null,
+      }),
+    )
+  })
+
+  it('does not split a period that already matches the persisted started box', async () => {
+    const current = Object.assign(new BoxUsagePeriod(), {
+      id: 'period-current',
+      boxId: box.id,
+      organizationId: box.organizationId,
+      region: box.region,
+      cpu: box.cpu,
+      gpu: box.gpu,
+      mem: box.mem,
+      disk: box.disk,
+      startAt: new Date(Date.now() - 60_000),
+      endAt: null,
+    })
+    const { service, transactionalEntityManager } = makeService([current])
+
+    await service.handleBoxStateUpdate(
+      new BoxStateUpdatedEvent({ ...box, state: BoxState.STARTED } as Box, BoxState.STOPPED, BoxState.STARTED),
+    )
+
+    expect(transactionalEntityManager.save).not.toHaveBeenCalled()
+    expect(current.endAt).toBeNull()
+  })
+
+  it('ignores a delayed started event after the persisted box has moved on', async () => {
+    const diskOnly = openPeriod(0)
+    const { service, transactionalEntityManager } = makeService([diskOnly])
+    transactionalEntityManager.findOne.mockImplementation(async (entity) =>
+      entity === Box ? ({ ...box, state: BoxState.STOPPED } as Box) : diskOnly,
+    )
+
+    await service.handleBoxStateUpdate(
+      new BoxStateUpdatedEvent({ ...box, state: BoxState.STARTED } as Box, BoxState.STOPPED, BoxState.STARTED),
+    )
+
+    expect(transactionalEntityManager.findOne).toHaveBeenCalledTimes(1)
+    expect(transactionalEntityManager.save).not.toHaveBeenCalled()
+    expect(diskOnly.endAt).toBeNull()
+  })
+
   it('never closes a period belonging to a different box', async () => {
     const otherBoxPeriod = openPeriod(box.cpu, OTHER_BOX_ID)
-    const { service, usagePeriodRepository } = makeService([otherBoxPeriod])
+    const { service, usagePeriodRepository, transactionalEntityManager } = makeService([otherBoxPeriod])
 
     await service.handleBoxStateUpdate(event(BoxState.STARTED))
 
     // only the newly opened period is written; the other box keeps accruing
-    expect(usagePeriodRepository.save).toHaveBeenCalledTimes(1)
+    expect(usagePeriodRepository.save).not.toHaveBeenCalled()
+    expect(transactionalEntityManager.save).toHaveBeenCalledTimes(1)
     expect(otherBoxPeriod.endAt).toBeNull()
   })
 
@@ -300,19 +414,21 @@ describe('UsageService.handleBoxStateUpdate', () => {
 
   it('does not reopen a period after lease ownership is lost while closing it', async () => {
     const open = openPeriod()
-    const { service, usagePeriodRepository, lease } = makeService([open])
+    open.organizationId = 'org-stale'
+    const { service, usagePeriodRepository, lease, transactionalEntityManager } = makeService([open])
     const ownershipError = new Error('ownership was lost')
     const controller = new AbortController()
     lease.signal = controller.signal
-    usagePeriodRepository.save.mockImplementationOnce(async (period) => {
+    transactionalEntityManager.save.mockImplementationOnce(async (period) => {
       controller.abort(ownershipError)
       return period
     })
 
     await expect(service.handleBoxStateUpdate(event(BoxState.STARTED))).rejects.toBe(ownershipError)
 
-    expect(usagePeriodRepository.save).toHaveBeenCalledTimes(1)
-    expect(usagePeriodRepository.save).toHaveBeenCalledWith(open)
+    expect(usagePeriodRepository.save).not.toHaveBeenCalled()
+    expect(transactionalEntityManager.save).toHaveBeenCalledTimes(1)
+    expect(transactionalEntityManager.save).toHaveBeenCalledWith(open)
     expect(lease.release).toHaveBeenCalledTimes(1)
   })
 })
@@ -349,6 +465,74 @@ describe('UsageService.claimWarmPoolBox', () => {
       expect.stringContaining(`warm-pool claim ${box.id} committed`),
       expect.any(Error),
     )
+  })
+})
+
+describe('UsageService.transitionBoxToStarted', () => {
+  it('atomically replaces a disk-only period through a conditional box update', async () => {
+    const diskOnly = Object.assign(new BoxUsagePeriod(), {
+      id: 'period-stopped',
+      boxId: box.id,
+      organizationId: box.organizationId,
+      region: box.region,
+      cpu: 0,
+      gpu: 0,
+      mem: 0,
+      disk: box.disk,
+      startAt: new Date(Date.now() - 60_000),
+      endAt: null,
+    })
+    const { service, boxRepository, transactionalEntityManager } = makeService([diskOnly])
+    const updatedBox = { ...box, state: BoxState.STARTED } as Box
+    boxRepository.updateWhere.mockImplementation(async (_id, params) => {
+      await params.afterUpdateInTransaction(transactionalEntityManager, updatedBox)
+      return updatedBox
+    })
+    const whereCondition = {
+      state: BoxState.STOPPED,
+      desiredState: BoxDesiredState.STARTED,
+      pending: false,
+    }
+
+    await expect(
+      service.transitionBoxToStarted(box.id, {
+        updateData: { state: BoxState.STARTED },
+        whereCondition,
+      }),
+    ).resolves.toBe(updatedBox)
+
+    expect(boxRepository.updateWhere).toHaveBeenCalledWith(box.id, {
+      updateData: { state: BoxState.STARTED },
+      whereCondition,
+      afterUpdateInTransaction: expect.any(Function),
+    })
+    expect(boxRepository.update).not.toHaveBeenCalled()
+    const [closed, opened] = transactionalEntityManager.save.mock.calls.map(([period]) => period)
+    expect(closed).toBe(diskOnly)
+    expect(opened.startAt).toEqual(closed.endAt)
+    expect(opened).toEqual(
+      expect.objectContaining({
+        boxId: box.id,
+        organizationId: box.organizationId,
+        cpu: box.cpu,
+        gpu: box.gpu,
+        mem: box.mem,
+        disk: box.disk,
+        endAt: null,
+      }),
+    )
+  })
+
+  it('rejects before taking a lock when the update does not target STARTED', async () => {
+    const { service, redisLockProvider, boxRepository } = makeService()
+
+    await expect(
+      service.transitionBoxToStarted(box.id, { updateData: { state: BoxState.STOPPED } }),
+    ).rejects.toThrow(`update state must be ${BoxState.STARTED}`)
+
+    expect(redisLockProvider.waitForLease).not.toHaveBeenCalled()
+    expect(boxRepository.update).not.toHaveBeenCalled()
+    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
   })
 })
 

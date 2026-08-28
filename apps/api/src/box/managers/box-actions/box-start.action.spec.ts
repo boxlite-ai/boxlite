@@ -19,6 +19,31 @@ import { RunnerState } from '../../enums/runner-state.enum'
 import { LockCode } from '../../common/redis-lock.provider'
 
 describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => {
+  it('uses atomic STARTED persistence for the final runner state', async () => {
+    const box = new Box('region-1', 'started-box')
+    box.state = BoxState.STARTING
+    box.desiredState = BoxDesiredState.STARTED
+    box.pending = true
+    const lockCode = new LockCode('lock-started')
+    const boxRepository = { update: jest.fn() }
+    const transitionBoxToStarted = jest.fn().mockResolvedValue(box)
+    const action = Object.create(BoxStartAction.prototype) as BoxStartAction
+    Object.assign(action as any, {
+      boxRepository,
+      redisLockProvider: { getCode: jest.fn().mockResolvedValue(lockCode) },
+      usageService: { transitionBoxToStarted },
+      logger: { warn: jest.fn(), error: jest.fn() },
+    })
+
+    await (action as any).updateBoxState(box, BoxState.STARTED, lockCode, undefined, undefined, '1.2.3')
+
+    expect(transitionBoxToStarted).toHaveBeenCalledWith(box.id, {
+      updateData: { state: BoxState.STARTED, daemonVersion: '1.2.3' },
+      entity: box,
+    })
+    expect(boxRepository.update).not.toHaveBeenCalled()
+  })
+
   it('restarts a stopped box on its own runner (no cross-runner reassignment)', async () => {
     const ownRunnerId = 'runner-own-1'
 
@@ -74,6 +99,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       {} as any, // configService
       redisLockProvider as any,
       {} as any, // boxActivityService
+      {} as any, // usageService
     )
 
     const result = await (action as BoxAction).run(box, lockCode)
@@ -116,6 +142,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       organizationService as any,
       {} as any,
       redisLockProvider as any,
+      {} as any,
       {} as any,
     )
 
@@ -164,6 +191,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
       {} as any,
       redisLockProvider as any,
       {} as any,
+      {} as any,
     )
 
     const result = await (action as BoxAction).run(box, lockCode)
@@ -206,6 +234,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
       organizationService as any,
       {} as any,
       redisLockProvider as any,
+      {} as any,
       {} as any,
     )
 

@@ -9,6 +9,9 @@ import { JobStatus } from '../enums/job-status.enum'
 import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
+import { Box } from '../entities/box.entity'
+import { BoxState } from '../enums/box-state.enum'
+import { BoxDesiredState } from '../enums/box-desired-state.enum'
 
 describe('JobStateHandlerService migration job routing', () => {
   function makeService() {
@@ -22,10 +25,21 @@ describe('JobStateHandlerService migration job routing', () => {
     const boxMigrationJobReceiver = {
       handleJobCompletion: jest.fn().mockResolvedValue(undefined),
     } as any
-    return {
-      service: new JobStateHandlerService(boxRepository, redisLockProvider, boxMigrationJobReceiver),
+    const usageService = {
+      transitionBoxToStarted: jest.fn().mockResolvedValue(undefined),
+    } as any
+    const service = new JobStateHandlerService(
+      boxRepository,
       redisLockProvider,
       boxMigrationJobReceiver,
+      usageService,
+    )
+    return {
+      service,
+      boxRepository,
+      redisLockProvider,
+      boxMigrationJobReceiver,
+      usageService,
     }
   }
 
@@ -70,5 +84,30 @@ describe('JobStateHandlerService migration job routing', () => {
 
     expect(h.boxMigrationJobReceiver.handleJobCompletion).not.toHaveBeenCalled()
     expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getStateChangeLockKey('box-1'))
+  })
+
+  it('uses atomic STARTED persistence when a start job completes', async () => {
+    const h = makeService()
+    const box = new Box('us', 'box-1')
+    box.state = BoxState.STARTING
+    box.desiredState = BoxDesiredState.STARTED
+    box.pending = true
+    h.boxRepository.findOne.mockResolvedValue(box)
+    const job = new Job({
+      id: 'job-start',
+      type: JobType.START_BOX,
+      status: JobStatus.COMPLETED,
+      runnerId: 'runner-1',
+      resourceType: ResourceType.BOX,
+      resourceId: box.id,
+    })
+
+    await h.service.handleJobCompletion(job)
+
+    expect(h.usageService.transitionBoxToStarted).toHaveBeenCalledWith(box.id, {
+      updateData: { state: BoxState.STARTED, errorReason: null },
+      entity: box,
+    })
+    expect(h.boxRepository.update).not.toHaveBeenCalled()
   })
 })

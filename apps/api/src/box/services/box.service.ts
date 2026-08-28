@@ -1374,10 +1374,17 @@ export class BoxService {
       updateData.desiredState = desiredState
     }
 
-    await this.boxRepository.updateWhere(box.id, {
+    const updateParams = {
       updateData,
       whereCondition: { pending: false, state: oldState, desiredState: oldDesiredState },
-    })
+    }
+
+    if (newState === BoxState.STARTED) {
+      await this.usageService.transitionBoxToStarted(box.id, updateParams)
+      return
+    }
+
+    await this.boxRepository.updateWhere(box.id, updateParams)
   }
 
   @OnEvent(WarmPoolEvents.TOPUP_REQUESTED)

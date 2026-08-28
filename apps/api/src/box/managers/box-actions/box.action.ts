@@ -12,6 +12,7 @@ import { BoxRepository } from '../../repositories/box.repository'
 import { BoxState } from '../../enums/box-state.enum'
 import { getStateChangeLockKey } from '../../utils/lock-key.util'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
+import { UsageService } from '../../../usage/services/usage.service'
 
 export const SYNC_AGAIN = 'sync-again'
 export const DONT_SYNC_AGAIN = 'dont-sync-again'
@@ -26,6 +27,7 @@ export abstract class BoxAction {
     protected runnerAdapterFactory: RunnerAdapterFactory,
     protected readonly boxRepository: BoxRepository,
     protected readonly redisLockProvider: RedisLockProvider,
+    protected readonly usageService: UsageService,
   ) {}
 
   abstract run(box: Box, lockCode: LockCode): Promise<SyncState>
@@ -89,6 +91,11 @@ export abstract class BoxAction {
 
     if (recoverable !== undefined) {
       updateData.recoverable = recoverable
+    }
+
+    if (state === BoxState.STARTED) {
+      await this.usageService.transitionBoxToStarted(box.id, { updateData, entity: box })
+      return
     }
 
     await this.boxRepository.update(box.id, { updateData, entity: box })

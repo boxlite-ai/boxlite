@@ -24,7 +24,11 @@ import { TrackJobExecution } from '../../common/decorators/track-job-execution.d
 import { setTimeout as sleep } from 'timers/promises'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
-import { BoxRepository } from '../../box/repositories/box.repository'
+import {
+  BoxRepository,
+  type BoxUpdateParams,
+  type BoxUpdateWhereParams,
+} from '../../box/repositories/box.repository'
 import { UsageExportOutboxService } from './usage-export-outbox.service'
 import { Box } from '../../box/entities/box.entity'
 import { Runner } from '../../box/entities/runner.entity'
@@ -71,6 +75,10 @@ interface DriftCandidate {
   box_region: string
   period_id: string | null
 }
+
+export type StartedBoxUpdateParams =
+  | Pick<BoxUpdateParams, 'updateData' | 'entity'>
+  | Pick<BoxUpdateWhereParams, 'updateData' | 'whereCondition'>
 
 @Injectable()
 export class UsageService implements TrackableJobExecutions, OnApplicationShutdown {
@@ -134,9 +142,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
         signal.throwIfAborted()
         switch (event.newState) {
           case BoxState.STARTED: {
-            await this.closeUsagePeriod(event.box.id)
-            signal.throwIfAborted()
-            await this.openUsagePeriodFor(event.box, event.newState)
+            await this.syncStartedUsagePeriodFromCurrentBox(event.box.id, signal)
             break
           }
           // Billing stops charging compute the moment a stop is requested.
@@ -180,6 +186,26 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
    * the same database transaction as the box update.
    */
   async claimWarmPoolBox(id: string, params: { updateData: Partial<Box>; entity?: Box }): Promise<Box> {
+    return this.updateBoxAndUsagePeriod(id, params, `warm-pool claim ${id}`)
+  }
+
+  /**
+   * Persists a transition to STARTED and replaces its disk-only period in the
+   * same database transaction.
+   */
+  async transitionBoxToStarted(id: string, params: StartedBoxUpdateParams): Promise<Box> {
+    if (params.updateData.state !== BoxState.STARTED) {
+      throw new Error(`Cannot atomically start box ${id}: update state must be ${BoxState.STARTED}`)
+    }
+
+    return this.updateBoxAndUsagePeriod(id, params, `box start ${id}`)
+  }
+
+  private async updateBoxAndUsagePeriod(
+    id: string,
+    params: StartedBoxUpdateParams,
+    context: string,
+  ): Promise<Box> {
     const lease = await this.waitForLock(id)
     let committedBox: Box | null = null
 
@@ -188,47 +214,66 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
         lease,
         async (signal) => {
           signal.throwIfAborted()
-          const updatedBox = await this.boxRepository.update(id, {
-            ...params,
-            afterUpdateInTransaction: async (entityManager, transactionalBox) => {
-              signal.throwIfAborted()
-              await this.switchWarmPoolUsagePeriod(entityManager, transactionalBox, signal)
-              signal.throwIfAborted()
-            },
-          })
+          const afterUpdateInTransaction = async (entityManager: EntityManager, transactionalBox: Box) => {
+            signal.throwIfAborted()
+            await this.syncUsagePeriodInTransaction(entityManager, transactionalBox, signal)
+            signal.throwIfAborted()
+          }
+          const updatedBox =
+            'whereCondition' in params
+              ? await this.boxRepository.updateWhere(id, {
+                  updateData: params.updateData,
+                  whereCondition: params.whereCondition,
+                  afterUpdateInTransaction,
+                })
+              : await this.boxRepository.update(id, {
+                  updateData: params.updateData,
+                  entity: params.entity,
+                  afterUpdateInTransaction,
+                })
           committedBox = updatedBox
           return updatedBox
         },
-        `warm-pool claim ${id}`,
+        context,
       )
     } catch (error) {
       // The database is already authoritative at this point. Returning success
-      // prevents a client retry from claiming another warm-pool box merely
-      // because lease renewal or release failed after commit.
+      // prevents a caller retry merely because lease renewal or release failed
+      // after commit.
       if (committedBox) {
-        this.logger.error(
-          `Usage lease failed after warm-pool claim ${id} committed; returning the committed box`,
-          error,
-        )
+        this.logger.error(`Usage lease failed after ${context} committed; returning the committed box`, error)
         return committedBox
       }
       throw error
     }
   }
 
-  private async switchWarmPoolUsagePeriod(entityManager: EntityManager, box: Box, signal: AbortSignal): Promise<void> {
+  private async syncUsagePeriodInTransaction(
+    entityManager: EntityManager,
+    box: Box,
+    signal: AbortSignal,
+  ): Promise<void> {
     const expected = expectedOpenPeriod(box)
     if (expected === null) {
-      throw new Error(`Cannot claim warm-pool box ${box.id}: state ${box.state} has no billable usage period`)
+      throw new Error(`Cannot synchronize usage for box ${box.id}: state ${box.state} has no billable period`)
     }
 
-    // The box UPDATE has already locked its row. Lock the ledger second so all
-    // claim writers use the same Box -> BoxUsagePeriod ordering.
+    // The box row is already locked. Lock the ledger second so every atomic
+    // state and attribution writer uses the same Box -> BoxUsagePeriod order.
     const openPeriod = await entityManager.findOne(BoxUsagePeriod, {
       where: { boxId: box.id, endAt: IsNull() },
       lock: { mode: 'pessimistic_write' },
     })
     signal.throwIfAborted()
+
+    if (
+      openPeriod &&
+      sameShape(openPeriod, expected) &&
+      openPeriod.organizationId === box.organizationId &&
+      openPeriod.region === box.region
+    ) {
+      return
+    }
 
     const transitionAt = new Date()
     if (openPeriod) {
@@ -238,6 +283,37 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     }
 
     await this.createUsagePeriod(box, expected, entityManager, transitionAt)
+    signal.throwIfAborted()
+  }
+
+  /**
+   * Synchronizes the open period for a STARTED Box from the persisted row. The
+   * state event is only a notification and may carry an attribution snapshot
+   * that is stale by the time it is handled.
+   */
+  private async syncStartedUsagePeriodFromCurrentBox(boxId: string, signal: AbortSignal): Promise<void> {
+    await this.boxUsagePeriodRepository.manager.transaction(async (entityManager) => {
+      signal.throwIfAborted()
+      const box = await entityManager.findOne(Box, {
+        where: { id: boxId },
+        lock: { mode: 'pessimistic_write' },
+        loadEagerRelations: false,
+      })
+      signal.throwIfAborted()
+
+      // A delayed STARTED event must not overwrite the period for a newer Box
+      // state. The event that produced that state owns its own billing change.
+      if (!box || box.state !== BoxState.STARTED) {
+        return
+      }
+
+      const expected = expectedOpenPeriod(box)
+      if (expected === null) {
+        return
+      }
+
+      await this.syncUsagePeriodInTransaction(entityManager, box, signal)
+    })
   }
 
   /**

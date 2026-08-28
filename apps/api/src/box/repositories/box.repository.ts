@@ -40,11 +40,20 @@ const PG_LOCK_TIMEOUT_CODE = '55P03'
 // A box the migration marker may claim, with the stamp its claim copies.
 type ParkedBox = { id: string; updatedAt: Date }
 
-type BoxUpdateParams = {
+export type BoxUpdateInTransaction = (entityManager: EntityManager, updatedBox: Box) => Promise<void>
+
+export type BoxUpdateParams = {
   updateData: Partial<Box>
   entity?: Box
   /** Runs after the box and last-activity writes, before their transaction commits. */
-  afterUpdateInTransaction?: (entityManager: EntityManager, updatedBox: Box) => Promise<void>
+  afterUpdateInTransaction?: BoxUpdateInTransaction
+}
+
+export type BoxUpdateWhereParams = {
+  updateData: Partial<Box>
+  whereCondition: FindOptionsWhere<Box>
+  /** Runs after the box and last-activity writes, before their transaction commits. */
+  afterUpdateInTransaction?: BoxUpdateInTransaction
 }
 
 @Injectable()
@@ -159,14 +168,11 @@ export class BoxRepository extends BaseRepository<Box> {
    */
   async updateWhere(
     id: string,
-    params: {
-      updateData: Partial<Box>
-      whereCondition: FindOptionsWhere<Box>
-    },
+    params: BoxUpdateWhereParams,
   ): Promise<Box> {
-    const { updateData, whereCondition } = params
+    const { updateData, whereCondition, afterUpdateInTransaction } = params
 
-    return this.manager.transaction(async (entityManager) => {
+    const { box, previousBox } = await this.manager.transaction(async (entityManager) => {
       const whereClause = {
         ...whereCondition,
         id,
@@ -196,11 +202,15 @@ export class BoxRepository extends BaseRepository<Box> {
         await this.upsertLastActivity(entityManager, id, box.updatedAt)
       }
 
-      this.emitUpdateEvents(box, previousBox)
-      this.invalidateLookupCacheOnUpdate(box, previousBox)
+      await afterUpdateInTransaction?.(entityManager, box)
 
-      return box
+      return { box, previousBox }
     })
+
+    this.emitUpdateEvents(box, previousBox)
+    this.invalidateLookupCacheOnUpdate(box, previousBox)
+
+    return box
   }
 
   /**

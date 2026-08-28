@@ -17,6 +17,7 @@ import { TypedConfigService } from '../../../config/typed-config.service'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
 import { WithSpan } from '../../../common/decorators/otel.decorator'
 import { BoxActivityService } from '../../services/box-activity.service'
+import { UsageService } from '../../../usage/services/usage.service'
 
 @Injectable()
 export class BoxStartAction extends BoxAction {
@@ -29,8 +30,9 @@ export class BoxStartAction extends BoxAction {
     protected readonly configService: TypedConfigService,
     protected readonly redisLockProvider: RedisLockProvider,
     private readonly boxActivityService: BoxActivityService,
+    usageService: UsageService,
   ) {
-    super(runnerService, runnerAdapterFactory, boxRepository, redisLockProvider)
+    super(runnerService, runnerAdapterFactory, boxRepository, redisLockProvider, usageService)
   }
 
   @WithSpan()

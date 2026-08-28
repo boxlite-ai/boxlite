@@ -40,6 +40,7 @@ type Harness = {
   jobFindOne: jest.Mock
   updateJobStatus: jest.Mock
   updateWhere: jest.Mock
+  transitionBoxToStarted: jest.Mock
 }
 
 function createService(box: Box | null, stalledJob: Job | null): Harness {
@@ -47,11 +48,13 @@ function createService(box: Box | null, stalledJob: Job | null): Harness {
   const jobFindOne = jest.fn().mockResolvedValue(stalledJob)
   const updateJobStatus = jest.fn().mockResolvedValue(undefined)
   const updateWhere = jest.fn().mockResolvedValue(box)
+  const transitionBoxToStarted = jest.fn().mockResolvedValue(box)
 
   ;(service as any).logger = { debug: jest.fn(), warn: jest.fn(), error: jest.fn(), log: jest.fn() }
   ;(service as any).boxRepository = { findOne: jest.fn().mockResolvedValue(box), updateWhere }
   ;(service as any).jobRepository = { findOne: jobFindOne }
   ;(service as any).jobService = { updateJobStatus }
+  ;(service as any).usageService = { transitionBoxToStarted }
   ;(service as any).configService = {
     getOrThrow: jest.fn((key: string) => {
       if (key !== 'boxSync.startConfirmationStallSeconds') {
@@ -61,10 +64,32 @@ function createService(box: Box | null, stalledJob: Job | null): Harness {
     }),
   }
 
-  return { service, jobFindOne, updateJobStatus, updateWhere }
+  return { service, jobFindOne, updateJobStatus, updateWhere, transitionBoxToStarted }
 }
 
 describe('BoxService.updateState start reconciliation', () => {
+  it('uses atomic STARTED persistence for a stable stopped box', async () => {
+    const box = makeBox(BoxState.STOPPED, BoxDesiredState.STOPPED)
+    box.pending = false
+    const { service, updateWhere, transitionBoxToStarted } = createService(box, null)
+
+    await service.updateState(box.id, BoxState.STARTED)
+
+    expect(transitionBoxToStarted).toHaveBeenCalledWith(box.id, {
+      updateData: {
+        state: BoxState.STARTED,
+        desiredState: BoxDesiredState.STARTED,
+        recoverable: false,
+      },
+      whereCondition: {
+        pending: false,
+        state: BoxState.STOPPED,
+        desiredState: BoxDesiredState.STOPPED,
+      },
+    })
+    expect(updateWhere).not.toHaveBeenCalled()
+  })
+
   it('completes the stalled startup job instead of writing the box directly', async () => {
     const box = makeBox(BoxState.CREATING)
     const job = makeStalledJob(JobType.CREATE_BOX)

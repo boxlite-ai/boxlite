@@ -17,6 +17,7 @@ import { RedisLockProvider } from '../common/redis-lock.provider'
 import { ResourceType } from '../enums/resource-type.enum'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { BoxMigrationJobReceiver, isMigrationJobType } from './box-migration-job-receiver.service'
+import { UsageService } from '../../usage/services/usage.service'
 
 /**
  * Service for handling entity state updates based on job completion (v2 runners only).
@@ -30,6 +31,7 @@ export class JobStateHandlerService {
     private readonly boxRepository: BoxRepository,
     private readonly redisLockProvider: RedisLockProvider,
     private readonly boxMigrationJobReceiver: BoxMigrationJobReceiver,
+    private readonly usageService: UsageService,
   ) {}
 
   /**
@@ -120,7 +122,7 @@ export class JobStateHandlerService {
         updateData.recoverable = recoverable
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.persistBoxUpdate(boxId, box, updateData)
     } catch (error) {
       this.logger.error(`Error handling CREATE_BOX job completion for box ${boxId}:`, error)
     }
@@ -162,7 +164,7 @@ export class JobStateHandlerService {
         updateData.recoverable = recoverable
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.persistBoxUpdate(boxId, box, updateData)
     } catch (error) {
       this.logger.error(`Error handling START_BOX job completion for box ${boxId}:`, error)
     }
@@ -200,7 +202,7 @@ export class JobStateHandlerService {
         updateData.recoverable = recoverable
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.persistBoxUpdate(boxId, box, updateData)
     } catch (error) {
       this.logger.error(`Error handling STOP_BOX job completion for box ${boxId}:`, error)
     }
@@ -234,9 +236,18 @@ export class JobStateHandlerService {
         return
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.persistBoxUpdate(boxId, box, updateData)
     } catch (error) {
       this.logger.error(`Error handling DESTROY_BOX job completion for box ${boxId}:`, error)
     }
+  }
+
+  private async persistBoxUpdate(boxId: string, box: Box, updateData: Partial<Box>): Promise<void> {
+    if (updateData.state === BoxState.STARTED) {
+      await this.usageService.transitionBoxToStarted(boxId, { updateData, entity: box })
+      return
+    }
+
+    await this.boxRepository.update(boxId, { updateData, entity: box })
   }
 }

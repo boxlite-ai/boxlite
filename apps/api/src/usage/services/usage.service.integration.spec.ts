@@ -10,6 +10,7 @@ import { DataSource, IsNull, Not, Repository } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
 import { BoxLastActivity } from '../../box/entities/box-last-activity.entity'
 import { BoxState } from '../../box/enums/box-state.enum'
+import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
@@ -467,6 +468,73 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       expect.objectContaining({ organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION }),
     )
     expect(await periods.find()).toEqual([expect.objectContaining({ id: oldPeriod.id, endAt: null })])
+    expect(eventEmitter.emit).not.toHaveBeenCalled()
+  })
+
+  it('atomically restarts usage when the state event is dropped', async () => {
+    const current = {
+      organizationId: '8746db21-0d5b-4f0d-b26d-5a385ba6ecf2',
+      region: 'eu',
+      cpu: 6,
+      gpu: 2,
+      mem: 12,
+      disk: 80,
+    }
+    await insertBox({ state: BoxState.STOPPED, ...current })
+    const stoppedPeriod = await openPeriod({
+      organizationId: box.organizationId,
+      cpu: 0,
+      gpu: 0,
+      mem: 0,
+      disk: 10,
+    })
+    const { service, eventEmitter } = serviceForWarmPoolClaim()
+
+    await service.transitionBoxToStarted(box.id, {
+      updateData: { state: BoxState.STARTED },
+      whereCondition: {
+        state: BoxState.STOPPED,
+        desiredState: BoxDesiredState.STARTED,
+        pending: false,
+      },
+    })
+
+    expect(await dataSource.getRepository(Box).findOneByOrFail({ id: box.id })).toEqual(
+      expect.objectContaining({ state: BoxState.STARTED, ...current }),
+    )
+    const closed = await periods.findOneByOrFail({ id: stoppedPeriod.id })
+    const open = await periods.findOneByOrFail({ boxId: box.id, endAt: IsNull() })
+    expect(closed.endAt).toBeInstanceOf(Date)
+    expect(open.startAt).toEqual(closed.endAt)
+    expect(open).toEqual(expect.objectContaining(current))
+    // The emitter is deliberately not connected to UsageService. Correctness
+    // therefore comes from the transaction, not the notification.
+    expect(eventEmitter.emit).toHaveBeenCalled()
+  })
+
+  it('rolls back a STARTED box transition when creating its full-resource period fails', async () => {
+    await insertBox({ state: BoxState.STOPPED })
+    const stoppedPeriod = await openPeriod({ cpu: 0, gpu: 0, mem: 0 })
+    const { service, eventEmitter } = serviceForWarmPoolClaim()
+    const creationError = new Error('injected full-resource period creation failure')
+    const createUsagePeriod = jest.spyOn(service as any, 'createUsagePeriod').mockRejectedValue(creationError)
+
+    await expect(
+      service.transitionBoxToStarted(box.id, {
+        updateData: { state: BoxState.STARTED },
+        whereCondition: {
+          state: BoxState.STOPPED,
+          desiredState: BoxDesiredState.STARTED,
+          pending: false,
+        },
+      }),
+    ).rejects.toBe(creationError)
+    createUsagePeriod.mockRestore()
+
+    expect(await dataSource.getRepository(Box).findOneByOrFail({ id: box.id })).toEqual(
+      expect.objectContaining({ state: BoxState.STOPPED }),
+    )
+    expect(await periods.find()).toEqual([expect.objectContaining({ id: stoppedPeriod.id, endAt: null })])
     expect(eventEmitter.emit).not.toHaveBeenCalled()
   })
 

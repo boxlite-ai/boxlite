@@ -147,4 +147,45 @@ describe('BoxRepository.update transaction callback', () => {
     expect(eventEmitter.emit).not.toHaveBeenCalled()
     expect(cacheInvalidation.invalidate).not.toHaveBeenCalled()
   })
+
+  it('keeps conditional-update events post-commit when usage attribution fails', async () => {
+    const box = {
+      id: 'stopped-box',
+      organizationId: 'org-1',
+      name: 'stopped-box',
+      authToken: 'redacted',
+      state: BoxState.STOPPED,
+      desiredState: BoxDesiredState.STARTED,
+      pending: false,
+      public: false,
+      assertValid: jest.fn(),
+      enforceInvariants: jest.fn().mockReturnValue({}),
+    } as unknown as Box
+    const findOne = jest.fn().mockResolvedValue(box)
+    const update = jest.fn().mockResolvedValue({ affected: 1 })
+    const upsert = jest.fn().mockResolvedValue(undefined)
+    const entityManager = { findOne, update, upsert }
+    const transaction = jest.fn(async (callback: (manager: typeof entityManager) => Promise<unknown>) =>
+      callback(entityManager),
+    )
+    const eventEmitter = { emit: jest.fn() }
+    const dataSource = { getRepository: jest.fn(() => ({ manager: { transaction } })) }
+    const repository = new BoxRepository(dataSource as any, eventEmitter as any, {} as any)
+    const invalidate = jest.spyOn(repository as any, 'invalidateLookupCacheOnUpdate')
+    const periodError = new Error('injected full-resource period creation failure')
+    const afterUpdateInTransaction = jest.fn().mockRejectedValue(periodError)
+
+    await expect(
+      repository.updateWhere(box.id, {
+        updateData: { state: BoxState.STARTED },
+        whereCondition: { state: BoxState.STOPPED },
+        afterUpdateInTransaction,
+      }),
+    ).rejects.toBe(periodError)
+
+    expect(update.mock.invocationCallOrder[0]).toBeLessThan(upsert.mock.invocationCallOrder[0])
+    expect(upsert.mock.invocationCallOrder[0]).toBeLessThan(afterUpdateInTransaction.mock.invocationCallOrder[0])
+    expect(eventEmitter.emit).not.toHaveBeenCalled()
+    expect(invalidate).not.toHaveBeenCalled()
+  })
 })
