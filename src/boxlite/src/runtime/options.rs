@@ -762,25 +762,25 @@ impl VolumeSpec {
     pub fn validate(&self) -> BoxliteResult<()> {
         let guest_path = &self.guest_path;
         match &self.managed_volume {
-            Some(volume) if !self.host_path.is_empty() => {
-                Err(boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
+            Some(volume) if !self.host_path.is_empty() => Err(
+                boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
                     "volume mount {guest_path:?} sets both managed_volume ({volume:?}) and \
                      host_path; use exactly one"
-                )))
-            }
-            Some(volume) if volume.trim().is_empty() => {
-                Err(boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
+                )),
+            ),
+            Some(volume) if volume.trim().is_empty() => Err(
+                boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
                     "volume mount {guest_path:?} has an empty managed_volume; pass a volume id \
                      or name"
-                )))
-            }
+                )),
+            ),
             Some(_) => Ok(()),
-            None if self.host_path.is_empty() => {
-                Err(boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
+            None if self.host_path.is_empty() => Err(
+                boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
                     "volume mount {guest_path:?} needs a managed_volume (volume id or name) or \
                      a host_path"
-                )))
-            }
+                )),
+            ),
             None => Ok(()),
         }
     }
@@ -802,10 +802,12 @@ impl std::str::FromStr for NetworkMode {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
-            _ => Err(boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
-                "invalid network mode {:?}. Expected \"enabled\" or \"disabled\".",
-                value
-            ))),
+            _ => Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                format!(
+                    "invalid network mode {:?}. Expected \"enabled\" or \"disabled\".",
+                    value
+                ),
+            )),
         }
     }
 }
@@ -1702,7 +1704,10 @@ mod tests {
         // variant is what BoxliteError::http() dispatches on, so pin it here
         // rather than only the message.
         assert!(
-            matches!(err, boxlite_shared::errors::BoxliteError::InvalidArgument(_)),
+            matches!(
+                err,
+                boxlite_shared::errors::BoxliteError::InvalidArgument(_)
+            ),
             "expected InvalidArgument (→ HTTP 400), got {err:?}"
         );
     }
@@ -1722,7 +1727,10 @@ mod tests {
         // POL-356: same HTTP-mapping requirement as the try_from path above —
         // this backstop must not silently regress to a 500.
         assert!(
-            matches!(err, boxlite_shared::errors::BoxliteError::InvalidArgument(_)),
+            matches!(
+                err,
+                boxlite_shared::errors::BoxliteError::InvalidArgument(_)
+            ),
             "expected InvalidArgument (→ HTTP 400), got {err:?}"
         );
     }
