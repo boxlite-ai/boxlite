@@ -357,6 +357,7 @@ export class UserController {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
+        maxRedirects: 0,
       })
       return tokenResponse.data.access_token
     } catch (error) {

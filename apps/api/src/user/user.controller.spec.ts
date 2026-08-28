@@ -64,7 +64,7 @@ beforeEach(() => {
 })
 
 describe('UserController OIDC Management API requests', () => {
-  it('requests management tokens with a form-encoded OAuth client credentials body', async () => {
+  it('requests management tokens with a form-encoded body without following redirects', async () => {
     const { controller } = makeController()
 
     await controller.getAvailableAccountProviders()
@@ -81,6 +81,7 @@ describe('UserController OIDC Management API requests', () => {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
+      maxRedirects: 0,
     })
   })
 
