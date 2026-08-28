@@ -8,9 +8,9 @@ import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 
-// A chainable UPDATE query-builder stub whose terminal execute() is supplied
+// A chainable query-builder stub whose UPDATE and COUNT terminals are supplied
 // per-test. update/set/where/andWhere/returning all return the same builder.
-function makeQueryBuilder(execute: jest.Mock) {
+function makeQueryBuilder(execute: jest.Mock, getCount = jest.fn()) {
   const qb: any = {}
   qb.update = jest.fn(() => qb)
   qb.set = jest.fn(() => qb)
@@ -18,15 +18,16 @@ function makeQueryBuilder(execute: jest.Mock) {
   qb.andWhere = jest.fn(() => qb)
   qb.returning = jest.fn(() => qb)
   qb.execute = execute
+  qb.getCount = getCount
   return qb
 }
 
 // Build a BoxRepository whose `manager.transaction` runs the callback against a
-// fake entityManager. We bypass DI: only `manager` (a BaseRepository getter
-// over repository.manager) and the cache-invalidation hook are exercised here.
-function makeRepository(execute: jest.Mock) {
+// fake entityManager. We bypass DI: these tests exercise the repository query
+// builder, `manager` (a BaseRepository getter), and cache invalidation only.
+function makeRepository(execute: jest.Mock, getCount = jest.fn()) {
   const query = jest.fn().mockResolvedValue(undefined)
-  const queryBuilder = makeQueryBuilder(execute)
+  const queryBuilder = makeQueryBuilder(execute, getCount)
   // create() hydrates the RETURNING * raw row into a Box; the stub echoes the
   // row back so return-shape assertions stay on the same object.
   const create = jest.fn((_entity, raw) => raw)
@@ -38,12 +39,13 @@ function makeRepository(execute: jest.Mock) {
   const manager = {
     transaction: jest.fn(async (cb: (em: typeof entityManager) => Promise<unknown>) => cb(entityManager)),
   }
-  const dataSource = { getRepository: () => ({ manager }) } as any
+  const ormRepository = { manager, createQueryBuilder: jest.fn(() => queryBuilder) }
+  const dataSource = { getRepository: () => ormRepository } as any
   const repo = new BoxRepository(dataSource, {} as any, {} as any)
   // invalidateLookupCacheOnUpdate touches the real cache service; stub it out —
   // it is incidental to the lock-timeout behavior under test.
   jest.spyOn(repo as any, 'invalidateLookupCacheOnUpdate').mockImplementation(() => undefined)
-  return { repo, query, execute, create }
+  return { repo, query, execute, create, queryBuilder }
 }
 
 const startedRow = {
@@ -55,6 +57,21 @@ const startedRow = {
   desiredState: BoxDesiredState.STARTED,
   pending: true,
 }
+
+describe('BoxRepository.countQuotaBoxes', () => {
+  it('counts every organization box except destroyed and archived boxes', async () => {
+    const getCount = jest.fn().mockResolvedValue(7)
+    const { repo, queryBuilder } = makeRepository(jest.fn(), getCount)
+
+    await expect(repo.countQuotaBoxes('org-1')).resolves.toBe(7)
+    expect(queryBuilder.where).toHaveBeenCalledWith('box.organizationId = :organizationId', {
+      organizationId: 'org-1',
+    })
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith('box.state NOT IN (:...excludedStates)', {
+      excludedStates: [BoxState.DESTROYED, BoxState.ARCHIVED],
+    })
+  })
+})
 
 describe('BoxRepository.conditionalStartForProxy', () => {
   it('bounds the row-lock wait with a lock_timeout before the UPDATE', async () => {

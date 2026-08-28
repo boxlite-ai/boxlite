@@ -37,6 +37,7 @@ import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.map
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
+import { RestBoxCreationService } from './services/rest-box-creation.service'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml, not the
 // generated product spec (which `:prefix` routes would render invalid).
@@ -67,6 +68,7 @@ export class BoxliteBoxController {
   constructor(
     private readonly boxService: BoxService,
     private readonly boxStateWaiter: BoxStateWaiterService,
+    private readonly restBoxCreationService: RestBoxCreationService,
   ) {}
 
   @Post()
@@ -75,6 +77,14 @@ export class BoxliteBoxController {
     status: 201,
     description: 'Box created',
     type: BoxResponseDto,
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Organization box limit reached',
+  })
+  @ApiResponse({
+    status: 503,
+    description: 'Box creation admission temporarily unavailable',
   })
   @Audit({
     action: AuditAction.CREATE,
@@ -114,7 +124,7 @@ export class BoxliteBoxController {
     const organization = authContext.organization
     const createBoxDto = createBoxToCreateBox(dto)
 
-    let box = await this.boxService.create(createBoxDto, organization)
+    let box = await this.restBoxCreationService.create(createBoxDto, organization)
     if (box.state !== BoxState.STARTED) {
       box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
     }

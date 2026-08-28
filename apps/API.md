@@ -640,9 +640,11 @@ same time.
 ## Externally served APIs
 
 These interfaces are called from this directory but served by systems outside
-it, so no route table above owns them. The analytics and billing clients take
-their base URL from `GET /api/config` and disable the corresponding UI when it
-is unset; the same document carries PostHog's key and host to the browser.
+it, so no route table above owns them. The dashboard analytics and billing
+clients take their base URL from `GET /api/config` and disable the corresponding
+UI when it is unset; the API reads that same billing base from
+`BILLING_API_URL`. The same config document carries PostHog's key and host to
+the browser.
 
 <details>
 <summary><b>External interfaces</b> · 2 APIs, 2 SaaS integrations</summary>
@@ -650,7 +652,7 @@ is unset; the same document carries PostHog's key and host to the browser.
 | Interface     | Client                                                                                 | Base URL source                  | What it covers                                                                                                                                               |
 | ------------- | -------------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Analytics API | [`libs/analytics-api-client`](./libs/analytics-api-client/), generated                 | `analyticsApiUrl`                | 8 routes: per-box and organization usage, aggregates, and charts, plus box logs, metrics, and traces.                                                        |
-| Billing API   | [`billingApiClient.ts`](./dashboard/src/billing-api/billingApiClient.ts), hand-written | `billingApiUrl`                  | 20 routes: usage, wallet and top-ups, plans, invoices, coupons, billing emails, portal and checkout URLs.                                                    |
+| Billing API   | [`billingApiClient.ts`](./dashboard/src/billing-api/billingApiClient.ts) and [`CommerceBoxLimitService`](./api/src/boxlite-rest/services/commerce-box-limit.service.ts), hand-written | `billingApiUrl`; `BILLING_API_URL` | Dashboard billing routes plus API-side `GET /plan` and `GET /organization/{id}/plan` reads used to limit hosted REST box creation. |
 | PostHog       | `posthog-js` in the dashboard; `posthog-node` in the API                               | `posthog.apiKey`, `posthog.host` | Browser product analytics; server-side `api_*` operation events from the global metrics interceptor, two `groupIdentify` calls, and feature-flag evaluation. |
 | Pylon         | [`App.tsx`](./dashboard/src/App.tsx) widget, production builds only                    | `pylonAppId`                     | Outbound support-chat widget; it registers no route here.                                                                                                    |
 
@@ -659,7 +661,11 @@ The analytics client is generated from
 routes duplicate the control plane's own [box telemetry](#control-plane-api)
 routes, and the dashboard's box telemetry views call the analytics client only —
 they disable themselves when `analyticsApiUrl` is unset rather than falling back.
-Nothing in this directory registers the analytics or billing paths.
+The API authenticates both server-side plan reads with `USAGE_EXPORT_TOKEN`.
+Successful resolutions are cached for 10 seconds; Commerce errors or malformed
+responses fall back to 20 for the current create request without being cached.
+With no `BILLING_API_URL`, the hosted REST path is unlimited. Nothing in this
+directory registers the analytics or billing paths.
 
 </details>
 

@@ -301,10 +301,14 @@ paths:
                 $ref: "#/components/schemas/Box"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "403":
+          $ref: "#/components/responses/ResourceExhaustedError"
         "409":
           $ref: "#/components/responses/ConflictError"
         "422":
           $ref: "#/components/responses/UnprocessableEntityError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
     get:
       operationId: listBoxes
@@ -1275,6 +1279,19 @@ components:
               message: "invalid or missing API key"
               type: AuthError
               code: unauthenticated
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
+
+    ResourceExhaustedError:
+      description: The organization has reached its maximum allowed number of boxes
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              message: "You have already created 20 boxes, reaching or exceeding the current maximum allowed number of 20. Please delete unused boxes and try again."
+              type: ResourceExhaustedError
+              code: resource_exhausted
               request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     NotFoundError:

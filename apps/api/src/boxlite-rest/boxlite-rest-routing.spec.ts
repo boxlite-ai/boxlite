@@ -10,12 +10,16 @@ import type { INestApplication } from '@nestjs/common'
 import type { AddressInfo } from 'net'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
+import { RedisLockProvider } from '../box/common/redis-lock.provider'
+import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
+import { CommerceBoxLimitService } from './services/commerce-box-limit.service'
+import { RestBoxCreationService } from './services/rest-box-creation.service'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -44,6 +48,22 @@ describe('BoxLite REST routing', () => {
           provide: BoxStateWaiterService,
           useValue: {},
         },
+        {
+          provide: RestBoxCreationService,
+          useClass: RestBoxCreationService,
+        },
+        {
+          provide: CommerceBoxLimitService,
+          useValue: { resolveLimit: jest.fn().mockResolvedValue({ kind: 'limited', value: 20 }) },
+        },
+        {
+          provide: BoxRepository,
+          useValue: { countQuotaBoxes: jest.fn() },
+        },
+        {
+          provide: RedisLockProvider,
+          useValue: { waitForLease: jest.fn().mockRejectedValue(new Error('Redis unavailable')) },
+        },
       ],
     })
       .overrideGuard(CombinedAuthGuard)
@@ -70,6 +90,15 @@ describe('BoxLite REST routing', () => {
     return fetch(`http://127.0.0.1:${address.port}${path}`)
   }
 
+  async function post(path: string, body: object): Promise<Response> {
+    const address = app.getHttpServer().address() as AddressInfo
+    return fetch(`http://127.0.0.1:${address.port}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+
   afterEach(async () => {
     await app?.close()
   })
@@ -90,6 +119,18 @@ describe('BoxLite REST routing', () => {
     expect(await canonical.json()).toEqual({ boxes: [] })
     expect(legacy.status).toBe(200)
     expect(await legacy.json()).toEqual({ boxes: [] })
+  })
+
+  it('returns the 503 admission response when the creation lease is unavailable', async () => {
+    await startRoutingTestApp()
+
+    const response = await post('/api/v1/boxes', { image: 'alpine:latest' })
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({
+      message: 'Box creation admission is temporarily unavailable. Please try again.',
+      code: 'upstream_unavailable',
+    })
   })
 
   it('matches websocket attach upgrades with or without a routing prefix', () => {

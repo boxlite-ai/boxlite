@@ -5,10 +5,26 @@
  */
 
 import 'reflect-metadata'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { BadRequestException, ValidationPipe } from '@nestjs/common'
 import { PIPES_METADATA } from '@nestjs/common/constants'
+import { parse } from 'yaml'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { CreateBoxDto } from './dto/create-box.dto'
+import { BoxState } from '../box/enums/box-state.enum'
+
+type ApiResponses = Record<string, { description?: string }>
+const SWAGGER_API_RESPONSE_METADATA = 'swagger/apiResponse'
+type BoxOpenApiDocument = {
+  paths: {
+    '/{prefix}/boxes': {
+      post: {
+        responses: Record<string, { $ref?: string }>
+      }
+    }
+  }
+}
 
 // `openapi/box.openapi.yaml` declares `additionalProperties: false` on
 // CreateBoxRequest, and both other servers enforce it — `boxlite serve` via
@@ -132,5 +148,52 @@ describe('BoxliteBoxController request validation', () => {
     )
 
     expect(dto.volumes?.[0]?.managed_volume).toBe(selector)
+  })
+})
+
+describe('BoxliteBoxController create admission', () => {
+  it('documents the 503 admission response in Swagger metadata', () => {
+    const responses = Reflect.getMetadata(
+      SWAGGER_API_RESPONSE_METADATA,
+      BoxliteBoxController.prototype.createBox,
+    ) as ApiResponses
+
+    expect(responses['503']).toEqual(
+      expect.objectContaining({ description: 'Box creation admission temporarily unavailable' }),
+    )
+  })
+
+  it('documents the 503 admission response in the spec-first OpenAPI contract', () => {
+    const openApiPath = resolve(__dirname, '../../../../openapi/box.openapi.yaml')
+    const document = parse(readFileSync(openApiPath, 'utf8')) as BoxOpenApiDocument
+
+    expect(document.paths['/{prefix}/boxes'].post.responses['503']).toEqual({
+      $ref: '#/components/responses/ServiceUnavailableError',
+    })
+  })
+
+  it('delegates REST creation before waiting for the box to start', async () => {
+    const created = { id: 'box-1', name: 'box-1', state: BoxState.CREATING }
+    const started = { ...created, state: BoxState.STARTED }
+    const restBoxCreationService = { create: jest.fn().mockResolvedValue(created) }
+    const boxStateWaiter = { waitForStarted: jest.fn().mockResolvedValue(started) }
+    const controller = new BoxliteBoxController(
+      {} as any,
+      boxStateWaiter as any,
+      restBoxCreationService as any,
+    )
+    const organization = { id: 'org-1' }
+
+    const response = await controller.createBox(
+      { organization } as any,
+      { name: 'box-1' } as CreateBoxDto,
+    )
+
+    expect(restBoxCreationService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'box-1' }),
+      organization,
+    )
+    expect(boxStateWaiter.waitForStarted).toHaveBeenCalledWith('box-1', 'org-1', 30)
+    expect(response.box_id).toBe('box-1')
   })
 })

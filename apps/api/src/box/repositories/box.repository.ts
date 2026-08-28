@@ -52,6 +52,16 @@ export class BoxRepository extends BaseRepository<Box> {
     super(dataSource, eventEmitter, Box)
   }
 
+  async countQuotaBoxes(organizationId: string): Promise<number> {
+    return this.repository
+      .createQueryBuilder('box')
+      .where('box.organizationId = :organizationId', { organizationId })
+      .andWhere('box.state NOT IN (:...excludedStates)', {
+        excludedStates: [BoxState.DESTROYED, BoxState.ARCHIVED],
+      })
+      .getCount()
+  }
+
   async insert(box: Box): Promise<Box> {
     const now = new Date()
     if (!box.createdAt) {
