@@ -577,7 +577,7 @@ impl BoxOptions {
     ///   guest-networking switch (it gates host jailer grants only)
     pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
-            return Err(boxlite_shared::errors::BoxliteError::Config(
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
                 "remove-on-stop is incompatible with detach=true. Detached boxes should use \
                  auto_delete=0 (or deprecated auto_remove=false) for manual lifecycle control."
                     .to_string(),
@@ -597,7 +597,7 @@ impl BoxOptions {
         }
 
         if matches!(self.network, NetworkSpec::Disabled) && !self.ports.is_empty() {
-            return Err(boxlite_shared::errors::BoxliteError::Config(
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
                 "ports require network.outbound.mode=\"enabled\"".to_string(),
             ));
         }
@@ -607,7 +607,7 @@ impl BoxOptions {
         // them at create. See try_from for the rationale.
         if matches!(&self.inbound_network, NetworkSpec::Enabled { allow_net } if !allow_net.is_empty())
         {
-            return Err(boxlite_shared::errors::BoxliteError::Config(
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
                 "inbound.allow_net is not supported yet; remove it \
                  (inbound access is controlled by mode only)"
                     .to_string(),
@@ -625,7 +625,7 @@ impl BoxOptions {
         if !self.advanced.security.network_enabled
             && matches!(self.network, NetworkSpec::Enabled { .. })
         {
-            return Err(boxlite_shared::errors::BoxliteError::Config(
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
                 "advanced.security.network_enabled=false does not disable guest networking — \
                  it only drops the host sandbox's network grants. Set network.mode=\"disabled\" \
                  to create a box with no network interface, or leave \
@@ -763,20 +763,20 @@ impl VolumeSpec {
         let guest_path = &self.guest_path;
         match &self.managed_volume {
             Some(volume) if !self.host_path.is_empty() => {
-                Err(boxlite_shared::errors::BoxliteError::Config(format!(
+                Err(boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
                     "volume mount {guest_path:?} sets both managed_volume ({volume:?}) and \
                      host_path; use exactly one"
                 )))
             }
             Some(volume) if volume.trim().is_empty() => {
-                Err(boxlite_shared::errors::BoxliteError::Config(format!(
+                Err(boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
                     "volume mount {guest_path:?} has an empty managed_volume; pass a volume id \
                      or name"
                 )))
             }
             Some(_) => Ok(()),
             None if self.host_path.is_empty() => {
-                Err(boxlite_shared::errors::BoxliteError::Config(format!(
+                Err(boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
                     "volume mount {guest_path:?} needs a managed_volume (volume id or name) or \
                      a host_path"
                 )))
@@ -802,7 +802,7 @@ impl std::str::FromStr for NetworkMode {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
-            _ => Err(boxlite_shared::errors::BoxliteError::Config(format!(
+            _ => Err(boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
                 "invalid network mode {:?}. Expected \"enabled\" or \"disabled\".",
                 value
             ))),
@@ -850,7 +850,7 @@ impl TryFrom<OutboundNetworkConfig> for NetworkSpec {
                 allow_net: config.allow_net,
             }),
             NetworkMode::Disabled if !config.allow_net.is_empty() => {
-                Err(boxlite_shared::errors::BoxliteError::Config(
+                Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
                     "network.outbound.mode=\"disabled\" is incompatible with allow_net. \
                      Remove allow_net or use mode=\"enabled\"."
                         .to_string(),
@@ -870,7 +870,7 @@ impl TryFrom<InboundNetworkConfig> for NetworkSpec {
         // caller a box that is fully open while they believe it is
         // restricted. Reject under either mode; lift once enforcement lands.
         if !config.allow_net.is_empty() {
-            return Err(boxlite_shared::errors::BoxliteError::Config(
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
                 "inbound.allow_net is not supported yet; remove it \
                  (inbound access is controlled by mode only)"
                     .to_string(),
@@ -1004,7 +1004,7 @@ impl PortSpec {
     /// publication planning both go through it, so they can never disagree.
     pub(crate) fn validate_publishable(&self) -> BoxliteResult<SocketAddr> {
         if self.guest_port == 0 {
-            return Err(boxlite_shared::errors::BoxliteError::Config(
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
                 "guest port must be in range 1-65535".to_string(),
             ));
         }
@@ -1016,7 +1016,7 @@ impl PortSpec {
         let host_ip = match self.host_ip.as_deref() {
             None => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             Some(host_ip) => host_ip.parse::<IpAddr>().map_err(|_| {
-                boxlite_shared::errors::BoxliteError::Config(format!(
+                boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
                     "invalid port host_ip {host_ip:?}; expected an IPv4 or IPv6 address"
                 ))
             })?,
@@ -1697,6 +1697,14 @@ mod tests {
         })
         .unwrap_err();
         assert!(err.to_string().contains("not supported yet"));
+        // POL-356: this is the caller's mistake, not the server's — over
+        // boxlite serve it must reach the client as a 400, not a 500. The
+        // variant is what BoxliteError::http() dispatches on, so pin it here
+        // rather than only the message.
+        assert!(
+            matches!(err, boxlite_shared::errors::BoxliteError::InvalidArgument(_)),
+            "expected InvalidArgument (→ HTTP 400), got {err:?}"
+        );
     }
 
     #[test]
@@ -1709,8 +1717,14 @@ mod tests {
             },
             ..Default::default()
         };
-        let err = opts.sanitize().unwrap_err().to_string();
-        assert!(err.contains("not supported yet"));
+        let err = opts.sanitize().unwrap_err();
+        assert!(err.to_string().contains("not supported yet"));
+        // POL-356: same HTTP-mapping requirement as the try_from path above —
+        // this backstop must not silently regress to a 500.
+        assert!(
+            matches!(err, boxlite_shared::errors::BoxliteError::InvalidArgument(_)),
+            "expected InvalidArgument (→ HTTP 400), got {err:?}"
+        );
     }
 
     /// `VolumeSpec::managed_volume` and `VolumeSpec::bind_mount` cannot produce a mount
