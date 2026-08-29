@@ -1832,13 +1832,32 @@ components:
       required: [capabilities, privileged, nested_virtualization]
       properties:
         capabilities:
-          $ref: "#/components/schemas/CreateContainerCapabilities"
+          $ref: "#/components/schemas/ContainerCapabilitiesInfo"
         privileged:
           type: boolean
           description: Whether the existing box was created in privileged mode
         nested_virtualization:
           type: boolean
           description: Whether the existing box was created with nested virtualization
+
+    ContainerCapabilitiesInfo:
+      type: object
+      description: Effective Linux capability policy reported for an existing box.
+      additionalProperties: false
+      required: [add, drop]
+      properties:
+        add:
+          type: array
+          items:
+            type: string
+          description: Linux capabilities added to the default container capability set.
+          example: [SYS_ADMIN]
+        drop:
+          type: array
+          items:
+            type: string
+          description: Linux capabilities removed from the container capability set.
+          example: [NET_RAW]
 
     CreateContainerCapabilities:
       type: object

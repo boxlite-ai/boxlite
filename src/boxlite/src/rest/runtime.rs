@@ -45,6 +45,23 @@ impl RestRuntime {
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
         Ok(litebox_from_rest(rest_box))
     }
+
+    fn adopt_existing_box(
+        &self,
+        requested: &BoxOptions,
+        response: &BoxResponse,
+        box_name: &str,
+    ) -> BoxliteResult<(LiteBox, bool)> {
+        let actual = response.advanced.as_ref().ok_or_else(|| {
+            BoxliteError::Unsupported(format!(
+                "REST server omitted advanced metadata for existing box '{box_name}', so its security policy cannot be verified before reuse; upgrade the server, use a different name, or recreate the box"
+            ))
+        })?;
+        requested
+            .advanced
+            .check_reuse_compatibility(actual, box_name)?;
+        Ok((self.box_from_response(response)?, false))
+    }
 }
 
 #[async_trait::async_trait]
@@ -249,19 +266,23 @@ impl RuntimeBackend for RestRuntime {
         if let Some(ref box_name) = name
             && let Some(response) = self.get_box_response(box_name).await?
         {
-            let actual = response.advanced.as_ref().ok_or_else(|| {
-                BoxliteError::Unsupported(format!(
-                    "REST server omitted advanced metadata for existing box '{box_name}', so its security policy cannot be verified before reuse; upgrade the server, use a different name, or recreate the box"
-                ))
-            })?;
-            options
-                .advanced
-                .check_reuse_compatibility(actual, box_name)?;
-            return Ok((self.box_from_response(&response)?, false));
+            return self.adopt_existing_box(&options, &response, box_name);
         }
-        // Create new box
-        let litebox = self.create(options, name).await?;
-        Ok((litebox, true))
+
+        match self.create(options.clone(), name.clone()).await {
+            Ok(litebox) => Ok((litebox, true)),
+            Err(create_error) => {
+                // REST producers do not agree on the duplicate-name error variant.
+                // A now-visible compatible box is the portable signal that another
+                // caller won the lookup/create race.
+                if let Some(ref box_name) = name
+                    && let Ok(Some(response)) = self.get_box_response(box_name).await
+                {
+                    return self.adopt_existing_box(&options, &response, box_name);
+                }
+                Err(create_error)
+            }
+        }
     }
 
     async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
@@ -392,6 +413,11 @@ mod tests {
 
     const BOX_RESPONSE: &str = r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{}}"#;
 
+    struct TestResponse {
+        status: &'static str,
+        body: &'static str,
+    }
+
     fn capability_options() -> BoxOptions {
         let mut advanced = crate::AdvancedBoxOptions::default();
         advanced
@@ -406,12 +432,14 @@ mod tests {
         }
     }
 
-    async fn json_server(bodies: Vec<&'static str>) -> (u16, tokio::task::JoinHandle<Vec<String>>) {
+    async fn response_server(
+        responses: Vec<TestResponse>,
+    ) -> (u16, tokio::task::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move {
             let mut requests = Vec::new();
-            for body in bodies {
+            for response in responses {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut headers = Vec::new();
                 while !headers.ends_with(b"\r\n\r\n") {
@@ -422,9 +450,10 @@ mod tests {
                 socket
                     .write_all(
                         format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            body.len(),
-                            body
+                            "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            response.status,
+                            response.body.len(),
+                            response.body
                         )
                         .as_bytes(),
                     )
@@ -434,6 +463,19 @@ mod tests {
             requests
         });
         (port, server)
+    }
+
+    async fn json_server(bodies: Vec<&'static str>) -> (u16, tokio::task::JoinHandle<Vec<String>>) {
+        response_server(
+            bodies
+                .into_iter()
+                .map(|body| TestResponse {
+                    status: "200 OK",
+                    body,
+                })
+                .collect(),
+        )
+        .await
     }
 
     #[tokio::test]
@@ -618,6 +660,94 @@ mod tests {
         assert!(!created);
         assert_eq!(litebox.name(), Some("named"));
         assert_eq!(server.await.unwrap(), ["GET /v1/boxes/named HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn get_or_create_reuses_a_compatible_box_created_during_the_request() {
+        let not_found =
+            r#"{"error":{"message":"box not found","type":"NotFoundError","code":"not_found"}}"#;
+        let already_exists = r#"{"error":{"message":"box named already exists","type":"AlreadyExistsError","code":"already_exists"}}"#;
+        let existing = r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{},"advanced":{"capabilities":{"add":[],"drop":[]},"privileged":false,"nested_virtualization":false}}"#;
+        let (port, server) = response_server(vec![
+            TestResponse {
+                status: "404 Not Found",
+                body: not_found,
+            },
+            TestResponse {
+                status: "409 Conflict",
+                body: already_exists,
+            },
+            TestResponse {
+                status: "200 OK",
+                body: existing,
+            },
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let (litebox, created) = RuntimeBackend::get_or_create(
+            &runtime,
+            BoxOptions::default(),
+            Some("named".to_string()),
+        )
+        .await
+        .expect("the concurrent winner should be reused");
+
+        assert!(!created);
+        assert_eq!(litebox.name(), Some("named"));
+        assert_eq!(
+            server.await.unwrap(),
+            [
+                "GET /v1/boxes/named HTTP/1.1",
+                "POST /v1/boxes HTTP/1.1",
+                "GET /v1/boxes/named HTTP/1.1"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn get_or_create_preserves_create_error_when_no_concurrent_winner_exists() {
+        let not_found =
+            r#"{"error":{"message":"box not found","type":"NotFoundError","code":"not_found"}}"#;
+        let invalid_image = r#"{"error":{"message":"invalid image reference","type":"InvalidArgumentError","code":"invalid_argument"}}"#;
+        let (port, server) = response_server(vec![
+            TestResponse {
+                status: "404 Not Found",
+                body: not_found,
+            },
+            TestResponse {
+                status: "400 Bad Request",
+                body: invalid_image,
+            },
+            TestResponse {
+                status: "404 Not Found",
+                body: not_found,
+            },
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let error = RuntimeBackend::get_or_create(
+            &runtime,
+            BoxOptions::default(),
+            Some("named".to_string()),
+        )
+        .await
+        .err()
+        .expect("a failed create without a winner must stay failed");
+
+        assert!(matches!(error, BoxliteError::InvalidArgument(_)));
+        assert!(error.to_string().contains("invalid image reference"));
+        assert_eq!(
+            server.await.unwrap(),
+            [
+                "GET /v1/boxes/named HTTP/1.1",
+                "POST /v1/boxes HTTP/1.1",
+                "GET /v1/boxes/named HTTP/1.1"
+            ]
+        );
     }
 
     #[tokio::test]

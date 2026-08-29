@@ -384,6 +384,7 @@ test\:unit\:openapi:
 		--with 'PyJWT>=2.8' \
 		--with 'python-multipart>=0.0.9' \
 		--with 'python-dotenv>=1.0' \
+		--with 'PyYAML>=6.0' \
 		python -m unittest discover -s openapi/reference-server/tests -p 'test_*.py' -v
 
 # CLI integration tests.
