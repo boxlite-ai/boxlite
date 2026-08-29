@@ -645,14 +645,15 @@ their base URL from `GET /api/config` and disable the corresponding UI when it
 is unset; the same document carries PostHog's key and host to the browser.
 
 <details>
-<summary><b>External interfaces</b> · 2 APIs, 2 SaaS integrations</summary>
+<summary><b>External interfaces</b> · 3 APIs, 2 SaaS integrations</summary>
 
-| Interface     | Client                                                                                 | Base URL source                  | What it covers                                                                                                                                               |
-| ------------- | -------------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Analytics API | [`libs/analytics-api-client`](./libs/analytics-api-client/), generated                 | `analyticsApiUrl`                | 8 routes: per-box and organization usage, aggregates, and charts, plus box logs, metrics, and traces.                                                        |
-| Billing API   | [`billingApiClient.ts`](./dashboard/src/billing-api/billingApiClient.ts), hand-written | `billingApiUrl`                  | 20 routes: usage, wallet and top-ups, plans, invoices, coupons, billing emails, portal and checkout URLs.                                                    |
-| PostHog       | `posthog-js` in the dashboard; `posthog-node` in the API                               | `posthog.apiKey`, `posthog.host` | Browser product analytics; server-side `api_*` operation events from the global metrics interceptor, two `groupIdentify` calls, and feature-flag evaluation. |
-| Pylon         | [`App.tsx`](./dashboard/src/App.tsx) widget, production builds only                    | `pylonAppId`                     | Outbound support-chat widget; it registers no route here.                                                                                                    |
+| Interface     | Client                                                                                 | Base URL source                  | What it covers                                                                                                                                                                                             |
+| ------------- | -------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Analytics API | [`libs/analytics-api-client`](./libs/analytics-api-client/), generated                 | `analyticsApiUrl`                | 8 routes: per-box and organization usage, aggregates, and charts, plus box logs, metrics, and traces.                                                                                                      |
+| Billing API   | [`billingApiClient.ts`](./dashboard/src/billing-api/billingApiClient.ts), hand-written | `billingApiUrl`                  | 20 routes: wallet and top-ups, plans, payment methods, invoices, usage series and prices, coupons, billing emails, portal and checkout URLs.                                                               |
+| Usage export  | [`api/src/usage/services`](./api/src/usage/services/), hand-written                    | `usageExport.url`                | 2 routes on the same Commerce service, server-side: `POST /internal/usage-events` and `POST /internal/allocation-snapshot`, bearer `USAGE_EXPORT_TOKEN`, which must equal Commerce's `USAGE_INGEST_TOKEN`. |
+| PostHog       | `posthog-js` in the dashboard; `posthog-node` in the API                               | `posthog.apiKey`, `posthog.host` | Browser product analytics; server-side `api_*` operation events from the global metrics interceptor, two `groupIdentify` calls, and feature-flag evaluation.                                               |
+| Pylon         | [`App.tsx`](./dashboard/src/App.tsx) widget, production builds only                    | `pylonAppId`                     | Outbound support-chat widget; it registers no route here.                                                                                                                                                  |
 
 The analytics client is generated from
 [`swagger.json`](./libs/analytics-api-client/swagger.json). Its four telemetry
@@ -660,6 +661,35 @@ routes duplicate the control plane's own [box telemetry](#control-plane-api)
 routes, and the dashboard's box telemetry views call the analytics client only —
 they disable themselves when `analyticsApiUrl` is unset rather than falling back.
 Nothing in this directory registers the analytics or billing paths.
+
+The Billing API and Usage export rows are the same Commerce service reached two
+ways, on URLs that normally differ by path rather than host: the browser API
+lives under `/api/billing`, which `BILLING_API_URL` already includes, while the
+internal routes are served off the bare origin because they authenticate a
+service rather than a user. The API itself requires `USAGE_EXPORT_URL` whenever
+export is on and never derives it
+([`configuration.ts`](./api/src/config/configuration.ts)); it is the SST stack
+that supplies a default of `BILLING_API_URL`'s origin
+([`api.ts`](./infra/stack/api.ts)), so a deployment outside that stack must set
+it explicitly. The two stay separate settings because pointing the dashboard at
+a billing service and shipping usage to it remain separate decisions. One
+caveat on the credential: a `USAGE_EXPORT_URL` carrying userinfo makes Axios
+build Basic auth and drop the bearer header, so the publisher then sends the
+URL's credentials rather than `USAGE_EXPORT_TOKEN`. Commerce reaches back
+in one direction only: it resolves organization ownership against this control
+plane using the caller's own token. The `billing` API role and `BILLING_API_KEY`
+that widen [organization suspend/unsuspend](#control-plane-api) exist for
+Commerce, which does not currently call them.
+
+Because the billing client is hand-written rather than generated, neither side
+detects divergence. Five of its 20 routes — the billing-email group — have no
+implementation in Commerce, of which only `email/verify` has a live caller here
+([`EmailVerify.tsx`](./dashboard/src/pages/EmailVerify.tsx)); Commerce in turn
+serves card default/delete, `plan/pay-open-charge`, and a credit admission API
+that nothing in this repository calls. The full inventory and the open decisions
+are catalogued in `docs/boxlite-client-contract.md` in the `boxlite-commerce`
+repository — a companion change that lands there separately, so that path
+resolves only once it has merged.
 
 </details>
 

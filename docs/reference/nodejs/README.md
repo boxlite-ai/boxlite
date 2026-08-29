@@ -246,10 +246,19 @@ Metadata about a box.
 | `network` | `JsNetworkInfo \| null` | Current network configuration and resolved local publications |
 
 ```typescript
-interface JsNetworkInfo {
+interface JsNetworkDirectionInfo {
   mode: string;
   allowNet: string[];
+}
+
+interface JsNetworkInfo {
+  outbound: JsNetworkDirectionInfo;
+  inbound: JsNetworkDirectionInfo;
   publishedPorts: JsPublishedPort[] | null;
+  /** @deprecated Mirrors outbound.mode. */
+  mode: string;
+  /** @deprecated Mirrors outbound.allowNet. */
+  allowNet: string[];
 }
 
 interface JsPublishedPort {

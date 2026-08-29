@@ -69,13 +69,61 @@ const (
 	NetworkModeDisabled NetworkMode = "disabled"
 )
 
-// NetworkSpec configures guest networking. A non-empty AllowNet restricts
-// both TCP and UDP egress. Hostname entries are enforced by TLS SNI / HTTP
-// Host inspection, which only TCP carries, so a hostname-only AllowNet denies
-// all UDP egress — add the IP or CIDR to keep UDP open.
-type NetworkSpec struct {
+// OutboundNetworkSpec configures guest-initiated egress. A non-empty
+// AllowNet restricts both TCP and UDP egress. Hostname entries are enforced
+// by TLS SNI / HTTP Host inspection, which only TCP carries, so a
+// hostname-only AllowNet denies all UDP egress — add the IP or CIDR to keep
+// UDP open.
+type OutboundNetworkSpec struct {
 	Mode     NetworkMode
 	AllowNet []string
+}
+
+// InboundNetworkSpec configures whether services running inside the box are
+// reachable from outside it. Aligned field-for-field with
+// OutboundNetworkSpec: ModeEnabled means publicly reachable, ModeDisabled
+// means private. AllowNet exists for shape symmetry only — no layer
+// enforces an inbound allowlist yet, so a non-empty value is rejected.
+type InboundNetworkSpec struct {
+	Mode     NetworkMode
+	AllowNet []string
+}
+
+// NetworkSpec configures guest networking: Outbound covers guest-initiated
+// egress, Inbound covers whether services the box exposes are reachable
+// from outside it. The two are independent — set either, both, or neither.
+type NetworkSpec struct {
+	Outbound OutboundNetworkSpec
+	Inbound  InboundNetworkSpec
+
+	// Mode is the pre-split outbound mode, kept so existing callers keep
+	// compiling and behaving the same.
+	//
+	// Deprecated: use Outbound.Mode. Setting both Mode and Outbound is
+	// rejected when the options are converted rather than resolved silently.
+	Mode NetworkMode
+
+	// AllowNet is the pre-split outbound allowlist.
+	//
+	// Deprecated: use Outbound.AllowNet.
+	AllowNet []string
+}
+
+// resolve folds the deprecated flat fields into Outbound, which is the
+// direction they configured before the outbound/inbound split. Returns an
+// error when a caller supplies both shapes.
+func (s NetworkSpec) resolve() (NetworkSpec, error) {
+	legacySet := s.Mode != "" || len(s.AllowNet) > 0
+	nestedSet := s.Outbound.Mode != "" || len(s.Outbound.AllowNet) > 0
+	if legacySet && nestedSet {
+		return NetworkSpec{}, fmt.Errorf("network cannot mix Outbound with deprecated Mode/AllowNet")
+	}
+	if legacySet {
+		s.Outbound = OutboundNetworkSpec{Mode: s.Mode, AllowNet: s.AllowNet}
+	}
+	s.Mode = ""
+	s.AllowNet = nil
+	return s, nil
 }
 
 // PortProtocol selects the transport protocol for a port forwarding rule.
@@ -188,6 +236,7 @@ type boxConfig struct {
 	autoResume *bool
 	detach     *bool
 	network    *NetworkSpec
+	networkErr error // deferred WithNetwork validation error, surfaced at conversion
 	secrets    []Secret
 	advanced   *AdvancedBoxOptions // nil = runtime defaults; non-nil = caller-owned advanced opts applied via boxlite_options_set_advanced
 }
@@ -312,10 +361,23 @@ func WithCmd(args ...string) BoxOption {
 // WithNetwork sets the structured network configuration for the box.
 func WithNetwork(spec NetworkSpec) BoxOption {
 	return func(c *boxConfig) {
-		allowNet := append([]string(nil), spec.AllowNet...)
+		resolved, err := spec.resolve()
+		if err != nil {
+			c.networkErr = err
+			return
+		}
+		spec = resolved
+		outboundAllowNet := append([]string(nil), spec.Outbound.AllowNet...)
+		inboundAllowNet := append([]string(nil), spec.Inbound.AllowNet...)
 		c.network = &NetworkSpec{
-			Mode:     spec.Mode,
-			AllowNet: allowNet,
+			Outbound: OutboundNetworkSpec{
+				Mode:     spec.Outbound.Mode,
+				AllowNet: outboundAllowNet,
+			},
+			Inbound: InboundNetworkSpec{
+				Mode:     spec.Inbound.Mode,
+				AllowNet: inboundAllowNet,
+			},
 		}
 	}
 }
@@ -491,24 +553,44 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 			return nil, fmt.Errorf("add port %d:%d failed with code %d", cPort.host_port, cPort.guest_port, int(code))
 		}
 	}
+	if cfg.networkErr != nil {
+		C.boxlite_options_free(cOpts)
+		return nil, cfg.networkErr
+	}
 	if cfg.network != nil {
-		switch cfg.network.Mode {
+		switch cfg.network.Outbound.Mode {
 		case "", NetworkModeEnabled:
 			C.boxlite_options_set_network_enabled(cOpts)
-			for _, host := range cfg.network.AllowNet {
+			for _, host := range cfg.network.Outbound.AllowNet {
 				cHost := toCString(host)
 				C.boxlite_options_add_network_allow(cOpts, cHost)
 				C.free(unsafe.Pointer(cHost))
 			}
 		case NetworkModeDisabled:
-			if len(cfg.network.AllowNet) > 0 {
+			if len(cfg.network.Outbound.AllowNet) > 0 {
 				C.boxlite_options_free(cOpts)
-				return nil, fmt.Errorf("network.mode=%q is incompatible with allow_net", NetworkModeDisabled)
+				return nil, fmt.Errorf("network.outbound.mode=%q is incompatible with allow_net", NetworkModeDisabled)
 			}
 			C.boxlite_options_set_network_disabled(cOpts)
 		default:
 			C.boxlite_options_free(cOpts)
-			return nil, fmt.Errorf("invalid network mode %q", cfg.network.Mode)
+			return nil, fmt.Errorf("invalid outbound network mode %q", cfg.network.Outbound.Mode)
+		}
+		// The field exists for shape symmetry with Outbound, but no layer
+		// enforces an inbound allowlist yet — reject rather than accept a
+		// restriction that silently doesn't apply.
+		if len(cfg.network.Inbound.AllowNet) > 0 {
+			C.boxlite_options_free(cOpts)
+			return nil, fmt.Errorf("inbound.allow_net is not supported yet; remove it (inbound access is controlled by mode only)")
+		}
+		switch cfg.network.Inbound.Mode {
+		case "", NetworkModeEnabled:
+			C.boxlite_options_set_network_inbound_enabled(cOpts)
+		case NetworkModeDisabled:
+			C.boxlite_options_set_network_inbound_disabled(cOpts)
+		default:
+			C.boxlite_options_free(cOpts)
+			return nil, fmt.Errorf("invalid inbound network mode %q", cfg.network.Inbound.Mode)
 		}
 	}
 	for _, secret := range cfg.secrets {

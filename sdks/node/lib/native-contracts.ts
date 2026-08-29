@@ -102,7 +102,32 @@ export interface JsHostPathVolumeSpec {
 }
 
 export interface JsNetworkSpec {
+  outbound?: JsOutboundNetworkSpec;
+  inbound?: JsInboundNetworkSpec;
+  /**
+   * @deprecated Use `outbound.mode`. Accepted as a legacy alias; supplying it
+   * together with `outbound` is rejected.
+   */
+  mode?: "enabled" | "disabled";
+  /**
+   * @deprecated Use `outbound.allowNet`. Accepted as a legacy alias; supplying
+   * it together with `outbound` is rejected.
+   */
+  allowNet?: string[];
+}
+
+export interface JsOutboundNetworkSpec {
   mode: "enabled" | "disabled";
+  allowNet?: string[];
+}
+
+export interface JsInboundNetworkSpec {
+  /** Inbound mode: "enabled" (publicly reachable) or "disabled" (private). */
+  mode: "enabled" | "disabled";
+  /**
+   * Not supported yet: a non-empty value is rejected. Exists for shape
+   * symmetry with the outbound spec; inbound access follows `mode` alone.
+   */
   allowNet?: string[];
 }
 
@@ -253,8 +278,17 @@ export interface JsPublishedPort {
   protocol: "tcp" | "udp";
 }
 
-export interface JsNetworkInfo {
+export interface JsNetworkDirectionInfo {
   mode: "enabled" | "disabled";
+  allowNet: string[];
+}
+
+export interface JsNetworkInfo {
+  outbound: JsNetworkDirectionInfo;
+  inbound: JsNetworkDirectionInfo;
+  /** @deprecated Use `outbound.mode`. Mirrors it for legacy readers. */
+  mode: "enabled" | "disabled";
+  /** @deprecated Use `outbound.allowNet`. Mirrors it for legacy readers. */
   allowNet: string[];
   /** `null` means unknown to this handle; `[]` means no active publications. */
   publishedPorts: JsPublishedPort[] | null;
