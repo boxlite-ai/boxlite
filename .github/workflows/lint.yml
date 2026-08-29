@@ -20,6 +20,7 @@ on:
       - 'make/quality.mk'
       - 'make/test.mk'
       - '.pre-commit-config.yaml'
+      - '.github/actionlint.yaml'
       - '.github/workflows/**'
       - '.github/actions/**'
       - 'apps/infra/**'
@@ -92,6 +93,10 @@ jobs:
               # the workflow that used to inline it, so an edit here changes what those
               # workflows run and must face the same suite.
               - '.github/actions/**'
+              # actionlint configuration and its Make target are executed by
+              # the infra job below.
+              - '.github/actionlint.yaml'
+              - 'make/quality.mk'
               - 'make/test.mk'
             install_script:
               - 'scripts/release/**'
@@ -133,7 +138,7 @@ jobs:
 
       - name: Install guest cross target (macOS)
         if: runner.os == 'macOS'
-        run: rustup target add $(bash scripts/util.sh --target)
+        run: rustup target add "$(bash scripts/util.sh --target)"
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -291,6 +296,11 @@ jobs:
         uses: actions/checkout@v5
         with:
           persist-credentials: false
+
+      - uses: ./.github/actions/setup-go
+
+      - name: Lint GitHub Actions workflows
+        run: make lint:ci
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

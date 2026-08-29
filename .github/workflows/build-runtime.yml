@@ -87,11 +87,16 @@ jobs:
         run: |
           make setup:build runtime
           cargo build -p boxlite-cli --release
-          command -v sccache &>/dev/null && sccache --show-stats || true
+          if command -v sccache &>/dev/null; then
+            sccache --show-stats || true
+          fi
 
       - name: Package runtime
         run: |
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          # Cargo build directory names cannot contain whitespace. Keep `ls -t`
+          # here because GNU find's timestamp formatting is unavailable on macOS.
+          # shellcheck disable=SC2012
           RUNTIME_DIR=$(ls -dt target/release/build/boxlite-*/out/runtime 2>/dev/null | head -1)
           [ -n "$RUNTIME_DIR" ] || { echo "ERROR: Runtime directory not found under target/"; exit 1; }
           cp -a "$RUNTIME_DIR" boxlite-runtime
@@ -147,7 +152,7 @@ jobs:
           for f in boxlite-runtime-*.tar.gz boxlite-cli-*.tar.gz; do
             sha256sum "$f" > "$f.sha256"
           done
-          ls -1 *.sha256
+          ls -1 -- ./*.sha256
 
       - name: Render install.sh for this release
         working-directory: dist
@@ -264,9 +269,9 @@ jobs:
           publish_crate() {
             local crate="$1"
             shift
-            local extra_args="$*"
+            local extra_args=("$@")
             echo "::group::Publishing $crate"
-            if cargo publish -p "$crate" $extra_args 2>&1 | tee /tmp/publish-"$crate".log; then
+            if cargo publish -p "$crate" "${extra_args[@]}" 2>&1 | tee /tmp/publish-"$crate".log; then
               echo "$crate published successfully"
             else
               if grep -q "already uploaded" /tmp/publish-"$crate".log; then
