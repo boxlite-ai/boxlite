@@ -71,22 +71,3 @@ func TestCNetworkInfoToGoTraversesNativeStruct(t *testing.T) {
 		})
 	}
 }
-
-func TestCAdvancedBoxInfoToGoTraversesNativeStruct(t *testing.T) {
-	fixtures := cAdvancedBoxInfoTraversalTestFixtures()
-	if fixtures[0] != nil {
-		t.Fatalf("cAdvancedBoxInfoToGo(nil) = %#v, want nil", fixtures[0])
-	}
-
-	want := &AdvancedBoxInfo{
-		Capabilities: ContainerCapabilities{
-			Add:  []string{"SYS_ADMIN"},
-			Drop: []string{"NET_RAW"},
-		},
-		Privileged:           false,
-		NestedVirtualization: true,
-	}
-	if !reflect.DeepEqual(fixtures[1], want) {
-		t.Fatalf("cAdvancedBoxInfoToGo() = %#v, want %#v", fixtures[1], want)
-	}
-}

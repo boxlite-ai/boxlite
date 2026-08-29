@@ -772,6 +772,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_or_create_rejects_incomplete_capability_metadata() {
+        let responses = [
+            r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{},"advanced":{"capabilities":{},"privileged":false,"nested_virtualization":false}}"#,
+            r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{},"advanced":{"capabilities":{"add":[]},"privileged":false,"nested_virtualization":false}}"#,
+            r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{},"advanced":{"capabilities":{"drop":[]},"privileged":false,"nested_virtualization":false}}"#,
+        ];
+
+        for incomplete in responses {
+            let (port, server) = json_server(vec![incomplete]).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+
+            let error = RuntimeBackend::get_or_create(
+                &runtime,
+                BoxOptions::default(),
+                Some("named".to_string()),
+            )
+            .await
+            .err()
+            .expect("an incomplete capability policy must not be reused");
+
+            assert!(matches!(error, BoxliteError::Internal(_)));
+            assert!(error.to_string().contains("missing field"));
+            assert_eq!(server.await.unwrap(), ["GET /v1/boxes/named HTTP/1.1"]);
+        }
+    }
+
+    #[tokio::test]
     async fn get_or_create_refuses_reuse_when_the_server_omits_advanced_metadata() {
         let (port, server) = json_server(vec![BOX_RESPONSE]).await;
         let runtime =

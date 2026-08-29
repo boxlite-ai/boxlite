@@ -109,15 +109,6 @@ impl From<JsContainerCapabilities> for ContainerCapabilities {
     }
 }
 
-impl From<ContainerCapabilities> for JsContainerCapabilities {
-    fn from(capabilities: ContainerCapabilities) -> Self {
-        Self {
-            add: Some(capabilities.add),
-            drop: Some(capabilities.drop),
-        }
-    }
-}
-
 /// Expert-only box options. Released top-level security and health-check
 /// fields remain on `JsBoxOptions`; new capability policy is nested here.
 #[napi(object)]

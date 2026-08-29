@@ -1,4 +1,3 @@
-use boxlite::AdvancedBoxInfo;
 use boxlite::NetworkMode;
 use boxlite::litebox::HealthState as CoreHealthState;
 use boxlite::runtime::options::PortProtocol;
@@ -7,8 +6,6 @@ use boxlite::runtime::types::{
 };
 use napi::bindgen_prelude::{Either, Null};
 use napi_derive::napi;
-
-use crate::advanced_options::JsContainerCapabilities;
 
 fn port_protocol_to_string(protocol: PortProtocol) -> String {
     match protocol {
@@ -198,26 +195,6 @@ impl From<BoxStateInfo> for JsBoxStateInfo {
 // BoxInfo - Container info with nested state
 // ============================================================================
 
-/// Reuse-relevant advanced policy reported for an existing box.
-#[napi(object)]
-#[derive(Clone, Debug)]
-pub struct JsAdvancedBoxInfo {
-    pub capabilities: JsContainerCapabilities,
-    pub privileged: bool,
-    #[napi(js_name = "nestedVirtualization")]
-    pub nested_virtualization: bool,
-}
-
-impl From<AdvancedBoxInfo> for JsAdvancedBoxInfo {
-    fn from(info: AdvancedBoxInfo) -> Self {
-        Self {
-            capabilities: info.capabilities.into(),
-            privileged: info.privileged,
-            nested_virtualization: info.nested_virtualization,
-        }
-    }
-}
-
 /// Public metadata about a box (returned by list operations).
 ///
 /// Provides read-only information about a box's identity, configuration,
@@ -248,9 +225,6 @@ pub struct JsBoxInfo {
 
     /// Allocated memory in MiB
     pub memory_mib: u32,
-
-    /// Reuse-relevant advanced policy, when reported by the runtime.
-    pub advanced: Either<JsAdvancedBoxInfo, Null>,
 
     /// Network configuration and resolved local publications, when available.
     pub network: Either<JsNetworkInfo, Null>,
@@ -289,10 +263,6 @@ impl From<BoxInfo> for JsBoxInfo {
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
-            advanced: match info.advanced {
-                Some(advanced) => Either::A(JsAdvancedBoxInfo::from(advanced)),
-                None => Either::B(Null),
-            },
             network: match info.network {
                 Some(network) => Either::A(JsNetworkInfo::from(network)),
                 None => Either::B(Null),
@@ -312,8 +282,8 @@ mod tests {
 
     use boxlite::runtime::options::PortProtocol;
     use boxlite::{
-        AdvancedBoxInfo, BoxID, BoxInfo, BoxStatus, ContainerCapabilities, HealthStatus,
-        NetworkDirectionInfo, NetworkInfo, NetworkMode, PublishedPort,
+        BoxID, BoxInfo, BoxStatus, HealthStatus, NetworkDirectionInfo, NetworkInfo, NetworkMode,
+        PublishedPort,
     };
 
     use napi::bindgen_prelude::Either;
@@ -432,38 +402,5 @@ mod tests {
             Some("1970-01-01T00:00:01+00:00")
         );
         assert!(JsBoxInfo::from(core_info(None)).started_at.is_none());
-    }
-
-    #[test]
-    fn box_info_conversion_preserves_the_reuse_policy() {
-        let mut info = core_info(None);
-        info.advanced = Some(AdvancedBoxInfo {
-            capabilities: ContainerCapabilities {
-                add: vec!["SYS_ADMIN".to_string()],
-                drop: vec!["NET_RAW".to_string()],
-            },
-            privileged: false,
-            nested_virtualization: true,
-        });
-
-        let advanced = match JsBoxInfo::from(info).advanced {
-            Either::A(advanced) => advanced,
-            Either::B(_) => panic!("advanced metadata missing"),
-        };
-        assert_eq!(
-            advanced.capabilities.add,
-            Some(vec!["SYS_ADMIN".to_string()])
-        );
-        assert_eq!(
-            advanced.capabilities.drop,
-            Some(vec!["NET_RAW".to_string()])
-        );
-        assert!(!advanced.privileged);
-        assert!(advanced.nested_virtualization);
-
-        assert!(matches!(
-            JsBoxInfo::from(core_info(None)).advanced,
-            Either::B(_)
-        ));
     }
 }

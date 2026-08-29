@@ -1016,14 +1016,6 @@ contains typed `CPublishedPort` entries with `guest_port`, `host_ip`,
 `host_port`, and `protocol` fields. These nested values are borrowed from
 `CBoxInfo` and must not be freed separately.
 
-`info->advanced` is an owned `CAdvancedBoxInfo*` freed with the rest of
-`CBoxInfo`. It is `NULL` when the runtime did not report enough metadata to
-describe the box's reuse-relevant policy. Otherwise `capabilities.add` and
-`capabilities.drop` point to owned string arrays with their corresponding
-counts, while `privileged` and `nested_virtualization` report the effective
-creation policy. These nested values are borrowed from `CBoxInfo` and must not
-be freed separately.
-
 Because info resolution is asynchronous, the implementation may perform backend
 I/O before posting the callback. Keep the runtime and any callback `user_data`
 alive until the completion has been drained.

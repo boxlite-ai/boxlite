@@ -27,8 +27,7 @@ pub use copy::JsCopyOptions;
 pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution};
 pub use images::{JsImageHandle, JsImageInfo, JsImagePullResult};
 pub use info::{
-    JsAdvancedBoxInfo, JsBoxInfo, JsBoxStateInfo, JsHealthState, JsHealthStatus, JsNetworkInfo,
-    JsPublishedPort,
+    JsBoxInfo, JsBoxStateInfo, JsHealthState, JsHealthStatus, JsNetworkInfo, JsPublishedPort,
 };
 pub use metrics::{JsBoxMetrics, JsRuntimeMetrics};
 pub use network::{

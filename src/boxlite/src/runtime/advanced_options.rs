@@ -6,7 +6,7 @@
 //! compatibility. Direct custom-kernel boot is also grouped here because it
 //! changes the VM boot contract.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -591,6 +591,7 @@ pub struct ContainerCapabilities {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdvancedBoxInfo {
     /// Effective Linux capability policy after privileged-mode resolution.
+    #[serde(deserialize_with = "deserialize_required_capabilities")]
     pub capabilities: ContainerCapabilities,
 
     /// Whether the box was created in privileged mode.
@@ -598,6 +599,25 @@ pub struct AdvancedBoxInfo {
 
     /// Whether the box was created with nested virtualization enabled.
     pub nested_virtualization: bool,
+}
+
+fn deserialize_required_capabilities<'de, D>(
+    deserializer: D,
+) -> Result<ContainerCapabilities, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    struct RequiredCapabilities {
+        add: Vec<String>,
+        drop: Vec<String>,
+    }
+
+    let capabilities = RequiredCapabilities::deserialize(deserializer)?;
+    Ok(ContainerCapabilities {
+        add: capabilities.add,
+        drop: capabilities.drop,
+    })
 }
 
 impl ContainerCapabilities {

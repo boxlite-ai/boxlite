@@ -255,11 +255,20 @@ pub struct BoxInfo {
     /// Allocated memory in MiB
     pub memory_mib: u32,
 
+    /// Reuse-relevant advanced policy, when reported by the runtime
+    pub advanced: Option<AdvancedBoxInfo>,
+
     /// Current network configuration and resolved local publications
     pub network: Option<NetworkInfo>,
 
     /// User-defined labels
     pub labels: HashMap<String, String>,
+}
+
+pub struct AdvancedBoxInfo {
+    pub capabilities: ContainerCapabilities,
+    pub privileged: bool,
+    pub nested_virtualization: bool,
 }
 
 pub struct NetworkDirectionInfo {
@@ -284,6 +293,10 @@ pub struct PublishedPort {
     pub protocol: PortProtocol,
 }
 ```
+
+`advanced` is `None` when a remote or older producer did not report enough
+metadata to verify whether a named box can be reused without changing its
+effective privilege policy.
 
 `network: None` means network information is unavailable, such as metadata from
 an older or remote producer. Within `NetworkInfo`, `published_ports: None`

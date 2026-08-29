@@ -324,23 +324,6 @@ typedef struct CNetworkInfo {
   struct CNetworkDirectionInfo inbound;
 } CNetworkInfo;
 
-// Owned Linux capability policy reported for an existing box.
-//
-// Both arrays and their strings are owned by the enclosing [`CBoxInfo`].
-typedef struct CContainerCapabilities {
-  char **add;
-  int add_count;
-  char **drop;
-  int drop_count;
-} CContainerCapabilities;
-
-// Reuse-relevant advanced policy owned by an enclosing [`CBoxInfo`].
-typedef struct CAdvancedBoxInfo {
-  struct CContainerCapabilities capabilities;
-  int privileged;
-  int nested_virtualization;
-} CAdvancedBoxInfo;
-
 typedef struct CBoxInfo {
   char *id;
   char *name;
@@ -362,9 +345,6 @@ typedef struct CBoxInfo {
   // Milliseconds — not `created_at`'s seconds — preserve sub-second ordering
   // against a job's timeline.
   int64_t started_at;
-  // Owned reuse-relevant advanced policy; null when unavailable.
-  // Appended to preserve the offsets of every preceding field.
-  struct CAdvancedBoxInfo *advanced;
 } CBoxInfo;
 
 // Box info completion. On success the callback owns the non-null metadata and
