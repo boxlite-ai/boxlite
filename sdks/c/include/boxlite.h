@@ -293,17 +293,35 @@ typedef struct CPublishedPortList {
   int count;
 } CPublishedPortList;
 
-// Typed network metadata owned by an enclosing [`CBoxInfo`].
-//
-// `allow_net` points to `allow_net_count` owned strings. `published_ports`
-// is null when the current handle does not know the bindings, non-null and
-// empty when there are no active publications, and otherwise contains
-// concrete bindings.
-typedef struct CNetworkInfo {
+// Mode and allowlist for one traffic direction. `allow_net` points to
+// `allow_net_count` owned strings, owned by the enclosing [`CNetworkInfo`].
+typedef struct CNetworkDirectionInfo {
   enum BoxliteNetworkMode mode;
   char **allow_net;
   int allow_net_count;
+} CNetworkDirectionInfo;
+
+// Typed network metadata owned by an enclosing [`CBoxInfo`].
+//
+// `published_ports` is null when the current handle does not know the
+// bindings, non-null and empty when there are no active publications, and
+// otherwise contains concrete bindings.
+// The first four fields are byte-compatible with the pre-split struct
+// (`mode`, `allow_net`, `allow_net_count`, `published_ports`), so callers
+// compiled against the old header keep reading valid data at the same
+// offsets. They alias `outbound`'s allocations — never free them separately;
+// [`free_network_info`] releases each allocation exactly once through
+// `outbound`/`inbound`.
+typedef struct CNetworkInfo {
+  // Deprecated: read `outbound.mode`. Mirrors it for old callers.
+  enum BoxliteNetworkMode mode;
+  // Deprecated: read `outbound.allow_net`. Aliases it — do not free.
+  char **allow_net;
+  // Deprecated: read `outbound.allow_net_count`.
+  int allow_net_count;
   struct CPublishedPortList *published_ports;
+  struct CNetworkDirectionInfo outbound;
+  struct CNetworkDirectionInfo inbound;
 } CNetworkInfo;
 
 typedef struct CBoxInfo {
@@ -853,6 +871,15 @@ void boxlite_options_set_network_disabled(CBoxliteOptions *opts);
 // CIDR to keep UDP open.
 void boxlite_options_add_network_allow(CBoxliteOptions *opts, const char *host);
 
+// Marks services the box exposes as publicly reachable (the default).
+// Mirrors `boxlite_options_set_network_enabled` for the inbound direction.
+void boxlite_options_set_network_inbound_enabled(CBoxliteOptions *opts);
+
+// Marks services the box exposes as private — unreachable from outside the
+// box. Mirrors `boxlite_options_set_network_disabled` for the inbound
+// direction.
+void boxlite_options_set_network_inbound_disabled(CBoxliteOptions *opts);
+
 void boxlite_options_add_secret(CBoxliteOptions *opts,
                                 const char *name,
                                 const char *value,
@@ -863,10 +890,22 @@ void boxlite_options_add_secret(CBoxliteOptions *opts,
 // Deprecated: use `boxlite_options_set_auto_delete_interval`.
 void boxlite_options_set_auto_remove(CBoxliteOptions *opts, int val);
 
+// Set how long an idle box may remain paused before the runtime pauses it.
+//
+// The value is expressed in seconds. `0` preserves the runtime/control-plane
+// default. A null options pointer is treated as a no-op.
 void boxlite_options_set_auto_stop_interval(CBoxliteOptions *opts, uint32_t seconds);
 
+// Set how long a stopped box may remain before the runtime deletes it.
+//
+// The value is expressed in seconds. `0` disables automatic deletion for
+// persistent boxes. A null options pointer is treated as a no-op.
 void boxlite_options_set_auto_delete_interval(CBoxliteOptions *opts, uint32_t seconds);
 
+// Configure whether stopped boxes may automatically resume on demand.
+//
+// Any non-zero `val` enables auto-resume; `0` disables it. A null options
+// pointer is treated as a no-op.
 void boxlite_options_set_auto_resume_enabled(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);

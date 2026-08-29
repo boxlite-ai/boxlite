@@ -527,6 +527,11 @@ impl ExecutionState {
         self.signal_if_current(signal, false).await
     }
 
+    /// Whether registry shutdown owns this session's lifecycle.
+    pub(super) fn shutdown_managed(&self) -> bool {
+        self.shutdown_managed
+    }
+
     async fn signal_if_current(
         &self,
         signal: nix::sys::signal::Signal,

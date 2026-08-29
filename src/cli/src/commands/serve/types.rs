@@ -107,6 +107,8 @@ pub(super) struct ContainerCapabilitiesRequest {
 pub(super) struct NetworkSpec {
     #[serde(default)]
     pub outbound: Option<OutboundNetworkSpec>,
+    #[serde(default)]
+    pub inbound: Option<InboundNetworkSpec>,
     #[serde(flatten)]
     pub legacy: LegacyNetworkSpec,
 }
@@ -129,6 +131,18 @@ pub(super) struct LegacyNetworkSpec {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct OutboundNetworkSpec {
+    pub mode: String,
+    #[serde(default)]
+    pub allow_net: Vec<String>,
+}
+
+/// Aligned field-for-field with [`OutboundNetworkSpec`]: `mode="enabled"`
+/// means services the box exposes are publicly reachable, `mode="disabled"`
+/// means private. `allow_net` exists for shape symmetry only — no layer
+/// enforces an inbound allowlist yet, so a non-empty value is rejected.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct InboundNetworkSpec {
     pub mode: String,
     #[serde(default)]
     pub allow_net: Vec<String>,

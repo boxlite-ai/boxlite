@@ -7,7 +7,7 @@ use boxlite::experimental::{
     EXPERIMENTAL_FEATURES_ENV, ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder,
 };
 use boxlite::runtime::options::{
-    NetworkMode, OutboundNetworkConfig, PortProtocol, PortSpec, VolumeSpec,
+    InboundNetworkConfig, NetworkMode, OutboundNetworkConfig, PortProtocol, PortSpec, VolumeSpec,
 };
 use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime,
@@ -645,22 +645,37 @@ pub struct NetworkFlags {
     /// disabled`.
     #[arg(long = "allow-net", value_name = "HOST")]
     pub allow_net: Vec<String>,
+
+    /// Inbound mode: "enabled" (default — services the box exposes are
+    /// publicly reachable) or "disabled" (private, unreachable from outside
+    /// the box).
+    #[arg(long = "inbound", value_name = "MODE")]
+    pub inbound: Option<String>,
 }
 
 impl NetworkFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
-        // Leave BoxOptions::default() (Enabled, full access) untouched when
-        // neither flag is given, so a bare `run` behaves as before.
-        if self.network.is_none() && self.allow_net.is_empty() {
+        // Leave BoxOptions::default() (outbound Enabled/full access, inbound
+        // Enabled/public) untouched when no flag is given, so a bare `run`
+        // behaves as before.
+        if self.network.is_none() && self.allow_net.is_empty() && self.inbound.is_none() {
             return Ok(());
         }
         let mode = match self.network.as_deref() {
             Some(value) => value.parse::<NetworkMode>()?,
             None => NetworkMode::Enabled,
         };
+        let inbound_mode = match self.inbound.as_deref() {
+            Some(value) => value.parse::<NetworkMode>()?,
+            None => NetworkMode::Enabled,
+        };
         opts.network = NetworkSpec::try_from(OutboundNetworkConfig {
             mode,
             allow_net: self.allow_net.clone(),
+        })?;
+        opts.inbound_network = NetworkSpec::try_from(InboundNetworkConfig {
+            mode: inbound_mode,
+            allow_net: Vec::new(),
         })?;
         Ok(())
     }
@@ -1266,6 +1281,7 @@ mod tests {
         NetworkFlags {
             network: network.map(str::to_string),
             allow_net: allow_net.iter().map(|s| s.to_string()).collect(),
+            inbound: None,
         }
     }
 
@@ -1331,6 +1347,59 @@ mod tests {
         let err = network_flags(Some("bridge"), &[])
             .apply_to(&mut opts)
             .expect_err("unknown mode must error");
+
+        assert!(err.to_string().contains("network mode"));
+    }
+
+    #[test]
+    fn test_network_flags_inbound_disabled_sets_private() {
+        // --inbound disabled alone (no --network/--allow-net) still applies,
+        // and leaves outbound at its Enabled/full-access default.
+        let mut opts = BoxOptions::default();
+        let mut flags = network_flags(None, &[]);
+        flags.inbound = Some("disabled".to_string());
+        flags.apply_to(&mut opts).expect("disabled is valid");
+
+        assert!(matches!(opts.inbound_network, NetworkSpec::Disabled));
+        assert!(
+            matches!(opts.network, NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty())
+        );
+    }
+
+    #[test]
+    fn cli_rejects_inbound_allow_net_flag() {
+        // The flag is deliberately not exposed until inbound allowlist
+        // enforcement exists — a flag that always errors would advertise a
+        // feature that doesn't work.
+        let err = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "--inbound-allow-net",
+            "10.0.0.0/8",
+            "alpine:latest",
+        ])
+        .expect_err("unknown flag must fail parsing");
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn cli_parses_run_with_inbound_flags() {
+        let cli = Cli::try_parse_from(["boxlite", "run", "--inbound", "disabled", "alpine:latest"])
+            .expect("parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected Run")
+        };
+        assert_eq!(args.network.inbound.as_deref(), Some("disabled"));
+    }
+
+    #[test]
+    fn test_network_flags_invalid_inbound_mode_is_rejected() {
+        let mut opts = BoxOptions::default();
+        let mut flags = network_flags(None, &[]);
+        flags.inbound = Some("bridge".to_string());
+        let err = flags
+            .apply_to(&mut opts)
+            .expect_err("unknown inbound mode must error");
 
         assert!(err.to_string().contains("network mode"));
     }
@@ -1582,18 +1651,13 @@ mod tests {
     // ─── tunnel parse tests ────────────────────────────────────────────────
 
     #[test]
-    fn network_tunnel_parses_box_and_port() {
-        Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "3000"]).expect("parse");
-    }
-
-    #[test]
-    fn network_tunnel_preserves_box_and_port() {
+    fn tunnel_parses_box_and_port() {
         let cli =
             Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "3000"]).expect("parse");
-        let Commands::Network(args) = cli.command else {
+        let Commands::Network(network) = cli.command else {
             panic!("expected Commands::Network");
         };
-        let NetworkCommand::Tunnel(args) = args.command;
+        let NetworkCommand::Tunnel(args) = network.command;
         assert_eq!(args.target, "mybox");
         assert_eq!(args.port, 3000);
         assert!(args.listen.is_none());
@@ -1638,7 +1702,7 @@ mod tests {
     }
 
     #[test]
-    fn network_tunnel_rejects_port_zero_at_parse() {
+    fn tunnel_rejects_port_zero_at_parse() {
         let result = Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "0"]);
         assert!(result.is_err(), "port 0 must be rejected by the parser");
     }

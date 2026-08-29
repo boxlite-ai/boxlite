@@ -223,6 +223,13 @@ export class BoxliteProxyController {
       throw new ConflictException(`Box ${boxId} is not running (state: ${box.state})`)
     }
 
+    // POL-205: tunnel URLs expose the box to the public internet. Require the
+    // caller to have explicitly opted in by setting public: true on the box.
+    // A private box should be accessed via the authenticated API, not a tunnel.
+    if (!box.public) {
+      throw new ConflictException(`Box ${boxId} is not public; set public: true before opening a tunnel`)
+    }
+
     const uri = await this.boxService.getNetworkTunnelUrl(boxId, authContext.organizationId, port)
     return { uri }
   }

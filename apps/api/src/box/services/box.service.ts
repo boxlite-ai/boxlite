@@ -288,7 +288,10 @@ export class BoxService {
       box.mem = mem
       box.disk = disk
 
-      box.public = createBoxDto.public ?? true
+      // POL-205: default private. A caller who never mentions visibility gets
+      // a box that is not reachable from the public internet, rather than
+      // silently anonymously public.
+      box.public = createBoxDto.public ?? false
 
       if (createBoxDto.networkBlockAll !== undefined) {
         box.networkBlockAll = createBoxDto.networkBlockAll
@@ -352,7 +355,8 @@ export class BoxService {
   ): Promise<BoxDto> {
     const now = new Date()
     const updateData: Partial<Box> = {
-      public: createBoxDto.public ?? true,
+      // POL-205: same default as the fresh-box path — see the comment there.
+      public: createBoxDto.public ?? false,
       labels: createBoxDto.labels || {},
       organizationId: organization.id,
       createdAt: now,

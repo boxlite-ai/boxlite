@@ -24,7 +24,7 @@ function makeHarness() {
   const boxService = {
     findOneByIdOrName: jest
       .fn()
-      .mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true, state: 'started' }),
+      .mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true, state: 'started', public: true }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
     getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://3000-box.proxy.test'),
   }
@@ -77,6 +77,22 @@ describe('BoxliteProxyController', () => {
 
     expect(boxService.getNetworkTunnelUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
     expect(result).toEqual({ uri: 'https://3000-box.proxy.test' })
+  })
+
+  it('rejects a tunnel request for a private box with 409', async () => {
+    const { controller, boxService } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+      state: 'started',
+      public: false,
+    })
+
+    await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
+      status: 409,
+    })
+    expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
   })
 
   it('rejects a tunnel request for a stopped box with 409, without auto-resuming it', async () => {
