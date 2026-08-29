@@ -105,12 +105,31 @@ impl ExperimentalFeatures {
     }
 }
 
+/// Runtime-scoped capability declarations supplied by the embedder.
+///
+/// Grouped into one type so adding a capability does not grow every runtime
+/// constructor's argument list.
+#[derive(Clone, Debug, Default)]
+pub struct RuntimeCapabilities {
+    /// Release-candidate options this runtime will accept.
+    pub features: ExperimentalFeatures,
+
+    /// Whether the embedder runs a lifecycle sweeper that will act on the
+    /// `auto_stop` / `auto_delete` deadlines.
+    ///
+    /// The engine never sweeps on its own. Accepting a deadline nothing acts on
+    /// would store policy that is silently inert, so a runtime without a sweeper
+    /// refuses an explicit deadline instead of pretending to honour it.
+    /// `boxlite serve` sets this; a bare embedded runtime leaves it false.
+    pub lifecycle_sweeper: bool,
+}
+
 /// Builder for a local runtime with explicit release-candidate capabilities.
 #[derive(Clone, Debug)]
 #[must_use]
 pub struct RuntimeBuilder {
     options: BoxliteOptions,
-    features: ExperimentalFeatures,
+    capabilities: RuntimeCapabilities,
 }
 
 impl RuntimeBuilder {
@@ -118,25 +137,34 @@ impl RuntimeBuilder {
     pub fn new(options: BoxliteOptions) -> Self {
         Self {
             options,
-            features: ExperimentalFeatures::default(),
+            capabilities: RuntimeCapabilities::default(),
         }
     }
 
     /// Enable one release-candidate capability for this runtime.
     pub fn enable(mut self, feature: ExperimentalFeature) -> Self {
-        self.features.enabled.insert(feature);
+        self.capabilities.features.enabled.insert(feature);
         self
     }
 
     /// Replace the capabilities enabled for this runtime.
     pub fn with_features(mut self, features: ExperimentalFeatures) -> Self {
-        self.features = features;
+        self.capabilities.features = features;
+        self
+    }
+
+    /// Declare that this embedder enforces lifecycle deadlines.
+    ///
+    /// Without this, `auto_stop` and `auto_delete` are refused rather than
+    /// stored inertly. Set it only when a sweeper really runs.
+    pub fn with_lifecycle_sweeper(mut self, enabled: bool) -> Self {
+        self.capabilities.lifecycle_sweeper = enabled;
         self
     }
 
     /// Construct the local runtime with the selected capabilities.
     pub fn build(self) -> BoxliteResult<BoxliteRuntime> {
-        BoxliteRuntime::new_with_experimental_features(self.options, self.features)
+        BoxliteRuntime::new_with_capabilities(self.options, self.capabilities)
     }
 }
 

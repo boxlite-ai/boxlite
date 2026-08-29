@@ -396,9 +396,11 @@ fn create_box_rejects_null_callback() {
     let _ = std::fs::remove_dir_all(home_dir);
 }
 
+/// `auto_remove` and `auto_delete` are independent axes at the ABI, not two
+/// spellings of one policy. They previously used last-call-wins, so setting
+/// remove-on-stop silently discarded a caller's delete deadline.
 #[test]
-#[allow(deprecated)]
-fn auto_remove_and_auto_delete_use_last_call_wins() {
+fn auto_remove_and_auto_delete_are_independent() {
     let image = CString::new("alpine:latest").unwrap();
     let mut opts: *mut CBoxliteOptions = ptr::null_mut();
     let mut error = FFIError::default();
@@ -410,14 +412,26 @@ fn auto_remove_and_auto_delete_use_last_call_wins() {
         boxlite_options_set_auto_delete_interval(opts, 60);
         boxlite_options_set_auto_remove(opts, 0);
         assert!(!(*opts).options.auto_remove);
-        assert_eq!((*opts).options.auto_delete, None);
+        assert_eq!(
+            (*opts).options.auto_delete,
+            Some(60),
+            "setting auto_remove must not clear the delete deadline"
+        );
 
         boxlite_options_set_auto_remove(opts, 1);
         assert!((*opts).options.auto_remove);
-        assert_eq!((*opts).options.auto_delete, None);
+        assert_eq!(
+            (*opts).options.auto_delete,
+            Some(60),
+            "the deadline survives remove-on-stop being turned on"
+        );
 
-        boxlite_options_set_auto_delete_interval(opts, 60);
-        assert_eq!((*opts).options.auto_delete, Some(60));
+        boxlite_options_set_auto_delete_interval(opts, 3600);
+        assert_eq!((*opts).options.auto_delete, Some(3600));
+        assert!(
+            (*opts).options.auto_remove,
+            "setting the deadline must not clear auto_remove either"
+        );
 
         boxlite_options_free(opts);
     }

@@ -16,7 +16,9 @@ auto_delete: integer seconds, 0 disables
 auto_resume: boolean, default true; user operations resume an auto-stopped box when enabled
 ```
 
-The default `auto_stop` is `900` seconds, the default `auto_delete` is `0`, and the default `auto_resume` is `true`. Create and read APIs and the Rust, Python, Node.js, C, and Go SDK boundaries use these same modern lifecycle semantics. AutoResume is implemented by the cloud control plane; the embedded local runtime has no auto-stopped state to resume. SDKs continue to accept deprecated `auto_remove` for embedded remove-on-stop compatibility, and explicit `auto_delete` takes precedence there. The REST API does not expose `auto_remove`; leaving `auto_delete` unset preserves the remote server's default instead of translating the deprecated field to a timer.
+The default `auto_stop` is `900` seconds, the default `auto_delete` is `0`, and the default `auto_resume` is `true`. Create and read APIs and the Rust, Python, Node.js, C, and Go SDK boundaries use these same modern lifecycle semantics.
+
+`auto_remove` is a separate axis, not a deprecated spelling of `auto_delete`: it removes the box synchronously the moment it stops (docker `run --rm`) and needs no sweeper, while `auto_delete` is a deferred deadline something has to act on later. Setting one never clears the other, and the two are mutually exclusive at the CLI. The REST API does not expose `auto_remove`; leaving `auto_delete` unset preserves the remote server's default.
 
 The internal database columns are `autoStop`, `autoDelete`, `autoResume`, and `lastActivityAt`. Public names remain stable.
 
@@ -105,12 +107,13 @@ Therefore, if a user changes the policy, manually starts or stops the box, or an
 - `create` puts explicit options in the REST body;
 - `Box` responses are mapped to `BoxInfo`.
 
-The local runtime:
+A runtime accepts a deadline only when its embedder declares a lifecycle sweeper (`RuntimeCapabilities::lifecycle_sweeper`). `boxlite serve` declares one; a bare embedded runtime does not. The embedded runtime therefore:
 
-- Preserves the historical `auto_remove` remove-on-stop behavior when `auto_delete` is unset;
-- Uses `auto_delete=0` to keep a stopped box and a positive value for immediate local remove-on-stop;
-- Returns `Unsupported` when AutoStop is explicitly configured, because it has no lifecycle sweeper;
+- Applies `auto_remove` for remove-on-stop, which is synchronous and needs no sweeper;
+- Returns `Unsupported` when either `auto_stop` or `auto_delete` is set to a non-zero value, rather than storing a deadline nothing will act on — `0` stays acceptable, since it asks for no enforcement;
 - Does not implement cloud AutoResume because local boxes do not enter an AutoStopped state.
+
+`boxlite serve` enforces all three itself: an activity middleware plus a per-box idle clock in `AppState`, and a lifecycle pass on the existing reaper tick that stops idle boxes and deletes ones that have been stopped past their window. It holds the `BOXLITE_HOME` lock for its whole life, so nothing can touch its boxes behind its back and its activity view is complete. A WebSocket attach re-stamps the clock per client frame, so an active terminal keeps its box alive while an abandoned one ages out.
 
 The C ABI uses `uint32_t` for `auto_stop` and `uint32_t` for `auto_delete`, with `0` meaning disabled in both cases. The Go bridge, Python, and Node bindings use corresponding non-negative integer types.
 

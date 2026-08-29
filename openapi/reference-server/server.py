@@ -347,6 +347,13 @@ def box_info_to_dict(info) -> dict:
         "cpus": info.cpus,
         "memory_mib": info.memory_mib,
         "labels": {},
+        # Report what the box actually carries. These are optional on the wire,
+        # and a client that finds them missing fills in the schema defaults —
+        # `auto_stop` defaults to 900 — so omitting them tells every caller the
+        # box has a live 15-minute window it does not have.
+        "auto_stop": info.auto_stop,
+        "auto_delete": info.auto_delete,
+        "auto_resume": info.auto_resume,
     }
 
 
@@ -396,6 +403,14 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
             )
             for secret in req.secrets
         ]
+    # A server-side box outlives the request that made it, so it must not be
+    # removed the moment it stops. `auto_remove` defaults to true and is never
+    # transmitted, so it has to be said here — the same reason `boxlite serve`
+    # sets it in its own build_box_options. This preserves the behaviour a
+    # caller used to get from `auto_delete: 0`, which no longer suppresses
+    # removal now that the two axes are independent.
+    kwargs["auto_remove"] = False
+
     if req.auto_stop is not None:
         kwargs["auto_stop"] = req.auto_stop
     if req.auto_delete is not None:

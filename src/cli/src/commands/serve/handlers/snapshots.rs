@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use boxlite::SnapshotOptions;
 
 use super::super::types::{CreateSnapshotRequest, ListSnapshotsResponse, SnapshotResponse};
-use super::super::{AppState, error_from_boxlite, error_response, get_or_fetch_box};
+use super::super::{AppState, error_from_boxlite, error_response, fetch_box};
 
 fn snapshot_to_response(info: &boxlite::SnapshotInfo) -> SnapshotResponse {
     SnapshotResponse {
@@ -28,7 +28,7 @@ pub(in crate::commands::serve) async fn create_snapshot(
     Path(box_id): Path<String>,
     Json(req): Json<CreateSnapshotRequest>,
 ) -> Response {
-    let litebox = match get_or_fetch_box(&state, &box_id).await {
+    let litebox = match fetch_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };
@@ -47,7 +47,7 @@ pub(in crate::commands::serve) async fn list_snapshots(
     State(state): State<Arc<AppState>>,
     Path(box_id): Path<String>,
 ) -> Response {
-    let litebox = match get_or_fetch_box(&state, &box_id).await {
+    let litebox = match fetch_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };
@@ -65,7 +65,7 @@ pub(in crate::commands::serve) async fn get_snapshot(
     State(state): State<Arc<AppState>>,
     Path((box_id, name)): Path<(String, String)>,
 ) -> Response {
-    let litebox = match get_or_fetch_box(&state, &box_id).await {
+    let litebox = match fetch_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };
@@ -86,7 +86,7 @@ pub(in crate::commands::serve) async fn delete_snapshot(
     State(state): State<Arc<AppState>>,
     Path((box_id, name)): Path<(String, String)>,
 ) -> Response {
-    let litebox = match get_or_fetch_box(&state, &box_id).await {
+    let litebox = match fetch_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };
@@ -101,7 +101,7 @@ pub(in crate::commands::serve) async fn restore_snapshot(
     State(state): State<Arc<AppState>>,
     Path((box_id, name)): Path<(String, String)>,
 ) -> Response {
-    let litebox = match get_or_fetch_box(&state, &box_id).await {
+    let litebox = match fetch_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };

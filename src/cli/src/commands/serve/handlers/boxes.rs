@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use super::super::types::{CreateBoxRequest, ListBoxesResponse, RemoveQuery};
 use super::super::{
     AppState, box_info_to_response, build_box_options, error_from_boxlite, error_response,
-    get_or_fetch_box,
+    fetch_box,
 };
 
 pub(in crate::commands::serve) async fn create_box(
@@ -111,7 +111,8 @@ pub(in crate::commands::serve) async fn start_box(
         }
     }
 
-    let litebox = match get_or_fetch_box(&state, &box_id).await {
+    // Explicit start: never gated on auto_resume, which governs implicit wakes.
+    let litebox = match fetch_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };
@@ -131,7 +132,8 @@ pub(in crate::commands::serve) async fn stop_box(
     State(state): State<Arc<AppState>>,
     Path(box_id): Path<String>,
 ) -> Response {
-    let litebox = match get_or_fetch_box(&state, &box_id).await {
+    // Explicit stop: likewise ungated.
+    let litebox = match fetch_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };
@@ -161,7 +163,12 @@ pub(in crate::commands::serve) async fn remove_box(
     let force = query.force.unwrap_or(true);
 
     match state.runtime.remove(&box_id, force).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            // Drop the idle clock with the box, or the map keeps an entry per
+            // deleted box for the lifetime of the process.
+            state.forget_box_activity(&box_id).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => error_from_boxlite(&e),
     }
 }

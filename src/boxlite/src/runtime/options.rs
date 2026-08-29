@@ -343,28 +343,29 @@ pub struct BoxOptions {
     /// Remote runtimes reject port mappings; use a box network tunnel for
     /// portable local/remote access to a guest service.
     pub ports: Vec<PortSpec>,
-    /// Automatically remove the box when stopped.
+    /// Remove the box synchronously as soon as it stops (`--rm` semantics).
     ///
-    /// Deprecated: use [`BoxOptions::auto_delete`]. When `auto_delete` is set,
-    /// it takes precedence over this field. REST runtimes do not transmit this
-    /// legacy field and preserve the remote server's lifecycle defaults.
-    #[deprecated(note = "use auto_delete instead")]
+    /// A separate axis from [`BoxOptions::auto_delete`], not a legacy spelling
+    /// of it: this one removes the box the moment `stop()` returns, while
+    /// `auto_delete` is a deadline a sweeper acts on later. REST runtimes do not
+    /// transmit this field — the wire contract carries only `auto_delete`.
     #[serde(default = "default_auto_remove")]
     pub auto_remove: bool,
 
     /// Idle time in seconds before AutoStop. `Some(0)` disables AutoStop.
-    /// Only REST runtimes implement AutoStop; local runtimes return
-    /// `Unsupported`.
+    ///
+    /// Enforced by whoever runs a lifecycle sweeper — `boxlite serve` or the
+    /// cloud control plane. A runtime with no sweeper returns `Unsupported`
+    /// rather than storing a deadline nothing will act on.
     #[serde(default)]
     pub auto_stop: Option<u32>,
 
     /// Time in seconds after a successful stop before AutoDelete.
     ///
-    /// - `Some(0)`: keep the box after stop.
-    /// - `Some(n>0)`: REST runtimes delete after `n` seconds; local runtimes
-    ///   remove immediately on stop because they have no sweeper.
-    /// - `None` (default): local runtimes fall back to deprecated `auto_remove`;
-    ///   REST runtimes preserve the remote server's AutoDelete default.
+    /// `Some(0)` (or `None`) disables it. Like [`BoxOptions::auto_stop`], this
+    /// needs a sweeper, and a runtime without one returns `Unsupported`. For
+    /// immediate removal on stop, use [`BoxOptions::auto_remove`] instead —
+    /// that is a different axis and needs no sweeper.
     #[serde(default)]
     pub auto_delete: Option<u32>,
 
@@ -522,7 +523,6 @@ fn default_detach() -> bool {
     false
 }
 
-#[allow(deprecated)]
 impl Default for BoxOptions {
     fn default() -> Self {
         Self {
@@ -552,25 +552,27 @@ impl Default for BoxOptions {
 }
 
 impl BoxOptions {
-    /// Resolve the modern and deprecated deletion inputs to one policy.
-    #[allow(deprecated)]
-    pub(crate) fn effective_auto_delete(&self) -> u32 {
-        self.auto_delete
-            .unwrap_or_else(|| u32::from(self.auto_remove))
+    /// The AutoDelete deadline in seconds; `0` when there is none.
+    pub(crate) fn auto_delete_seconds(&self) -> u32 {
+        self.auto_delete.unwrap_or(0)
     }
 
-    /// Whether the box is removed when it stops.
+    /// Whether the box is removed synchronously as soon as it stops.
     ///
-    /// Explicit `auto_delete` takes precedence over deprecated `auto_remove`.
+    /// This is `--rm` / docker semantics and is a *different axis* from
+    /// [`BoxOptions::auto_delete`], which is a deferred deadline a sweeper acts
+    /// on later. Keeping them separate is what lets a detached box outlive the
+    /// process that made it and still be swept on its own schedule; while one
+    /// integer carried both meanings, `auto_delete = 1` was spent as the `--rm`
+    /// sentinel and no real deadline could coexist with it.
     pub(crate) fn removes_on_stop(&self) -> bool {
-        self.effective_auto_delete() > 0
+        self.auto_remove
     }
 
     /// Sanitize and validate options.
     ///
     /// Validates option combinations:
-    /// - effective remove-on-stop (`auto_delete>0`, or deprecated `auto_remove`)
-    ///   with `detach=true` is invalid
+    /// - remove-on-stop (`auto_remove`) with `detach=true` is invalid
     /// - `advanced.isolate_mounts=true` is only supported on Linux
     /// - `advanced.capabilities` contains well-formed Linux capability names
     /// - `advanced.security.network_enabled=false` is not mistaken for a
@@ -578,8 +580,9 @@ impl BoxOptions {
     pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
-                "remove-on-stop is incompatible with detach=true. Detached boxes should use \
-                 auto_delete=0 (or deprecated auto_remove=false) for manual lifecycle control."
+                "auto_remove is incompatible with detach=true. A detached box outlives the \
+                 process that created it, so use auto_delete=<seconds> for a deferred deadline \
+                 or auto_remove=false for manual lifecycle control."
                     .to_string(),
             ));
         }
@@ -1198,13 +1201,12 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_box_options_defaults() {
         let opts = BoxOptions::default();
         assert!(opts.removes_on_stop());
         assert!(
             opts.auto_remove,
-            "auto_remove should keep its legacy default"
+            "auto_remove should keep its default of true"
         );
         assert!(!opts.detach, "detach should default to false");
         assert!(
@@ -1486,29 +1488,51 @@ mod tests {
         assert!(error.contains("regular file"), "unexpected error: {error}");
     }
 
+    /// `auto_remove` and `auto_delete` are independent axes: one removes the box
+    /// synchronously on stop, the other is a deadline a sweeper acts on later.
+    /// Neither may be inferred from the other — while they were fused, a `--rm`
+    /// box was indistinguishable from one with a 1-second deadline, and a real
+    /// deadline forced synchronous deletion the moment the box stopped.
     #[test]
-    #[allow(deprecated)]
-    fn explicit_auto_delete_takes_precedence_over_auto_remove() {
-        let keep = BoxOptions {
-            auto_remove: true,
-            auto_delete: Some(0),
-            ..Default::default()
-        };
-        assert!(!keep.removes_on_stop());
+    fn remove_on_stop_and_the_delete_deadline_are_independent() {
+        for auto_delete in [None, Some(0), Some(1), Some(604_800)] {
+            for auto_remove in [false, true] {
+                let opts = BoxOptions {
+                    auto_remove,
+                    auto_delete,
+                    ..Default::default()
+                };
 
-        let remove = BoxOptions {
-            auto_remove: false,
-            auto_delete: Some(60),
-            ..Default::default()
-        };
-        assert!(remove.removes_on_stop());
+                assert_eq!(
+                    opts.removes_on_stop(),
+                    auto_remove,
+                    "removes_on_stop must track auto_remove alone \
+                     (auto_delete={auto_delete:?}, auto_remove={auto_remove})"
+                );
+                assert_eq!(
+                    opts.auto_delete_seconds(),
+                    auto_delete.unwrap_or(0),
+                    "the deadline must track auto_delete alone \
+                     (auto_delete={auto_delete:?}, auto_remove={auto_remove})"
+                );
+            }
+        }
+    }
 
-        let legacy_keep = BoxOptions {
+    /// The pairing that was previously unrepresentable: a detached box that
+    /// deletes itself a week after it stops. Fused, this failed validation
+    /// because any deadline implied synchronous removal, which detach forbids.
+    #[test]
+    fn a_detached_box_may_carry_a_delete_deadline() {
+        let opts = BoxOptions {
             auto_remove: false,
-            auto_delete: None,
+            auto_delete: Some(604_800),
+            detach: true,
             ..Default::default()
         };
-        assert!(!legacy_keep.removes_on_stop());
+
+        opts.sanitize_common()
+            .expect("a deferred deadline is compatible with detach");
     }
 
     #[test]
@@ -1633,7 +1657,7 @@ mod tests {
     #[test]
     fn test_box_options_roundtrip() {
         let opts = BoxOptions {
-            auto_delete: Some(0),
+            auto_remove: false,
             detach: true,
             ..Default::default()
         };
@@ -1834,7 +1858,7 @@ mod tests {
     #[test]
     fn test_sanitize_remove_on_stop_detach_incompatible() {
         let mut opts = BoxOptions {
-            auto_delete: Some(1),
+            auto_remove: true,
             detach: true,
             ..Default::default()
         };
@@ -1844,21 +1868,36 @@ mod tests {
 
     #[test]
     fn test_sanitize_valid_combinations() {
-        let mut remove = BoxOptions {
-            auto_delete: Some(1),
+        // Attached + remove-on-stop: the `docker run --rm` shape.
+        let mut remove_attached = BoxOptions {
+            auto_remove: true,
+            detach: false,
             ..Default::default()
         };
-        assert!(remove.sanitize().is_ok());
+        assert!(remove_attached.sanitize().is_ok());
 
+        // Detached + kept: `docker run -d`. Only `auto_remove` conflicts with
+        // detach, so it must be off here.
         let mut keep_detached = BoxOptions {
-            auto_delete: Some(0),
+            auto_remove: false,
             detach: true,
             ..Default::default()
         };
         assert!(keep_detached.sanitize().is_ok());
 
+        // Detached + a deferred deadline: valid, and the whole point of keeping
+        // the two axes apart.
+        let mut swept_detached = BoxOptions {
+            auto_remove: false,
+            auto_delete: Some(3600),
+            detach: true,
+            ..Default::default()
+        };
+        assert!(swept_detached.sanitize().is_ok());
+
         let mut keep_attached = BoxOptions {
-            auto_delete: Some(0),
+            auto_remove: false,
+            detach: false,
             ..Default::default()
         };
         assert!(keep_attached.sanitize().is_ok());

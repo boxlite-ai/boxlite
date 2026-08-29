@@ -185,15 +185,21 @@ export interface JsBoxOptions {
   network?: JsNetworkSpec;
   ports?: JsPortSpec[];
   /**
-   * @deprecated Use autoDelete. Preserved for embedded remove-on-stop
-   * compatibility; an explicit autoDelete value takes precedence. Remote
-   * runtimes preserve server lifecycle defaults when autoDelete is omitted.
+   * Remove the box as soon as it stops (docker `run --rm`). Synchronous, and
+   * needs no sweeper — a separate axis from autoDelete, which is a deferred
+   * deadline. Setting one never clears the other. Not sent to remote runtimes.
    */
   autoRemove?: boolean;
   detach?: boolean;
-  /** Idle time in seconds before AutoStop; 0 disables AutoStop. */
+  /**
+   * Idle time in seconds before AutoStop; 0 disables AutoStop. Needs a runtime
+   * that sweeps deadlines; the embedded runtime returns Unsupported.
+   */
   autoStop?: number;
-  /** Time in seconds after stop before AutoDelete; 0 disables AutoDelete. */
+  /**
+   * Time in seconds after stop before AutoDelete; 0 disables AutoDelete. Needs a
+   * runtime that sweeps deadlines; use autoRemove for immediate removal.
+   */
   autoDelete?: number;
   /** Whether access automatically resumes an auto-stopped box. */
   autoResume?: boolean;

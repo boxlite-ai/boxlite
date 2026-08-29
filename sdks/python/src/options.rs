@@ -552,7 +552,9 @@ pub(crate) struct PyBoxOptions {
     #[pyo3(get, set)]
     pub(crate) network: Option<PyNetworkSpec>,
     pub(crate) ports: Vec<PyPortSpec>,
-    /// Deprecated compatibility option; use auto_delete.
+    /// Remove the box as soon as it stops (docker `run --rm`). Synchronous and
+    /// needs no sweeper — an independent axis from `auto_delete`, which is a
+    /// deferred deadline. Not transmitted to remote runtimes.
     #[pyo3(get, set)]
     pub(crate) auto_remove: Option<bool>,
     #[pyo3(get, set)]
@@ -683,7 +685,6 @@ impl PyBoxOptions {
 impl TryFrom<PyBoxOptions> for BoxOptions {
     type Error = boxlite::BoxliteError;
 
-    #[allow(deprecated)]
     fn try_from(py_opts: PyBoxOptions) -> Result<Self, Self::Error> {
         let auto_remove = py_opts.auto_remove;
         let auto_delete = py_opts.auto_delete;

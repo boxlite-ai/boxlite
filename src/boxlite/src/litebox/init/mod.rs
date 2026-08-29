@@ -192,7 +192,7 @@ impl BoxBuilder {
         // validate only their stored shape here; the boot-assets task reopens a
         // source only when no complete box-scoped generation exists.
         let options = &config.options;
-        validate_persisted_options(&runtime.experimental_features, options)?;
+        validate_persisted_options(&runtime.capabilities.features, options)?;
 
         Ok(Self {
             runtime,

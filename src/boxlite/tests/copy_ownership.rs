@@ -47,7 +47,7 @@ async fn copy_in_hands_files_to_the_box_user() {
 
     let opts = BoxOptions {
         rootfs: RootfsSpec::Image("alpine:latest".into()),
-        auto_delete: Some(0),
+        auto_remove: false,
         user: Some(format!("{BOX_UID}:{BOX_GID}")),
         ..Default::default()
     };

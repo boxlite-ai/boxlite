@@ -65,14 +65,23 @@ struct BoxRunner {
     args: RunArgs,
     rt: BoxliteRuntime,
     home: Option<std::path::PathBuf>,
+    /// Whether this invocation talks to a REST server, which decides how `--rm`
+    /// is spelled on the way out — see `ManagementFlags::apply_to`.
+    targets_rest: bool,
 }
 
 impl BoxRunner {
     fn new(args: RunArgs, global: &GlobalFlags) -> anyhow::Result<Self> {
+        let targets_rest = global.targets_rest();
         let rt = global.create_runtime()?;
         let home = global.home.clone();
 
-        Ok(Self { args, rt, home })
+        Ok(Self {
+            args,
+            rt,
+            home,
+            targets_rest,
+        })
     }
 
     async fn run(&mut self, rootfs: RootfsSpec, command_args: Vec<String>) -> anyhow::Result<i32> {
@@ -132,7 +141,9 @@ impl BoxRunner {
         self.args.resource.apply_to(&mut options);
         self.args.capability.apply_to(&mut options);
         self.args.boot.apply_to(&mut options);
-        self.args.management.apply_to(&mut options)?;
+        self.args
+            .management
+            .apply_to(&mut options, self.targets_rest)?;
         self.args.publish.apply_to(&mut options)?;
         self.args
             .volume
@@ -140,11 +151,7 @@ impl BoxRunner {
         self.args.network.apply_to(&mut options)?;
         self.args.process.apply_to(&mut options)?;
 
-        // Detached boxes keep manual lifecycle control: detach silently
-        // overrides --rm (historical CLI behavior).
-        if self.args.management.detach {
-            options.auto_delete = Some(0);
-        }
+        self.args.management.apply_detach_override(&mut options);
 
         // Docker semantics: the user COMMAND replaces the image CMD (the image
         // ENTRYPOINT is preserved and prepended) and the result runs as the

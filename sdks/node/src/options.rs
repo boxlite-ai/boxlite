@@ -198,11 +198,14 @@ pub struct JsBoxOptions {
     /// Port mappings as array of port specs
     pub ports: Option<Vec<JsPortSpec>>,
 
-    /// Automatically remove box when stopped (default: false).
-    /// @deprecated Use autoDelete.
+    /// Remove the box as soon as it stops (docker `run --rm`, default: false).
+    /// Synchronous and needs no sweeper — a separate axis from autoDelete, which
+    /// is a deferred deadline. Setting one never clears the other. Not sent to
+    /// remote runtimes.
     pub auto_remove: Option<bool>,
 
-    /// Idle time in seconds before AutoStop; 0 disables AutoStop.
+    /// Idle time in seconds before AutoStop; 0 disables AutoStop. Needs a
+    /// runtime that sweeps deadlines; the embedded runtime returns Unsupported.
     #[napi(js_name = "autoStop")]
     pub auto_stop: Option<u32>,
 
@@ -480,7 +483,6 @@ impl TryFrom<JsNetworkSpec> for (NetworkSpec, NetworkSpec) {
 impl TryFrom<JsBoxOptions> for BoxOptions {
     type Error = boxlite_shared::errors::BoxliteError;
 
-    #[allow(deprecated)]
     fn try_from(js_opts: JsBoxOptions) -> Result<Self, Self::Error> {
         let auto_remove = js_opts.auto_remove.unwrap_or(false);
         let auto_delete = js_opts.auto_delete;
@@ -889,7 +891,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn box_options_from_js_allow_net() {
         let js = JsBoxOptions {
             image: Some("alpine:latest".into()),

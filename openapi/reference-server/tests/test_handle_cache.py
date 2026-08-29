@@ -103,6 +103,12 @@ def _make_box_info(box_id: str, *, name: str = "test-box", status: str = "create
         image="alpine:latest",
         cpus=2,
         memory_mib=512,
+        # Real BoxInfo carries these (sdks/python/src/info.rs), and
+        # box_info_to_dict reports them so a client does not fall back to the
+        # schema's 900s auto_stop default.
+        auto_stop=0,
+        auto_delete=0,
+        auto_resume=True,
     )
 
 
@@ -222,6 +228,52 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(options.kwargs.get("tty"), True)
 
+    def test_box_response_reports_its_lifecycle_policy(self) -> None:
+        # These are optional on the wire, so a client that finds them missing
+        # fills in the schema defaults — auto_stop defaults to 900 — and reads
+        # a live 15-minute idle window on a box that has none.
+        # Every value here differs from both the fixture's and the schema's
+        # default (auto_stop 900, auto_delete 0, auto_resume true), so the
+        # assertions fail against a mapper that hardcodes either — including one
+        # that hardcodes 900, which is precisely the wrong answer an omitted
+        # auto_stop produces. An imported archive can genuinely carry a deadline.
+        info = _make_box_info("box-abc123")
+        info.auto_stop = 1800
+        info.auto_delete = 3600
+        info.auto_resume = False
+
+        payload = SERVER.box_info_to_dict(info)
+
+        self.assertEqual(payload["auto_stop"], 1800)
+        self.assertEqual(payload["auto_delete"], 3600)
+        self.assertEqual(payload["auto_resume"], False)
+
+    def test_created_box_is_kept_after_it_stops(self) -> None:
+        # A server-side box outlives the request that made it. `auto_remove`
+        # defaults to true in BoxOptions and is never transmitted, so this
+        # server has to say it locally — the wire used to express it as
+        # `auto_delete: 0`, which no longer suppresses removal. Without this the
+        # box is deleted the instant it stops, and rest_integration.rs's
+        # stop-then-inspect tests operate on a box that is already gone.
+        request = SERVER.CreateBoxRequest.model_validate({"image": "alpine:latest"})
+
+        options = SERVER.build_box_options(request)
+
+        self.assertEqual(options.kwargs.get("auto_remove"), False)
+
+    def test_lifecycle_deadlines_are_forwarded_as_sent(self) -> None:
+        # Passed through untouched. The embedded runtime enforces neither and
+        # refuses a non-zero value, so such a create surfaces its 400 rather
+        # than being silently reshaped here.
+        request = SERVER.CreateBoxRequest.model_validate(
+            {"image": "alpine:latest", "auto_stop": 900, "auto_delete": 3600}
+        )
+
+        options = SERVER.build_box_options(request)
+
+        self.assertEqual(options.kwargs.get("auto_stop"), 900)
+        self.assertEqual(options.kwargs.get("auto_delete"), 3600)
+
     def test_create_request_omits_tty_when_not_asked_for(self) -> None:
         request = SERVER.CreateBoxRequest.model_validate({"image": "alpine:latest"})
 
@@ -272,6 +324,7 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
         constructor.assert_called_once_with(
             image="alpine:latest",
             advanced=advanced,
+            auto_remove=False,
             detach=False,
         )
 

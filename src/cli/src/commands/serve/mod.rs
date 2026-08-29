@@ -25,8 +25,8 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 
 use boxlite::runtime::options::{InboundNetworkConfig, NetworkMode, OutboundNetworkConfig};
 use boxlite::{
-    BoxCommand, BoxInfo, BoxOptions, BoxliteRuntime, ExecStdin, Execution, LiteBox, NetworkSpec,
-    RootfsSpec,
+    BoxCommand, BoxInfo, BoxOptions, BoxStatus, BoxliteRuntime, ExecStdin, Execution, LiteBox,
+    NetworkSpec, RootfsSpec,
 };
 
 use crate::cli::GlobalFlags;
@@ -68,9 +68,74 @@ struct AppState {
     /// `Arc` so attach sessions can drop the map lock before doing
     /// long-running WS pumping while keeping the exec alive.
     executions: RwLock<HashMap<String, Arc<ActiveExecution>>>,
+    /// Last observed user activity per box, for AutoStop.
+    ///
+    /// In-memory and deliberately not persisted: `serve` holds the
+    /// `BOXLITE_HOME` lock for its whole life, so while it runs nothing else can
+    /// touch these boxes and this map is a complete record.
+    ///
+    /// Across a restart it starts empty, and the sweep must not fall back to
+    /// `BoxInfo.last_updated` for idleness. That field is written by state
+    /// transitions and health checks only — never by exec, files or attach — so
+    /// on a box that has been up and busy for hours it reports the *boot* time.
+    /// Using it would over-estimate idle and stop exactly the boxes that are in
+    /// use. Instead the sweep seeds an unseen running box at the current tick,
+    /// giving it a full window to prove itself idle.
+    last_activity: RwLock<HashMap<String, Instant>>,
     /// Optional expected API key (`--api-key` / `$BOXLITE_SERVE_API_KEY`).
     /// `None` ⇒ permissive (no auth enforced).
     api_key: Option<String>,
+    /// Whether this process sweeps the boxes it serves.
+    ///
+    /// False when `serve` is itself proxying to another server: that server
+    /// enforces its own deadlines over boxes this one cannot see, and
+    /// `last_activity` above would report all of them as untouched.
+    enforces_lifecycle: bool,
+}
+
+impl AppState {
+    /// Mark a box as used right now, resetting its AutoStop window.
+    ///
+    /// The single write site for the idle clock, so every caller — the request
+    /// middleware and the WebSocket session loop — agrees on what "used" means.
+    pub(in crate::commands::serve) async fn record_box_activity(&self, box_id: &str) {
+        // The clock exists only to feed this process's sweep. When another
+        // server owns these boxes nothing reads it and nothing prunes it, so
+        // recording would grow the map for the life of the process.
+        if !self.enforces_lifecycle {
+            return;
+        }
+        self.last_activity
+            .write()
+            .await
+            .insert(box_id.to_string(), Instant::now());
+    }
+
+    /// Forget a removed box's idle clock.
+    ///
+    /// Without this the map grows for the lifetime of the process: a box deleted
+    /// through `DELETE /boxes/{id}` would leave its entry behind forever.
+    pub(in crate::commands::serve) async fn forget_box_activity(&self, box_id: &str) {
+        self.last_activity.write().await.remove(box_id);
+    }
+
+    /// Drop idle clocks for boxes that no longer exist.
+    ///
+    /// `forget_box_activity` covers the boxes this server deletes, but not the
+    /// ones that were never there: the activity middleware stamps a clock from
+    /// the request path, before any handler can reject an unknown id, so a
+    /// client looping over made-up ids would otherwise grow this map for the
+    /// life of the process. The sweep already holds the authoritative list, so
+    /// it reconciles against it on every tick.
+    pub(in crate::commands::serve) async fn retain_box_activity(
+        &self,
+        live: &std::collections::HashSet<String>,
+    ) {
+        self.last_activity
+            .write()
+            .await
+            .retain(|box_id, _| live.contains(box_id));
+    }
 }
 
 /// Which stdio session an [`ActiveExecution`] fronts.
@@ -565,14 +630,9 @@ async fn reaper_loop(state: Arc<AppState>) {
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
-        run_reap_once(
-            &state,
-            Instant::now(),
-            reconnect_grace,
-            shutdown_grace,
-            max_lifetime,
-        )
-        .await;
+        let now = Instant::now();
+        run_reap_once(&state, now, reconnect_grace, shutdown_grace, max_lifetime).await;
+        run_lifecycle_once(&state, now).await;
     }
 }
 
@@ -835,7 +895,6 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         })
         .unwrap_or_default();
 
-    let auto_delete = req.auto_delete.unwrap_or(0);
     Ok(BoxOptions {
         rootfs,
         cpus: req.cpus,
@@ -862,11 +921,18 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
             advanced
         },
         auto_stop: req.auto_stop,
-        auto_delete: Some(auto_delete),
+        auto_delete: req.auto_delete,
         auto_resume: req.auto_resume,
-        // Preserve the serve API's historical detached default for persistent
-        // boxes, but do not synthesize an invalid detached remove-on-stop box.
-        detach: req.detach.unwrap_or(auto_delete == 0),
+        // The wire contract has no synchronous-removal field, and this server
+        // sweeps deadlines instead — so never inherit `BoxOptions`' local
+        // remove-on-stop default, which would delete the box the moment it
+        // stopped and leave any deadline nothing to act on.
+        auto_remove: false,
+        // Boxes served over REST always outlive the request that made them.
+        // Previously derived from `auto_delete`, which forced any box with a
+        // deadline to be non-detached — it could then not survive a restart,
+        // making a long deadline unreachable.
+        detach: req.detach.unwrap_or(true),
         ..Default::default()
     })
 }
@@ -990,6 +1056,239 @@ async fn require_api_key(State(state): State<Arc<AppState>>, req: Request, next:
     }
 }
 
+// ============================================================================
+// Lifecycle deadlines — AutoStop / AutoDelete
+// ============================================================================
+
+/// What the lifecycle sweep decided for one box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LifecycleAction {
+    Leave,
+    Stop,
+    Delete,
+}
+
+/// Decide one box's fate from its policy and observed clocks alone.
+///
+/// Split out from the sweep so the rule is testable without a VM, a runtime, or
+/// a clock: the sweep's job is only to gather these inputs and apply the answer.
+/// `0` disables either deadline, matching the wire contract.
+fn decide_lifecycle(
+    status: BoxStatus,
+    auto_stop_secs: u32,
+    auto_delete_secs: u32,
+    idle: std::time::Duration,
+    since_stop: std::time::Duration,
+) -> LifecycleAction {
+    // A running box is stopped once it has been idle for the whole window.
+    if status == BoxStatus::Running
+        && auto_stop_secs > 0
+        && idle >= std::time::Duration::from_secs(u64::from(auto_stop_secs))
+    {
+        return LifecycleAction::Stop;
+    }
+
+    // A box that has come to rest is deleted once it has been at rest for the
+    // whole window. Anchored on that transition, not on last activity: a box
+    // that was busy right before it stopped must still age out on schedule.
+    if status.is_at_rest()
+        && auto_delete_secs > 0
+        && since_stop >= std::time::Duration::from_secs(u64::from(auto_delete_secs))
+    {
+        return LifecycleAction::Delete;
+    }
+
+    LifecycleAction::Leave
+}
+
+/// Whether a request path is user activity on a box, and if so which box.
+///
+/// Box-scoped paths count by default. Defaulting to "counts" means a newly added
+/// box operation cannot silently become invisible to the idle clock and get its
+/// box stopped mid-flight.
+///
+/// `/start` counts, and must: it is the one operation whose whole purpose is to
+/// make a box usable again. Treating it as a mere state change left the previous
+/// stamp in place, so a box explicitly restarted long after it was AutoStopped
+/// was immediately stopped again by the next sweep, measuring from the stamp it
+/// carried into the stop.
+///
+/// The exclusions are the paths a poller hits on a timer — `/metrics`, and a
+/// bare `GET`/`HEAD`/`DELETE` on the box — which must never be able to hold a
+/// box open forever. `/stop` is excluded because it cannot matter: AutoStop
+/// ignores a box that is already stopped, and AutoDelete measures from
+/// `last_updated`, not from this clock.
+fn activity_box_id(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/v1/boxes/")?;
+    // No suffix means a bare `/v1/boxes/{id}` — get, head, delete. Not activity.
+    // This also covers `/v1/boxes/import`, which has no suffix of its own.
+    let (box_id, suffix) = rest.split_once('/')?;
+    if box_id.is_empty() {
+        return None;
+    }
+    match suffix {
+        "metrics" | "stop" => None,
+        _ => Some(box_id),
+    }
+}
+
+/// Activity middleware: stamps the idle clock before the handler runs.
+///
+/// Before, not after: a long exec or a large upload must not look idle for its
+/// whole duration. A WebSocket attach re-stamps per client frame from inside the
+/// session loop ([`handlers::executions`]), because the upgrade alone would only
+/// keep the box alive for one window while someone was still typing.
+async fn record_activity(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+    if let Some(box_id) = activity_box_id(req.uri().path()) {
+        state.record_box_activity(box_id).await;
+    }
+    next.run(req).await
+}
+
+/// How long a box has been idle, seeding the clock if this `serve` has not seen
+/// it before.
+///
+/// Idle comes only from the monotonic in-memory stamp. A box with no stamp — the
+/// state after a restart — is seeded at `now` and reported as freshly used, so it
+/// gets a full window to prove itself idle. It is deliberately *not* measured
+/// against `BoxInfo.last_updated`, which tracks state transitions rather than
+/// use and would report a long-running box as idle since boot.
+///
+/// Split out from the sweep so the lock discipline is testable on its own: the
+/// read guard must be released before taking the write lock. Holding it across
+/// the `.write().await` — which is what a `match` on the read guard does, since
+/// the scrutinee temporary outlives the arms — self-deadlocks on `tokio`'s
+/// `RwLock` and hangs the whole reaper loop, orphan-exec reaping included.
+/// `aliases` are the spellings the wire contract blesses — the canonical id
+/// first, then the box's name. (`lookup_box` additionally resolves a unique id
+/// prefix, which the contract does not bless: it tells clients to pass the
+/// identifier back verbatim, and no first-party client sends anything else.)
+/// The middleware stamps the raw `{box_id}` URL segment,
+/// and the wire contract lets that be either the id or the box's name — so a
+/// box driven as `/v1/boxes/web/exec` writes its clock under `web` while the
+/// sweep knows it as its id. Reading only one spelling loses the other's
+/// activity entirely and stops a box that is in continuous use.
+async fn idle_or_seed(
+    last_activity: &RwLock<HashMap<String, Instant>>,
+    aliases: &[String],
+    now: Instant,
+) -> std::time::Duration {
+    // Most recent wins: activity under any spelling is activity on the box.
+    let stamped = {
+        let clocks = last_activity.read().await;
+        aliases
+            .iter()
+            .filter_map(|alias| clocks.get(alias).copied())
+            .max()
+    };
+    match stamped {
+        Some(stamped) => now.saturating_duration_since(stamped),
+        None => {
+            last_activity.write().await.insert(aliases[0].clone(), now);
+            std::time::Duration::ZERO
+        }
+    }
+}
+
+/// One lifecycle pass: stop idle boxes, delete boxes that have been stopped
+/// long enough. Runs on the same tick as the orphan-exec reaper.
+///
+/// Returns whether the sweep actually ran, so the "this process does not own
+/// these boxes" branch is observable to a test. Sweeping boxes owned by another
+/// server would stop and delete them on the first tick, since `last_activity`
+/// here has never seen them.
+async fn run_lifecycle_once(state: &AppState, now: Instant) -> bool {
+    if !state.enforces_lifecycle {
+        return false;
+    }
+
+    let boxes = match state.runtime.list_info().await {
+        Ok(boxes) => boxes,
+        Err(error) => {
+            tracing::warn!(%error, "lifecycle sweep could not list boxes");
+            return true;
+        }
+    };
+
+    let now_utc = chrono::Utc::now();
+    let mut live: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for info in boxes {
+        let box_id = info.id.to_string();
+
+        // Every spelling a client could address this box by, canonical id
+        // first. Both must count as activity and both must survive the prune.
+        let mut aliases = vec![box_id.clone()];
+        if let Some(name) = info.name.as_ref().filter(|name| *name != &box_id) {
+            aliases.push(name.clone());
+        }
+        live.extend(aliases.iter().cloned());
+
+        let idle = idle_or_seed(&state.last_activity, &aliases, now).await;
+
+        // The delete deadline does use `last_updated`: for a stopped box that
+        // transition *is* the stop, which is exactly the anchor AutoDelete wants.
+        let since_stop = (now_utc - info.last_updated)
+            .to_std()
+            .unwrap_or(std::time::Duration::ZERO);
+
+        match decide_lifecycle(
+            info.status,
+            info.auto_stop,
+            info.auto_delete,
+            idle,
+            since_stop,
+        ) {
+            LifecycleAction::Leave => {}
+            LifecycleAction::Stop => {
+                tracing::info!(
+                    box_id = %box_id,
+                    idle_secs = idle.as_secs(),
+                    auto_stop = info.auto_stop,
+                    "AutoStop deadline reached, stopping box"
+                );
+                match state.runtime.get(&box_id).await {
+                    Ok(Some(bx)) => {
+                        if let Err(error) = bx.stop().await {
+                            tracing::warn!(box_id = %box_id, %error, "AutoStop failed to stop box");
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(box_id = %box_id, %error, "AutoStop could not fetch box")
+                    }
+                }
+            }
+            LifecycleAction::Delete => {
+                tracing::info!(
+                    box_id = %box_id,
+                    stopped_secs = since_stop.as_secs(),
+                    auto_delete = info.auto_delete,
+                    "AutoDelete deadline reached, removing box"
+                );
+                // Evict the cached handle before removing, as `remove_box`
+                // does. `get_or_fetch_box` self-heals a merely *stopped* box by
+                // replacing any non-active handle, but a removed box is never
+                // fetched again, so nothing would ever revalidate this entry and
+                // its `Arc<LiteBox>` would be held for the life of the process.
+                // Keyed by the canonical id: that is what every insert site uses.
+                state.boxes.write().await.remove(&box_id);
+                if let Err(error) = state.runtime.remove(&box_id, false).await {
+                    tracing::warn!(box_id = %box_id, %error, "AutoDelete failed to remove box");
+                } else {
+                    for alias in &aliases {
+                        state.forget_box_activity(alias).await;
+                        live.remove(alias);
+                    }
+                }
+            }
+        }
+    }
+
+    state.retain_box_activity(&live).await;
+
+    true
+}
+
 /// Length-checked constant-time byte compare — avoids a timing oracle on the
 /// configured token without pulling in a crate.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -1007,8 +1306,86 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 // Box Handle Cache Helper
 // ============================================================================
 
+/// 409 for an operation that would have to wake a box whose owner turned
+/// AutoResume off. Conflict, not error: the box exists and the request is
+/// well-formed — it just needs an explicit `POST /boxes/{id}/start` first.
+fn auto_resume_disabled(box_id: &str) -> Response {
+    error_response(
+        StatusCode::CONFLICT,
+        format!(
+            "box {box_id} is not running and auto_resume is disabled; start it explicitly first"
+        ),
+        "InvalidStateError",
+        "invalid_state",
+    )
+}
+
+/// Resolve a box for an operation that needs it *running*, waking it if it is
+/// not. Refuses with 409 when the box is stopped and its owner turned AutoResume
+/// off.
+///
+/// Use this only where the handler will actually drive the guest — exec, file
+/// transfer, attach, live metrics. Anything that reads or manipulates a box
+/// without needing the VM up (start, stop, snapshots, clone, export) must use
+/// [`fetch_box`]: gating those turns a read-only request on a stopped box into a
+/// 409 telling the caller to start a box they never asked to run.
+///
+/// `/metrics` sits on this side because `LiteBox::metrics` reaches `live_state`
+/// and so does boot a stopped box. That diverges from the control plane's own
+/// activity policy, which lists Metrics as neither activity nor a resume trigger
+/// (`docs/architecture/auto-stop-resume-design.md`) — there the proxy answers
+/// without waking anything. Gating it is the safer of the two routings available
+/// here: it is what stops a metrics scrape from waking a box whose owner
+/// disabled AutoResume. Making a scrape return stale metrics instead of booting
+/// is the real fix, and belongs with `box_metrics`, not with this resolver.
 #[allow(clippy::result_large_err)]
 async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>, Response> {
+    let handle = fetch_box(state, box_id).await?;
+
+    // A second read, on purpose. `fetch_box` reads `info` to decide whether a
+    // *cached* handle is still live and then discards it, and on the uncached
+    // path reads it only for the box id — `auto_resume` is part of neither
+    // decision. Sharing the value would mean threading it through a function
+    // whose other callers have no use for it.
+    //
+    // What matters here is that `info()` cannot wake the box: it reads the
+    // persisted state, and where it consults live state at all it does so
+    // through a non-initializing `OnceCell::get`. That is the property this gate
+    // depends on — asking is never itself the wake it is deciding whether to
+    // allow.
+    let info = handle.info().await.map_err(|e| error_from_boxlite(&e))?;
+    if !autoresume_allows(info.status, info.auto_resume) {
+        return Err(auto_resume_disabled(box_id));
+    }
+    Ok(handle)
+}
+
+/// Whether an operation that needs the VM up may proceed on a box in this state.
+///
+/// Split out from [`get_or_fetch_box`] for the same reason as
+/// [`decide_lifecycle`]: this is access-control branching, and inline it could
+/// only be exercised through a live runtime. As a pure function its whole truth
+/// table is testable, so inverting or deleting the rule fails a test rather than
+/// silently opening the gate.
+///
+/// A box that is already up needs no wake, so `auto_resume` does not apply to it
+/// — the flag governs *waking*, not *using*.
+fn autoresume_allows(status: BoxStatus, auto_resume: bool) -> bool {
+    status.is_active() || auto_resume
+}
+
+/// Resolve a box without waking it, for operations that do not need the VM up.
+///
+/// Deliberately ungated: `auto_resume: false` means "no operation may wake this
+/// box behind my back", not "this box may never be touched again". Routing
+/// `/start` through the gate made the 409's own advice — start it explicitly —
+/// impossible to follow; routing snapshot listing through it answered a
+/// metadata read with the same nonsense.
+#[allow(clippy::result_large_err)]
+pub(in crate::commands::serve) async fn fetch_box(
+    state: &AppState,
+    box_id: &str,
+) -> Result<Arc<LiteBox>, Response> {
     // Check cache first.
     //
     // A cached handle is only good while its box is up. A box can now stop
@@ -1271,6 +1648,12 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/v1/boxes/{box_id}/export",
             post(advanced::export_box),
         )
+        // Activity is stamped inside the auth boundary: an unauthenticated
+        // request must not be able to keep someone else's box alive.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            record_activity,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_api_key,
@@ -1300,13 +1683,15 @@ fn build_router(state: Arc<AppState>) -> Router {
 // ============================================================================
 
 pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()> {
-    let runtime = global.create_runtime()?;
+    let serve_runtime = global.create_serve_runtime()?;
 
     let state = Arc::new(AppState {
-        runtime,
+        runtime: serve_runtime.runtime,
         boxes: RwLock::new(HashMap::new()),
         executions: RwLock::new(HashMap::new()),
+        last_activity: RwLock::new(HashMap::new()),
         api_key: args.api_key.clone(),
+        enforces_lifecycle: serve_runtime.enforces_lifecycle,
     });
 
     // Phase 5.7: spawn the orphan reaper. Same escalation policy as the
@@ -1339,6 +1724,328 @@ mod tests {
     use super::*;
     use boxlite::runtime::options::NetworkSpec;
     use std::time::Duration;
+
+    // --- Lifecycle deadlines (pure; no runtime, VM or clock needed) ---
+
+    const RUNNING: BoxStatus = BoxStatus::Running;
+    const STOPPED: BoxStatus = BoxStatus::Stopped;
+
+    #[test]
+    fn a_zero_deadline_never_fires() {
+        // `0` is the disable sentinel on the wire, so an enormous idle time must
+        // still leave the box alone. Getting this wrong would delete every box
+        // that never configured a policy.
+        let forever = Duration::from_secs(86_400 * 365);
+        assert_eq!(
+            decide_lifecycle(RUNNING, 0, 0, forever, forever),
+            LifecycleAction::Leave
+        );
+        assert_eq!(
+            decide_lifecycle(STOPPED, 0, 0, forever, forever),
+            LifecycleAction::Leave
+        );
+    }
+
+    #[test]
+    fn autostop_fires_only_on_a_running_box_past_its_idle_window() {
+        // One second short of the window: still busy enough to keep.
+        assert_eq!(
+            decide_lifecycle(RUNNING, 900, 0, Duration::from_secs(899), Duration::ZERO),
+            LifecycleAction::Leave
+        );
+        // Exactly at the window — `>=`, so it fires.
+        assert_eq!(
+            decide_lifecycle(RUNNING, 900, 0, Duration::from_secs(900), Duration::ZERO),
+            LifecycleAction::Stop
+        );
+        // A box that is already stopped is not stopped again.
+        assert_eq!(
+            decide_lifecycle(STOPPED, 900, 0, Duration::from_secs(9_000), Duration::ZERO),
+            LifecycleAction::Leave
+        );
+    }
+
+    #[test]
+    fn autodelete_fires_only_on_a_stopped_box_past_its_window() {
+        assert_eq!(
+            decide_lifecycle(STOPPED, 0, 3600, Duration::ZERO, Duration::from_secs(3_599)),
+            LifecycleAction::Leave
+        );
+        assert_eq!(
+            decide_lifecycle(STOPPED, 0, 3600, Duration::ZERO, Duration::from_secs(3_600)),
+            LifecycleAction::Delete
+        );
+        // A running box is never deleted, however long it has been up: deletion
+        // is anchored on the stop, and it has not stopped.
+        assert_eq!(
+            decide_lifecycle(
+                RUNNING,
+                0,
+                3600,
+                Duration::ZERO,
+                Duration::from_secs(86_400)
+            ),
+            LifecycleAction::Leave
+        );
+    }
+
+    #[test]
+    fn stopping_takes_precedence_over_deleting_for_a_running_box() {
+        // Both deadlines configured and both elapsed: the box is running, so it
+        // must be stopped now and only become deletable afterwards. Deleting a
+        // running box here would destroy a live workload.
+        assert_eq!(
+            decide_lifecycle(
+                RUNNING,
+                900,
+                3600,
+                Duration::from_secs(10_000),
+                Duration::from_secs(10_000)
+            ),
+            LifecycleAction::Stop
+        );
+    }
+
+    // --- Idle clock (the sweep's lock discipline) ---
+
+    /// The seeding path must not deadlock. Holding the read guard across the
+    /// `.write().await` — which a `match` on the guard does, since the scrutinee
+    /// temporary outlives the arms — hangs `tokio`'s RwLock forever and takes the
+    /// whole reaper loop with it, orphan-exec reaping included. The timeout is
+    /// the assertion: without the fix this call never returns.
+    #[tokio::test]
+    async fn seeding_an_unseen_box_does_not_deadlock() {
+        let map: RwLock<HashMap<String, Instant>> = RwLock::new(HashMap::new());
+        let now = Instant::now();
+
+        let idle = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            idle_or_seed(&map, &["fresh".to_string()], now),
+        )
+        .await
+        .expect("idle_or_seed must not hold the read guard across the write lock");
+
+        assert_eq!(idle, std::time::Duration::ZERO);
+        assert!(
+            map.read().await.contains_key("fresh"),
+            "the box must be seeded so the next tick measures from here"
+        );
+    }
+
+    /// A box `serve` has never seen reads as freshly used, not as idle since
+    /// boot — otherwise the first tick after a restart stops every long-running
+    /// box whose window is shorter than its uptime.
+    ///
+    /// Timeout-wrapped for the same reason as the test above: the seeding path
+    /// deadlocks rather than returning a wrong answer when the lock discipline
+    /// regresses, and a test that hangs stalls CI instead of failing it.
+    #[tokio::test]
+    async fn an_unseen_box_starts_its_window_now_rather_than_looking_idle() {
+        let map: RwLock<HashMap<String, Instant>> = RwLock::new(HashMap::new());
+        let now = Instant::now();
+        let budget = std::time::Duration::from_secs(3);
+
+        let first = tokio::time::timeout(budget, idle_or_seed(&map, &["b".to_string()], now))
+            .await
+            .expect("seeding must not deadlock");
+        assert_eq!(first, std::time::Duration::ZERO);
+
+        // A later tick measures from the seed, not from zero again.
+        let later = now + std::time::Duration::from_secs(600);
+        let second = tokio::time::timeout(budget, idle_or_seed(&map, &["b".to_string()], later))
+            .await
+            .expect("reading a seeded box must not deadlock");
+        assert_eq!(second, std::time::Duration::from_secs(600));
+    }
+
+    /// Which resolver each handler uses is a policy decision, so pin it in the
+    /// source rather than trusting prose. The gate belongs only where the
+    /// handler drives the guest; on anything else it turns a request that never
+    /// needed a running box — a snapshot listing, an export — into a 409 telling
+    /// the caller to start a box they did not ask to run. Fixing `/start` and
+    /// `/stop` while leaving those siblings gated is exactly the bug this pins.
+    #[test]
+    fn only_handlers_that_need_a_running_box_use_the_gated_resolver() {
+        // Count *calls*, not mentions: a leftover `use` import would otherwise
+        // satisfy a `contains` check and let a re-gated handler slip through.
+        fn gated_calls(src: &str) -> usize {
+            src.matches("get_or_fetch_box(").count()
+        }
+
+        for (name, src, why) in [
+            (
+                "snapshots",
+                include_str!("handlers/snapshots.rs"),
+                "read metadata and must not be AutoResume-gated",
+            ),
+            (
+                "advanced",
+                include_str!("handlers/advanced.rs"),
+                "clone/export do not need the VM up",
+            ),
+            (
+                "boxes",
+                include_str!("handlers/boxes.rs"),
+                "explicit start/stop must never be gated",
+            ),
+        ] {
+            assert_eq!(gated_calls(src), 0, "{name}: {why}");
+        }
+
+        // ...and the gate must still be in force where a wake really happens.
+        for (name, src) in [
+            ("executions", include_str!("handlers/executions.rs")),
+            ("files", include_str!("handlers/files.rs")),
+            ("metrics", include_str!("handlers/metrics.rs")),
+        ] {
+            assert!(
+                gated_calls(src) > 0,
+                "{name} drives the guest and must stay AutoResume-gated"
+            );
+        }
+
+        // The main-session attach resolver lives in this module, not a handler
+        // file, so pin it here too rather than leaving it uncovered.
+        //
+        // `include_str!("mod.rs")` pulls in this test module as well, where both
+        // needles appear verbatim — so scanning the whole file would satisfy the
+        // assertion from its own source no matter what the resolver does. Slice
+        // the resolver's body out of the production half and count calls there.
+        // Ends at the function's own closing brace: a top-level `}` is the first
+        // one at column 0, since everything nested inside is indented. Stopping
+        // at the next `async fn` instead would swallow the rest of the file
+        // whenever this is the last one, and any unrelated gated call added
+        // later would then satisfy the assertion.
+        fn body_of<'a>(src: &'a str, signature: &str) -> &'a str {
+            let after = src
+                .split_once(signature)
+                .unwrap_or_else(|| panic!("{signature} must exist in this module"))
+                .1;
+            after
+                .split_once("\n}\n")
+                .map(|(body, _)| body)
+                .unwrap_or(after)
+        }
+
+        let production = include_str!("mod.rs")
+            .split_once("\n#[cfg(test)]")
+            .expect("this module must have a test module")
+            .0;
+        assert!(
+            gated_calls(body_of(production, "async fn get_or_attach_main_session")) > 0,
+            "attach must keep resolving through the gated path"
+        );
+    }
+
+    // --- AutoResume gate ---
+
+    /// The whole truth table, so inverting or dropping the rule fails here.
+    /// `is_active()` is Running | Paused; every other state needs a wake.
+    #[test]
+    fn autoresume_gates_only_states_that_would_need_waking() {
+        // Already up: no wake is involved, so the flag must not block use. A box
+        // whose owner disabled AutoResume is still perfectly usable while running.
+        for auto_resume in [true, false] {
+            assert!(
+                autoresume_allows(BoxStatus::Running, auto_resume),
+                "a running box needs no wake (auto_resume={auto_resume})"
+            );
+            assert!(
+                autoresume_allows(BoxStatus::Paused, auto_resume),
+                "a paused box is active and needs no boot (auto_resume={auto_resume})"
+            );
+        }
+
+        // Not up: the flag decides. These are exactly the states where
+        // proceeding would boot the box behind the caller's back.
+        for status in [
+            BoxStatus::Stopped,
+            BoxStatus::Configured,
+            BoxStatus::Failed,
+            BoxStatus::Stopping,
+            BoxStatus::Unknown,
+        ] {
+            assert!(
+                autoresume_allows(status, true),
+                "{status:?} + auto_resume must be allowed to wake"
+            );
+            assert!(
+                !autoresume_allows(status, false),
+                "{status:?} + no auto_resume must be refused, not silently booted"
+            );
+        }
+    }
+
+    // --- Activity classification ---
+
+    #[test]
+    fn user_operations_on_a_box_count_as_activity() {
+        for path in [
+            "/v1/boxes/abc/exec",
+            "/v1/boxes/abc/executions/e1",
+            "/v1/boxes/abc/executions/e1/attach",
+            "/v1/boxes/abc/attach",
+            "/v1/boxes/abc/files",
+            "/v1/boxes/abc/snapshots",
+            "/v1/boxes/abc/clone",
+        ] {
+            assert_eq!(activity_box_id(path), Some("abc"), "{path} must count");
+        }
+    }
+
+    #[test]
+    fn polling_and_lifecycle_paths_are_not_activity() {
+        // A dashboard refreshing `ls` or scraping metrics must not be able to
+        // keep every box alive forever — that would silently defeat AutoStop.
+        for path in [
+            "/v1/boxes/abc/metrics",
+            "/v1/boxes/abc/stop",
+            "/v1/boxes/abc",
+            "/v1/boxes",
+            "/v1/boxes/import",
+            "/v1/metrics",
+            "/v1/config",
+            "/v1/me",
+        ] {
+            assert_eq!(activity_box_id(path), None, "{path} must not count");
+        }
+    }
+
+    /// Starting a box must reset its clock. Without this the stamp from before
+    /// the AutoStop survives, and the next sweep — up to 30s later — reads the
+    /// box as idle for however long it sat stopped and stops it again, killing
+    /// an explicit start with no error.
+    #[test]
+    fn starting_a_box_counts_as_activity() {
+        assert_eq!(activity_box_id("/v1/boxes/abc/start"), Some("abc"));
+    }
+
+    /// A box that failed will never run again on its own, so it must still age
+    /// out — otherwise exactly the boxes nobody returns to clean up leak.
+    #[test]
+    fn a_failed_box_still_reaches_its_delete_deadline() {
+        assert_eq!(
+            decide_lifecycle(
+                BoxStatus::Failed,
+                0,
+                3600,
+                Duration::ZERO,
+                Duration::from_secs(3_600)
+            ),
+            LifecycleAction::Delete
+        );
+        // ...but not before it.
+        assert_eq!(
+            decide_lifecycle(
+                BoxStatus::Failed,
+                0,
+                3600,
+                Duration::ZERO,
+                Duration::from_secs(3_599)
+            ),
+            LifecycleAction::Leave
+        );
+    }
 
     // --- API-key auth decision (pure; no runtime/network needed) ---
 
@@ -1535,7 +2242,7 @@ mod tests {
     }
 
     #[test]
-    fn build_box_options_carries_lifecycle_policy_and_uses_compatible_detach_default() {
+    fn build_box_options_carries_lifecycle_policy_and_stays_detached() {
         let req: super::types::CreateBoxRequest = serde_json::from_str(
             r#"{"auto_stop": 900, "auto_delete": 3600, "auto_resume": false}"#,
         )
@@ -1544,7 +2251,26 @@ mod tests {
         assert_eq!(opts.auto_stop, Some(900));
         assert_eq!(opts.auto_delete, Some(3600));
         assert_eq!(opts.auto_resume, Some(false));
-        assert!(!opts.detach, "remove-on-stop must not default to detached");
+
+        // A box with a delete deadline must still be detached. Detach used to be
+        // derived from `auto_delete`, which forced exactly these boxes to be
+        // non-detached — they then could not survive a `serve` restart, making a
+        // long deadline unreachable.
+        assert!(
+            opts.detach,
+            "a swept box must outlive the request that created it"
+        );
+        // And the synchronous axis must be off, or the box would be deleted the
+        // moment it stopped and the deadline would never be reached.
+        assert!(
+            !opts.auto_remove,
+            "serve sweeps deadlines; it must never inherit remove-on-stop"
+        );
+        // The pairing above is only representable because the axes are separate:
+        // prove it actually validates rather than trusting the field values.
+        opts.clone()
+            .sanitize()
+            .expect("a detached box with a delete deadline must be valid");
 
         let persistent: super::types::CreateBoxRequest =
             serde_json::from_str(r#"{"auto_delete": 0}"#).expect("body must deserialize");
@@ -1780,7 +2506,9 @@ mod tests {
             runtime: runtime.clone(),
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
             api_key: None,
+            enforces_lifecycle: true,
         });
         let (control_status, control_error) =
             upload_v3_archive(state.clone(), serde_json::json!({})).await;
@@ -2015,7 +2743,9 @@ mod tests {
             runtime,
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
             api_key: None,
+            enforces_lifecycle: true,
         });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2265,6 +2995,182 @@ mod tests {
         );
     }
 
+    /// An auto-deleted box must not leave its handle in the cache.
+    ///
+    /// `get_or_fetch_box` self-heals a merely *stopped* box by replacing any
+    /// non-active handle, but a removed box is never fetched again — so nothing
+    /// revalidates its entry, and the `Arc<LiteBox>` (with the VM resources it
+    /// holds) stays for the life of the process. The handle here is built by
+    /// production code from a real HTTP response, so the seed is not something
+    /// the test made up.
+    #[tokio::test]
+    async fn an_auto_deleted_box_leaves_no_cached_handle() {
+        // Stopped long ago with a 1s delete deadline, so the sweep must delete.
+        let box_json = serde_json::json!({
+            "box_id": "box1",
+            "name": null,
+            "status": "stopped",
+            "created_at": "2020-01-01T00:00:00Z",
+            "updated_at": "2020-01-01T00:00:00Z",
+            "pid": null,
+            "image": "alpine:latest",
+            "cpus": 1,
+            "memory_mib": 512,
+            "auto_delete": 1,
+        });
+        let list_json = serde_json::json!({ "boxes": [box_json.clone()] });
+
+        let stub = axum::Router::new()
+            .route(
+                "/v1/boxes",
+                axum::routing::get(move || {
+                    let body = list_json.clone();
+                    async move { axum::Json(body) }
+                }),
+            )
+            .route(
+                "/v1/boxes/box1",
+                axum::routing::get(move || {
+                    let body = box_json.clone();
+                    async move { axum::Json(body) }
+                })
+                .delete(|| async { axum::http::StatusCode::NO_CONTENT }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, stub).await;
+        });
+
+        let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(format!(
+            "http://127.0.0.1:{port}"
+        )))
+        .expect("rest runtime");
+        let state = AppState {
+            runtime,
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+            api_key: None,
+            enforces_lifecycle: true,
+        };
+
+        get_or_fetch_box(&state, "box1")
+            .await
+            .expect("the stub must hand back a box");
+        assert!(
+            state.boxes.read().await.contains_key("box1"),
+            "precondition: fetching must cache the handle, or this proves nothing"
+        );
+
+        run_lifecycle_once(&state, Instant::now()).await;
+
+        assert!(
+            state.boxes.read().await.is_empty(),
+            "a swept box must not keep its handle cached"
+        );
+        server.abort();
+    }
+
+    /// Activity under a box's *name* must count as activity on that box.
+    ///
+    /// The middleware stamps the raw `{box_id}` URL segment, and the wire
+    /// contract lets that be either the id or a user-defined name, which
+    /// `runtime.get(id_or_name)` resolves. The sweep knows the box by its
+    /// canonical id, so reading only that spelling loses every request made by
+    /// name — and AutoStop then stops a box in continuous use, one window after
+    /// the sweep seeded it.
+    #[tokio::test]
+    async fn a_box_driven_by_name_is_not_idle_under_its_id() {
+        let map: RwLock<HashMap<String, Instant>> = RwLock::new(HashMap::new());
+        let now = Instant::now();
+        let aliases = ["box-abc123".to_string(), "web".to_string()];
+
+        // The client has been driving `/v1/boxes/web/...` all along.
+        map.write().await.insert("web".to_string(), now);
+
+        let idle = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            idle_or_seed(&map, &aliases, now + std::time::Duration::from_secs(30)),
+        )
+        .await
+        .expect("reading must not deadlock");
+
+        assert_eq!(
+            idle,
+            std::time::Duration::from_secs(30),
+            "the name-keyed stamp is this box's activity and must be measured from"
+        );
+    }
+
+    /// The idle map must not grow on ids that were never boxes.
+    ///
+    /// `record_activity` stamps a clock straight off the request path, before
+    /// any handler can reject an unknown id, and `forget_box_activity` only
+    /// fires on a real delete — so a client looping over made-up ids would grow
+    /// this map for the life of the process.
+    #[tokio::test]
+    async fn the_idle_clock_drops_ids_that_are_not_boxes() {
+        let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+            "http://127.0.0.1:1".to_string(),
+        ))
+        .expect("rest runtime");
+        let state = AppState {
+            runtime,
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+            api_key: None,
+            enforces_lifecycle: true,
+        };
+
+        state.record_box_activity("real-box").await;
+        state.record_box_activity("never-existed").await;
+
+        let live = std::collections::HashSet::from(["real-box".to_string()]);
+        state.retain_box_activity(&live).await;
+
+        let clocks = state.last_activity.read().await;
+        assert!(
+            clocks.contains_key("real-box"),
+            "a live box keeps its clock"
+        );
+        assert!(
+            !clocks.contains_key("never-existed"),
+            "an id the runtime does not know must not hold a clock forever"
+        );
+    }
+
+    /// A `serve` that proxies to another server must not sweep that server's
+    /// boxes.
+    ///
+    /// The remote enforces its own deadlines, and `last_activity` here has
+    /// never seen those boxes — so a sweep from this side reads every one of
+    /// them as idle since this process started and stops or deletes them on the
+    /// first tick. Pinning the branch, not just the flag: without the guard the
+    /// sweep proceeds to `list_info` and this returns true.
+    #[tokio::test]
+    async fn a_proxying_serve_never_sweeps_the_boxes_it_does_not_own() {
+        let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+            "http://127.0.0.1:1".to_string(),
+        ))
+        .expect("rest runtime");
+        let state = AppState {
+            runtime,
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+            api_key: None,
+            enforces_lifecycle: false,
+        };
+
+        assert!(
+            !run_lifecycle_once(&state, Instant::now()).await,
+            "a proxying serve must leave the sweep to the server that owns the boxes"
+        );
+    }
+
     /// The reaper must never reap the box's main session.
     ///
     /// That session is the container's init, so killing it powers the VM off
@@ -2284,7 +3190,9 @@ mod tests {
             runtime,
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
             api_key: None,
+            enforces_lifecycle: true,
         };
 
         // The box's main command, and an ordinary exec running beside it.

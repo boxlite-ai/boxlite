@@ -43,7 +43,7 @@ impl BoxTestBase {
     pub async fn new() -> Self {
         let t = Self::with_options(BoxOptions {
             rootfs: RootfsSpec::Image("alpine:latest".into()),
-            auto_delete: Some(0),
+            auto_remove: false,
             ..Default::default()
         })
         .await;
@@ -95,7 +95,7 @@ impl BoxTestBase {
             .create(
                 BoxOptions {
                     rootfs: RootfsSpec::Image("alpine:latest".into()),
-                    auto_delete: Some(0),
+                    auto_remove: false,
                     ..Default::default()
                 },
                 None,

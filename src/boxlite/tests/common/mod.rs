@@ -5,8 +5,8 @@
 //! - [`PerTestBoxHome::isolated()`]: Per-test home without cache (for non-VM tests).
 //!
 //! Helper functions:
-//! - [`alpine_opts()`]: Default `BoxOptions` with `alpine:latest`, `auto_delete=0`
-//! - [`alpine_opts_auto()`]: Same but `auto_delete>0`
+//! - [`alpine_opts()`]: Default `BoxOptions` with `alpine:latest`, kept on stop
+//! - [`alpine_opts_auto()`]: Same but removed as soon as it stops (`--rm`)
 
 #![allow(dead_code)]
 
@@ -19,20 +19,20 @@ use boxlite::runtime::options::{BoxOptions, RootfsSpec};
 // BOX OPTIONS HELPERS
 // ============================================================================
 
-/// Default test box options: `alpine:latest`, `auto_delete=0`.
+/// Default test box options: `alpine:latest`, kept when it stops.
 pub fn alpine_opts() -> BoxOptions {
     BoxOptions {
         rootfs: RootfsSpec::Image("alpine:latest".into()),
-        auto_delete: Some(0),
+        auto_remove: false,
         ..Default::default()
     }
 }
 
-/// Alpine box with `auto_delete>0` (cleaned up on stop).
+/// Alpine box removed as soon as it stops (`--rm` semantics).
 pub fn alpine_opts_auto() -> BoxOptions {
     BoxOptions {
         rootfs: RootfsSpec::Image("alpine:latest".into()),
-        auto_delete: Some(1),
+        auto_remove: true,
         ..Default::default()
     }
 }

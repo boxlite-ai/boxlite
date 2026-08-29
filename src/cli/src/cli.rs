@@ -194,9 +194,57 @@ pub(crate) fn experimental_features_from_env() -> boxlite::BoxliteResult<Experim
     }
 }
 
+/// Parse a lifecycle duration into whole seconds.
+///
+/// A bare integer is seconds, which is exactly the unit the SDKs and the wire
+/// contract use, so the flags stay consistent with them. Suffixes are sugar for
+/// the long windows these deadlines are typically set to — `7d` rather than
+/// `604800`. Mirrors `serve`'s env-var duration parser and adds `d`.
+pub(crate) fn parse_duration_seconds(raw: &str) -> Result<u32, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("expected a duration such as 900, 30m, 2h or 7d".into());
+    }
+
+    let (digits, multiplier) = match raw.strip_suffix(['s', 'm', 'h', 'd']) {
+        Some(rest) => {
+            let unit = raw.as_bytes()[raw.len() - 1];
+            let multiplier = match unit {
+                b's' => 1,
+                b'm' => 60,
+                b'h' => 3_600,
+                _ => 86_400,
+            };
+            (rest, multiplier)
+        }
+        None => (raw, 1),
+    };
+
+    let value: u32 = digits
+        .parse()
+        .map_err(|_| format!("invalid duration {raw:?}: expected 900, 30m, 2h or 7d"))?;
+    value
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("duration {raw:?} is too large"))
+}
+
 // ============================================================================
 // GLOBAL FLAGS
 // ============================================================================
+
+/// The runtime `serve` will drive, together with whether this process is the
+/// one enforcing lifecycle deadlines on it.
+pub struct ServeRuntime {
+    pub runtime: BoxliteRuntime,
+
+    /// False when a `--url`, `BOXLITE_REST_URL` or stored credential profile
+    /// points this `serve` at another server. That server runs its own sweeper
+    /// over boxes this process cannot see, so sweeping from here would stop and
+    /// delete boxes on someone else's host — driven by an idle map that starts
+    /// empty, which reads every remote box as untouched since this process
+    /// began.
+    pub enforces_lifecycle: bool,
+}
 
 #[derive(Args, Debug, Clone)]
 pub struct GlobalFlags {
@@ -299,21 +347,62 @@ impl GlobalFlags {
     }
 
     pub fn create_runtime(&self) -> anyhow::Result<BoxliteRuntime> {
+        Ok(self.build_runtime(false)?.runtime)
+    }
+
+    /// Runtime for `boxlite serve`, which runs its own lifecycle sweeper.
+    ///
+    /// The embedded runtime refuses AutoStop / AutoDelete unless something will
+    /// actually enforce them; `serve` does, so it says so here. A `--url`
+    /// invocation proxies to a server that enforces its own and is left alone.
+    pub fn create_serve_runtime(&self) -> anyhow::Result<ServeRuntime> {
+        self.build_runtime(true)
+    }
+
+    /// Resolves the backend once, so the runtime and the answer to "does this
+    /// process enforce deadlines on it" can never disagree.
+    fn build_runtime(&self, lifecycle_sweeper: bool) -> anyhow::Result<ServeRuntime> {
+        match self.rest_options() {
+            Some(opts) => Ok(ServeRuntime {
+                runtime: BoxliteRuntime::rest(opts).map_err(anyhow::Error::from)?,
+                enforces_lifecycle: false,
+            }),
+            None => {
+                // No URL anywhere → local runtime, unchanged behavior.
+                let options = self.resolve_runtime_options()?;
+                let runtime = RuntimeBuilder::new(options)
+                    .with_features(self.experimental_features.clone())
+                    .with_lifecycle_sweeper(lifecycle_sweeper)
+                    .build()
+                    .map_err(anyhow::Error::from)?;
+                Ok(ServeRuntime {
+                    runtime,
+                    enforces_lifecycle: lifecycle_sweeper,
+                })
+            }
+        }
+    }
+
+    /// Resolved REST connection options, or `None` when this invocation targets
+    /// the embedded runtime.
+    fn rest_options(&self) -> Option<BoxliteRestOptions> {
         let stored = crate::credentials::load_named(&self.resolved_profile())
             .ok()
             .flatten();
         // Clap reads BOXLITE_REST_URL into `self.url`; BOXLITE_API_KEY is the
         // one credential env we still consult directly here.
         let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
+        self.resolve_rest_options(stored, env_api_key)
+    }
 
-        match self.resolve_rest_options(stored, env_api_key) {
-            Some(opts) => BoxliteRuntime::rest(opts).map_err(Into::into),
-            None => {
-                // No URL anywhere → local runtime, unchanged behavior.
-                let options = self.resolve_runtime_options()?;
-                self.create_runtime_with_options(options)
-            }
-        }
+    /// Whether this invocation talks to a REST server rather than the embedded
+    /// runtime.
+    ///
+    /// `--rm` is spelled differently for each: the wire contract carries only
+    /// the `auto_delete` deadline, while the embedded runtime deletes
+    /// synchronously through `auto_remove` and has no sweeper for a deadline.
+    pub fn targets_rest(&self) -> bool {
+        self.rest_options().is_some()
     }
 
     /// Build REST connection options from the selected credential profile and
@@ -872,8 +961,25 @@ pub struct ManagementFlags {
     pub detach: bool,
 
     /// Automatically remove the box when it exits
-    #[arg(long)]
+    #[arg(long, conflicts_with = "auto_delete")]
     pub rm: bool,
+
+    /// Stop the box after this much idle time; `0` disables.
+    ///
+    /// Accepts seconds (`900`) or a suffixed duration (`30m`, `2h`, `7d`).
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration_seconds)]
+    pub auto_stop: Option<u32>,
+
+    /// Delete the box this long after it stops; `0` disables.
+    ///
+    /// Unlike `--rm`, which deletes as soon as the box stops, this is a deadline
+    /// a server sweeps later — so it is compatible with `--detach`.
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration_seconds)]
+    pub auto_delete: Option<u32>,
+
+    /// Do not restart this box automatically when an operation targets it.
+    #[arg(long)]
+    pub no_auto_resume: bool,
 
     /// Sandbox security: `enable` (default) or `disable` (case-insensitive).
     /// Absent → the box uses `SecurityOptions::default()` = enable, the
@@ -897,11 +1003,32 @@ impl ManagementFlags {
         features.require(ExperimentalFeature::NestedVirtualization)
     }
 
-    pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
+    pub fn apply_to(&self, opts: &mut BoxOptions, targets_rest: bool) -> anyhow::Result<()> {
         opts.detach = self.detach;
-        // `--rm` is the CLI spelling of "delete when stopped"; the CLI
-        // default (like `docker run`) is to keep the box.
-        opts.auto_delete = Some(if self.rm { 1 } else { 0 });
+
+        // `--rm` is "delete as soon as it stops". The embedded runtime does that
+        // synchronously through `auto_remove`; the wire contract has no such
+        // field, so against a server the nearest honest spelling is the shortest
+        // possible deadline, which its sweeper acts on. Sending nothing would
+        // leave `--rm` silently doing nothing remotely.
+        if targets_rest {
+            opts.auto_remove = false;
+            if self.rm {
+                opts.auto_delete = Some(1);
+            }
+        } else {
+            opts.auto_remove = self.rm;
+        }
+
+        if let Some(seconds) = self.auto_stop {
+            opts.auto_stop = Some(seconds);
+        }
+        if let Some(seconds) = self.auto_delete {
+            opts.auto_delete = Some(seconds);
+        }
+        if self.no_auto_resume {
+            opts.auto_resume = Some(false);
+        }
         if let Some(ref preset) = self.security {
             // Bubble the typo'd-preset error all the way back to the
             // CLI exit so the operator sees the offending value.
@@ -913,6 +1040,31 @@ impl ManagementFlags {
         }
         Ok(())
     }
+
+    /// Reconcile the two deletion axes with the box's effective detach state.
+    ///
+    /// Detached boxes keep manual lifecycle control, so detach silently
+    /// overrides `--rm` (historical CLI behaviour). Only the synchronous axis
+    /// conflicts: an explicit `--auto-delete` deadline is deliberately left
+    /// alone, because a deferred deadline on a detached box is exactly the
+    /// pairing this feature exists to make expressible.
+    ///
+    /// Keyed on `opts.detach`, not on the `--detach` flag: `create` detaches
+    /// every box it makes without the flag being passed, and it needs the same
+    /// reconciliation `run -d` gets.
+    ///
+    /// Runs after [`Self::apply_to`], so it also clears the `Some(1)` deadline
+    /// that the REST encoding of `--rm` writes there — left in place, the
+    /// server's sweeper would delete the box a second after it stopped.
+    pub fn apply_detach_override(&self, opts: &mut BoxOptions) {
+        if !opts.detach {
+            return;
+        }
+        opts.auto_remove = false;
+        if self.auto_delete.is_none() {
+            opts.auto_delete = None;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -923,6 +1075,194 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    // --- Lifecycle duration parsing ---
+
+    #[test]
+    fn a_bare_integer_is_seconds() {
+        // The unit the SDKs and the wire contract use. If this ever became
+        // minutes, `--auto-stop 900` would silently mean 15 hours.
+        assert_eq!(parse_duration_seconds("900"), Ok(900));
+        assert_eq!(parse_duration_seconds("0"), Ok(0));
+    }
+
+    #[test]
+    fn suffixed_durations_convert_to_seconds() {
+        assert_eq!(parse_duration_seconds("45s"), Ok(45));
+        assert_eq!(parse_duration_seconds("30m"), Ok(1_800));
+        assert_eq!(parse_duration_seconds("2h"), Ok(7_200));
+        assert_eq!(parse_duration_seconds("7d"), Ok(604_800));
+        assert_eq!(parse_duration_seconds("  15m  "), Ok(900));
+    }
+
+    #[test]
+    fn a_malformed_duration_is_rejected_not_silently_zero() {
+        // Parsing failures must reach the user as a flag error. Falling back to
+        // 0 would read as "disabled" and quietly drop the policy they asked for.
+        for raw in ["", "  ", "abc", "10x", "1.5h", "-5", "m", "9999999999999d"] {
+            assert!(
+                parse_duration_seconds(raw).is_err(),
+                "{raw:?} must be rejected"
+            );
+        }
+    }
+
+    // --- `--rm` encoding per backend ---
+
+    fn rm_flags(rm: bool) -> ManagementFlags {
+        ManagementFlags {
+            name: None,
+            detach: false,
+            rm,
+            auto_stop: None,
+            auto_delete: None,
+            no_auto_resume: false,
+            security: None,
+            nested_virtualization: false,
+        }
+    }
+
+    #[test]
+    fn rm_uses_the_synchronous_axis_against_the_embedded_runtime() {
+        let mut opts = BoxOptions::default();
+        rm_flags(true).apply_to(&mut opts, false).unwrap();
+        assert!(opts.auto_remove, "--rm must set the synchronous axis");
+        assert_eq!(
+            opts.auto_delete, None,
+            "the embedded runtime has no sweeper, so --rm must not become a deadline"
+        );
+
+        let mut kept = BoxOptions::default();
+        rm_flags(false).apply_to(&mut kept, false).unwrap();
+        assert!(!kept.auto_remove, "without --rm the box is kept");
+    }
+
+    #[test]
+    fn rm_becomes_a_deadline_against_a_rest_server() {
+        // The wire contract carries no synchronous-removal field, so sending
+        // nothing would make `--rm` a silent no-op against a server.
+        let mut opts = BoxOptions::default();
+        rm_flags(true).apply_to(&mut opts, true).unwrap();
+        assert_eq!(opts.auto_delete, Some(1));
+        assert!(
+            !opts.auto_remove,
+            "auto_remove is never transmitted; leaving it set would be a lie"
+        );
+
+        let mut kept = BoxOptions::default();
+        rm_flags(false).apply_to(&mut kept, true).unwrap();
+        assert_eq!(
+            kept.auto_delete, None,
+            "no --rm must leave the server's own default alone"
+        );
+        assert!(!kept.auto_remove);
+    }
+
+    #[test]
+    fn explicit_lifecycle_flags_reach_box_options() {
+        let flags = ManagementFlags {
+            auto_stop: Some(1_800),
+            auto_delete: Some(604_800),
+            no_auto_resume: true,
+            ..rm_flags(false)
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts, false).unwrap();
+
+        assert_eq!(opts.auto_stop, Some(1_800));
+        assert_eq!(opts.auto_delete, Some(604_800));
+        assert_eq!(opts.auto_resume, Some(false));
+    }
+
+    #[test]
+    fn serve_against_a_remote_server_does_not_claim_the_sweep() {
+        // The remote enforces its own deadlines over boxes this process cannot
+        // see, and `last_activity` here starts empty — so sweeping from this
+        // side would stop and delete another host's boxes on the first tick.
+        let cli = Cli::try_parse_from(["boxlite", "--url", "http://127.0.0.1:1", "serve"])
+            .expect("serve should parse");
+        let serve = cli
+            .global
+            .create_serve_runtime()
+            .expect("a REST runtime should build without contacting the server");
+
+        assert!(
+            !serve.enforces_lifecycle,
+            "a proxying serve must leave the sweep to the server that owns the boxes"
+        );
+    }
+
+    #[test]
+    fn detach_overrides_rm_on_both_backends() {
+        // A detached box keeps manual lifecycle control, so `--rm` is dropped
+        // rather than deleting the box the moment the foreground call returns.
+        // The REST path needs this too: `apply_to` spelled `--rm` as a 1-second
+        // deadline there, and leaving that in place would delete the box almost
+        // immediately — the opposite of what detaching asks for.
+        //
+        // This pins the intent for the `--detach` flag. The regression guard for
+        // boxes detached *without* the flag is in create.rs, since keying this
+        // on the flag rather than on `opts.detach` is what broke `create --rm`.
+        for targets_rest in [false, true] {
+            let flags = ManagementFlags {
+                detach: true,
+                ..rm_flags(true)
+            };
+            let mut opts = BoxOptions::default();
+            flags.apply_to(&mut opts, targets_rest).unwrap();
+            flags.apply_detach_override(&mut opts);
+
+            assert!(!opts.auto_remove, "targets_rest={targets_rest}");
+            assert_eq!(
+                opts.auto_delete, None,
+                "the REST encoding of --rm must be cleared too (targets_rest={targets_rest})"
+            );
+        }
+    }
+
+    #[test]
+    fn an_explicit_delete_deadline_survives_detach() {
+        // The pairing the split exists to make expressible: detach the box and
+        // still have it aged out on schedule. Clearing the deadline here would
+        // silently leak every detached box that asked to be cleaned up.
+        let flags = ManagementFlags {
+            detach: true,
+            auto_delete: Some(3_600),
+            ..rm_flags(true)
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts, true).unwrap();
+        flags.apply_detach_override(&mut opts);
+
+        assert_eq!(opts.auto_delete, Some(3_600));
+        assert!(!opts.auto_remove);
+    }
+
+    #[test]
+    fn the_detach_override_leaves_an_attached_box_alone() {
+        let flags = rm_flags(true);
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts, false).unwrap();
+        flags.apply_detach_override(&mut opts);
+        assert!(opts.auto_remove, "--rm must still work without --detach");
+    }
+
+    #[test]
+    fn rm_and_auto_delete_cannot_be_combined() {
+        // Enforced by clap so the collision is a parse error with a real
+        // message, not a silent precedence rule the user has to guess.
+        let error = Cli::command()
+            .try_get_matches_from(vec![
+                "boxlite",
+                "run",
+                "--rm",
+                "--auto-delete",
+                "1h",
+                "alpine",
+            ])
+            .expect_err("--rm and --auto-delete are mutually exclusive");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
 
     #[test]
     fn test_apply_env_vars_with_lookup() {
@@ -1182,6 +1522,9 @@ mod tests {
             name: None,
             detach: false,
             rm: false,
+            auto_stop: None,
+            auto_delete: None,
+            no_auto_resume: false,
             security: None,
         };
 
@@ -1855,11 +2198,16 @@ mod tests {
             name: None,
             detach: false,
             rm: false,
+            auto_stop: None,
+            auto_delete: None,
+            no_auto_resume: false,
             security: Some("disable".to_string()),
             nested_virtualization: false,
         };
         let mut opts = BoxOptions::default();
-        flags.apply_to(&mut opts).expect("setting must apply");
+        flags
+            .apply_to(&mut opts, false)
+            .expect("setting must apply");
         assert_eq!(
             opts.advanced.security,
             boxlite::SecurityOptions::disabled(),
@@ -1873,12 +2221,15 @@ mod tests {
             name: None,
             detach: false,
             rm: false,
+            auto_stop: None,
+            auto_delete: None,
+            no_auto_resume: false,
             security: None,
             nested_virtualization: false,
         };
         let mut opts = BoxOptions::default();
         flags
-            .apply_to(&mut opts)
+            .apply_to(&mut opts, false)
             .expect("absent preset must succeed");
         assert_eq!(
             opts.advanced.security,
@@ -1893,12 +2244,15 @@ mod tests {
             name: None,
             detach: false,
             rm: false,
+            auto_stop: None,
+            auto_delete: None,
+            no_auto_resume: false,
             security: Some("ultra".to_string()),
             nested_virtualization: false,
         };
         let mut opts = BoxOptions::default();
         let err = flags
-            .apply_to(&mut opts)
+            .apply_to(&mut opts, false)
             .expect_err("unknown preset must reject at apply_to");
         let msg = err.to_string();
         assert!(msg.contains("ultra"), "got {msg}");
@@ -1916,7 +2270,7 @@ mod tests {
         let mut opts = BoxOptions::default();
         assert!(!opts.advanced.nested_virtualization);
         args.management
-            .apply_to(&mut opts)
+            .apply_to(&mut opts, false)
             .expect("nested virtualization should apply");
 
         assert!(opts.advanced.nested_virtualization);

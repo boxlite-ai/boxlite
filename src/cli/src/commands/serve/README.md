@@ -27,11 +27,14 @@ let rt = BoxliteRuntime::rest(BoxliteRestOptions::new("http://localhost:8100"))?
 ```
 execute(ServeArgs, GlobalFlags)
   │
-  ├─ GlobalFlags::create_runtime()          — build local BoxliteRuntime
-  │
-  ├─ Arc::new(AppState { runtime, boxes, executions })
+  ├─ GlobalFlags::create_serve_runtime()     — local BoxliteRuntime, declaring
+  │                                            a lifecycle sweeper so AutoStop /
+  │                                            AutoDelete are accepted
+  ├─ Arc::new(AppState { runtime, boxes, executions, last_activity,
+  │                      api_key, enforces_lifecycle })
   │                                          — shared state for all handlers
-  ├─ tokio::spawn(reaper_loop(state))       — background orphan reaper (30 s tick)
+  ├─ tokio::spawn(reaper_loop(state))       — orphan reaper + lifecycle sweep
+  │                                            (30 s tick)
   │
   ├─ build_router(state)                    — register 26 routes on axum::Router
   │
@@ -84,7 +87,25 @@ execute(ServeArgs, GlobalFlags)
 
 `AppState.boxes` is a lazy cache — `get_or_fetch_box()` populates it from `runtime.get()` on first
 access. `AppState.executions` maps execution IDs to `Arc<ActiveExecution>` for the active-session
-registry.
+registry. `AppState.last_activity` is the per-box idle clock AutoStop sweeps against, keyed by the URL segment
+the client used — which the contract lets be either a box id or its name, so the sweep reads both
+spellings. `AppState.enforces_lifecycle` is false when this `serve` proxies to another server, which
+owns those boxes and sweeps them itself.
+
+Two resolvers, split by whether the handler needs the VM **up**:
+
+| Resolver             | AutoResume gate | Used by                                              |
+|----------------------|-----------------|------------------------------------------------------|
+| `get_or_fetch_box()` | yes — 409       | exec, files, attach, metrics                          |
+| `fetch_box()`        | no              | start, stop, snapshots, clone, export                 |
+
+`get_or_fetch_box()` implements **AutoResume**: a stopped box is handed back as a fresh handle that
+boots on first use, unless it was created with `auto_resume: false`, in which case the call returns
+**409** — the caller asked that no operation wake it behind their back.
+
+`fetch_box()` is deliberately ungated. `auto_resume: false` means "nothing may wake this box
+implicitly", not "this box may never be touched again". Gating `/start` would make the 409's own
+advice impossible to follow, and gating snapshot listing would answer a pure metadata read with it.
 
 ## Handler Reference
 
@@ -310,7 +331,27 @@ reaper_loop(state)
   ├─ resolve_duration("BOXLITE_SHUTDOWN_GRACE",   30 s)
   ├─ resolve_duration("BOXLITE_MAX_SESSION_LIFETIME", 86400 s)
   │
-  └─ loop { ticker.tick(); run_reap_once(...) }
+  └─ loop { ticker.tick(); run_reap_once(...); run_lifecycle_once(...) }
+
+run_lifecycle_once(state, now) -> bool             — false when not ours
+  │
+  ├─ state.enforces_lifecycle                  — a proxying serve sweeps
+  │                                              nothing; the server that
+  │                                              owns the boxes does
+  ├─ runtime.list_info()                       — every box and its policy
+  ├─ decide_lifecycle(status, auto_stop, auto_delete, idle, since_stop)
+  │    │                                        — Stop / Delete / Leave
+  │    └─ idle = newest last_activity[alias] over {id, name} (monotonic);
+  │              an unseen box is seeded at this tick, never measured
+  │              against BoxInfo.last_updated
+  │    └─ since_stop = now - BoxInfo.last_updated (the stop transition)
+  ├─ Stop   → box.stop()
+  ├─ Delete → evict state.boxes, runtime.remove(box, force = false),
+  │           forget_box_activity()          — a removed box is never
+  │                                            re-fetched, so nothing else
+  │                                            would drop its handle
+  └─ retain_box_activity(live)                 — drop clocks for ids no
+                                                 box answers to
 
 run_reap_once(state, now, ...)
   │

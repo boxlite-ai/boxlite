@@ -728,15 +728,22 @@ Used by `run` and `create` (defined at `src/cli/src/cli.rs:407-578`).
 
 ### `ManagementFlags`
 
-Used by `run` and `create` (defined at `src/cli/src/cli.rs:584-604`).
+Used by `run` and `create` (defined at `src/cli/src/cli.rs:954`).
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--name NAME` | — | Assign a name to the box |
 | `--detach` | `-d` | Run in the background; print box ID and return |
-| `--rm` | — | Automatically remove the box when it exits |
+| `--rm` | — | Remove the box as soon as it stops; conflicts with `--auto-delete` |
+| `--auto-stop DURATION` | — | Stop the box after this much inactivity; `0` disables |
+| `--auto-delete DURATION` | — | Delete the box this long after it stops; `0` disables |
+| `--no-auto-resume` | — | Refuse operations that would implicitly wake a stopped box |
 
-> `--rm` with `--detach` on `run` is silently downgraded — `run -d` always sets `auto_remove=false` (`src/cli/src/commands/run.rs:106`) so the detached box outlives the CLI process. Use `boxlite rm` to clean up.
+`DURATION` is seconds when bare, or a suffixed value: `30s`, `15m`, `2h`, `7d`.
+
+> `--auto-stop` and `--auto-delete` are deadlines a sweeper acts on, so they need a server that runs one — `boxlite serve` or the cloud. The embedded runtime refuses a non-zero value rather than storing a policy nothing enforces.
+
+> `--rm` with `--detach` is silently downgraded — a detached box always keeps manual lifecycle control (`ManagementFlags::apply_detach_override`, `src/cli/src/cli.rs:1059`) so it outlives the CLI process. An explicit `--auto-delete` deadline survives detaching. Use `boxlite rm` to clean up.
 
 ---
 

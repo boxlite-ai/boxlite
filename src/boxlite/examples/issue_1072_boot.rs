@@ -27,7 +27,7 @@ fn options(network: NetworkSpec, network_enabled: bool, jailer_enabled: bool) ->
     BoxOptions {
         network,
         rootfs: RootfsSpec::Image("alpine:latest".into()),
-        auto_delete: Some(0),
+        auto_remove: false,
         advanced,
         ..Default::default()
     }

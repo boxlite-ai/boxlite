@@ -34,7 +34,7 @@ fn health_check_opts(
     BoxOptions {
         rootfs: RootfsSpec::Image("alpine:latest".into()),
         advanced,
-        auto_delete: Some(0),
+        auto_remove: false,
         ..Default::default()
     }
 }

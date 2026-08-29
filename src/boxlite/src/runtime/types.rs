@@ -180,7 +180,11 @@ impl From<Seconds> for u64 {
 
 impl fmt::Display for Seconds {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.0 >= 3600 && self.0.is_multiple_of(3600) {
+        // Days first: lifecycle windows are routinely set a week out, and
+        // "168 hours" is a worse answer than "7 days" for the same number.
+        if self.0 >= 86_400 && self.0.is_multiple_of(86_400) {
+            write!(f, "{} days", self.0 / 86_400)
+        } else if self.0 >= 3600 && self.0.is_multiple_of(3600) {
             write!(f, "{} hours", self.0 / 3600)
         } else if self.0 >= 60 && self.0.is_multiple_of(60) {
             write!(f, "{} minutes", self.0 / 60)
@@ -533,10 +537,11 @@ impl BoxInfo {
                 crate::litebox::ports::resolved_from_state(config, state),
             )),
             labels: HashMap::new(),
-            // Local runtimes do not sweep lifecycle deadlines, but metadata keeps
-            // the configured values so callers can inspect the effective policy.
+            // The deadlines a sweeper acts on. `auto_remove` is deliberately not
+            // folded in here: it is a separate, synchronous axis and reporting it
+            // as a deadline would tell a client a timer exists when none does.
             auto_stop: config.options.auto_stop.unwrap_or(0),
-            auto_delete: config.options.effective_auto_delete(),
+            auto_delete: config.options.auto_delete_seconds(),
             auto_resume: config.options.auto_resume.unwrap_or(true),
             health_status: state.health_status,
             exit_code: state.exit_code,
@@ -1084,6 +1089,16 @@ mod tests {
 
         // Non-even values show in seconds
         assert_eq!(format!("{}", Seconds::from_seconds(90)), "90 seconds");
+
+        // Days win over hours for exact multiples — lifecycle windows are
+        // routinely set a week out, and "168 hours" is a worse answer than
+        // "7 days" for the same number.
+        assert_eq!(format!("{}", Seconds::from_seconds(86_400)), "1 days");
+        assert_eq!(format!("{}", Seconds::from_seconds(604_800)), "7 days");
+
+        // A span longer than a day that is not a whole number of days falls
+        // back to the largest unit it *is* an exact multiple of.
+        assert_eq!(format!("{}", Seconds::from_seconds(90_000)), "25 hours");
     }
 
     #[test]

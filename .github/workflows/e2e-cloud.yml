@@ -122,7 +122,7 @@ permissions:
 # A later run queues behind the in-progress one instead of cancelling it.
 # The `box` fixture's teardown is the only thing that deletes the boxes a
 # run creates: auto_remove is a no-op over REST (see
-# deprecated_auto_remove_does_not_change_rest_lifecycle_defaults) and the
+# auto_remove_is_never_transmitted_to_a_rest_runtime) and the
 # API defaults autoDelete to disabled, so a run killed mid-suite strands
 # every box it had open — they auto-stop after 15 min but are never
 # deleted. Note this bounds the damage rather than eliminating it:

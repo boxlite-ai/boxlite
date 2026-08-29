@@ -1,5 +1,5 @@
 use crate::db::{BoxStore, Database};
-use crate::experimental::ExperimentalFeatures;
+use crate::experimental::RuntimeCapabilities;
 use crate::images::{ImageDiskManager, ImageManager};
 use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
@@ -148,8 +148,9 @@ pub struct RuntimeImpl {
     /// Runtime-wide metrics (AtomicU64 based, lock-free)
     pub(crate) runtime_metrics: RuntimeMetricsStorage,
 
-    /// Immutable release-candidate capability opt-ins for this runtime.
-    pub(crate) experimental_features: ExperimentalFeatures,
+    /// Immutable capability declarations for this runtime: release-candidate
+    /// feature opt-ins, and whether the embedder sweeps lifecycle deadlines.
+    pub(crate) capabilities: RuntimeCapabilities,
 
     /// Base disk manager for clone base lifecycle and ref-count tracking.
     pub(crate) base_disk_mgr: crate::disk::BaseDiskManager,
@@ -223,27 +224,27 @@ impl RuntimeImpl {
     ///
     /// Performs all initialization: filesystem setup, locks, managers, and box recovery.
     pub fn new(options: BoxliteOptions) -> BoxliteResult<SharedRuntimeImpl> {
-        Self::new_with_experimental_features(options, ExperimentalFeatures::default())
+        Self::new_with_capabilities(options, RuntimeCapabilities::default())
     }
 
-    pub(crate) fn new_with_experimental_features(
+    pub(crate) fn new_with_capabilities(
         options: BoxliteOptions,
-        experimental_features: ExperimentalFeatures,
+        capabilities: RuntimeCapabilities,
     ) -> BoxliteResult<SharedRuntimeImpl> {
         let _sys = crate::system_check::SystemCheck::run()?;
-        Self::initialize(options, experimental_features)
+        Self::initialize(options, capabilities)
     }
 
     /// Build a runtime without host validation. Tests using this must not exercise
     /// VM or hypervisor operations.
     #[cfg(test)]
     pub(crate) fn new_for_test(options: BoxliteOptions) -> BoxliteResult<SharedRuntimeImpl> {
-        Self::initialize(options, ExperimentalFeatures::default())
+        Self::initialize(options, RuntimeCapabilities::default())
     }
 
     fn initialize(
         options: BoxliteOptions,
-        experimental_features: ExperimentalFeatures,
+        capabilities: RuntimeCapabilities,
     ) -> BoxliteResult<SharedRuntimeImpl> {
         // Validate Early: Check preconditions before expensive work
         if !options.home_dir.is_absolute() {
@@ -355,7 +356,7 @@ impl RuntimeImpl {
             guest_rootfs_mgr,
             guest_rootfs: Arc::new(OnceCell::new()),
             runtime_metrics: RuntimeMetricsStorage::new(),
-            experimental_features,
+            capabilities,
             base_disk_mgr,
             snapshot_mgr,
             lock_manager,
@@ -1293,7 +1294,7 @@ impl RuntimeImpl {
         let persisted = self.box_manager.all_boxes(true)?;
 
         // Phase 1: Clean up boxes that shouldn't persist
-        // - remove-on-stop boxes (auto_delete): ephemeral, shouldn't survive restarts
+        // - remove-on-stop boxes (auto_remove): ephemeral, shouldn't survive restarts
         // - Orphaned active boxes: was Running but directory is missing (crashed mid-operation)
         //
         // Note: We don't remove Configured or Stopped boxes without directories because:
@@ -1740,13 +1741,29 @@ impl std::fmt::Debug for RuntimeImpl {
 /// Trait methods use `&self`. This newtype holds the Arc as a field to bridge the gap.
 pub(crate) struct LocalRuntime(pub(crate) SharedRuntimeImpl);
 
-fn reject_local_unsupported_options(options: &BoxOptions) -> BoxliteResult<()> {
-    // Local runtimes support auto_delete as a remove-on-stop policy, but AutoStop
-    // needs a sweeper that the local runtime does not have, so it stays REST-only.
-    if options.auto_stop.is_some_and(|seconds| seconds > 0) {
-        return Err(BoxliteError::Unsupported(
-            "AutoStop is only supported by REST runtimes".into(),
-        ));
+fn reject_local_unsupported_options(
+    options: &BoxOptions,
+    lifecycle_sweeper: bool,
+) -> BoxliteResult<()> {
+    // Both deadlines need something to act on them. Storing one that nothing
+    // sweeps would report a policy back to the caller that never fires, so a
+    // runtime whose embedder declared no sweeper refuses it outright. Use
+    // `auto_remove` for synchronous removal on stop — that needs no sweeper.
+    if !lifecycle_sweeper {
+        if options.auto_stop.is_some_and(|seconds| seconds > 0) {
+            return Err(BoxliteError::Unsupported(
+                "AutoStop needs a lifecycle sweeper; this runtime has none. Use a REST runtime \
+                 (`boxlite serve` or the cloud) to enforce it."
+                    .into(),
+            ));
+        }
+        if options.auto_delete.is_some_and(|seconds| seconds > 0) {
+            return Err(BoxliteError::Unsupported(
+                "AutoDelete needs a lifecycle sweeper; this runtime has none. Use a REST runtime \
+                 to enforce it, or auto_remove=true to delete the box as soon as it stops."
+                    .into(),
+            ));
+        }
     }
 
     // `resolve_user_volumes` catches this too, but only once boot is under way
@@ -1767,11 +1784,11 @@ fn reject_local_unsupported_options(options: &BoxOptions) -> BoxliteResult<()> {
 }
 
 async fn sanitize_local_options(
-    features: &ExperimentalFeatures,
+    capabilities: &RuntimeCapabilities,
     options: BoxOptions,
 ) -> BoxliteResult<BoxOptions> {
-    reject_local_unsupported_options(&options)?;
-    features.require_for_options(&options)?;
+    reject_local_unsupported_options(&options, capabilities.lifecycle_sweeper)?;
+    capabilities.features.require_for_options(&options)?;
     tokio::task::spawn_blocking(move || {
         let mut options = options;
         options.sanitize()?;
@@ -1788,7 +1805,7 @@ async fn sanitize_local_options(
 #[async_trait::async_trait]
 impl super::backend::RuntimeBackend for LocalRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
-        let options = sanitize_local_options(&self.0.experimental_features, options).await?;
+        let options = sanitize_local_options(&self.0.capabilities, options).await?;
         self.0.create(options, name).await
     }
 
@@ -1797,7 +1814,7 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
-        let options = sanitize_local_options(&self.0.experimental_features, options).await?;
+        let options = sanitize_local_options(&self.0.capabilities, options).await?;
         self.0.get_or_create(options, name).await
     }
 
@@ -1917,6 +1934,7 @@ impl Drop for RuntimeImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::experimental::ExperimentalFeatures;
     use crate::experimental::custom_kernel::KernelOptions;
     use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
     use crate::runtime::backend::RuntimeBackend;
@@ -1949,31 +1967,75 @@ mod tests {
         );
     }
 
+    /// Without a sweeper, *both* deadlines must be refused rather than stored:
+    /// a policy nothing acts on is reported back to the caller as if it were
+    /// live. The disable sentinel `0` stays acceptable — it asks for nothing.
     #[tokio::test]
-    async fn local_runtime_rejects_explicit_lifecycle_policy() {
-        let features = ExperimentalFeatures::default();
+    async fn a_runtime_without_a_sweeper_refuses_both_deadlines() {
+        let no_sweeper = RuntimeCapabilities::default();
         let mut options = BoxOptions::default();
         assert!(
-            sanitize_local_options(&features, options.clone())
+            sanitize_local_options(&no_sweeper, options.clone())
                 .await
                 .is_ok()
         );
 
-        options.auto_stop = Some(0);
-        assert!(
-            sanitize_local_options(&features, options.clone())
-                .await
-                .is_ok()
-        );
+        for disabled in [Some(0), None] {
+            options.auto_stop = disabled;
+            options.auto_delete = disabled;
+            assert!(
+                sanitize_local_options(&no_sweeper, options.clone())
+                    .await
+                    .is_ok(),
+                "a disabled deadline asks for no enforcement: {disabled:?}"
+            );
+        }
 
         options.auto_stop = Some(1);
-        assert!(matches!(
-            sanitize_local_options(&features, options.clone()).await,
-            Err(BoxliteError::Unsupported(_))
-        ));
+        options.auto_delete = None;
+        let error = sanitize_local_options(&no_sweeper, options.clone())
+            .await
+            .expect_err("AutoStop with no sweeper must be refused, not stored");
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("AutoStop"), "{error}");
+
         options.auto_stop = None;
         options.auto_delete = Some(3600);
-        assert!(sanitize_local_options(&features, options).await.is_ok());
+        let error = sanitize_local_options(&no_sweeper, options.clone())
+            .await
+            .expect_err("AutoDelete with no sweeper must be refused, not stored");
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("AutoDelete"), "{error}");
+    }
+
+    /// The mirror of the above: an embedder that declared a sweeper (`boxlite
+    /// serve`) must be able to create the very boxes it intends to sweep.
+    #[tokio::test]
+    async fn a_runtime_with_a_sweeper_accepts_both_deadlines() {
+        let with_sweeper = RuntimeCapabilities {
+            lifecycle_sweeper: true,
+            ..Default::default()
+        };
+        let options = BoxOptions {
+            auto_stop: Some(900),
+            auto_delete: Some(604_800),
+            detach: true,
+            // The other axis must be off: `auto_remove` would delete the box the
+            // instant it stopped, leaving the deadline nothing to sweep.
+            auto_remove: false,
+            ..Default::default()
+        };
+
+        let sanitized = sanitize_local_options(&with_sweeper, options)
+            .await
+            .expect("a declared sweeper makes both deadlines enforceable");
+
+        assert_eq!(sanitized.auto_stop, Some(900));
+        assert_eq!(sanitized.auto_delete, Some(604_800));
+        assert!(
+            sanitized.detach,
+            "a swept box must be able to outlive the process that created it"
+        );
     }
 
     /// The local runtime has no volume backend. `resolve_user_volumes` also
@@ -1985,18 +2047,22 @@ mod tests {
     async fn local_runtime_rejects_managed_volumes_before_boot() {
         use crate::runtime::options::VolumeSpec;
 
-        let features = ExperimentalFeatures::default();
+        let capabilities = RuntimeCapabilities::default();
         let host_bind = BoxOptions {
             volumes: vec![VolumeSpec::bind_mount("/tmp/data", "/data")],
             ..Default::default()
         };
-        assert!(sanitize_local_options(&features, host_bind).await.is_ok());
+        assert!(
+            sanitize_local_options(&capabilities, host_bind)
+                .await
+                .is_ok()
+        );
 
         let managed = BoxOptions {
             volumes: vec![VolumeSpec::managed_volume("my-data", "/data")],
             ..Default::default()
         };
-        let error = sanitize_local_options(&features, managed)
+        let error = sanitize_local_options(&capabilities, managed)
             .await
             .expect_err("a managed volume has no local backend to resolve against");
 
@@ -2091,7 +2157,7 @@ mod tests {
         options.advanced.kernel = Some(KernelOptions::new("/definitely/missing/vmlinux"));
 
         let disabled_error =
-            sanitize_local_options(&ExperimentalFeatures::default(), options.clone())
+            sanitize_local_options(&RuntimeCapabilities::default(), options.clone())
                 .await
                 .expect_err("custom kernel must be disabled by default");
         assert!(
@@ -2100,7 +2166,10 @@ mod tests {
                 .contains("BOXLITE_EXPERIMENTAL=custom-kernel")
         );
 
-        let enabled = ExperimentalFeatures::parse("custom-kernel").unwrap();
+        let enabled = RuntimeCapabilities {
+            features: ExperimentalFeatures::parse("custom-kernel").unwrap(),
+            ..Default::default()
+        };
         let validation_error = sanitize_local_options(&enabled, options)
             .await
             .expect_err("enabled feature should continue to kernel validation");
@@ -2120,7 +2189,7 @@ mod tests {
             ..Default::default()
         };
 
-        let error = sanitize_local_options(&ExperimentalFeatures::default(), options.clone())
+        let error = sanitize_local_options(&RuntimeCapabilities::default(), options.clone())
             .await
             .expect_err("nested virtualization must be disabled by default");
         assert!(
@@ -2129,7 +2198,10 @@ mod tests {
                 .contains("BOXLITE_EXPERIMENTAL=nested-virtualization")
         );
 
-        let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
+        let enabled = RuntimeCapabilities {
+            features: ExperimentalFeatures::parse("nested-virtualization").unwrap(),
+            ..Default::default()
+        };
         sanitize_local_options(&enabled, options).await.unwrap();
     }
 
@@ -2142,7 +2214,7 @@ mod tests {
             ..Default::default()
         };
 
-        sanitize_local_options(&ExperimentalFeatures::default(), options)
+        sanitize_local_options(&RuntimeCapabilities::default(), options)
             .await
             .expect("privileged mode should be available without an experimental opt-in");
     }
@@ -2164,7 +2236,7 @@ mod tests {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
         };
-        let runtime = RuntimeImpl::initialize(options, ExperimentalFeatures::default())
+        let runtime = RuntimeImpl::initialize(options, RuntimeCapabilities::default())
             .expect("Failed to create test runtime");
         (runtime, temp_dir)
     }
@@ -2181,7 +2253,7 @@ mod tests {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 detach,
-                auto_delete: Some(0),
+                auto_remove: false,
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
@@ -2244,7 +2316,7 @@ mod tests {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 detach,
-                auto_delete: Some(0),
+                auto_remove: false,
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,

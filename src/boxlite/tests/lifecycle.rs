@@ -4,7 +4,7 @@ mod common;
 
 use boxlite::BoxliteRuntime;
 use boxlite::runtime::id::{BoxID, BoxIDMint};
-use boxlite::runtime::options::{BoxOptions, BoxliteOptions};
+use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
 use boxlite::runtime::types::BoxStatus;
 
 // ============================================================================
@@ -600,16 +600,23 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
 // AUTO_DELETE TESTS
 // ============================================================================
 
+/// `BoxOptions::default()` still removes the box on stop: `auto_remove` defaults
+/// to true, and that is now the only field that decides this. `auto_delete` is a
+/// deferred deadline and says nothing about the synchronous path — leaving it
+/// unset must not change the default behaviour either way.
 #[tokio::test]
-async fn auto_delete_default_removes_box_on_stop() {
+async fn default_options_remove_box_on_stop() {
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     })
     .expect("create runtime");
-    let mut options = common::alpine_opts();
-    options.auto_delete = None;
+    let options = BoxOptions {
+        rootfs: RootfsSpec::Image("alpine:latest".into()),
+        auto_delete: None,
+        ..Default::default()
+    };
     let handle = runtime.create(options, None).await.unwrap();
     let box_id = handle.id().clone();
 
@@ -617,11 +624,11 @@ async fn auto_delete_default_removes_box_on_stop() {
 
     assert!(
         !runtime.exists(box_id.as_str()).await.unwrap(),
-        "Box should be auto-removed when auto_delete is unset"
+        "Box should be auto-removed when auto_remove keeps its default of true"
     );
 }
 #[tokio::test]
-async fn auto_delete_removes_box_on_stop() {
+async fn auto_remove_removes_box_on_stop() {
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -643,12 +650,12 @@ async fn auto_delete_removes_box_on_stop() {
     // Box should no longer exist
     assert!(
         !runtime.exists(box_id.as_str()).await.unwrap(),
-        "Box should be auto-removed when auto_delete>0"
+        "Box should be auto-removed when auto_remove is true"
     );
 }
 
 #[tokio::test]
-async fn auto_delete_zero_preserves_box_on_stop() {
+async fn auto_remove_off_preserves_box_on_stop() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -667,7 +674,7 @@ async fn auto_delete_zero_preserves_box_on_stop() {
     // Box should still exist
     assert!(
         runtime.exists(box_id.as_str()).await.unwrap(),
-        "Box should be preserved when auto_delete=0"
+        "Box should be preserved when auto_remove is false"
     );
 
     // Status should be Stopped

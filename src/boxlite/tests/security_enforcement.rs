@@ -90,7 +90,7 @@ async fn virtiofs_readonly_and_capabilities() {
                     },
                 ],
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_delete: Some(0),
+                auto_remove: false,
                 ..Default::default()
             },
             None,
@@ -357,7 +357,7 @@ async fn disabled_network_blocks_tsi_socket_forwarding() {
             BoxOptions {
                 network: NetworkSpec::Disabled,
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_delete: Some(0),
+                auto_remove: false,
                 ..Default::default()
             },
             None,

@@ -395,8 +395,11 @@ func WithAutoStopInterval(seconds uint32) BoxOption {
 	return func(c *boxConfig) { c.autoStop = &seconds }
 }
 
-// WithAutoDeleteInterval configures the cloud AutoDelete TTL in seconds.
-// A value of 0 disables AutoDelete. Local runtimes return Unsupported.
+// WithAutoDeleteInterval sets how long after a box stops it is deleted, in
+// seconds. A value of 0 disables AutoDelete. This is a deferred deadline that
+// needs a runtime which sweeps them (boxlite serve or the cloud); the embedded
+// runtime returns Unsupported. For immediate removal on stop use WithAutoRemove,
+// which is an independent axis and needs no sweeper.
 func WithAutoDeleteInterval(seconds uint32) BoxOption {
 	return func(c *boxConfig) { c.autoDelete = &seconds }
 }
@@ -407,8 +410,10 @@ func WithAutoResumeEnabled(enabled bool) BoxOption {
 	return func(c *boxConfig) { c.autoResume = &enabled }
 }
 
-// WithAutoRemove sets whether the box is auto-removed on stop.
-// Deprecated: use WithAutoDeleteInterval.
+// WithAutoRemove removes the box as soon as it stops (docker `run --rm`).
+// Synchronous and needs no sweeper — an independent axis from
+// WithAutoDeleteInterval, not a legacy spelling of it. Setting one never clears
+// the other. Not transmitted to remote runtimes.
 func WithAutoRemove(v bool) BoxOption {
 	return func(c *boxConfig) { c.autoRemove = &v }
 }

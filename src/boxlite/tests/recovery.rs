@@ -431,15 +431,15 @@ async fn successful_start_stashes_stale_exit_file() {
 // ============================================================================
 
 #[tokio::test]
-async fn recovery_removes_auto_delete_boxes() {
-    // Test that boxes with auto_delete>0 are removed during recovery
+async fn recovery_removes_auto_remove_boxes() {
+    // Test that boxes with auto_remove are removed during recovery
     // This simulates a crash scenario where boxes weren't properly cleaned up
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let home_dir = temp_dir.path().to_path_buf();
 
     let persistent_box_id: BoxID;
 
-    // Create two boxes: one with auto_delete>0, one with auto_delete=0
+    // Create two boxes: one with auto_remove, one without
     {
         let options = BoxliteOptions {
             home_dir: home_dir.clone(),
@@ -447,13 +447,13 @@ async fn recovery_removes_auto_delete_boxes() {
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
-        // Create auto_delete>0 box (should be cleaned up on recovery)
+        // Create the auto_remove box (should be cleaned up on recovery)
         let ephemeral_box = runtime
             .create(common::alpine_opts_auto(), None)
             .await
             .unwrap();
 
-        // Create auto_delete=0 box (should persist)
+        // Create the kept box (should persist)
         let persistent_box = runtime.create(common::alpine_opts(), None).await.unwrap();
         persistent_box_id = persistent_box.id().clone();
 
@@ -479,8 +479,8 @@ async fn recovery_removes_auto_delete_boxes() {
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime after restart");
 
-        // auto_delete>0 box should be removed during recovery
-        // auto_delete=0 box should be recovered
+        // the auto_remove box should be removed during recovery
+        // the kept box should be recovered
         let boxes = runtime.list_info().await.unwrap();
         assert_eq!(
             boxes.len(),

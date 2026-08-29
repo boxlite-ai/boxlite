@@ -34,8 +34,39 @@ pub(crate) const CAPABILITY_POLICY_ARCHIVE_VERSION: u32 = 4;
 /// v5, and the importer canonicalizes anything below it.
 pub(crate) const PUBLISHED_PORTS_ARCHIVE_VERSION: u32 = 5;
 
+/// First archive version whose deletion axes are split.
+///
+/// Up to v5 `auto_remove` and `auto_delete` resolved to one policy, with
+/// `auto_delete` taking precedence: `Some(0)` meant "keep the box", any
+/// non-zero value meant "remove it as soon as it stops", and no deferred
+/// deadline could be expressed at all. A pre-split importer reading a v6
+/// archive's real `auto_delete` deadline under that rule would delete the box
+/// the moment it stopped instead of after the deadline, so an archive that
+/// carries a deadline is stamped v6 and such an importer refuses it.
+pub(crate) const SPLIT_DELETION_ARCHIVE_VERSION: u32 = 6;
+
 /// Maximum archive version this build can import.
-pub(crate) const MAX_SUPPORTED_VERSION: u32 = PUBLISHED_PORTS_ARCHIVE_VERSION;
+pub(crate) const MAX_SUPPORTED_VERSION: u32 = SPLIT_DELETION_ARCHIVE_VERSION;
+
+/// Whether a pre-split importer would act on these options differently.
+///
+/// Such an importer resolves the two deletion fields as
+/// `auto_delete.unwrap_or(auto_remove) > 0`, and cannot represent a deferred
+/// deadline at all. This must stay the exact complement of the rewrite window
+/// in `options_from_manifest`: anything left below v6 is re-read through that
+/// old rule by this build too, so a shape the two disagree about would be
+/// silently rewritten on its own round trip.
+fn pre_split_importer_disagrees(options: &crate::runtime::options::BoxOptions) -> bool {
+    match options.auto_delete {
+        // A real deadline. The old rule removes the box the moment it stops
+        // instead of waiting for it.
+        Some(seconds) if seconds > 0 => true,
+        // An explicit `0` overrode `auto_remove` under the old rule, so an
+        // importer reads "keep" exactly where this build removes on stop.
+        Some(_) => options.auto_remove,
+        None => false,
+    }
+}
 
 /// Pick the archive format an exported box needs.
 ///
@@ -45,7 +76,9 @@ pub(crate) const MAX_SUPPORTED_VERSION: u32 = PUBLISHED_PORTS_ARCHIVE_VERSION;
 /// rather than silently drop. Only `None` (the caller never touched the
 /// field) is indistinguishable from what a v3 importer already does.
 pub(crate) fn archive_version_for_options(options: &crate::runtime::options::BoxOptions) -> u32 {
-    if !options.ports.is_empty() {
+    if pre_split_importer_disagrees(options) {
+        SPLIT_DELETION_ARCHIVE_VERSION
+    } else if !options.ports.is_empty() {
         PUBLISHED_PORTS_ARCHIVE_VERSION
     } else if options.advanced.capabilities().is_none() {
         ARCHIVE_VERSION
@@ -61,9 +94,10 @@ pub(crate) fn archive_version_for_options(options: &crate::runtime::options::Box
 /// v3: adds `box_options` for full configuration preservation
 /// v4: `box_options.advanced` carries a custom capability policy
 /// v5: `ports` carry publication semantics (automatic host port, bind IP)
+/// v6: `auto_remove` and `auto_delete` are independent axes
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ArchiveManifest {
-    /// Archive format version (1 through 5).
+    /// Archive format version (1 through 6).
     pub version: u32,
     /// Original box name (optional, may be renamed on import).
     pub box_name: Option<String>,
@@ -417,6 +451,64 @@ mod tests {
             "an export carrying ports must be stamped at or above the version \
              below which the importer rewrites them"
         );
+    }
+
+    /// The same invariant for the deletion axes: anything left below v6 is
+    /// re-read through the pre-split rule by this build too, so a shape that
+    /// rule disagrees about would be rewritten on its own round trip. The one
+    /// that bit: `auto_remove` beside an explicit `auto_delete: 0` stamped v3,
+    /// and re-importing took the `Some(0) => false` arm and silently dropped
+    /// remove-on-stop.
+    #[test]
+    fn this_builds_deletion_exports_are_never_rewritten_on_import() {
+        for options in [
+            crate::runtime::options::BoxOptions {
+                auto_remove: true,
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            crate::runtime::options::BoxOptions {
+                auto_remove: false,
+                auto_delete: Some(3_600),
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                archive_version_for_options(&options) >= SPLIT_DELETION_ARCHIVE_VERSION,
+                "an export a pre-split importer would misread must be stamped at \
+                 or above the version below which the importer rewrites it: \
+                 auto_remove={} auto_delete={:?}",
+                options.auto_remove,
+                options.auto_delete,
+            );
+        }
+    }
+
+    /// The complement: a shape both rules agree on must stay at the lowest
+    /// version that is safe, so ordinary boxes keep importing into older
+    /// builds.
+    #[test]
+    fn an_agreed_deletion_shape_is_not_pushed_to_v6() {
+        for options in [
+            crate::runtime::options::BoxOptions {
+                auto_remove: true,
+                auto_delete: None,
+                ..Default::default()
+            },
+            crate::runtime::options::BoxOptions {
+                auto_remove: false,
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                archive_version_for_options(&options) < SPLIT_DELETION_ARCHIVE_VERSION,
+                "a pre-split importer reads this shape correctly and must not be \
+                 locked out of it: auto_remove={} auto_delete={:?}",
+                options.auto_remove,
+                options.auto_delete,
+            );
+        }
     }
 
     #[test]

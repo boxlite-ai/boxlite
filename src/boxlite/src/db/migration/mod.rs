@@ -4,6 +4,7 @@
 //! [`all_migrations`]. Migrations run sequentially on startup when the
 //! database schema version is older than the current version.
 
+mod v10_to_v11;
 mod v2_to_v3;
 mod v3_to_v4;
 mod v4_to_v5;
@@ -83,5 +84,65 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(v7_to_v8::RenameNetworkSpec),
         Box::new(v8_to_v9::PreservePublishedPorts),
         Box::new(v9_to_v10::DropAmbiguousEmptyCapabilities),
+        Box::new(v10_to_v11::SplitFusedDeletionAxes),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Registration is what actually makes a migration run: each migration's
+    /// own tests call `run` directly and would pass just the same if it were
+    /// never added to the registry. Drive the whole chain instead, starting
+    /// from the version a released build leaves behind.
+    #[test]
+    fn the_chain_reaches_the_current_schema_and_rescues_a_legacy_box() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_version (
+                 id INTEGER PRIMARY KEY,
+                 version INTEGER,
+                 updated_at TEXT
+             );
+             INSERT INTO schema_version (id, version, updated_at) VALUES (1, 10, '');
+             CREATE TABLE box_config (
+                 id TEXT PRIMARY KEY,
+                 name TEXT,
+                 created_at INTEGER,
+                 json TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO box_config (id, name, created_at, json) VALUES ('legacy', NULL, 0, ?1)",
+            rusqlite::params![r#"{"options":{"auto_remove":true,"auto_delete":0}}"#],
+        )
+        .unwrap();
+
+        run_migrations(&conn, 10, None).unwrap();
+
+        let version: i32 = conn
+            .query_row(
+                "SELECT version FROM schema_version WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, crate::db::schema::SCHEMA_VERSION);
+
+        let json: String = conn
+            .query_row(
+                "SELECT json FROM box_config WHERE id = 'legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let config: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            config.pointer("/options/auto_remove"),
+            Some(&false.into()),
+            "an ordinary pre-upgrade box must not come back marked remove-on-stop"
+        );
+    }
 }

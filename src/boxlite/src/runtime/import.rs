@@ -9,7 +9,7 @@ use crate::disk::constants::filenames as disk_filenames;
 use crate::litebox::LiteBox;
 use crate::litebox::archive::{
     ArchiveManifest, MANIFEST_FILENAME, MAX_SUPPORTED_VERSION, PUBLISHED_PORTS_ARCHIVE_VERSION,
-    extract_archive, move_file, sha256_file,
+    SPLIT_DELETION_ARCHIVE_VERSION, extract_archive, move_file, sha256_file,
 };
 use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::options::{
@@ -93,6 +93,21 @@ fn options_from_manifest(
                 "Canonicalized legacy archive port mappings"
             );
         }
+    }
+    // Up to v5 the two deletion axes shared one integer, with `auto_delete`
+    // taking precedence: `Some(0)` meant "keep the box after stop" and any
+    // non-zero value meant "remove it as soon as it stops". Every archive an
+    // older build wrote therefore carries `auto_delete:0` beside the
+    // `auto_remove:true` default it never wrote. Read under the split rule that
+    // says remove-on-stop, which — since such a box is also detached — sanitize
+    // rejects outright, making those archives unimportable. Resolve them the
+    // way the build that wrote them did, before validating.
+    if manifest.version < SPLIT_DELETION_ARCHIVE_VERSION {
+        options.auto_remove = match options.auto_delete {
+            Some(seconds) => seconds > 0,
+            None => options.auto_remove,
+        };
+        options.auto_delete = None;
     }
     options.sanitize().map_err(|error| {
         BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
@@ -321,6 +336,71 @@ mod tests {
             preserved.ports, options.ports,
             "a v5 archive carries publication semantics and must survive import intact"
         );
+    }
+
+    /// Every archive an older build wrote carries the fused shape: an explicit
+    /// `auto_delete:0` beside the `auto_remove:true` default it never wrote,
+    /// on a box `create` had already detached. Read under the split rule that
+    /// is remove-on-stop, which sanitize refuses next to `detach`, so the
+    /// archive stops being importable at all.
+    #[test]
+    fn a_pre_split_archive_keeps_the_box_it_asked_to_keep() {
+        let options = BoxOptions {
+            auto_remove: true,
+            auto_delete: Some(0),
+            detach: true,
+            ..Default::default()
+        };
+
+        let mut legacy = v3_manifest(options);
+        legacy.version = SPLIT_DELETION_ARCHIVE_VERSION - 1;
+
+        let imported = options_from_manifest(&legacy, ArchiveImportPolicy::Trusted)
+            .expect("a legacy archive must stay importable");
+
+        assert!(
+            !imported.auto_remove,
+            "auto_delete:0 meant keep the box, so it must not become remove-on-stop"
+        );
+        assert_eq!(imported.auto_delete, None);
+    }
+
+    /// The `--rm` spelling has to land on the synchronous axis, not become a
+    /// one-second deadline that outlives the import.
+    #[test]
+    fn a_pre_split_rm_archive_still_removes_on_stop() {
+        let options = BoxOptions {
+            auto_remove: false,
+            auto_delete: Some(1),
+            ..Default::default()
+        };
+
+        let mut legacy = v3_manifest(options);
+        legacy.version = SPLIT_DELETION_ARCHIVE_VERSION - 1;
+
+        let imported = options_from_manifest(&legacy, ArchiveImportPolicy::Trusted).unwrap();
+
+        assert!(imported.auto_remove);
+        assert_eq!(imported.auto_delete, None);
+    }
+
+    /// A current archive's deadline is a real deferred deadline and must not be
+    /// collapsed onto the synchronous axis.
+    #[test]
+    fn a_split_archive_keeps_its_deferred_deadline() {
+        let options = BoxOptions {
+            auto_remove: false,
+            auto_delete: Some(3_600),
+            ..Default::default()
+        };
+
+        let mut current = v3_manifest(options);
+        current.version = SPLIT_DELETION_ARCHIVE_VERSION;
+
+        let imported = options_from_manifest(&current, ArchiveImportPolicy::Trusted).unwrap();
+
+        assert_eq!(imported.auto_delete, Some(3_600));
+        assert!(!imported.auto_remove);
     }
 
     #[test]

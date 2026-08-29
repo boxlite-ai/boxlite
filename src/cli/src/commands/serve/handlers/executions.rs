@@ -255,7 +255,7 @@ pub(in crate::commands::serve) async fn attach_execution(
         );
     }
 
-    upgrade_to_attach_session(ws, active)
+    upgrade_to_attach_session(ws, active, state)
 }
 
 /// Attach to the box's **main command session** — the container's init.
@@ -305,7 +305,7 @@ pub(in crate::commands::serve) async fn attach_box(
         }
     };
 
-    let mut response = upgrade_to_attach_session(ws, active);
+    let mut response = upgrade_to_attach_session(ws, active, state);
     response
         .headers_mut()
         .insert(MAIN_SESSION_ID_HEADER, header_value);
@@ -318,7 +318,11 @@ pub(in crate::commands::serve) async fn attach_box(
 /// permanently unattachable and unreapable.
 ///
 /// The caller must have already claimed the slot with `mark_connected()`.
-fn upgrade_to_attach_session(ws: WebSocketUpgrade, active: Arc<ActiveExecution>) -> Response {
+fn upgrade_to_attach_session(
+    ws: WebSocketUpgrade,
+    active: Arc<ActiveExecution>,
+    state: Arc<AppState>,
+) -> Response {
     let failed_active = Arc::clone(&active);
     ws.on_failed_upgrade(move |_err| {
         tokio::spawn(async move {
@@ -326,11 +330,11 @@ fn upgrade_to_attach_session(ws: WebSocketUpgrade, active: Arc<ActiveExecution>)
         });
     })
     .on_upgrade(move |socket| async move {
-        run_attach_session(socket, active).await;
+        run_attach_session(socket, active, state).await;
     })
 }
 
-async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>) {
+async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, state: Arc<AppState>) {
     let mut stdout_rx = active.stdout_bus().subscribe();
     let mut stderr_rx = active.stderr_bus().subscribe();
     let mut done_rx = active.done_rx();
@@ -341,8 +345,21 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>) {
     let (ctrl_tx, mut ctrl_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
     let reader_active = Arc::clone(&active);
+    let reader_state = Arc::clone(&state);
     let mut reader = tokio::spawn(async move {
         while let Some(msg) = stream.next().await {
+            // Client *data* frames renew the lease. The upgrade itself is
+            // stamped once, like any other box request, but that alone would
+            // only hold the box for a single window: a terminal left open
+            // overnight must be allowed to idle out, while one someone is
+            // typing into must keep its box alive past the AutoStop window. A
+            // Close frame or a transport error ends the session rather than
+            // using it, so neither renews the lease.
+            if matches!(msg, Ok(Message::Binary(_)) | Ok(Message::Text(_))) {
+                reader_state
+                    .record_box_activity(reader_active.box_id())
+                    .await;
+            }
             match msg {
                 Ok(Message::Binary(bytes)) => {
                     let mut guard = reader_active.stdin().lock().await;

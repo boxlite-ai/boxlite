@@ -11,16 +11,14 @@ use axum::response::{IntoResponse, Response};
 use boxlite::{BoxArchive, CloneOptions, ExportOptions};
 
 use super::super::types::{CloneRequest, ImportQuery};
-use super::super::{
-    AppState, box_info_to_response, error_from_boxlite, error_response, get_or_fetch_box,
-};
+use super::super::{AppState, box_info_to_response, error_from_boxlite, error_response, fetch_box};
 
 pub(in crate::commands::serve) async fn clone_box(
     State(state): State<Arc<AppState>>,
     Path(box_id): Path<String>,
     Json(req): Json<CloneRequest>,
 ) -> Response {
-    let litebox = match get_or_fetch_box(&state, &box_id).await {
+    let litebox = match fetch_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };
@@ -48,7 +46,7 @@ pub(in crate::commands::serve) async fn export_box(
     State(state): State<Arc<AppState>>,
     Path(box_id): Path<String>,
 ) -> Response {
-    let litebox = match get_or_fetch_box(&state, &box_id).await {
+    let litebox = match fetch_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };

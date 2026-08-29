@@ -115,7 +115,11 @@ async fn test_rest_box_exists() {
 async fn test_rest_start_stop_box() {
     let rt = rest_runtime();
     let opts = BoxOptions {
-        auto_delete: Some(0), // Keep box after stop so we can inspect status
+        // Inert on this path — `auto_remove` is never transmitted, so it says
+        // nothing to the server. The box survives its stop because the server
+        // itself creates boxes with remove-on-stop off; this states the intent
+        // locally so the options read the same as the box that comes back.
+        auto_remove: false,
         ..Default::default()
     };
 
@@ -242,7 +246,7 @@ async fn test_rest_not_found() {
 async fn test_rest_snapshot_lifecycle() {
     let rt = rest_runtime();
     let opts = BoxOptions {
-        auto_delete: Some(0),
+        auto_remove: false,
         ..Default::default()
     };
 
@@ -302,7 +306,7 @@ async fn test_rest_snapshot_lifecycle() {
 async fn test_rest_clone_from_snapshot() {
     let rt = rest_runtime();
     let opts = BoxOptions {
-        auto_delete: Some(0),
+        auto_remove: false,
         ..Default::default()
     };
 
@@ -336,7 +340,7 @@ async fn test_rest_clone_from_snapshot() {
 async fn test_rest_export_box() {
     let rt = rest_runtime();
     let opts = BoxOptions {
-        auto_delete: Some(0),
+        auto_remove: false,
         ..Default::default()
     };
 

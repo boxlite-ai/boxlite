@@ -208,9 +208,10 @@ impl CreateBoxRequest {
                     capabilities: capabilities.clone(),
                 }
             }),
-            // The deprecated remove-on-stop flag was never applied by the cloud
-            // control-plane mapper. Keep remote defaults unchanged and only send
-            // the modern lifecycle fields when callers explicitly configure them.
+            // `auto_remove` is deliberately absent: it is the synchronous
+            // remove-on-stop axis, which the wire contract does not carry and
+            // the server could not honour. Keep remote defaults unchanged and
+            // send a lifecycle field only when the caller configured it.
             auto_stop: options.auto_stop,
             auto_delete: options.auto_delete,
             auto_resume: options.auto_resume,
@@ -915,8 +916,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn deprecated_auto_remove_does_not_change_rest_lifecycle_defaults() {
+    fn auto_remove_is_never_transmitted_to_a_rest_runtime() {
         for auto_remove in [false, true] {
             let opts = BoxOptions {
                 auto_remove,

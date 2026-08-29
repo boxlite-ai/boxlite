@@ -75,7 +75,8 @@ impl CreateArgs {
         self.resource.apply_to(&mut options);
         self.capability.apply_to(&mut options);
         self.boot.apply_to(&mut options);
-        self.management.apply_to(&mut options)?;
+        self.management
+            .apply_to(&mut options, global.targets_rest())?;
         self.publish.apply_to(&mut options)?;
         self.volume.apply_to(&mut options, global.home.as_deref())?;
         self.network.apply_to(&mut options)?;
@@ -87,11 +88,11 @@ impl CreateArgs {
         // non-detached created box is killed by the exiting `start` CLI (its
         // watchdog + the runtime's drop-time auto-stop) before its main command
         // records an exit code — the box then reports 0 instead of its real
-        // code. Detached boxes have no foreground watcher, so auto-remove cannot
-        // apply — the same rule `run -d` enforces (remove-on-stop with detach is
-        // rejected at sanitize).
+        // code. Detached boxes have no foreground watcher, so remove-on-stop
+        // cannot apply; `apply_detach_override` drops it on both backends, the
+        // same reconciliation `run -d` gets.
         options.detach = true;
-        options.auto_delete = Some(0);
+        self.management.apply_detach_override(&mut options);
         options.working_dir = self.workdir.clone();
         if let Some(ref exec) = self.entrypoint {
             options.entrypoint = Some(vec![exec.clone()]);
@@ -136,6 +137,52 @@ mod tests {
             RootfsSpec::RootfsPath(path) => assert_eq!(path, "/tmp/rootfs"),
             other => panic!("expected RootfsPath, got {other:?}"),
         }
+    }
+
+    /// A `create`d box always detaches, so `--rm` can never apply to it. The
+    /// two backends spell `--rm` differently, so both need checking: the
+    /// embedded runtime uses the synchronous `auto_remove`, while the REST
+    /// encoding turns it into `auto_delete = Some(1)`. Leaving that deadline in
+    /// place would have the server's sweeper delete the box one second after it
+    /// stops — the opposite of what `create` promises.
+    fn created_options(args: &[&str]) -> BoxOptions {
+        let cli = Cli::try_parse_from(args).expect("create should parse");
+        let Commands::Create(args) = cli.command else {
+            panic!("expected create command");
+        };
+        args.to_box_options(&cli.global)
+            .expect("options should build")
+    }
+
+    #[test]
+    fn create_rm_never_survives_as_a_deadline_against_a_server() {
+        let opts = created_options(&[
+            "boxlite",
+            "--url",
+            "http://127.0.0.1:1",
+            "create",
+            "--rm",
+            "alpine:latest",
+        ]);
+
+        assert!(opts.detach, "create always detaches");
+        assert!(!opts.auto_remove);
+        assert_eq!(
+            opts.auto_delete, None,
+            "--rm must not reach the sweeper as a 1s deadline on a detached box"
+        );
+    }
+
+    #[test]
+    fn create_rm_is_dropped_whichever_backend_is_configured() {
+        // No `--url`, so the backend follows ambient credentials and env: this
+        // pins only what must hold either way. The REST sentinel gets its own
+        // deterministic guard above, which passes `--url` explicitly.
+        let opts = created_options(&["boxlite", "create", "--rm", "alpine:latest"]);
+
+        assert!(opts.detach, "create always detaches");
+        assert!(!opts.auto_remove, "detach drops --rm");
+        assert_eq!(opts.auto_delete, None);
     }
 
     #[test]

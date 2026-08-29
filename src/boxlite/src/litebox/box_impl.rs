@@ -1745,7 +1745,7 @@ mod tests {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 detach: true,
-                auto_delete: Some(0),
+                auto_remove: false,
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
@@ -1995,7 +1995,7 @@ mod tests {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 detach: false,
-                auto_delete: Some(0),
+                auto_remove: false,
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
@@ -2074,7 +2074,9 @@ mod tests {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 detach: false,
-                auto_delete: Some(u32::from(removes_on_stop)),
+                // Synchronous removal is `auto_remove`'s axis; `auto_delete` is a
+                // deferred deadline that needs a sweeper this runtime has none of.
+                auto_remove: removes_on_stop,
                 ports,
                 ..Default::default()
             },

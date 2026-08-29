@@ -187,7 +187,11 @@ pub unsafe extern "C" fn boxlite_options_add_secret(
     options_add_secret(opts, name, value, placeholder, hosts, hosts_count)
 }
 
-/// Deprecated: use `boxlite_options_set_auto_delete_interval`.
+/// Remove the box as soon as it stops (docker `run --rm`).
+///
+/// A separate axis from `boxlite_options_set_auto_delete_interval`: this removes
+/// the box synchronously and needs no sweeper, while the interval is a deadline
+/// something has to act on later. Setting one never clears the other.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_auto_remove(opts: *mut CBoxliteOptions, val: c_int) {
     options_set_auto_remove(opts, val)
@@ -570,11 +574,12 @@ pub unsafe fn options_add_secret(
     }
 }
 
-#[allow(deprecated)]
 pub unsafe fn options_set_auto_remove(handle: *mut OptionsHandle, val: c_int) {
     if let Some(handle) = unsafe { handle.as_mut() } {
+        // Only this axis. Clearing `auto_delete` here would silently destroy a
+        // caller's deadline — the two are independent policies, not two
+        // spellings of one.
         handle.options.auto_remove = val != 0;
-        handle.options.auto_delete = None;
     }
 }
 

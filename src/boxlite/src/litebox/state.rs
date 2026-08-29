@@ -63,6 +63,17 @@ impl BoxStatus {
         matches!(self, BoxStatus::Running)
     }
 
+    /// Whether the box has come to rest, and so is subject to an AutoDelete
+    /// deadline measured from that transition.
+    ///
+    /// `Failed` counts: it will never run again on its own, so excluding it
+    /// would leak exactly the boxes nobody goes back to clean up. Anything that
+    /// acts on a deadline and anything that reports one read this same rule, so
+    /// the schedule a box is on and the deadline it shows cannot drift apart.
+    pub fn is_at_rest(&self) -> bool {
+        matches!(self, BoxStatus::Stopped | BoxStatus::Failed)
+    }
+
     pub fn is_configured(&self) -> bool {
         matches!(self, BoxStatus::Configured)
     }

@@ -64,7 +64,7 @@ pub use runtime::id::{BaseDiskID, BaseDiskIDMint, BoxID, BoxIDMint};
 pub use runtime::types::ContainerID;
 pub use runtime::types::{
     BoxInfo, BoxLifecyclePolicy, BoxState, BoxStateInfo, BoxStatus, NetworkDirectionInfo,
-    NetworkInfo, PublishedPort,
+    NetworkInfo, PublishedPort, Seconds,
 };
 
 #[cfg(feature = "rest")]

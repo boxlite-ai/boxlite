@@ -87,7 +87,7 @@ async fn mount_security_integration() {
                     read_only: false,
                 }],
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_delete: Some(0),
+                auto_remove: false,
                 ..Default::default()
             },
             None,

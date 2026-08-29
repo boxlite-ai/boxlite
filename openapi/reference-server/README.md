@@ -102,6 +102,15 @@ curl -s -X DELETE http://localhost:8080/v1/demo/boxes/$BOX_ID \
 
 **Not implemented:** `GET/HEAD /{prefix}/images/{id}` (SDK has no get-by-digest), WebSocket TTY.
 
+`auto_stop` / `auto_delete` are forwarded to the embedded runtime as sent. That runtime enforces
+neither — it runs no sweeper — and refuses a non-zero value, so a create carrying one returns 400.
+Responses report the box's real `auto_stop`, `auto_delete` and `auto_resume` rather than omitting
+them. All three are optional on the wire and `auto_stop` defaults to 900, so a client that finds it
+missing reads a live 15-minute idle window this server never enforces. A deadline can reach the
+store despite the create-path refusal — importing an archive does not go through that check, and a
+runtime home shared with `boxlite serve` holds whatever that server persisted — so the values are
+read back from the box rather than assumed.
+
 ## CLI Options
 
 ```

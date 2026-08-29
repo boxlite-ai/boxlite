@@ -3,7 +3,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use crate::experimental::ExperimentalFeatures;
 use crate::litebox::LiteBox;
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
@@ -91,13 +90,11 @@ impl BoxliteRuntime {
         Ok(Self::from_local(local))
     }
 
-    pub(crate) fn new_with_experimental_features(
+    pub(crate) fn new_with_capabilities(
         options: BoxliteOptions,
-        features: ExperimentalFeatures,
+        capabilities: crate::experimental::RuntimeCapabilities,
     ) -> BoxliteResult<Self> {
-        let local = LocalRuntime(RuntimeImpl::new_with_experimental_features(
-            options, features,
-        )?);
+        let local = LocalRuntime(RuntimeImpl::new_with_capabilities(options, capabilities)?);
         Ok(Self::from_local(local))
     }
 
@@ -561,11 +558,14 @@ mod tests {
 
     #[tokio::test]
     async fn create_rejects_detached_remove_on_stop() {
-        // Remove-on-stop (auto_delete>0) with detach=true is contradictory. The
-        // create boundary must reject it up front rather than deferring to start().
+        // Remove-on-stop (`auto_remove`) with detach=true is contradictory: the box
+        // is meant to outlive its creator, yet would be deleted the moment it
+        // stops. The create boundary must reject it up front rather than deferring
+        // to start(). A deferred `auto_delete` deadline is the compatible spelling
+        // and is covered separately.
         let (runtime, _dir) = local_runtime();
         let opts = BoxOptions {
-            auto_delete: Some(1),
+            auto_remove: true,
             detach: true,
             ..Default::default()
         };
@@ -582,7 +582,7 @@ mod tests {
             "expected an InvalidArgument error, got: {err:?}"
         );
         assert!(
-            err.to_string().contains("remove-on-stop is incompatible"),
+            err.to_string().contains("auto_remove is incompatible"),
             "unexpected message: {err}"
         );
     }

@@ -90,13 +90,31 @@ class TestBoxOptionsDefaults:
 class TestAutoRemoveBehavior:
     """Test auto_remove option behavior."""
 
-    async def test_auto_delete_overrides_auto_remove(self, runtime):
+    async def test_auto_delete_needs_a_sweeper_the_embedded_runtime_lacks(
+        self, runtime
+    ):
+        """A delete deadline is refused, not silently stored, with no sweeper.
+
+        `auto_delete` is a deferred deadline someone has to act on. The embedded
+        runtime runs no sweeper, so accepting one would report a policy back to
+        the caller that never fires. `auto_remove` is the axis that works here.
+        """
+        with pytest.raises(RuntimeError, match="AutoDelete"):
+            await runtime.create(
+                boxlite.BoxOptions(
+                    image="alpine:latest", auto_remove=False, auto_delete=60
+                )
+            )
+
+    async def test_auto_delete_zero_is_accepted_as_disabled(self, runtime):
+        """`0` asks for no enforcement, so it must not trip the sweeper gate."""
         box = await runtime.create(
-            boxlite.BoxOptions(image="alpine:latest", auto_remove=False, auto_delete=60)
+            boxlite.BoxOptions(image="alpine:latest", auto_remove=False, auto_delete=0)
         )
         box_id = box.id
         await box.stop()
-        assert await runtime.get_info(box_id) is None
+        assert await runtime.get_info(box_id) is not None
+        await runtime.remove(box_id)
 
     async def test_auto_remove_true_removes_box_on_stop(self, runtime):
         """Test that auto_remove=True removes box when stop() is called."""
@@ -164,7 +182,7 @@ class TestDetachOption:
 
     async def test_detach_true_creates_box(self, runtime):
         """Test that detach=True creates box successfully."""
-        # Detached boxes opt out of removal with the deprecated compatibility flag.
+        # A detached box outlives its creator, so synchronous removal is off.
         box = await runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
@@ -190,14 +208,30 @@ class TestOptionCombinations:
             auto_remove=True,
             detach=True,
         )
-        with pytest.raises(RuntimeError, match="remove-on-stop is incompatible"):
+        with pytest.raises(RuntimeError, match="auto_remove is incompatible"):
             await runtime.create(opts)
 
-    async def test_auto_delete_overrides_auto_remove_for_detach(self, runtime):
+    async def test_detach_needs_auto_remove_off_not_a_zero_deadline(self, runtime):
+        """`auto_delete=0` no longer cancels `auto_remove`.
+
+        The two are independent axes, so turning the deadline off says nothing
+        about synchronous removal — and `auto_remove` is what conflicts with
+        detach. Only clearing that axis makes the box valid.
+        """
+        with pytest.raises(RuntimeError, match="auto_remove is incompatible"):
+            await runtime.create(
+                boxlite.BoxOptions(
+                    image="alpine:latest",
+                    auto_remove=True,
+                    auto_delete=0,
+                    detach=True,
+                )
+            )
+
         box = await runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
-                auto_remove=True,
+                auto_remove=False,
                 auto_delete=0,
                 detach=True,
             )

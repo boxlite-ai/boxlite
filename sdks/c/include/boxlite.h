@@ -887,7 +887,11 @@ void boxlite_options_add_secret(CBoxliteOptions *opts,
                                 const char *const *hosts,
                                 int hosts_count);
 
-// Deprecated: use `boxlite_options_set_auto_delete_interval`.
+// Remove the box as soon as it stops (docker `run --rm`).
+//
+// A separate axis from `boxlite_options_set_auto_delete_interval`: this removes
+// the box synchronously and needs no sweeper, while the interval is a deadline
+// something has to act on later. Setting one never clears the other.
 void boxlite_options_set_auto_remove(CBoxliteOptions *opts, int val);
 
 // Set how long an idle box may remain paused before the runtime pauses it.
