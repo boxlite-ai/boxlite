@@ -277,7 +277,7 @@ Credential:      API key (from ~/.boxlite/credentials.toml [local])
 **Example output (OIDC session):**
 
 ```
-Logged in to:    https://api.boxlite.ai/api
+Logged in to:    https://app.boxlite.ai/api
 Credential:      OIDC bearer token (from ~/.boxlite/credentials.toml [cloud])
 Expires:         2026-05-21T15:42:00+00:00
 ```
@@ -299,7 +299,7 @@ Logged in as:    dev@acme.test
 Name:            Dev McAcme
 Principal:       auth0|abc123 (user)
 Organization:    acme
-Server:          https://api.boxlite.ai/api
+Server:          https://app.boxlite.ai/api
 Scopes:          box:read, box:write, box:exec, image:read, snapshot:read
 ```
 

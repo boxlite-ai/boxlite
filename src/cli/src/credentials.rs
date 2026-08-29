@@ -370,7 +370,7 @@ mod tests {
 
     fn sample_oidc_profile() -> Profile {
         Profile {
-            url: "https://api.boxlite.ai/api".to_string(),
+            url: "https://app.boxlite.ai/api".to_string(),
             access_token: Some(SecretString::from("at-abc".to_string())),
             refresh_token: Some(SecretString::from("rt-xyz".to_string())),
             id_token: Some(SecretString::from("eyJhbGciOi...".to_string())),
@@ -489,7 +489,7 @@ mod tests {
     #[tokio::test]
     async fn into_rest_options_propagates_path_prefix() {
         let profile = Profile {
-            url: "https://api.boxlite.ai/api".to_string(),
+            url: "https://app.boxlite.ai/api".to_string(),
             api_key: Some(SecretString::from("blk_live_x".to_string())),
             path_prefix: Some("acme".to_string()),
             ..Profile::default()
@@ -664,7 +664,7 @@ mod tests {
     #[tokio::test]
     async fn into_rest_options_oidc_uses_access_token() {
         let profile = Profile {
-            url: "https://api.boxlite.ai/api".to_string(),
+            url: "https://app.boxlite.ai/api".to_string(),
             api_key: Some(SecretString::from("should-not-be-used".to_string())),
             access_token: Some(SecretString::from("oidc-at".to_string())),
             auth_method: AuthMethod::Oidc,

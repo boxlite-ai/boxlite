@@ -164,7 +164,7 @@ mod tests {
 
     fn oidc_profile_with_expiry(expires_at: chrono::DateTime<Utc>) -> Profile {
         Profile {
-            url: "https://api.boxlite.ai/api".to_string(),
+            url: "https://app.boxlite.ai/api".to_string(),
             access_token: Some(SecretString::from("at".to_string())),
             refresh_token: Some(SecretString::from("rt".to_string())),
             expires_at: Some(expires_at),
@@ -213,7 +213,7 @@ mod tests {
     fn clear_oidc_session_keeps_url_and_method() {
         let mut p = oidc_profile_with_expiry(Utc::now());
         clear_oidc_session(&mut p);
-        assert_eq!(p.url, "https://api.boxlite.ai/api");
+        assert_eq!(p.url, "https://app.boxlite.ai/api");
         assert!(p.access_token.is_none());
         assert!(p.refresh_token.is_none());
         assert!(p.oidc_issuer.is_none());
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn apply_tokens_populates_all_oidc_fields() {
         let mut p = Profile {
-            url: "https://api.boxlite.ai/api".to_string(),
+            url: "https://app.boxlite.ai/api".to_string(),
             ..Profile::default()
         };
         let cfg = OidcConfig {
