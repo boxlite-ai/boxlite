@@ -48,18 +48,37 @@ pub struct CPublishedPortList {
     pub count: c_int,
 }
 
-/// Typed network metadata owned by an enclosing [`CBoxInfo`].
-///
-/// `allow_net` points to `allow_net_count` owned strings. `published_ports`
-/// is null when the current handle does not know the bindings, non-null and
-/// empty when there are no active publications, and otherwise contains
-/// concrete bindings.
+/// Mode and allowlist for one traffic direction. `allow_net` points to
+/// `allow_net_count` owned strings, owned by the enclosing [`CNetworkInfo`].
 #[repr(C)]
-pub struct CNetworkInfo {
+pub struct CNetworkDirectionInfo {
     pub mode: BoxliteNetworkMode,
     pub allow_net: *mut *mut c_char,
     pub allow_net_count: c_int,
+}
+
+/// Typed network metadata owned by an enclosing [`CBoxInfo`].
+///
+/// `published_ports` is null when the current handle does not know the
+/// bindings, non-null and empty when there are no active publications, and
+/// otherwise contains concrete bindings.
+/// The first four fields are byte-compatible with the pre-split struct
+/// (`mode`, `allow_net`, `allow_net_count`, `published_ports`), so callers
+/// compiled against the old header keep reading valid data at the same
+/// offsets. They alias `outbound`'s allocations — never free them separately;
+/// [`free_network_info`] releases each allocation exactly once through
+/// `outbound`/`inbound`.
+#[repr(C)]
+pub struct CNetworkInfo {
+    /// Deprecated: read `outbound.mode`. Mirrors it for old callers.
+    pub mode: BoxliteNetworkMode,
+    /// Deprecated: read `outbound.allow_net`. Aliases it — do not free.
+    pub allow_net: *mut *mut c_char,
+    /// Deprecated: read `outbound.allow_net_count`.
+    pub allow_net_count: c_int,
     pub published_ports: *mut CPublishedPortList,
+    pub outbound: CNetworkDirectionInfo,
+    pub inbound: CNetworkDirectionInfo,
 }
 
 #[repr(C)]
@@ -148,15 +167,28 @@ impl CPublishedPortList {
     }
 }
 
-impl CNetworkInfo {
-    fn from_network_info(network: &boxlite::NetworkInfo) -> Self {
+impl CNetworkDirectionInfo {
+    fn from_direction_info(direction: &boxlite::runtime::types::NetworkDirectionInfo) -> Self {
         let (allow_net, allow_net_count) = into_raw_slice(
-            network
+            direction
                 .allow_net
                 .iter()
                 .map(|host| to_c_str(host))
                 .collect(),
         );
+        Self {
+            mode: match direction.mode {
+                NetworkMode::Enabled => BoxliteNetworkMode::BoxliteNetworkModeEnabled,
+                NetworkMode::Disabled => BoxliteNetworkMode::BoxliteNetworkModeDisabled,
+            },
+            allow_net,
+            allow_net_count,
+        }
+    }
+}
+
+impl CNetworkInfo {
+    fn from_network_info(network: &boxlite::NetworkInfo) -> Self {
         let published_ports = network
             .published_ports
             .as_deref()
@@ -165,14 +197,16 @@ impl CNetworkInfo {
             .map(Box::into_raw)
             .unwrap_or(ptr::null_mut());
 
+        let outbound = CNetworkDirectionInfo::from_direction_info(&network.outbound);
         Self {
-            mode: match network.mode {
-                NetworkMode::Enabled => BoxliteNetworkMode::BoxliteNetworkModeEnabled,
-                NetworkMode::Disabled => BoxliteNetworkMode::BoxliteNetworkModeDisabled,
-            },
-            allow_net,
-            allow_net_count,
+            // Aliases of `outbound`, kept for pre-split callers. Ownership
+            // stays with `outbound`.
+            mode: outbound.mode,
+            allow_net: outbound.allow_net,
+            allow_net_count: outbound.allow_net_count,
             published_ports,
+            outbound,
+            inbound: CNetworkDirectionInfo::from_direction_info(&network.inbound),
         }
     }
 }
@@ -201,18 +235,25 @@ unsafe fn free_published_port_list(list: *mut CPublishedPortList) {
     }
 }
 
+unsafe fn free_network_direction_info(direction: &CNetworkDirectionInfo) {
+    unsafe {
+        if !direction.allow_net.is_null() && direction.allow_net_count >= 0 {
+            for index in 0..direction.allow_net_count as usize {
+                free_str(*direction.allow_net.add(index));
+            }
+        }
+        free_raw_slice(direction.allow_net, direction.allow_net_count);
+    }
+}
+
 pub(crate) unsafe fn free_network_info(network: *mut CNetworkInfo) {
     if network.is_null() {
         return;
     }
     unsafe {
         let network = Box::from_raw(network);
-        if !network.allow_net.is_null() && network.allow_net_count >= 0 {
-            for index in 0..network.allow_net_count as usize {
-                free_str(*network.allow_net.add(index));
-            }
-        }
-        free_raw_slice(network.allow_net, network.allow_net_count);
+        free_network_direction_info(&network.outbound);
+        free_network_direction_info(&network.inbound);
         free_published_port_list(network.published_ports);
     }
 }
@@ -500,12 +541,81 @@ mod tests {
     use std::ptr::NonNull;
 
     use boxlite::runtime::options::PortProtocol;
+    use boxlite::runtime::types::NetworkDirectionInfo;
     use boxlite::{NetworkInfo, NetworkMode, PublishedPort};
 
     use crate::options::BoxlitePortProtocol;
     use crate::{FREE_STR_CALLS, FREE_STR_LOCK};
 
-    use super::{BoxliteNetworkMode, free_network_info, network_to_c_ptr};
+    use super::{BoxliteNetworkMode, CNetworkInfo, free_network_info, network_to_c_ptr};
+    use std::ffi::c_char;
+
+    /// Callers compiled against the pre-split header read `mode`,
+    /// `allow_net`, `allow_net_count` and `published_ports` at the offsets
+    /// they had before `outbound`/`inbound` existed. Pin those offsets: moving
+    /// them is an ABI break that no recompile of the caller would reveal.
+    #[test]
+    fn legacy_network_info_fields_keep_their_pre_split_offsets() {
+        use std::mem::offset_of;
+
+        assert_eq!(offset_of!(CNetworkInfo, mode), 0);
+        assert_eq!(
+            offset_of!(CNetworkInfo, allow_net),
+            offset_of!(CNetworkInfo, mode) + size_of::<usize>()
+        );
+        assert_eq!(
+            offset_of!(CNetworkInfo, allow_net_count),
+            offset_of!(CNetworkInfo, allow_net) + size_of::<*mut *mut c_char>()
+        );
+        assert_eq!(
+            offset_of!(CNetworkInfo, published_ports),
+            offset_of!(CNetworkInfo, allow_net) + 2 * size_of::<usize>()
+        );
+        // The legacy prefix must sit ahead of the nested view, otherwise the
+        // offsets above would only hold by accident.
+        assert!(offset_of!(CNetworkInfo, outbound) > offset_of!(CNetworkInfo, published_ports));
+    }
+
+    /// The legacy scalar fields alias `outbound`'s allocations, so they must
+    /// report the same values — and the aliasing must not double-free.
+    #[test]
+    fn legacy_network_info_fields_mirror_outbound() {
+        let _guard = FREE_STR_LOCK.lock().unwrap();
+
+        let network = NonNull::new(network_to_c_ptr(&Some(NetworkInfo::new(
+            NetworkDirectionInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: vec!["api.example.com".to_string()],
+            },
+            NetworkDirectionInfo {
+                mode: NetworkMode::Disabled,
+                allow_net: Vec::new(),
+            },
+            None,
+        ))))
+        .expect("Some network metadata must allocate CNetworkInfo");
+
+        {
+            let network = unsafe { network.as_ref() };
+            assert_eq!(network.mode, network.outbound.mode);
+            assert_eq!(network.allow_net_count, network.outbound.allow_net_count);
+            assert_eq!(network.allow_net, network.outbound.allow_net);
+            assert_eq!(
+                unsafe { CStr::from_ptr(*network.allow_net) }
+                    .to_str()
+                    .unwrap(),
+                "api.example.com"
+            );
+        }
+
+        // One free of the aliased allowlist, not two.
+        let before = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+        unsafe { free_network_info(network.as_ptr()) };
+        assert_eq!(
+            FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst) - before,
+            1
+        );
+    }
 
     #[test]
     fn typed_network_info_preserves_network_and_publication_state() {
@@ -514,36 +624,53 @@ mod tests {
 
         assert!(network_to_c_ptr(&None).is_null());
 
-        let unresolved = NonNull::new(network_to_c_ptr(&Some(NetworkInfo {
-            mode: NetworkMode::Enabled,
-            allow_net: vec!["api.example.com".to_string()],
-            published_ports: None,
-        })))
+        let unresolved = NonNull::new(network_to_c_ptr(&Some(NetworkInfo::new(
+            NetworkDirectionInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: vec!["api.example.com".to_string()],
+            },
+            NetworkDirectionInfo {
+                mode: NetworkMode::Disabled,
+                allow_net: Vec::new(),
+            },
+            None,
+        ))))
         .expect("Some network metadata must allocate CNetworkInfo");
         let unresolved_ref = unsafe { unresolved.as_ref() };
         assert_eq!(
-            unresolved_ref.mode,
+            unresolved_ref.outbound.mode,
             BoxliteNetworkMode::BoxliteNetworkModeEnabled
         );
-        assert_eq!(unresolved_ref.allow_net_count, 1);
+        assert_eq!(unresolved_ref.outbound.allow_net_count, 1);
         assert_eq!(
-            unsafe { CStr::from_ptr(*unresolved_ref.allow_net) }
+            unsafe { CStr::from_ptr(*unresolved_ref.outbound.allow_net) }
                 .to_str()
                 .unwrap(),
             "api.example.com"
         );
+        assert_eq!(
+            unresolved_ref.inbound.mode,
+            BoxliteNetworkMode::BoxliteNetworkModeDisabled
+        );
+        assert_eq!(unresolved_ref.inbound.allow_net_count, 0);
         assert!(unresolved_ref.published_ports.is_null());
         unsafe { free_network_info(unresolved.as_ptr()) };
 
-        let resolved_empty = NonNull::new(network_to_c_ptr(&Some(NetworkInfo {
-            mode: NetworkMode::Disabled,
-            allow_net: Vec::new(),
-            published_ports: Some(Vec::new()),
-        })))
+        let resolved_empty = NonNull::new(network_to_c_ptr(&Some(NetworkInfo::new(
+            NetworkDirectionInfo {
+                mode: NetworkMode::Disabled,
+                allow_net: Vec::new(),
+            },
+            NetworkDirectionInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: Vec::new(),
+            },
+            Some(Vec::new()),
+        ))))
         .expect("Some network metadata must allocate CNetworkInfo");
         let resolved_empty_ref = unsafe { resolved_empty.as_ref() };
         assert_eq!(
-            resolved_empty_ref.mode,
+            resolved_empty_ref.outbound.mode,
             BoxliteNetworkMode::BoxliteNetworkModeDisabled
         );
         assert!(!resolved_empty_ref.published_ports.is_null());
@@ -552,16 +679,22 @@ mod tests {
         assert_eq!(resolved_empty_ports.count, 0);
         unsafe { free_network_info(resolved_empty.as_ptr()) };
 
-        let resolved = NonNull::new(network_to_c_ptr(&Some(NetworkInfo {
-            mode: NetworkMode::Enabled,
-            allow_net: Vec::new(),
-            published_ports: Some(vec![PublishedPort {
+        let resolved = NonNull::new(network_to_c_ptr(&Some(NetworkInfo::new(
+            NetworkDirectionInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: Vec::new(),
+            },
+            NetworkDirectionInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: Vec::new(),
+            },
+            Some(vec![PublishedPort {
                 guest_port: 3000,
                 host_ip: "127.0.0.1".to_string(),
                 host_port: 49152,
                 protocol: PortProtocol::Tcp,
             }]),
-        })))
+        ))))
         .expect("Some network metadata must allocate CNetworkInfo");
         let resolved_ref = unsafe { resolved.as_ref() };
         assert!(!resolved_ref.published_ports.is_null());

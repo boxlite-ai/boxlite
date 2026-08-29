@@ -3,6 +3,7 @@ package boxlite
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"unsafe"
 )
@@ -237,8 +238,10 @@ func TestBoxOptions(t *testing.T) {
 	WithEntrypoint("/bin/sh")(cfg)
 	WithCmd("-c", "echo hi")(cfg)
 	WithNetwork(NetworkSpec{
-		Mode:     NetworkModeEnabled,
-		AllowNet: []string{"example.com", "*.openai.com"},
+		Outbound: OutboundNetworkSpec{
+			Mode:     NetworkModeEnabled,
+			AllowNet: []string{"example.com", "*.openai.com"},
+		},
 	})(cfg)
 	WithSecret(Secret{Name: "openai", Value: "sk-test"})(cfg)
 
@@ -287,11 +290,11 @@ func TestBoxOptions(t *testing.T) {
 	if cfg.network == nil {
 		t.Fatal("network should be set")
 	}
-	if cfg.network.Mode != NetworkModeEnabled {
-		t.Errorf("network.Mode: got %q", cfg.network.Mode)
+	if cfg.network.Outbound.Mode != NetworkModeEnabled {
+		t.Errorf("network.Mode: got %q", cfg.network.Outbound.Mode)
 	}
-	if len(cfg.network.AllowNet) != 2 {
-		t.Errorf("network.AllowNet: got %v", cfg.network.AllowNet)
+	if len(cfg.network.Outbound.AllowNet) != 2 {
+		t.Errorf("network.AllowNet: got %v", cfg.network.Outbound.AllowNet)
 	}
 	if len(cfg.secrets) != 1 {
 		t.Fatalf("secrets: got %d", len(cfg.secrets))
@@ -682,33 +685,140 @@ func TestWithDetach(t *testing.T) {
 func TestWithNetwork(t *testing.T) {
 	cfg := &boxConfig{}
 	WithNetwork(NetworkSpec{
-		Mode:     NetworkModeDisabled,
-		AllowNet: []string{},
+		Outbound: OutboundNetworkSpec{
+			Mode:     NetworkModeDisabled,
+			AllowNet: []string{},
+		},
 	})(cfg)
 
 	if cfg.network == nil {
 		t.Fatal("network should be set")
 	}
-	if cfg.network.Mode != NetworkModeDisabled {
-		t.Errorf("network.Mode: got %q", cfg.network.Mode)
+	if cfg.network.Outbound.Mode != NetworkModeDisabled {
+		t.Errorf("network.Mode: got %q", cfg.network.Outbound.Mode)
 	}
-	if len(cfg.network.AllowNet) != 0 {
-		t.Errorf("network.AllowNet: got %v", cfg.network.AllowNet)
+	if len(cfg.network.Outbound.AllowNet) != 0 {
+		t.Errorf("network.AllowNet: got %v", cfg.network.Outbound.AllowNet)
+	}
+}
+
+// The pre-split shape was NetworkSpec{Mode, AllowNet}, which configured the
+// outbound direction. Callers that still pass it must keep working.
+func TestWithNetwork_LegacyFlatFieldsConfigureOutbound(t *testing.T) {
+	cfg := &boxConfig{}
+	WithNetwork(NetworkSpec{
+		Mode:     NetworkModeEnabled,
+		AllowNet: []string{"api.example.com"},
+	})(cfg)
+
+	if cfg.networkErr != nil {
+		t.Fatalf("unexpected error: %v", cfg.networkErr)
+	}
+	if cfg.network == nil {
+		t.Fatal("network should be set")
+	}
+	if cfg.network.Outbound.Mode != NetworkModeEnabled {
+		t.Errorf("Outbound.Mode: got %q", cfg.network.Outbound.Mode)
+	}
+	if len(cfg.network.Outbound.AllowNet) != 1 || cfg.network.Outbound.AllowNet[0] != "api.example.com" {
+		t.Errorf("Outbound.AllowNet: got %v", cfg.network.Outbound.AllowNet)
+	}
+	// A legacy spec said nothing about inbound, so inbound keeps its default.
+	if cfg.network.Inbound.Mode != "" {
+		t.Errorf("Inbound.Mode should stay unset, got %q", cfg.network.Inbound.Mode)
+	}
+	if err := buildAndFreeCOptions("alpine:latest", cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// Mixing the two shapes is ambiguous — reject rather than pick one. The error
+// surfaces at conversion because BoxOption has no error channel.
+func TestWithNetwork_RejectsMixedLegacyAndNestedShapes(t *testing.T) {
+	cfg := &boxConfig{}
+	WithNetwork(NetworkSpec{
+		Mode:     NetworkModeDisabled,
+		Outbound: OutboundNetworkSpec{Mode: NetworkModeEnabled},
+	})(cfg)
+
+	if cfg.networkErr == nil {
+		t.Fatal("mixing Mode with Outbound should be rejected")
+	}
+	err := buildAndFreeCOptions("alpine:latest", cfg)
+	if err == nil {
+		t.Fatal("buildCOptions should surface the deferred network error")
+	}
+	if !strings.Contains(err.Error(), "cannot mix Outbound with deprecated Mode/AllowNet") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestWithNetwork_InboundDisabled(t *testing.T) {
+	cfg := &boxConfig{}
+	WithNetwork(NetworkSpec{
+		Inbound: InboundNetworkSpec{Mode: NetworkModeDisabled},
+	})(cfg)
+
+	if cfg.network == nil {
+		t.Fatal("network should be set")
+	}
+	if cfg.network.Inbound.Mode != NetworkModeDisabled {
+		t.Errorf("network.Inbound.Mode: got %q", cfg.network.Inbound.Mode)
+	}
+	// Outbound is independent of Inbound: unset Outbound.Mode still means
+	// "enabled, full access" once buildCOptions runs, same as before this
+	// field existed.
+	if err := buildAndFreeCOptions("alpine:latest", cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildCOptions_RejectsUnsupportedInboundAllowNet(t *testing.T) {
+	// The field exists for shape symmetry with Outbound, but no layer
+	// enforces an inbound allowlist yet — a non-empty one must error under
+	// either mode instead of being accepted as a silent no-op.
+	for _, mode := range []NetworkMode{NetworkModeEnabled, NetworkModeDisabled} {
+		cfg := &boxConfig{}
+		WithNetwork(NetworkSpec{
+			Inbound: InboundNetworkSpec{Mode: mode, AllowNet: []string{"10.0.0.0/8"}},
+		})(cfg)
+
+		_, err := buildCOptions("alpine:latest", cfg)
+		if err == nil {
+			t.Fatalf("mode=%q: expected error for non-empty inbound allowlist", mode)
+		}
+		if !strings.Contains(err.Error(), "not supported yet") {
+			t.Fatalf("mode=%q: unexpected error: %v", mode, err)
+		}
+	}
+}
+
+func TestBuildCOptions_RejectsInvalidInboundMode(t *testing.T) {
+	cfg := &boxConfig{}
+	WithNetwork(NetworkSpec{
+		Inbound: InboundNetworkSpec{Mode: NetworkMode("readonly")},
+	})(cfg)
+
+	_, err := buildCOptions("alpine:latest", cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid inbound mode")
 	}
 }
 
 func TestBuildCOptions_RejectsAllowNetWithDisabledMode(t *testing.T) {
 	cfg := &boxConfig{}
 	WithNetwork(NetworkSpec{
-		Mode:     NetworkModeDisabled,
-		AllowNet: []string{"example.com"},
+		Outbound: OutboundNetworkSpec{
+			Mode:     NetworkModeDisabled,
+			AllowNet: []string{"example.com"},
+		},
 	})(cfg)
 
 	_, err := buildCOptions("alpine:latest", cfg)
 	if err == nil {
 		t.Fatal("expected error for disabled network with allowlist")
 	}
-	if err.Error() != "network.mode=\"disabled\" is incompatible with allow_net" {
+	if err.Error() != "network.outbound.mode=\"disabled\" is incompatible with allow_net" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

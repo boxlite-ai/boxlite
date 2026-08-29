@@ -262,10 +262,19 @@ pub struct BoxInfo {
     pub labels: HashMap<String, String>,
 }
 
-pub struct NetworkInfo {
+pub struct NetworkDirectionInfo {
     pub mode: NetworkMode,
     pub allow_net: Vec<String>,
+}
+
+pub struct NetworkInfo {
+    pub outbound: NetworkDirectionInfo,
+    pub inbound: NetworkDirectionInfo,
     pub published_ports: Option<Vec<PublishedPort>>,
+    // Deprecated mirrors of `outbound`, kept so pre-split readers keep
+    // compiling. Build with `NetworkInfo::new` so they cannot disagree.
+    pub mode: NetworkMode,
+    pub allow_net: Vec<String>,
 }
 
 pub struct PublishedPort {

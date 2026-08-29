@@ -616,30 +616,54 @@ async fn spawn_with_executor(
             };
             let executor = ContainerExecutor::new(container_arc);
             let container_ref = executor.container_ref();
-            let spawn = match ssh_workload {
-                Some(workload) => executor.spawn_ssh_workload(req, workload).await,
+            let spawn = match ssh_workload.as_ref() {
+                Some(workload) => executor.spawn_ssh_workload(req, workload.clone()).await,
                 None => executor.spawn(req).await,
             };
             let handle = match spawn {
                 Ok(h) => h,
                 Err(e) => {
-                    // Check if container init died — provide actionable diagnostics
-                    let mut container = container_ref.lock().await;
-                    if !container.is_running() {
-                        let (init_stdout, init_stderr) = container.drain_init_output();
-                        let mut msg = format!(
-                            "Container init process exited — cannot exec. Original error: {}",
-                            e
-                        );
-                        if !init_stdout.is_empty() {
-                            msg.push_str(&format!(". Init stdout: {}", init_stdout.trim()));
+                    // Zombie revival: run -d's Container.Start handoff can be
+                    // lost when the creating CLI process exits before the RPC
+                    // leaves the machine — the container sits in Created while
+                    // the host has already marked the box Running. Re-issue the
+                    // start here: run_init is idempotent, and a start still in
+                    // flight holds the per-container lock, so this call queues
+                    // behind it and then no-ops. On success, retry the spawn
+                    // once (the lock must be dropped first — spawn takes it).
+                    let retry = revive_and_retry(
+                        &container_ref,
+                        move || async move {
+                            match ssh_workload {
+                                Some(workload) => executor.spawn_ssh_workload(req, workload).await,
+                                None => executor.spawn(req).await,
+                            }
+                        },
+                        e,
+                    )
+                    .await;
+                    match retry {
+                        Ok(h) => h,
+                        Err(e) => {
+                            // Check if container init died — provide actionable diagnostics
+                            let mut container = container_ref.lock().await;
+                            if !container.is_running() {
+                                let (init_stdout, init_stderr) = container.drain_init_output();
+                                let mut msg = format!(
+                                    "Container init process exited — cannot exec. Error: {}",
+                                    e
+                                );
+                                if !init_stdout.is_empty() {
+                                    msg.push_str(&format!(". Init stdout: {}", init_stdout.trim()));
+                                }
+                                if !init_stderr.is_empty() {
+                                    msg.push_str(&format!(". Init stderr: {}", init_stderr.trim()));
+                                }
+                                return Err(spawn_error(execution_id, msg));
+                            }
+                            return Err(spawn_error(execution_id, e.to_string()));
                         }
-                        if !init_stderr.is_empty() {
-                            msg.push_str(&format!(". Init stderr: {}", init_stderr.trim()));
-                        }
-                        return Err(spawn_error(execution_id, msg));
                     }
-                    return Err(spawn_error(execution_id, e.to_string()));
                 }
             };
             Ok((handle, Some(container_ref)))
@@ -658,6 +682,38 @@ async fn spawn_with_executor(
     }
 }
 
+/// One revival attempt for a failed exec spawn.
+///
+/// Retries via `spawn_again` only when the container is provably not running:
+/// a non-running container can never have spawned the command (libcontainer
+/// refuses to build into Created), so the first failure was the Created-window
+/// build error and one retry after run_init is safe. A *running* container
+/// must NOT be retried: `spawn_request` can fail in Phase 2 (the PTY console
+/// handshake) after Phase 1 already spawned the process, and a retry would
+/// execute the user's command twice. A Stopped container fails run_init and
+/// the original error is returned unchanged.
+async fn revive_and_retry<F, Fut>(
+    container_ref: &std::sync::Arc<tokio::sync::Mutex<crate::container::Container>>,
+    spawn_again: F,
+    original_error: boxlite_shared::errors::BoxliteError,
+) -> boxlite_shared::errors::BoxliteResult<exec_handle::ExecHandle>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<
+        Output = boxlite_shared::errors::BoxliteResult<exec_handle::ExecHandle>,
+    >,
+{
+    let revive = {
+        let container = container_ref.lock().await;
+        !container.is_running() && container.run_init().is_ok()
+    };
+    if revive {
+        spawn_again().await
+    } else {
+        Err(original_error)
+    }
+}
+
 /// True when `id` is a single normal path component (no `..`, `/`, or a prefix),
 /// so joining it under `containers/` cannot escape that directory. Real container
 /// ids are 64-char hex, so this never rejects a legitimate one.
@@ -669,15 +725,82 @@ fn is_single_path_component(id: &str) -> bool {
 
 #[cfg(test)]
 mod container_id_path_tests {
-    use super::{execution_id_for_request, is_single_path_component, GuestServer, TtyResize};
+    use super::{
+        execution_id_for_request, is_single_path_component, revive_and_retry, GuestServer,
+        TtyResize,
+    };
     use crate::layout::GuestLayout;
     use crate::reaper::ExitSlot;
     use crate::service::exec::error::ExecutionError;
     use crate::service::exec::exec_handle::{ExecHandle, ExitStatus};
     use crate::service::exec::output::{OutputStreamSummary, OutputTerminalSummary};
     use crate::service::exec::state::{ExecutionExit, ExecutionState, TerminalSnapshot};
+    use boxlite_shared::errors::BoxliteError;
     use boxlite_shared::{exec_output, ExecStdin};
     use nix::unistd::{pipe, write, Pid};
+
+    /// The retry gate must not re-spawn when the container is already running:
+    /// `spawn_request` can fail after spawning (the PTY console handshake), and
+    /// a retry would execute the user's command twice. With the old
+    /// `is_running() || run_init()` condition the assertion below fails:
+    /// "a running container must not be retried — the command may already have
+    /// been spawned".
+    #[tokio::test]
+    async fn failed_spawn_on_a_running_container_is_not_retried() {
+        use crate::container::Container;
+        use libcontainer::container::{ContainerStatus, State};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        // Running state with our own (alive) pid — the same trick as
+        // `run_init_is_noop_when_init_already_running` in lifecycle.rs.
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let state_root = dir
+            .path()
+            .parent()
+            .expect("temp dir has a parent")
+            .to_path_buf();
+        let id = dir
+            .path()
+            .file_name()
+            .expect("temp dir has a name")
+            .to_string_lossy()
+            .to_string();
+        let state = State::new(
+            &id,
+            ContainerStatus::Running,
+            Some(i32::try_from(std::process::id()).expect("current pid fits in i32")),
+            dir.path().to_path_buf(),
+        );
+        state.save(dir.path()).expect("save libcontainer state");
+
+        let container = Container::for_unit_test(&id, state_root, dir.path().join("bundle"));
+        let container_ref = Arc::new(Mutex::new(container));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_closure = Arc::clone(&calls);
+        let original = BoxliteError::Internal("first spawn failed".into());
+
+        let result = revive_and_retry(
+            &container_ref,
+            move || {
+                let calls = Arc::clone(&calls_for_closure);
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Err::<ExecHandle, _>(BoxliteError::Internal("retry ran".into()))
+                }
+            },
+            original,
+        )
+        .await;
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "a running container must not be retried — the command may already have been spawned"
+        );
+        assert!(result.is_err(), "the original error must be returned");
+    }
 
     #[test]
     fn rejects_ids_that_would_escape_the_containers_dir() {

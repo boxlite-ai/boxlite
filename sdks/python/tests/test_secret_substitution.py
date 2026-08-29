@@ -114,8 +114,10 @@ class TestBoxOptionsWithSecrets:
             memory_mib=512,
             env=[("FOO", "bar")],
             network=boxlite.NetworkSpec(
-                mode="enabled",
-                allow_net=["api.example.com"],
+                outbound=boxlite.OutboundNetworkSpec(
+                    mode="enabled",
+                    allow_net=["api.example.com"],
+                ),
             ),
             secrets=[secret],
         )
@@ -131,12 +133,14 @@ class TestBoxOptionsWithSecrets:
         opts = boxlite.BoxOptions(
             image="alpine:latest",
             network=boxlite.NetworkSpec(
-                mode="enabled",
-                allow_net=["api.openai.com", "pypi.org"],
+                outbound=boxlite.OutboundNetworkSpec(
+                    mode="enabled",
+                    allow_net=["api.openai.com", "pypi.org"],
+                ),
             ),
             secrets=[secret],
         )
-        assert opts.network.allow_net == ["api.openai.com", "pypi.org"]
+        assert opts.network.outbound.allow_net == ["api.openai.com", "pypi.org"]
         assert len(opts.secrets) == 1
 
     def test_secret_fields_accessible_through_boxoptions(self):
@@ -246,8 +250,10 @@ class TestSecretIntegration:
             boxlite.BoxOptions(
                 image="alpine:latest",
                 network=boxlite.NetworkSpec(
-                    mode="enabled",
-                    allow_net=["httpbingo.org"],
+                    outbound=boxlite.OutboundNetworkSpec(
+                        mode="enabled",
+                        allow_net=["httpbingo.org"],
+                    ),
                 ),
                 secrets=[secret],
             )
@@ -296,8 +302,10 @@ class TestSecretIntegration:
             boxlite.BoxOptions(
                 image="alpine:latest",
                 network=boxlite.NetworkSpec(
-                    mode="enabled",
-                    allow_net=["httpbingo.org"],
+                    outbound=boxlite.OutboundNetworkSpec(
+                        mode="enabled",
+                        allow_net=["httpbingo.org"],
+                    ),
                 ),
                 secrets=[secret],
             )

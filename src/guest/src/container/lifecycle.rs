@@ -247,7 +247,18 @@ impl Container {
     /// — docker's create → attach → start. Fused, a command that finishes
     /// immediately can be gone before an attach issued after start reaches the
     /// guest, taking its output and exit code with it when the VM powers off.
+    ///
+    /// Idempotent: a container whose init is already up no-ops here instead of
+    /// reaching youki's start, which errors with IncorrectStatus on a Running
+    /// container. This method itself takes no lock — the guarantee relies on
+    /// both callers (the Container.Start RPC and the exec zombie-revival path)
+    /// holding the per-container mutex, so concurrent calls serialize at the
+    /// caller and the late one observes Running. A Created container (the
+    /// zombie, or a start still in flight behind the lock) proceeds to start.
     pub fn run_init(&self) -> BoxliteResult<()> {
+        if self.is_running() {
+            return Ok(());
+        }
         start::start_container(&self.id, &self.state_root)
     }
 
@@ -353,6 +364,29 @@ impl Container {
                 );
                 None
             }
+        }
+    }
+
+    /// Test-only constructor: a container whose libcontainer state must be
+    /// written separately by the test (see `run_init_is_noop_when_init_already_running`
+    /// and the exec `failed_spawn_on_a_running_container_is_not_retried` test,
+    /// which save a Running state file first). `is_shutdown` is set so Drop
+    /// never signals the recorded pid — tests point it at their own process.
+    #[cfg(test)]
+    pub(crate) fn for_unit_test(id: &str, state_root: PathBuf, bundle_path: PathBuf) -> Self {
+        // Drop removes the bundle directory; create it so cleanup is a
+        // silent no-op instead of warning on a NotFound during tests.
+        std::fs::create_dir_all(&bundle_path).expect("create bundle dir for unit test");
+        Self {
+            id: id.to_string(),
+            state_root,
+            bundle_path,
+            env: HashMap::new(),
+            user: (0, 0),
+            mount_destinations: Vec::new(),
+            capabilities: CapabilitySet::default(),
+            stdio: ContainerStdio::pipes().expect("create stdio pipes").0,
+            is_shutdown: std::sync::atomic::AtomicBool::new(true),
         }
     }
 
@@ -638,6 +672,7 @@ impl Drop for Container {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use libcontainer::container::{ContainerStatus, State};
     use nix::sys::signal::kill;
     use nix::unistd::{pipe, Pid};
     use std::os::fd::OwnedFd;
@@ -679,6 +714,63 @@ mod tests {
         assert!(
             kill(pid, None).is_err(),
             "failed init handle must not leave a child"
+        );
+    }
+
+    /// `run_init` must be idempotent: the Container.Start RPC and the exec
+    /// zombie-revival path both call it, and a second call on a container whose
+    /// init is already running must no-op — youki's `start()` errors with
+    /// `IncorrectStatus(Running)` on a Running container, and that error is the
+    /// failure this test exists to pin.
+    #[test]
+    fn run_init_is_noop_when_init_already_running() {
+        // `container_state_path()` is `state_root.join(id)`, and libcontainer
+        // persists the state as `<that dir>/state.json` — so point the two
+        // halves at one TempDir by splitting it into parent + name.
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let state_root = dir
+            .path()
+            .parent()
+            .expect("temp dir has a parent")
+            .to_path_buf();
+        let id = dir
+            .path()
+            .file_name()
+            .expect("temp dir has a name")
+            .to_string_lossy()
+            .to_string();
+
+        // Running with our own (alive) pid: `refresh_status` keeps it Running,
+        // the same trick `load_container_status_refreshes_stale_persisted_status`
+        // relies on in start.rs.
+        let state = State::new(
+            &id,
+            ContainerStatus::Running,
+            Some(i32::try_from(std::process::id()).expect("current pid fits in i32")),
+            dir.path().to_path_buf(),
+        );
+        state.save(dir.path()).expect("save libcontainer state");
+
+        // Drop removes the bundle directory; create it so cleanup is a
+        // silent no-op instead of warning on a NotFound during tests.
+        std::fs::create_dir_all(dir.path().join("bundle")).expect("create bundle dir");
+        let container = Container {
+            id,
+            state_root,
+            bundle_path: dir.path().join("bundle"),
+            env: HashMap::new(),
+            user: (0, 0),
+            mount_destinations: Vec::new(),
+            capabilities: CapabilitySet::default(),
+            stdio: ContainerStdio::pipes().expect("create stdio pipes").0,
+            // Drop must not SIGKILL the recorded pid — it is this test process.
+            is_shutdown: std::sync::atomic::AtomicBool::new(true),
+        };
+
+        let result = container.run_init();
+        assert!(
+            result.is_ok(),
+            "run_init on an already-running container must no-op, got: {result:?}"
         );
     }
 }

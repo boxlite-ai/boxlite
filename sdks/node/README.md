@@ -179,9 +179,17 @@ const box = new SimpleBox({
   autoRemove: true,  // Auto-remove on stop (default: true)
   workingDir: '/app',
   network: {
-    mode: 'enabled',
-    allowNet: ['api.openai.com'],
+    outbound: {
+      mode: 'enabled',
+      allowNet: ['api.openai.com'],
+    },
+    inbound: {
+      mode: 'disabled',
+    },
   },
+  // The pre-split shape `network: { mode, allowNet }` still works and
+  // configures the outbound direction. Passing it together with `outbound`
+  // is rejected.
   advanced: {
     capabilities: {
       add: ['NET_ADMIN'],

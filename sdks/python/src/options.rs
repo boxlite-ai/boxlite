@@ -5,10 +5,11 @@ use boxlite::litebox::copy::CopyOptions;
 use boxlite::runtime::advanced_options::{HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, NetworkMode, NetworkSpec,
-    OutboundNetworkConfig, PortProtocol, PortSpec, RegistryTransport, RootfsSpec, VolumeSpec,
+    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, InboundNetworkConfig,
+    NetworkMode, NetworkSpec, OutboundNetworkConfig, PortProtocol, PortSpec, RegistryTransport,
+    RootfsSpec, VolumeSpec,
 };
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyTuple};
 
@@ -246,9 +247,42 @@ impl From<PyCopyOptions> for CopyOptions {
 // NetworkSpec
 // ============================================================================
 
+/// Network policy for a box.
+///
+/// Prefer the nested `outbound` and `inbound` fields. The constructor also
+/// accepts legacy `mode` and `allow_net` keywords as a compatibility shim.
 #[pyclass(name = "NetworkSpec")]
 #[derive(Clone, Debug)]
 pub(crate) struct PyNetworkSpec {
+    #[pyo3(get, set)]
+    pub(crate) outbound: Option<PyOutboundNetworkSpec>,
+    #[pyo3(get, set)]
+    pub(crate) inbound: Option<PyInboundNetworkSpec>,
+}
+
+/// Outbound network policy.
+///
+/// `mode` accepts `"enabled"` or `"disabled"`. `allow_net` contains the host
+/// patterns allowed when outbound networking is enabled.
+#[pyclass(name = "OutboundNetworkSpec")]
+#[derive(Clone, Debug)]
+pub(crate) struct PyOutboundNetworkSpec {
+    #[pyo3(get, set)]
+    pub(crate) mode: String,
+    #[pyo3(get, set)]
+    pub(crate) allow_net: Vec<String>,
+}
+
+/// Inbound network policy.
+///
+/// Aligned field-for-field with `NetworkSpec`: `mode` accepts
+/// `"enabled"` (services the box exposes are publicly reachable) or
+/// `"disabled"` (private). `allow_net` exists for shape symmetry only — no
+/// layer enforces an inbound allowlist yet, so a non-empty value is
+/// rejected.
+#[pyclass(name = "InboundNetworkSpec")]
+#[derive(Clone, Debug)]
+pub(crate) struct PyInboundNetworkSpec {
     #[pyo3(get, set)]
     pub(crate) mode: String,
     #[pyo3(get, set)]
@@ -257,27 +291,162 @@ pub(crate) struct PyNetworkSpec {
 
 #[pymethods]
 impl PyNetworkSpec {
+    /// Create a network policy from nested specs or legacy outbound keywords.
+    ///
+    /// Passing `outbound` together with legacy `mode` or `allow_net` raises
+    /// `ValueError`; callers should use one shape per request.
     #[new]
-    #[pyo3(signature = (mode, allow_net=vec![]))]
-    fn new(mode: String, allow_net: Vec<String>) -> Self {
-        Self { mode, allow_net }
+    #[pyo3(signature = (outbound=None, inbound=None, mode=None, allow_net=None))]
+    fn new(
+        outbound: Option<&Bound<'_, PyAny>>,
+        inbound: Option<&Bound<'_, PyAny>>,
+        mode: Option<String>,
+        allow_net: Option<Vec<String>>,
+    ) -> PyResult<Self> {
+        // The pre-split signature was `NetworkSpec(mode, allow_net)`, so the
+        // first two positional slots used to hold a `str` and a list of `str`.
+        // Both legacy shapes stay callable because each is unambiguous by
+        // type: a `str` in slot 1 is a mode, a sequence in slot 2 is an
+        // allowlist. Anything else must be the nested spec objects.
+        let (outbound, positional_mode) = match outbound {
+            None => (None, None),
+            Some(value) => match value.extract::<String>() {
+                Ok(legacy_mode) => (None, Some(legacy_mode)),
+                Err(_) => (Some(value.extract::<PyOutboundNetworkSpec>()?), None),
+            },
+        };
+        let (inbound, positional_allow_net) = match inbound {
+            None => (None, None),
+            Some(value) => match value.extract::<Vec<String>>() {
+                Ok(legacy_allow_net) => (None, Some(legacy_allow_net)),
+                Err(_) => (Some(value.extract::<PyInboundNetworkSpec>()?), None),
+            },
+        };
+
+        let mode = match (positional_mode, mode) {
+            (Some(_), Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "NetworkSpec got mode both positionally and by keyword",
+                ));
+            }
+            (positional, keyword) => positional.or(keyword),
+        };
+        let allow_net = match (positional_allow_net, allow_net) {
+            (Some(_), Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "NetworkSpec got allow_net both positionally and by keyword",
+                ));
+            }
+            (positional, keyword) => positional.or(keyword),
+        };
+
+        let legacy_outbound = if mode.is_some() || allow_net.is_some() {
+            if outbound.is_some() {
+                return Err(PyValueError::new_err(
+                    "NetworkSpec cannot mix outbound with legacy mode/allow_net",
+                ));
+            }
+            Some(PyOutboundNetworkSpec {
+                mode: mode.unwrap_or_else(|| "enabled".to_string()),
+                allow_net: allow_net.unwrap_or_default(),
+            })
+        } else {
+            None
+        };
+
+        Ok(Self {
+            outbound: outbound.or(legacy_outbound),
+            inbound,
+        })
+    }
+
+    /// Legacy view of the outbound mode.
+    ///
+    /// Deprecated: read `spec.outbound.mode`. Kept so pre-split readers keep
+    /// working; defaults to `"enabled"` when no outbound policy is set, which
+    /// is what an unset spec meant before the split.
+    #[getter]
+    fn mode(&self) -> String {
+        self.outbound
+            .as_ref()
+            .map(|outbound| outbound.mode.clone())
+            .unwrap_or_else(|| "enabled".to_string())
+    }
+
+    /// Legacy view of the outbound allowlist.
+    ///
+    /// Deprecated: read `spec.outbound.allow_net`.
+    #[getter]
+    fn allow_net(&self) -> Vec<String> {
+        self.outbound
+            .as_ref()
+            .map(|outbound| outbound.allow_net.clone())
+            .unwrap_or_default()
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "NetworkSpec(mode={:?}, allow_net={:?})",
-            self.mode, self.allow_net
+            "NetworkSpec(outbound={:?}, inbound={:?})",
+            self.outbound, self.inbound
         )
     }
 }
 
-impl TryFrom<PyNetworkSpec> for NetworkSpec {
+#[pymethods]
+impl PyOutboundNetworkSpec {
+    /// Create an outbound network policy.
+    ///
+    /// `mode` defaults to `"enabled"` and `allow_net` defaults to an empty
+    /// allow list, which means no additional host allow-list restriction.
+    #[new]
+    #[pyo3(signature = (mode="enabled".to_string(), allow_net=vec![]))]
+    fn new(mode: String, allow_net: Vec<String>) -> Self {
+        Self { mode, allow_net }
+    }
+}
+
+#[pymethods]
+impl PyInboundNetworkSpec {
+    /// Create an inbound network policy.
+    ///
+    /// `mode` defaults to `"enabled"` (publicly reachable) and `allow_net`
+    /// defaults to an empty allow list, meaning no host-based restriction.
+    #[new]
+    #[pyo3(signature = (mode="enabled".to_string(), allow_net=vec![]))]
+    fn new(mode: String, allow_net: Vec<String>) -> Self {
+        Self { mode, allow_net }
+    }
+}
+
+/// Both directions of the Python-facing network spec, converted into the two
+/// independent `BoxOptions` fields.
+impl TryFrom<PyNetworkSpec> for (NetworkSpec, NetworkSpec) {
     type Error = boxlite::BoxliteError;
 
     fn try_from(py_spec: PyNetworkSpec) -> Result<Self, Self::Error> {
-        let mode = py_spec.mode.parse::<NetworkMode>()?;
+        let PyNetworkSpec { outbound, inbound } = py_spec;
+
+        let outbound = match outbound {
+            Some(outbound) => outbound.try_into()?,
+            None => NetworkSpec::default(),
+        };
+        let inbound = match inbound {
+            Some(inbound) => NetworkSpec::try_from(InboundNetworkConfig {
+                mode: inbound.mode.parse::<NetworkMode>()?,
+                allow_net: inbound.allow_net,
+            })?,
+            None => NetworkSpec::default(),
+        };
+        Ok((outbound, inbound))
+    }
+}
+
+impl TryFrom<PyOutboundNetworkSpec> for NetworkSpec {
+    type Error = boxlite::BoxliteError;
+
+    fn try_from(py_spec: PyOutboundNetworkSpec) -> Result<Self, Self::Error> {
         NetworkSpec::try_from(OutboundNetworkConfig {
-            mode,
+            mode: py_spec.mode.parse::<NetworkMode>()?,
             allow_net: py_spec.allow_net,
         })
     }
@@ -520,9 +689,9 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
         let auto_delete = py_opts.auto_delete;
         let volumes = py_opts.volumes.into_iter().map(VolumeSpec::from).collect();
 
-        let network = match py_opts.network {
-            Some(spec) => NetworkSpec::try_from(spec)?,
-            None => NetworkSpec::default(),
+        let (network, inbound_network) = match py_opts.network {
+            Some(spec) => <(NetworkSpec, NetworkSpec)>::try_from(spec)?,
+            None => (NetworkSpec::default(), NetworkSpec::default()),
         };
 
         let ports = py_opts.ports.into_iter().map(PortSpec::from).collect();
@@ -548,6 +717,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
             rootfs,
             volumes,
             network,
+            inbound_network,
             ports,
             auto_stop: py_opts.auto_stop,
             auto_delete,
@@ -1153,6 +1323,23 @@ mod tests {
                 assert!(spec.read_only);
             }
         });
+    }
+
+    /// A disabled inbound policy maps to `NetworkSpec::Disabled`; an unset
+    /// outbound falls back to the enabled default.
+    #[test]
+    fn nested_network_spec_converts() {
+        let (outbound, inbound) = <(NetworkSpec, NetworkSpec)>::try_from(PyNetworkSpec {
+            outbound: None,
+            inbound: Some(PyInboundNetworkSpec {
+                mode: "disabled".into(),
+                allow_net: vec![],
+            }),
+        })
+        .unwrap();
+
+        assert!(matches!(inbound, NetworkSpec::Disabled));
+        assert!(matches!(outbound, NetworkSpec::Enabled { .. }));
     }
 
     /// A dropped alias must fail loudly. `ro` was accepted before the rename;

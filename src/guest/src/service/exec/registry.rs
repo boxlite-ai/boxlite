@@ -651,8 +651,16 @@ impl ExecutionRegistry {
             std::mem::take(&mut inner.entries)
                 .into_values()
                 .filter_map(|entry| match entry {
+                    // The init session (`shutdown_managed=false`) belongs to the
+                    // container lifecycle, not to registry shutdown — see the
+                    // `new_init_session` contract. Skip it here: its drain and
+                    // attach-forwarder tasks are carrying the trailing output of
+                    // a main command that just exited, and releasing would abort
+                    // them mid-delivery. Init's fds closed with the process, so
+                    // the drain ends at its natural EOF in microseconds; the
+                    // rest dies with the guest at power-off.
                     ExecutionEntry::Live(state) | ExecutionEntry::Retained { state, .. } => {
-                        Some(state)
+                        state.shutdown_managed().then_some(state)
                     }
                     ExecutionEntry::Reserved { .. } | ExecutionEntry::Tombstone { .. } => None,
                 })
@@ -687,6 +695,17 @@ mod release_tests {
         } else {
             ExecutionState::new_for_test(handle, exit)
         }
+    }
+
+    /// A registry-managed state (the ordinary SDK execution): shutdown owns it.
+    fn settled_managed_state(pid: i32) -> ExecutionState {
+        let (_stdin_peer, stdin) = pipe().unwrap();
+        let (stdout, _stdout_peer) = pipe().unwrap();
+        let (stderr, _stderr_peer) = pipe().unwrap();
+        let handle = ExecHandle::new(Pid::from_raw(pid), stdin, stdout, Some(stderr))
+            .expect("test pipe must register with Tokio");
+        let exit = ExitSlot::settled_for_test(ExitStatus::Code(7));
+        ExecutionState::new(handle, exit, None)
     }
 
     #[tokio::test]
@@ -1157,8 +1176,8 @@ mod release_tests {
     #[tokio::test]
     async fn shutdown_releases_live_and_retained_state_resources() {
         let registry = ExecutionRegistry::new();
-        let live = settled_state(12_300, false);
-        let retained = settled_state(12_301, false);
+        let live = settled_managed_state(12_300);
+        let retained = settled_managed_state(12_301);
         let snapshot = TerminalSnapshot {
             exit: ExecutionExit {
                 exit_code: 0,
@@ -1187,6 +1206,25 @@ mod release_tests {
         assert!(retained.get_pid().await.is_none());
         assert!(!registry.exists("live").await);
         assert!(!registry.exists("retained").await);
+    }
+
+    /// Registry shutdown must leave the init session alone: the container
+    /// lifecycle owns its shutdown (`shutdown_managed=false`), and releasing it
+    /// here would abort its output drain + attach forwarder mid-delivery —
+    /// losing the trailing stdout of a main command that just exited, right
+    /// while an attach is draining it. The session dies with the guest.
+    #[tokio::test]
+    async fn shutdown_does_not_release_the_init_session() {
+        let registry = ExecutionRegistry::new();
+        let init = settled_state(12_302, true);
+        registry.register("init".into(), init.clone()).await;
+
+        registry.shutdown_all(0).await;
+
+        assert!(
+            init.get_pid().await.is_some(),
+            "init session resources must survive registry shutdown"
+        );
     }
 
     #[tokio::test]

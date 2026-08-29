@@ -23,7 +23,7 @@ use tokio::sync::RwLock;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 
-use boxlite::runtime::options::{NetworkMode, OutboundNetworkConfig};
+use boxlite::runtime::options::{InboundNetworkConfig, NetworkMode, OutboundNetworkConfig};
 use boxlite::{
     BoxCommand, BoxInfo, BoxOptions, BoxliteRuntime, ExecStdin, Execution, LiteBox, NetworkSpec,
     RootfsSpec,
@@ -739,11 +739,13 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default();
 
-    let network = match &req.network {
+    let (network, inbound_network) = match &req.network {
         Some(network) => {
-            if network.uses_legacy_fields() && network.outbound.is_some() {
+            if network.uses_legacy_fields()
+                && (network.outbound.is_some() || network.inbound.is_some())
+            {
                 return Err(boxlite::BoxliteError::InvalidArgument(
-                    "network must use either nested outbound fields or legacy flat fields, not both"
+                    "network must use either nested outbound/inbound fields or legacy flat fields, not both"
                         .into(),
                 ));
             }
@@ -763,9 +765,22 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                     network.legacy.allow_net.clone().unwrap_or_default(),
                 ),
             };
-            NetworkSpec::try_from(OutboundNetworkConfig { mode, allow_net })?
+            let (inbound_mode, inbound_allow_net) = match &network.inbound {
+                Some(inbound) => (
+                    inbound.mode.parse::<NetworkMode>()?,
+                    inbound.allow_net.clone(),
+                ),
+                None => (NetworkMode::Enabled, Vec::new()),
+            };
+            (
+                NetworkSpec::try_from(OutboundNetworkConfig { mode, allow_net })?,
+                NetworkSpec::try_from(InboundNetworkConfig {
+                    mode: inbound_mode,
+                    allow_net: inbound_allow_net,
+                })?,
+            )
         }
-        None => NetworkSpec::default(),
+        None => (NetworkSpec::default(), NetworkSpec::default()),
     };
 
     // SecurityOptions is deliberately NOT client-configurable over
@@ -830,6 +845,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         env,
         secrets,
         network,
+        inbound_network,
         entrypoint: req.entrypoint.clone(),
         cmd: req.cmd.clone(),
         user: req.user.clone(),
@@ -1567,6 +1583,9 @@ mod tests {
                     "outbound": {
                         "mode": "enabled",
                         "allow_net": ["api.openai.com"]
+                    },
+                    "inbound": {
+                        "mode": "disabled"
                     }
                 }
             }"#,
@@ -1579,9 +1598,7 @@ mod tests {
             }
             NetworkSpec::Disabled => panic!("network should be enabled"),
         }
-        assert!(
-            matches!(opts.inbound_network, NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty())
-        );
+        assert!(matches!(opts.inbound_network, NetworkSpec::Disabled));
     }
 
     #[test]

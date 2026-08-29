@@ -304,8 +304,8 @@ describe('BoxService public defaults', () => {
   )
 
   it.each([
-    [undefined, true],
-    [false, false],
+    [undefined, false],
+    [true, true],
   ])('defaults a fresh box to public=%s', async (requestedPublic, expectedPublic) => {
     const { service, boxRepository } = makeCreateService()
 
@@ -373,8 +373,8 @@ describe('BoxService public defaults', () => {
   })
 
   it.each([
-    [undefined, true],
-    [false, false],
+    [undefined, false],
+    [true, true],
   ])('defaults an assigned warm-pool box to public=%s', async (requestedPublic, expectedPublic) => {
     const warmPoolBox = { id: 'warm-box', runnerId: 'runner-1', name: 'warm-box' } as any
     const update = jest.fn().mockResolvedValue(warmPoolBox)

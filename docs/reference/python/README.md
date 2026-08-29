@@ -268,8 +268,11 @@ Metadata about a box.
 | `memory_mib` | `int` | Allocated memory in MiB |
 | `network` | `NetworkInfo \| None` | Current network configuration and resolved local publications |
 
-`NetworkInfo` has `mode: str`, `allow_net: List[str]`, and
-`published_ports: List[PublishedPort] | None`. Each `PublishedPort` has named
+`NetworkInfo` has `outbound: NetworkDirectionInfo`, `inbound:
+NetworkDirectionInfo`, and `published_ports: List[PublishedPort] | None`; each
+direction has `mode: str` and `allow_net: List[str]`. The pre-split
+`mode: str` / `allow_net: List[str]` attributes remain readable on
+`NetworkInfo` as views onto `outbound`. Each `PublishedPort` has named
 `guest_port`, `host_ip`, `host_port`, and `protocol` attributes.
 
 `network is None` means network information is unavailable. Within

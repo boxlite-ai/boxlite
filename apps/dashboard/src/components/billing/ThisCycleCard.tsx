@@ -47,7 +47,7 @@ export function cycleFacts(plan: OrganizationPlan, now: Date, catalog: Plan[] = 
 }
 
 /**
- * The current billing cycle at a glance: quota consumed against the plan's
+ * The current billing cycle at a glance: quota remaining from the plan's
  * grant, the wallet that funds the overage, and when the cycle rolls. Every
  * number is the billing service's own — the plan block and the wallet — so
  * the meter here is the meter settlement charges by. Renders nothing when
@@ -89,8 +89,8 @@ export function ThisCycleCard() {
       <Panel>
         <div className="flex flex-col gap-6 px-[22px] py-6 sm:flex-row sm:gap-14">
           <Metric
-            label="Quota consumed"
-            value={formatAmount(plan.quotaConsumedCents)}
+            label="Quota Remaining"
+            value={formatAmount(plan.quotaRemainingCents ?? 0)}
             sub={unlimited ? 'unlimited quota' : `of ${formatAmount(plan.includedQuotaCents ?? 0)} included`}
           />
           {wallet && (
