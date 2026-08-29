@@ -1751,6 +1751,13 @@ mod tests {
     }
 
     async fn running_box_for_start_test(gate: Arc<StartGate>) -> StartFixture {
+        running_box_with_handler(gate, Box::new(InfoTestHandler(0))).await
+    }
+
+    async fn running_box_with_handler(
+        gate: Arc<StartGate>,
+        handler: Box<dyn VmmHandler>,
+    ) -> StartFixture {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
@@ -1797,7 +1804,7 @@ mod tests {
             .push(listener.clone() as Arc<dyn EventListener>);
 
         let live = LiveState::new(
-            Box::new(InfoTestHandler(0)),
+            handler,
             guest_session,
             None,
             None,
@@ -1980,6 +1987,150 @@ mod tests {
 
         assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
         assert_eq!(fixture.listener.count.load(Ordering::SeqCst), 0);
+    }
+
+    /// Stands in for the real handlers' blocking work: `ShimHandler::stop()`
+    /// polls `waitpid` with `std::thread::sleep(50ms)` for up to 2s, and
+    /// `ShimHandler::metrics()` refreshes sysinfo through syscalls. Both block
+    /// whatever thread runs them.
+    struct BlockingHandler {
+        stop_block: Duration,
+        metrics_block: Duration,
+        entered: std::sync::mpsc::SyncSender<()>,
+    }
+
+    impl VmmHandler for BlockingHandler {
+        fn stop(&mut self) -> BoxliteResult<()> {
+            let _ = self.entered.try_send(());
+            std::thread::sleep(self.stop_block);
+            Ok(())
+        }
+
+        fn metrics(&self) -> BoxliteResult<VmmMetrics> {
+            let _ = self.entered.try_send(());
+            std::thread::sleep(self.metrics_block);
+            Ok(VmmMetrics::default())
+        }
+
+        fn is_running(&self) -> bool {
+            true
+        }
+
+        fn pid(&self) -> u32 {
+            0
+        }
+    }
+
+    const REPRO_BLOCK: Duration = Duration::from_millis(600);
+    const REPRO_OBSERVE: Duration = Duration::from_millis(300);
+    const REPRO_TICK: Duration = Duration::from_millis(10);
+    const REPRO_MIN_TICKS: usize = 5;
+
+    /// Counts timer ticks landing on the runtime worker while the handler is
+    /// inside its blocking call. The sampler runs on a plain OS thread so it
+    /// can observe even when every worker is wedged.
+    fn spawn_tick_observer(
+        ticks: Arc<AtomicUsize>,
+        entered_rx: std::sync::mpsc::Receiver<()>,
+    ) -> std::thread::JoinHandle<usize> {
+        std::thread::spawn(move || {
+            entered_rx
+                .recv()
+                .expect("handler never entered blocking call");
+            let before = ticks.load(Ordering::SeqCst);
+            std::thread::sleep(REPRO_OBSERVE);
+            ticks.load(Ordering::SeqCst) - before
+        })
+    }
+
+    fn spawn_heartbeat(ticks: Arc<AtomicUsize>) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(REPRO_TICK).await;
+                ticks.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn stop_keeps_runtime_worker_free_while_handler_blocks() {
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let fixture = running_box_with_handler(
+            {
+                // live_state() drives an implicit Container.Start; hand it a
+                // permit so the call under test reaches the handler instead of
+                // parking on the stub guest's gate.
+                let gate = Arc::new(StartGate::default());
+                gate.release.add_permits(1);
+                gate
+            },
+            Box::new(BlockingHandler {
+                stop_block: REPRO_BLOCK,
+                metrics_block: Duration::ZERO,
+                entered: entered_tx,
+            }),
+        )
+        .await;
+
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let heartbeat = spawn_heartbeat(Arc::clone(&ticks));
+        let observer = spawn_tick_observer(Arc::clone(&ticks), entered_rx);
+
+        // The call under test must run ON the single worker: #[tokio::test]'s
+        // block_on drives the test body from the calling thread, which is not
+        // part of the worker pool, so blocking there would starve nothing.
+        let target = Arc::clone(&fixture.box_impl);
+        tokio::spawn(async move { target.stop().await })
+            .await
+            .expect("stop task panicked")
+            .expect("stop running box");
+        heartbeat.abort();
+
+        let ticks_during_stop = observer.join().expect("observer thread panicked");
+        assert!(
+            ticks_during_stop >= REPRO_MIN_TICKS,
+            "runtime worker starved while handler.stop() blocked: {ticks_during_stop} \
+             timer ticks in {REPRO_OBSERVE:?} (expected >= {REPRO_MIN_TICKS})"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn metrics_keeps_runtime_worker_free_while_handler_blocks() {
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let fixture = running_box_with_handler(
+            {
+                // live_state() drives an implicit Container.Start; hand it a
+                // permit so the call under test reaches the handler instead of
+                // parking on the stub guest's gate.
+                let gate = Arc::new(StartGate::default());
+                gate.release.add_permits(1);
+                gate
+            },
+            Box::new(BlockingHandler {
+                stop_block: Duration::ZERO,
+                metrics_block: REPRO_BLOCK,
+                entered: entered_tx,
+            }),
+        )
+        .await;
+
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let heartbeat = spawn_heartbeat(Arc::clone(&ticks));
+        let observer = spawn_tick_observer(Arc::clone(&ticks), entered_rx);
+
+        let target = Arc::clone(&fixture.box_impl);
+        tokio::spawn(async move { target.metrics().await })
+            .await
+            .expect("metrics task panicked")
+            .expect("collect metrics");
+        heartbeat.abort();
+
+        let ticks_during_metrics = observer.join().expect("observer thread panicked");
+        assert!(
+            ticks_during_metrics >= REPRO_MIN_TICKS,
+            "runtime worker starved while handler.metrics() blocked: {ticks_during_metrics} \
+             timer ticks in {REPRO_OBSERVE:?} (expected >= {REPRO_MIN_TICKS})"
+        );
     }
 
     // Regression test for the silent-orphan bug in stop().
