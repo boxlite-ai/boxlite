@@ -43,10 +43,10 @@ func (b *Box) CopyInto(ctx context.Context, hostSrc, guestDst string) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
+		abandonAsyncErr(ch, h, b.runtime.closing)
 		return ctx.Err()
 	case <-b.runtime.closing:
-		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
+		abandonAsyncErr(ch, h, b.runtime.closing)
 		return ErrRuntimeClosed
 	}
 }
@@ -78,10 +78,10 @@ func (b *Box) CopyOut(ctx context.Context, guestSrc, hostDst string) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
+		abandonAsyncErr(ch, h, b.runtime.closing)
 		return ctx.Err()
 	case <-b.runtime.closing:
-		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
+		abandonAsyncErr(ch, h, b.runtime.closing)
 		return ErrRuntimeClosed
 	}
 }
@@ -143,6 +143,24 @@ func (s *copyStreamState) deliverDone(err error) {
 	s.fail(err)
 }
 
+// abandonCopyOutStream reclaims the shared copy-out callback handle after the
+// stream reports a result. During Runtime.Close it waits for the drain loop to
+// finish first, because queued meta/data callbacks read the handle via Value()
+// without claiming it.
+func abandonCopyOutStream(ch chan error, h cgo.Handle, closing <-chan struct{}, drainDone <-chan struct{}) {
+	go func() {
+		select {
+		case <-ch:
+			deleteHandleForDispatch(h)
+		case <-closing:
+			if drainDone != nil {
+				<-drainDone
+			}
+			deleteHandleForDispatch(h)
+		}
+	}()
+}
+
 // CopyOutStream streams a tar of guestSrc to w without staging to disk.
 //
 // onMeta (optional) fires exactly once — before the first write to w — with
@@ -176,10 +194,10 @@ func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer, o
 	case err := <-state.done:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(state.done, h, b.runtime.closing, b.runtime.drainDone)
+		abandonCopyOutStream(state.done, h, b.runtime.closing, b.runtime.drainDone)
 		return ctx.Err()
 	case <-b.runtime.closing:
-		abandonAsyncErr(state.done, h, b.runtime.closing, b.runtime.drainDone)
+		abandonCopyOutStream(state.done, h, b.runtime.closing, b.runtime.drainDone)
 		return ErrRuntimeClosed
 	}
 }
@@ -277,10 +295,10 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
+		abandonAsyncErr(ch, h, b.runtime.closing)
 		return ctx.Err()
 	case <-b.runtime.closing:
-		abandonAsyncErr(ch, h, b.runtime.closing, b.runtime.drainDone)
+		abandonAsyncErr(ch, h, b.runtime.closing)
 		return ErrRuntimeClosed
 	}
 }

@@ -164,10 +164,6 @@ type Execution struct {
 	// ResizeTTY select on it so they unblock when Runtime.Close is called
 	// while they're parked on their result channel.
 	closing <-chan struct{}
-	// drainDone is the parent runtime's drain-finished signal, passed to
-	// abandonAsyncErr so stream-callback handles are deleted only after the
-	// last dispatch (see abandonAsyncErr).
-	drainDone <-chan struct{}
 
 	// Stdin writes bytes to the running command's standard input. Closing it
 	// signals EOF to the guest process — the analog of `os/exec.Cmd.StdinPipe()`'s
@@ -271,7 +267,6 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 		handle:      handle,
 		streamState: state,
 		closing:     b.runtime.closing,
-		drainDone:   b.runtime.drainDone,
 	}
 	execution.Stdin = &executionStdin{execution: execution}
 	return execution, nil
@@ -381,10 +376,10 @@ func (e *Execution) Kill(ctx context.Context) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, e.closing, e.drainDone)
+		abandonAsyncErr(ch, h, e.closing)
 		return ctx.Err()
 	case <-e.closing:
-		abandonAsyncErr(ch, h, e.closing, e.drainDone)
+		abandonAsyncErr(ch, h, e.closing)
 		return ErrRuntimeClosed
 	}
 }
@@ -430,10 +425,10 @@ func (e *Execution) Signal(ctx context.Context, sig int) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, e.closing, e.drainDone)
+		abandonAsyncErr(ch, h, e.closing)
 		return ctx.Err()
 	case <-e.closing:
-		abandonAsyncErr(ch, h, e.closing, e.drainDone)
+		abandonAsyncErr(ch, h, e.closing)
 		return ErrRuntimeClosed
 	}
 }
@@ -458,10 +453,10 @@ func (e *Execution) ResizeTTY(ctx context.Context, rows, cols int) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, e.closing, e.drainDone)
+		abandonAsyncErr(ch, h, e.closing)
 		return ctx.Err()
 	case <-e.closing:
-		abandonAsyncErr(ch, h, e.closing, e.drainDone)
+		abandonAsyncErr(ch, h, e.closing)
 		return ErrRuntimeClosed
 	}
 }

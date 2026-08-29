@@ -82,7 +82,7 @@ func TestAbandonAsyncErr_DeletesHandle(t *testing.T) {
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 	closing := make(chan struct{})
 
-	abandonAsyncErr(ch, h, closing, nil)
+	abandonAsyncErr(ch, h, closing)
 	ch <- nil
 
 	time.Sleep(100 * time.Millisecond)
@@ -134,7 +134,7 @@ func TestAbandonAsyncErr_RespondsToCloseSignal(t *testing.T) {
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 	closing := make(chan struct{})
 
-	abandonAsyncErr(ch, h, closing, nil)
+	abandonAsyncErr(ch, h, closing)
 	close(closing)
 
 	time.Sleep(100 * time.Millisecond)
@@ -180,32 +180,4 @@ func TestExecutionStreamState_HandleDeletedOnExit(t *testing.T) {
 	if !state.released.Load() {
 		t.Fatal("executionStreamState.released was not set by deliverExit")
 	}
-}
-
-// Stream callbacks (exec/copy meta+data) read their handle via Value()
-// without claiming, so the closing branch must not delete it while the
-// drain goroutine can still dispatch a queued event. Deletion must wait
-// for drainDone.
-func TestAbandonAsyncErr_CloseBranchWaitsForDrainDone(t *testing.T) {
-	ch := make(chan error, 1)
-	h := registerHandleForDispatch(cgo.NewHandle(ch))
-	closing := make(chan struct{})
-	drainDone := make(chan struct{})
-
-	abandonAsyncErr(ch, h, closing, drainDone)
-	close(closing)
-
-	// The detached goroutine must park on <-drainDone and NOT delete the
-	// handle yet — deleting now would panic any queued stream callback
-	// that still calls h.Value(). Load (not claim) so we do not consume
-	// the registry entry the goroutine needs to reclaim later.
-	time.Sleep(100 * time.Millisecond)
-	if _, ok := activeHandles.Load(uintptr(h)); !ok {
-		t.Fatal("handle was deleted before the drain finished")
-	}
-
-	// Drain finishes; now the handle must be reclaimed.
-	close(drainDone)
-	time.Sleep(100 * time.Millisecond)
-	expectAlreadyDeleted(t, h)
 }

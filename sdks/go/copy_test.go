@@ -2,7 +2,9 @@ package boxlite
 
 import (
 	"errors"
+	"runtime/cgo"
 	"testing"
+	"time"
 )
 
 type failingWriter struct{ err error }
@@ -34,4 +36,26 @@ func TestCopyOutStreamSurfacesWriterError(t *testing.T) {
 
 	// Once completion is signalled, further data callbacks are ignored.
 	s.deliverData([]byte("late chunk"))
+}
+
+// Copy-out meta/data callbacks read their shared handle via Value() without
+// claiming it. Runtime shutdown must therefore finish draining queued callbacks
+// before the abandoned operation reclaims that handle.
+func TestAbandonCopyOutStream_CloseBranchWaitsForDrainDone(t *testing.T) {
+	ch := make(chan error, 1)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
+	closing := make(chan struct{})
+	drainDone := make(chan struct{})
+
+	abandonCopyOutStream(ch, h, closing, drainDone)
+	close(closing)
+
+	time.Sleep(100 * time.Millisecond)
+	if _, ok := activeHandles.Load(uintptr(h)); !ok {
+		t.Fatal("handle was deleted before the drain finished")
+	}
+
+	close(drainDone)
+	time.Sleep(100 * time.Millisecond)
+	expectAlreadyDeleted(t, h)
 }

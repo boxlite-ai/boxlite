@@ -125,10 +125,10 @@ func (r *Runtime) Shutdown(ctx context.Context, timeout time.Duration) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, r.closing, r.drainDone)
+		abandonAsyncErr(ch, h, r.closing)
 		return ctx.Err()
 	case <-r.closing:
-		abandonAsyncErr(ch, h, r.closing, r.drainDone)
+		abandonAsyncErr(ch, h, r.closing)
 		return ErrRuntimeClosed
 	}
 }
@@ -319,10 +319,10 @@ func (r *Runtime) removeBox(ctx context.Context, idOrName string, force bool) er
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h, r.closing, r.drainDone)
+		abandonAsyncErr(ch, h, r.closing)
 		return ctx.Err()
 	case <-r.closing:
-		abandonAsyncErr(ch, h, r.closing, r.drainDone)
+		abandonAsyncErr(ch, h, r.closing)
 		return ErrRuntimeClosed
 	}
 }
@@ -512,25 +512,13 @@ func abandonAsync[T any](ch chan handleResult[T], h cgo.Handle, closing <-chan s
 
 // abandonAsyncErr is the variant for async ops whose channel only carries
 // `error` (no resource value).
-//
-// `drainDone` is the runtime's drain-finished signal (nil when the drain
-// goroutine never started). The closing branch must wait for it before
-// deleting the handle: stream callbacks (exec and copy meta/data) read the
-// handle via Value() without claiming it, and Runtime.Close closes `closing`
-// before `stopDrain` runs — deleting here would let a queued callback
-// dispatch Value() a deleted handle and panic the process.
-func abandonAsyncErr(ch chan error, h cgo.Handle, closing <-chan struct{}, drainDone <-chan struct{}) {
+func abandonAsyncErr(ch chan error, h cgo.Handle, closing <-chan struct{}) {
 	go func() {
 		select {
 		case <-ch:
-			// The dispatch callback claimed first; idempotent no-op if not.
-			deleteHandleForDispatch(h)
 		case <-closing:
-			if drainDone != nil {
-				<-drainDone
-			}
-			deleteHandleForDispatch(h)
 		}
+		deleteHandleForDispatch(h)
 	}()
 }
 
