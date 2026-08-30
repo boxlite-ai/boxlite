@@ -50,9 +50,14 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
   }
   const transactionalEntityManager = {
     find: jest.fn().mockResolvedValue([]),
-    findOne: jest.fn(),
+    findOne: jest.fn(
+      async (_entity, { where }: any): Promise<any> =>
+        stored.find((period) =>
+          Object.entries(where).every(([column, condition]) => satisfies((period as any)[column], condition)),
+        ),
+    ),
     delete: jest.fn().mockResolvedValue(undefined),
-    save: jest.fn().mockImplementation(async (value) => value),
+    save: jest.fn().mockImplementation(async (value) => usagePeriodRepository.save(value)),
   }
   const usagePeriodRepository = {
     findOne: jest.fn(async ({ where }: any) =>
@@ -166,6 +171,19 @@ describe('UsageService.handleBoxStateUpdate', () => {
     expect(closed).toBe(stale)
     expect(stale.endAt).toBeInstanceOf(Date)
     expect(opened).toEqual(expect.objectContaining({ cpu: 2, endAt: null }))
+  })
+
+  it('switches stopped billing to started billing atomically at one timestamp', async () => {
+    const stopped = openPeriod(0)
+    const { service, usagePeriodRepository, transactionalEntityManager } = makeService([stopped])
+    transactionalEntityManager.findOne.mockResolvedValue(stopped)
+
+    await service.handleBoxStateUpdate(new BoxStateUpdatedEvent(box, BoxState.STOPPED, BoxState.STARTED))
+
+    expect(usagePeriodRepository.manager.transaction).toHaveBeenCalledTimes(1)
+    const [closed, opened] = transactionalEntityManager.save.mock.calls.map(([period]) => period)
+    expect(closed).toBe(stopped)
+    expect(opened.startAt).toEqual(closed.endAt)
   })
 
   it('never closes a period belonging to a different box', async () => {

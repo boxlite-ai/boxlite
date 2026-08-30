@@ -128,9 +128,13 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
         signal.throwIfAborted()
         switch (event.newState) {
           case BoxState.STARTED: {
-            await this.closeUsagePeriod(event.box.id)
-            signal.throwIfAborted()
-            await this.openUsagePeriodFor(event.box, event.newState)
+            await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
+              const transitionAt = new Date()
+              await this.closeUsagePeriod(event.box.id, transactionalEntityManager, transitionAt)
+              signal.throwIfAborted()
+              await this.openUsagePeriodFor(event.box, event.newState, transactionalEntityManager, transitionAt)
+              signal.throwIfAborted()
+            })
             break
           }
           // Billing stops charging compute the moment a stop is requested.
@@ -174,7 +178,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
    * (terminal) or whose state is still in flight gets none — the caller has
    * already closed whatever was open.
    */
-  private async openUsagePeriodFor(box: Box, state: BoxState) {
+  private async openUsagePeriodFor(box: Box, state: BoxState, entityManager?: EntityManager, startAt?: Date) {
     // The event's newState is the authority on where the box landed; the entity
     // it carries is a snapshot, and a synthetic transition may have been built
     // with a state of its own (see the warm-pool claim in box.service.ts).
@@ -182,7 +186,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     if (expected === null) {
       return
     }
-    await this.createUsagePeriod(box, expected)
+    await this.createUsagePeriod(box, expected, entityManager, startAt)
   }
 
   private async createUsagePeriod(
@@ -205,17 +209,15 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     await (entityManager ? entityManager.save(usagePeriod) : this.boxUsagePeriodRepository.save(usagePeriod))
   }
 
-  private async closeUsagePeriod(boxId: string) {
-    const lastUsagePeriod = await this.boxUsagePeriodRepository.findOne({
-      where: {
-        boxId,
-        endAt: IsNull(),
-      },
-    })
+  private async closeUsagePeriod(boxId: string, entityManager?: EntityManager, endAt = new Date()) {
+    const where = { boxId, endAt: IsNull() }
+    const lastUsagePeriod = entityManager
+      ? await entityManager.findOne(BoxUsagePeriod, { where })
+      : await this.boxUsagePeriodRepository.findOne({ where })
 
     if (lastUsagePeriod) {
-      lastUsagePeriod.endAt = new Date()
-      await this.boxUsagePeriodRepository.save(lastUsagePeriod)
+      lastUsagePeriod.endAt = endAt
+      await (entityManager ? entityManager.save(lastUsagePeriod) : this.boxUsagePeriodRepository.save(lastUsagePeriod))
     }
   }
 
