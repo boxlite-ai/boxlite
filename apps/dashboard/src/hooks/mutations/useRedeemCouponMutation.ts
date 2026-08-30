@@ -19,12 +19,14 @@ export const useRedeemCouponMutation = () => {
 
   return useMutation<string, unknown, RedeemCouponVariables>({
     mutationFn: ({ organizationId, couponCode }) => billingApi.redeemCoupon(organizationId, couponCode),
-    onSuccess: (_data, { organizationId }) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.organization.wallet(organizationId) })
-
-      // a coupon can upgrade the plan
-      queryClient.invalidateQueries({ queryKey: queryKeys.organization.plan(organizationId) })
-      queryClient.invalidateQueries({ queryKey: queryKeys.organization.usage.overview(organizationId) })
+    onSuccess: async (_data, { organizationId }) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.organization.wallet(organizationId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.billing.transactions(organizationId) }),
+        // a coupon can upgrade the plan
+        queryClient.invalidateQueries({ queryKey: queryKeys.organization.plan(organizationId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.organization.usage.overview(organizationId) }),
+      ])
     },
   })
 }

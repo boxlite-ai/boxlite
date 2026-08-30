@@ -14,7 +14,7 @@ import {
   useFetchOrganizationCheckoutUrlQuery,
   useIsOrganizationCheckoutUrlFetching,
 } from './useOrganizationCheckoutUrlQuery'
-import { useOrganizationInvoicesQuery } from './useOrganizationInvoicesQuery'
+import { useOrganizationWalletTransactionsQuery } from './useOrganizationWalletTransactionsQuery'
 import { useOrganizationPaymentMethodsQuery } from './useOrganizationPaymentMethodsQuery'
 import { useOrganizationPlanQuery } from './useOrganizationPlanQuery'
 import { useOrganizationWalletQuery } from './useOrganizationWalletQuery'
@@ -68,9 +68,9 @@ export function useIsOwnerCheckoutUrlFetching() {
   return useIsOrganizationCheckoutUrlFetching(organizationId)
 }
 
-export function useOwnerInvoicesQuery(page?: number, perPage?: number) {
+export function useOwnerWalletTransactionsQuery(page?: number, perPage?: number) {
   const scope = useSelectedOrgBillingScope()
-  return useOrganizationInvoicesQuery({
+  return useOrganizationWalletTransactionsQuery({
     ...scope,
     page,
     perPage,

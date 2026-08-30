@@ -4,13 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import type { PaginatedInvoices } from '@/billing-api/types/Invoice'
+import type { PaginatedWalletTransactions } from '@/billing-api/types/WalletTransaction'
 import { useQuery } from '@tanstack/react-query'
 import { useApi } from '../useApi'
 import { useConfig } from '../useConfig'
 import { queryKeys } from './queryKeys'
 
-export const useOrganizationInvoicesQuery = ({
+export function useOrganizationWalletTransactionsQuery({
   organizationId,
   page,
   perPage,
@@ -20,13 +20,13 @@ export const useOrganizationInvoicesQuery = ({
   page?: number
   perPage?: number
   enabled?: boolean
-}) => {
+}) {
   const { billingApi } = useApi()
   const config = useConfig()
 
-  return useQuery<PaginatedInvoices>({
-    queryKey: queryKeys.billing.invoices(organizationId, page, perPage),
-    queryFn: () => billingApi.listInvoices(organizationId, page, perPage),
+  return useQuery<PaginatedWalletTransactions>({
+    queryKey: queryKeys.billing.transactions(organizationId, page, perPage),
+    queryFn: () => billingApi.listWalletTransactions(organizationId, page, perPage),
     enabled: Boolean(enabled && config.billingApiUrl && organizationId),
   })
 }

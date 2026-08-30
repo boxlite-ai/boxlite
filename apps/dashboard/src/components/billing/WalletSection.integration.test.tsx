@@ -43,7 +43,7 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
   useFetchOwnerCheckoutUrlQuery: () => mocks.fetchCheckoutUrl,
   useIsOwnerCheckoutUrlFetching: () => false,
   useOwnerBillingPortalUrlQuery: () => ({ data: undefined, isLoading: false }),
-  useOwnerInvoicesQuery: () => ({ data: { items: [], totalItems: 0, totalPages: 0 }, isLoading: false }),
+  useOwnerWalletTransactionsQuery: () => ({ data: { items: [], totalItems: 0, totalPages: 0 }, isLoading: false }),
   useOwnerPaymentMethodsQuery: () => ({ data: mocks.paymentMethods, isLoading: false, isError: false }),
   useOwnerPlanQuery: () => ({ data: { quotaRemainingCents: 0 } }),
   useOwnerWalletQuery: () => ({ data: mocks.wallet, isLoading: false }),
@@ -61,7 +61,7 @@ vi.mock('@/hooks/mutations/useTopUpWalletMutation', () => ({
   useTopUpWalletMutation: () => ({ mutateAsync: mocks.topUpWallet, isPending: false }),
 }))
 
-vi.mock('@/components/Invoices', () => ({ InvoicesTable: () => null }))
+vi.mock('@/components/WalletTransactions', () => ({ WalletTransactionsTable: () => null }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 function typeInto(element: HTMLInputElement, value: string) {
@@ -108,6 +108,9 @@ describe('WalletSection top-up checkout', () => {
       root.render(<WalletSection />)
     })
     await flush()
+
+    expect(document.body.textContent).toContain('Transactions')
+    expect(document.body.textContent).not.toContain('Usage Settlements')
 
     const topUpButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
       (button) => button.textContent?.trim() === 'Top up →',

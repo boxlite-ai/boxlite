@@ -7,7 +7,7 @@
 import { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
 import { AsciiButton, AsciiChip, BRAND, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
 import { BalanceThresholdBanner } from '@/components/billing/BalanceLowBanner'
-import { InvoicesTable } from '@/components/Invoices'
+import { WalletTransactionsTable } from '@/components/WalletTransactions'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
@@ -18,9 +18,9 @@ import {
   useFetchOwnerCheckoutUrlQuery,
   useIsOwnerCheckoutUrlFetching,
   useOwnerBillingPortalUrlQuery,
-  useOwnerInvoicesQuery,
   useOwnerPaymentMethodsQuery,
   useOwnerPlanQuery,
+  useOwnerWalletTransactionsQuery,
   useOwnerWalletQuery,
 } from '@/hooks/queries/billingQueries'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
@@ -32,7 +32,7 @@ import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
 import { PaymentMethodsPanel } from './PaymentMethodsPanel'
 
-const DEFAULT_PAGE_SIZE = 10
+const TRANSACTION_HISTORY_LIMIT = 100
 
 /** Commerce rejects anything smaller, so the form says so before the round trip. */
 export const MIN_TOP_UP_DOLLARS = 10
@@ -67,13 +67,9 @@ export function WalletSection() {
   // one-shot action. Neither earns six rows of the panel on every visit.
   const [autoReloadOpen, setAutoReloadOpen] = useState(false)
   const [couponOpen, setCouponOpen] = useState(false)
-  const [invoicesPagination, setInvoicesPagination] = useState({
-    pageIndex: 0,
-    pageSize: DEFAULT_PAGE_SIZE,
-  })
   const walletQuery = useOwnerWalletQuery({ refetchOnMount: 'always' })
   const billingPortalUrlQuery = useOwnerBillingPortalUrlQuery()
-  const invoicesQuery = useOwnerInvoicesQuery(invoicesPagination.pageIndex + 1, invoicesPagination.pageSize)
+  const transactionsQuery = useOwnerWalletTransactionsQuery(1, TRANSACTION_HISTORY_LIMIT)
   const paymentMethodsQuery = useOwnerPaymentMethodsQuery()
   const planQuery = useOwnerPlanQuery()
 
@@ -518,18 +514,10 @@ export function WalletSection() {
 
           <section>
             <SectionTitle
-              title="Usage Settlements"
-              count={invoicesQuery.data?.totalItems ? `${invoicesQuery.data.totalItems} records` : undefined}
+              title="Transactions"
+              count={transactionsQuery.data?.totalItems ? `${transactionsQuery.data.totalItems} records` : undefined}
             />
-            <InvoicesTable
-              data={invoicesQuery.data?.items ?? []}
-              pagination={invoicesPagination}
-              pageCount={invoicesQuery.data?.totalPages ?? 0}
-              totalItems={invoicesQuery.data?.totalItems ?? 0}
-              onPaginationChange={setInvoicesPagination}
-              loading={invoicesQuery.isLoading}
-            />
-            <PanelNote>Settled usage cost, split by the plan quota and wallet funds that paid it</PanelNote>
+            <WalletTransactionsTable data={transactionsQuery.data?.items ?? []} loading={transactionsQuery.isLoading} />
           </section>
         </div>
       )}
