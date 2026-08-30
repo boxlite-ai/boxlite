@@ -296,7 +296,7 @@ pub struct PublishedPort {
 
 `advanced` is `None` when a remote or older producer did not report enough
 metadata to verify whether a named box can be reused without changing its
-effective privilege policy.
+effective capabilities, privileged mode, or nested-virtualization policy.
 
 `network: None` means network information is unavailable, such as metadata from
 an older or remote producer. Within `NetworkInfo`, `published_ports: None`
