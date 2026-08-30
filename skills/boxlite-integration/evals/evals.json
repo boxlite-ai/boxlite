@@ -1,0 +1,20 @@
+{
+  "skill_name": "boxlite-integration",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I have a Python AI agent that uses subprocess to run code. Here's the relevant part:\n\n```python\nimport subprocess\nimport asyncio\n\nasync def execute_code(code: str) -> dict:\n    \"\"\"Tool called by the LLM to run Python code.\"\"\"\n    result = subprocess.run(\n        [\"python\", \"-c\", code],\n        capture_output=True,\n        text=True,\n        timeout=10\n    )\n    return {\n        \"stdout\": result.stdout,\n        \"stderr\": result.stderr,\n        \"exit_code\": result.returncode\n    }\n```\n\nI want to integrate BoxLite so the code runs in a sandbox instead of on my host machine.",
+      "expected_output": "Agent reads the code, identifies subprocess as the execution point, wraps it with BoxLite SimpleBox or CodeBox, applies async timeout + kill pattern, keeps the same function signature."
+    },
+    {
+      "id": 2,
+      "prompt": "I'm building a FastAPI backend that serves an AI coding assistant. The agent has a tool to run code that users submit. Right now it just uses eval() which is obviously unsafe:\n\n```python\nfrom fastapi import FastAPI\napp = FastAPI()\n\n@app.post(\"/run\")\nasync def run_code(request: RunRequest):\n    # TODO: make this safe\n    result = eval(request.code)\n    return {\"result\": str(result)}\n```\n\nHow do I add BoxLite here? Multiple users will be hitting this endpoint.",
+      "expected_output": "Agent detects FastAPI + multi-user context, recommends per-request box isolation, replaces eval() with BoxLite CodeBox, adds proper cleanup in try/finally."
+    },
+    {
+      "id": 3,
+      "prompt": "我想在我的 Node.js agent 里接入 boxlite，这是我现在的代码：\n\n```javascript\nconst { execSync } = require('child_process');\n\nfunction runPythonCode(code) {\n  const result = execSync(`python3 -c \"${code}\"`, { timeout: 5000 });\n  return result.toString();\n}\n\nmodule.exports = { runPythonCode };\n```\n\n帮我把这个换成 boxlite",
+      "expected_output": "Agent identifies Node.js + child_process pattern, switches to BoxLite Node.js SDK (SimpleBox or CodeBox), converts sync to async, adds timeout + kill handling."
+    }
+  ]
+}
