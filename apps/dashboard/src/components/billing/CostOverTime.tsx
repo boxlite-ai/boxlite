@@ -167,6 +167,7 @@ export function CostOverTime() {
                 />
                 <ChartTooltip
                   cursor={false}
+                  payloadUniqBy={true}
                   content={
                     <ChartTooltipContent
                       indicator="dot"
@@ -189,8 +190,19 @@ export function CostOverTime() {
                   dataKey="wallet"
                   type="monotoneX"
                   stackId="a"
+                  activeDot={false}
                   stroke="var(--color-wallet)"
                   fill="url(#cost-wallet)"
+                />
+                {/* Preserve the stacked total while drawing the wallet's active
+                    dot at its raw value instead of the cumulative stack value. */}
+                <Area
+                  dataKey="wallet"
+                  type="monotoneX"
+                  stroke="transparent"
+                  fill="transparent"
+                  tooltipType="none"
+                  activeDot={{ fill: 'var(--color-wallet)' }}
                 />
               </AreaChart>
             </ChartContainer>
