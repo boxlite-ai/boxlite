@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { BILLING_PAGE_CONTAINER } from '@/components/billing/billingLayout'
+import { BalanceLowBanner } from '@/components/billing/BalanceLowBanner'
 import { BillingAlerts } from '@/components/billing/BillingAlerts'
 import { PlanSection } from '@/components/billing/PlanSection'
 import { UsageSection } from '@/components/billing/UsageSection'
@@ -12,12 +14,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RoutePath } from '@/enums/RoutePath'
 import { useConfig } from '@/hooks/useConfig'
 import { Clock, Cpu, Database, MemoryStick, type LucideIcon } from '@/components/ui/icon'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 // Verbatim from the design: square segments, right-divided, accent fill when active.
 const TAB_TRIGGER =
   'h-full gap-1.5 rounded-none border-0 border-r border-border px-5 text-xs text-muted-foreground transition-colors hover:text-foreground data-[state=active]:bg-accent data-[state=active]:font-semibold data-[state=active]:text-foreground data-[state=active]:shadow-none'
-const TAB_PANE = 'px-[34px] pb-14 pt-6 lg:px-[40px]'
+const TAB_PANE = 'py-6'
 const TAB_TRIGGER_LAST =
   'h-full gap-1.5 rounded-none border-0 px-5 text-xs text-muted-foreground transition-colors hover:text-foreground data-[state=active]:bg-accent data-[state=active]:font-semibold data-[state=active]:text-foreground data-[state=active]:shadow-none'
 
@@ -80,51 +83,57 @@ function BillingComingSoon() {
 
 /**
  * One page, three tabs — the arrangement in the design. Each tab is a section
- * that keeps its own hooks; this only composes and switches them. Alerts sit
- * above the strip so a blocking one (an outstanding invoice stops top-ups) is
- * visible whichever tab you land on.
+ * that keeps its own hooks; this only composes and switches them. Critical wallet
+ * warnings stay above the tabs; identity and payment guidance stays in Overview.
  */
 function Billing() {
   const config = useConfig()
+  // Controlled, so the page-level balance warning can send the user to Wallet.
+  const [tab, setTab] = useState('overview')
 
   if (!config.billingApiUrl) {
     return <BillingComingSoon />
   }
 
   return (
-    <Tabs defaultValue="overview" className="w-full gap-0">
-      <div className="px-[34px] pt-[26px] lg:px-[40px]">
-        <h1 className="font-mono text-[22px] font-medium leading-none tracking-[-0.5px]">Billing</h1>
-        <div className="mt-5 flex flex-col gap-4 empty:hidden">
-          <BillingAlerts />
+    <Tabs value={tab} onValueChange={setTab} className="w-full gap-0">
+      <div className={BILLING_PAGE_CONTAINER}>
+        <div className="pt-6">
+          <h1 className="font-display text-2xl font-semibold leading-none tracking-tight">Billing</h1>
+          <div className="mt-4 w-full empty:hidden">
+            <BalanceLowBanner onGoToWallet={() => setTab('wallet')} />
+          </div>
+          <TabsList className="mt-5 h-9 gap-0 rounded-none border border-border bg-transparent p-0">
+            <TabsTrigger value="overview" className={TAB_TRIGGER}>
+              Overview
+            </TabsTrigger>
+            <TabsTrigger value="usage" className={TAB_TRIGGER}>
+              Usage
+            </TabsTrigger>
+            <TabsTrigger value="wallet" className={TAB_TRIGGER_LAST}>
+              Wallet
+            </TabsTrigger>
+          </TabsList>
         </div>
-        <TabsList className="mt-5 h-9 gap-0 rounded-none border border-border bg-transparent p-0">
-          <TabsTrigger value="overview" className={TAB_TRIGGER}>
-            Overview
-          </TabsTrigger>
-          <TabsTrigger value="usage" className={TAB_TRIGGER}>
-            Usage
-          </TabsTrigger>
-          <TabsTrigger value="wallet" className={TAB_TRIGGER_LAST}>
-            Wallet
-          </TabsTrigger>
-        </TabsList>
+        <TabsContent value="overview">
+          <div className={TAB_PANE}>
+            <div className="mb-8 flex flex-col gap-4 empty:hidden">
+              <BillingAlerts />
+            </div>
+            <PlanSection />
+          </div>
+        </TabsContent>
+        <TabsContent value="usage">
+          <div className={TAB_PANE}>
+            <UsageSection />
+          </div>
+        </TabsContent>
+        <TabsContent value="wallet">
+          <div className={TAB_PANE}>
+            <WalletSection />
+          </div>
+        </TabsContent>
       </div>
-      <TabsContent value="overview">
-        <div className={TAB_PANE}>
-          <PlanSection />
-        </div>
-      </TabsContent>
-      <TabsContent value="usage">
-        <div className={TAB_PANE}>
-          <UsageSection />
-        </div>
-      </TabsContent>
-      <TabsContent value="wallet">
-        <div className={TAB_PANE}>
-          <WalletSection />
-        </div>
-      </TabsContent>
     </Tabs>
   )
 }

@@ -17,6 +17,7 @@ use super::{InitCtx, task_start};
 use crate::litebox::CrashReport;
 use crate::net::NetworkBackendConfig;
 use crate::pipeline::PipelineTask;
+use crate::runtime::options::NetworkSpec;
 use crate::runtime::rt_impl::stash_exit_file;
 use crate::util::{PidFileReader, ProcessIdentity};
 use crate::vmm::ExitInfo;
@@ -36,10 +37,10 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
             let ctx = ctx.lock().await;
             // Reattach still owns a control backend for the box's live gvproxy.
             let network = match &ctx.config.options.network {
-                crate::runtime::options::NetworkSpec::Enabled { allow_net } => {
+                NetworkSpec::Enabled { allow_net } => {
                     Some((allow_net.clone(), ctx.config.options.secrets.clone()))
                 }
-                crate::runtime::options::NetworkSpec::Disabled => None,
+                NetworkSpec::Disabled => None,
             };
             (ctx.runtime.clone(), ctx.config.id.clone(), network)
         };
@@ -73,7 +74,15 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
                         box_id.as_str(),
                         None,
                     );
-                    report.user_message
+                    // This path logged nothing before: the crash cause reached
+                    // the caller and nowhere else. Route the detail to the host
+                    // log so it survives the terse caller-facing message.
+                    tracing::error!(
+                        box_id = %box_id,
+                        "Box crashed in a prior lifecycle:\n{}",
+                        report.operator_report
+                    );
+                    report.client_message
                 } else {
                     "Box process is no longer running (PID file missing, process dead, \
                      or start-time mismatch indicating PID reuse)"

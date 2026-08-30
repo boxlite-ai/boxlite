@@ -97,7 +97,7 @@ typedef struct BoxNetworkHandle BoxNetworkHandle;
 // Opaque handle for Runner API (auto-manages runtime)
 typedef struct BoxRunner BoxRunner;
 
-// Opaque handle for a one-shot box service tunnel.
+// Opaque handle for a one-shot prepared tunnel.
 typedef struct BoxTunnelHandle BoxTunnelHandle;
 
 // Opaque credential handle. Wraps a core `Arc<dyn Credential>` so the
@@ -121,6 +121,9 @@ typedef struct RestOptionsHandle RestOptionsHandle;
 // Opaque handle to a BoxliteRuntime instance with its Tokio runtime and the
 // per-runtime event queue used by the post-and-drain callback API.
 typedef struct RuntimeHandle RuntimeHandle;
+
+// Opaque long-lived listener handle.
+typedef struct TunnelForwarderHandle TunnelForwarderHandle;
 
 // Opaque handle to runtime named-volume operations.
 //
@@ -290,17 +293,35 @@ typedef struct CPublishedPortList {
   int count;
 } CPublishedPortList;
 
-// Typed network metadata owned by an enclosing [`CBoxInfo`].
-//
-// `allow_net` points to `allow_net_count` owned strings. `published_ports`
-// is null when the current handle does not know the bindings, non-null and
-// empty when there are no active publications, and otherwise contains
-// concrete bindings.
-typedef struct CNetworkInfo {
+// Mode and allowlist for one traffic direction. `allow_net` points to
+// `allow_net_count` owned strings, owned by the enclosing [`CNetworkInfo`].
+typedef struct CNetworkDirectionInfo {
   enum BoxliteNetworkMode mode;
   char **allow_net;
   int allow_net_count;
+} CNetworkDirectionInfo;
+
+// Typed network metadata owned by an enclosing [`CBoxInfo`].
+//
+// `published_ports` is null when the current handle does not know the
+// bindings, non-null and empty when there are no active publications, and
+// otherwise contains concrete bindings.
+// The first four fields are byte-compatible with the pre-split struct
+// (`mode`, `allow_net`, `allow_net_count`, `published_ports`), so callers
+// compiled against the old header keep reading valid data at the same
+// offsets. They alias `outbound`'s allocations — never free them separately;
+// [`free_network_info`] releases each allocation exactly once through
+// `outbound`/`inbound`.
+typedef struct CNetworkInfo {
+  // Deprecated: read `outbound.mode`. Mirrors it for old callers.
+  enum BoxliteNetworkMode mode;
+  // Deprecated: read `outbound.allow_net`. Aliases it — do not free.
+  char **allow_net;
+  // Deprecated: read `outbound.allow_net_count`.
+  int allow_net_count;
   struct CPublishedPortList *published_ports;
+  struct CNetworkDirectionInfo outbound;
+  struct CNetworkDirectionInfo inbound;
 } CNetworkInfo;
 
 typedef struct CBoxInfo {
@@ -318,11 +339,11 @@ typedef struct CBoxInfo {
   int64_t created_at;
   // Owned typed network metadata; null when network metadata is unavailable.
   struct CNetworkInfo *network;
-  // Unix milliseconds of the most recently recorded successful guest
-  // `Container.Start`; `0` when none was recorded. Preserved after stop or
-  // reboot; when [`Self::pid`] is nonzero, the timestamp describes that live
-  // PID. Milliseconds — not `created_at`'s seconds — preserve sub-second
-  // ordering against a job's timeline.
+  // Unix milliseconds when the box most recently entered `Running`; `0`
+  // when no start time was recorded. Preserved after stop or reboot; when
+  // [`Self::pid`] is nonzero, the timestamp describes that live PID.
+  // Milliseconds — not `created_at`'s seconds — preserve sub-second ordering
+  // against a job's timeline.
   int64_t started_at;
   // Init exit code, when the box stopped because its command exited. Read it
   // only when [`Self::has_exit_code`] is nonzero — `0` is a valid exit code,
@@ -376,7 +397,25 @@ typedef void (*CRuntimeMetricsCb)(struct CRuntimeMetrics*, CBoxliteError*, void*
 
 typedef struct BoxNetworkHandle CBoxNetworkHandle;
 
+typedef struct TunnelForwarderHandle CTunnelForwarderHandle;
+
+// Tunnel forwarder wait completion.
+typedef void (*CTunnelForwarderWaitCb)(CBoxliteError*, void*);
+
+// Tunnel forwarder close completion.
+typedef void (*CTunnelForwarderCloseCb)(CBoxliteError*, void*);
+
 typedef struct BoxTunnelHandle CBoxTunnelHandle;
+
+typedef uint32_t BoxliteSocketAddressKind;
+
+// Listener address. Input strings are borrowed for the duration of a call.
+typedef struct BoxliteSocketAddress {
+  BoxliteSocketAddressKind kind;
+  const char *host;
+  uint16_t port;
+  const char *path;
+} BoxliteSocketAddress;
 
 typedef struct CredentialHandle CBoxliteCredential;
 
@@ -406,6 +445,8 @@ typedef void (*CRuntimeShutdownCb)(CBoxliteError*, void*);
 // meaningful only when `has_size` is non-zero.
 typedef struct CVolumeInfo {
   char *id;
+  // Volume name, mountable in place of the id. Defaults to the id.
+  char *name;
   char *created_at;
   uint64_t size_bytes;
   int has_size;
@@ -439,6 +480,10 @@ typedef void (*CBoxVolumeGetCb)(struct CVolumeInfo*, CBoxliteError*, void*);
 // Volume remove completion. The error pointer is borrowed for callback dispatch
 // only and no result allocation is produced.
 typedef void (*CBoxVolumeRemoveCb)(CBoxliteError*, void*);
+
+#define BoxliteSocketTcp 0
+
+#define BoxliteSocketUnix 1
 
 #ifdef __cplusplus
 extern "C" {
@@ -702,6 +747,24 @@ enum BoxliteErrorCode boxlite_box_network(CBoxHandle *handle,
                                           CBoxNetworkHandle **out_network,
                                           CBoxliteError *out_error);
 
+// Return a newly allocated canonical address string.
+enum BoxliteErrorCode boxlite_tunnel_forwarder_address(CTunnelForwarderHandle *forwarder,
+                                                       char **out_address,
+                                                       CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_tunnel_forwarder_wait(CTunnelForwarderHandle *forwarder,
+                                                    CTunnelForwarderWaitCb cb,
+                                                    void *user_data,
+                                                    CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_tunnel_forwarder_close(CTunnelForwarderHandle *forwarder,
+                                                     CTunnelForwarderCloseCb cb,
+                                                     void *user_data,
+                                                     CBoxliteError *out_error);
+
+// Initiate non-blocking cancellation and release the caller's handle.
+void boxlite_tunnel_forwarder_free(CTunnelForwarderHandle *forwarder);
+
 // Release a network handle. Accepts NULL and does not affect the box handle.
 void boxlite_network_free(CBoxNetworkHandle *network);
 
@@ -715,7 +778,7 @@ enum BoxliteErrorCode boxlite_network_tunnel(CBoxNetworkHandle *network,
                                              CBoxTunnelHandle **out_tunnel,
                                              CBoxliteError *out_error);
 
-// Release a tunnel handle and any unconsumed connection. Accepts NULL.
+// Release an unconsumed tunnel. Existing connections and forwarders remain alive.
 void boxlite_tunnel_free(CBoxTunnelHandle *tunnel);
 
 // Read the public URL of a remotely served tunnel, without consuming it.
@@ -729,13 +792,19 @@ enum BoxliteErrorCode boxlite_tunnel_uri(CBoxTunnelHandle *tunnel,
                                          char **out_uri,
                                          CBoxliteError *out_error);
 
-// Consume a tunnel's single connection and return its owned file descriptor.
+// Consume the tunnel and return its owned file descriptor.
 //
-// On success, the caller owns `*out_fd` and must close it. A second call
-// returns `InvalidState`. On failure `*out_fd` remains -1 and `out_error`
+// On success, the caller owns `*out_fd` and must close it.
+// On failure `*out_fd` remains -1 and `out_error`
 // receives details when provided.
 enum BoxliteErrorCode boxlite_tunnel_connect(CBoxTunnelHandle *tunnel,
                                              int32_t *out_fd,
+                                             CBoxliteError *out_error);
+
+// Bind a local listener synchronously and start forwarding accepted clients.
+enum BoxliteErrorCode boxlite_tunnel_forward(CBoxTunnelHandle *tunnel,
+                                             const struct BoxliteSocketAddress *listen,
+                                             CTunnelForwarderHandle **out_forwarder,
                                              CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_options_new(const char *image,
@@ -754,12 +823,32 @@ void boxlite_options_set_disk_size_gb(CBoxliteOptions *opts, int disk_size_gb);
 
 void boxlite_options_set_workdir(CBoxliteOptions *opts, const char *workdir);
 
+void boxlite_options_set_user(CBoxliteOptions *opts, const char *user);
+
 void boxlite_options_add_env(CBoxliteOptions *opts, const char *key, const char *val);
 
-void boxlite_options_add_volume(CBoxliteOptions *opts,
-                                const char *host_path,
-                                const char *guest_path,
-                                int read_only);
+// Bind a host directory or file into the box.
+//
+// Host bind mounts are local-runtime only; a REST runtime rejects them at
+// create. Use [`boxlite_options_add_managed_volume`] against a REST runtime.
+void boxlite_options_add_bind_mount(CBoxliteOptions *opts,
+                                    const char *host_path,
+                                    const char *guest_path,
+                                    int read_only);
+
+// Mount a managed volume, addressed by its server-assigned id **or** by its
+// name — the server resolves either.
+//
+// `managed_volume` is the volume's id or name (`"my-data"`, `"vol_01K2…"`).
+// Managed volumes need a REST runtime; the local runtime has no volume backend
+// and rejects one at create.
+//
+// A NULL `opts`, `managed_volume`, or `guest_path` is ignored, matching
+// [`boxlite_options_add_bind_mount`].
+void boxlite_options_add_managed_volume(CBoxliteOptions *opts,
+                                        const char *managed_volume,
+                                        const char *guest_path,
+                                        int read_only);
 
 // Forward `host_port` on the host to `guest_port` inside the box.
 //
@@ -788,6 +877,15 @@ void boxlite_options_set_network_disabled(CBoxliteOptions *opts);
 // CIDR to keep UDP open.
 void boxlite_options_add_network_allow(CBoxliteOptions *opts, const char *host);
 
+// Marks services the box exposes as publicly reachable (the default).
+// Mirrors `boxlite_options_set_network_enabled` for the inbound direction.
+void boxlite_options_set_network_inbound_enabled(CBoxliteOptions *opts);
+
+// Marks services the box exposes as private — unreachable from outside the
+// box. Mirrors `boxlite_options_set_network_disabled` for the inbound
+// direction.
+void boxlite_options_set_network_inbound_disabled(CBoxliteOptions *opts);
+
 void boxlite_options_add_secret(CBoxliteOptions *opts,
                                 const char *name,
                                 const char *value,
@@ -798,10 +896,22 @@ void boxlite_options_add_secret(CBoxliteOptions *opts,
 // Deprecated: use `boxlite_options_set_auto_delete_interval`.
 void boxlite_options_set_auto_remove(CBoxliteOptions *opts, int val);
 
+// Set how long an idle box may remain paused before the runtime pauses it.
+//
+// The value is expressed in seconds. `0` preserves the runtime/control-plane
+// default. A null options pointer is treated as a no-op.
 void boxlite_options_set_auto_stop_interval(CBoxliteOptions *opts, uint32_t seconds);
 
+// Set how long a stopped box may remain before the runtime deletes it.
+//
+// The value is expressed in seconds. `0` disables automatic deletion for
+// persistent boxes. A null options pointer is treated as a no-op.
 void boxlite_options_set_auto_delete_interval(CBoxliteOptions *opts, uint32_t seconds);
 
+// Configure whether stopped boxes may automatically resume on demand.
+//
+// Any non-zero `val` enables auto-resume; `0` disables it. A null options
+// pointer is treated as a no-op.
 void boxlite_options_set_auto_resume_enabled(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
@@ -978,6 +1088,7 @@ void boxlite_free_string(char *s);
 // remain valid until this function returns. A successful callback must release
 // its metadata with `boxlite_free_volume_info`; the error pointer is borrowed.
 enum BoxliteErrorCode boxlite_volume_create(CBoxliteVolumeHandle *handle,
+                                            const char *name,
                                             CBoxVolumeCreateCb cb,
                                             void *user_data,
                                             CBoxliteError *out_error);

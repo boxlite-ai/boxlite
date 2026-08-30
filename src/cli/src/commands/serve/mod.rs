@@ -23,7 +23,7 @@ use tokio::sync::RwLock;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 
-use boxlite::runtime::options::{NetworkConfig, NetworkMode};
+use boxlite::runtime::options::{InboundNetworkConfig, NetworkMode, OutboundNetworkConfig};
 use boxlite::{
     BoxCommand, BoxInfo, BoxOptions, BoxliteRuntime, ExecStdin, Execution, LiteBox, NetworkSpec,
     RootfsSpec,
@@ -720,6 +720,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
 fn volume_info_to_response(info: &boxlite::runtime::types::VolumeInfo) -> types::VolumeResponse {
     types::VolumeResponse {
         id: info.id.clone(),
+        name: info.name.clone(),
         created_at: info.created_at.to_rfc3339(),
         size_bytes: info.size_bytes,
     }
@@ -738,12 +739,48 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default();
 
-    let network = match &req.network {
-        Some(network) => NetworkSpec::try_from(NetworkConfig {
-            mode: network.mode.parse::<NetworkMode>()?,
-            allow_net: network.allow_net.clone(),
-        })?,
-        None => NetworkSpec::default(),
+    let (network, inbound_network) = match &req.network {
+        Some(network) => {
+            if network.uses_legacy_fields()
+                && (network.outbound.is_some() || network.inbound.is_some())
+            {
+                return Err(boxlite::BoxliteError::InvalidArgument(
+                    "network must use either nested outbound/inbound fields or legacy flat fields, not both"
+                        .into(),
+                ));
+            }
+
+            let (mode, allow_net) = match &network.outbound {
+                Some(outbound) => (
+                    outbound.mode.parse::<NetworkMode>()?,
+                    outbound.allow_net.clone(),
+                ),
+                None => (
+                    network
+                        .legacy
+                        .mode
+                        .as_deref()
+                        .unwrap_or("enabled")
+                        .parse::<NetworkMode>()?,
+                    network.legacy.allow_net.clone().unwrap_or_default(),
+                ),
+            };
+            let (inbound_mode, inbound_allow_net) = match &network.inbound {
+                Some(inbound) => (
+                    inbound.mode.parse::<NetworkMode>()?,
+                    inbound.allow_net.clone(),
+                ),
+                None => (NetworkMode::Enabled, Vec::new()),
+            };
+            (
+                NetworkSpec::try_from(OutboundNetworkConfig { mode, allow_net })?,
+                NetworkSpec::try_from(InboundNetworkConfig {
+                    mode: inbound_mode,
+                    allow_net: inbound_allow_net,
+                })?,
+            )
+        }
+        None => (NetworkSpec::default(), NetworkSpec::default()),
     };
 
     // SecurityOptions is deliberately NOT client-configurable over
@@ -753,6 +790,51 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
     // uniformly. Operators who want a different policy run the
     // server with a different default; clients cannot relax it.
 
+    if let Some(volumes) = &req.volumes
+        && !volumes.is_empty()
+    {
+        return Err(boxlite::BoxliteError::InvalidArgument(
+            "managed volumes are not supported by boxlite serve".into(),
+        ));
+    }
+
+    // An empty name or value can never substitute anything. Reject at the
+    // boundary so this server agrees with the Cloud API's IsNotEmpty and the
+    // runner's per-element `dive` required validation on what a secret is.
+    if let Some(secrets) = &req.secrets
+        && secrets
+            .iter()
+            .any(|s| s.name.is_empty() || s.value.is_empty())
+    {
+        return Err(boxlite::BoxliteError::InvalidArgument(
+            "secret name and value must be non-empty".into(),
+        ));
+    }
+
+    // Map secrets onto the core `Secret` type and apply the placeholder
+    // default. The local runtime does not synthesize `<BOXLITE_SECRET:{name}>`
+    // for an empty placeholder (unlike the Go SDK), so defaulting here is what
+    // keeps a placeholder-less secret from silently injecting an empty env var
+    // and no MITM substitution — the same failure class POL-303 fixes on Cloud.
+    let secrets: Vec<boxlite::runtime::options::Secret> = req
+        .secrets
+        .as_ref()
+        .map(|ss| {
+            ss.iter()
+                .map(|s| boxlite::runtime::options::Secret {
+                    name: s.name.clone(),
+                    value: s.value.clone(),
+                    hosts: s.hosts.clone(),
+                    placeholder: s
+                        .placeholder
+                        .clone()
+                        .filter(|p| !p.is_empty())
+                        .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", s.name)),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let auto_delete = req.auto_delete.unwrap_or(0);
     Ok(BoxOptions {
         rootfs,
@@ -761,17 +843,23 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         disk_size_gb: req.disk_size_gb,
         working_dir: req.working_dir.clone(),
         env,
+        secrets,
         network,
+        inbound_network,
         entrypoint: req.entrypoint.clone(),
         cmd: req.cmd.clone(),
         user: req.user.clone(),
         tty: req.tty.unwrap_or(false),
-        advanced: boxlite::AdvancedBoxOptions {
-            capabilities: boxlite::ContainerCapabilities {
-                add: req.advanced.capabilities.add.clone(),
-                drop: req.advanced.capabilities.drop.clone(),
-            },
-            ..Default::default()
+        advanced: {
+            let mut advanced = boxlite::AdvancedBoxOptions::default();
+            let capabilities = req.advanced.capabilities.as_ref().map(|capabilities| {
+                boxlite::ContainerCapabilities {
+                    add: capabilities.add.clone(),
+                    drop: capabilities.drop.clone(),
+                }
+            });
+            advanced.set_capabilities(capabilities)?;
+            advanced
         },
         auto_stop: req.auto_stop,
         auto_delete: Some(auto_delete),
@@ -919,6 +1007,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 // Box Handle Cache Helper
 // ============================================================================
 
+#[allow(clippy::result_large_err)]
 async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>, Response> {
     // Check cache first.
     //
@@ -1050,6 +1139,7 @@ where
 /// so attaching to a finished job would silently run the job again. `attach()`
 /// already does the right thing for every status by itself: it boots a
 /// `Configured` box (which has never run) and refuses a `Stopped` one.
+#[allow(clippy::result_large_err)]
 async fn get_or_attach_main_session(
     state: &AppState,
     box_id: &str,
@@ -1247,6 +1337,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boxlite::runtime::options::NetworkSpec;
     use std::time::Duration;
 
     // --- API-key auth decision (pure; no runtime/network needed) ---
@@ -1335,6 +1426,85 @@ mod tests {
     }
 
     #[test]
+    fn build_box_options_carries_secrets_from_the_wire() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","secrets":[{"name":"openai","value":"sk-test","hosts":["api.openai.com"]}]}"#,
+        )
+        .expect("body with secrets must deserialize");
+
+        let opts = build_box_options(&req).expect("build with secrets");
+        assert_eq!(opts.secrets.len(), 1, "one secret in, one secret out");
+        let secret = &opts.secrets[0];
+        assert_eq!(secret.name, "openai");
+        assert_eq!(secret.value, "sk-test");
+        assert_eq!(secret.hosts, vec!["api.openai.com"]);
+        // Placeholder omitted on the wire: serve applies the same default the
+        // Go SDK does, so a placeholder-less secret still substitutes.
+        assert_eq!(secret.placeholder, "<BOXLITE_SECRET:openai>");
+    }
+
+    #[test]
+    fn build_box_options_preserves_explicit_secret_placeholder() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","secrets":[{"name":"httpbin","value":"v","placeholder":"<MY_TOKEN>"}]}"#,
+        )
+        .expect("body with explicit placeholder must deserialize");
+
+        let opts = build_box_options(&req).expect("build");
+        assert_eq!(
+            opts.secrets[0].placeholder, "<MY_TOKEN>",
+            "caller placeholder wins"
+        );
+    }
+
+    #[test]
+    fn build_box_options_defaults_an_empty_secret_placeholder() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","secrets":[{"name":"openai","value":"v","placeholder":""}]}"#,
+        )
+        .expect("body with empty placeholder must deserialize");
+
+        let opts = build_box_options(&req).expect("build");
+        assert_eq!(
+            opts.secrets[0].placeholder, "<BOXLITE_SECRET:openai>",
+            "an empty placeholder is as absent as an omitted one"
+        );
+    }
+
+    #[test]
+    fn build_box_options_rejects_an_empty_secret_name_or_value() {
+        for secrets in [
+            r#"[{"name":"","value":"v"}]"#,
+            r#"[{"name":"n","value":""}]"#,
+        ] {
+            let req: super::types::CreateBoxRequest = serde_json::from_str(&format!(
+                r#"{{"image":"alpine:latest","secrets":{secrets}}}"#
+            ))
+            .expect("body with secrets must deserialize");
+
+            let err = build_box_options(&req).expect_err("empty secret fields must be rejected");
+            assert!(
+                matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("non-empty")),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_box_options_rejects_nonempty_volumes() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","volumes":[{"managed_volume":"v1","guest_path":"/data"}]}"#,
+        )
+        .expect("body with volumes must deserialize (accepted, then rejected)");
+
+        let err = build_box_options(&req).expect_err("non-empty volumes must be rejected");
+        assert!(
+            matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("managed volumes")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn build_box_options_carries_container_capabilities_from_the_wire() {
         let req: super::types::CreateBoxRequest = serde_json::from_str(
             r#"{"image":"alpine:latest","advanced":{"capabilities":{"add":["SYS_ADMIN"],"drop":["CAP_NET_RAW"]}}}"#,
@@ -1342,8 +1512,26 @@ mod tests {
         .expect("capability request must deserialize");
 
         let opts = build_box_options(&req).expect("build capability options");
-        assert_eq!(opts.advanced.capabilities.add, vec!["SYS_ADMIN"]);
-        assert_eq!(opts.advanced.capabilities.drop, vec!["CAP_NET_RAW"]);
+        let capabilities = opts.advanced.capabilities().expect("capabilities set");
+        assert_eq!(capabilities.add, vec!["SYS_ADMIN"]);
+        assert_eq!(capabilities.drop, vec!["CAP_NET_RAW"]);
+    }
+
+    /// A request that never mentions `advanced`/`capabilities` at all must
+    /// resolve to `None` (unspecified), not an explicit empty policy — that
+    /// distinction is what a privileged request needs, and what an older
+    /// archive importer needs (`archive_version_for_options` keys off it).
+    #[test]
+    fn build_box_options_leaves_capabilities_unspecified_when_the_wire_omits_them() {
+        let req: super::types::CreateBoxRequest =
+            serde_json::from_str(r#"{"image":"alpine:latest"}"#)
+                .expect("ordinary request must deserialize");
+
+        let opts = build_box_options(&req).expect("build ordinary options");
+        assert!(
+            opts.advanced.capabilities().is_none(),
+            "omitting capabilities on the wire must not become an explicit empty policy"
+        );
     }
 
     #[test]
@@ -1363,6 +1551,96 @@ mod tests {
         assert!(
             build_box_options(&persistent).expect("build").detach,
             "persistent boxes keep the serve API's historical detached default"
+        );
+    }
+
+    #[test]
+    fn build_box_options_legacy_network_defaults_inbound_to_enabled() {
+        // Legacy flat `network` never carried an inbound concept — it
+        // predates the outbound/inbound split — so inbound falls back to
+        // its default (Enabled/public) regardless of outbound mode.
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{
+                "image": "alpine:latest",
+                "network": {
+                    "mode": "enabled"
+                }
+            }"#,
+        )
+        .expect("legacy flat body must deserialize");
+        let opts = build_box_options(&req).expect("build");
+        assert!(
+            matches!(opts.inbound_network, NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty())
+        );
+    }
+
+    #[test]
+    fn build_box_options_accepts_nested_network_spec() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{
+                "image": "alpine:latest",
+                "network": {
+                    "outbound": {
+                        "mode": "enabled",
+                        "allow_net": ["api.openai.com"]
+                    },
+                    "inbound": {
+                        "mode": "disabled"
+                    }
+                }
+            }"#,
+        )
+        .expect("nested network body must deserialize");
+        let opts = build_box_options(&req).expect("build");
+        match opts.network {
+            NetworkSpec::Enabled { allow_net } => {
+                assert_eq!(allow_net, vec!["api.openai.com"]);
+            }
+            NetworkSpec::Disabled => panic!("network should be enabled"),
+        }
+        assert!(matches!(opts.inbound_network, NetworkSpec::Disabled));
+    }
+
+    #[test]
+    fn build_box_options_rejects_mixed_legacy_and_nested_network_spec() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{
+                "image": "alpine:latest",
+                "network": {
+                    "mode": "enabled",
+                    "outbound": {
+                        "mode": "enabled",
+                        "allow_net": ["api.openai.com"]
+                    }
+                }
+            }"#,
+        )
+        .expect("mixed network body still deserializes for compatibility validation");
+        let err = build_box_options(&req).expect_err("mixed network body must fail");
+        assert!(
+            matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("either nested")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn build_box_options_rejects_empty_legacy_allow_net_mixed_with_nested_network_spec() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{
+                "image": "alpine:latest",
+                "network": {
+                    "allow_net": [],
+                    "outbound": {
+                        "mode": "enabled"
+                    }
+                }
+            }"#,
+        )
+        .expect("mixed network body still deserializes for compatibility validation");
+        let err = build_box_options(&req).expect_err("mixed network body must fail");
+        assert!(
+            matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("either nested")),
+            "unexpected error: {err}"
         );
     }
 
@@ -1551,7 +1829,25 @@ mod tests {
                     "read_only": false
                 }]
             }),
-            "host volume mounts",
+            "volume mounts",
+        )
+        .await;
+    }
+
+    /// The managed-volume shape is refused by the same gate, and reaches it
+    /// through the same deserialization — an archive naming someone else's
+    /// volume must not provision a box either.
+    #[tokio::test]
+    async fn serve_import_rejects_managed_volume_archive_before_provisioning() {
+        assert_uploaded_archive_rejected_before_provisioning(
+            serde_json::json!({
+                "volumes": [{
+                    "managed_volume": "someone-elses-data",
+                    "guest_path": "/data",
+                    "read_only": false
+                }]
+            }),
+            "volume mounts",
         )
         .await;
     }

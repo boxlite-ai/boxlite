@@ -8,7 +8,9 @@
 
 use std::os::raw::{c_char, c_int};
 
-use boxlite::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
+use boxlite::runtime::advanced_options::{
+    AdvancedBoxOptions, ContainerCapabilities, SecurityOptions,
+};
 
 use crate::CAdvancedBoxOptions;
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
@@ -89,8 +91,8 @@ pub unsafe extern "C" fn boxlite_advanced_options_set_capabilities_add(
     capabilities: *const *const c_char,
     count: c_int,
 ) -> BoxliteErrorCode {
-    set_capability_list(opts, capabilities, count, |options, values| {
-        options.capabilities.add = values;
+    set_capability_list(opts, capabilities, count, |caps, values| {
+        caps.add = values;
     })
 }
 
@@ -104,8 +106,8 @@ pub unsafe extern "C" fn boxlite_advanced_options_set_capabilities_drop(
     capabilities: *const *const c_char,
     count: c_int,
 ) -> BoxliteErrorCode {
-    set_capability_list(opts, capabilities, count, |options, values| {
-        options.capabilities.drop = values;
+    set_capability_list(opts, capabilities, count, |caps, values| {
+        caps.drop = values;
     })
 }
 
@@ -115,28 +117,38 @@ fn set_capability_list(
     handle: *mut CAdvancedBoxOptions,
     capabilities: *const *const c_char,
     count: c_int,
-    assign: impl FnOnce(&mut AdvancedBoxOptions, Vec<String>),
+    assign: impl FnOnce(&mut ContainerCapabilities, Vec<String>),
 ) -> BoxliteErrorCode {
     let Some(handle) = (unsafe { handle.as_mut() }) else {
         return BoxliteErrorCode::InvalidArgument;
     };
 
-    match parse_capability_array(capabilities, count) {
+    let mut current = handle.options.capabilities().cloned().unwrap_or_default();
+
+    let parse_result = match parse_capability_array(capabilities, count) {
         Ok(values) => {
-            assign(&mut handle.options, values);
+            assign(&mut current, values);
             BoxliteErrorCode::Ok
         }
         Err(()) => {
             // Keep the handle invalid if a caller ignores the return code. The
             // subsequent BoxOptions::sanitize call then rejects the policy
             // instead of silently falling back to the baseline.
-            assign(
-                &mut handle.options,
-                vec![INVALID_CAPABILITY_INPUT.to_string()],
-            );
+            assign(&mut current, vec![INVALID_CAPABILITY_INPUT.to_string()]);
             BoxliteErrorCode::InvalidArgument
         }
+    };
+
+    // Only reachable if this handle's options were already resolved (used to
+    // build a box request) — not possible through this C API today, since
+    // `boxlite_options_set_advanced` clones the options rather than resolving
+    // this handle directly, but fail closed rather than silently keep stale
+    // capabilities if that ever changes.
+    if handle.options.set_capabilities(Some(current)).is_err() {
+        return BoxliteErrorCode::InvalidArgument;
     }
+
+    parse_result
 }
 
 fn parse_capability_array(

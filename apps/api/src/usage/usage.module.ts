@@ -19,11 +19,14 @@ import { UsageAllocationSnapshotService } from './services/usage-allocation-snap
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
 import { Box } from '../box/entities/box.entity'
+import { Runner } from '../box/entities/runner.entity'
+import { UsageConcurrencyService } from './services/usage-concurrency.service'
 
 @Module({
-  imports: [TypeOrmModule.forFeature([BoxUsagePeriod, Box, BoxUsagePeriodArchive, BoxUsageExportOutbox])],
+  imports: [TypeOrmModule.forFeature([BoxUsagePeriod, Box, Runner, BoxUsagePeriodArchive, BoxUsageExportOutbox])],
   providers: [
     UsageService,
+    UsageConcurrencyService,
     UsageExportOutboxService,
     UsageExportPublisherService,
     UsageAllocationSnapshotService,
@@ -39,6 +42,6 @@ import { Box } from '../box/entities/box.entity'
       ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService),
     },
   ],
-  exports: [UsageService],
+  exports: [UsageService, UsageConcurrencyService],
 })
 export class UsageModule {}

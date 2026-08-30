@@ -33,7 +33,6 @@ import { BoxStartedEvent } from '../events/box-started.event'
 import { BoxDesiredStateUpdatedEvent } from '../events/box-desired-state-updated.event'
 import { BoxStoppedEvent } from '../events/box-stopped.event'
 import { OrganizationService } from '../../organization/services/organization.service'
-import { OrganizationUsageService, PendingBoxReservation } from '../../organization/services/organization-usage.service'
 import { OrganizationEvents } from '../../organization/constants/organization-events.constant'
 import { OrganizationSuspendedBoxStoppedEvent } from '../../organization/events/organization-suspended-box-stopped.event'
 import { TypedConfigService } from '../../config/typed-config.service'
@@ -79,6 +78,7 @@ import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidati
 import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
+import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
 import {
   AUTO_DELETE_DISABLED,
   AUTO_STOP_DISABLED,
@@ -108,7 +108,6 @@ export class BoxService {
     private readonly warmPoolService: BoxWarmPoolService,
     private readonly eventEmitter: EventEmitter2,
     private readonly organizationService: OrganizationService,
-    private readonly organizationUsageService: OrganizationUsageService,
     private readonly runnerAdapterFactory: RunnerAdapterFactory,
     private readonly redisLockProvider: RedisLockProvider,
     @InjectRedis() private readonly redis: Redis,
@@ -157,8 +156,8 @@ export class BoxService {
           return inserted
         }
       } catch (error) {
-        // Once insert committed, returning the entity keeps quota realization
-        // and CREATED event handling consistent even if the lease is lost while releasing.
+        // Once insert committed, returning the entity keeps CREATED event handling
+        // consistent even if the lease is lost while releasing.
         if (committed) {
           return committed
         }
@@ -193,19 +192,13 @@ export class BoxService {
 
     box.pending = true
 
-    return this.persistWithRunnerAssignmentFence(
-      box,
-      { regions: [box.region], boxClass: box.class },
-      () => this.boxRepository.insert(box),
+    return this.persistWithRunnerAssignmentFence(box, { regions: [box.region], boxClass: box.class }, () =>
+      this.boxRepository.insert(box),
     )
   }
 
   async create(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
-
-    // Released on the failure path; on success the box's CREATED/STATE_UPDATED event
-    // realizes the reservation into current usage.
-    let quotaReservation: PendingBoxReservation | null = null
 
     try {
       const boxClass = this.getValidatedOrDefaultClass(createBoxDto.class)
@@ -223,21 +216,29 @@ export class BoxService {
       // Restrict box creation to the supported pinned images; reject anything else
       // at the request boundary (defaults undefined -> base image).
       const image = assertSupportedImage(createBoxDto.image)
+      const needsFreshBox = requiresFreshBox(createBoxDto, organization)
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
-      quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
-        organization,
-        cpu,
-        mem,
-        disk,
-        gpu,
-      )
-
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
-        await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
-      } else if (image) {
+        const canonical = await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
+        // Replace the caller's selector with the id it resolved to inside this
+        // organization. A name is only unique per organization, but everything
+        // downstream (the runner, the `boxlite-volume-<id>` bucket) reads this
+        // field as a global id - see VolumeService.validateVolumes.
+        createBoxDto.volumes = createBoxDto.volumes.map((volume) => {
+          const canonicalId = canonical.get(volume.volumeId)
+          if (!canonicalId) {
+            // validateVolumes keys every selector or throws, so this is
+            // unreachable today. Fail closed anyway: the alternative fallback
+            // is silently persisting the caller's own string, which is exactly
+            // the tenant-controlled passthrough the resolution exists to stop.
+            throw new BadRequestError(`Volume '${volume.volumeId}' could not be resolved`)
+          }
+          return { ...volume, volumeId: canonicalId }
+        })
+      } else if (image && !needsFreshBox) {
         //  No volumes requested — try to claim a pre-warmed box matching this image/spec
         //  before creating a fresh one.
         const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${image}`)) === 1
@@ -270,7 +271,15 @@ export class BoxService {
       box.class = boxClass
       //  TODO: default user should be configurable
       box.osUser = createBoxDto.user || 'boxlite'
+      // Only set when the caller actually asked. Collapsing "not supplied" into
+      // a default here would hand every box a USER override its image may not
+      // define — which is exactly what 16d9248bb removed.
+      box.runAsUser = createBoxDto.runAsUser
+      box.workingDir = createBoxDto.workingDir
+      box.entrypoint = createBoxDto.entrypoint
+      box.cmd = createBoxDto.cmd
       box.env = createBoxDto.env || {}
+      box.secrets = createBoxDto.secrets || []
       box.labels = createBoxDto.labels || {}
 
       box.image = image
@@ -279,10 +288,15 @@ export class BoxService {
       box.mem = mem
       box.disk = disk
 
-      box.public = createBoxDto.public ?? true
+      // POL-205: default private. A caller who never mentions visibility gets
+      // a box that is not reachable from the public internet, rather than
+      // silently anonymously public.
+      box.public = createBoxDto.public ?? false
 
       if (createBoxDto.networkBlockAll !== undefined) {
         box.networkBlockAll = createBoxDto.networkBlockAll
+      } else if (organization.boxLimitedNetworkEgress) {
+        box.networkBlockAll = true
       }
 
       if (createBoxDto.networkAllowList !== undefined) {
@@ -307,16 +321,13 @@ export class BoxService {
       // No caller-provided name -> assign a fun default (e.g. "cozy-otter"),
       // falling back to "cozy-otter-{boxId}" if it collides with the per-org
       // @Unique(['organizationId', 'name']) constraint.
-      const insertedBox = await this.persistWithRunnerAssignmentFence(
-        box,
-        { regions: [region.id], boxClass },
-        () =>
-          createBoxDto.name
-            ? this.boxRepository.insert(box)
-            : persistWithGeneratedBoxName(box.id, (name) => {
-                box.name = name
-                return this.boxRepository.insert(box)
-              }),
+      const insertedBox = await this.persistWithRunnerAssignmentFence(box, { regions: [region.id], boxClass }, () =>
+        createBoxDto.name
+          ? this.boxRepository.insert(box)
+          : persistWithGeneratedBoxName(box.id, (name) => {
+              box.name = name
+              return this.boxRepository.insert(box)
+            }),
       )
 
       this.eventEmitter
@@ -325,10 +336,6 @@ export class BoxService {
 
       return this.toBoxDto(insertedBox)
     } catch (error) {
-      if (quotaReservation) {
-        await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
-      }
-
       if (error.code === '23505') {
         throw new ConflictException(
           createBoxDto.name
@@ -348,7 +355,8 @@ export class BoxService {
   ): Promise<BoxDto> {
     const now = new Date()
     const updateData: Partial<Box> = {
-      public: createBoxDto.public ?? true,
+      // POL-205: same default as the fresh-box path — see the comment there.
+      public: createBoxDto.public ?? false,
       labels: createBoxDto.labels || {},
       organizationId: organization.id,
       createdAt: now,
@@ -373,21 +381,6 @@ export class BoxService {
 
     if (!warmPoolBox.runnerId) {
       throw new BoxError('Runner not found for warm pool box')
-    }
-
-    if (
-      createBoxDto.networkBlockAll !== undefined ||
-      createBoxDto.networkAllowList !== undefined ||
-      organization.boxLimitedNetworkEgress
-    ) {
-      const runner = await this.runnerService.findOneOrFail(warmPoolBox.runnerId)
-      const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-      await runnerAdapter.updateNetworkSettings(
-        warmPoolBox.id,
-        createBoxDto.networkBlockAll,
-        createBoxDto.networkAllowList,
-        organization.boxLimitedNetworkEgress,
-      )
     }
 
     // Resolve the name at persist time. A caller-provided name updates in one
@@ -948,34 +941,16 @@ export class BoxService {
 
     this.organizationService.assertOrganizationIsNotSuspended(organization)
 
-    // A stopped box holds only disk; starting it re-adds compute and a running slot,
-    // so re-check the org quota. excludeBoxId keeps the box's own disk from being
-    // double counted. Realized into current usage once the box leaves STOPPED.
-    const quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
-      organization,
-      box.cpu,
-      box.mem,
-      box.disk,
-      box.gpu,
-      box.id,
-    )
-
     const updateData: Partial<Box> = {
       pending: true,
       desiredState: BoxDesiredState.STARTED,
       authToken: nanoid(32).toLocaleLowerCase(),
     }
 
-    let updatedBox: Box
-    try {
-      updatedBox = await this.boxRepository.updateWhere(box.id, {
-        updateData,
-        whereCondition: { pending: false, state: box.state },
-      })
-    } catch (error) {
-      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
-      throw error
-    }
+    const updatedBox = await this.boxRepository.updateWhere(box.id, {
+      updateData,
+      whereCondition: { pending: false, state: box.state },
+    })
 
     this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
 
@@ -997,27 +972,8 @@ export class BoxService {
       return box
     }
 
-    // Auto-resume also brings a stopped box back to running, so it must honor the
-    // org quota just like start(). Released if the box does not actually start.
-    const quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
-      organization,
-      box.cpu,
-      box.mem,
-      box.disk,
-      box.gpu,
-      box.id,
-    )
-
-    let updated: Box
-    try {
-      updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
-    } catch (error) {
-      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
-      throw error
-    }
-
+    const updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
     if (!updated) {
-      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
       return this.findOneByIdOrName(box.id, organization.id)
     }
 
@@ -1081,7 +1037,6 @@ export class BoxService {
     if (runner.apiVersion === '2') {
       // TODO: we need "recovering" state that can be set after calling recover
       // Once in recovering, we abort further processing and let the manager/job handler take care of it
-      // (Also, since desiredState would be STARTED, we need to check the quota)
       throw new ForbiddenException('Recovering boxes with runner API version 2 is not supported')
     }
 
@@ -1110,7 +1065,7 @@ export class BoxService {
     })
 
     // Now that box is in STOPPED state, use the normal start flow
-    // This handles quota validation, pending usage, event emission, etc.
+    // This handles state validation and event emission.
     return await this.start(box.id, organization)
   }
 

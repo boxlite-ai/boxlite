@@ -12,7 +12,6 @@ Name | Type | Description | Notes
 **currentCpuUsagePercentage** | **number** |  | [optional] [default to undefined]
 **currentDiskUsagePercentage** | **number** |  | [optional] [default to undefined]
 **currentMemoryUsagePercentage** | **number** |  | [optional] [default to undefined]
-**currentSnapshotCount** | **number** |  | [optional] [default to undefined]
 **currentStartedBoxes** | **number** |  | [optional] [default to undefined]
 
 ## Example
@@ -28,7 +27,6 @@ const instance: RunnerMetrics = {
     currentCpuUsagePercentage,
     currentDiskUsagePercentage,
     currentMemoryUsagePercentage,
-    currentSnapshotCount,
     currentStartedBoxes,
 };
 ```

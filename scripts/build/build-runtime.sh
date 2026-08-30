@@ -2,7 +2,8 @@
 # Populate cargo's OUT_DIR/runtime with all binaries and libraries
 #
 # This script completes the runtime directory that contains everything
-# needed to run BoxLite: shim binary, guest binary, and all FFI libraries.
+# needed to run BoxLite: shim binary, guest binary, the guest e2fsprogs tools,
+# and all FFI libraries.
 #
 # Usage:
 #   ./build-runtime.sh [--profile PROFILE]
@@ -13,6 +14,8 @@
 # The runtime directory will contain:
 #   - boxlite-shim      VM subprocess runner (statically links libkrun + libgvproxy)
 #   - boxlite-guest     Guest agent (Linux binary)
+#   - guest-mke2fs      Guest e2fsprogs tool (static musl, embedded under a distinct name)
+#   - guest-resize2fs   Guest e2fsprogs tool (static musl, embedded under a distinct name)
 #   - libkrunfw.*       libkrunfw library (dlopen'd at runtime)
 
 set -e
@@ -37,6 +40,8 @@ Options:
 The runtime directory will contain:
   - boxlite-shim      VM subprocess runner (statically links libkrun + libgvproxy)
   - boxlite-guest     Guest agent (Linux binary)
+  - guest-mke2fs      Guest e2fsprogs tool (static musl, embedded under a distinct name)
+  - guest-resize2fs   Guest e2fsprogs tool (static musl, embedded under a distinct name)
   - libkrunfw.*       libkrunfw library (dlopen'd at runtime)
 
 Examples:
@@ -48,6 +53,7 @@ Examples:
 
   # Full workflow
   bash scripts/build/build-guest.sh
+  bash scripts/build/build-guest-deps.sh
   bash scripts/build/build-shim.sh
   ./build-runtime.sh
 
@@ -155,6 +161,61 @@ build_guest() {
     fi
 }
 
+# Build the guest e2fsprogs tools (mke2fs, resize2fs).
+#
+# These are required by GuestArtifacts::get() on the default boot path, so they
+# must always be produced here rather than treated as optional — a runtime
+# missing them builds fine but fails on the first Box start.
+
+# Validate a pre-built guest tool with the same checks build-guest-deps.sh
+# applies to freshly built tools (verify_tool): a regular file (not a symlink),
+# non-empty, mode 0755, and a statically-linked ELF for the guest target.
+# SKIP_GUEST_BUILD must not trust a bad cache that would only fail at Box start.
+verify_guest_tool() {
+    local path="$1"
+    local mode
+    if [ ! -f "$path" ] || [ -L "$path" ] || [ ! -s "$path" ]; then
+        print_error "Invalid cached guest tool (must be a regular, non-empty file): $path"
+        exit 1
+    fi
+    mode="$(stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path")"
+    if [ "$mode" != "755" ]; then
+        print_error "Guest tool must have mode 0755: $path (found $mode)"
+        exit 1
+    fi
+    bash "$SCRIPT_DIR/util.sh" --verify-guest-elf "$GUEST_TARGET" "$path" || {
+        print_error "Guest tool is not a valid static ELF for $GUEST_TARGET: $path"
+        exit 1
+    }
+}
+
+build_guest_deps() {
+    echo ""
+    print_section "Building guest e2fsprogs tools (mke2fs, resize2fs)..."
+
+    source "$SCRIPT_DIR/util.sh"
+    local mke2fs_path="$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/mke2fs"
+    local resize2fs_path="$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/resize2fs"
+
+    # Skip build if SKIP_GUEST_BUILD=1 and both tools already exist.
+    # Used in CI when `make guest` (the build-guest action) pre-built and staged
+    # them to .cache/, restored into target/ before this script runs.
+    if [ "${SKIP_GUEST_BUILD:-0}" = "1" ] && [ -f "$mke2fs_path" ] && [ -f "$resize2fs_path" ]; then
+        verify_guest_tool "$mke2fs_path"
+        verify_guest_tool "$resize2fs_path"
+        print_success "Using pre-built guest e2fsprogs tools (SKIP_GUEST_BUILD=1)"
+        return 0
+    fi
+
+    bash "$SCRIPT_BUILD_DIR/build-guest-deps.sh" --target "$GUEST_TARGET" --profile "$PROFILE"
+
+    if [ ! -f "$mke2fs_path" ] || [ ! -f "$resize2fs_path" ]; then
+        print_error "Failed to build guest e2fsprogs tools (mke2fs, resize2fs) required for Box startup"
+        exit 1
+    fi
+    print_success "Built: $mke2fs_path, $resize2fs_path"
+}
+
 # Find and collect FFI libraries
 collect_libraries() {
     echo ""
@@ -222,6 +283,17 @@ assemble_runtime() {
     cp "$GUEST_BINARY" "$RUNTIME_LIBS_DIR/"
     echo "✓"
 
+    # Guest e2fsprogs tools, embedded under distinct names so they never shadow
+    # the host mke2fs bundled by e2fsprogs-sys. build_guest_deps() has already
+    # built them (or verified their presence), so these copies are unconditional.
+    print_step "Copying guest-mke2fs... "
+    cp "$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/mke2fs" "$RUNTIME_LIBS_DIR/guest-mke2fs"
+    echo "✓"
+
+    print_step "Copying guest-resize2fs... "
+    cp "$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/resize2fs" "$RUNTIME_LIBS_DIR/guest-resize2fs"
+    echo "✓"
+
     # Sign shim on macOS (always, to ensure proper entitlements)
     if [ "$OS" = "macos" ] && [ -f "$RUNTIME_LIBS_DIR/boxlite-shim" ]; then
         echo ""
@@ -269,6 +341,7 @@ main() {
     detect_platform
     build_shim
     build_guest
+    build_guest_deps
     collect_libraries
     echo "Destination: $RUNTIME_LIBS_DIR"
 

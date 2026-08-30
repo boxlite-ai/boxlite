@@ -181,11 +181,14 @@ async function bootstrap() {
     // AWS ALB User Guide HTTP 502 troubleshooting: "Check whether the keep-alive
     // duration of the target is shorter than the idle timeout value of the load
     // balancer." Node 18+ defaults keepAliveTimeout to 5s; we set ALB idle to
-    // "1 hour" (sst.config.ts Api service.loadBalancer). 65 min keepalive and
+    // "1 hour" (apps/infra/stack/api.ts Api service.loadBalancer). 65 min keepalive and
     // 66 min headersTimeout (which must be >= keepAliveTimeout) cover the gap.
     const httpServer = app.getHttpServer()
     httpServer.keepAliveTimeout = 65 * 60 * 1000
     httpServer.headersTimeout = 66 * 60 * 1000
+    // File uploads can legitimately exceed Node's default five-minute request
+    // body deadline. Node exposes this setting only at the server level.
+    httpServer.requestTimeout = 0
 
     // WebSocket upgrade routing for the BoxLite REST `/attach` endpoint.
     // NestJS controllers only fire on Express's `request` event; WS upgrades

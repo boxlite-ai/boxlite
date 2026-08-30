@@ -1,3 +1,0 @@
-runtime: nodejs
-main: policies/runner/index.js
-description: Mandatory BoxLite Runner lifecycle and identity policy

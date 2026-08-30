@@ -15,6 +15,8 @@ import {
   Query,
   HttpCode,
   UseGuards,
+  UsePipes,
+  ValidationPipe,
   Logger,
   Res,
 } from '@nestjs/common'
@@ -35,12 +37,29 @@ import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.map
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
+
 // Spec-first surface: the contract is openapi/box.openapi.yaml, not the
 // generated product spec (which `:prefix` routes would render invalid).
 @ApiExcludeController()
 @ApiTags('BoxLite REST')
 @Controller(['v1/boxes', 'v1/:prefix/boxes'])
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
+// The spec declares `additionalProperties: false` on CreateBoxRequest, and the
+// other two servers enforce it — `boxlite serve` through
+// `#[serde(deny_unknown_fields)]`, the reference server through
+// `extra="forbid"`. Without this, a body carrying a sandbox knob
+// (`security`, `advanced.security`, `privileged`) or a host path
+// (`rootfs_path`) is accepted and silently forgotten: the caller gets a 201
+// and a box that ignored what they asked for.
+//
+// Scoped to this controller rather than the global pipe in main.ts, which also
+// serves the dashboard, admin, runner-callback and webhook routes — none of
+// which are covered by this spec, and all of which would change behaviour in
+// the same commit.
+//
+// `whitelist` alone only strips unknown fields; `forbidNonWhitelisted` is what
+// turns a stripped field into a 400. Both are required.
+@UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
 @ApiBearerAuth()
 export class BoxliteBoxController {
   private readonly logger = new Logger(BoxliteBoxController.name)
@@ -69,6 +88,11 @@ export class BoxliteBoxController {
         env: req.body?.env
           ? Object.fromEntries(Object.keys(req.body?.env).map((key) => [key, MASKED_AUDIT_VALUE]))
           : undefined,
+        secrets: req.body?.secrets?.map((s) => ({
+          name: s.name,
+          hosts: s.hosts,
+          value: MASKED_AUDIT_VALUE,
+        })),
         cpus: req.body?.cpus,
         memory_mib: req.body?.memory_mib,
         disk_size_gb: req.body?.disk_size_gb,
@@ -79,6 +103,7 @@ export class BoxliteBoxController {
         auto_stop: req.body?.auto_stop,
         auto_delete: req.body?.auto_delete,
         auto_resume: req.body?.auto_resume,
+        network: req.body?.network,
       }),
     },
   })

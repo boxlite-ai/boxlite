@@ -78,10 +78,6 @@ impl CreateArgs {
         self.management.apply_to(&mut options)?;
         self.publish.apply_to(&mut options)?;
         self.volume.apply_to(&mut options, global.home.as_deref())?;
-        if self.volume.has_managed_volumes() && !global.resolves_rest_runtime() {
-            anyhow::bail!("managed volume mounts require a REST runtime");
-        }
-        self.volume.apply_managed_to(&mut options)?;
         self.network.apply_to(&mut options)?;
 
         // A `create`d box is a background box: `create` then `start`/`exec` runs
@@ -190,7 +186,8 @@ mod tests {
         let opts = args
             .to_box_options(&cli.global)
             .expect("options should build");
-        assert_eq!(opts.advanced.capabilities.add, vec!["SYS_ADMIN"]);
-        assert_eq!(opts.advanced.capabilities.drop, vec!["CAP_NET_RAW"]);
+        let capabilities = opts.advanced.capabilities().expect("capabilities set");
+        assert_eq!(capabilities.add, vec!["SYS_ADMIN"]);
+        assert_eq!(capabilities.drop, vec!["CAP_NET_RAW"]);
     }
 }

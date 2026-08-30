@@ -39,76 +39,6 @@ DEFAULT_BOXLITE_CACHE="$(cd "$_BUILD_LIBSECCOMP_DIR/../.." && pwd)/target/native
 LIBSECCOMP_VERSION="${LIBSECCOMP_VERSION:-2.5.5}"
 LIBSECCOMP_TARBALL_SHA256="${LIBSECCOMP_TARBALL_SHA256:-248a2c8a4d9b9858aa6baf52712c34afefcf9c9e94b76dce02c1c9aa25fb3375}"
 
-# sabotage-linux/kernel-headers: small portable export of Linux user-space
-# headers (asm/, linux/, etc.). Needed because brew's musl-cross ships
-# musl libc headers but no Linux kernel headers, and libseccomp #includes
-# <asm/unistd.h> and <linux/audit.h>.
-LINUX_HEADERS_VERSION="${LINUX_HEADERS_VERSION:-4.19.88-2}"
-LINUX_HEADERS_SHA256="${LINUX_HEADERS_SHA256:-16161844e56944d39794ad74c2dfd6faad12bda79b5dc00595f4178d28a92e2d}"
-
-# Install Linux user-space headers for ARCH into a cache dir, return path
-# to the include/ root via stdout. Idempotent.
-ensure_linux_headers_for_arch() {
-    local arch="$1"
-    if [ -z "$arch" ]; then
-        echo "ERROR: ensure_linux_headers_for_arch requires an arch (e.g. aarch64, x86_64)" >&2
-        return 1
-    fi
-
-    local cache_root="${BOXLITE_CACHE:-$DEFAULT_BOXLITE_CACHE}/linux-headers/$LINUX_HEADERS_VERSION/$arch"
-    local include_dir="$cache_root/include"
-
-    if [ -f "$include_dir/asm/unistd.h" ] && [ -f "$include_dir/linux/audit.h" ]; then
-        echo "$include_dir"
-        return 0
-    fi
-
-    local build_root
-    build_root=$(mktemp -d -t boxlite-kheaders-XXXXXX)
-    # local trap so caller's trap (libseccomp build_root) isn't clobbered
-    local _kheaders_cleanup="rm -rf '$build_root'"
-
-    local tarball="$build_root/kernel-headers.tar.gz"
-    local url="https://github.com/sabotage-linux/kernel-headers/archive/refs/tags/v$LINUX_HEADERS_VERSION.tar.gz"
-
-    echo "  → downloading $url" >&2
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$url" -o "$tarball" || { eval "$_kheaders_cleanup"; return 1; }
-    else
-        wget -q "$url" -O "$tarball" || { eval "$_kheaders_cleanup"; return 1; }
-    fi
-
-    local actual_sha256
-    if command -v shasum >/dev/null 2>&1; then
-        actual_sha256=$(shasum -a 256 "$tarball" | awk '{print $1}')
-    else
-        actual_sha256=$(sha256sum "$tarball" | awk '{print $1}')
-    fi
-    if [ "$actual_sha256" != "$LINUX_HEADERS_SHA256" ]; then
-        echo "ERROR: kernel-headers tarball SHA256 mismatch" >&2
-        echo "  expected: $LINUX_HEADERS_SHA256" >&2
-        echo "  actual:   $actual_sha256" >&2
-        eval "$_kheaders_cleanup"
-        return 1
-    fi
-
-    tar -xzf "$tarball" -C "$build_root"
-    mkdir -p "$cache_root"
-    (
-        cd "$build_root/kernel-headers-$LINUX_HEADERS_VERSION"
-        make ARCH="$arch" prefix="$cache_root" install >/dev/null
-    )
-
-    eval "$_kheaders_cleanup"
-
-    if [ ! -f "$include_dir/asm/unistd.h" ] || [ ! -f "$include_dir/linux/audit.h" ]; then
-        echo "ERROR: kernel-headers install did not produce expected headers" >&2
-        return 1
-    fi
-
-    echo "$include_dir"
-}
-
 ensure_libseccomp_for_target() {
     local target="$1"
     if [ -z "$target" ]; then
@@ -175,8 +105,20 @@ ensure_libseccomp_for_target() {
 
     # libseccomp #includes <asm/unistd.h> and <linux/audit.h> which musl-cross
     # doesn't ship. Vendor portable Linux user-space headers for the target arch.
+    local -a headers_env=()
+    if [ "${BOXLITE_CACHE+x}" = x ]; then
+        headers_env+=("BOXLITE_CACHE=$BOXLITE_CACHE")
+    fi
+    if [ "${LINUX_HEADERS_VERSION+x}" = x ]; then
+        headers_env+=("LINUX_HEADERS_VERSION=$LINUX_HEADERS_VERSION")
+    fi
+    if [ "${LINUX_HEADERS_SHA256+x}" = x ]; then
+        headers_env+=("LINUX_HEADERS_SHA256=$LINUX_HEADERS_SHA256")
+    fi
+
     local headers_include
-    headers_include=$(ensure_linux_headers_for_arch "$arch_prefix")
+    headers_include=$(env "${headers_env[@]}" bash "$_BUILD_LIBSECCOMP_DIR/../util.sh" \
+        --ensure-linux-headers "$arch_prefix")
     if [ -z "$headers_include" ]; then
         echo "ERROR: failed to provision Linux kernel headers for $arch_prefix" >&2
         return 1
@@ -223,10 +165,7 @@ ensure_libseccomp_for_target() {
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     target="${1:-}"
     if [ -z "$target" ]; then
-        SCRIPT_DIR_LSC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-        # shellcheck source=../util.sh
-        source "$SCRIPT_DIR_LSC/util.sh"
-        target="$GUEST_TARGET"
+        target=$(bash "$_BUILD_LIBSECCOMP_DIR/../util.sh" --target)
     fi
     ensure_libseccomp_for_target "$target"
     echo "LIBSECCOMP_LIB_PATH=$LIBSECCOMP_LIB_PATH"

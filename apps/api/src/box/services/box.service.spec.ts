@@ -3,16 +3,15 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BadRequestException, ForbiddenException } from '@nestjs/common'
+import { ForbiddenException } from '@nestjs/common'
 import { BoxService } from './box.service'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
 import { BoxEvents } from '../constants/box-events.constants'
 
-// ensureStartedForProxy touches boxRepository + eventEmitter +
-// organizationService + organizationUsageService; every other injected
-// dependency is irrelevant.
+// ensureStartedForProxy only touches boxRepository + eventEmitter +
+// organizationService; every other injected dependency is irrelevant.
 function makeService() {
   const boxRepository = {
     findOneByIdOrName: jest.fn(),
@@ -28,12 +27,6 @@ function makeService() {
       }
     }),
   } as any
-  // Quota check passes by default; tests assert reservations are released when
-  // the box does not actually start.
-  const organizationUsageService = {
-    validateOrganizationQuotas: jest.fn().mockResolvedValue({ cpu: 0, memory: 0, disk: 0, gpu: 0, count: 0 }),
-    rollbackPendingUsage: jest.fn().mockResolvedValue(undefined),
-  } as any
   const noop = {} as any
   const service = new BoxService(
     boxRepository, // boxRepository
@@ -44,7 +37,6 @@ function makeService() {
     noop, // warmPoolService
     eventEmitter, // eventEmitter
     organizationService, // organizationService
-    organizationUsageService, // organizationUsageService
     noop, // runnerAdapterFactory
     noop, // redisLockProvider
     noop, // redis
@@ -54,7 +46,7 @@ function makeService() {
     noop, // jobRepository
     noop, // jobService
   )
-  return { service, boxRepository, eventEmitter, organizationService, organizationUsageService }
+  return { service, boxRepository, eventEmitter, organizationService }
 }
 
 const activeOrg = { id: 'org-1', suspended: false } as any
@@ -87,7 +79,6 @@ function makePreviewUrlService() {
     noop, // warmPoolService
     noop, // eventEmitter
     noop, // organizationService
-    noop, // organizationUsageService
     noop, // runnerAdapterFactory
     noop, // redisLockProvider
     redis, // redis
@@ -197,52 +188,26 @@ describe('BoxService.ensureStartedForProxy', () => {
     expect(boxRepository.conditionalStartForProxy).not.toHaveBeenCalled()
   })
 
-  // Conditional UPDATE matched zero rows = race lost or box transitioned out
-  // of the eligible state between snapshot and write. Same no-op semantics
-  // as the old BoxConflictError swallow.
-  // Conditional UPDATE matched zero rows = race lost. The docstring's contract is
-  // "transitional states are returned unchanged", so the current box is returned and
-  // nothing is emitted.
-  it('returns the box unchanged and emits nothing when the conditional update matches zero rows (race lost)', async () => {
+  it('returns the latest box without emitting when another request wins the start race', async () => {
     const { service, boxRepository, eventEmitter } = makeService()
     jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
     boxRepository.conditionalStartForProxy.mockResolvedValue(null)
 
-    await expect(service.ensureStartedForProxy('box-1', activeOrg)).resolves.toBe(stoppedBox)
+    const result = await service.ensureStartedForProxy('box-1', activeOrg)
+
+    expect(result).toBe(stoppedBox)
     expect(eventEmitter.emit).not.toHaveBeenCalled()
   })
 
-  // Docstring: "Unexpected database errors propagate; AutoResume must never proxy
-  // before readiness." So the error is rethrown, not swallowed.
-  it('propagates an unexpected DB failure without emitting', async () => {
+  it('does not emit and preserves an unexpected database failure', async () => {
     const { service, boxRepository, eventEmitter } = makeService()
     jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
-    boxRepository.conditionalStartForProxy.mockRejectedValue(new Error('db connection lost'))
+    const databaseError = new Error('db connection lost')
+    boxRepository.conditionalStartForProxy.mockRejectedValue(databaseError)
 
-    await expect(service.ensureStartedForProxy('box-1', activeOrg)).rejects.toThrow('db connection lost')
+    await expect(service.ensureStartedForProxy('box-1', activeOrg)).rejects.toBe(databaseError)
     expect(eventEmitter.emit).not.toHaveBeenCalled()
-  })
-
-  it('rejects auto-resume when the org is over quota and does not start the box', async () => {
-    const { service, boxRepository, organizationUsageService } = makeService()
-    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
-    organizationUsageService.validateOrganizationQuotas.mockRejectedValue(
-      new BadRequestException('Organization quota exceeded'),
-    )
-
-    await expect(service.ensureStartedForProxy('box-1', activeOrg)).rejects.toThrow(BadRequestException)
-    expect(boxRepository.conditionalStartForProxy).not.toHaveBeenCalled()
-  })
-
-  it('releases the quota reservation when the conditional start matches zero rows', async () => {
-    const { service, boxRepository, organizationUsageService } = makeService()
-    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
-    boxRepository.conditionalStartForProxy.mockResolvedValue(null)
-
-    await service.ensureStartedForProxy('box-1', activeOrg)
-
-    expect(organizationUsageService.rollbackPendingUsage).toHaveBeenCalled()
-  })
+  }) // Unexpected database errors must remain visible to callers.
 })
 
 function makeNetworkTunnelService() {
@@ -264,7 +229,6 @@ function makeNetworkTunnelService() {
     noop,
     noop,
     noop,
-    noop, // organizationUsageService
     noop,
     noop,
     noop,
@@ -294,6 +258,7 @@ describe('BoxService network tunnel URLs', () => {
 describe('BoxService public defaults', () => {
   function makeCreateService() {
     const boxRepository = { insert: jest.fn(async (box: any) => box) } as any
+    const warmPoolService = { fetchWarmPoolBox: jest.fn().mockResolvedValue(undefined) }
     const runner = { id: 'runner-1', draining: false, state: RunnerState.READY }
     const runnerService = {
       getRandomAvailableRunner: jest.fn().mockResolvedValue(runner),
@@ -310,29 +275,71 @@ describe('BoxService public defaults', () => {
       getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
       getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
       organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
-      organizationUsageService: {
-        validateOrganizationQuotas: jest.fn().mockResolvedValue({ cpu: 0, memory: 0, disk: 0, gpu: 0, count: 0 }),
-        rollbackPendingUsage: jest.fn().mockResolvedValue(undefined),
-      },
       redis: { exists: jest.fn().mockResolvedValue(1) },
+      warmPoolService,
       runnerService,
       redisLockProvider,
       boxRepository,
       eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
       toBoxDto: jest.fn((box) => box),
     })
-    return { service, boxRepository, runnerService, redisLockProvider }
+    return { service, boxRepository, runnerService, redisLockProvider, warmPoolService }
   }
 
   it.each([
-    [undefined, true],
-    [false, false],
+    [{ networkBlockAll: true }, { boxLimitedNetworkEgress: false }, { networkBlockAll: true }],
+    [{ networkAllowList: '10.0.0.0/8' }, { boxLimitedNetworkEgress: false }, { networkAllowList: '10.0.0.0/8' }],
+    [{}, { boxLimitedNetworkEgress: true }, { networkBlockAll: true }],
+  ])(
+    'creates a fresh box instead of claiming a warm box when network policy is required',
+    async (request, org, expected) => {
+      const { service, boxRepository, warmPoolService } = makeCreateService()
+      ;(service as any).redis.exists.mockResolvedValue(0)
+
+      await service.create({ name: 'restricted-box', image: 'base', ...request } as any, { id: 'org-1', ...org } as any)
+
+      expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+      expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining(expected))
+    },
+  )
+
+  it.each([
+    [undefined, false],
+    [true, true],
   ])('defaults a fresh box to public=%s', async (requestedPublic, expectedPublic) => {
     const { service, boxRepository } = makeCreateService()
 
     await service.create({ name: 'fresh-box', public: requestedPublic } as any, { id: 'org-1' } as any)
 
     expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ public: expectedPublic }))
+  })
+
+  it('persists secrets on a freshly created box', async () => {
+    const { service, boxRepository } = makeCreateService()
+
+    await service.create(
+      { name: 'secret-box', image: 'base', secrets: [{ name: 'openai', value: 'sk-test' }] } as any,
+      { id: 'org-1' } as any,
+    )
+
+    expect(boxRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ secrets: [{ name: 'openai', value: 'sk-test' }] }),
+    )
+  })
+
+  it('creates a fresh box instead of claiming a warm box when secrets are present', async () => {
+    const { service, boxRepository, warmPoolService } = makeCreateService()
+    // Default exists=1 would skip the warm-pool branch outright; clear it so
+    // the assertion below actually guards the secrets needsFreshBox path.
+    ;(service as any).redis.exists.mockResolvedValue(0)
+
+    await service.create(
+      { name: 'secret-box', image: 'base', secrets: [{ name: 'openai', value: 'sk-test' }] } as any,
+      { id: 'org-1' } as any,
+    )
+
+    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+    expect(boxRepository.insert).toHaveBeenCalled()
   })
 
   it('rechecks runner eligibility under the assignment fence before inserting', async () => {
@@ -366,8 +373,8 @@ describe('BoxService public defaults', () => {
   })
 
   it.each([
-    [undefined, true],
-    [false, false],
+    [undefined, false],
+    [true, true],
   ])('defaults an assigned warm-pool box to public=%s', async (requestedPublic, expectedPublic) => {
     const warmPoolBox = { id: 'warm-box', runnerId: 'runner-1', name: 'warm-box' } as any
     const update = jest.fn().mockResolvedValue(warmPoolBox)

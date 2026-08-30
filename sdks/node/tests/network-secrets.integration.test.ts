@@ -19,10 +19,29 @@ describe("SimpleBox network and secrets", { timeout: 180_000 }, () => {
     ).toThrow("SimpleBoxOptions.allowNet was removed");
   });
 
-  test("disabled network removes eth0", async () => {
+  test("accepts legacy flat network fields as outbound", () => {
     const box = new SimpleBox({
       image: "alpine:latest",
       network: { mode: "disabled" },
+    } as any);
+
+    expect((box as any)._boxOpts.network).toEqual({ mode: "disabled" });
+  });
+
+  test("rejects mixing legacy flat fields with outbound", () => {
+    expect(
+      () =>
+        new SimpleBox({
+          image: "alpine:latest",
+          network: { mode: "disabled", outbound: { mode: "enabled" } },
+        } as any),
+    ).toThrow("cannot mix outbound with the deprecated mode/allowNet");
+  });
+
+  test("disabled network removes eth0", async () => {
+    const box = new SimpleBox({
+      image: "alpine:latest",
+      network: { outbound: { mode: "disabled" } },
       autoRemove: true,
     });
 
@@ -41,8 +60,10 @@ describe("SimpleBox network and secrets", { timeout: 180_000 }, () => {
     const box = new SimpleBox({
       image: "alpine:latest",
       network: {
-        mode: "enabled",
-        allowNet: ["example.com"],
+        outbound: {
+          mode: "enabled",
+          allowNet: ["example.com"],
+        },
       },
       autoRemove: true,
     });
@@ -66,8 +87,10 @@ describe("SimpleBox network and secrets", { timeout: 180_000 }, () => {
     const box = new SimpleBox({
       image: "python:slim",
       network: {
-        mode: "enabled",
-        allowNet: ["httpbingo.org"],
+        outbound: {
+          mode: "enabled",
+          allowNet: ["httpbingo.org"],
+        },
       },
       secrets: [
         {

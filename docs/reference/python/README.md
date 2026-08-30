@@ -130,7 +130,7 @@ Configuration options for creating a box.
 | `disk_size_gb` | `int \| None` | `None` | Persistent disk size in GB (None = ephemeral) |
 | `working_dir` | `str` | `"/root"` | Working directory inside container |
 | `env` | `List[Tuple[str, str]]` | `[]` | Environment variables as (key, value) pairs |
-| `volumes` | `List[Tuple[str, str, str]]` | `[]` | Volume mounts as (host_path, guest_path, mode) |
+| `volumes` | `List[Tuple \| Dict]` | `[]` | Volume mounts; tuple = host bind, dict = `managed_volume` or `host_path` |
 | `network` | `NetworkSpec \| None` | `None` | Structured network configuration. Omit for default enabled networking. |
 | `ports` | `List[Tuple \| Dict]` | `[]` | Local TCP forwarding; omit `host_port` in a dict for automatic allocation |
 | `secrets` | `List[Secret]` | `[]` | Outbound HTTP(S) secret substitution rules |
@@ -174,12 +174,28 @@ network = NetworkSpec(
 
 #### Volume Mount Format
 
+A mount has exactly one origin. A tuple is always a host bind:
+
 ```python
 volumes=[
-    ("/host/config", "/etc/app/config", "ro"),  # Read-only
-    ("/host/data", "/mnt/data", "rw"),          # Read-write
+    ("/host/config", "/etc/app/config", True),  # Read-only
+    ("/host/data", "/mnt/data", False),         # Read-write
 ]
 ```
+
+A dict takes `managed_volume` — the volume's server-assigned id **or** its
+name, the server resolves either — or `host_path`, never both:
+
+```python
+volumes=[
+    {"managed_volume": "my-data", "guest_path": "/data"},
+    {"managed_volume": "vol_01K2EXAMPLE", "guest_path": "/cache"},
+    {"host_path": "/host/config", "guest_path": "/etc/app/config"},
+]
+```
+
+Managed volumes require a REST runtime; host binds are local-runtime only.
+`read_only` is rejected on a managed mount - only host binds may be read-only.
 
 #### Port Forwarding Format
 
@@ -192,7 +208,7 @@ ports=[
 ```
 
 Port publication is local-only and TCP-only. For portable local/remote access,
-use `box.network.tunnel(port)`; each tunnel handle represents one connection.
+use `box.network.tunnel(port)`; each returned tunnel is one-shot.
 
 #### Secret Format
 
@@ -246,14 +262,17 @@ Metadata about a box.
 | `name` | `str \| None` | Optional user-assigned name |
 | `state` | `BoxStateInfo` | Runtime state with `status`, `running`, and nullable `pid` and `exit_code` fields. `exit_code` holds the init command's exit code once the box has stopped because that command exited, and is `None` otherwise |
 | `created_at` | `str` | ISO 8601 creation timestamp |
-| `started_at` | `str \| None` | Most recent successful container start timestamp (RFC 3339); `None` if not recorded or unavailable over REST |
+| `started_at` | `str \| None` | Time when the box most recently entered `Running` (RFC 3339); `None` if not recorded or unavailable over REST |
 | `image` | `str` | OCI image used |
 | `cpus` | `int` | Allocated CPU cores |
 | `memory_mib` | `int` | Allocated memory in MiB |
 | `network` | `NetworkInfo \| None` | Current network configuration and resolved local publications |
 
-`NetworkInfo` has `mode: str`, `allow_net: List[str]`, and
-`published_ports: List[PublishedPort] | None`. Each `PublishedPort` has named
+`NetworkInfo` has `outbound: NetworkDirectionInfo`, `inbound:
+NetworkDirectionInfo`, and `published_ports: List[PublishedPort] | None`; each
+direction has `mode: str` and `allow_net: List[str]`. The pre-split
+`mode: str` / `allow_net: List[str]` attributes remain readable on
+`NetworkInfo` as views onto `outbound`. Each `PublishedPort` has named
 `guest_port`, `host_ip`, `host_port`, and `protocol` attributes.
 
 `network is None` means network information is unavailable. Within
@@ -291,16 +310,21 @@ Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.network`.
 
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
-| Prepare | `await box.network.tunnel(port) -> BoxTunnel` | Prepare one connection to a TCP service in the box |
-| Inspect | `tunnel.uri() -> str \| None` | Public URL of a remotely served tunnel; `None` for a local one |
-| Connect | `await tunnel.connect() -> BoxConnection` | Consume the tunnel and return its bidirectional byte stream |
+| Tunnel | `await box.network.tunnel(port) -> BoxTunnel` | Prepare a one-shot tunnel to a TCP service in the box |
+| Forward | `await tunnel.forward(listen) -> TunnelForwarder` | Bind one local listener and forward every client |
+| Inspect | `tunnel.uri() -> str \| None` | Read the prepared public URL; `None` for a local box |
+| Connect | `await tunnel.connect() -> BoxConnection` | Consume the prepared tunnel into its byte stream |
 | Read/write | `await connection.read(max_bytes)`, `await connection.write(data)` | Exchange bytes with the service |
 | Close | `await connection.close()` | Close the connection |
 
-Each `BoxTunnel` carries exactly one connection. Call `tunnel()` again for each
-additional or concurrent connection. This differs from `BoxOptions.ports`,
-which creates a persistent, local-only host listener that accepts repeated
-connections from ordinary host applications.
+Use `SocketAddress.tcp(host="127.0.0.1", port=0)` or
+`SocketAddress.unix(path)`. A forwarder exposes `local_addr()`, `await
+wait()`, and repeatable `await close()`; synchronous and `SimpleBox` wrappers
+provide the same operations.
+
+Each `BoxTunnel` is one-shot: choose `connect()` or `forward()`. This differs
+from `BoxOptions.ports`, which creates a persistent, local-only host listener
+that accepts repeated connections from ordinary host applications.
 
 ---
 

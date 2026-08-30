@@ -1,4 +1,4 @@
-PHONY_TARGETS += test test\:unit\:guest test\:guest-perms _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
+PHONY_TARGETS += test test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -20,6 +20,11 @@ export NEXTEST_FILTER_EXPR
 NEXTEST_FILTER   = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',))
 NEXTEST_CLI_FILTER = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',-E 'not binary(stress_disk)'))
 CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),)
+# The `--features rest` pass below is the only one that compiles the `rest`
+# module at all — the two passes above build --no-default-features — so every
+# rest-gated test lives or dies by this filter. It covers the whole module:
+# scoped to one test module it silently skipped the other six.
+REST_CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),rest::)
 PYTEST_FILTER    = $(if $(FILTER),-k '$(FILTER)',)
 VITEST_FILTER    = $(if $(FILTER),-t '$(FILTER)',)
 CTEST_FILTER     = $(if $(FILTER),-R '$(FILTER)',)
@@ -84,12 +89,18 @@ endef
 test:
 	@$(MAKE) test:changed
 
-# Repo-local BoxLite diagram skill validator. This suite is deterministic: it
-# uses local stand-ins for gh and Mermaid CLI while exercising the real parser,
-# source, diff, and cross-view validation code.
+test\:setup\:submodules:
+	@bash $(SCRIPT_DIR)/test/test-setup-submodules.sh
+
+# Pinned BoxLite diagram skill validator. This suite is deterministic: it uses
+# local stand-ins for gh and Mermaid CLI while exercising the real parser,
+# source, diff, and cross-view validation code from agent-tooling.
 test\:skill\:boxlite-diagrams:
 	@echo "🧪 Running BoxLite diagrams skill validator tests..."
-	@python3 -m unittest discover -s .agents/skills/boxlite-diagrams/tests -v
+	@./.agent-tooling/install.sh >/dev/null
+	@hooks_path="$$(git config --get core.hooksPath)"; \
+	tooling_root="$$(cd "$$hooks_path/.." && pwd)"; \
+	python3 -m unittest discover -s "$$tooling_root/.agents/skills/boxlite-diagrams/tests" -v
 
 # Smart test: only test components with changes, fall back to full matrix.
 test\:changed:
@@ -104,7 +115,13 @@ else
 endif
 
 # Per-component test dispatch targets (map component tag → existing test targets).
+#
+# rust runs the reference-server suite first: its error table is keyed on the
+# Display text of `BoxliteError` (src/shared/src/errors.rs, this component), so
+# a new variant leaves the reference server answering the caller's mistake as a
+# server fault. It costs milliseconds and fails before the long suites start.
 test\:changed\:rust:
+	@$(MAKE) test:unit:openapi
 	@$(MAKE) test:unit:rust
 	@$(MAKE) test:integration:rust
 
@@ -129,6 +146,16 @@ test\:changed\:go:
 
 test\:changed\:apps:
 	@$(MAKE) test:apps
+
+# The Box API contract and the reference server that implements it.
+test\:changed\:openapi:
+	@$(MAKE) test:unit:openapi
+
+# Workflow and composite-action changes. Runs the infra suite rather than the whole apps matrix:
+# that suite is what asserts across .github (caller/callee permissions, Environment allowlists,
+# the deploy step list, and the composite actions' own shell), and it finishes in seconds.
+test\:changed\:ci:
+	@$(MAKE) test:apps:infra
 
 # Integration-only for changed components (used by E2E CI on PRs).
 test\:integration\:changed:
@@ -176,8 +203,8 @@ test\:stress:
 
 # Core unit suites: Rust unit + FFI unit + gvproxy bridge unit.
 test\:unit\:core:
-	@echo "── Core unit suites (rust, ffi, gvproxy) ──"
-	$(call run_suites,test:unit:rust test:unit:ffi test:unit:gvproxy)
+	@echo "── Core unit suites (rust, openapi, ffi, gvproxy) ──"
+	$(call run_suites,test:unit:rust test:unit:openapi test:unit:ffi test:unit:gvproxy)
 
 # Core integration suites: Rust integration + CLI integration.
 test\:integration\:core:
@@ -211,6 +238,7 @@ test\:unit\:rust:
 		cargo test -p boxlite --no-default-features --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 		cargo test -p boxlite-shared --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 	fi; \
+	cargo test -p boxlite --no-default-features --features rest --lib -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	exit $$rc
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
@@ -218,7 +246,7 @@ test\:unit\:rust:
 # nextest's process-per-test isolation is what makes the whole crate runnable:
 # several suites assert on process-global state (raw fd numbers, waitpid), so
 # they can interfere under a shared process. The cargo fallback has no such
-# isolation, so it stays on the two modules that are pure logic.
+# isolation, so it stays on the modules that are pure logic.
 test\:unit\:guest:
 	@if [ "$$(uname)" != "Linux" ]; then \
 		echo "⏭️  Guest unit tests require Linux"; \
@@ -228,7 +256,7 @@ test\:unit\:guest:
 	if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run --no-tests=fail -p boxlite-guest; \
 	else \
-		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests; \
+		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests sysctl::tests; \
 	fi
 
 # Keep ordinary ownership tests unprivileged. Only explicitly ignored tests
@@ -280,6 +308,15 @@ test\:guest-perms:
 		exit 1; \
 	fi
 
+# Build and qualify the standalone guest artifacts. Native x86_64 release also
+# exercises verifier rejection paths; matching native Linux runs tool smoke tests.
+test\:guest-artifacts: export _BOXLITE_GUEST_TARGET_ARG := $(value GUEST_TARGET)
+test\:guest-artifacts: export _BOXLITE_PROFILE_ARG := $(value PROFILE)
+test\:guest-artifacts:
+	@target="$${_BOXLITE_GUEST_TARGET_ARG:-$$(bash "$$PWD/scripts/util.sh" --target)}"; \
+	profile="$${_BOXLITE_PROFILE_ARG:-release}"; \
+	bash "$$PWD/scripts/test/test-guest-artifacts.sh" --target "$$target" --profile "$$profile"
+
 # Pre-warm Rust integration test image cache (internal helper, still callable).
 test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🔥 Warming Rust integration test image cache..."
@@ -305,6 +342,14 @@ test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:ru
 			$(CARGOTEST_FILTER); \
 	fi
 
+# Manual release-mode benchmark. Kept out of every aggregate and CI suite.
+test\:perf\:import-export: runtime
+	@echo "📊 Running manual 1 GiB import/export benchmark (release, serial)..."
+	@echo "   Commit: $$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+	@echo "   Ensure at least 8 GiB of free disk space and no competing I/O workload."
+	@cargo test --release -p boxlite --features krun,gvproxy \
+		--test import_export_benchmark -- --ignored --test-threads=1 --nocapture
+
 # BoxLite C SDK unit tests.
 test\:unit\:ffi:
 	@echo "🧪 Running BoxLite C SDK unit tests..."
@@ -318,6 +363,22 @@ test\:unit\:ffi:
 test\:unit\:gvproxy:
 	@echo "🧪 Running gvproxy bridge unit tests..."
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && go test ./... $(GOTEST_FILTER)
+
+# OpenAPI reference-server unit tests: the error class the server answers with
+# must be one openapi/box.openapi.yaml declares, and must match the triple
+# `BoxliteError::http()` (src/shared/src/errors.rs) gives the same failure —
+# the reference server is what src/boxlite/tests/rest_integration.rs points the
+# Rust client at, so a class it gets wrong is a class every conformance run
+# gets wrong.
+#
+# Discovery is restricted to the modules that import only the stdlib
+# (openapi/reference-server/errors.py, like config.py). The rest of that
+# directory needs python-dotenv, fastapi and pydantic, which no setup target
+# here installs — discovering the whole directory would fail this suite on
+# every checkout that does not intend to run the server.
+test\:unit\:openapi:
+	@echo "🧪 Running OpenAPI reference-server unit tests..."
+	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
 
 # CLI integration tests.
 test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
@@ -348,6 +409,10 @@ test\:stress\:disk: $(if $(SETUP_DONE),,runtime\:debug)
 test\:unit\:python: _ensure-python-deps
 	@echo "🧪 Running Python SDK unit tests..."
 	@. .venv/bin/activate && cd sdks/python && python -m pytest tests/ -v -m "not integration" $(PYTEST_FILTER)
+	@echo "🧪 Running Python binding (Rust) unit tests..."
+	@# --no-default-features drops pyo3's extension-module so the test binary can
+	@# link libpython; see sdks/python/Cargo.toml.
+	@cargo test -p boxlite-python --no-default-features --lib $(CARGOTEST_FILTER)
 
 # Python SDK integration tests.
 test\:integration\:python:
@@ -365,6 +430,8 @@ test\:all\:python:
 test\:unit\:node: _ensure-node-deps
 	@echo "🧪 Running Node.js SDK unit tests..."
 	@cd sdks/node && npm test -- $(VITEST_FILTER)
+	@echo "🧪 Running Node.js binding (Rust) unit tests..."
+	@cargo test -p boxlite-node --lib $(CARGOTEST_FILTER)
 
 # Node.js SDK integration tests (requires VM environment).
 test\:integration\:node:
@@ -430,15 +497,19 @@ _ensure-infra-deps:
 		cd apps/infra && npm ci --no-audit --no-fund; \
 	fi
 
+# Type-check first: the suite runs under `tsx --test`, which strips types without checking them, so
+# a signature change that no longer compiles still leaves every test green. tsconfig.tooling.json
+# is the subset that checks without `sst install`; test:apps:infra-config below covers the rest.
 test\:apps\:infra: _ensure-infra-deps
+	@echo "🧪 Type-checking infrastructure scripts..."
+	@cd apps/infra && npm run --silent typecheck:tooling
 	@echo "🧪 Running infrastructure script tests..."
 	@cd apps/infra && npm test
 
 test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 	@echo "🧪 Installing and type-checking the SST deployment config..."
 	@cd apps/infra && IAM_PERMISSIONS_BOUNDARY_STAGE=ci npm run sst -- install --stage ci
-	@cd apps/infra && ../node_modules/.bin/tsc --noEmit --allowJs --checkJs false \
-		--module NodeNext --moduleResolution NodeNext --target ES2022 --skipLibCheck sst.config.ts
+	@cd apps/infra && npm run typecheck
 
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."

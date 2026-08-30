@@ -191,8 +191,8 @@ Use read-only volumes to provide data to the sandbox without risk of modificatio
 options = boxlite.BoxOptions(
     image="python:slim",
     volumes=[
-        ("/host/datasets", "/mnt/data", "ro"),     # Agent can read but not write
-        ("/host/config", "/etc/app/config", "ro"),  # Configuration files
+        ("/host/datasets", "/mnt/data", True),     # Agent can read but not write
+        ("/host/config", "/etc/app/config", True),  # Configuration files
     ],
 )
 ```
@@ -274,6 +274,35 @@ await box.stop()
 await runtime.remove(box.id)
 ```
 
+**Ownership (`copy_in` only):** files arriving in the box are owned by its exec user (the
+image's `USER`, or the `user` you set on `BoxOptions`), so an agent running as a non-root
+user can read them without any `chmod`/`chown` of its own. Directories created to hold the
+copy get the same owner. `copy_out` writes to the host and leaves host ownership alone.
+
+**Paths under a mount are refused, in both directions.** `copy_in`/`copy_out` work on the
+rootfs layer from outside the container's mount namespace, so a path at or under a mount —
+`/tmp`, `/dev/shm`, a volume, or the `/etc/{hosts,hostname,resolv.conf}` binds — resolves
+to a different file than the one the workload sees. Rather than transfer something
+invisible, `copy_in` refuses such a destination and `copy_out` refuses such a source.
+
+The two directions differ on a directory that merely *contains* a mount. `copy_out` refuses
+it outright — the archive would carry the image's file rather than the mounted one. `copy_in`
+allows it and checks per entry instead, refusing only if some entry would land *on* a mount:
+copying a directory into `/etc` is fine, and becomes a refusal only when an entry resolves
+to `/etc/hosts`, `/etc/hostname`, or `/etc/resolv.conf` — which needs `include_parent=False`,
+since the default nests everything under the source directory's own name.
+
+Use a path outside the mount (`/workspace` is a good default), or pipe a tar through
+`exec`, which runs inside the namespace:
+
+```python
+execution = await box.exec("tar", ["xf", "-", "-C", "/tmp"])
+stdin = execution.stdin()
+await stdin.send_input(tar_bytes)
+await stdin.close()
+await execution.wait()
+```
+
 ### Inline Data via exec
 
 For small payloads, write data through a command:
@@ -300,8 +329,8 @@ For datasets or configuration that should be available immediately:
 options = boxlite.BoxOptions(
     image="python:slim",
     volumes=[
-        ("/host/datasets", "/mnt/data", "ro"),   # Input data
-        ("/host/results", "/mnt/results", "rw"),  # Output directory
+        ("/host/datasets", "/mnt/data", True),   # Input data
+        ("/host/results", "/mnt/results", False),  # Output directory
     ],
 )
 ```
@@ -371,7 +400,7 @@ async def main():
         memory_mib=1024,
         working_dir="/workspace",
         volumes=[
-            ("/host/datasets", "/mnt/data", "ro"),
+            ("/host/datasets", "/mnt/data", True),
         ],
         security=boxlite.SecurityOptions.maximum(),
     ))

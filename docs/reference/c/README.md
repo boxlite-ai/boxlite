@@ -720,19 +720,43 @@ BoxliteErrorCode boxlite_tunnel_connect(
     CBoxliteError* out_error
 );
 void boxlite_tunnel_free(CBoxTunnelHandle* tunnel);
+
+BoxliteErrorCode boxlite_tunnel_forward(
+    CBoxTunnelHandle* tunnel,
+    const BoxliteSocketAddress* listen,
+    CTunnelForwarderHandle** out_forwarder,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_tunnel_forwarder_address(
+    CTunnelForwarderHandle* forwarder,
+    char** out_address,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_tunnel_forwarder_wait(
+    CTunnelForwarderHandle* forwarder,
+    CTunnelForwarderWaitCb cb,
+    void* user_data,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_tunnel_forwarder_close(
+    CTunnelForwarderHandle* forwarder,
+    CTunnelForwarderCloseCb cb,
+    void* user_data,
+    CBoxliteError* out_error
+);
+void boxlite_tunnel_forwarder_free(CTunnelForwarderHandle* forwarder);
 ```
 
-Each `CBoxTunnelHandle` owns exactly one connection.
-`boxlite_tunnel_connect()` consumes that connection and returns an owned file
-descriptor that the caller must close; a second call returns `InvalidState`.
-Release the tunnel handle with `boxlite_tunnel_free()` after connecting or when
-discarding an unconsumed tunnel.
+Each `CBoxTunnelHandle` is one-shot. Choose `boxlite_tunnel_connect()` or
+`boxlite_tunnel_forward()`; either consumes the prepared tunnel.
 `boxlite_tunnel_uri()` reports where a remotely served tunnel can be reached, as
 an allocated string the caller frees with `boxlite_free_string()`. It writes NULL
-for a local tunnel, whose descriptor is already a live connection rather than an
-address — reach those with `boxlite_tunnel_connect()`.
+for a local tunnel.
 
-Create another tunnel handle for each additional or concurrent connection.
+`boxlite_tunnel_forward()` creates a TCP or Unix listener from the tunnel. Its
+wait and close callbacks are posted exactly once through the parent runtime's
+drain queue; freeing the caller handle requests non-blocking cancellation while
+already accepted operations retain their callback state.
 This differs from `boxlite_options_add_port()`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 
@@ -982,8 +1006,10 @@ if (boxlite_list_info(runtime, on_box_list, &list_request, &error) == Ok) {
 
 `info->network` is an owned `CNetworkInfo*` freed with the rest of `CBoxInfo`.
 It is `NULL` when network information is unavailable. Otherwise it contains a
-typed `mode`, an `allow_net` string array and count, and a nullable
-`CPublishedPortList*`. A `NULL` `published_ports` pointer means the current
+`CNetworkDirectionInfo` per direction (`outbound`, `inbound`), each with a
+typed `mode` plus an `allow_net` string array and count, and a nullable
+`CPublishedPortList*`. The deprecated top-level `mode`, `allow_net` and
+`allow_net_count` fields keep their pre-split offsets and alias `outbound`. A `NULL` `published_ports` pointer means the current
 handle does not know the lifecycle's publications, a non-`NULL` list with
 `count == 0` means there are no active local publications, and a populated list
 contains typed `CPublishedPort` entries with `guest_port`, `host_ip`,

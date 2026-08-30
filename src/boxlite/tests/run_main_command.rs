@@ -471,6 +471,20 @@ async fn an_adopted_running_box_is_followed_to_its_exit() {
             .await
             .expect("create box");
         handle.start().await.expect("start box");
+        // `start()` only *spawns* the container start — boot creates the
+        // container, running its init is the separate step (docker's create →
+        // attach → start), and `start()` returns as soon as the VM is up.
+        // Leaving the block here would drop the runtime mid-spawn and race it,
+        // testing that race instead of the adoption below. `exec` single-flights
+        // on the same `container_start` cell, so it both performs and awaits
+        // that step: past this point the main command is genuinely running.
+        handle
+            .exec(BoxCommand::new("true"))
+            .await
+            .expect("run the container init before abandoning the runtime")
+            .wait()
+            .await
+            .expect("await the probe exec");
     }
 
     // A second runtime adopts it: `get()` hands out a handle, which is where the

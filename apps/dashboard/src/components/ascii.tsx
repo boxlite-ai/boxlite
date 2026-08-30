@@ -11,7 +11,7 @@ import type { ComponentProps, ReactNode } from 'react'
  *
  * These are presentation only — they take plain display values, never domain
  * objects — so a screen can adopt the look without the primitive learning
- * anything about boxes, wallets or tiers.
+ * anything about boxes, wallets or plans.
  */
 
 export const BRAND = 'hsl(var(--brand))'
@@ -67,9 +67,34 @@ function DotMatrix({ text, dot = 4, gap = 1 }: { text: string; dot?: number; gap
   )
 }
 
-export function StatCard({ label, value, sub, live }: { label: string; value: string; sub: string; live?: boolean }) {
+// `onClick` turns the card into a filter control: on an inventory screen the
+// counts are the fastest way to narrow the list, so making them inert wastes
+// the most prominent element on the page. Cards without it stay plain divs.
+export function StatCard({
+  label,
+  value,
+  sub,
+  live,
+  onClick,
+  active,
+}: {
+  label: string
+  value: string
+  sub: string
+  live?: boolean
+  onClick?: () => void
+  active?: boolean
+}) {
+  const Tag = onClick ? 'button' : 'div'
   return (
-    <div className="flex flex-col gap-2 border border-border bg-card px-3 py-2.5 transition-transform hover:-translate-y-0.5 sm:gap-[14px] sm:px-[22px] sm:pb-5 sm:pt-[18px]">
+    <Tag
+      {...(onClick ? { type: 'button' as const, onClick, 'aria-pressed': active } : {})}
+      className={cn(
+        'flex flex-col gap-2 border bg-card px-3 py-2.5 text-left transition-transform hover:-translate-y-0.5 sm:gap-[14px] sm:px-[22px] sm:pb-5 sm:pt-[18px]',
+        active ? 'border-brand' : 'border-border',
+        onClick && !active && 'hover:border-muted-foreground/50',
+      )}
+    >
       <div className="flex items-start justify-between gap-1">
         <span className="font-mono text-[9px] uppercase leading-tight tracking-[1px] text-muted-foreground sm:whitespace-nowrap sm:text-[10px] sm:tracking-[1.5px]">
           <span style={{ color: BRAND }}>▸</span> {label}
@@ -97,7 +122,7 @@ export function StatCard({ label, value, sub, live }: { label: string; value: st
         )}
         <span className="mb-[2px] font-mono text-[10px] uppercase tracking-[0.5px] text-muted-foreground">{sub}</span>
       </div>
-    </div>
+    </Tag>
   )
 }
 
@@ -227,11 +252,14 @@ export function Panel({ className, children }: { className?: string; children: R
   return <div className={cn('border border-border bg-card', className)}>{children}</div>
 }
 
-/** A note under a bar or field: ▸ explanatory text. */
+/**
+ * A note under a bar or field: plain explanatory text, no leading marker.
+ *
+ * The `▸` glyph is reserved for section/heading labels (`SectionTitle`, and
+ * the inline heading treatment some dialogs use in its place) — it marks
+ * "this line names a section". Putting it on body text too made a heading
+ * and a caption underneath it look like the same kind of line.
+ */
 export function PanelNote({ children }: { children: ReactNode }) {
-  return (
-    <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
-      <span style={{ color: BRAND }}>▸</span> {children}
-    </p>
-  )
+  return <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">{children}</p>
 }

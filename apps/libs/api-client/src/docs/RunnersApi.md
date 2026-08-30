@@ -84,7 +84,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new RunnersApi(configuration);
 
-let id: string; //Runner ID (default to undefined)
+let id: string; //Runner ID
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.deleteRunner(
@@ -97,7 +97,7 @@ const { status, data } = await apiInstance.deleteRunner(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] | Runner ID | defaults to undefined|
+| **id** | [**string**] | Runner ID | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -180,7 +180,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new RunnersApi(configuration);
 
-let boxId: string; // (default to undefined)
+let boxId: string; //
 
 const { status, data } = await apiInstance.getRunnerByBoxId(
     boxId
@@ -191,7 +191,7 @@ const { status, data } = await apiInstance.getRunnerByBoxId(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] |  | defaults to undefined|
+| **boxId** | [**string**] |  | |
 
 
 ### Return type
@@ -230,7 +230,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new RunnersApi(configuration);
 
-let id: string; //Runner ID (default to undefined)
+let id: string; //Runner ID
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.getRunnerById(
@@ -243,7 +243,7 @@ const { status, data } = await apiInstance.getRunnerById(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] | Runner ID | defaults to undefined|
+| **id** | [**string**] | Runner ID | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -283,7 +283,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new RunnersApi(configuration);
 
-let id: string; //Runner ID (default to undefined)
+let id: string; //Runner ID
 
 const { status, data } = await apiInstance.getRunnerFullById(
     id
@@ -294,7 +294,7 @@ const { status, data } = await apiInstance.getRunnerFullById(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] | Runner ID | defaults to undefined|
+| **id** | [**string**] | Runner ID | |
 
 
 ### Return type
@@ -435,7 +435,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new RunnersApi(configuration);
 
-let id: string; //Runner ID (default to undefined)
+let id: string; //Runner ID
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.updateRunnerDraining(
@@ -448,7 +448,7 @@ const { status, data } = await apiInstance.updateRunnerDraining(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] | Runner ID | defaults to undefined|
+| **id** | [**string**] | Runner ID | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -488,7 +488,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new RunnersApi(configuration);
 
-let id: string; //Runner ID (default to undefined)
+let id: string; //Runner ID
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.updateRunnerScheduling(
@@ -501,7 +501,7 @@ const { status, data } = await apiInstance.updateRunnerScheduling(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] | Runner ID | defaults to undefined|
+| **id** | [**string**] | Runner ID | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 

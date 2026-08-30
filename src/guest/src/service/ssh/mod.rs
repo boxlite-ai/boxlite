@@ -26,37 +26,17 @@ use crate::service::server::GuestServer;
 use auth::CertificateAuthorizer;
 use backoff::Backoff;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use russh::keys::HashAlg;
 use std::net::{Shutdown, SocketAddr};
-use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, Weak};
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, watch, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-/// Materialize the persistent SSH host key while the guest root is still
-/// writable.
-///
-/// A listener is configured later over RPC, long after
-/// [`crate::mounts::seal_root_readonly`] has run, and the key lives on the
-/// guest root rather than on one of the tmpfs mounts because clients pin it in
-/// `known_hosts` and it must survive a box restart. Creating it here keeps that
-/// storage unchanged: by the time a listener starts, `load_or_create` only ever
-/// reads.
-pub(crate) fn provision_host_key() -> BoxliteResult<()> {
-    host_key::load_or_create(&host_key::default_path())
-        .map(|_| ())
-        .map_err(|error| {
-            BoxliteError::Internal(format!("failed to provision SSH host key: {error}"))
-        })
-}
-
 #[derive(Clone)]
 pub(crate) struct SshConfig {
     listen_addr: SocketAddr,
     authorizer: Arc<CertificateAuthorizer>,
-    host_key_path: PathBuf,
 }
 
 impl SshConfig {
@@ -70,14 +50,7 @@ impl SshConfig {
         Ok(Self {
             listen_addr,
             authorizer: Arc::new(authorizer),
-            host_key_path: host_key::default_path(),
         })
-    }
-
-    #[cfg(test)]
-    fn with_host_key_path(mut self, host_key_path: PathBuf) -> Self {
-        self.host_key_path = host_key_path;
-        self
     }
 }
 
@@ -528,17 +501,10 @@ fn listen_addresses_overlap(current: SocketAddr, next: SocketAddr) -> bool {
             || next.ip().is_unspecified())
 }
 
-async fn prepare_listener(ssh: &SshConfig) -> Result<PreparedListener, SshStartError> {
-    let host_key = host_key::load_or_create(&ssh.host_key_path).map_err(SshStartError::HostKey)?;
-    let host_key_fingerprint = host_key
-        .public_key()
-        .fingerprint(HashAlg::Sha256)
-        .to_string();
-    let config = Arc::new(server::build_config(host_key));
-    Ok(PreparedListener {
-        config,
-        host_key_fingerprint,
-    })
+async fn prepare_listener(_ssh: &SshConfig) -> Result<PreparedListener, SshStartError> {
+    // The guest rootfs is read-only and no host key is generated, so SSH cannot
+    // start. Ignored for now.
+    Err(SshStartError::HostKey(host_key::HostKeyError::Unavailable))
 }
 
 async fn accept_loop(
@@ -873,20 +839,6 @@ mod tests {
     }
 
     #[test]
-    fn tests_can_redirect_the_host_key_without_changing_production_default() {
-        let address = "127.0.0.1:0".parse().unwrap();
-        let path = PathBuf::from("/tmp/test-host-key");
-        let config = SshConfig::new(address, ca_public_key(), "box_123")
-            .unwrap()
-            .with_host_key_path(path.clone());
-        assert_eq!(config.host_key_path, path);
-        assert_eq!(
-            host_key::default_path(),
-            PathBuf::from(host_key::DEFAULT_HOST_KEY_PATH)
-        );
-    }
-
-    #[test]
     fn authentication_commit_rejects_a_replaced_or_disabled_policy_epoch() {
         let accepted = Arc::new(CertificateAuthorizer::new(&ca_public_key(), "box_123").unwrap());
         let (policy_tx, mut policy_rx) = watch::channel(Some(accepted.clone()));
@@ -942,22 +894,17 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "embedded SSH server is disabled (read-only rootfs has no host key)"]
     async fn manager_reconfigures_in_place_and_releases_listener_on_disable() {
         let port_guard = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = port_guard.local_addr().unwrap();
         drop(port_guard);
-        let host_key_dir = tempfile::tempdir().unwrap();
-        let host_key_path = host_key_dir.path().join("ssh_host_ed25519_key");
 
         let guest = Arc::new(GuestServer::new(GuestLayout::new()));
         guest.ssh_manager.attach_guest(&guest);
         let first = guest
             .ssh_manager
-            .configure(
-                SshConfig::new(address, ca_public_key(), "box_123")
-                    .unwrap()
-                    .with_host_key_path(host_key_path),
-            )
+            .configure(SshConfig::new(address, ca_public_key(), "box_123").unwrap())
             .await
             .unwrap();
         let second = guest
@@ -979,12 +926,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "embedded SSH server is disabled (read-only rootfs has no host key)"]
     async fn wire_auth_rotation_disable_and_shutdown_have_distinct_lifecycles() {
         let port_guard = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = port_guard.local_addr().unwrap();
         drop(port_guard);
-        let host_key_dir = tempfile::tempdir().unwrap();
-        let host_key_path = host_key_dir.path().join("ssh_host_ed25519_key");
         let ca_a = private_key();
         let ca_b = private_key();
         let (subject_a, certificate_a) = user_certificate(&ca_a, "box_123");
@@ -996,8 +942,7 @@ mod tests {
             .ssh_manager
             .configure(
                 SshConfig::new(address, ca_a.public_key().to_openssh().unwrap(), "box_123")
-                    .unwrap()
-                    .with_host_key_path(host_key_path.clone()),
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -1090,8 +1035,7 @@ mod tests {
             .ssh_manager
             .configure(
                 SshConfig::new(address, ca_b.public_key().to_openssh().unwrap(), "box_456")
-                    .unwrap()
-                    .with_host_key_path(host_key_path),
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -1111,22 +1055,18 @@ mod tests {
         assert!(matches!(
             guest
                 .ssh_manager
-                .configure(
-                    SshConfig::new(address, ca_public_key(), "box_789")
-                        .unwrap()
-                        .with_host_key_path(host_key_dir.path().join("other-host-key")),
-                )
+                .configure(SshConfig::new(address, ca_public_key(), "box_789").unwrap(),)
                 .await,
             Err(SshStartError::ShuttingDown)
         ));
     }
 
     #[tokio::test]
+    #[ignore = "embedded SSH server is disabled (read-only rootfs has no host key)"]
     async fn wire_rejected_session_requests_close_the_accepted_channel() {
         let port_guard = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = port_guard.local_addr().unwrap();
         drop(port_guard);
-        let host_key_dir = tempfile::tempdir().unwrap();
         let ca_key = private_key();
         let (subject_key, certificate) = user_certificate(&ca_key, "box_123");
         let guest = Arc::new(GuestServer::new(GuestLayout::new()));
@@ -1139,8 +1079,7 @@ mod tests {
                     ca_key.public_key().to_openssh().unwrap(),
                     "box_123",
                 )
-                .unwrap()
-                .with_host_key_path(host_key_dir.path().join("ssh_host_ed25519_key")),
+                .unwrap(),
             )
             .await
             .unwrap();
@@ -1196,6 +1135,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "embedded SSH server is disabled (read-only rootfs has no host key)"]
     async fn failed_overlapping_rebind_preserves_the_previous_listener() {
         let port_guard = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = port_guard.local_addr().unwrap().port();
@@ -1207,28 +1147,18 @@ mod tests {
         let _other_loopback_listener = std::net::TcpListener::bind(("127.0.0.2", port)).unwrap();
         let old_address: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
         let replacement_address: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
-        let host_key_dir = tempfile::tempdir().unwrap();
-        let host_key_path = host_key_dir.path().join("ssh_host_ed25519_key");
 
         let guest = Arc::new(GuestServer::new(GuestLayout::new()));
         guest.ssh_manager.attach_guest(&guest);
         let original = guest
             .ssh_manager
-            .configure(
-                SshConfig::new(old_address, ca_public_key(), "box_123")
-                    .unwrap()
-                    .with_host_key_path(host_key_path.clone()),
-            )
+            .configure(SshConfig::new(old_address, ca_public_key(), "box_123").unwrap())
             .await
             .unwrap();
 
         let replacement = guest
             .ssh_manager
-            .configure(
-                SshConfig::new(replacement_address, ca_public_key(), "box_456")
-                    .unwrap()
-                    .with_host_key_path(host_key_path),
-            )
+            .configure(SshConfig::new(replacement_address, ca_public_key(), "box_456").unwrap())
             .await;
 
         assert!(replacement.is_err());

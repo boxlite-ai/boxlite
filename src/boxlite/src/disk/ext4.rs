@@ -487,6 +487,22 @@ fn check_debugfs_output(what: &str, output: &std::process::Output) -> BoxliteRes
     Ok(())
 }
 
+/// Quote a path passed through debugfs's command parser.
+///
+/// Whitespace is significant to that parser, so even an otherwise ordinary
+/// OCI path such as `launcher manifest.xml` must be one quoted argument. The
+/// parser does not provide an escape for a literal double quote or a line
+/// break inside a quoted argument; reject those paths instead of emitting a
+/// malformed (or additional) command.
+fn quote_debugfs_path(path: &str) -> BoxliteResult<String> {
+    if path.contains(['"', '\n', '\r']) {
+        return Err(BoxliteError::Storage(format!(
+            "debugfs cannot safely address path {path:?}"
+        )));
+    }
+    Ok(format!("\"{path}\""))
+}
+
 /// Normalize inode metadata in the ext4 image via debugfs: give every file the
 /// ownership its layer declared (0:0 when none was recorded), and restore the
 /// original mode on any entry whose owner-read bit was temporarily widened so
@@ -520,15 +536,17 @@ fn normalize_inodes_with_debugfs(
     // Using sif (set inode field) command: sif <path> <field> <value>
     let mut commands = String::new();
     for owner in owners {
+        let ext4_path = quote_debugfs_path(&owner.ext4_path)?;
         // sif sets inode field by path
-        commands.push_str(&format!("sif {} uid {}\n", owner.ext4_path, owner.uid));
-        commands.push_str(&format!("sif {} gid {}\n", owner.ext4_path, owner.gid));
+        commands.push_str(&format!("sif {} uid {}\n", ext4_path, owner.uid));
+        commands.push_str(&format!("sif {} gid {}\n", ext4_path, owner.gid));
     }
     // Restore the original mode on entries we widened for mke2fs. The value is
     // the full st_mode incl. type bits (e.g. a 0000 regular file -> 0100000),
     // matching the `sif … mode 0100555` form used by inject_file_into_ext4.
     for w in widened {
-        commands.push_str(&format!("sif {} mode 0{:o}\n", w.ext4_path, w.mode));
+        let ext4_path = quote_debugfs_path(&w.ext4_path)?;
+        commands.push_str(&format!("sif {} mode 0{:o}\n", ext4_path, w.mode));
     }
 
     let debugfs = get_debugfs_path();
@@ -672,6 +690,16 @@ fn build_inject_commands(host_file_str: &str, guest_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quote_debugfs_path_preserves_whitespace_and_rejects_command_delimiters() {
+        assert_eq!(
+            quote_debugfs_path("/usr/lib/launcher manifest.xml").unwrap(),
+            "\"/usr/lib/launcher manifest.xml\""
+        );
+        assert!(quote_debugfs_path("/tmp/quote\"file").is_err());
+        assert!(quote_debugfs_path("/tmp/line\nbreak").is_err());
+    }
 
     /// A `sif` command targeting a path debugfs cannot resolve makes the whole
     /// batch script exit 0 — e2fsprogs's `-f -` mode logs the failure via

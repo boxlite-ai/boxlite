@@ -167,10 +167,11 @@ pub struct SecurityOptions {
     /// If None, uses the built-in modular sandbox profile.
     pub sandbox_profile: Option<PathBuf>,
 
-    /// Allow network access inside the sandbox profile.
+    /// Allow host-side IP networking grants in the jailer profile.
     ///
-    /// Cross-platform: feeds the macOS seatbelt network policy and the Linux
-    /// landlock TCP rules (false = deny all TCP).
+    /// This is not the guest-networking switch; use `network.mode` for that.
+    /// The shim's AF_UNIX control plane is granted separately.
+    ///
     /// Default: true (needed for gvproxy VM networking).
     pub network_enabled: bool,
 }
@@ -542,8 +543,9 @@ impl SecurityOptionsBuilder {
         self
     }
 
-    /// Allow or deny network access inside the sandbox profile (Linux landlock
-    /// + macOS seatbelt).
+    /// Allow or deny host-side IP networking grants in the jailer profile.
+    ///
+    /// This does not disable guest networking; use `network.mode` for that.
     pub fn network_enabled(&mut self, enabled: bool) -> &mut Self {
         self.inner.network_enabled = enabled;
         self
@@ -583,6 +585,12 @@ impl ContainerCapabilities {
     /// Whether this policy leaves the default capability set unchanged.
     pub fn is_empty(&self) -> bool {
         self.add.is_empty() && self.drop.is_empty()
+    }
+
+    pub(crate) fn is_privileged_capability_shape(&self) -> bool {
+        self.drop.is_empty()
+            && self.add.len() == 1
+            && canonical_capability_name(&self.add[0]) == "ALL"
     }
 
     pub(crate) fn validate(&self) -> boxlite_shared::errors::BoxliteResult<()> {
@@ -663,11 +671,30 @@ fn validate_capability_names(
 ///
 /// Entry-level users can ignore this — the defaults are secure and sensible.
 /// Only modify these if you understand the security implications.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct AdvancedBoxOptions {
     /// Linux capability policy for the container process.
-    #[serde(default)]
-    pub capabilities: ContainerCapabilities,
+    ///
+    /// `None` means the caller left it unspecified. That's a distinct state
+    /// from `Some` of an empty policy: combined with `privileged`, leaving
+    /// this unspecified is the one-flag DinD case (see `privileged`'s own
+    /// doc comment), while an explicit override — even an empty one — is a
+    /// conflict `validate_privileged_capability_conflict` rejects. Private;
+    /// read via `capabilities()`, write via `set_capabilities`, which also
+    /// enforces that this can't change out from under an already-resolved
+    /// request (see `resolved`).
+    ///
+    /// `skip_serializing_if` on top of `default` is load-bearing, not
+    /// cosmetic: without it, `None` serializes as an explicit `"capabilities":
+    /// null`, which a pre-Option build's plain `ContainerCapabilities` field
+    /// rejects with "invalid type: null, expected struct
+    /// ContainerCapabilities" — `#[serde(default)]` alone only covers an
+    /// *absent* key. Omitting the key on `None` keeps an ordinary box's
+    /// exported manifest byte-for-byte what a pre-#1296 importer already
+    /// handles, which is the entire premise `archive_version_for_options`
+    /// relies on to leave that case at `ARCHIVE_VERSION` instead of bumping it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capabilities: Option<ContainerCapabilities>,
 
     /// Security isolation options (jailer, seccomp, namespaces, resource limits).
     ///
@@ -717,4 +744,389 @@ pub struct AdvancedBoxOptions {
     #[doc(hidden)]
     #[serde(default)]
     pub nested_virtualization: bool,
+
+    /// Docker-style privileged OCI spec shape for DinD.
+    ///
+    /// Mirrors how moby itself resolves this (`oci/caps.TweakCapabilities`):
+    /// privileged short-circuits straight to every capability, and never
+    /// writes that result back into `CapAdd`/`CapDrop` — those stay exactly
+    /// what the caller set, and the container's *effective* capabilities are
+    /// computed fresh from `privileged` + `capabilities` every time a spec is
+    /// built. `resolve_container_security` is BoxLite's equivalent of that
+    /// computation: `capabilities` here is never mutated by `privileged` in
+    /// either direction, so there is no "did privileged install this or did
+    /// the caller" ambiguity to track.
+    #[serde(default)]
+    pub privileged: bool,
+
+    /// Set once `resolve_container_security` has run on this instance.
+    /// `set_capabilities` refuses to change the policy afterward — a
+    /// resolved request's capabilities shouldn't shift under it before the
+    /// resolved value is actually used. `AtomicBool`, not a plain `bool` or
+    /// `Cell`, for two reasons: `resolve_container_security` only borrows
+    /// `&self` (it's a read-only computation over everything except this
+    /// bookkeeping bit), and `AdvancedBoxOptions` crosses `Send`/`Sync`
+    /// boundaries (it lives inside `BoxOptions`, held across `.await`
+    /// points) where `Cell` doesn't qualify. Not persisted: a freshly
+    /// deserialized instance hasn't resolved anything yet in *this*
+    /// process, regardless of the box it was loaded for. `Clone` is
+    /// implemented manually below because atomics aren't `Clone` — a clone
+    /// is a fresh, unresolved copy, which is the right default for building
+    /// a new request off of an old one's data.
+    #[serde(skip)]
+    resolved: std::sync::atomic::AtomicBool,
+}
+
+impl Clone for AdvancedBoxOptions {
+    fn clone(&self) -> Self {
+        Self {
+            capabilities: self.capabilities.clone(),
+            security: self.security.clone(),
+            isolate_mounts: self.isolate_mounts,
+            health_check: self.health_check.clone(),
+            kernel: self.kernel.clone(),
+            nested_virtualization: self.nested_virtualization,
+            privileged: self.privileged,
+            resolved: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+impl AdvancedBoxOptions {
+    /// The caller's capability policy, if one was configured. `None` means
+    /// unspecified — see the field's own doc comment for why that's not the
+    /// same as an explicit empty policy.
+    pub fn capabilities(&self) -> Option<&ContainerCapabilities> {
+        self.capabilities.as_ref()
+    }
+
+    /// Replace the capability policy. `None` clears back to "unspecified".
+    ///
+    /// Errors if this options object has already been resolved (used to
+    /// build a box request via `resolve_container_security`) — capabilities
+    /// cannot change after that point.
+    pub fn set_capabilities(
+        &mut self,
+        capabilities: Option<ContainerCapabilities>,
+    ) -> boxlite_shared::errors::BoxliteResult<()> {
+        if self.resolved.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                "capabilities cannot be changed after these options have been resolved".to_string(),
+            ));
+        }
+        self.capabilities = capabilities;
+        Ok(())
+    }
+
+    /// Reject capability overrides that conflict with privileged mode.
+    ///
+    /// Moby's own `TweakCapabilities` silently ignores `CapAdd`/`CapDrop`
+    /// once `--privileged` is set — a real, reported footgun. Failing loudly
+    /// here instead means a caller who sets both finds out at request time,
+    /// not by wondering later why their capability override had no effect.
+    /// `None` (unspecified) is the only value privileged mode tolerates; an
+    /// explicit `Some`, even an empty one, is rejected unless it's already
+    /// the canonical `add=["ALL"]` shape — that's what a box created under
+    /// an earlier version of this option (which mutated `capabilities` in
+    /// place) has persisted, and it's the same effective result
+    /// `resolve_container_security` would produce anyway.
+    pub(crate) fn validate_privileged_capability_conflict(
+        &self,
+    ) -> boxlite_shared::errors::BoxliteResult<()> {
+        if !self.privileged {
+            return Ok(());
+        }
+
+        match &self.capabilities {
+            None => Ok(()),
+            Some(caps) if caps.is_privileged_capability_shape() => Ok(()),
+            Some(_) => Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                "privileged mode cannot be combined with an explicit capabilities override, \
+                 including an explicitly empty one — leave capabilities unspecified instead"
+                    .to_string(),
+            )),
+        }
+    }
+
+    /// Toggle privileged mode.
+    ///
+    /// A thin wrapper over the `privileged` field itself — kept as a stable
+    /// method for existing callers of this crate's public API rather than
+    /// requiring a field assignment. It no longer does anything beyond
+    /// `self.privileged = enabled`: `capabilities` isn't installed or
+    /// withdrawn here (see `resolve_container_security`, which computes the
+    /// effective capability set fresh instead).
+    pub fn set_privileged(&mut self, enabled: bool) {
+        self.privileged = enabled;
+    }
+
+    /// The capability policy actually enforced, after moby-style privileged
+    /// resolution — not just the caller's raw `capabilities` field.
+    ///
+    /// Used wherever the *effective* policy matters rather than what happens
+    /// to be stored: box-reuse compatibility in particular, where an
+    /// already-persisted privileged box's raw field may predate this —  an
+    /// earlier version of this option mutated `capabilities` to `add=["ALL"]`
+    /// on enable, so that box's raw field looks different from a new
+    /// privileged request that leaves `capabilities` empty even though both
+    /// resolve to the same thing.
+    pub(crate) fn effective_capabilities(&self) -> ContainerCapabilities {
+        if self.privileged {
+            ContainerCapabilities {
+                add: vec!["ALL".to_string()],
+                drop: Vec::new(),
+            }
+        } else {
+            self.capabilities.clone().unwrap_or_default()
+        }
+    }
+
+    /// Resolve the container security request before it crosses into the guest.
+    ///
+    /// The host owns the public option semantics *and* the literal OCI values
+    /// that follow from it — the readonly-path list and the `/sys` bind's
+    /// mount options are resolved here, not re-derived by the guest from a
+    /// flag (see docs/architecture/privileged-mode-design.md, Trade-offs,
+    /// option F). Masked paths are deliberately not part of this: nothing in
+    /// DinD reads a masked path, so the guest keeps applying its own oci-spec
+    /// default unconditionally, the same way it did before `privileged`
+    /// existed — see the Trade-offs note on the finding that motivated
+    /// dropping it. Capabilities follow moby's own `TweakCapabilities`:
+    /// privileged short-circuits to every capability and `self.capabilities`
+    /// is read, never written — call `validate_privileged_capability_conflict`
+    /// first so a conflicting explicit override is rejected rather than
+    /// silently overridden here.
+    pub(crate) fn resolve_container_security(
+        &self,
+    ) -> boxlite_shared::errors::BoxliteResult<ResolvedContainerSecurityConfig> {
+        self.validate_privileged_capability_conflict()?;
+        self.resolved
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let capabilities = self.effective_capabilities();
+
+        let readonly_paths = if self.privileged {
+            Vec::new()
+        } else {
+            default_readonly_paths()
+        };
+
+        Ok(ResolvedContainerSecurityConfig {
+            capabilities,
+            linux: ResolvedLinuxSecurity { readonly_paths },
+            mount: ResolvedMountSecurity {
+                options: mount_options(self.privileged),
+            },
+        })
+    }
+}
+
+/// Default OCI readonly-path list for a non-privileged container. Sourced
+/// from `oci_spec::runtime::get_default_readonly_paths()` for the same
+/// no-drift reason `advanced_options.rs`'s other host-resolved values follow.
+fn default_readonly_paths() -> Vec<String> {
+    oci_spec::runtime::get_default_readonly_paths()
+}
+
+/// Full resolved option list for the guest's `/sys` recursive bind mount.
+/// Recursive: `/sys` is an rbind, and OCI's plain `ro` is applied without
+/// `AT_RECURSIVE`, which would leave the guest's cgroup2 submount writable
+/// inside the container — hence `rro`, not `ro`, for the non-privileged case.
+fn mount_options(privileged: bool) -> Vec<String> {
+    let mut options: Vec<String> = ["rbind", "nosuid", "noexec", "nodev"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    if !privileged {
+        options.push("rro".to_string());
+    }
+    options
+}
+
+/// Atomic container security configuration crossing the host-to-guest
+/// boundary. `readonly_paths`/`mount.options` are literal, host-resolved
+/// OCI values the guest assigns verbatim — matching how Docker, Podman, and
+/// Kata Containers all hand the enforcing side a finished shape rather than a
+/// flag to reinterpret (see docs/architecture/privileged-mode-design.md,
+/// Trade-offs, option F). `capabilities` is the one exception: only the
+/// guest, across the VM boundary, knows its own kernel's capability ceiling,
+/// so it stays as add/drop deltas the guest resolves itself.
+///
+/// No masked-path field, no cgroup namespace, no allow-all device-cgroup
+/// rule: all three were tested and found unnecessary for DinD — nothing in
+/// the DinD workflow reads a masked path, the guest never enforced a
+/// restrictive device-cgroup default in the first place, and `dockerd`
+/// tolerated running without a private cgroup namespace view. The guest keeps
+/// applying its own oci-spec masked-path default unconditionally.
+///
+/// `linux`/`mount` are grouped the same way OCI runtime-spec groups the
+/// fields they resolve to — parallel top-level fields of one Spec — rather
+/// than flattened across a level of structure that doesn't exist in the
+/// source concept. Matches the wire shape (`ContainerAdvancedOptions`) it
+/// eventually becomes verbatim. `capabilities` stays flat, not nested under
+/// a matching `process` field: it predates this grouping (added in #1047,
+/// guest version floor 0.9.8) as a plain field on the wire message, and
+/// wrapping it now would collide with what already-deployed guests expect
+/// there — see `ContainerAdvancedOptions.capabilities` in service.proto.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ResolvedContainerSecurityConfig {
+    pub(crate) capabilities: ContainerCapabilities,
+    pub(crate) linux: ResolvedLinuxSecurity,
+    pub(crate) mount: ResolvedMountSecurity,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ResolvedLinuxSecurity {
+    pub(crate) readonly_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ResolvedMountSecurity {
+    pub(crate) options: Vec<String>,
+}
+
+#[cfg(test)]
+mod resolved_security_tests {
+    use super::*;
+
+    /// `default_readonly_paths` calls straight into
+    /// `oci_spec::runtime::get_default_readonly_paths()` — a caret
+    /// dependency, so a semver-compatible release could change what that
+    /// returns without BoxLite choosing to. Pinned to the exact list so that
+    /// happening is a decision to review, not a silent security-posture
+    /// change picked up on the next `cargo update`.
+    #[test]
+    fn unprivileged_resolves_hardened_path_defaults() {
+        let resolved = AdvancedBoxOptions::default()
+            .resolve_container_security()
+            .expect("default (unprivileged) security should resolve");
+
+        assert_eq!(
+            resolved.linux.readonly_paths,
+            [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger",
+            ]
+            .map(String::from)
+        );
+        assert!(resolved.mount.options.contains(&"rro".to_string()));
+    }
+
+    #[test]
+    fn set_privileged_toggles_the_plain_field() {
+        let mut options = AdvancedBoxOptions::default();
+
+        options.set_privileged(true);
+        assert!(options.privileged);
+
+        options.set_privileged(false);
+        assert!(!options.privileged);
+    }
+
+    /// Matches moby's `TweakCapabilities`: `privileged` alone resolves every
+    /// capability, the same one-flag DinD enabler Docker's `--privileged`
+    /// is — no separate `capabilities.add = ["ALL"]` required.
+    #[test]
+    fn privileged_resolves_cleared_readonly_paths_and_writable_sys() {
+        let mut options = AdvancedBoxOptions::default();
+        options.set_privileged(true);
+
+        let resolved = options
+            .resolve_container_security()
+            .expect("privileged security should resolve");
+
+        assert!(resolved.linux.readonly_paths.is_empty());
+        assert!(!resolved.mount.options.contains(&"rro".to_string()));
+        assert_eq!(resolved.capabilities.add, ["ALL"]);
+    }
+
+    /// Also like moby's `TweakCapabilities`: privileged resolution reads
+    /// `capabilities`, it never writes it. Unlike an earlier version of this
+    /// option (which mutated `capabilities` in place on enable, then had to
+    /// track whether it was safe to take that mutation back on disable),
+    /// there is nothing here to withdraw — the field the caller set is
+    /// exactly the field they get back.
+    #[test]
+    fn privileged_resolution_does_not_mutate_capabilities() {
+        let options = AdvancedBoxOptions {
+            privileged: true,
+            ..Default::default()
+        };
+
+        options
+            .resolve_container_security()
+            .expect("privileged security should resolve");
+
+        assert!(options.capabilities.is_none());
+    }
+
+    /// Capabilities and the OCI path/mount shape are resolved from the same
+    /// `privileged` bool but are otherwise independent knobs: a capability
+    /// override alone (no `privileged`) must not relax the hardened paths.
+    #[test]
+    fn capability_override_without_privileged_keeps_hardened_paths() {
+        let options = AdvancedBoxOptions {
+            capabilities: Some(ContainerCapabilities {
+                add: vec!["SYS_ADMIN".to_string()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let resolved = options
+            .resolve_container_security()
+            .expect("capability-only options should resolve");
+
+        assert!(!resolved.linux.readonly_paths.is_empty());
+        assert!(resolved.mount.options.contains(&"rro".to_string()));
+        assert_eq!(resolved.capabilities.add, ["SYS_ADMIN"]);
+    }
+
+    /// The conflict guard mirrors a real moby footgun (`--privileged` +
+    /// `--cap-drop` silently ignores the drop) but fails loudly instead: a
+    /// caller combining `privileged` with an explicit, non-canonical
+    /// capability override finds out at request time.
+    #[test]
+    fn privileged_rejects_conflicting_capability_override() {
+        let options = AdvancedBoxOptions {
+            privileged: true,
+            capabilities: Some(ContainerCapabilities {
+                add: vec!["SYS_ADMIN".to_string()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let error = options
+            .resolve_container_security()
+            .expect_err("privileged mode plus an explicit override should be rejected");
+
+        assert!(error.to_string().contains("cannot be combined"));
+    }
+
+    /// The conflict guard runs on the final state at `resolve_container_security`
+    /// time, not on each setter call — so it doesn't matter which knob a caller
+    /// (e.g. CLI flags, or an SDK's builder) happens to set first. Setting an
+    /// explicit capability override and only then turning on `privileged` must
+    /// be rejected exactly like setting them in the opposite order.
+    #[test]
+    fn privileged_rejects_conflicting_override_regardless_of_setter_order() {
+        let mut options = AdvancedBoxOptions::default();
+        options
+            .set_capabilities(Some(ContainerCapabilities {
+                add: vec!["SYS_ADMIN".to_string()],
+                ..Default::default()
+            }))
+            .unwrap();
+        options.set_privileged(true);
+
+        let error = options.resolve_container_security().expect_err(
+            "capabilities-then-privileged should be rejected same as the reverse order",
+        );
+
+        assert!(error.to_string().contains("cannot be combined"));
+    }
 }

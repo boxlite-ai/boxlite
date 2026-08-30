@@ -5,12 +5,11 @@
  */
 
 import { Invoice } from '@/billing-api/types/Invoice'
+import { StatusMark } from '@/components/ascii'
+import { ArrowDown, ArrowUp } from '@/components/ui/icon'
 import { formatAmount } from '@/lib/utils'
 import { ColumnDef } from '@tanstack/react-table'
-import { ArrowDown, ArrowUp } from '@/components/ui/icon'
 import React from 'react'
-import { StatusMark } from '@/components/ascii'
-import { InvoicesTableActions } from './InvoicesTableActions'
 
 interface SortableHeaderProps {
   column: any
@@ -18,191 +17,76 @@ interface SortableHeaderProps {
   dataState?: string
 }
 
-const SortableHeader: React.FC<SortableHeaderProps> = ({ column, label, dataState }) => {
-  return (
-    <div
-      role="button"
-      onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-      className="flex items-center"
-      {...(dataState && { 'data-state': dataState })}
-    >
-      {label}
-      {column.getIsSorted() === 'asc' ? (
-        <ArrowUp className="ml-2 h-4 w-4" />
-      ) : column.getIsSorted() === 'desc' ? (
-        <ArrowDown className="ml-2 h-4 w-4" />
-      ) : (
-        <div className="ml-2 w-4 h-4" />
-      )}
-    </div>
-  )
-}
+const SortableHeader: React.FC<SortableHeaderProps> = ({ column, label, dataState }) => (
+  <div
+    role="button"
+    onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
+    className="flex items-center"
+    {...(dataState && { 'data-state': dataState })}
+  >
+    {label}
+    {column.getIsSorted() === 'asc' ? (
+      <ArrowUp className="ml-2 size-4" />
+    ) : column.getIsSorted() === 'desc' ? (
+      <ArrowDown className="ml-2 size-4" />
+    ) : (
+      <div className="ml-2 size-4" />
+    )}
+  </div>
+)
 
-interface GetColumnsProps {
-  onViewInvoice?: (invoice: Invoice) => void
-  onVoidInvoice?: (invoice: Invoice) => void
-  onPayInvoice?: (invoice: Invoice) => void
-}
-
-export function getColumns({ onViewInvoice, onVoidInvoice, onPayInvoice }: GetColumnsProps): ColumnDef<Invoice>[] {
-  const columns: ColumnDef<Invoice>[] = [
+export function getColumns(): ColumnDef<Invoice>[] {
+  return [
     {
       id: 'number',
-      header: ({ column }) => {
-        return <SortableHeader column={column} label="Invoice" />
-      },
+      header: ({ column }) => <SortableHeader column={column} label="Settlement" />,
       accessorKey: 'number',
-      cell: ({ row }) => {
-        return (
-          <div className="w-full truncate">
-            <span className="font-medium">{row.original.number}</span>
-          </div>
-        )
-      },
-      sortingFn: (rowA, rowB) => {
-        return rowA.original.number.localeCompare(rowB.original.number)
-      },
+      cell: ({ row }) => <span className="font-medium">{row.original.number || `#${row.original.sequentialId}`}</span>,
+      sortingFn: (rowA, rowB) => rowA.original.sequentialId - rowB.original.sequentialId,
     },
     {
-      id: 'issuingDate',
-      size: 140,
-      header: ({ column }) => {
-        return <SortableHeader column={column} label="Date" />
-      },
-      cell: ({ row }) => {
-        const date = new Date(row.original.issuingDate)
-        return (
-          <div className="w-full truncate">
-            <span>{date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</span>
-          </div>
-        )
-      },
-      accessorFn: (row) => new Date(row.issuingDate).getTime(),
-      sortingFn: (rowA, rowB) => {
-        return new Date(rowA.original.issuingDate).getTime() - new Date(rowB.original.issuingDate).getTime()
-      },
-    },
-    {
-      id: 'paymentDueDate',
-      size: 140,
-      header: ({ column }) => {
-        return <SortableHeader column={column} label="Due Date" />
-      },
-      cell: ({ row }) => {
-        const date = new Date(row.original.paymentDueDate)
-        return (
-          <div className="w-full truncate">
-            <span>{date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</span>
-          </div>
-        )
-      },
-      accessorFn: (row) => new Date(row.paymentDueDate).getTime(),
-      sortingFn: (rowA, rowB) => {
-        return new Date(rowA.original.paymentDueDate).getTime() - new Date(rowB.original.paymentDueDate).getTime()
-      },
+      id: 'chargedAt',
+      size: 160,
+      header: ({ column }) => <SortableHeader column={column} label="Charged" />,
+      cell: ({ row }) => (
+        <span>
+          {new Date(row.original.chargedAt).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+          })}
+        </span>
+      ),
+      accessorFn: (row) => new Date(row.chargedAt).getTime(),
     },
     {
       id: 'totalAmountCents',
       size: 120,
-      header: ({ column }) => {
-        return <SortableHeader column={column} label="Amount" />
-      },
-      cell: ({ row }) => {
-        return (
-          <div className="w-full truncate">
-            <span>{formatAmount(row.original.totalAmountCents)}</span>
-          </div>
-        )
-      },
+      header: ({ column }) => <SortableHeader column={column} label="Cost" />,
+      cell: ({ row }) => <span>{formatAmount(row.original.totalAmountCents)}</span>,
       accessorKey: 'totalAmountCents',
-      sortingFn: (rowA, rowB) => {
-        return rowA.original.totalAmountCents - rowB.original.totalAmountCents
-      },
     },
     {
-      id: 'paymentStatus',
-      size: 120,
-      header: ({ column }) => {
-        return <SortableHeader column={column} label="Status" />
-      },
-      cell: ({ row }) => {
-        const invoice = row.original
-        const isSucceeded = invoice.paymentStatus === 'succeeded'
-        const isFailed = invoice.paymentStatus === 'failed'
-        const isOverdue = invoice.paymentOverdue
-
-        let tone: 'ok' | 'bad' | 'warn' | 'idle' = 'warn'
-        let label = 'Pending'
-
-        if (isSucceeded) {
-          tone = 'ok'
-          label = 'Paid'
-        } else if (isOverdue || isFailed) {
-          tone = 'bad'
-          label = isOverdue ? 'Overdue' : 'Failed'
-        }
-
-        if (invoice.status === 'voided') {
-          tone = 'idle'
-          label = 'Voided'
-        }
-
-        return (
-          <div className="flex max-w-[120px]">
-            <StatusMark tone={tone}>{label}</StatusMark>
-          </div>
-        )
-      },
-      accessorKey: 'paymentStatus',
-      sortingFn: (rowA, rowB) => {
-        const statusOrder = { succeeded: 0, pending: 1, failed: 2 }
-        return (statusOrder[rowA.original.paymentStatus] ?? 3) - (statusOrder[rowB.original.paymentStatus] ?? 3)
-      },
+      id: 'quotaCoveredCents',
+      size: 140,
+      header: ({ column }) => <SortableHeader column={column} label="From quota" />,
+      cell: ({ row }) => <span>{formatAmount(row.original.quotaCoveredCents)}</span>,
+      accessorKey: 'quotaCoveredCents',
     },
     {
-      id: 'type',
-      size: 120,
-      header: ({ column }) => {
-        return <SortableHeader column={column} label="Type" />
-      },
-      cell: ({ row }) => {
-        const type = row.original.type
-        const displayType = type === 'subscription' ? 'Subscription' : 'One Time'
-        return (
-          <div className="w-full truncate">
-            <span>{displayType}</span>
-          </div>
-        )
-      },
-      accessorKey: 'type',
-      sortingFn: (rowA, rowB) => {
-        return rowA.original.type.localeCompare(rowB.original.type)
-      },
+      id: 'walletFundedCents',
+      size: 140,
+      header: ({ column }) => <SortableHeader column={column} label="From wallet" />,
+      cell: ({ row }) => <span>{formatAmount(row.original.totalAmountCents - row.original.quotaCoveredCents)}</span>,
+      accessorFn: (row) => row.totalAmountCents - row.quotaCoveredCents,
     },
     {
-      id: 'actions',
-      size: 100,
-      enableHiding: false,
-      cell: ({ row }) => {
-        const isViewable = Boolean(row.original.fileUrl)
-        const isVoidable =
-          row.original.status === 'finalized' && ['pending', 'failed'].includes(row.original.paymentStatus)
-        const isPayable =
-          row.original.status === 'finalized' && ['pending', 'failed'].includes(row.original.paymentStatus)
-
-        return (
-          <div>
-            <InvoicesTableActions
-              invoice={row.original}
-              onView={isViewable ? onViewInvoice : undefined}
-              onVoid={isVoidable ? onVoidInvoice : undefined}
-              onPay={isPayable ? onPayInvoice : undefined}
-            />
-          </div>
-        )
-      },
+      id: 'voided',
+      size: 110,
+      header: ({ column }) => <SortableHeader column={column} label="Status" />,
+      cell: ({ row }) =>
+        row.original.voided ? <StatusMark tone="idle">Voided</StatusMark> : <StatusMark tone="ok">Settled</StatusMark>,
+      accessorKey: 'voided',
     },
   ]
-
-  return columns
 }

@@ -21,13 +21,17 @@ use crate::box_handle::PyBox;
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
 use crate::images::{PyImageHandle, PyImageInfo, PyImagePullResult};
 use crate::info::{
-    PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus, PyNetworkInfo, PyPublishedPort,
+    PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus, PyNetworkDirectionInfo,
+    PyNetworkInfo, PyPublishedPort,
 };
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
-use crate::network::{PyBoxConnection, PyBoxTunnel, PyNetworkHandle};
+use crate::network::{
+    PyBoxConnection, PyBoxTunnel, PyNetworkHandle, PySocketAddress, PyTunnelForwarder,
+};
 use crate::options::{
     PyAccessToken, PyApiKeyCredential, PyBoxOptions, PyBoxliteRestOptions, PyCopyOptions,
-    PyImageRegistry, PyNetworkSpec, PyOptions, PySecret,
+    PyImageRegistry, PyInboundNetworkSpec, PyNetworkSpec, PyOptions, PyOutboundNetworkSpec,
+    PySecret,
 };
 use crate::runtime::PyBoxlite;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions, PySnapshotOptions};
@@ -41,6 +45,8 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyImageRegistry>()?;
     m.add_class::<PyBoxOptions>()?;
     m.add_class::<PyNetworkSpec>()?;
+    m.add_class::<PyOutboundNetworkSpec>()?;
+    m.add_class::<PyInboundNetworkSpec>()?;
     m.add_class::<PySecurityOptions>()?;
     m.add_class::<PyHealthCheckOptions>()?;
     m.add_class::<PyAdvancedBoxOptions>()?;
@@ -59,6 +65,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBoxInfo>()?;
     m.add_class::<PyBoxStateInfo>()?;
     m.add_class::<PyNetworkInfo>()?;
+    m.add_class::<PyNetworkDirectionInfo>()?;
     m.add_class::<PyPublishedPort>()?;
     m.add_class::<PyHealthState>()?;
     m.add_class::<PyHealthStatus>()?;
@@ -67,6 +74,8 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNetworkHandle>()?;
     m.add_class::<PyBoxTunnel>()?;
     m.add_class::<PyBoxConnection>()?;
+    m.add_class::<PySocketAddress>()?;
+    m.add_class::<PyTunnelForwarder>()?;
     m.add_class::<PyCopyOptions>()?;
     m.add_class::<PySnapshotInfo>()?;
     m.add_class::<PySnapshotHandle>()?;

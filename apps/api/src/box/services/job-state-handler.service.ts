@@ -16,6 +16,7 @@ import { Box } from '../entities/box.entity'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { ResourceType } from '../enums/resource-type.enum'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
+import { BoxMigrationJobReceiver, isMigrationJobType } from './box-migration-job-receiver.service'
 
 /**
  * Service for handling entity state updates based on job completion (v2 runners only).
@@ -28,6 +29,7 @@ export class JobStateHandlerService {
   constructor(
     private readonly boxRepository: BoxRepository,
     private readonly redisLockProvider: RedisLockProvider,
+    private readonly boxMigrationJobReceiver: BoxMigrationJobReceiver,
   ) {}
 
   /**
@@ -43,6 +45,15 @@ export class JobStateHandlerService {
       return
     }
 
+    // A migration job carries its own lock — taken by the loop that submitted
+    // it, released by the receiver below — and never the box's state-change
+    // lock. Handing it to the tail of this method would delete a lock a
+    // concurrent start or stop of the same box is holding.
+    if (isMigrationJobType(job.type)) {
+      await this.boxMigrationJobReceiver.handleJobCompletion(job)
+      return
+    }
+
     switch (job.type) {
       case JobType.CREATE_BOX:
         await this.handleCreateBoxJobCompletion(job)
@@ -55,14 +66,6 @@ export class JobStateHandlerService {
         break
       case JobType.DESTROY_BOX:
         await this.handleDestroyBoxJobCompletion(job)
-        break
-      case JobType.RESIZE_BOX:
-        await this.handleResizeBoxJobCompletion(job)
-        break
-      // TODO(image-rewrite): PULL_IMAGE / REMOVE_IMAGE job handling removed with
-      // the runner image subsystems; rebuild artifact lifecycle handling here.
-      case JobType.RECOVER_BOX:
-        await this.handleRecoverBoxJobCompletion(job)
         break
       default:
         break
@@ -234,95 +237,6 @@ export class JobStateHandlerService {
       await this.boxRepository.update(boxId, { updateData, entity: box })
     } catch (error) {
       this.logger.error(`Error handling DESTROY_BOX job completion for box ${boxId}:`, error)
-    }
-  }
-
-  private async handleRecoverBoxJobCompletion(job: Job): Promise<void> {
-    const boxId = job.resourceId
-    if (!boxId) return
-
-    try {
-      const box = await this.boxRepository.findOne({ where: { id: boxId } })
-      if (!box) {
-        this.logger.warn(`Box ${boxId} not found for RECOVER_BOX job ${job.id}`)
-        return
-      }
-
-      if (box.desiredState !== BoxDesiredState.STARTED) {
-        this.logger.error(
-          `Box ${boxId} is not in desired state STARTED for RECOVER_BOX job ${job.id}. Desired state: ${box.desiredState}`,
-        )
-        return
-      }
-
-      const updateData: Partial<Box> = {}
-
-      if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`RECOVER_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
-        updateData.state = BoxState.STARTED
-        updateData.errorReason = null
-      } else if (job.status === JobStatus.FAILED) {
-        this.logger.error(`RECOVER_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
-        updateData.state = BoxState.ERROR
-        updateData.errorReason = job.errorMessage || 'Failed to recover box'
-      }
-
-      await this.boxRepository.update(boxId, { updateData, entity: box })
-    } catch (error) {
-      this.logger.error(`Error handling RECOVER_BOX job completion for box ${boxId}:`, error)
-    }
-  }
-
-  private async handleResizeBoxJobCompletion(job: Job): Promise<void> {
-    const boxId = job.resourceId
-    if (!boxId) return
-
-    try {
-      const box = await this.boxRepository.findOne({ where: { id: boxId } })
-      if (!box) {
-        this.logger.warn(`Box ${boxId} not found for RESIZE_BOX job ${job.id}`)
-        return
-      }
-
-      if (box.state !== BoxState.RESIZING) {
-        this.logger.warn(`Box ${boxId} is not in RESIZING state for RESIZE_BOX job ${job.id}. State: ${box.state}`)
-        return
-      }
-
-      // Determine the previous state (STARTED or STOPPED based on desiredState)
-      const previousState =
-        box.desiredState === BoxDesiredState.STARTED
-          ? BoxState.STARTED
-          : box.desiredState === BoxDesiredState.STOPPED
-            ? BoxState.STOPPED
-            : null
-
-      if (!previousState) {
-        this.logger.error(`Box ${boxId} has unexpected desiredState ${box.desiredState} for RESIZE_BOX job ${job.id}`)
-        return
-      }
-
-      const payload = job.getPayload<{ cpu?: number; memory?: number; disk?: number }>() ?? {}
-
-      const updateData: Partial<Box> = {}
-
-      if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`RESIZE_BOX job ${job.id} completed successfully for box ${boxId}`)
-
-        // Update box resources
-        updateData.cpu = payload.cpu ?? box.cpu
-        updateData.mem = payload.memory ?? box.mem
-        updateData.disk = payload.disk ?? box.disk
-        updateData.state = previousState
-      } else if (job.status === JobStatus.FAILED) {
-        this.logger.error(`RESIZE_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
-
-        updateData.state = previousState
-      }
-
-      await this.boxRepository.update(boxId, { updateData, entity: box })
-    } catch (error) {
-      this.logger.error(`Error handling RESIZE_BOX job completion for box ${boxId}:`, error)
     }
   }
 }

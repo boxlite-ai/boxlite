@@ -7,6 +7,20 @@ import { BoxState } from '../../box/enums/box-state.enum'
 import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
 
 describe('BoxLite lifecycle policy mapper', () => {
+  it.each([
+    ['enabled', true],
+    ['disabled', false],
+  ])('maps inbound.mode=%s to control-plane public=%s', (mode, expected) => {
+    const mapped = createBoxToCreateBox({
+      network: {
+        outbound: { mode: 'enabled' },
+        inbound: { mode: mode as 'enabled' | 'disabled' },
+      },
+    })
+
+    expect(mapped.public).toBe(expected)
+  })
+
   it('maps second-based create fields into the control-plane DTO', () => {
     const mapped = createBoxToCreateBox({
       auto_stop: 1800,
@@ -21,55 +35,40 @@ describe('BoxLite lifecycle policy mapper', () => {
 
   it('maps REST volume specs to managed volume mounts', () => {
     const mapped = createBoxToCreateBox({
-      volumes: [{ source: 'volume://volume-123', guest_path: '/data', read_only: false }],
+      volumes: [{ managed_volume: 'volume-123', guest_path: '/data', read_only: false }],
     })
 
     expect(mapped.volumes).toEqual([{ volumeId: 'volume-123', mountPath: '/data' }])
   })
 
-  it('maps the deprecated host_path field to managed volume mounts', () => {
+  // A name is as valid as an id here; VolumeService.validateVolumes resolves
+  // either, so the mapper must pass the value through untouched.
+  it('passes a volume name through as-is', () => {
     const mapped = createBoxToCreateBox({
-      volumes: [{ host_path: 'volume://volume-123', guest_path: '/data', read_only: false }],
+      volumes: [{ managed_volume: 'customer-data', guest_path: '/data', read_only: false }],
     })
 
-    expect(mapped.volumes).toEqual([{ volumeId: 'volume-123', mountPath: '/data' }])
+    expect(mapped.volumes).toEqual([{ volumeId: 'customer-data', mountPath: '/data' }])
   })
 
-  it('does not fall back to host_path when source is an empty string', () => {
-    // DTO validation (IsNotEmpty) is the primary guard against this reaching
-    // the mapper at all; this locks in that the mapper itself also fails
-    // closed rather than treating '' as absent via `??`.
-    expect(() =>
-      createBoxToCreateBox({
-        volumes: [{ source: '', host_path: 'volume://volume-123', guest_path: '/data', read_only: false }],
-      }),
-    ).toThrow('volume source must use the volume:// scheme')
-  })
-
-  it('prefers source over host_path when both are present', () => {
+  it('maps REST secret specs to secret placeholder rules', () => {
     const mapped = createBoxToCreateBox({
-      volumes: [
-        { source: 'volume://source-wins', host_path: 'volume://ignored', guest_path: '/data', read_only: false },
+      secrets: [
+        { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
       ],
     })
 
-    expect(mapped.volumes).toEqual([{ volumeId: 'source-wins', mountPath: '/data' }])
+    expect(mapped.secrets).toEqual([
+      { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+    ])
   })
 
-  it('rejects non-volume scheme sources on the remote managed-volume mapper', () => {
-    expect(() =>
-      createBoxToCreateBox({
-        volumes: [{ source: 'host:///tmp/data', guest_path: '/data', read_only: false }],
-      }),
-    ).toThrow('volume source must use the volume:// scheme')
-  })
+  it('passes a secret without hosts/placeholder through untouched', () => {
+    const mapped = createBoxToCreateBox({
+      secrets: [{ name: 'openai', value: 'sk-test' }],
+    })
 
-  it('rejects source values without a supported scheme', () => {
-    expect(() =>
-      createBoxToCreateBox({
-        volumes: [{ source: 'volume-123', guest_path: '/data', read_only: false }],
-      }),
-    ).toThrow('volume source must use the volume:// scheme')
+    expect(mapped.secrets).toEqual([{ name: 'openai', value: 'sk-test' }])
   })
 
   it('returns the effective second-based policy', () => {
@@ -97,5 +96,45 @@ describe('BoxLite lifecycle policy mapper', () => {
     } as any)
 
     expect(response.auto_resume).toBe(true)
+  })
+})
+
+// These four validated, were audit-logged, and were then dropped on the floor
+// here: the mapper simply never read them, so a caller got a 201 and a box that
+// ignored the working directory, entrypoint, command and user they asked for.
+describe('BoxLite container process options mapper', () => {
+  it('carries the container process options into the control-plane DTO', () => {
+    const mapped = createBoxToCreateBox({
+      working_dir: '/app',
+      entrypoint: ['python'],
+      cmd: ['-c', 'print(1)'],
+      user: '1000:1000',
+    })
+
+    expect(mapped.workingDir).toBe('/app')
+    expect(mapped.entrypoint).toEqual(['python'])
+    expect(mapped.cmd).toEqual(['-c', 'print(1)'])
+    expect(mapped.runAsUser).toBe('1000:1000')
+  })
+
+  // `user` feeds two fields with different jobs. runAsUser is the real OCI
+  // process.user override; osUser is the Daytona-era warm-pool label, and
+  // box.service.ts still defaults it to 'boxlite' when absent.
+  it('feeds user to both the process override and the warm-pool label', () => {
+    const mapped = createBoxToCreateBox({ user: 'node' })
+
+    expect(mapped.runAsUser).toBe('node')
+    expect(mapped.user).toBe('node')
+  })
+
+  // The load-bearing case: an unset user must stay unset, so box.service.ts
+  // does not hand every box a USER override its image may never define.
+  it('leaves runAsUser undefined when the caller asks for no user', () => {
+    const mapped = createBoxToCreateBox({ image: 'alpine:latest' })
+
+    expect(mapped.runAsUser).toBeUndefined()
+    expect(mapped.workingDir).toBeUndefined()
+    expect(mapped.entrypoint).toBeUndefined()
+    expect(mapped.cmd).toBeUndefined()
   })
 })

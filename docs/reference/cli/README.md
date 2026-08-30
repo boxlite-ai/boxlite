@@ -34,6 +34,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite stats`](#boxlite-stats)
   - [`boxlite network tunnel`](#boxlite-network-tunnel)
   - [`boxlite serve`](#boxlite-serve)
+  - [`boxlite volume`](#boxlite-volume)
   - [`boxlite completion`](#boxlite-completion)
 - [Shared Flag Groups](#shared-flag-groups)
 - [Volume Mount Syntax](#volume-mount-syntax)
@@ -463,9 +464,9 @@ Show detailed information for one or more boxes.
 | `--format FMT` | `-f` | `json` | `json`, `yaml`, or a Go template (e.g. `'{{.State.Status}}'`) |
 
 The Go-template engine exposes a `json` function for serializing nested values.
-`State.StartedAt` is the most recent successful container start timestamp in
-RFC 3339 format, or `null` if it has not been recorded or is unavailable over
-REST.
+`State.StartedAt` is when the box most recently entered `Running`, in RFC 3339
+format, or `null` if the start time has not been recorded or is unavailable
+over REST.
 
 **Examples:**
 
@@ -493,6 +494,20 @@ Copy files/folders between host and box. Exactly one of `SRC` or `DST` must be a
 | `--include-parent` | `true` | Include the source's parent directory when copying out (docker-cp semantics) |
 
 If the box is stopped at copy time, it's started temporarily and stopped again afterwards.
+
+Paths at or under a mount inside the box are refused in both directions — `/tmp`,
+`/dev/shm`, volumes, and the `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf` binds.
+`cp` works on the rootfs layer from outside the box's mount namespace, so such a copy
+would write where nothing in the box can see it, or read back the image's file rather
+than the one the box has.
+
+A directory that merely *contains* a mount is treated differently per direction. Copying
+one **out** is refused (`boxlite cp box:/etc ./etc`), since the archive would carry the
+image's files rather than the mounted ones. Copying **in** is allowed, and refused only
+if a file being written would land on a mount — so `boxlite cp ./x box:/etc` works.
+
+Copy a path outside the mount, or pipe a tar through `boxlite exec`. Files copied in are
+owned by the box's exec user.
 
 **Examples:**
 
@@ -554,10 +569,23 @@ Display resource usage statistics for a box.
 
 ### `boxlite network tunnel`
 
-**Synopsis:** `boxlite network tunnel BOX PORT`
+**Synopsis:** `boxlite network tunnel BOX GUEST_PORT [--listen ADDRESS]`
 
 Print the public URL for a box service port. Requires a remote REST profile
-(`--url` or `--profile`); local boxes have no public ingress.
+(`--url` or `--profile`); local boxes have no public ingress. With `--listen`,
+bind a local listener and open one tunnel per accepted connection instead:
+
+```bash
+boxlite network tunnel mybox 3000 --listen 8080
+boxlite network tunnel mybox 3000 --listen 127.0.0.1:8080
+boxlite network tunnel mybox 3000 --listen '[::1]:8080'
+boxlite network tunnel mybox 3000 --listen unix:/tmp/app.sock
+```
+
+A bare port binds `127.0.0.1`; listener port `0` asks the OS to allocate a
+port. The canonical bound address is printed to stdout before clients are
+accepted. Ctrl-C closes the listener and active connections. TCP hosts must be
+numeric addresses, and Unix socket paths must be absolute.
 
 ---
 
@@ -580,6 +608,42 @@ Run a long-running REST API server. The server holds a single `BoxliteRuntime` a
 boxlite serve
 boxlite serve --host 127.0.0.1 --port 9000
 ```
+
+---
+
+### `boxlite volume`
+
+**Synopsis:** `boxlite volume <create|ls|get|rm>`
+
+Manage managed persistent volumes. Volumes are a REST-runtime capability — the
+local runtime has no volume backend, so every subcommand returns
+`named volumes are not supported yet` against it. See
+[Connecting to the cloud](#connecting-to-the-cloud).
+
+| Subcommand | Synopsis | Notes |
+|---|---|---|
+| `create` | `boxlite volume create [--name NAME]` | Prints the new id |
+| `ls` (`list`) | `boxlite volume ls [-q] [--format FORMAT]` | Columns: ID, NAME, CREATED, SIZE |
+| `get` (`inspect`) | `boxlite volume get ID [--format FORMAT]` | By id |
+| `rm` (`delete`) | `boxlite volume rm ID... [--force]` | By id |
+
+**`--name`** is mountable in place of the id, so a box can ask for the volume it
+wants without knowing the id:
+
+```bash
+boxlite volume create --name my-data       # prints e.g. vol_01K2EXAMPLE
+boxlite run -v my-data:/data alpine        # by name
+boxlite run -v vol_01K2EXAMPLE:/data alpine # or by id
+```
+
+Names must be at least two characters of `[a-zA-Z0-9][a-zA-Z0-9_.-]` — Docker's
+rule, and for the same reason: the name has to survive
+[`-v` parsing](#volume-mount-syntax). A leading `.`, `/` or `~` would classify
+the source as a host path; a `:` would split the spec into the wrong fields.
+Neither name could ever be mounted. Without `--name` the server names the
+volume after its id, which stays mountable.
+
+`get` and `rm` take an id only; mounting is what accepts either.
 
 ---
 
@@ -678,22 +742,51 @@ Used by `run` and `create` (defined at `src/cli/src/cli.rs:584-604`).
 
 ## Volume Mount Syntax
 
-`-v`/`--volume` accepts the grammar implemented at `src/cli/src/cli.rs:442-519`:
+`-v`/`--volume` accepts the grammar implemented in `src/cli/src/volumespec.rs`:
 
 ```
-VOLUME := HOST_PATH ':' BOX_PATH [':' OPTIONS]          # bind mount
+VOLUME := SOURCE ':' BOX_PATH [':' OPTIONS]             # managed volume or bind mount
         | BOX_PATH [':' OPTIONS]                         # anonymous volume
 ```
+
+`SOURCE` is classified by its **first character**, the same rule Docker uses
+(`docker/cli/internal/volumespec`). Nothing inspects the filesystem, so a spec
+means the same thing on every machine:
+
+| `SOURCE` starts with | Meaning |
+|---|---|
+| `/`, `./`, `../`, `~` | Host path |
+| `\\` (UNC / named pipe) | Host path |
+| A drive letter, e.g. `C:\` or `D:/` | Host path |
+| Anything else | **Managed volume**, by id or by name |
 
 | Form | Example | Behavior |
 |------|---------|----------|
 | `BOX_PATH` | `/data` | Anonymous volume stored under `{home}/volumes/anonymous/<ulid>` |
 | `BOX_PATH:ro` / `BOX_PATH:rw` | `/data:ro` | Anonymous volume with explicit mode |
+| `VOLUME:BOX_PATH` | `my-data:/data` | Managed volume by name |
+| `VOLUME:BOX_PATH` | `vol_01K2EXAMPLE:/data` | Managed volume by server-assigned id |
 | `HOST_PATH:BOX_PATH` | `/host/data:/data` | Bind mount (host directory must exist) |
-| `HOST_PATH:BOX_PATH:OPTIONS` | `/host/data:/data:ro` | Bind mount with options |
+| `HOST_PATH:BOX_PATH:OPTIONS` | `./data:/data:ro` | Bind mount with options |
 | `C:\HOST\PATH:/BOX_PATH[:OPTIONS]` | `C:\data:/app/data:ro` | Windows drive paths are handled — the drive-letter colon is not treated as a separator |
 
 **Options:** `ro` (read-only) or `rw` (read-write, default). Other options are ignored. Relative host paths are canonicalized at parse time; missing host paths fail with `volume host path ...`.
+
+**Runtime support.** Managed volumes require a REST runtime — the local runtime
+has no volume backend and rejects them at create. Host binds are the mirror
+image: they name a path on the machine running the box, so a REST runtime
+refuses them. Manage volumes with [`boxlite volume`](#boxlite-volume).
+
+> **Behavior change.** A bare relative source is no longer a bind mount:
+> `-v data:/app` now means the managed volume `data`, not `./data`. Write
+> `./data:/app` for the bind. Unlike Docker, a mistyped name cannot silently
+> create an empty volume — boxlite never auto-creates, so an unknown reference
+> fails with "Volume 'data' not found".
+
+**Single-character names are not addressable via `-v`.** The parser cannot
+distinguish `a:` from a drive letter, so `-v a:/data` is read as one field and
+fails. Docker has the same limitation and rejects one-character volume names
+outright.
 
 The anonymous-volume base directory is resolved as: `--home`, else `$BOXLITE_HOME`, else `~/.boxlite`, else the system temp dir.
 
@@ -718,7 +811,7 @@ Ports must be in `1..=65535`. TCP is the only supported protocol; UDP is rejecte
 `-p` is explicit local publication and is rejected for remote REST runtimes.
 For a remote box, use `boxlite network tunnel BOX PORT` to obtain its public
 service URL. For SDK code that must run with either runtime, use the box network
-tunnel API; each tunnel handle represents one connection.
+tunnel API; each returned tunnel is one-shot.
 Image `EXPOSE` declarations remain metadata and do not open host listeners.
 
 ---

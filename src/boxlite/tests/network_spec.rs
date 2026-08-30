@@ -1,4 +1,4 @@
-//! Tests for NetworkSpec enum behavior.
+//! Tests for NetworkSpec behavior.
 
 mod common;
 
@@ -10,6 +10,70 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 use std::sync::mpsc;
 use std::thread;
+
+/// Pre-split source compatibility. `NetworkSpec` is untouched by the split —
+/// same name, same variants, same field on `BoxOptions` — so every shape
+/// pre-split callers wrote still compiles verbatim, with no conversion at
+/// the assignment site. Inbound lives in the sibling field
+/// `BoxOptions::inbound_network`. This test is the contract: if it stops
+/// compiling, the Rust API broke.
+#[test]
+fn pre_split_network_spec_source_shape_still_compiles() {
+    let spec = NetworkSpec::Enabled {
+        allow_net: vec!["api.openai.com".into()],
+    };
+    match &spec {
+        NetworkSpec::Enabled { allow_net } => assert_eq!(allow_net.len(), 1),
+        NetworkSpec::Disabled => panic!("expected enabled"),
+    }
+
+    // No `.into()`, no container: the field type is still the enum.
+    let opts = BoxOptions {
+        network: NetworkSpec::Disabled,
+        ..Default::default()
+    };
+    assert!(matches!(opts.network, NetworkSpec::Disabled));
+
+    // The direction the pre-split API could not express defaults to public.
+    assert!(
+        matches!(opts.inbound_network, NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty())
+    );
+}
+
+/// The two directions are independent: a box can refuse egress while the
+/// services it exposes stay reachable. Sibling fields express that directly.
+#[test]
+fn directions_are_independent() {
+    let opts = BoxOptions {
+        network: NetworkSpec::Disabled,
+        inbound_network: NetworkSpec::Enabled {
+            allow_net: Vec::new(),
+        },
+        ..Default::default()
+    };
+
+    assert!(matches!(opts.network, NetworkSpec::Disabled));
+    assert!(matches!(opts.inbound_network, NetworkSpec::Enabled { .. }));
+}
+
+/// Already-persisted box configs predate `inbound_network`; the missing
+/// field must default rather than fail the load.
+#[test]
+fn pre_split_persisted_json_still_deserializes() {
+    let json = r#"{
+        "rootfs": {"Image": "alpine:latest"},
+        "env": [],
+        "volumes": [],
+        "network": {"Enabled": {"allow_net": ["api.openai.com"]}},
+        "ports": []
+    }"#;
+    let opts: BoxOptions = serde_json::from_str(json).unwrap();
+    assert!(
+        matches!(opts.network, NetworkSpec::Enabled { ref allow_net } if allow_net == &["api.openai.com".to_string()])
+    );
+    assert!(matches!(opts.inbound_network, NetworkSpec::Enabled { .. }));
+}
+
 use std::time::{Duration, Instant};
 
 #[test]

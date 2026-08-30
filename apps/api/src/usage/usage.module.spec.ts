@@ -9,6 +9,7 @@ import { Test } from '@nestjs/testing'
 import { getRepositoryToken } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
 import { Box } from '../box/entities/box.entity'
+import { Runner } from '../box/entities/runner.entity'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
 import { RedisLockProvider } from '../box/common/redis-lock.provider'
@@ -19,6 +20,7 @@ import { UsageExportOutboxService } from './services/usage-export-outbox.service
 import { UsageExportPublisherService } from './services/usage-export-publisher.service'
 import { UsageService } from './services/usage.service'
 import { UsageModule } from './usage.module'
+import { UsageConcurrencyService } from './services/usage-concurrency.service'
 
 // Everything the module reaches for outside its own providers — the DataSource,
 // the ioredis connection — is stubbed, and useMocker fills in any token the
@@ -40,6 +42,7 @@ describe('UsageModule', () => {
       .compile()
 
     expect(moduleRef.get(UsageService)).toBeInstanceOf(UsageService)
+    expect(moduleRef.get(UsageConcurrencyService)).toBeInstanceOf(UsageConcurrencyService)
     expect(moduleRef.get(RedisLockProvider)).toBeInstanceOf(RedisLockProvider)
     expect(moduleRef.get(BoxRepository)).toBeInstanceOf(BoxRepository)
     expect(moduleRef.get(UsageExportOutboxService)).toBeInstanceOf(UsageExportOutboxService)
@@ -57,6 +60,7 @@ describe('UsageModule', () => {
         getRepositoryToken(BoxUsagePeriodArchive),
         getRepositoryToken(BoxUsageExportOutbox),
         getRepositoryToken(Box),
+        getRepositoryToken(Runner),
       ]),
     )
     expect(providers).toContain(BoxLookupCacheInvalidationService)

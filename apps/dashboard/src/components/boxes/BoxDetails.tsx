@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
+import { useVolumesQuery } from '@/hooks/queries/useVolumesQuery'
 import { useDeleteBoxMutation } from '@/hooks/mutations/useDeleteBoxMutation'
 import { useRecoverBoxMutation } from '@/hooks/mutations/useRecoverBoxMutation'
 import { useStartBoxMutation } from '@/hooks/mutations/useStartBoxMutation'
@@ -28,7 +29,7 @@ import { useConfig } from '@/hooks/useConfig'
 import { useRegions } from '@/hooks/useRegions'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
+import { getBoxDisplayName, getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
 import { setLocalStorageItem } from '@/lib/local-storage'
 import {
@@ -43,7 +44,7 @@ import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/
 import { Box, BoxState, OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { isAxiosError } from 'axios'
 import { Check, Container, Copy, MoreVertical, Pause, Play, RefreshCw, RotateCcw, Trash2 } from '@/components/ui/icon'
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -118,6 +119,7 @@ export default function BoxDetails() {
   const [showOnboardingDialog, setShowOnboardingDialog] = useState(false)
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
   const [copied, setCopied] = useState(false)
+  const [copiedName, setCopiedName] = useState(false)
   const [terminalRefreshSignal, setTerminalRefreshSignal] = useState(0)
   const refreshRef = useRef<HTMLSpanElement>(null)
 
@@ -163,6 +165,17 @@ export default function BoxDetails() {
   }, [clearOnboardingUrlParam, userId])
 
   const { data: box, isLoading, isError, error, refetch } = useBoxQuery(boxId ?? '')
+
+  // Volumes this box mounts, with the stored handle resolved back to a name.
+  const { data: allVolumes = [] } = useVolumesQuery()
+  const mountedVolumes = useMemo(() => {
+    const mounts = (box?.volumes ?? []) as { volumeId: string; mountPath: string; subpath?: string }[]
+    return mounts.map((mount) => {
+      const match = allVolumes.find((v) => v.id === mount.volumeId || v.name === mount.volumeId)
+      return { ...mount, displayName: match?.name ?? mount.volumeId }
+    })
+  }, [box?.volumes, allVolumes])
+
   const isNotFound = isError && isAxiosError(error.cause) && error.cause?.status === 404
   useBoxWsSync({ boxId })
 
@@ -258,6 +271,17 @@ export default function BoxDetails() {
     setTimeout(() => setCopied(false), 1300)
   }
 
+  const copyName = () => {
+    if (!box) return
+    try {
+      navigator.clipboard?.writeText(getBoxDisplayName(box))
+    } catch {
+      /* clipboard may be unavailable */
+    }
+    setCopiedName(true)
+    setTimeout(() => setCopiedName(false), 1300)
+  }
+
   return (
     <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col gap-[14px] px-4 pb-[22px] pt-4 font-mono text-[13px] sm:px-6 lg:px-[40px]">
       <OnboardingGuideDialog
@@ -310,8 +334,25 @@ export default function BoxDetails() {
           {/* identity strip */}
           <div className="flex flex-none flex-col gap-4 border-b border-dashed border-border pb-[14px] lg:flex-row lg:items-center lg:gap-[18px]">
             <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:gap-[14px]">
-              <span className="max-w-full truncate text-[20px] font-medium tracking-[-0.4px] sm:max-w-[360px] sm:text-[22px]">
-                {getBoxPublicIdLabel(box)}
+              <span className="flex min-w-0 items-center gap-[9px]">
+                <span
+                  className="max-w-full truncate text-[20px] font-medium tracking-[-0.4px] sm:max-w-[360px] sm:text-[22px]"
+                  title={getBoxDisplayName(box)}
+                >
+                  {getBoxDisplayName(box)}
+                </span>
+                <button
+                  type="button"
+                  onClick={copyName}
+                  title="copy name"
+                  className="shrink-0 text-muted-foreground hover:text-foreground"
+                >
+                  {copiedName ? (
+                    <Check className="size-[15px]" style={{ color: STATUS.running }} />
+                  ) : (
+                    <Copy className="size-[15px]" />
+                  )}
+                </button>
               </span>
               <span className="flex flex-none items-center gap-2 text-[13px]">
                 <span
@@ -436,6 +477,30 @@ export default function BoxDetails() {
               <SpecRow label="cpu">{box.cpu} vcpu</SpecRow>
               <SpecRow label="memory">{box.memory} gib</SpecRow>
               <SpecRow label="disk">{box.disk} gib</SpecRow>
+
+              {/* Read-only by construction: mounts are fixed when the box is
+                  created and there is no attach/detach endpoint, so this
+                  answers "where is my data" and nothing more. Stored volumeId
+                  may be a name or an id — the API accepts either — so resolve
+                  it back to the readable name when we know it. */}
+              {mountedVolumes.length > 0 && (
+                <>
+                  <SectionHeader title="volumes" />
+                  {mountedVolumes.map((mount) => (
+                    <SpecRow key={`${mount.volumeId}:${mount.mountPath}`} label={mount.displayName}>
+                      <button
+                        type="button"
+                        onClick={() => navigate(RoutePath.VOLUMES)}
+                        className="transition-colors hover:text-brand"
+                        title="Go to volumes"
+                      >
+                        {mount.mountPath}
+                        {mount.subpath ? ` (${mount.subpath})` : ''}
+                      </button>
+                    </SpecRow>
+                  ))}
+                </>
+              )}
 
               <SectionHeader title="timestamps" />
               <SpecRow label="created">{getRelativeTimeString(box.createdAt).relativeTimeString}</SpecRow>

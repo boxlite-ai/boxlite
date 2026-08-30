@@ -11,7 +11,6 @@ import { OrganizationRoleController } from './controllers/organization-role.cont
 import { OrganizationUserController } from './controllers/organization-user.controller'
 import { OrganizationInvitationController } from './controllers/organization-invitation.controller'
 import { Organization } from './entities/organization.entity'
-import { OrganizationQuota } from './entities/organization-quota.entity'
 import { OrganizationRole } from './entities/organization-role.entity'
 import { OrganizationUser } from './entities/organization-user.entity'
 import { OrganizationInvitation } from './entities/organization-invitation.entity'
@@ -19,7 +18,6 @@ import { OrganizationService } from './services/organization.service'
 import { OrganizationRoleService } from './services/organization-role.service'
 import { OrganizationUserService } from './services/organization-user.service'
 import { OrganizationInvitationService } from './services/organization-invitation.service'
-import { OrganizationUsageService } from './services/organization-usage.service'
 import { UserModule } from '../user/user.module'
 import { Box } from '../box/entities/box.entity'
 import { Volume } from '../box/entities/volume.entity'
@@ -32,6 +30,8 @@ import { RegionModule } from '../region/region.module'
 import { OrganizationRegionController } from './controllers/organization-region.controller'
 import { Region } from '../region/entities/region.entity'
 import { EncryptionModule } from '../encryption/encryption.module'
+import { UsageModule } from '../usage/usage.module'
+import { UsageController } from '../usage/controllers/usage.controller'
 
 @Module({
   imports: [
@@ -39,7 +39,6 @@ import { EncryptionModule } from '../encryption/encryption.module'
     RegionModule,
     TypeOrmModule.forFeature([
       Organization,
-      OrganizationQuota,
       OrganizationRole,
       OrganizationUser,
       OrganizationInvitation,
@@ -48,6 +47,7 @@ import { EncryptionModule } from '../encryption/encryption.module'
       Region,
     ]),
     EncryptionModule,
+    UsageModule,
   ],
   controllers: [
     OrganizationController,
@@ -55,13 +55,13 @@ import { EncryptionModule } from '../encryption/encryption.module'
     OrganizationUserController,
     OrganizationInvitationController,
     OrganizationRegionController,
+    UsageController,
   ],
   providers: [
     OrganizationService,
     OrganizationRoleService,
     OrganizationUserService,
     OrganizationInvitationService,
-    OrganizationUsageService,
     RedisLockProvider,
     BoxLookupCacheInvalidationService,
     {
@@ -74,12 +74,6 @@ import { EncryptionModule } from '../encryption/encryption.module'
       ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService),
     },
   ],
-  exports: [
-    OrganizationService,
-    OrganizationRoleService,
-    OrganizationUserService,
-    OrganizationInvitationService,
-    OrganizationUsageService,
-  ],
+  exports: [OrganizationService, OrganizationRoleService, OrganizationUserService, OrganizationInvitationService],
 })
 export class OrganizationModule {}

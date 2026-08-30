@@ -7,29 +7,45 @@ import { createServer, Server } from 'node:http'
 import { AddressInfo } from 'node:net'
 import { Redis } from 'ioredis'
 import { DataSource, IsNull, Not, Repository } from 'typeorm'
+import { Box } from '../../box/entities/box.entity'
+import { BoxLastActivity } from '../../box/entities/box-last-activity.entity'
 import { BoxState } from '../../box/enums/box-state.enum'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
+import { Migration1741087887225 } from '../../migrations/1741087887225-migration'
+import { AddBoxLifecycleSeconds1784250000000 } from '../../migrations/pre-deploy/1784250000000-add-box-lifecycle-seconds-migration'
 import { AddBoxUsagePeriods1785250000000 } from '../../migrations/pre-deploy/1785250000000-add-box-usage-periods-migration'
 import { AddBoxUsageExportOutbox1786100000000 } from '../../migrations/pre-deploy/1786100000000-add-box-usage-export-outbox-migration'
+import { AddUsageConcurrencyIndexes1786340000000 } from '../../migrations/pre-deploy/1786340000000-add-usage-concurrency-indexes-migration'
+import { AddBoxContainerProcessOptions1786400000000 } from '../../migrations/pre-deploy/1786400000000-add-box-container-process-options-migration'
+import { AddBoxSecrets1787000000000 } from '../../migrations/pre-deploy/1787000000000-add-box-secrets-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
 import { UsageExportOutboxService } from './usage-export-outbox.service'
 import { UsageExportPublisherService } from './usage-export-publisher.service'
 import { UsageService } from './usage.service'
+import { expectedOpenPeriod } from './expected-usage-period'
+import { UsageConcurrencyService } from './usage-concurrency.service'
+import { UsageConcurrencyGranularity } from '../dto/usage-concurrency.dto'
 
-// The two cron jobs are a destructive archive transaction and a roll-over that
-// rewrites resources — neither is observable without a real database, and the
+// The three cron jobs are a destructive archive transaction, a roll-over that
+// rewrites resources, and a reconcile pass built on a left join from box to the
+// ledger — none is observable without a real database, and the
 // at-most-one-open-period invariant lives in a Postgres partial index whose
 // WHERE clause no schema differ compares. The schema here is built by running
-// the migration, so these tests exercise the DDL that actually ships. Runs only
+// the migrations, so these tests exercise the DDL that actually ships. Runs only
 // when a Postgres and a Redis are reachable; skipped otherwise.
 const describeIfDatabase = process.env.DB_HOST && process.env.REDIS_HOST ? describe : describe.skip
 
 const DAY_MS = 24 * 60 * 60 * 1000
-const TABLES = ['box_usage_periods', 'box_usage_periods_archive', 'box_usage_export_outbox']
+// Cleared between tests. `box` is here because the reconcile pass reads it; the
+// rest of the schema the initial migration builds is left in place untouched.
+const TABLES = ['box_usage_periods', 'box_usage_periods_archive', 'box_usage_export_outbox', 'box']
+// Older than the reconcile pass's grace window, so a box is eligible unless a
+// test deliberately makes it fresh.
+const SETTLED_AGO_MS = 10 * 60 * 1000
 
 describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   let dataSource: DataSource
@@ -41,7 +57,17 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   // them belong to somebody else and nothing here may write or clear them.
   let ownsTables = false
 
-  const box = { id: 'box-int-1', organizationId: 'org-int-1', region: 'us', cpu: 2, gpu: 1, mem: 4, disk: 10 }
+  // organizationId is a uuid on the box table, so it has to be a real one here
+  // even though the ledger stores it as text.
+  const box = {
+    id: 'box-int-1',
+    organizationId: '5c2f6a48-8f2b-4a1e-9d31-2b7e6f0c1a45',
+    region: 'us',
+    cpu: 2,
+    gpu: 1,
+    mem: 4,
+    disk: 10,
+  }
 
   // The service's own lock keys — cleared individually so a parallel spec
   // sharing this Redis keeps its state.
@@ -50,6 +76,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     'close-and-reopen-usage-periods',
     'archive-usage-periods',
     'publish-usage-exports',
+    'reconcile-usage-periods',
   ]
 
   const openPeriod = (overrides: Partial<BoxUsagePeriod> = {}) =>
@@ -75,34 +102,92 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       get: () => enabled,
     } as any)
 
-  const serviceForBoxState = (state: BoxState, exportEnabled = false) =>
+  const openPeriods = () => periods.find({ where: { endAt: IsNull() } })
+
+  /**
+   * Inserts a real box row. The reconcile pass joins the box table, so these
+   * cases cannot use the stub above.
+   */
+  const insertBox = (
+    overrides: Partial<typeof box> & { state: BoxState; runnerId?: string; pending?: boolean; updatedAtMsAgo?: number },
+  ) => {
+    const row = {
+      ...box,
+      runnerId: null as string | null,
+      pending: false,
+      updatedAtMsAgo: SETTLED_AGO_MS,
+      ...overrides,
+    }
+    return dataSource.query(
+      `INSERT INTO "box" ("id","organizationId","name","region","osUser","authToken","state","desiredState",
+                          "cpu","gpu","mem","disk","runnerId","pending","updatedAt")
+       VALUES ($1,$2,$3,$4,'root',$5,$6,'started',$7,$8,$9,$10,$11,$12,$13)`,
+      [
+        row.id,
+        row.organizationId,
+        `name-${row.id}`,
+        row.region,
+        `token-${row.id}`,
+        row.state,
+        row.cpu,
+        row.gpu,
+        row.mem,
+        row.disk,
+        row.runnerId,
+        row.pending,
+        new Date(Date.now() - row.updatedAtMsAgo),
+      ],
+    )
+  }
+
+  /**
+   * Everything the control plane runs to keep the ledger in step with box state:
+   * the roll-over settles periods that have grown too long, the reconcile pass
+   * settles periods that disagree with the box they bill for. Reads boxes from
+   * the real table — a plain TypeORM repository satisfies the two methods the
+   * service uses (findOne and createQueryBuilder).
+   *
+   * @param runnerIds shards the reconcile pass will visit on top of the always
+   *   scanned "no runner" shard.
+   */
+  const settleLedger = async (runnerIds: string[] = []) => {
+    const service = new UsageService(
+      periods,
+      new RedisLockProvider(redis),
+      dataSource.getRepository(Box) as any,
+      outboxService(),
+      { find: async () => runnerIds.map((id) => ({ id })) } as any,
+    )
+    await service.closeAndReopenUsagePeriods()
+    await service.reconcileUsagePeriods()
+  }
+
+  const serviceForBoxState = (state: BoxState, exportEnabled = false, boxOverrides: Partial<typeof box> = {}) =>
     new UsageService(
       periods,
       new RedisLockProvider(redis),
-      {
-        findOne: async () => ({ id: box.id, state }),
-      } as any,
+      { findOne: async () => ({ ...box, state, ...boxOverrides }) } as any,
       outboxService(exportEnabled),
+      { find: async () => [] } as any,
     )
 
   const quoted = TABLES.map((table) => `"${table}"`).join(', ')
-  const dropTables = () => dataSource.query(`DROP TABLE IF EXISTS ${quoted}`)
-  const truncateTables = () => dataSource.query(`TRUNCATE ${quoted}`)
+  // CASCADE because box_last_activity references box.
+  const truncateTables = () => dataSource.query(`TRUNCATE ${quoted} CASCADE`)
 
-  // This spec owns the ledger tables outright — it drops and rebuilds them from
-  // the migration — so it must never be pointed at a database holding real
-  // usage. Each table is checked on its own: one populated table is enough to
-  // refuse, even if the other is missing.
+  // This spec rebuilds the entire public schema from the migrations, so it must
+  // never be pointed at a database holding real data. Every table is checked,
+  // not just the ledger's: one populated table anywhere is enough to refuse.
   const assertDisposableDatabase = async () => {
-    const existing: string[] = (
-      await dataSource.query(`SELECT table_name FROM information_schema.tables WHERE table_name = ANY($1)`, [TABLES])
-    ).map((row: { table_name: string }) => row.table_name)
+    const tables: { table_name: string }[] = await dataSource.query(
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`,
+    )
 
-    for (const table of existing) {
-      const [{ rows }] = await dataSource.query(`SELECT count(*)::int AS rows FROM "${table}"`)
+    for (const { table_name } of tables) {
+      const [{ rows }] = await dataSource.query(`SELECT count(*)::int AS rows FROM "${table_name}"`)
       if (rows > 0) {
         throw new Error(
-          `refusing to run: "${table}" in database "${process.env.DB_DATABASE}" already holds rows — point DB_* at a disposable database`,
+          `refusing to run: "${table_name}" in database "${process.env.DB_DATABASE}" already holds rows — point DB_* at a disposable database`,
         )
       }
     }
@@ -116,20 +201,32 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       username: process.env.DB_USERNAME,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
-      entities: [BoxUsagePeriod, BoxUsagePeriodArchive, BoxUsageExportOutbox],
+      entities: [BoxUsagePeriod, BoxUsagePeriodArchive, BoxUsageExportOutbox, Box, BoxLastActivity],
       namingStrategy: new CustomNamingStrategy(),
       synchronize: false,
     }).initialize()
 
-    // Rebuild the schema from the migration every run, so these tests exercise
+    // Rebuild the schema from the migrations every run, so these tests exercise
     // the DDL that ships rather than whatever an earlier run happened to leave.
+    // The whole schema, not just the ledger: the reconcile pass joins the box
+    // table, and box only exists as part of the initial migration.
     await assertDisposableDatabase()
-    await dropTables()
+    await dataSource.query(`DROP SCHEMA public CASCADE`)
+    await dataSource.query(`CREATE SCHEMA public`)
     await dataSource.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`)
     const queryRunner = dataSource.createQueryRunner()
     try {
+      await new Migration1741087887225().up(queryRunner)
+      await new AddBoxLifecycleSeconds1784250000000().up(queryRunner)
       await new AddBoxUsagePeriods1785250000000().up(queryRunner)
       await new AddBoxUsageExportOutbox1786100000000().up(queryRunner)
+      await new AddUsageConcurrencyIndexes1786340000000().up(queryRunner)
+      // `Box` is in `entities` above, so its repository SELECTs every column the
+      // entity declares. Any migration that adds one has to be listed here too,
+      // or the reconcile pass queries a column this database does not have and
+      // silently finds no boxes.
+      await new AddBoxContainerProcessOptions1786400000000().up(queryRunner)
+      await new AddBoxSecrets1787000000000().up(queryRunner)
       ownsTables = true
     } finally {
       await queryRunner.release()
@@ -163,9 +260,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   })
 
   beforeEach(async () => {
-    await periods.clear()
-    await archives.clear()
-    await outboxes.clear()
+    await truncateTables()
     await redis.del(...lockKeys)
   })
 
@@ -178,6 +273,73 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     expect(await periods.find()).toEqual([expect.objectContaining({ id: stillOpen.id })])
     expect(await archives.find()).toEqual([
       expect.objectContaining({ boxId: box.id, organizationId: box.organizationId, cpu: box.cpu }),
+    ])
+  })
+
+  it('builds concurrency across hot and archived half-open compute periods', async () => {
+    const from = new Date('2026-07-01T00:00:00.000Z')
+    const to = new Date('2026-07-03T00:00:00.000Z')
+    const base = {
+      organizationId: box.organizationId,
+      region: box.region,
+      cpu: box.cpu,
+      gpu: box.gpu,
+      mem: box.mem,
+      disk: box.disk,
+    }
+
+    await archives.save([
+      archives.create({
+        ...base,
+        boxId: 'archived-ending-at-sample',
+        startAt: new Date('2026-06-30T12:00:00.000Z'),
+        endAt: new Date('2026-07-02T00:00:00.000Z'),
+      }),
+      archives.create({
+        ...base,
+        boxId: 'archived-starting-at-sample',
+        startAt: new Date('2026-07-02T00:00:00.000Z'),
+        endAt: to,
+      }),
+      archives.create({
+        ...base,
+        organizationId: '7f33c512-a431-4a21-9efc-ff6924f9724c',
+        boxId: 'other-organization',
+        startAt: from,
+        endAt: to,
+      }),
+    ])
+    await periods.save([
+      periods.create({
+        ...base,
+        boxId: 'hot-running',
+        startAt: new Date('2026-07-01T12:00:00.000Z'),
+        endAt: null,
+      }),
+      periods.create({
+        ...base,
+        boxId: 'hot-disk-only',
+        startAt: from,
+        endAt: null,
+        cpu: 0,
+        gpu: 0,
+        mem: 0,
+      }),
+    ])
+
+    const result = await new UsageConcurrencyService(dataSource).getSeries(
+      box.organizationId,
+      from,
+      to,
+      UsageConcurrencyGranularity.DAY,
+      new Date('2026-07-04T00:00:00.000Z'),
+    )
+
+    expect(result.current).toBe(1)
+    expect(result.points).toEqual([
+      { observedAt: from, runningBoxes: 1 },
+      { observedAt: new Date('2026-07-02T00:00:00.000Z'), runningBoxes: 2 },
+      { observedAt: to, runningBoxes: 1 },
     ])
   })
 
@@ -239,10 +401,9 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     const serviceWithoutBox = new UsageService(
       periods,
       new RedisLockProvider(redis),
-      {
-        findOne: async () => null,
-      } as any,
+      { findOne: async () => null } as any,
       outboxService(),
+      { find: async () => [] } as any,
     )
 
     await serviceWithoutBox.closeAndReopenUsagePeriods()
@@ -262,6 +423,200 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     const remaining = await periods.find()
     expect(remaining).toHaveLength(1)
     expect(remaining[0].endAt).toBeInstanceOf(Date)
+  })
+
+  // The ledger is maintained by in-process events, which are fire-and-forget: a
+  // dropped one leaves the open period disagreeing with the box it bills for.
+  // These four assert the invariant the control plane owes its tenants — the
+  // open period matches the box's current state — after everything it runs to
+  // settle the ledger has run. Nothing here reaches for an unwritten method;
+  // each drives the shipped roll-over and states what the ledger should hold.
+  describe('box state versus the open period', () => {
+    it('opens a period for a running box that has none', async () => {
+      // the STARTED event never reached the handler, so nothing was ever opened
+      await insertBox({ state: BoxState.STARTED })
+
+      await settleLedger()
+
+      const open = await openPeriods()
+      expect(open).toHaveLength(1)
+      expect(open[0]).toEqual(
+        expect.objectContaining({
+          boxId: box.id,
+          organizationId: box.organizationId,
+          region: box.region,
+          cpu: box.cpu,
+          gpu: box.gpu,
+          mem: box.mem,
+          disk: box.disk,
+        }),
+      )
+    })
+
+    it('restores compute billing for a running box whose period charges no cpu', async () => {
+      // the box was started again but the STARTED event was lost, so the period
+      // left over from the stop is still open and still charging nothing
+      await insertBox({ state: BoxState.STARTED })
+      await openPeriod({ cpu: 0, gpu: 0, mem: 0 })
+
+      await settleLedger()
+
+      expect(await periods.findOne({ where: { endAt: IsNull() } })).toEqual(
+        expect.objectContaining({ cpu: box.cpu, gpu: box.gpu, mem: box.mem }),
+      )
+    })
+
+    it('follows a disk resize that landed while the box was stopped', async () => {
+      // RESIZING -> STOPPED changed the box's disk; the stopped period's cpu is
+      // already 0, so the STOPPED branch's safeguard never fires
+      await insertBox({ state: BoxState.STOPPED, disk: 100 })
+      await openPeriod({ cpu: 0, gpu: 0, mem: 0, disk: 10 })
+
+      await settleLedger()
+
+      expect(await periods.findOne({ where: { endAt: IsNull() } })).toEqual(expect.objectContaining({ disk: 100 }))
+    })
+
+    it('closes the open period of a box that already reached a terminal state', async () => {
+      // destroyed an hour ago: the box stopped consuming anything, but the
+      // period is younger than the roll-over's one-day cutoff
+      await insertBox({ state: BoxState.DESTROYED })
+      await openPeriod({ startAt: new Date(Date.now() - 60 * 60 * 1000) })
+
+      await settleLedger()
+
+      expect(await openPeriods()).toHaveLength(0)
+    })
+
+    it('reaches boxes assigned to a runner, not just unassigned ones', async () => {
+      const runnerId = 'b41f1d0e-9c3a-4f77-8a2d-6e5b3c1d0af2'
+      await insertBox({ state: BoxState.STARTED, runnerId })
+
+      await settleLedger([runnerId])
+
+      expect(await openPeriods()).toHaveLength(1)
+    })
+
+    it('leaves a box alone until its own event handler has had time to run', async () => {
+      // inside the grace window the handler may still be waiting on the per-box
+      // lock; opening a period here would race it and collide on the index
+      await insertBox({ state: BoxState.STARTED, updatedAtMsAgo: 0 })
+
+      await settleLedger()
+
+      expect(await openPeriods()).toHaveLength(0)
+    })
+
+    it('leaves a box mid-transition alone', async () => {
+      await insertBox({ state: BoxState.STARTING })
+
+      await settleLedger()
+
+      expect(await openPeriods()).toHaveLength(0)
+    })
+
+    it('keeps the period a box already holds while it is mid-transition', async () => {
+      // A box on its way up from STOPPED still holds the disk-only period the
+      // stop opened. expectedOpenPeriod answers null for STARTING exactly as it
+      // does for a terminal box, so the only thing standing between that period
+      // and a close is that STARTING is in neither of the two state lists the
+      // drift predicate matches on. Adding it to BOX_STATES_WITHOUT_OPEN_PERIOD
+      // stops billing disk for every box for the length of its startup.
+      await insertBox({ state: BoxState.STARTING })
+      const held = await openPeriod({ cpu: 0, gpu: 0, mem: 0 })
+
+      await settleLedger()
+
+      expect(await periods.find()).toEqual([expect.objectContaining({ id: held.id, endAt: null })])
+    })
+
+    it('leaves a box alone while a state change is in flight', async () => {
+      await insertBox({ state: BoxState.STARTED, pending: true })
+
+      await settleLedger()
+
+      expect(await openPeriods()).toHaveLength(0)
+    })
+
+    it('does not touch a period that already agrees with its box', async () => {
+      await insertBox({ state: BoxState.STARTED })
+      const settled = await openPeriod()
+
+      await settleLedger()
+      await settleLedger()
+
+      // a rewrite on every pass would shred the ledger into unbillable slivers
+      expect(await periods.find()).toEqual([expect.objectContaining({ id: settled.id, endAt: null })])
+    })
+
+    // The reconcile pass filters candidates in SQL while the repair re-derives
+    // the shape in TypeScript, so the state -> period rule exists twice. This
+    // pins the two together: any state where they disagree is a rule that was
+    // changed on one side only.
+    it.each(Object.values(BoxState))('agrees with expectedOpenPeriod about %s', async (state) => {
+      await insertBox({ state })
+      const expected = expectedOpenPeriod({ ...box, state })
+
+      await settleLedger()
+
+      const open = await openPeriods()
+      if (expected === null) {
+        expect(open).toHaveLength(0)
+        return
+      }
+      expect(open).toHaveLength(1)
+      expect(open[0]).toEqual(expect.objectContaining(expected))
+    })
+  })
+
+  // The roll-over runs on its own schedule and must leave a correct ledger by
+  // itself. Driving it alone here matters: with the reconcile pass also running,
+  // it would paper over a roll-over that carried the wrong figures forward, and
+  // the ledger would still churn out a wrong period every single day.
+  describe('the daily roll-over on its own', () => {
+    const rollOver = (state: BoxState, boxOverrides: Partial<typeof box> = {}) =>
+      serviceForBoxState(state, false, boxOverrides).closeAndReopenUsagePeriods()
+
+    it('carries the resources the box has now, not the ones the closing period held', async () => {
+      await openPeriod({ cpu: 0, gpu: 0, mem: 0, startAt: new Date(Date.now() - DAY_MS - 60_000) })
+
+      await rollOver(BoxState.STARTED)
+
+      expect(await periods.findOne({ where: { endAt: IsNull() } })).toEqual(
+        expect.objectContaining({ cpu: box.cpu, gpu: box.gpu, mem: box.mem }),
+      )
+    })
+
+    it('picks up a disk resize the ledger never heard about', async () => {
+      await openPeriod({ cpu: 0, gpu: 0, mem: 0, disk: 10, startAt: new Date(Date.now() - DAY_MS - 60_000) })
+
+      await rollOver(BoxState.STOPPED, { disk: 100 })
+
+      expect(await periods.findOne({ where: { endAt: IsNull() } })).toEqual(expect.objectContaining({ disk: 100 }))
+    })
+
+    it('stops charging compute for a stopping box whose period still bills it', async () => {
+      // STOPPING bills disk only, exactly like STOPPED — a period that still
+      // charges cpu here has to be cut over, not copied forward
+      await openPeriod({ startAt: new Date(Date.now() - DAY_MS - 60_000) })
+
+      await rollOver(BoxState.STOPPING)
+
+      expect(await periods.findOne({ where: { endAt: IsNull() } })).toEqual(
+        expect.objectContaining({ cpu: 0, gpu: 0, mem: 0, disk: box.disk }),
+      )
+    })
+
+    it('does not reopen a period for a state this repository never assigns', async () => {
+      // ARCHIVING has no writer anywhere in the codebase, so it carries no
+      // price and the roll-over must behave exactly as it did before: close the
+      // over-long period and leave it closed, rather than invent a charge.
+      await openPeriod({ cpu: 0, gpu: 0, mem: 0, startAt: new Date(Date.now() - DAY_MS - 60_000) })
+
+      await rollOver(BoxState.ARCHIVING)
+
+      expect(await openPeriods()).toHaveLength(0)
+    })
   })
 
   it('declares the open-period invariant on the entity as well as in the migration', () => {
@@ -335,6 +690,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
             throw new Error('configuration unavailable')
           },
         } as any),
+        { find: async () => [] } as any,
       )
 
       await expect(failing.archiveUsagePeriods()).rejects.toThrow('configuration unavailable')

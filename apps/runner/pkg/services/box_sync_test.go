@@ -27,12 +27,12 @@ func TestBoxStartedAt(t *testing.T) {
 		want *time.Time
 	}{
 		{
-			name: "box reports a confirmed container start",
+			name: "box reports a recorded Running transition",
 			info: sdkboxlite.BoxInfo{ID: "box-1", PID: 4242, StartedAt: startedAt},
 			want: &startedAt,
 		},
 		{
-			name: "running box whose init was never launched",
+			name: "box has no recorded Running transition",
 			info: sdkboxlite.BoxInfo{ID: "box-1", PID: 4242},
 			want: nil,
 		},
@@ -152,14 +152,14 @@ func newSyncServiceForTest(
 	}
 }
 
-func TestPerformSyncConfirmsTransitionalBoxOnlyWithAConfirmedStart(t *testing.T) {
+func TestPerformSyncConfirmsTransitionalBoxOnlyWithARecordedStart(t *testing.T) {
 	tests := []struct {
 		name          string
 		startedAt     time.Time
 		wantStateSent bool
 	}{
-		{name: "container start confirmed", startedAt: time.Now(), wantStateSent: true},
-		{name: "running but init never launched", wantStateSent: false},
+		{name: "box start recorded", startedAt: time.Now(), wantStateSent: true},
+		{name: "Running without a recorded start", wantStateSent: false},
 	}
 
 	for _, tt := range tests {

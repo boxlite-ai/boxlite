@@ -10,7 +10,7 @@ name: Deploy release
 #   1. the GitHub release must contain the Runner tarball + checksum;
 #   2. Build apps/api image must have built (dev) or promoted (another stage) the same X.Y.Z.
 #
-# sst-with-cloudflare.mjs verifies both artifacts before invoking SST.
+# apps/infra/deployment/sst.ts verifies both artifacts before invoking SST.
 
 on:
   workflow_dispatch:
@@ -85,7 +85,7 @@ jobs:
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.stage }}-github-deploy
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: deploy-release-${{ github.run_id }}
 
@@ -106,23 +106,16 @@ jobs:
 
       - name: Verify deploy role IAM boundary permissions
         working-directory: apps/infra
-        run: node scripts/verify-deploy-role-boundary.mjs
-
-      - name: Materialize stage configuration
         shell: bash
-        env:
-          DEPLOY_ENV: ${{ secrets.DEPLOY_ENV }}
-        run: |
-          set -euo pipefail
-          test -n "$DEPLOY_ENV"
-          umask 077
-          printf '%s\n' "$DEPLOY_ENV" > apps/infra/.env
-          node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env
+        run: npm run --silent verify-deploy-role
 
       - name: Deploy published API and Runner artifacts
         working-directory: apps/infra
-        run: npm run deploy -- --stage "$STAGE" --policy .
-
-      - name: Remove materialized configuration
-        if: always()
-        run: rm -f apps/infra/.env
+        shell: bash
+        # Same reason as deploy-infra: the wrapper reads the stage's SST secret store before invoking
+        # sst, and reading it initializes the Cloudflare provider. Without these the store read fails
+        # and a release deploy stops rather than reconciling against defaults.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
+        run: npm run deploy -- --stage "$STAGE" --policy policies/runner

@@ -1,0 +1,33 @@
+# Requirement: ./.github/actions/sccache should be run after this, in any job that compiles.
+# The two are deliberately separate — see that action's header for why.
+
+name: Set up Rust
+description: >-
+  Installs the Rust toolchain a job compiles with. Every wrapped default is left
+  alone: this action passes only toolchain and components, so the upstream
+  action's caching, problem matchers and rustflags behave exactly as they did
+  when each call site invoked it directly.
+
+inputs:
+  toolchain:
+    description: >-
+      Toolchain specification to install. Defaults to the same value config.yml
+      publishes as its rust-toolchain output, so a job with no config dependency
+      can say nothing rather than grow a needs: edge just to spell "stable".
+    required: false
+    default: stable
+  components:
+    description: >-
+      Comma-separated rustup components to add, e.g. "rustfmt" or "clippy".
+      Empty installs none — an absent input and an empty one reach the upstream
+      action identically, so this is the same as omitting it.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: ${{ inputs.components }}

@@ -29,46 +29,14 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: ./.github/actions/setup-rust
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
 
-      # sccache caches individual compilation units via GHA cache API.
-      # Works on host and inside cibuildwheel's manylinux containers.
-      # Cache is pre-warmed by the Warm Caches workflow on push to main.
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-        continue-on-error: true
+      - uses: ./.github/actions/sccache
 
-      - name: Export GHA cache env vars
-        uses: actions/github-script@v7
-        with:
-          script: |
-            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', process.env.ACTIONS_CACHE_SERVICE_V2 || '');
-
-      # Build guest on host BEFORE cibuildwheel container because:
-      # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
-      # - Building musl-cross-make from source takes ~15 minutes
-      # - Ubuntu host has musl-tools via apt (~30 seconds)
-      # - Guest is static musl binary, doesn't need manylinux glibc compatibility
-      # - Shim must be built IN container (needs glibc 2.28 for manylinux)
-      - name: Build guest binary (Linux only)
+      - uses: ./.github/actions/build-guest
         if: runner.os == 'Linux'
-        run: |
-          make setup:build guest
-
-          # Cache only the final binary (11MB), not entire target dir (2.3GB)
-          # Guest is not rebuilt in container (SKIP_GUEST_BUILD=1), so no incremental compilation needed
-          GUEST_TARGET=$(scripts/util.sh --target)
-          mkdir -p ".cache/$GUEST_TARGET/release"
-          cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
-
-          # Clean up to save disk space (sccache stores compilation cache separately)
-          rm -rf target ~/.rustup ~/.cargo
-          mkdir -p target
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.2.0
@@ -98,8 +66,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: ./.github/actions/setup-python
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -157,6 +124,13 @@ jobs:
       contents: write  # Required to upload to releases
 
     steps:
+      # Before the download, not after: ./.github/actions/upload-to-release below is resolved from
+      # the checked-out tree, and checkout cleans the workspace, which would take the wheels with
+      # it if it ran second.
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false # Only the action.yml is needed; nothing here runs git.
+
       - name: Download all wheels
         uses: actions/download-artifact@v5
         with:
@@ -165,7 +139,6 @@ jobs:
           merge-multiple: true
 
       - name: Upload wheels to release
-        uses: softprops/action-gh-release@v2
+        uses: ./.github/actions/upload-to-release
         with:
           files: dist/*.whl
-          fail_on_unmatched_files: true

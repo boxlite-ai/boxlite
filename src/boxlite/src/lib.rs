@@ -33,7 +33,9 @@ mod rest;
 mod rootfs;
 mod volumes;
 
-pub use litebox::{BoxConnection, BoxReader, BoxTunnel, BoxWriter, LiteBox};
+pub use litebox::{
+    BoxConnection, BoxReader, BoxTunnel, BoxWriter, LiteBox, SocketAddress, TunnelForwarder,
+};
 pub use portal::GuestSession;
 pub use runtime::{AuthHandle, BoxliteRuntime, ImageHandle, Principal};
 
@@ -61,7 +63,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use runtime::id::{BaseDiskID, BaseDiskIDMint, BoxID, BoxIDMint};
 pub use runtime::types::ContainerID;
 pub use runtime::types::{
-    BoxInfo, BoxLifecyclePolicy, BoxState, BoxStateInfo, BoxStatus, NetworkInfo, PublishedPort,
+    BoxInfo, BoxLifecyclePolicy, BoxState, BoxStateInfo, BoxStatus, NetworkDirectionInfo,
+    NetworkInfo, PublishedPort,
 };
 
 #[cfg(feature = "rest")]

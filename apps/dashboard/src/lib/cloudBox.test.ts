@@ -52,6 +52,29 @@ describe('toBoxApiCreateRequest', () => {
     expect(toBoxApiCreateRequest({}).memory_mib).toBeUndefined()
     expect(toBoxApiCreateRequest().memory_mib).toBeUndefined()
   })
+
+  // The REST boundary takes {managed_volume, guest_path} — NOT the internal
+  // {volumeId, mountPath} pair it maps onto. Both fields are required, so
+  // sending the internal shape is a 400, not a silent no-op.
+  it('maps volume mounts to the REST managed_volume shape', () => {
+    const request = toBoxApiCreateRequest({
+      volumes: [
+        { volumeId: 'vol-a1b2c3d4', mountPath: '/models' },
+        // Names are accepted too: the API resolves id-or-name.
+        { volumeId: 'customer-data', mountPath: '/data' },
+      ],
+    })
+
+    expect(request.volumes).toEqual([
+      { managed_volume: 'vol-a1b2c3d4', guest_path: '/models' },
+      { managed_volume: 'customer-data', guest_path: '/data' },
+    ])
+  })
+
+  it('omits volumes entirely when none are mounted', () => {
+    expect(toBoxApiCreateRequest({ volumes: [] }).volumes).toBeUndefined()
+    expect(toBoxApiCreateRequest({}).volumes).toBeUndefined()
+  })
 })
 
 describe('validateLifecyclePolicy', () => {

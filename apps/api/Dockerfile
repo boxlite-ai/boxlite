@@ -3,7 +3,13 @@
 FROM node:24-slim AS base
 ENV CI=true
 
-RUN apt-get update && apt-get install -y --no-install-recommends bash curl && \
+# python3/make/g++ are node-gyp's toolchain. Native dependencies (sqlite3, ssh2) normally unpack
+# a prebuilt binary and never invoke gyp, so this is dead weight on a good day — but the fallback
+# `prebuild-install ... || node-gyp rebuild` runs whenever that download fails, and without a
+# toolchain the fallback cannot succeed, so one lost download fails the whole `yarn install`
+# rather than degrading into a slower build. The shipped image starts from its own node:24-slim
+# below and copies only node_modules, so none of this reaches it.
+RUN apt-get update && apt-get install -y --no-install-recommends bash curl python3 make g++ && \
   rm -rf /var/lib/apt/lists/*
 RUN npm install -g corepack && corepack enable
 

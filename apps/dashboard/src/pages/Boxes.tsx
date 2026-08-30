@@ -47,6 +47,8 @@ import {
   readOnboardingProgress,
   type OnboardingProgress,
 } from '@/lib/onboarding-progress'
+import { shouldAutoOpenOnboarding } from '@/lib/onboarding-visibility'
+import { useApiKeysQuery } from '@/hooks/queries/useApiKeysQuery'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { pluralize } from '@/lib/utils'
 import {
@@ -65,6 +67,8 @@ import { toast } from 'sonner'
 
 interface BoxesLocationState {
   openCreateBox?: boolean
+  /** Volume name to pre-mount, set when arriving from the Volumes page. */
+  mountVolume?: string
 }
 
 const Boxes: React.FC = () => {
@@ -81,6 +85,7 @@ const Boxes: React.FC = () => {
   const { selectedOrganization, authenticatedUserOrganizationMember, authenticatedUserHasPermission } =
     useSelectedOrganization()
   const [createBoxOpen, setCreateBoxOpen] = useState(false)
+  const [prefillVolume, setPrefillVolume] = useState<string | undefined>(undefined)
   const [showOnboardingDialog, setShowOnboardingDialog] = useState(false)
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
 
@@ -630,20 +635,6 @@ const Boxes: React.FC = () => {
     result.successfulIds.forEach(removeBoxFromCache)
   }
 
-  useEffect(() => {
-    if (!selectedOrganization || !user?.profile.sub) {
-      return
-    }
-
-    const skipOnboardingKey = `${LocalStorageKey.SkipOnboardingPrefix}${user.profile.sub}`
-    const shouldOpenFromUrl = searchParams.get('onboarding') === '1'
-    const shouldSkipOnboarding = getLocalStorageItem(skipOnboardingKey) === 'true'
-
-    if (shouldOpenFromUrl || !shouldSkipOnboarding) {
-      setShowOnboardingDialog(true)
-    }
-  }, [searchParams, selectedOrganization, user?.profile.sub])
-
   const clearOnboardingUrlParam = useCallback(() => {
     if (searchParams.get('onboarding') !== '1') {
       return
@@ -664,16 +655,30 @@ const Boxes: React.FC = () => {
     }, 220)
   }, [clearOnboardingUrlParam, userId])
 
+  // Two channels open this dialog: router state for a same-tab navigation, and
+  // query params for anything that has to survive being opened in a new tab
+  // (router state does not cross a tab boundary) — e.g. the Volumes page's
+  // "create a box with this volume".
   useEffect(() => {
     const state = location.state as BoxesLocationState | null
-    if (!state?.openCreateBox) {
+    const fromUrl = searchParams.get('createBox') === '1'
+    if (!state?.openCreateBox && !fromUrl) {
       return
     }
 
     setShowOnboardingDialog(false)
+    setPrefillVolume(state?.mountVolume ?? searchParams.get('volume') ?? undefined)
     setCreateBoxOpen(true)
+
+    if (fromUrl) {
+      const nextParams = new URLSearchParams(searchParams)
+      nextParams.delete('createBox')
+      nextParams.delete('volume')
+      setSearchParams(nextParams, { replace: true })
+      return
+    }
     navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null })
-  }, [location.pathname, location.search, location.state, navigate])
+  }, [location.pathname, location.search, location.state, navigate, searchParams, setSearchParams])
 
   // Fleet stat cards — real data, independent of the table's current filter/page.
   const orgId = selectedOrganization?.id
@@ -707,6 +712,39 @@ const Boxes: React.FC = () => {
     enabled: !!orgId,
     staleTime: 10_000,
   })
+
+  // Onboarding auto-open. Deliberately placed below the fleet-count query: the local "skip"
+  // flag only remembers one browser, so whether this account is actually new is decided by
+  // account state (an API key or any box), which follows the user to a new browser or device.
+  const apiKeysQuery = useApiKeysQuery(orgId)
+
+  useEffect(() => {
+    if (!selectedOrganization || !userId) {
+      return
+    }
+
+    const skipOnboardingKey = `${LocalStorageKey.SkipOnboardingPrefix}${userId}`
+
+    if (
+      shouldAutoOpenOnboarding({
+        requestedByUrl: searchParams.get('onboarding') === '1',
+        dismissedInThisBrowser: getLocalStorageItem(skipOnboardingKey) === 'true',
+        accountStateLoaded: apiKeysQuery.isSuccess && totalBoxesQuery.isSuccess,
+        hasApiKeys: (apiKeysQuery.data?.length ?? 0) > 0,
+        hasBoxes: (totalBoxesQuery.data ?? 0) > 0,
+      })
+    ) {
+      setShowOnboardingDialog(true)
+    }
+  }, [
+    apiKeysQuery.data,
+    apiKeysQuery.isSuccess,
+    searchParams,
+    selectedOrganization,
+    totalBoxesQuery.data,
+    totalBoxesQuery.isSuccess,
+    userId,
+  ])
 
   const totalBoxesDisplay = totalBoxesQuery.data != null ? totalBoxesQuery.data.toLocaleString('en-US') : '…'
   const runningBoxesDisplay = runningBoxesQuery.data != null ? runningBoxesQuery.data.toLocaleString('en-US') : '…'
@@ -758,6 +796,7 @@ const Boxes: React.FC = () => {
             triggerClassName="h-11 justify-center sm:h-9"
             open={createBoxOpen}
             onOpenChange={setCreateBoxOpen}
+            prefillVolume={prefillVolume}
             onCreated={() => {
               updateOnboardingProgress({ boxCreated: true })
               setShowOnboardingDialog(false)

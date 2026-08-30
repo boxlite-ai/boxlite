@@ -7,7 +7,7 @@ import { Injectable, Logger } from '@nestjs/common'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import { InjectDataSource } from '@nestjs/typeorm'
-import { DataSource, IsNull, Raw } from 'typeorm'
+import { DataSource } from 'typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
@@ -127,6 +127,14 @@ export class BoxActivityService {
    * Uses a conditional upsert that only updates when the incoming timestamp is newer, preventing updates to stale buffered values.
    */
   private buildUpsertQuery(values: BoxActivityUpdate | BoxActivityUpdate[]) {
+    // ON CONFLICT names the row already there by the table's own name, and the
+    // guard is written against that name by hand: an object-form condition is
+    // built against the builder's alias for the target instead, which is the
+    // entity's table path — under a non-default schema that is quoted whole,
+    // as "schema.box_last_activity", a table no clause of the statement has.
+    const conflictTarget = this.dataSource.getMetadata(BoxLastActivity).tableName
+    const storedAt = `"${conflictTarget}"."lastActivityAt"`
+
     return this.dataSource
       .createQueryBuilder()
       .insert()
@@ -134,10 +142,7 @@ export class BoxActivityService {
       .values(values)
       .orUpdate(['lastActivityAt'], ['boxId'], {
         overwriteCondition: {
-          where: [
-            { lastActivityAt: IsNull() },
-            { lastActivityAt: Raw((alias) => `${alias} < EXCLUDED."lastActivityAt"`) },
-          ],
+          where: `(${storedAt} IS NULL OR ${storedAt} < EXCLUDED."lastActivityAt")`,
         },
       })
   }

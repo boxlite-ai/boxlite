@@ -9,13 +9,13 @@ name: Build apps/api image
 # Named per service because it is one of three the stack builds from source — apps/proxy and
 # apps/otel-collector are the others (sst.config.ts) and have no published-image path yet, so a
 # release deploy still compiles them from the deployed checkout. A sibling workflow per service
-# is the intended shape; jaeger/pgadmin/maildev need none, they run pinned public tags.
+# is the intended shape.
 #
 # A released image is built once into the dev repository, then promoted: promotion copies that
 # exact manifest registry-side, addressed by digest, and verifies the digest survived — it never
 # rebuilds and never round-trips the image through a local daemon. A commit build has nothing to
 # promote; it writes straight into the stage being deployed. The per-stage repositories are
-# provisioned by apps/infra/ci/github-deploy-role.yaml so a fresh stack can consume an image
+# provisioned by apps/infra/bootstrap/aws/github-deploy-role.yaml so a fresh stack can consume an image
 # without first having to create its own input.
 #
 # `build` is dispatched from main rather than triggered by the release event. A release event
@@ -168,7 +168,7 @@ jobs:
           fi
 
           # The one identity everything downstream addresses. Must equal apiImageTag() in
-          # apps/infra/scripts/api-artifact.mjs, which is what the deploy resolves to.
+          # apps/infra/artifacts/api.ts, which is what the deploy resolves to.
           if [ "$operation" = commit ]; then
             tag="v${version}-${INPUT_REF}"
           else
@@ -183,7 +183,7 @@ jobs:
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.stage || 'dev' }}-github-deploy
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: build-apps-api-image-${{ github.run_id }}
 
@@ -207,7 +207,7 @@ jobs:
           set -euo pipefail
           target_name="boxlite-app-${TARGET_STAGE}-api"
           aws ecr describe-repositories --region "$AWS_REGION" --repository-names "$target_name" >/dev/null || {
-            echo "ECR repository $target_name is missing; update apps/infra/ci/github-deploy-role.yaml for $TARGET_STAGE first" >&2
+            echo "ECR repository $target_name is missing; update apps/infra/bootstrap/aws/github-deploy-role.yaml for $TARGET_STAGE first" >&2
             exit 1
           }
           source_digest=""

@@ -5,7 +5,7 @@
 
 use super::capabilities::CapabilitySet;
 use super::command::ContainerCommand;
-use super::spec::{ContainerDevices, UserMount};
+use super::spec::{ContainerDevices, MountOverride, UserMount};
 use super::stdio::{ContainerStdio, InitIo};
 use super::{console_socket, kill, spec, start};
 use crate::layout::GuestLayout;
@@ -64,6 +64,8 @@ pub struct Container {
     env: HashMap<String, String>,
     /// Resolved (uid, gid) from image USER directive, propagated to exec commands.
     user: (u32, u32),
+    /// Destinations of every mount the applied OCI spec declares.
+    mount_destinations: Vec<PathBuf>,
     /// Resolved capability set shared by init and every exec process.
     capabilities: CapabilitySet,
     /// Stdio pipes that keep init process alive.
@@ -93,7 +95,8 @@ impl Container {
     /// - `env`: Environment variables in "KEY=VALUE" format
     /// - `workdir`: Working directory inside container
     /// - `user_mounts`: Bind mounts from guest VM paths into container
-    /// - `capabilities`: capability policy resolved at the RPC boundary
+    /// - `capabilities`/`readonly_paths`/`mount_override`: security fields
+    ///   resolved at the RPC boundary
     ///
     /// # Errors
     ///
@@ -112,6 +115,8 @@ impl Container {
         user_mounts: Vec<UserMount>,
         tty: bool,
         capabilities: CapabilitySet,
+        readonly_paths: Vec<String>,
+        mount_override: MountOverride,
         devices: ContainerDevices,
     ) -> BoxliteResult<Self> {
         let rootfs = rootfs.as_ref();
@@ -177,7 +182,7 @@ impl Container {
 
         // Create OCI bundle at /run/boxlite/containers/{cid}/
         // create_oci_bundle creates bundle_root/{cid}/, so pass containers_dir
-        let bundle_path = start::create_oci_bundle(
+        let bundle = start::create_oci_bundle(
             container_id,
             rootfs,
             &entrypoint,
@@ -186,6 +191,8 @@ impl Container {
             uid,
             gid,
             &capabilities,
+            &readonly_paths,
+            &mount_override,
             &layout.containers_dir(),
             &user_mounts,
             tty,
@@ -201,7 +208,7 @@ impl Container {
             start::create_container_with_stdio(
                 container_id,
                 &state_root,
-                &bundle_path,
+                &bundle.path,
                 start::InitIoSetup::Console(socket.path().to_string()),
             )?;
             ContainerStdio::pty(socket.receive_pty_master()?)
@@ -212,7 +219,7 @@ impl Container {
             start::create_container_with_stdio(
                 container_id,
                 &state_root,
-                &bundle_path,
+                &bundle.path,
                 start::InitIoSetup::Pipes(init_fds),
             )?;
             stdio
@@ -224,9 +231,10 @@ impl Container {
         Ok(Self {
             id: container_id.to_string(),
             state_root,
-            bundle_path,
+            bundle_path: bundle.path,
             env: env_map,
             user: (uid, gid),
+            mount_destinations: bundle.mount_destinations,
             capabilities,
             stdio,
             is_shutdown: std::sync::atomic::AtomicBool::new(false),
@@ -239,7 +247,18 @@ impl Container {
     /// — docker's create → attach → start. Fused, a command that finishes
     /// immediately can be gone before an attach issued after start reaches the
     /// guest, taking its output and exit code with it when the VM powers off.
+    ///
+    /// Idempotent: a container whose init is already up no-ops here instead of
+    /// reaching youki's start, which errors with IncorrectStatus on a Running
+    /// container. This method itself takes no lock — the guarantee relies on
+    /// both callers (the Container.Start RPC and the exec zombie-revival path)
+    /// holding the per-container mutex, so concurrent calls serialize at the
+    /// caller and the late one observes Running. A Created container (the
+    /// zombie, or a start still in flight behind the lock) proceeds to start.
     pub fn run_init(&self) -> BoxliteResult<()> {
+        if self.is_running() {
+            return Ok(());
+        }
         start::start_container(&self.id, &self.state_root)
     }
 
@@ -299,6 +318,37 @@ impl Container {
         &self.id
     }
 
+    /// The (uid, gid) every process in this container runs as.
+    ///
+    /// Resolved once at creation from the image's `USER` directive (or the
+    /// box-level override) and handed to init and every exec alike, so anything
+    /// that wants to match what the workload can read should ask here rather
+    /// than guessing.
+    pub fn user(&self) -> (u32, u32) {
+        self.user
+    }
+
+    /// Destinations of every mount the container was created with.
+    ///
+    /// Taken from the OCI spec that was actually applied — the same object
+    /// `config.json` was written from — so it covers the standard tmpfs/pseudo
+    /// mounts and user volumes alike and cannot drift from what the runtime
+    /// did. Callers use this to tell whether a path inside the container is
+    /// reachable through the rootfs directory: anything at or below one of
+    /// these destinations is covered by a mount in the container's own
+    /// namespace and is *not* the file a process in the box would see at that
+    /// path.
+    ///
+    /// Resolved once at creation, like [`Self::user`], rather than re-read per
+    /// question: the bundle is written once and never rewritten, and the
+    /// callers are RPC handlers on the guest's async runtime — which on a
+    /// single-vCPU box is a single worker thread — so a `Spec::load` here
+    /// stalled every other in-flight RPC for the length of a file read and a
+    /// deserialize.
+    pub fn mount_destinations(&self) -> &[PathBuf] {
+        &self.mount_destinations
+    }
+
     /// PID of the container's init process, from libcontainer state.
     ///
     /// `None` if the state can't be loaded or init never started.
@@ -314,6 +364,29 @@ impl Container {
                 );
                 None
             }
+        }
+    }
+
+    /// Test-only constructor: a container whose libcontainer state must be
+    /// written separately by the test (see `run_init_is_noop_when_init_already_running`
+    /// and the exec `failed_spawn_on_a_running_container_is_not_retried` test,
+    /// which save a Running state file first). `is_shutdown` is set so Drop
+    /// never signals the recorded pid — tests point it at their own process.
+    #[cfg(test)]
+    pub(crate) fn for_unit_test(id: &str, state_root: PathBuf, bundle_path: PathBuf) -> Self {
+        // Drop removes the bundle directory; create it so cleanup is a
+        // silent no-op instead of warning on a NotFound during tests.
+        std::fs::create_dir_all(&bundle_path).expect("create bundle dir for unit test");
+        Self {
+            id: id.to_string(),
+            state_root,
+            bundle_path,
+            env: HashMap::new(),
+            user: (0, 0),
+            mount_destinations: Vec::new(),
+            capabilities: CapabilitySet::default(),
+            stdio: ContainerStdio::pipes().expect("create stdio pipes").0,
+            is_shutdown: std::sync::atomic::AtomicBool::new(true),
         }
     }
 
@@ -599,6 +672,7 @@ impl Drop for Container {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use libcontainer::container::{ContainerStatus, State};
     use nix::sys::signal::kill;
     use nix::unistd::{pipe, Pid};
     use std::os::fd::OwnedFd;
@@ -640,6 +714,63 @@ mod tests {
         assert!(
             kill(pid, None).is_err(),
             "failed init handle must not leave a child"
+        );
+    }
+
+    /// `run_init` must be idempotent: the Container.Start RPC and the exec
+    /// zombie-revival path both call it, and a second call on a container whose
+    /// init is already running must no-op — youki's `start()` errors with
+    /// `IncorrectStatus(Running)` on a Running container, and that error is the
+    /// failure this test exists to pin.
+    #[test]
+    fn run_init_is_noop_when_init_already_running() {
+        // `container_state_path()` is `state_root.join(id)`, and libcontainer
+        // persists the state as `<that dir>/state.json` — so point the two
+        // halves at one TempDir by splitting it into parent + name.
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let state_root = dir
+            .path()
+            .parent()
+            .expect("temp dir has a parent")
+            .to_path_buf();
+        let id = dir
+            .path()
+            .file_name()
+            .expect("temp dir has a name")
+            .to_string_lossy()
+            .to_string();
+
+        // Running with our own (alive) pid: `refresh_status` keeps it Running,
+        // the same trick `load_container_status_refreshes_stale_persisted_status`
+        // relies on in start.rs.
+        let state = State::new(
+            &id,
+            ContainerStatus::Running,
+            Some(i32::try_from(std::process::id()).expect("current pid fits in i32")),
+            dir.path().to_path_buf(),
+        );
+        state.save(dir.path()).expect("save libcontainer state");
+
+        // Drop removes the bundle directory; create it so cleanup is a
+        // silent no-op instead of warning on a NotFound during tests.
+        std::fs::create_dir_all(dir.path().join("bundle")).expect("create bundle dir");
+        let container = Container {
+            id,
+            state_root,
+            bundle_path: dir.path().join("bundle"),
+            env: HashMap::new(),
+            user: (0, 0),
+            mount_destinations: Vec::new(),
+            capabilities: CapabilitySet::default(),
+            stdio: ContainerStdio::pipes().expect("create stdio pipes").0,
+            // Drop must not SIGKILL the recorded pid — it is this test process.
+            is_shutdown: std::sync::atomic::AtomicBool::new(true),
+        };
+
+        let result = container.run_init();
+        assert!(
+            result.is_ok(),
+            "run_init on an already-running container must no-op, got: {result:?}"
         );
     }
 }

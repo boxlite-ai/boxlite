@@ -14,7 +14,7 @@ use crate::rootfs::guest::{GuestRootfs, Strategy};
 use crate::runtime::constants::{guest_paths, mount_tags};
 use crate::runtime::id::BoxID;
 use crate::runtime::layout::BoxFilesystemLayout;
-use crate::runtime::options::BoxOptions;
+use crate::runtime::options::{BoxOptions, NetworkSpec};
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::ContainerID;
 use crate::util::find_binary;
@@ -26,7 +26,7 @@ use crate::volumes::{
 use async_trait::async_trait;
 use boxlite_shared::BoxTransport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub struct VmmSpawnTask;
 
@@ -36,7 +36,6 @@ struct VmmSpawnInputs {
     container_image_config: ContainerImageConfig,
     prepared_kernel: Option<PreparedKernel>,
     container_disk_path: PathBuf,
-    guest_disk_path: Option<PathBuf>,
     container_id: ContainerID,
     runtime: SharedRuntimeImpl,
     reuse_rootfs: bool,
@@ -71,10 +70,6 @@ impl VmmSpawnInputs {
             container_image_config,
             prepared_kernel,
             container_disk_path,
-            guest_disk_path: ctx
-                .guest_disk
-                .as_ref()
-                .map(|disk| disk.path().to_path_buf()),
             container_id: ctx.config.container.id.clone(),
             runtime: ctx.runtime.clone(),
             reuse_rootfs: ctx.reuse_rootfs,
@@ -142,7 +137,6 @@ async fn build_config(
         container_image_config,
         prepared_kernel,
         container_disk_path,
-        guest_disk_path,
         container_id,
         runtime,
         reuse_rootfs,
@@ -224,8 +218,7 @@ async fn build_config(
         .ok_or_else(|| BoxliteError::Internal("guest_rootfs not initialized".into()))?
         .clone();
 
-    let guest_rootfs =
-        configure_guest_rootfs(guest_rootfs, guest_disk_path.as_deref(), &mut volume_mgr)?;
+    let guest_rootfs = configure_guest_rootfs(guest_rootfs, &mut volume_mgr)?;
 
     // Build VMM config from volume manager
     let vmm_config = volume_mgr.build_vmm_config();
@@ -260,10 +253,7 @@ async fn build_config(
         guest_rootfs,
         network_backend_spec,
         network_backend_endpoint: None,
-        disable_network: matches!(
-            options.network,
-            crate::runtime::options::NetworkSpec::Disabled
-        ),
+        disable_network: matches!(options.network, NetworkSpec::Disabled),
         home_dir: runtime.layout.home_dir().to_path_buf(),
         // Diagnostic files in box_dir (preserved on crash)
         console_output: Some(layout.console_output_path()),
@@ -283,17 +273,18 @@ async fn build_config(
 /// Configure guest rootfs with device path from volume manager.
 fn configure_guest_rootfs(
     mut guest_rootfs: GuestRootfs,
-    guest_disk_path: Option<&Path>,
     volume_mgr: &mut GuestVolumeManager,
 ) -> BoxliteResult<GuestRootfs> {
-    if let Some(disk_path_input) = guest_disk_path
-        && let Strategy::Disk { ref disk_path, .. } = guest_rootfs.strategy
-    {
-        // Add disk to volume manager (guest rootfs - no format/resize needed)
+    if let Strategy::Disk { ref disk_path, .. } = guest_rootfs.strategy {
+        // The guest rootfs is read-only: attach the base ext4 directly, with no
+        // per-box qcow2 COW overlay — the guest never writes its root disk.
+        // The block device is opened read-only (bases/ is mounted RO by the
+        // jailer), and the "ro" mount option in set_root_disk_remount makes the
+        // guest root read-only too.
         let device_path = volume_mgr.add_block_device(
-            disk_path_input,
-            DiskFormat::Qcow2,
-            false,
+            disk_path,
+            DiskFormat::Ext4,
+            true, // read_only
             None,
             false, // need_format
             false, // need_resize
@@ -360,8 +351,8 @@ fn build_network_backend(
 ) -> BoxliteResult<Option<Box<dyn NetworkBackend>>> {
     // Disabled = no network at all.
     let allow_net = match &options.network {
-        crate::runtime::options::NetworkSpec::Enabled { allow_net } => allow_net.clone(),
-        crate::runtime::options::NetworkSpec::Disabled => return Ok(None),
+        NetworkSpec::Enabled { allow_net } => allow_net.clone(),
+        NetworkSpec::Disabled => return Ok(None),
     };
 
     let config = NetworkBackendConfig {
@@ -379,10 +370,7 @@ fn unpublished_exposed_tcp_ports(
     image_config: &ContainerImageConfig,
     options: &BoxOptions,
 ) -> Vec<u16> {
-    if matches!(
-        options.network,
-        crate::runtime::options::NetworkSpec::Disabled
-    ) {
+    if matches!(options.network, NetworkSpec::Disabled) {
         return Vec::new();
     }
 
@@ -468,6 +456,48 @@ mod tests {
         assert!(
             unpublished_exposed_tcp_ports(&image_config, &disabled_options).is_empty(),
             "disabled networking never created implicit EXPOSE listeners"
+        );
+    }
+
+    #[test]
+    fn configure_guest_rootfs_attaches_disk_read_only() {
+        // The guest root must reject writes so a tenant workload that enters the
+        // container by fork (without execve) cannot reopen the agent binary
+        // through `/proc/<pid>/exe` for write (CVE-2019-5736). The rootfs is
+        // now read-only by construction — attached as a read-only block device —
+        // rather than remounted read-only after boot, so the regression guard
+        // lives here, on the `read_only` attach flag.
+        let disk_path = PathBuf::from("/tmp/fake-guest-rootfs.ext4");
+        let rootfs = GuestRootfs::new(
+            disk_path.clone(),
+            Strategy::Disk {
+                disk_path: disk_path.clone(),
+                device_path: None,
+            },
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        let mut volume_mgr = GuestVolumeManager::new();
+        let configured = configure_guest_rootfs(rootfs, &mut volume_mgr).unwrap();
+
+        // The attach happened and the strategy records the guest device path
+        // (a fresh manager hands out /dev/vda first).
+        match configured.strategy {
+            Strategy::Disk { device_path, .. } => {
+                assert_eq!(device_path.as_deref(), Some("/dev/vda"));
+            }
+            _ => panic!("expected disk-based strategy"),
+        }
+
+        let config = volume_mgr.build_vmm_config();
+        let devices = config.block_devices.devices();
+        assert_eq!(devices.len(), 1);
+        assert!(
+            devices[0].read_only,
+            "guest rootfs must attach read-only (is_disk_read_only)"
         );
     }
 }

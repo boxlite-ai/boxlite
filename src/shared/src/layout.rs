@@ -87,6 +87,11 @@ pub mod dirs {
 /// Guest base path (FHS-compliant).
 pub const GUEST_BASE: &str = "/run/boxlite";
 
+/// Guest binary directory — holds `boxlite-guest` plus the static filesystem
+/// tools (`mke2fs`, `resize2fs`, `mkfs.ext4`). Shared so the host (entrypoint
+/// path) and the guest (absolute tool paths) agree on one location.
+pub const BIN_DIR: &str = "/boxlite/bin";
+
 // ============================================================================
 // SHARED CONTAINER LAYOUT (per-container directories)
 // ============================================================================

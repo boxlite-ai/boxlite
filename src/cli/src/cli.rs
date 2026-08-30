@@ -6,10 +6,12 @@ use boxlite::experimental::custom_kernel::{KernelFormat, KernelOptions, configur
 use boxlite::experimental::{
     EXPERIMENTAL_FEATURES_ENV, ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder,
 };
-use boxlite::runtime::options::{NetworkConfig, NetworkMode, PortProtocol, PortSpec, VolumeSpec};
+use boxlite::runtime::options::{
+    InboundNetworkConfig, NetworkMode, OutboundNetworkConfig, PortProtocol, PortSpec, VolumeSpec,
+};
 use boxlite::{
-    BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime, ImageRegistry,
-    NetworkSpec,
+    BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime,
+    ContainerCapabilities, ImageRegistry, NetworkSpec,
 };
 use clap::{Args, Command, Parser, Subcommand, ValueEnum};
 use clap_complete::shells::{Bash, Fish, Zsh};
@@ -314,14 +316,6 @@ impl GlobalFlags {
         }
     }
 
-    pub fn resolves_rest_runtime(&self) -> bool {
-        let stored = crate::credentials::load_named(&self.resolved_profile())
-            .ok()
-            .flatten();
-        let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
-        self.resolve_rest_options(stored, env_api_key).is_some()
-    }
-
     /// Build REST connection options from the selected credential profile and
     /// the ambient `BOXLITE_API_KEY`. Returns `None` when no URL is configured
     /// (the caller then falls back to the local runtime). Pure — takes the
@@ -491,8 +485,15 @@ pub struct CapabilityFlags {
 
 impl CapabilityFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) {
-        opts.advanced.capabilities.add.clone_from(&self.cap_add);
-        opts.advanced.capabilities.drop.clone_from(&self.cap_drop);
+        if self.cap_add.is_empty() && self.cap_drop.is_empty() {
+            return;
+        }
+        opts.advanced
+            .set_capabilities(Some(ContainerCapabilities {
+                add: self.cap_add.clone(),
+                drop: self.cap_drop.clone(),
+            }))
+            .expect("apply_to runs before options are resolved");
     }
 }
 
@@ -644,22 +645,37 @@ pub struct NetworkFlags {
     /// disabled`.
     #[arg(long = "allow-net", value_name = "HOST")]
     pub allow_net: Vec<String>,
+
+    /// Inbound mode: "enabled" (default — services the box exposes are
+    /// publicly reachable) or "disabled" (private, unreachable from outside
+    /// the box).
+    #[arg(long = "inbound", value_name = "MODE")]
+    pub inbound: Option<String>,
 }
 
 impl NetworkFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
-        // Leave BoxOptions::default() (Enabled, full access) untouched when
-        // neither flag is given, so a bare `run` behaves as before.
-        if self.network.is_none() && self.allow_net.is_empty() {
+        // Leave BoxOptions::default() (outbound Enabled/full access, inbound
+        // Enabled/public) untouched when no flag is given, so a bare `run`
+        // behaves as before.
+        if self.network.is_none() && self.allow_net.is_empty() && self.inbound.is_none() {
             return Ok(());
         }
         let mode = match self.network.as_deref() {
             Some(value) => value.parse::<NetworkMode>()?,
             None => NetworkMode::Enabled,
         };
-        opts.network = NetworkSpec::try_from(NetworkConfig {
+        let inbound_mode = match self.inbound.as_deref() {
+            Some(value) => value.parse::<NetworkMode>()?,
+            None => NetworkMode::Enabled,
+        };
+        opts.network = NetworkSpec::try_from(OutboundNetworkConfig {
             mode,
             allow_net: self.allow_net.clone(),
+        })?;
+        opts.inbound_network = NetworkSpec::try_from(InboundNetworkConfig {
+            mode: inbound_mode,
+            allow_net: Vec::new(),
         })?;
         Ok(())
     }
@@ -745,129 +761,13 @@ fn parse_port(s: &str) -> anyhow::Result<u16> {
 // VOLUME FLAGS
 // ============================================================================
 
-/// Result of parsing a volume spec. Anonymous volumes have host_path = None.
-struct ParsedVolumeSpec {
-    host_path: Option<String>,
-    guest_path: String,
-    read_only: bool,
-}
-
 #[derive(Args, Debug, Clone)]
 pub struct VolumeFlags {
-    /// Mount a volume (format: hostPath:boxPath[:options], or boxPath for anonymous volume, e.g. /data:/app/data, /data:ro)
+    /// Mount a volume: VOLUME:BOX_PATH for a managed volume, HOST_PATH:BOX_PATH[:options]
+    /// for a host bind (host paths start with `/`, `./`, `~` or a drive letter), or
+    /// BOX_PATH[:options] for an anonymous volume
     #[arg(short = 'v', long = "volume", value_name = "VOLUME")]
     pub volume: Vec<String>,
-
-    /// Mount a source into the box (e.g. src=volume://vol_123,target=/data)
-    #[arg(long = "mount", value_name = "MOUNT")]
-    pub mount: Vec<String>,
-}
-
-/// True if the segment is a single ASCII letter (Windows drive, e.g. "C" in "C:\path").
-fn is_windows_drive(segment: &str) -> bool {
-    let s = segment.trim();
-    s.len() == 1
-        && s.chars()
-            .next()
-            .map(|c| c.is_ascii_alphabetic())
-            .unwrap_or(false)
-}
-
-/// True if path looks like a Windows absolute path (e.g. `C:\foo` or `D:/bar`).
-fn is_windows_absolute_path(path: &str) -> bool {
-    let b = path.as_bytes();
-    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
-}
-
-/// Parse options string (e.g. "ro" or "rw,nocopy") and return read_only. Other options are ignored.
-fn parse_volume_read_only(opts: &str) -> bool {
-    opts.split(',').any(|o| o.trim().eq_ignore_ascii_case("ro"))
-}
-
-/// Parse a single volume spec.
-/// - Anonymous : `boxPath` or `boxPath:ro` (e.g. `/data`, `/data:ro`).
-/// - Bind mount: `hostPath:boxPath[:options]` (e.g. `/data:/app/data`, `/data:/app/data:ro`).
-///
-/// Options: `ro` (read-only), `rw` (read-write, default). Other options are ignored.
-///   Windows: host path may be a drive path like `C:\data`; the colon after the drive letter is not
-///   treated as a separator (e.g. `C:\data:/app/data` → host=`C:\data`, guest=`/app/data`).
-fn parse_volume_spec(s: &str) -> anyhow::Result<ParsedVolumeSpec> {
-    let s = s.trim();
-    if s.is_empty() {
-        anyhow::bail!("empty volume spec");
-    }
-    let parts: Vec<&str> = s.split(':').map(str::trim).collect();
-
-    let (host_path, guest_path, read_only) = match parts.len() {
-        1 => {
-            // Anonymous volume: box path only (e.g. /data)
-            let guest = parts[0].to_string();
-            if guest.is_empty() {
-                anyhow::bail!("volume box path must be non-empty");
-            }
-            if !guest.starts_with('/') && !is_windows_drive(parts[0]) {
-                anyhow::bail!(
-                    "anonymous volume box path must be absolute (e.g. /data), got {:?}",
-                    guest
-                );
-            }
-            (None, guest, false)
-        }
-        2 => {
-            // Either anonymous with options (guest:ro) or bind (host:guest)
-            let second = parts[1];
-            if second.eq_ignore_ascii_case("ro") || second.eq_ignore_ascii_case("rw") {
-                let guest = parts[0].to_string();
-                if guest.is_empty() {
-                    anyhow::bail!("volume box path must be non-empty");
-                }
-                (None, guest, second.eq_ignore_ascii_case("ro"))
-            } else {
-                (Some(parts[0].to_string()), parts[1].to_string(), false)
-            }
-        }
-        3 => {
-            if is_windows_drive(parts[0]) {
-                let host = format!("{}:{}", parts[0], parts[1]);
-                (Some(host), parts[2].to_string(), false)
-            } else {
-                let ro = parse_volume_read_only(parts[2]);
-                (Some(parts[0].to_string()), parts[1].to_string(), ro)
-            }
-        }
-        4.. => {
-            if is_windows_drive(parts[0]) {
-                let host = format!("{}:{}", parts[0], parts[1]);
-                let ro = parse_volume_read_only(parts[3]);
-                (Some(host), parts[2].to_string(), ro)
-            } else {
-                anyhow::bail!(
-                    "invalid volume spec {:?}; use hostPath:boxPath[:options] (e.g. /data:/app/data or C:\\data:/app/data:ro)",
-                    s
-                );
-            }
-        }
-        _ => {
-            anyhow::bail!(
-                "invalid volume spec {:?}; use hostPath:boxPath[:options] or boxPath[:options] for anonymous volume",
-                s
-            );
-        }
-    };
-
-    if let Some(ref host) = host_path
-        && host.is_empty()
-    {
-        anyhow::bail!("volume host path must be non-empty");
-    }
-    if guest_path.is_empty() {
-        anyhow::bail!("volume box path must be non-empty");
-    }
-    Ok(ParsedVolumeSpec {
-        host_path,
-        guest_path,
-        read_only,
-    })
 }
 
 /// Resolve base directory for anonymous volumes: explicit home, or BOXLITE_HOME, or ~/.boxlite, or temp dir.
@@ -887,6 +787,26 @@ fn anonymous_volume_base(home: Option<&std::path::Path>) -> std::path::PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
+/// Make a host bind path absolute.
+///
+/// `volumespec` classified this as a path without touching the filesystem, so a
+/// relative one is resolved here — the same split Docker uses, where the client
+/// absolutizes and only the resolved path travels on.
+fn resolve_host_path(path: String) -> anyhow::Result<String> {
+    // A Windows path is absolute even where `Path::is_relative` says otherwise:
+    // on Unix `C:\data` has no leading `/`, so without this it would be
+    // canonicalized against the working directory and fail.
+    if !std::path::Path::new(&path).is_relative()
+        || crate::volumespec::is_windows_drive_prefix(&path)
+    {
+        return Ok(path);
+    }
+
+    let absolute = std::fs::canonicalize(&path)
+        .map_err(|e| anyhow::anyhow!("volume host path {:?}: {}", path, e))?;
+    Ok(absolute.to_string_lossy().into_owned())
+}
+
 impl VolumeFlags {
     /// Apply volume flags to options. Pass `home` for anonymous volume storage (e.g. from GlobalFlags).
     pub fn apply_to(
@@ -895,108 +815,46 @@ impl VolumeFlags {
         home: Option<&std::path::Path>,
     ) -> anyhow::Result<()> {
         let base = anonymous_volume_base(home);
-        for s in self.volume.iter() {
-            let spec = parse_volume_spec(s)?;
-            let host_path = match spec.host_path {
-                // TODO(#942): when the host side of a `-v <src>:<guest>` spec is a
-                // bare name (not a path) that matches a named volume, resolve it
-                // to the volume's mountpoint here (via the volume backend) and
-                // bind that payload dir instead of treating the name as a literal
-                // host path.
-                Some(host) => {
-                    let mut path = host;
-                    if std::path::Path::new(&path).is_relative() && !is_windows_absolute_path(&path)
-                    {
-                        let abs = std::fs::canonicalize(&path)
-                            .map_err(|e| anyhow::anyhow!("volume host path {:?}: {}", path, e))?;
-                        path = abs.to_string_lossy().into_owned();
+        for value in self.volume.iter() {
+            let mount = crate::volumespec::parse(value)?;
+
+            let spec = match mount.origin {
+                // Held as written; the server resolves an id or a name.
+                crate::volumespec::MountOrigin::ManagedVolume(volume) => {
+                    // Neither the server nor the REST client accepts one yet;
+                    // saying so here beats a downgrade the caller never sees.
+                    if mount.read_only {
+                        anyhow::bail!(
+                            "read-only managed volumes are not supported yet; \
+                             mount {volume:?} read-write"
+                        );
                     }
-                    path
+                    VolumeSpec::managed_volume(volume, mount.guest_path)
                 }
-                None => {
-                    // Anonymous volume: use a random ID for the directory name (same approach as
-                    // Podman: cryptographically random ID to avoid collisions under any load).
+
+                crate::volumespec::MountOrigin::BindMount(path) => {
+                    VolumeSpec::bind_mount(resolve_host_path(path)?, mount.guest_path)
+                }
+
+                crate::volumespec::MountOrigin::Anonymous => {
+                    // Random id for the directory name (same approach as Podman:
+                    // cryptographically random to avoid collisions under any load).
                     let unique = ulid::Ulid::new().to_string();
                     let dir = base.join("volumes").join("anonymous").join(unique);
                     std::fs::create_dir_all(&dir).map_err(|e| {
                         anyhow::anyhow!("failed to create anonymous volume dir {:?}: {}", dir, e)
                     })?;
-                    dir.to_string_lossy().into_owned()
+                    VolumeSpec::bind_mount(dir.to_string_lossy().into_owned(), mount.guest_path)
                 }
             };
+
             opts.volumes.push(VolumeSpec {
-                host_path,
-                guest_path: spec.guest_path,
-                read_only: spec.read_only,
+                read_only: mount.read_only,
+                ..spec
             });
         }
         Ok(())
     }
-
-    /// Apply managed volume id mounts. These are only meaningful for REST runtimes,
-    /// where the server resolves the id to backing object storage before creating the box.
-    pub fn apply_managed_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
-        for s in self.mount.iter() {
-            let (volume_id, guest_path) = parse_managed_mount_spec(s)?;
-            if volume_id.is_empty() {
-                anyhow::bail!("managed volume id must be non-empty");
-            }
-            if guest_path.is_empty() || !guest_path.starts_with('/') {
-                anyhow::bail!("managed volume box path must be absolute (e.g. vol_123:/data)");
-            }
-            opts.volumes.push(VolumeSpec {
-                host_path: volume_id.to_string(),
-                guest_path: guest_path.to_string(),
-                read_only: false,
-            });
-        }
-        Ok(())
-    }
-
-    pub fn has_managed_volumes(&self) -> bool {
-        !self.mount.is_empty()
-    }
-}
-
-fn parse_managed_mount_spec(s: &str) -> anyhow::Result<(String, String)> {
-    let mut source: Option<String> = None;
-    let mut target: Option<String> = None;
-
-    for part in s.split(',') {
-        let (key, value) = part
-            .split_once('=')
-            .ok_or_else(|| anyhow::anyhow!("mount options must use key=value pairs"))?;
-        let key = key.trim();
-        let value = value.trim();
-        match key {
-            "type" => anyhow::bail!("mount type is inferred from the source scheme"),
-            "src" | "source" => source = Some(value.to_string()),
-            "dst" | "destination" | "target" => target = Some(value.to_string()),
-            "volume" => {
-                anyhow::bail!("use source=volume://<volume_id> instead of the volume= shorthand")
-            }
-            "readonly" | "ro" => {
-                if value.eq_ignore_ascii_case("true") || value == "1" {
-                    anyhow::bail!("managed volume mounts are read-write only for now");
-                }
-            }
-            other => anyhow::bail!("unsupported mount option {other:?}"),
-        }
-    }
-
-    let volume_source = source
-        .ok_or_else(|| anyhow::anyhow!("mount volume source is required (src=volume://vol_123)"))?;
-    let volume_id = normalize_managed_volume_source(&volume_source)?;
-    let guest_path =
-        target.ok_or_else(|| anyhow::anyhow!("mount target is required (target=/data)"))?;
-    Ok((volume_id, guest_path))
-}
-
-fn normalize_managed_volume_source(source: &str) -> anyhow::Result<String> {
-    if let Some(volume_id) = source.strip_prefix("volume://") {
-        return Ok(volume_id.to_string());
-    }
-    anyhow::bail!("managed volume source must use the volume:// scheme")
 }
 
 // ============================================================================
@@ -1060,6 +918,7 @@ impl ManagementFlags {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boxlite::runtime::options::NetworkSpec;
     use clap::CommandFactory;
     use std::fs;
     use std::path::PathBuf;
@@ -1422,6 +1281,7 @@ mod tests {
         NetworkFlags {
             network: network.map(str::to_string),
             allow_net: allow_net.iter().map(|s| s.to_string()).collect(),
+            inbound: None,
         }
     }
 
@@ -1488,7 +1348,60 @@ mod tests {
             .apply_to(&mut opts)
             .expect_err("unknown mode must error");
 
-        assert!(err.to_string().contains("network.mode"));
+        assert!(err.to_string().contains("network mode"));
+    }
+
+    #[test]
+    fn test_network_flags_inbound_disabled_sets_private() {
+        // --inbound disabled alone (no --network/--allow-net) still applies,
+        // and leaves outbound at its Enabled/full-access default.
+        let mut opts = BoxOptions::default();
+        let mut flags = network_flags(None, &[]);
+        flags.inbound = Some("disabled".to_string());
+        flags.apply_to(&mut opts).expect("disabled is valid");
+
+        assert!(matches!(opts.inbound_network, NetworkSpec::Disabled));
+        assert!(
+            matches!(opts.network, NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty())
+        );
+    }
+
+    #[test]
+    fn cli_rejects_inbound_allow_net_flag() {
+        // The flag is deliberately not exposed until inbound allowlist
+        // enforcement exists — a flag that always errors would advertise a
+        // feature that doesn't work.
+        let err = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "--inbound-allow-net",
+            "10.0.0.0/8",
+            "alpine:latest",
+        ])
+        .expect_err("unknown flag must fail parsing");
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn cli_parses_run_with_inbound_flags() {
+        let cli = Cli::try_parse_from(["boxlite", "run", "--inbound", "disabled", "alpine:latest"])
+            .expect("parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected Run")
+        };
+        assert_eq!(args.network.inbound.as_deref(), Some("disabled"));
+    }
+
+    #[test]
+    fn test_network_flags_invalid_inbound_mode_is_rejected() {
+        let mut opts = BoxOptions::default();
+        let mut flags = network_flags(None, &[]);
+        flags.inbound = Some("bridge".to_string());
+        let err = flags
+            .apply_to(&mut opts)
+            .expect_err("unknown inbound mode must error");
+
+        assert!(err.to_string().contains("network mode"));
     }
 
     fn process_flags_with_entrypoint(entrypoint: Option<&str>) -> ProcessFlags {
@@ -1598,118 +1511,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_volume_spec_host_guest() {
-        let spec = super::parse_volume_spec("/data:/app/data").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some("/data"));
-        assert_eq!(spec.guest_path, "/app/data");
-        assert!(!spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_read_only() {
-        let spec = super::parse_volume_spec("/data:/app/data:ro").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some("/data"));
-        assert_eq!(spec.guest_path, "/app/data");
-        assert!(spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_rw_explicit() {
-        let spec = super::parse_volume_spec("/data:/app/data:rw").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some("/data"));
-        assert_eq!(spec.guest_path, "/app/data");
-        assert!(!spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_anonymous() {
-        let spec = super::parse_volume_spec("/data").unwrap();
-        assert!(spec.host_path.is_none());
-        assert_eq!(spec.guest_path, "/data");
-        assert!(!spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_anonymous_ro() {
-        let spec = super::parse_volume_spec("/data:ro").unwrap();
-        assert!(spec.host_path.is_none());
-        assert_eq!(spec.guest_path, "/data");
-        assert!(spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_anonymous_relative_invalid() {
-        assert!(super::parse_volume_spec("data").is_err());
-    }
-
-    #[test]
-    fn test_parse_volume_spec_invalid_empty_parts() {
-        assert!(super::parse_volume_spec(":/app").is_err());
-        assert!(super::parse_volume_spec("/data:").is_err());
-    }
-
-    // --- Windows drive compatibility ---
-
-    #[test]
-    fn test_parse_volume_spec_windows_drive_two_parts() {
-        // "C:\data:/app/data" → host=C:\data, guest=/app/data (3 segments after split)
-        let spec = super::parse_volume_spec(r"C:\data:/app/data").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some(r"C:\data"));
-        assert_eq!(spec.guest_path, "/app/data");
-        assert!(!spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_windows_drive_with_ro() {
-        // "C:\data:/app/data:ro" → 4 segments
-        let spec = super::parse_volume_spec(r"C:\data:/app/data:ro").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some(r"C:\data"));
-        assert_eq!(spec.guest_path, "/app/data");
-        assert!(spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_windows_drive_with_rw() {
-        let spec = super::parse_volume_spec(r"D:\path:/mnt:rw").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some(r"D:\path"));
-        assert_eq!(spec.guest_path, "/mnt");
-        assert!(!spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_windows_drive_long_path() {
-        // "D:\host\path:/app" → host=D:\host\path, guest=/app
-        let spec = super::parse_volume_spec(r"D:\host\path:/app").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some(r"D:\host\path"));
-        assert_eq!(spec.guest_path, "/app");
-    }
-
-    #[test]
-    fn test_parse_volume_spec_unix_three_colons_invalid() {
-        // Unix path with 4+ segments and no Windows drive → error
-        assert!(super::parse_volume_spec("/a:b:c:d").is_err());
-    }
-
-    #[test]
-    fn test_parse_volume_spec_linux_unchanged() {
-        // Linux/macOS style must still work
-        let spec = super::parse_volume_spec("/data:/app/data").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some("/data"));
-        assert_eq!(spec.guest_path, "/app/data");
-        let spec2 = super::parse_volume_spec("/data:/app/data:ro").unwrap();
-        assert_eq!(spec2.host_path.as_deref(), Some("/data"));
-        assert_eq!(spec2.guest_path, "/app/data");
-        assert!(spec2.read_only);
-    }
-
-    #[test]
     fn test_volume_flags_apply_to() {
         let flags = VolumeFlags {
             volume: vec![
                 "/host/data:/guest/data".to_string(),
                 "/readonly:/ro:ro".to_string(),
             ],
-            mount: vec![],
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, None).unwrap();
@@ -1729,7 +1536,6 @@ mod tests {
                 r"C:\host\data:/guest/data".to_string(),
                 r"D:\readonly:/ro:ro".to_string(),
             ],
-            mount: vec![],
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, None).unwrap();
@@ -1742,12 +1548,85 @@ mod tests {
         assert!(opts.volumes[1].read_only);
     }
 
+    /// `-v my-data:/data` reaches `BoxOptions` as a managed volume, not a host
+    /// bind — the whole point of adopting Docker's rule. It must not touch the
+    /// filesystem on the way: no canonicalize, no "path does not exist".
+    #[test]
+    fn test_volume_flags_apply_to_managed_volume() {
+        let flags = VolumeFlags {
+            volume: vec![
+                "my-data:/data".to_string(),
+                "vol_01K2EXAMPLE:/cache".to_string(),
+            ],
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts, None).unwrap();
+
+        assert_eq!(opts.volumes.len(), 2);
+        assert_eq!(opts.volumes[0].managed_volume.as_deref(), Some("my-data"));
+        assert_eq!(opts.volumes[0].host_path, "");
+        assert_eq!(opts.volumes[0].guest_path, "/data");
+        assert!(!opts.volumes[0].read_only);
+        assert_eq!(
+            opts.volumes[1].managed_volume.as_deref(),
+            Some("vol_01K2EXAMPLE")
+        );
+        assert_eq!(opts.volumes[1].guest_path, "/cache");
+    }
+
+    /// `:ro` on a managed volume is refused, not quietly downgraded. Neither
+    /// the server nor the REST client accepts one, and a caller who believes a
+    /// mount is protected when it is writable is the failure worth preventing.
+    #[test]
+    fn test_volume_flags_reject_read_only_managed_volume() {
+        let flags = VolumeFlags {
+            volume: vec!["my-data:/data:ro".to_string()],
+        };
+        let mut opts = BoxOptions::default();
+
+        let error = flags
+            .apply_to(&mut opts, None)
+            .expect_err("read-only managed volumes must be refused")
+            .to_string();
+
+        assert!(error.contains("read-only"), "{error}");
+        assert!(error.contains("my-data"), "{error}");
+        assert!(opts.volumes.is_empty());
+    }
+
+    /// A host bind may still be read-only — the restriction is specific to
+    /// managed volumes, not to `:ro`.
+    #[test]
+    fn test_volume_flags_still_allow_read_only_host_binds() {
+        let flags = VolumeFlags {
+            volume: vec!["/host/data:/data:ro".to_string()],
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts, None).unwrap();
+
+        assert_eq!(opts.volumes[0].host_path, "/host/data");
+        assert!(opts.volumes[0].read_only);
+    }
+
+    /// A host bind keeps `managed_volume` unset, so the two `-v` forms stay
+    /// distinguishable all the way to the wire.
+    #[test]
+    fn test_volume_flags_apply_to_leaves_host_binds_unmanaged() {
+        let flags = VolumeFlags {
+            volume: vec!["/host/data:/guest/data".to_string()],
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts, None).unwrap();
+
+        assert_eq!(opts.volumes[0].managed_volume, None);
+        assert_eq!(opts.volumes[0].host_path, "/host/data");
+    }
+
     #[test]
     fn test_volume_flags_apply_to_anonymous() {
         let base = std::env::temp_dir();
         let flags = VolumeFlags {
             volume: vec!["/data".to_string(), "/cache:ro".to_string()],
-            mount: vec![],
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, Some(&base)).unwrap();
@@ -1764,143 +1643,6 @@ mod tests {
         assert!(opts.volumes[1].host_path.contains("anonymous"));
     }
 
-    #[test]
-    fn test_volume_flags_managed_volume_rejects_bare_id() {
-        let flags = VolumeFlags {
-            volume: vec![],
-            mount: vec!["src=vol_123,target=/data".to_string()],
-        };
-        let mut opts = BoxOptions::default();
-        let err = flags
-            .apply_managed_to(&mut opts)
-            .expect_err("bare volume ids must use the volume:// scheme");
-
-        assert!(
-            err.to_string().contains("volume:// scheme"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_volume_flags_managed_volume_source_scheme() {
-        let flags = VolumeFlags {
-            volume: vec![],
-            mount: vec!["src=volume://vol_123,target=/data".to_string()],
-        };
-        let mut opts = BoxOptions::default();
-        flags.apply_managed_to(&mut opts).unwrap();
-
-        assert_eq!(opts.volumes[0].host_path, "vol_123");
-        assert_eq!(opts.volumes[0].guest_path, "/data");
-    }
-
-    #[test]
-    fn test_volume_flags_managed_volume_rejects_host_scheme() {
-        let flags = VolumeFlags {
-            volume: vec![],
-            mount: vec!["src=host:///tmp/data,target=/data".to_string()],
-        };
-        let mut opts = BoxOptions::default();
-        let err = flags
-            .apply_managed_to(&mut opts)
-            .expect_err("host scheme must be rejected for managed volume mounts");
-
-        assert!(
-            err.to_string().contains("volume:// scheme"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_volume_flags_managed_volume_rejects_missing_id() {
-        let flags = VolumeFlags {
-            volume: vec![],
-            // Must carry the `volume://` prefix so parsing reaches the
-            // empty-id check (`apply_managed_to`) instead of failing earlier
-            // at the scheme check (`normalize_managed_volume_source`).
-            mount: vec!["src=volume://,target=/data".to_string()],
-        };
-        let mut opts = BoxOptions::default();
-        let err = flags
-            .apply_managed_to(&mut opts)
-            .expect_err("managed volume id must be rejected when empty");
-
-        assert!(
-            err.to_string().contains("id must be non-empty"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_volume_flags_managed_volume_rejects_relative_box_path() {
-        let flags = VolumeFlags {
-            volume: vec![],
-            mount: vec!["src=volume://vol_123,target=data".to_string()],
-        };
-        let mut opts = BoxOptions::default();
-        let err = flags
-            .apply_managed_to(&mut opts)
-            .expect_err("managed volume guest path must be absolute");
-
-        assert!(
-            err.to_string().contains("box path must be absolute"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_volume_flags_managed_volume_rejects_shorthand() {
-        let flags = VolumeFlags {
-            volume: vec![],
-            mount: vec!["volume=vol_123,target=/data".to_string()],
-        };
-        let mut opts = BoxOptions::default();
-        let err = flags
-            .apply_managed_to(&mut opts)
-            .expect_err("volume= shorthand must be rejected");
-
-        assert!(
-            err.to_string().contains("source=volume://"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_volume_flags_managed_volume_rejects_type_option() {
-        let flags = VolumeFlags {
-            volume: vec![],
-            mount: vec!["type=volume,src=volume://vol_123,target=/data".to_string()],
-        };
-        let mut opts = BoxOptions::default();
-        let err = flags
-            .apply_managed_to(&mut opts)
-            .expect_err("mount type option must be inferred from source scheme");
-
-        assert!(
-            err.to_string()
-                .contains("type is inferred from the source scheme"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_run_parses_managed_mount_flag() {
-        let cli = Cli::try_parse_from([
-            "boxlite",
-            "run",
-            "--mount",
-            "src=volume://vol_123,target=/data",
-            "alpine",
-        ])
-        .expect("run --mount should parse");
-        let Commands::Run(args) = cli.command else {
-            panic!("expected run command");
-        };
-
-        assert_eq!(args.volume.mount, vec!["src=volume://vol_123,target=/data"]);
-        assert!(args.volume.volume.is_empty());
-    }
-
     // ─── auth subcommand parse tests ───────────────────────────────────────
 
     use crate::commands::{auth::AuthCommand, network::NetworkCommand};
@@ -1909,20 +1651,48 @@ mod tests {
     // ─── tunnel parse tests ────────────────────────────────────────────────
 
     #[test]
-    fn network_tunnel_parses_box_and_port() {
-        Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "3000"]).expect("parse");
+    fn tunnel_parses_box_and_port() {
+        let cli =
+            Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "3000"]).expect("parse");
+        let Commands::Network(network) = cli.command else {
+            panic!("expected Commands::Network");
+        };
+        let NetworkCommand::Tunnel(args) = network.command;
+        assert_eq!(args.target, "mybox");
+        assert_eq!(args.port, 3000);
+        assert!(args.listen.is_none());
     }
 
     #[test]
-    fn network_tunnel_preserves_box_and_port() {
-        let cli =
-            Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "3000"]).expect("parse");
-        let Commands::Network(args) = cli.command else {
-            panic!("expected Commands::Network");
-        };
-        let NetworkCommand::Tunnel(args) = args.command;
-        assert_eq!(args.target, "mybox");
-        assert_eq!(args.port, 3000);
+    fn network_tunnel_accepts_listener_forms() {
+        for listen in [
+            "8080",
+            "0",
+            "127.0.0.1:8080",
+            "[::1]:8080",
+            "unix:/tmp/app.sock",
+        ] {
+            Cli::try_parse_from([
+                "boxlite", "network", "tunnel", "mybox", "3000", "--listen", listen,
+            ])
+            .unwrap_or_else(|error| panic!("{listen} should parse: {error}"));
+        }
+    }
+
+    #[test]
+    fn network_tunnel_rejects_ambiguous_listener_forms() {
+        for listen in [
+            "localhost:8080",
+            "::1:8080",
+            ":8080",
+            "unix:relative.sock",
+            "127.0.0.1",
+        ] {
+            let result = Cli::try_parse_from([
+                "boxlite", "network", "tunnel", "mybox", "3000", "--listen", listen,
+            ]);
+            assert!(result.is_err(), "{listen} must be rejected");
+        }
     }
 
     #[test]
@@ -1932,7 +1702,7 @@ mod tests {
     }
 
     #[test]
-    fn network_tunnel_rejects_port_zero_at_parse() {
+    fn tunnel_rejects_port_zero_at_parse() {
         let result = Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "0"]);
         assert!(result.is_err(), "port 0 must be rejected by the parser");
     }
@@ -1981,14 +1751,28 @@ mod tests {
     use crate::commands::volume::VolumeCommand;
 
     #[test]
-    fn volume_create_takes_no_args() {
-        // `create` takes no arguments — the id is server-assigned and printed.
+    fn volume_create_takes_an_optional_name() {
+        // Without --name the server names the volume after its id.
         let cli = Cli::try_parse_from(["boxlite", "volume", "create"]).expect("parse");
         let Commands::Volume(args) = cli.command else {
             panic!("expected Commands::Volume");
         };
-        assert!(matches!(args.command, VolumeCommand::Create(_)));
-        // A positional argument must be rejected.
+        let VolumeCommand::Create(create) = args.command else {
+            panic!("expected VolumeCommand::Create");
+        };
+        assert_eq!(create.name, None);
+
+        let cli = Cli::try_parse_from(["boxlite", "volume", "create", "--name", "my-data"])
+            .expect("parse");
+        let Commands::Volume(args) = cli.command else {
+            panic!("expected Commands::Volume");
+        };
+        let VolumeCommand::Create(create) = args.command else {
+            panic!("expected VolumeCommand::Create");
+        };
+        assert_eq!(create.name.as_deref(), Some("my-data"));
+
+        // The name is a flag, not a positional: a bare argument is still rejected.
         assert!(Cli::try_parse_from(["boxlite", "volume", "create", "data"]).is_err());
     }
 

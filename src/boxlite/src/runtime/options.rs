@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
+use crate::disk::constants::qcow2::{DEFAULT_DISK_SIZE_GB, FSIZE_DISK_MULTIPLIER};
 use crate::runtime::advanced_options::AdvancedBoxOptions;
+use crate::runtime::types::Bytes;
 use std::fmt;
 
 // ============================================================================
@@ -329,6 +331,13 @@ pub struct BoxOptions {
     pub rootfs: RootfsSpec,
     pub volumes: Vec<VolumeSpec>,
     pub network: NetworkSpec,
+    /// Inbound reachability of the services this box exposes. A sibling of
+    /// `network` rather than a field inside it: the two directions are
+    /// independent, and `network` keeps its pre-split meaning (egress
+    /// only). Same type as `network` — both directions have identical
+    /// shape.
+    #[serde(default)]
+    pub inbound_network: NetworkSpec,
     /// Explicit host publication for the local runtime.
     ///
     /// Remote runtimes reject port mappings; use a box network tunnel for
@@ -525,6 +534,7 @@ impl Default for BoxOptions {
             rootfs: RootfsSpec::default(),
             volumes: Vec::new(),
             network: NetworkSpec::default(),
+            inbound_network: NetworkSpec::default(),
             ports: Vec::new(),
             auto_remove: default_auto_remove(),
             auto_stop: None,
@@ -563,9 +573,11 @@ impl BoxOptions {
     ///   with `detach=true` is invalid
     /// - `advanced.isolate_mounts=true` is only supported on Linux
     /// - `advanced.capabilities` contains well-formed Linux capability names
+    /// - `advanced.security.network_enabled=false` is not mistaken for a
+    ///   guest-networking switch (it gates host jailer grants only)
     pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
-            return Err(boxlite_shared::errors::BoxliteError::Config(
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
                 "remove-on-stop is incompatible with detach=true. Detached boxes should use \
                  auto_delete=0 (or deprecated auto_remove=false) for manual lifecycle control."
                     .to_string(),
@@ -579,16 +591,55 @@ impl BoxOptions {
             ));
         }
 
-        self.advanced.capabilities.validate()?;
+        self.advanced.validate_privileged_capability_conflict()?;
+        if let Some(capabilities) = self.advanced.capabilities() {
+            capabilities.validate()?;
+        }
 
         if matches!(self.network, NetworkSpec::Disabled) && !self.ports.is_empty() {
-            return Err(boxlite_shared::errors::BoxliteError::Config(
-                "ports require network.mode=\"enabled\"".to_string(),
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                "ports require network.outbound.mode=\"enabled\"".to_string(),
+            ));
+        }
+
+        // Wire conversions already reject this (the InboundNetworkConfig
+        // TryFrom), but FFI callers (C/Go) set the spec directly — catch
+        // them at create. See try_from for the rationale.
+        if matches!(&self.inbound_network, NetworkSpec::Enabled { allow_net } if !allow_net.is_empty())
+        {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                "inbound.allow_net is not supported yet; remove it \
+                 (inbound access is controlled by mode only)"
+                    .to_string(),
+            ));
+        }
+
+        // `advanced.security.network_enabled` reads like a guest-networking
+        // switch but only gates the HOST jailer's own network grants (macOS
+        // seatbelt, Linux Landlock). Left alone with the default
+        // `network.mode="enabled"` it does not take the guest offline — it
+        // starves the running network backend instead, so the box either
+        // fails to start or, with the jailer off, keeps full internet access
+        // while the config reads as network-free. Name the real option rather
+        // than let either outcome through.
+        if !self.advanced.security.network_enabled
+            && matches!(self.network, NetworkSpec::Enabled { .. })
+        {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                "advanced.security.network_enabled=false does not disable guest networking — \
+                 it only drops the host sandbox's network grants. Set network.mode=\"disabled\" \
+                 to create a box with no network interface, or leave \
+                 advanced.security.network_enabled at its default."
+                    .to_string(),
             ));
         }
 
         for port in &self.ports {
             port.validate_publishable()?;
+        }
+
+        for volume in &self.volumes {
+            volume.validate()?;
         }
 
         Ok(())
@@ -604,12 +655,34 @@ impl BoxOptions {
         Ok(())
     }
 
-    pub fn sanitize(&self) -> BoxliteResult<()> {
+    pub fn sanitize(&mut self) -> BoxliteResult<()> {
         self.sanitize_common()?;
 
         if let Some(kernel) = &self.advanced.kernel {
             kernel.sanitize()?;
         }
+
+        // The jailed shim is the sole writer of this box's qcow2 disks, so its
+        // per-file RLIMIT_FSIZE caps their growth: a write past it fails with
+        // `EFBIG` and takes the guest down. `SecurityOptions::default()` cannot
+        // pick that number — it runs for a box that does not exist yet and
+        // cannot see `disk_size_gb` — which is how a fixed 1 GiB ceiling ended
+        // up contradicting every larger disk (#1152). Derive it here, next to
+        // the size it comes from.
+        //
+        // `FSIZE_DISK_MULTIPLIER` is deliberately loose: this is a
+        // runaway-write backstop, not a capacity policy. Capacity is the qcow2
+        // virtual size, where a guest that fills its disk gets a clean `ENOSPC`
+        // inside the box rather than a host-side `SIGXFSZ` that kills the VM.
+        self.advanced.security.resource_limits.max_file_size = Some(
+            Bytes::from_gib(
+                self.disk_size_gb
+                    .unwrap_or(DEFAULT_DISK_SIZE_GB)
+                    .saturating_mul(FSIZE_DISK_MULTIPLIER),
+            )
+            .as_bytes(),
+        );
+
         Ok(())
     }
 }
@@ -630,11 +703,87 @@ impl Default for RootfsSpec {
 }
 
 /// Filesystem mount specification.
+///
+/// A mount has exactly one origin: `managed_volume` for a server-side managed
+/// volume, or `host_path` for a bind mount from the machine running the box.
+/// Build one with [`VolumeSpec::managed_volume`] or [`VolumeSpec::bind_mount`]
+/// instead of filling the fields by hand.
+///
+/// The `host_path` field keeps its name because it is persisted box config:
+/// boxes on disk carry a `host_path` key, so renaming the field — not the
+/// constructor — would strand every box written before such a rename.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct VolumeSpec {
+    /// Managed volume to mount, addressed by its server-assigned id **or** by
+    /// its name — the server resolves either.
+    ///
+    /// Managed volumes need a REST runtime, since the local runtime has no
+    /// volume backend to resolve a reference against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_volume: Option<String>,
+
+    /// Host directory or file to bind into the box. Empty when
+    /// `managed_volume` is set.
+    #[serde(default)]
     pub host_path: String,
+
+    /// Mount point inside the box.
     pub guest_path: String,
+
+    /// Mount without write access.
     pub read_only: bool,
+}
+
+impl VolumeSpec {
+    /// Bind a host directory or file into the box.
+    pub fn bind_mount(host_path: impl Into<String>, guest_path: impl Into<String>) -> Self {
+        Self {
+            managed_volume: None,
+            host_path: host_path.into(),
+            guest_path: guest_path.into(),
+            read_only: false,
+        }
+    }
+
+    /// Mount a managed volume, addressed by server-assigned id or by name.
+    pub fn managed_volume(volume: impl Into<String>, guest_path: impl Into<String>) -> Self {
+        Self {
+            managed_volume: Some(volume.into()),
+            host_path: String::new(),
+            guest_path: guest_path.into(),
+            read_only: false,
+        }
+    }
+
+    /// Reject a mount that names no origin, both origins, or an empty one.
+    ///
+    /// FFI callers (C/Go) and hand-built literals can reach either invalid
+    /// shape, so this runs at create rather than only in the constructors.
+    pub fn validate(&self) -> BoxliteResult<()> {
+        let guest_path = &self.guest_path;
+        match &self.managed_volume {
+            Some(volume) if !self.host_path.is_empty() => Err(
+                boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
+                    "volume mount {guest_path:?} sets both managed_volume ({volume:?}) and \
+                     host_path; use exactly one"
+                )),
+            ),
+            Some(volume) if volume.trim().is_empty() => Err(
+                boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
+                    "volume mount {guest_path:?} has an empty managed_volume; pass a volume id \
+                     or name"
+                )),
+            ),
+            Some(_) => Ok(()),
+            None if self.host_path.is_empty() => Err(
+                boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
+                    "volume mount {guest_path:?} needs a managed_volume (volume id or name) or \
+                     a host_path"
+                )),
+            ),
+            None => Ok(()),
+        }
+    }
 }
 
 /// Network mode for public box configuration surfaces.
@@ -653,10 +802,12 @@ impl std::str::FromStr for NetworkMode {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
-            _ => Err(boxlite_shared::errors::BoxliteError::Config(format!(
-                "invalid network.mode {:?}. Expected \"enabled\" or \"disabled\".",
-                value
-            ))),
+            _ => Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                format!(
+                    "invalid network mode {:?}. Expected \"enabled\" or \"disabled\".",
+                    value
+                ),
+            )),
         }
     }
 }
@@ -665,22 +816,44 @@ impl std::str::FromStr for NetworkMode {
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NetworkConfig {
+    #[serde(default)]
+    pub outbound: OutboundNetworkConfig,
+    #[serde(default)]
+    pub inbound: InboundNetworkConfig,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutboundNetworkConfig {
     pub mode: NetworkMode,
     #[serde(default)]
     pub allow_net: Vec<String>,
 }
 
-impl TryFrom<NetworkConfig> for NetworkSpec {
+/// Wire shape for the inbound direction, aligned field-for-field with
+/// [`OutboundNetworkConfig`]. `Enabled` means services the box exposes are
+/// publicly reachable; `Disabled` means they are private (unreachable from
+/// outside the box). `allow_net` exists for shape symmetry with outbound but
+/// is rejected when non-empty — no layer enforces an inbound allowlist yet.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InboundNetworkConfig {
+    pub mode: NetworkMode,
+    #[serde(default)]
+    pub allow_net: Vec<String>,
+}
+
+impl TryFrom<OutboundNetworkConfig> for NetworkSpec {
     type Error = boxlite_shared::errors::BoxliteError;
 
-    fn try_from(config: NetworkConfig) -> Result<Self, Self::Error> {
+    fn try_from(config: OutboundNetworkConfig) -> Result<Self, Self::Error> {
         match config.mode {
             NetworkMode::Enabled => Ok(Self::Enabled {
                 allow_net: config.allow_net,
             }),
             NetworkMode::Disabled if !config.allow_net.is_empty() => {
-                Err(boxlite_shared::errors::BoxliteError::Config(
-                    "network.mode=\"disabled\" is incompatible with allow_net. \
+                Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                    "network.outbound.mode=\"disabled\" is incompatible with allow_net. \
                      Remove allow_net or use mode=\"enabled\"."
                         .to_string(),
                 ))
@@ -690,25 +863,67 @@ impl TryFrom<NetworkConfig> for NetworkSpec {
     }
 }
 
-impl From<&NetworkSpec> for NetworkConfig {
-    fn from(spec: &NetworkSpec) -> Self {
-        match spec {
-            NetworkSpec::Enabled { allow_net } => Self {
-                mode: NetworkMode::Enabled,
-                allow_net: allow_net.clone(),
-            },
-            NetworkSpec::Disabled => Self {
-                mode: NetworkMode::Disabled,
+impl TryFrom<InboundNetworkConfig> for NetworkSpec {
+    type Error = boxlite_shared::errors::BoxliteError;
+
+    fn try_from(config: InboundNetworkConfig) -> Result<Self, Self::Error> {
+        // No runtime sink enforces an inbound allowlist yet — reachability is
+        // gated purely on inbound mode — so accepting one would hand the
+        // caller a box that is fully open while they believe it is
+        // restricted. Reject under either mode; lift once enforcement lands.
+        if !config.allow_net.is_empty() {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                "inbound.allow_net is not supported yet; remove it \
+                 (inbound access is controlled by mode only)"
+                    .to_string(),
+            ));
+        }
+        Ok(match config.mode {
+            NetworkMode::Enabled => Self::Enabled {
                 allow_net: Vec::new(),
             },
+            NetworkMode::Disabled => Self::Disabled,
+        })
+    }
+}
+
+impl From<&NetworkSpec> for OutboundNetworkConfig {
+    fn from(spec: &NetworkSpec) -> Self {
+        let (mode, allow_net) = match spec {
+            NetworkSpec::Enabled { allow_net } => (NetworkMode::Enabled, allow_net.clone()),
+            NetworkSpec::Disabled => (NetworkMode::Disabled, Vec::new()),
+        };
+        Self { mode, allow_net }
+    }
+}
+
+impl From<&NetworkSpec> for InboundNetworkConfig {
+    fn from(spec: &NetworkSpec) -> Self {
+        let (mode, allow_net) = match spec {
+            NetworkSpec::Enabled { allow_net } => (NetworkMode::Enabled, allow_net.clone()),
+            NetworkSpec::Disabled => (NetworkMode::Disabled, Vec::new()),
+        };
+        Self { mode, allow_net }
+    }
+}
+
+impl NetworkConfig {
+    /// Assemble the wire shape from the two independent directions.
+    pub fn from_specs(outbound: &NetworkSpec, inbound: &NetworkSpec) -> Self {
+        Self {
+            outbound: outbound.into(),
+            inbound: inbound.into(),
         }
     }
 }
 
 /// Internal Rust network configuration for a box.
 ///
-/// Controls whether the box has network access and what hosts it can reach.
+/// Separates outbound guest egress from inbound service access policy so future
+/// inbound restrictions (for example CIDR allowlists) can evolve without
+/// overloading outbound network mode.
 ///
+/// Outbound examples:
 /// - `Enabled { allow_net: [] }` — full internet access (default)
 /// - `Enabled { allow_net: ["api.openai.com"] }` — only listed hosts reachable
 /// - `Disabled` — no network interface at all
@@ -732,6 +947,11 @@ impl From<&NetworkSpec> for NetworkConfig {
 ///
 /// The gateway's DNS resolver and DHCP are unaffected: they are internal
 /// services, not egress.
+/// Guest egress policy. Untouched by the outbound/inbound split — same
+/// name, same variants, same wire form — so existing literals, match arms
+/// and persisted box configs keep working. It is the outbound half of
+/// `BoxOptions::network`; the inbound direction lives in the sibling
+/// field `BoxOptions::inbound_network`, which reuses this same type.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum NetworkSpec {
     /// Network enabled. Empty `allow_net` = full access.
@@ -786,7 +1006,7 @@ impl PortSpec {
     /// publication planning both go through it, so they can never disagree.
     pub(crate) fn validate_publishable(&self) -> BoxliteResult<SocketAddr> {
         if self.guest_port == 0 {
-            return Err(boxlite_shared::errors::BoxliteError::Config(
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
                 "guest port must be in range 1-65535".to_string(),
             ));
         }
@@ -798,7 +1018,7 @@ impl PortSpec {
         let host_ip = match self.host_ip.as_deref() {
             None => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             Some(host_ip) => host_ip.parse::<IpAddr>().map_err(|_| {
-                boxlite_shared::errors::BoxliteError::Config(format!(
+                boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
                     "invalid port host_ip {host_ip:?}; expected an IPv4 or IPv6 address"
                 ))
             })?,
@@ -911,6 +1131,7 @@ mod tests {
     use crate::runtime::advanced_options::{
         ContainerCapabilities, SecurityOptions, SecurityOptionsBuilder,
     };
+    use crate::runtime::types::Bytes;
 
     #[test]
     fn legacy_ports_keep_old_same_port_and_last_write_wins_semantics() {
@@ -987,8 +1208,8 @@ mod tests {
         );
         assert!(!opts.detach, "detach should default to false");
         assert!(
-            opts.advanced.capabilities.is_empty(),
-            "advanced capabilities should default to empty"
+            opts.advanced.capabilities().is_none(),
+            "advanced capabilities should default to unspecified"
         );
     }
 
@@ -1004,30 +1225,50 @@ mod tests {
         }"#;
 
         let opts: BoxOptions = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            opts.advanced.capabilities.add,
-            ["SYS_ADMIN", "CAP_NET_ADMIN"]
-        );
-        assert_eq!(opts.advanced.capabilities.drop, ["NET_RAW"]);
+        let capabilities = opts.advanced.capabilities().expect("capabilities set");
+        assert_eq!(capabilities.add, ["SYS_ADMIN", "CAP_NET_ADMIN"]);
+        assert_eq!(capabilities.drop, ["NET_RAW"]);
 
         let serialized = serde_json::to_string(&opts).unwrap();
         let roundtripped: BoxOptions = serde_json::from_str(&serialized).unwrap();
         assert_eq!(
-            roundtripped.advanced.capabilities,
-            opts.advanced.capabilities
+            roundtripped.advanced.capabilities(),
+            opts.advanced.capabilities()
+        );
+    }
+
+    /// An ordinary box (no explicit capability policy) must serialize with
+    /// the `capabilities` key absent, not present-as-`null` — a pre-#1296
+    /// build's plain, non-Option `capabilities` field parses an absent key
+    /// via its own `#[serde(default)]`, but rejects an explicit `null` with
+    /// "invalid type: null, expected struct ContainerCapabilities" (reproduced
+    /// standalone against that exact field shape before this test was added).
+    /// `archive_version_for_options` leaves this case at `ARCHIVE_VERSION`
+    /// specifically because it assumes the wire shape matches what a v3
+    /// importer already handles; this test is what keeps that true.
+    #[test]
+    fn box_options_omits_capabilities_key_when_unspecified() {
+        let json = serde_json::to_string(&BoxOptions::default()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let advanced = parsed.get("advanced").unwrap();
+
+        assert!(
+            !advanced.as_object().unwrap().contains_key("capabilities"),
+            "unspecified capabilities must omit the key, not serialize null: {advanced}"
         );
     }
 
     #[test]
     fn box_options_sanitize_accepts_valid_capability_names() {
-        let opts = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                capabilities: ContainerCapabilities {
-                    add: vec!["sys_admin".into(), "CAP_NET_ADMIN".into()],
-                    drop: vec!["NET_RAW".into()],
-                },
-                ..Default::default()
-            },
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced
+            .set_capabilities(Some(ContainerCapabilities {
+                add: vec!["sys_admin".into(), "CAP_NET_ADMIN".into()],
+                drop: vec!["NET_RAW".into()],
+            }))
+            .unwrap();
+        let mut opts = BoxOptions {
+            advanced,
             ..Default::default()
         };
 
@@ -1037,14 +1278,15 @@ mod tests {
 
     #[test]
     fn box_options_sanitize_accepts_future_capability_names() {
-        let opts = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                capabilities: ContainerCapabilities {
-                    add: vec!["FUTURE_KERNEL_FEATURE".into()],
-                    ..Default::default()
-                },
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced
+            .set_capabilities(Some(ContainerCapabilities {
+                add: vec!["FUTURE_KERNEL_FEATURE".into()],
                 ..Default::default()
-            },
+            }))
+            .unwrap();
+        let mut opts = BoxOptions {
+            advanced,
             ..Default::default()
         };
 
@@ -1054,48 +1296,33 @@ mod tests {
 
     #[test]
     fn box_options_sanitize_rejects_malformed_capability_names() {
-        for opts in [
-            BoxOptions {
-                advanced: AdvancedBoxOptions {
-                    capabilities: ContainerCapabilities {
-                        add: vec!["".into()],
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
+        let malformed = [
+            ContainerCapabilities {
+                add: vec!["".into()],
                 ..Default::default()
             },
-            BoxOptions {
-                advanced: AdvancedBoxOptions {
-                    capabilities: ContainerCapabilities {
-                        drop: vec!["NET-ADMIN".into()],
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
+            ContainerCapabilities {
+                drop: vec!["NET-ADMIN".into()],
                 ..Default::default()
             },
-            BoxOptions {
-                advanced: AdvancedBoxOptions {
-                    capabilities: ContainerCapabilities {
-                        add: vec!["123".into()],
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
+            ContainerCapabilities {
+                add: vec!["123".into()],
                 ..Default::default()
             },
-            BoxOptions {
-                advanced: AdvancedBoxOptions {
-                    capabilities: ContainerCapabilities {
-                        add: vec!["ß".into()],
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
+            ContainerCapabilities {
+                add: vec!["ß".into()],
                 ..Default::default()
             },
-        ] {
+        ];
+
+        for capabilities in malformed {
+            let mut advanced = AdvancedBoxOptions::default();
+            advanced.set_capabilities(Some(capabilities)).unwrap();
+            let mut opts = BoxOptions {
+                advanced,
+                ..Default::default()
+            };
+
             let err = opts
                 .sanitize()
                 .expect_err("malformed capability should be rejected");
@@ -1128,16 +1355,15 @@ mod tests {
         #[cfg(target_arch = "aarch64")]
         let format = KernelFormat::PeGz;
 
-        let opts = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                kernel: Some(
-                    KernelOptions::new(&kernel)
-                        .with_format(format)
-                        .with_initramfs(&initramfs)
-                        .with_command_line("console=ttyS0 panic=-1"),
-                ),
-                ..Default::default()
-            },
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.kernel = Some(
+            KernelOptions::new(&kernel)
+                .with_format(format)
+                .with_initramfs(&initramfs)
+                .with_command_line("console=ttyS0 panic=-1"),
+        );
+        let mut opts = BoxOptions {
+            advanced,
             ..Default::default()
         };
 
@@ -1150,13 +1376,65 @@ mod tests {
         assert_eq!(restored.advanced.kernel, opts.advanced.kernel);
     }
 
+    /// #1072: `security.network_enabled=false` with the default
+    /// `network.mode="enabled"` neither disables the guest network nor starts
+    /// a usable box. Reject it and point at the option that does the job.
+    #[test]
+    fn host_network_grants_off_with_guest_network_on_is_rejected() {
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.security = SecurityOptions {
+            network_enabled: false,
+            ..SecurityOptions::default()
+        };
+        let opts = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+        assert!(
+            matches!(opts.network, NetworkSpec::Enabled { .. }),
+            "guard assumes the default network mode is enabled"
+        );
+
+        let error = opts.sanitize_common().unwrap_err().to_string();
+
+        assert!(
+            error.contains("network.mode=\"disabled\""),
+            "error must name the option that disables guest networking: {error}"
+        );
+        assert!(
+            error.contains("advanced.security.network_enabled"),
+            "error must name the option the caller actually set: {error}"
+        );
+    }
+
+    /// The pairing that genuinely means "no network" stays valid, and so does
+    /// leaving the host grants at their default.
+    #[test]
+    fn network_disabled_pairs_with_either_host_grant_setting() {
+        for network_enabled in [true, false] {
+            let mut advanced = AdvancedBoxOptions::default();
+            advanced.security = SecurityOptions {
+                network_enabled,
+                ..SecurityOptions::default()
+            };
+            let opts = BoxOptions {
+                network: NetworkSpec::Disabled,
+                advanced,
+                ..Default::default()
+            };
+
+            opts.sanitize_common().unwrap_or_else(|e| {
+                panic!("network.mode=disabled + network_enabled={network_enabled} rejected: {e}")
+            });
+        }
+    }
+
     #[test]
     fn custom_kernel_must_be_a_file() {
-        let opts = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                kernel: Some(KernelOptions::new("/definitely/missing/vmlinux")),
-                ..Default::default()
-            },
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.kernel = Some(KernelOptions::new("/definitely/missing/vmlinux"));
+        let mut opts = BoxOptions {
+            advanced,
             ..Default::default()
         };
 
@@ -1172,15 +1450,14 @@ mod tests {
         let format = KernelFormat::Elf;
         #[cfg(target_arch = "aarch64")]
         let format = KernelFormat::PeGz;
-        let opts = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                kernel: Some(
-                    KernelOptions::new("/source/removed/after-create")
-                        .with_format(format)
-                        .with_command_line("console=ttyS0"),
-                ),
-                ..Default::default()
-            },
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.kernel = Some(
+            KernelOptions::new("/source/removed/after-create")
+                .with_format(format)
+                .with_command_line("console=ttyS0"),
+        );
+        let mut opts = BoxOptions {
+            advanced,
             ..Default::default()
         };
 
@@ -1193,15 +1470,14 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let kernel = temp.path().join("vmlinux");
         std::fs::write(&kernel, b"\x7fELFcustom kernel").unwrap();
-        let opts = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                kernel: Some(
-                    KernelOptions::new(&kernel)
-                        .with_format(KernelFormat::Elf)
-                        .with_initramfs(temp.path().join("missing-initramfs")),
-                ),
-                ..Default::default()
-            },
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.kernel = Some(
+            KernelOptions::new(&kernel)
+                .with_format(KernelFormat::Elf)
+                .with_initramfs(temp.path().join("missing-initramfs")),
+        );
+        let mut opts = BoxOptions {
+            advanced,
             ..Default::default()
         };
 
@@ -1285,6 +1561,76 @@ mod tests {
     }
 
     #[test]
+    fn privileged_option_roundtrips() {
+        let stored: BoxOptions =
+            serde_json::from_str(r#"{"advanced":{"privileged":true}}"#).unwrap();
+        assert!(stored.advanced.privileged);
+        assert_eq!(
+            serde_json::to_value(stored).unwrap()["advanced"]["privileged"],
+            serde_json::Value::Bool(true)
+        );
+
+        let legacy: BoxOptions = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.advanced.privileged);
+    }
+
+    #[test]
+    fn privileged_rejects_explicit_capability_overrides() {
+        let options: BoxOptions = serde_json::from_str(
+            r#"{"advanced":{"privileged":true,"capabilities":{"add":["SYS_ADMIN"],"drop":["NET_RAW"]}}}"#,
+        )
+        .unwrap();
+
+        let error = options
+            .advanced
+            .validate_privileged_capability_conflict()
+            .expect_err("privileged capability overrides must be rejected");
+
+        assert!(error.to_string().contains("cannot be combined"));
+    }
+
+    /// The canonical shape is accepted, not rewritten: unlike an earlier
+    /// version of this option, `capabilities` is never mutated by
+    /// `privileged` — this exists for a box persisted by that earlier
+    /// version, whose stored `capabilities` already looks like this.
+    #[test]
+    fn privileged_canonical_capability_shape_remains_accepted() {
+        let options: BoxOptions = serde_json::from_str(
+            r#"{"advanced":{"privileged":true,"capabilities":{"add":["ALL"],"drop":[]}}}"#,
+        )
+        .unwrap();
+
+        options
+            .advanced
+            .validate_privileged_capability_conflict()
+            .expect("canonical privileged shape should be accepted");
+
+        let capabilities = options.advanced.capabilities().expect("capabilities set");
+        assert_eq!(capabilities.add, ["ALL"]);
+        assert!(capabilities.drop.is_empty());
+    }
+
+    #[test]
+    fn privileged_security_is_resolved_before_guest_init() {
+        let mut advanced = crate::AdvancedBoxOptions::default();
+        advanced.privileged = true;
+        let options = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let resolved = options
+            .advanced
+            .resolve_container_security()
+            .expect("privileged security should resolve");
+
+        assert!(resolved.linux.readonly_paths.is_empty());
+        assert!(!resolved.mount.options.contains(&"rro".to_string()));
+        assert_eq!(resolved.capabilities.add, ["ALL"]);
+        assert!(resolved.capabilities.drop.is_empty());
+    }
+
+    #[test]
     fn test_box_options_roundtrip() {
         let opts = BoxOptions {
             auto_delete: Some(0),
@@ -1314,12 +1660,12 @@ mod tests {
     #[test]
     fn test_network_mode_from_str_rejects_invalid_values() {
         let err = "broken".parse::<NetworkMode>().unwrap_err().to_string();
-        assert!(err.contains("invalid network.mode"));
+        assert!(err.contains("invalid network mode"));
     }
 
     #[test]
     fn test_network_config_enabled_converts_to_internal_network_spec() {
-        let spec = NetworkSpec::try_from(NetworkConfig {
+        let spec = NetworkSpec::try_from(OutboundNetworkConfig {
             mode: NetworkMode::Enabled,
             allow_net: vec!["example.com".to_string()],
         })
@@ -1334,27 +1680,160 @@ mod tests {
     }
 
     #[test]
+    fn test_inbound_config_converts_to_internal_spec() {
+        let spec = NetworkSpec::try_from(InboundNetworkConfig {
+            mode: NetworkMode::Disabled,
+            allow_net: Vec::new(),
+        })
+        .unwrap();
+        assert!(matches!(spec, NetworkSpec::Disabled));
+    }
+
+    #[test]
+    fn test_network_config_rejects_unsupported_inbound_allow_net() {
+        // No layer enforces an inbound allowlist yet; a non-empty one is
+        // rejected outright rather than accepted as a silent no-op.
+        let err = NetworkSpec::try_from(InboundNetworkConfig {
+            mode: NetworkMode::Enabled,
+            allow_net: vec!["10.0.0.0/8".to_string()],
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("not supported yet"));
+        // POL-356: this is the caller's mistake, not the server's — over
+        // boxlite serve it must reach the client as a 400, not a 500. The
+        // variant is what BoxliteError::http() dispatches on, so pin it here
+        // rather than only the message.
+        assert!(
+            matches!(
+                err,
+                boxlite_shared::errors::BoxliteError::InvalidArgument(_)
+            ),
+            "expected InvalidArgument (→ HTTP 400), got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_rejects_unsupported_inbound_allow_net() {
+        // FFI callers (C/Go) set the spec directly, bypassing try_from —
+        // sanitize() is the create-time backstop for those paths.
+        let mut opts = BoxOptions {
+            inbound_network: NetworkSpec::Enabled {
+                allow_net: vec!["10.0.0.0/8".to_string()],
+            },
+            ..Default::default()
+        };
+        let err = opts.sanitize().unwrap_err();
+        assert!(err.to_string().contains("not supported yet"));
+        // POL-356: same HTTP-mapping requirement as the try_from path above —
+        // this backstop must not silently regress to a 500.
+        assert!(
+            matches!(
+                err,
+                boxlite_shared::errors::BoxliteError::InvalidArgument(_)
+            ),
+            "expected InvalidArgument (→ HTTP 400), got {err:?}"
+        );
+    }
+
+    /// `VolumeSpec::managed_volume` and `VolumeSpec::bind_mount` cannot produce a mount
+    /// with two origins or none, but a struct literal and the C/Go FFI both
+    /// can, so sanitize() is the create-time backstop for those paths.
+    #[test]
+    fn test_sanitize_rejects_ambiguous_volume_origin() {
+        let mut both = BoxOptions {
+            volumes: vec![VolumeSpec {
+                managed_volume: Some("my-data".into()),
+                host_path: "/tmp/data".into(),
+                guest_path: "/data".into(),
+                read_only: false,
+            }],
+            ..Default::default()
+        };
+        let err = both.sanitize().unwrap_err().to_string();
+        assert!(err.contains("exactly one"), "{err}");
+
+        let mut neither = BoxOptions {
+            volumes: vec![VolumeSpec {
+                guest_path: "/data".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let err = neither.sanitize().unwrap_err().to_string();
+        assert!(err.contains("volume id or name"), "{err}");
+
+        let mut empty_reference = BoxOptions {
+            volumes: vec![VolumeSpec::managed_volume("   ", "/data")],
+            ..Default::default()
+        };
+        let err = empty_reference.sanitize().unwrap_err().to_string();
+        assert!(err.contains("empty managed_volume"), "{err}");
+    }
+
+    /// A box persisted before `managed_volume` existed carries only
+    /// `host_path`; it must still load, as a host bind, without a migration.
+    #[test]
+    fn legacy_volume_json_without_managed_volume_still_loads() {
+        let mut opts: BoxOptions = serde_json::from_str(
+            r#"{"volumes":[{"host_path":"/tmp/data","guest_path":"/data","read_only":true}]}"#,
+        )
+        .expect("pre-managed_volume box config must still deserialize");
+
+        let volume = &opts.volumes[0];
+        assert_eq!(volume.managed_volume, None);
+        assert_eq!(volume.host_path, "/tmp/data");
+        assert!(volume.read_only);
+        opts.sanitize().expect("a legacy host bind is still valid");
+    }
+
+    /// An ordinary host bind must not start writing a `managed_volume` key
+    /// into persisted configs and archives — an older reader has no field for
+    /// it. Same reasoning as `box_options_omits_capabilities_key_when_unspecified`.
+    #[test]
+    fn host_volume_omits_managed_volume_key() {
+        let opts = BoxOptions {
+            volumes: vec![VolumeSpec::bind_mount("/tmp/data", "/data")],
+            ..Default::default()
+        };
+
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&opts).unwrap()).unwrap();
+        let volume = &json["volumes"][0];
+
+        assert!(
+            !volume.as_object().unwrap().contains_key("managed_volume"),
+            "a host bind must omit the key, not serialize null: {volume}"
+        );
+    }
+
+    #[test]
     fn test_network_config_disabled_rejects_allow_net() {
-        let err = NetworkSpec::try_from(NetworkConfig {
+        let err = NetworkSpec::try_from(OutboundNetworkConfig {
             mode: NetworkMode::Disabled,
             allow_net: vec!["example.com".to_string()],
         })
         .unwrap_err()
         .to_string();
 
-        assert!(err.contains("network.mode=\"disabled\""));
+        assert!(err.contains("network.outbound.mode=\"disabled\""));
     }
 
     #[test]
     fn test_network_spec_converts_to_public_network_config() {
-        let config = NetworkConfig::from(&NetworkSpec::Disabled);
-        assert_eq!(config.mode, NetworkMode::Disabled);
-        assert!(config.allow_net.is_empty());
+        let config = NetworkConfig::from_specs(
+            &NetworkSpec::Disabled,
+            &NetworkSpec::Enabled {
+                allow_net: Vec::new(),
+            },
+        );
+        assert_eq!(config.outbound.mode, NetworkMode::Disabled);
+        assert!(config.outbound.allow_net.is_empty());
+        assert_eq!(config.inbound.mode, NetworkMode::Enabled);
     }
 
     #[test]
     fn test_sanitize_remove_on_stop_detach_incompatible() {
-        let opts = BoxOptions {
+        let mut opts = BoxOptions {
             auto_delete: Some(1),
             detach: true,
             ..Default::default()
@@ -1365,20 +1844,20 @@ mod tests {
 
     #[test]
     fn test_sanitize_valid_combinations() {
-        let remove = BoxOptions {
+        let mut remove = BoxOptions {
             auto_delete: Some(1),
             ..Default::default()
         };
         assert!(remove.sanitize().is_ok());
 
-        let keep_detached = BoxOptions {
+        let mut keep_detached = BoxOptions {
             auto_delete: Some(0),
             detach: true,
             ..Default::default()
         };
         assert!(keep_detached.sanitize().is_ok());
 
-        let keep_attached = BoxOptions {
+        let mut keep_attached = BoxOptions {
             auto_delete: Some(0),
             ..Default::default()
         };
@@ -1393,7 +1872,7 @@ mod tests {
             protocol: PortProtocol::Tcp,
             host_ip: None,
         };
-        let opts = BoxOptions {
+        let mut opts = BoxOptions {
             ports: vec![
                 duplicate.clone(),
                 PortSpec {
@@ -1906,5 +2385,36 @@ mod tests {
         // Only opts2 should have max_processes
         assert!(opts1.resource_limits.max_processes.is_none());
         assert_eq!(opts2.resource_limits.max_processes, Some(50));
+    }
+
+    /// The whole point of #1152: the ceiling has to follow the box's own
+    /// `--disk-size`, not a constant picked before the box existed.
+    #[test]
+    fn sanitize_scales_fsize_with_the_requested_disk() {
+        let mut options = BoxOptions {
+            disk_size_gb: Some(20),
+            ..BoxOptions::default()
+        };
+        options.sanitize().unwrap();
+
+        assert_eq!(
+            options.advanced.security.resource_limits.max_file_size,
+            Some(Bytes::from_gib(40).as_bytes()),
+            "a 20 GiB box gets a 40 GiB ceiling"
+        );
+    }
+
+    /// No explicit size: the disk is created at `DEFAULT_DISK_SIZE_GB`, so the
+    /// ceiling tracks that.
+    #[test]
+    fn sanitize_falls_back_to_the_default_disk_size() {
+        let mut options = BoxOptions::default();
+        options.sanitize().unwrap();
+
+        assert_eq!(
+            options.advanced.security.resource_limits.max_file_size,
+            Some(Bytes::from_gib(20).as_bytes()),
+            "the default 10 GiB disk gets a 20 GiB ceiling"
+        );
     }
 }

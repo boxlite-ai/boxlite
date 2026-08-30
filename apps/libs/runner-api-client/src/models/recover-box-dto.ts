@@ -15,10 +15,12 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
+import type { DtoSecretDTO } from './dto-secret-dto';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { DtoVolumeDTO } from './dto-volume-dto';
 
 export interface RecoverBoxDTO {
-    'backupErrorReason'?: string;
     'cpuQuota'?: number;
     'env'?: { [key: string]: string; };
     'errorReason': string;
@@ -28,7 +30,7 @@ export interface RecoverBoxDTO {
     'networkAllowList'?: string;
     'networkBlockAll'?: boolean;
     'osUser': string;
-    'snapshot'?: string;
+    'secrets'?: Array<DtoSecretDTO>;
     'storageQuota'?: number;
     'volumes'?: Array<DtoVolumeDTO>;
 }

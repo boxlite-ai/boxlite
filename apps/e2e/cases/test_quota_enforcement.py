@@ -1,13 +1,10 @@
-"""Per-box + per-org quota enforcement at the API boundary.
+"""Per-box quota enforcement at the API boundary.
 
 The admin org's per-box quotas are set by `fixture_setup.py::patch_admin_quota`:
 
   max_cpu_per_box    = 4
   max_memory_per_box = 8 (GiB)
   max_disk_per_box   = 20 (GiB)
-
-Plus the bootstrap's `ADMIN_TOTAL_*_QUOTA` envelope (32 CPU, 64 GiB mem,
-200 GiB disk org-wide).
 
 Quota violations must surface as 429 ResourceExhausted (or 400 if the API
 treats it as a validation error). 500 means the runner accepted a doomed

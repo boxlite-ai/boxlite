@@ -5,10 +5,11 @@ use boxlite::litebox::copy::CopyOptions;
 use boxlite::runtime::advanced_options::{HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, NetworkConfig, NetworkMode,
-    NetworkSpec, PortProtocol, PortSpec, RegistryTransport, RootfsSpec, VolumeSpec,
+    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, InboundNetworkConfig,
+    NetworkMode, NetworkSpec, OutboundNetworkConfig, PortProtocol, PortSpec, RegistryTransport,
+    RootfsSpec, VolumeSpec,
 };
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyTuple};
 
@@ -246,9 +247,42 @@ impl From<PyCopyOptions> for CopyOptions {
 // NetworkSpec
 // ============================================================================
 
+/// Network policy for a box.
+///
+/// Prefer the nested `outbound` and `inbound` fields. The constructor also
+/// accepts legacy `mode` and `allow_net` keywords as a compatibility shim.
 #[pyclass(name = "NetworkSpec")]
 #[derive(Clone, Debug)]
 pub(crate) struct PyNetworkSpec {
+    #[pyo3(get, set)]
+    pub(crate) outbound: Option<PyOutboundNetworkSpec>,
+    #[pyo3(get, set)]
+    pub(crate) inbound: Option<PyInboundNetworkSpec>,
+}
+
+/// Outbound network policy.
+///
+/// `mode` accepts `"enabled"` or `"disabled"`. `allow_net` contains the host
+/// patterns allowed when outbound networking is enabled.
+#[pyclass(name = "OutboundNetworkSpec")]
+#[derive(Clone, Debug)]
+pub(crate) struct PyOutboundNetworkSpec {
+    #[pyo3(get, set)]
+    pub(crate) mode: String,
+    #[pyo3(get, set)]
+    pub(crate) allow_net: Vec<String>,
+}
+
+/// Inbound network policy.
+///
+/// Aligned field-for-field with `NetworkSpec`: `mode` accepts
+/// `"enabled"` (services the box exposes are publicly reachable) or
+/// `"disabled"` (private). `allow_net` exists for shape symmetry only — no
+/// layer enforces an inbound allowlist yet, so a non-empty value is
+/// rejected.
+#[pyclass(name = "InboundNetworkSpec")]
+#[derive(Clone, Debug)]
+pub(crate) struct PyInboundNetworkSpec {
     #[pyo3(get, set)]
     pub(crate) mode: String,
     #[pyo3(get, set)]
@@ -257,27 +291,162 @@ pub(crate) struct PyNetworkSpec {
 
 #[pymethods]
 impl PyNetworkSpec {
+    /// Create a network policy from nested specs or legacy outbound keywords.
+    ///
+    /// Passing `outbound` together with legacy `mode` or `allow_net` raises
+    /// `ValueError`; callers should use one shape per request.
     #[new]
-    #[pyo3(signature = (mode, allow_net=vec![]))]
-    fn new(mode: String, allow_net: Vec<String>) -> Self {
-        Self { mode, allow_net }
+    #[pyo3(signature = (outbound=None, inbound=None, mode=None, allow_net=None))]
+    fn new(
+        outbound: Option<&Bound<'_, PyAny>>,
+        inbound: Option<&Bound<'_, PyAny>>,
+        mode: Option<String>,
+        allow_net: Option<Vec<String>>,
+    ) -> PyResult<Self> {
+        // The pre-split signature was `NetworkSpec(mode, allow_net)`, so the
+        // first two positional slots used to hold a `str` and a list of `str`.
+        // Both legacy shapes stay callable because each is unambiguous by
+        // type: a `str` in slot 1 is a mode, a sequence in slot 2 is an
+        // allowlist. Anything else must be the nested spec objects.
+        let (outbound, positional_mode) = match outbound {
+            None => (None, None),
+            Some(value) => match value.extract::<String>() {
+                Ok(legacy_mode) => (None, Some(legacy_mode)),
+                Err(_) => (Some(value.extract::<PyOutboundNetworkSpec>()?), None),
+            },
+        };
+        let (inbound, positional_allow_net) = match inbound {
+            None => (None, None),
+            Some(value) => match value.extract::<Vec<String>>() {
+                Ok(legacy_allow_net) => (None, Some(legacy_allow_net)),
+                Err(_) => (Some(value.extract::<PyInboundNetworkSpec>()?), None),
+            },
+        };
+
+        let mode = match (positional_mode, mode) {
+            (Some(_), Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "NetworkSpec got mode both positionally and by keyword",
+                ));
+            }
+            (positional, keyword) => positional.or(keyword),
+        };
+        let allow_net = match (positional_allow_net, allow_net) {
+            (Some(_), Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "NetworkSpec got allow_net both positionally and by keyword",
+                ));
+            }
+            (positional, keyword) => positional.or(keyword),
+        };
+
+        let legacy_outbound = if mode.is_some() || allow_net.is_some() {
+            if outbound.is_some() {
+                return Err(PyValueError::new_err(
+                    "NetworkSpec cannot mix outbound with legacy mode/allow_net",
+                ));
+            }
+            Some(PyOutboundNetworkSpec {
+                mode: mode.unwrap_or_else(|| "enabled".to_string()),
+                allow_net: allow_net.unwrap_or_default(),
+            })
+        } else {
+            None
+        };
+
+        Ok(Self {
+            outbound: outbound.or(legacy_outbound),
+            inbound,
+        })
+    }
+
+    /// Legacy view of the outbound mode.
+    ///
+    /// Deprecated: read `spec.outbound.mode`. Kept so pre-split readers keep
+    /// working; defaults to `"enabled"` when no outbound policy is set, which
+    /// is what an unset spec meant before the split.
+    #[getter]
+    fn mode(&self) -> String {
+        self.outbound
+            .as_ref()
+            .map(|outbound| outbound.mode.clone())
+            .unwrap_or_else(|| "enabled".to_string())
+    }
+
+    /// Legacy view of the outbound allowlist.
+    ///
+    /// Deprecated: read `spec.outbound.allow_net`.
+    #[getter]
+    fn allow_net(&self) -> Vec<String> {
+        self.outbound
+            .as_ref()
+            .map(|outbound| outbound.allow_net.clone())
+            .unwrap_or_default()
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "NetworkSpec(mode={:?}, allow_net={:?})",
-            self.mode, self.allow_net
+            "NetworkSpec(outbound={:?}, inbound={:?})",
+            self.outbound, self.inbound
         )
     }
 }
 
-impl TryFrom<PyNetworkSpec> for NetworkSpec {
+#[pymethods]
+impl PyOutboundNetworkSpec {
+    /// Create an outbound network policy.
+    ///
+    /// `mode` defaults to `"enabled"` and `allow_net` defaults to an empty
+    /// allow list, which means no additional host allow-list restriction.
+    #[new]
+    #[pyo3(signature = (mode="enabled".to_string(), allow_net=vec![]))]
+    fn new(mode: String, allow_net: Vec<String>) -> Self {
+        Self { mode, allow_net }
+    }
+}
+
+#[pymethods]
+impl PyInboundNetworkSpec {
+    /// Create an inbound network policy.
+    ///
+    /// `mode` defaults to `"enabled"` (publicly reachable) and `allow_net`
+    /// defaults to an empty allow list, meaning no host-based restriction.
+    #[new]
+    #[pyo3(signature = (mode="enabled".to_string(), allow_net=vec![]))]
+    fn new(mode: String, allow_net: Vec<String>) -> Self {
+        Self { mode, allow_net }
+    }
+}
+
+/// Both directions of the Python-facing network spec, converted into the two
+/// independent `BoxOptions` fields.
+impl TryFrom<PyNetworkSpec> for (NetworkSpec, NetworkSpec) {
     type Error = boxlite::BoxliteError;
 
     fn try_from(py_spec: PyNetworkSpec) -> Result<Self, Self::Error> {
-        let mode = py_spec.mode.parse::<NetworkMode>()?;
-        NetworkSpec::try_from(NetworkConfig {
-            mode,
+        let PyNetworkSpec { outbound, inbound } = py_spec;
+
+        let outbound = match outbound {
+            Some(outbound) => outbound.try_into()?,
+            None => NetworkSpec::default(),
+        };
+        let inbound = match inbound {
+            Some(inbound) => NetworkSpec::try_from(InboundNetworkConfig {
+                mode: inbound.mode.parse::<NetworkMode>()?,
+                allow_net: inbound.allow_net,
+            })?,
+            None => NetworkSpec::default(),
+        };
+        Ok((outbound, inbound))
+    }
+}
+
+impl TryFrom<PyOutboundNetworkSpec> for NetworkSpec {
+    type Error = boxlite::BoxliteError;
+
+    fn try_from(py_spec: PyOutboundNetworkSpec) -> Result<Self, Self::Error> {
+        NetworkSpec::try_from(OutboundNetworkConfig {
+            mode: py_spec.mode.parse::<NetworkMode>()?,
             allow_net: py_spec.allow_net,
         })
     }
@@ -408,6 +577,13 @@ pub(crate) struct PyBoxOptions {
     #[pyo3(get, set)]
     pub(crate) user: Option<String>,
 
+    /// Run the box's main command on a terminal (docker `run -t`).
+    ///
+    /// A property of the box, not of an attach: the main command is the
+    /// container's init, so whether it gets a terminal is fixed at create time.
+    #[pyo3(get, set)]
+    pub(crate) tty: Option<bool>,
+
     /// Advanced options for expert users (capabilities, security, mount isolation, health check).
     #[pyo3(get, set)]
     pub(crate) advanced: Option<PyAdvancedBoxOptions>,
@@ -439,6 +615,7 @@ impl PyBoxOptions {
         entrypoint=None,
         cmd=None,
         user=None,
+        tty=None,
         advanced=None,
         secrets=vec![],
     ))]
@@ -462,6 +639,7 @@ impl PyBoxOptions {
         entrypoint: Option<Vec<String>>,
         cmd: Option<Vec<String>>,
         user: Option<String>,
+        tty: Option<bool>,
         advanced: Option<PyAdvancedBoxOptions>,
         secrets: Vec<PySecret>,
     ) -> Self {
@@ -484,6 +662,7 @@ impl PyBoxOptions {
             entrypoint,
             cmd,
             user,
+            tty,
             advanced,
             secrets,
         }
@@ -510,9 +689,9 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
         let auto_delete = py_opts.auto_delete;
         let volumes = py_opts.volumes.into_iter().map(VolumeSpec::from).collect();
 
-        let network = match py_opts.network {
-            Some(spec) => NetworkSpec::try_from(spec)?,
-            None => NetworkSpec::default(),
+        let (network, inbound_network) = match py_opts.network {
+            Some(spec) => <(NetworkSpec, NetworkSpec)>::try_from(spec)?,
+            None => (NetworkSpec::default(), NetworkSpec::default()),
         };
 
         let ports = py_opts.ports.into_iter().map(PortSpec::from).collect();
@@ -538,6 +717,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
             rootfs,
             volumes,
             network,
+            inbound_network,
             ports,
             auto_stop: py_opts.auto_stop,
             auto_delete,
@@ -557,6 +737,10 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
             opts.detach = detach;
         }
 
+        if let Some(tty) = py_opts.tty {
+            opts.tty = tty;
+        }
+
         if let Some(advanced) = py_opts.advanced {
             if let Some(security) = advanced.security {
                 opts.advanced.security = SecurityOptions::from(security);
@@ -564,7 +748,9 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
             if let Some(health_check) = advanced.health_check {
                 opts.advanced.health_check = Some(HealthCheckOptions::from(health_check));
             }
-            opts.advanced.capabilities = advanced.capabilities.into();
+            if let Some(capabilities) = advanced.capabilities {
+                opts.advanced.set_capabilities(Some(capabilities.into()))?;
+            }
         }
 
         // Convert Python secrets to Rust secrets
@@ -585,19 +771,30 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
     }
 }
 
+/// One entry of the `volumes=` argument, before it becomes a [`VolumeSpec`].
+///
+/// `managed_volume` holds a volume id or name from the `managed_volume` key;
+/// `host_path` holds a bind path from a tuple or the `host_path` key. Exactly
+/// one is set. The dict keys are the core field names verbatim, so one
+/// vocabulary spans Python, the Rust core and the wire.
 #[derive(Clone, Debug)]
 pub(crate) struct PyVolumeSpec {
-    host: String,
-    guest: String,
+    managed_volume: Option<String>,
+    host_path: String,
+    guest_path: String,
     read_only: bool,
 }
 
 impl From<PyVolumeSpec> for VolumeSpec {
     fn from(v: PyVolumeSpec) -> Self {
+        let spec = match v.managed_volume {
+            Some(managed_volume) => VolumeSpec::managed_volume(managed_volume, v.guest_path),
+            None => VolumeSpec::bind_mount(v.host_path, v.guest_path),
+        };
+
         VolumeSpec {
-            host_path: v.host,
-            guest_path: v.guest,
             read_only: v.read_only,
+            ..spec
         }
     }
 }
@@ -608,75 +805,94 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
     fn extract(ob: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
         let obj = ob.to_owned();
 
+        // Tuple form is a host bind, and only a host bind: it predates managed
+        // volumes and has no slot to say which origin it means.
         if let Ok(t) = obj.cast::<PyTuple>() {
             let len = t.len();
-            let err =
-                || PyRuntimeError::new_err("volumes tuples must be (host, guest[, read_only])");
-            let host: String;
-            let guest: String;
+            let err = || {
+                PyRuntimeError::new_err(
+                    "volumes tuples must be (host_path, guest_path[, read_only])",
+                )
+            };
+            let host_path: String;
+            let guest_path: String;
             let read_only: bool;
 
             match len {
                 2 => {
-                    host = t.get_item(0)?.extract()?;
-                    guest = t.get_item(1)?.extract()?;
+                    host_path = t.get_item(0)?.extract()?;
+                    guest_path = t.get_item(1)?.extract()?;
                     read_only = false;
                 }
                 3 => {
-                    host = t.get_item(0)?.extract()?;
-                    guest = t.get_item(1)?.extract()?;
+                    host_path = t.get_item(0)?.extract()?;
+                    guest_path = t.get_item(1)?.extract()?;
                     read_only = t.get_item(2)?.extract()?;
                 }
                 _ => return Err(err()),
             }
 
             return Ok(PyVolumeSpec {
-                host,
-                guest,
+                managed_volume: None,
+                host_path,
+                guest_path,
                 read_only,
             });
         }
 
         if let Ok(d) = obj.cast::<PyDict>() {
-            let host: String = if let Ok(Some(v)) = d.get_item("source") {
-                let source: String = v.extract()?;
-                if !source.starts_with("volume://") {
+            // Unknown keys are an error, not noise. `ro` and `guest` used to be
+            // accepted aliases; ignoring them now would silently hand back a
+            // read-write mount to a caller who asked for read-only.
+            const KEYS: [&str; 4] = ["managed_volume", "host_path", "guest_path", "read_only"];
+            for key in d.keys() {
+                let key: String = key.extract()?;
+                if !KEYS.contains(&key.as_str()) {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "unknown volume dict key {key:?}; expected one of {}",
+                        KEYS.join(", ")
+                    )));
+                }
+            }
+
+            let managed_volume: Option<String> = match d.get_item("managed_volume") {
+                Ok(Some(v)) => Some(v.extract()?),
+                _ => None,
+            };
+            let host_path: Option<String> = match d.get_item("host_path") {
+                Ok(Some(v)) => Some(v.extract()?),
+                _ => None,
+            };
+
+            let (managed_volume, host_path) = match (managed_volume, host_path) {
+                (Some(_), Some(_)) => {
                     return Err(PyRuntimeError::new_err(
-                        "volume source must use the volume:// scheme",
+                        "volume dict takes managed_volume or host_path, not both",
                     ));
                 }
-                source
-            } else if let Ok(Some(v)) = d.get_item("host") {
-                v.extract()?
-            } else if let Ok(Some(v)) = d.get_item("host_path") {
-                v.extract()?
-            } else {
-                return Err(PyRuntimeError::new_err(
-                    "volume dict missing source/host/host_path",
-                ));
+                (Some(managed_volume), None) => (Some(managed_volume), String::new()),
+                (None, Some(host_path)) => (None, host_path),
+                (None, None) => {
+                    return Err(PyRuntimeError::new_err(
+                        "volume dict requires managed_volume or host_path",
+                    ));
+                }
             };
 
-            let guest: String = if let Ok(Some(v)) = d.get_item("guest") {
-                v.extract()?
-            } else if let Ok(Some(v)) = d.get_item("guest_path") {
-                v.extract()?
-            } else {
-                return Err(PyRuntimeError::new_err(
-                    "volume dict missing guest/guest_path",
-                ));
+            let guest_path: String = match d.get_item("guest_path") {
+                Ok(Some(v)) => v.extract()?,
+                _ => return Err(PyRuntimeError::new_err("volume dict missing guest_path")),
             };
 
-            let read_only: bool = if let Ok(Some(v)) = d.get_item("read_only") {
-                v.extract()?
-            } else if let Ok(Some(v)) = d.get_item("ro") {
-                v.extract()?
-            } else {
-                false
+            let read_only: bool = match d.get_item("read_only") {
+                Ok(Some(v)) => v.extract()?,
+                _ => false,
             };
 
             return Ok(PyVolumeSpec {
-                host,
-                guest,
+                managed_volume,
+                host_path,
+                guest_path,
                 read_only,
             });
         }
@@ -965,24 +1181,248 @@ impl From<PyBoxliteRestOptions> for BoxliteRestOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::advanced_options::{PyContainerCapabilities, PySecurityOptions};
+
+    /// Builds a `PyBoxOptions` with everything at its "untouched" default
+    /// except `advanced`, so the conversion under test is exercised without
+    /// needing the Python interpreter (plain struct literals, no
+    /// `Python::attach` — `cargo test -p boxlite-python` can't link libpython
+    /// in this sandbox, but a pure `TryFrom` call between plain Rust structs
+    /// doesn't need it).
+    fn py_box_options_with_advanced(advanced: PyAdvancedBoxOptions) -> PyBoxOptions {
+        PyBoxOptions {
+            image: None,
+            rootfs_path: None,
+            cpus: None,
+            memory_mib: None,
+            disk_size_gb: None,
+            working_dir: None,
+            env: vec![],
+            volumes: vec![],
+            network: None,
+            ports: vec![],
+            auto_remove: None,
+            auto_stop: None,
+            auto_delete: None,
+            auto_resume: None,
+            detach: None,
+            entrypoint: None,
+            cmd: None,
+            user: None,
+            tty: None,
+            advanced: Some(advanced),
+            secrets: vec![],
+        }
+    }
+
+    /// Same "untouched defaults" shape as above, parameterised on `tty` — the
+    /// field the reference server forwards into `boxlite.BoxOptions(**kwargs)`.
+    fn py_box_options_with_tty(tty: Option<bool>) -> PyBoxOptions {
+        PyBoxOptions {
+            image: None,
+            rootfs_path: None,
+            cpus: None,
+            memory_mib: None,
+            disk_size_gb: None,
+            working_dir: None,
+            env: vec![],
+            volumes: vec![],
+            network: None,
+            ports: vec![],
+            auto_remove: None,
+            auto_stop: None,
+            auto_delete: None,
+            auto_resume: None,
+            detach: None,
+            entrypoint: None,
+            cmd: None,
+            user: None,
+            tty,
+            advanced: None,
+            secrets: vec![],
+        }
+    }
+
+    fn default_py_security() -> PySecurityOptions {
+        PySecurityOptions {
+            jailer_enabled: false,
+            seccomp_enabled: false,
+            max_open_files: None,
+            max_file_size: None,
+            max_processes: None,
+            max_memory: None,
+            max_cpu_time: None,
+            network_enabled: true,
+            close_fds: true,
+        }
+    }
+
+    /// A caller who only sets `security=` (never mentions `capabilities=`)
+    /// must not have `capabilities` silently become an explicit, empty
+    /// policy — that's the exact None-vs-Some(empty) distinction this PR's
+    /// core API is built to preserve (see AdvancedBoxOptions::capabilities'
+    /// own doc comment), and Some(empty) trips `archive_version_for_options`
+    /// and `RestRuntime::create`'s `require_linux_capabilities_enabled` gate
+    /// for a caller who never touched capabilities at all.
     #[test]
-    fn py_volume_source_requires_volume_scheme() {
+    fn security_only_advanced_options_leaves_capabilities_unspecified() {
+        let advanced = PyAdvancedBoxOptions {
+            security: Some(default_py_security()),
+            health_check: None,
+            capabilities: None,
+        };
+
+        let opts = BoxOptions::try_from(py_box_options_with_advanced(advanced))
+            .expect("security-only options should convert");
+
+        assert!(
+            opts.advanced.capabilities().is_none(),
+            "expected capabilities to stay unspecified, got {:?}",
+            opts.advanced.capabilities()
+        );
+    }
+
+    /// Mirror of the above for the case a Python caller DOES explicitly ask
+    /// for a capability policy — must still come through as `Some`.
+    #[test]
+    fn explicit_capabilities_still_convert() {
+        let advanced = PyAdvancedBoxOptions {
+            security: None,
+            health_check: None,
+            capabilities: Some(PyContainerCapabilities {
+                add: vec!["SYS_ADMIN".to_string()],
+                drop: vec![],
+            }),
+        };
+
+        let opts = BoxOptions::try_from(py_box_options_with_advanced(advanced))
+            .expect("explicit capabilities should convert");
+
+        let capabilities = opts
+            .advanced
+            .capabilities()
+            .expect("capabilities should be set");
+        assert_eq!(capabilities.add, ["SYS_ADMIN"]);
+    }
+
+    /// A managed volume is taken verbatim — by id or by name alike. The server
+    /// resolves either, so the SDK must not narrow it or rewrite it.
+    #[test]
+    fn py_managed_volume_is_taken_verbatim() {
         Python::attach(|py| {
-            let valid = PyDict::new(py);
-            valid.set_item("source", "volume://vol_123").unwrap();
-            valid.set_item("guest_path", "/data").unwrap();
+            for reference in ["vol_01K2EXAMPLE", "my-data"] {
+                let dict = PyDict::new(py);
+                dict.set_item("managed_volume", reference).unwrap();
+                dict.set_item("guest_path", "/data").unwrap();
+                dict.set_item("read_only", true).unwrap();
 
-            let volume = valid.extract::<PyVolumeSpec>().unwrap();
-            assert_eq!(volume.host, "volume://vol_123");
-            assert_eq!(volume.guest, "/data");
-            assert!(!volume.read_only);
-
-            let invalid = PyDict::new(py);
-            invalid.set_item("source", "vol_123").unwrap();
-            invalid.set_item("guest_path", "/data").unwrap();
-
-            let err = invalid.extract::<PyVolumeSpec>().unwrap_err();
-            assert!(err.to_string().contains("volume:// scheme"));
+                let spec = VolumeSpec::from(dict.extract::<PyVolumeSpec>().unwrap());
+                assert_eq!(spec.managed_volume.as_deref(), Some(reference));
+                assert_eq!(spec.host_path, "");
+                assert_eq!(spec.guest_path, "/data");
+                assert!(spec.read_only);
+            }
         });
+    }
+
+    /// A disabled inbound policy maps to `NetworkSpec::Disabled`; an unset
+    /// outbound falls back to the enabled default.
+    #[test]
+    fn nested_network_spec_converts() {
+        let (outbound, inbound) = <(NetworkSpec, NetworkSpec)>::try_from(PyNetworkSpec {
+            outbound: None,
+            inbound: Some(PyInboundNetworkSpec {
+                mode: "disabled".into(),
+                allow_net: vec![],
+            }),
+        })
+        .unwrap();
+
+        assert!(matches!(inbound, NetworkSpec::Disabled));
+        assert!(matches!(outbound, NetworkSpec::Enabled { .. }));
+    }
+
+    /// A dropped alias must fail loudly. `ro` was accepted before the rename;
+    /// ignoring it as an unknown key would silently turn a read-only mount
+    /// into a read-write one — a permission downgrade the caller never sees.
+    #[test]
+    fn py_volume_dict_rejects_unknown_keys() {
+        Python::attach(|py| {
+            for (key, value) in [("ro", "true"), ("guest", "/d"), ("source", "my-data")] {
+                let dict = PyDict::new(py);
+                dict.set_item("host_path", "/tmp/data").unwrap();
+                dict.set_item("guest_path", "/data").unwrap();
+                dict.set_item(key, value).unwrap();
+
+                let err = dict.extract::<PyVolumeSpec>().unwrap_err();
+                let message = err.to_string();
+                assert!(message.contains("unknown volume dict key"), "{message}");
+                assert!(message.contains(key), "{message}");
+            }
+        });
+    }
+
+    #[test]
+    fn py_volume_dict_requires_exactly_one_origin() {
+        Python::attach(|py| {
+            let both = PyDict::new(py);
+            both.set_item("managed_volume", "my-data").unwrap();
+            both.set_item("host_path", "/tmp/data").unwrap();
+            both.set_item("guest_path", "/data").unwrap();
+
+            let err = both.extract::<PyVolumeSpec>().unwrap_err();
+            assert!(err.to_string().contains("not both"), "{err}");
+
+            let neither = PyDict::new(py);
+            neither.set_item("guest_path", "/data").unwrap();
+
+            let err = neither.extract::<PyVolumeSpec>().unwrap_err();
+            assert!(
+                err.to_string().contains("managed_volume or host_path"),
+                "{err}"
+            );
+        });
+    }
+
+    /// Tuples stay host binds. They predate managed volumes and have no slot
+    /// to say which origin they mean, so a first element that merely looks
+    /// like a volume name must not be promoted to a managed volume.
+    #[test]
+    fn py_volume_tuple_stays_a_host_bind() {
+        Python::attach(|py| {
+            let tuple = PyTuple::new(py, ["/tmp/data", "/data"]).unwrap();
+            let spec = VolumeSpec::from(tuple.extract::<PyVolumeSpec>().unwrap());
+
+            assert_eq!(spec.managed_volume, None);
+            assert_eq!(spec.host_path, "/tmp/data");
+            assert_eq!(spec.guest_path, "/data");
+        });
+    }
+
+    /// `tty` is a concrete `bool` on core `BoxOptions`, not an `Option`, so the
+    /// conversion has to distinguish "caller asked" from "caller said nothing".
+    /// Without the `if let Some(tty)` arm this silently stays false and
+    /// `boxlite run -t` against the reference server produces a box with no
+    /// terminal — the same class of silent drop this whole change closes.
+    #[test]
+    fn explicit_tty_reaches_core_box_options() {
+        let opts = BoxOptions::try_from(py_box_options_with_tty(Some(true)))
+            .expect("tty=True should convert");
+
+        assert!(opts.tty, "expected tty to reach core BoxOptions");
+    }
+
+    /// The other side: an unset `tty` must leave the core default alone rather
+    /// than writing `false` over whatever the core decides.
+    #[test]
+    fn unset_tty_preserves_the_core_default() {
+        let opts =
+            BoxOptions::try_from(py_box_options_with_tty(None)).expect("tty=None should convert");
+
+        assert_eq!(
+            opts.tty,
+            BoxOptions::default().tty,
+            "an unset tty must not overwrite the core default"
+        );
     }
 }

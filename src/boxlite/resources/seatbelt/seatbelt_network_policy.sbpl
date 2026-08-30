@@ -4,6 +4,13 @@
 ;
 ; This policy is ADDED to the base policy when security.network_enabled = true.
 ;
+; SCOPE: IP networking only (AF_INET/AF_INET6), for gvproxy's guest traffic.
+;   The shim's own AF_UNIX control plane is NOT granted here — it is emitted
+;   unconditionally by seatbelt.rs::build_unix_socket_grants(), because the
+;   shim needs it even for a box with no guest network. Do not move those
+;   grants back into this file: gating them on network_enabled killed every
+;   box at startup (issue #1072).
+;
 ; It allows:
 ;   - Outbound and inbound network connections
 ;   - System sockets for network operations

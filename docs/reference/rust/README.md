@@ -262,10 +262,19 @@ pub struct BoxInfo {
     pub labels: HashMap<String, String>,
 }
 
-pub struct NetworkInfo {
+pub struct NetworkDirectionInfo {
     pub mode: NetworkMode,
     pub allow_net: Vec<String>,
+}
+
+pub struct NetworkInfo {
+    pub outbound: NetworkDirectionInfo,
+    pub inbound: NetworkDirectionInfo,
     pub published_ports: Option<Vec<PublishedPort>>,
+    // Deprecated mirrors of `outbound`, kept so pre-split readers keep
+    // compiling. Build with `NetworkInfo::new` so they cannot disagree.
+    pub mode: NetworkMode,
+    pub allow_net: Vec<String>,
 }
 
 pub struct PublishedPort {
@@ -364,18 +373,23 @@ pub struct BoxState {
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
 | Get handle | `LiteBox::network(&self) -> NetworkHandle` | Get box-scoped network operations |
-| Prepare | `async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>` | Prepare one TCP connection |
-| Inspect | `BoxTunnel::uri(&self) -> Option<&str>` | Public URL of a remotely served tunnel; `None` for a local one |
+| Tunnel | `async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>` | Prepare a one-shot tunnel to one guest TCP service |
+| Forward | `async fn BoxTunnel::forward(self, listen: SocketAddress) -> BoxliteResult<TunnelForwarder>` | Consume the tunnel into a TCP or Unix listener |
+| Inspect | `BoxTunnel::uri(&self) -> Option<&str>` | Read the prepared public URL; `None` for a local box |
 | Descriptor | `BoxConnection::raw_fd(&self) -> Option<RawFd>` | Borrowed fd; `None` for a remotely served connection |
 | Take fd | `BoxConnection::into_fd(self) -> BoxliteResult<OwnedFd>` | Consume the connection and own its descriptor |
-| Connect | `BoxTunnel::connect(self) -> BoxliteResult<BoxConnection>` | Consume the tunnel into its bidirectional byte stream |
+| Connect | `BoxTunnel::connect(self) -> BoxliteResult<BoxConnection>` | Consume the prepared tunnel into its byte stream |
 | Split | `BoxConnection::into_split(self) -> (BoxReader, BoxWriter)` | Halves that read and write concurrently |
 | Half-close | `BoxWriter::shutdown(&mut self) -> BoxliteResult<()>` | Signal EOF; a peer that already hung up is success, not an error |
 
-`BoxTunnel` represents exactly one connection; its consuming `connect(self)`
-enforces that at the type boundary. Request another tunnel for each additional
-or concurrent connection. This differs from `BoxOptions.ports`, which creates a
-persistent, local-only host listener that accepts repeated connections.
+`BoxTunnel` remains one-shot: choose either `connect()` or `forward()`. A
+forwarder privately prepares a fresh tunnel for each later accepted client.
+This differs from `BoxOptions.ports`, which publishes a local port for
+the lifetime of the box.
+
+`TunnelForwarder::local_addr()` reports the canonical bound address, while
+repeatable `wait()` and `close()` share the listener's cached terminal result.
+Dropping the final handle requests cancellation.
 
 ---
 
@@ -572,8 +586,11 @@ pub struct BoxOptions {
     /// Volume mounts
     pub volumes: Vec<VolumeSpec>,
 
-    /// Network isolation mode
+    /// Network policy, per direction
     pub network: NetworkSpec,
+
+    /// Inbound reachability of exposed services
+    pub inbound_network: NetworkSpec,
 
     /// Outbound HTTP(S) secret substitution rules
     pub secrets: Vec<Secret>,
@@ -606,11 +623,7 @@ let options = BoxOptions {
         ("PYTHONPATH".to_string(), "/app".to_string()),
     ],
     volumes: vec![
-        VolumeSpec {
-            host_path: "/home/user/project".to_string(),
-            guest_path: "/app".to_string(),
-            read_only: false,
-        },
+        VolumeSpec::bind_mount("/home/user/project", "/app"),
     ],
     ports: vec![
         PortSpec {
@@ -675,11 +688,15 @@ impl Default for RootfsSpec {
 
 ### VolumeSpec
 
-Filesystem mount specification.
+Filesystem mount specification. A mount has exactly one origin: a managed
+volume, or a host bind path.
 
 ```rust
 pub struct VolumeSpec {
-    /// Path on host
+    /// Managed volume, by server-assigned id or by name.
+    pub managed_volume: Option<String>,
+
+    /// Path on host. Empty when `managed_volume` is set.
     pub host_path: String,
 
     /// Path inside guest
@@ -690,20 +707,71 @@ pub struct VolumeSpec {
 }
 ```
 
+The constructor names the operation; the `host_path` field names what it holds.
+The field keeps its name because it is persisted box config: boxes on disk carry
+a `host_path` key, so renaming the field would strand every box written before
+such a rename. Renaming the constructor, as here, does not touch what is stored.
+
+Build one with a constructor rather than by hand:
+
+```rust
+use boxlite::runtime::options::VolumeSpec;
+
+// Managed volume, addressed by name — `"vol_01K2EXAMPLE"` works the same way.
+let by_name = VolumeSpec::managed_volume("my-data", "/data");
+
+// Host bind mount, read-only.
+let bind = VolumeSpec {
+    read_only: true,
+    ..VolumeSpec::bind_mount("/tmp/data", "/data")
+};
+```
+
+The reference is taken verbatim and reaches the wire unchanged — nothing
+decorates or narrows it.
+
+The two origins are not interchangeable across runtimes:
+
+| Origin | Local runtime | REST runtime |
+| --- | --- | --- |
+| `VolumeSpec::managed_volume` | rejected — no volume backend | mounted |
+| `VolumeSpec::bind_mount` | mounted | rejected — the path is the server's, not yours |
+
 ### NetworkSpec
 
-Network isolation options.
+Guest egress policy — unchanged by the outbound/inbound split.
 
 ```rust
 pub enum NetworkSpec {
     Enabled {
-        allow_net: Vec<String>, // empty = full outbound access
+        allow_net: Vec<String>, // empty = full access
     },
-    Disabled,
+    Disabled,                   // no guest network interface at all
 }
 ```
 
 `allow_net` supports exact hosts, wildcard hosts, IPs, and CIDRs, and restricts both TCP and UDP egress. Hostname rules rely on TLS SNI / HTTP Host inspection, which only TCP carries, so an `allow_net` holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP open. `Disabled` removes the guest network interface entirely.
+
+The inbound direction — whether services the box exposes are reachable from
+outside it — is the sibling field `BoxOptions::inbound_network`, which reuses
+this same type: `Enabled` = reachable (the default), `Disabled` = private.
+The two directions are independent, so a box may refuse egress while the
+services it exposes stay reachable, or the reverse.
+
+```rust
+let opts = BoxOptions {
+    network: NetworkSpec::Disabled,                                  // no egress
+    inbound_network: NetworkSpec::Enabled { allow_net: vec![] },     // still reachable
+    ..Default::default()
+};
+```
+
+`inbound_network`'s `allow_net` must be empty — no layer enforces an inbound
+allowlist yet, so a non-empty value is rejected at create. Inbound is
+controlled by enabled/disabled alone.
+
+Pre-split code needs no change: `network` keeps its name, type and meaning,
+and box configs persisted without `inbound_network` load with it defaulted.
 
 ### Secret
 
@@ -1138,9 +1206,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rootfs: RootfsSpec::Image("python:3.11-slim".to_string()),
         volumes: vec![
             VolumeSpec {
-                host_path: "/home/user/code".to_string(),
-                guest_path: "/app".to_string(),
                 read_only: true,
+                ..VolumeSpec::bind_mount("/home/user/code", "/app")
             },
         ],
         advanced: AdvancedBoxOptions {

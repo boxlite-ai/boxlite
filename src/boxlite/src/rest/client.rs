@@ -11,13 +11,15 @@ use tokio::sync::RwLock;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::credential::{AccessToken, Credential};
-use super::error::{map_http_error, map_http_status};
+use super::error::{map_http_body, map_http_status};
 use super::options::BoxliteRestOptions;
-use super::types::{ErrorResponse, FlatErrorResponse, ServerConfig};
+use super::types::ServerConfig;
 use crate::runtime::auth::Principal;
 
 /// Re-request a token once it is within this leeway of `expires_at`.
 const REFRESH_LEEWAY: Duration = Duration::from_secs(60);
+/// File transfers cannot outlive the runner's 24-hour box lifetime cap.
+const FILE_REQUEST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const TUNNEL_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 type TunnelConnector =
@@ -64,6 +66,7 @@ impl ApiClient {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(300))
+            .connect_timeout(std::time::Duration::from_secs(300))
             .build()
             .map_err(|e| BoxliteError::Config(format!("failed to create HTTP client: {}", e)))?;
         let tunnel_connector = hyper_rustls::HttpsConnectorBuilder::new()
@@ -164,11 +167,10 @@ impl ApiClient {
         }
         // Read the body as bytes once, then parse; this is what lets us
         // include the body in a parse-failure error without re-issuing the
-        // request.
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("reading response body: {}", e)))?;
+        // request. A failure at this point is a transport fault — this client's
+        // own total timeout expiring after the headers landed, a reset
+        // connection, a corrupt compressed body — never an internal bug.
+        let bytes = resp.bytes().await.map_err(transport_error)?;
         serde_json::from_slice::<T>(&bytes).map_err(|e| {
             let preview = String::from_utf8_lossy(&bytes);
             let preview = if preview.len() > 4096 {
@@ -209,13 +211,7 @@ impl ApiClient {
         resp: reqwest::Response,
     ) -> BoxliteResult<T> {
         let text = resp.text().await.unwrap_or_default();
-        if let Ok(err_resp) = serde_json::from_str::<ErrorResponse>(&text) {
-            Err(map_http_error(status, &err_resp.error))
-        } else if let Ok(err_resp) = serde_json::from_str::<FlatErrorResponse>(&text) {
-            Err(map_http_error(status, &err_resp.into_error_model()))
-        } else {
-            Err(map_http_status(status, &text))
-        }
+        Err(map_http_body(status, &text))
     }
 
     // ========================================================================
@@ -417,35 +413,24 @@ impl ApiClient {
             uri: String,
         }
         let path = format!("/boxes/{}/network/tunnel?port={port}", box_id.as_ref());
-        let request = self
-            .authorize(
-                self.http
-                    .post(self.url(&path))
-                    .header(reqwest::header::ACCEPT, "application/json"),
-            )
-            .await?;
-        let response = request
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Network(e.to_string()))?;
-        let status = response.status();
-        if !status.is_success() {
-            return self.handle_error(status, response).await;
-        }
-        let descriptor: TunnelDescriptor = response
-            .json()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("invalid tunnel descriptor: {e}")))?;
+        let builder = self
+            .http
+            .post(self.url(&path))
+            .header(reqwest::header::ACCEPT, "application/json");
+        let descriptor: TunnelDescriptor = self.send_json(builder).await?;
         Ok(descriptor.uri)
     }
 
-    /// Build an authorized request (for custom operations like file upload/download).
+    /// Build an authorized file request bounded by the box lifetime.
     pub async fn authorized_request(
         &self,
         method: Method,
         path: &str,
     ) -> BoxliteResult<RequestBuilder> {
-        let builder = self.http.request(method, self.url(path));
+        let builder = self
+            .http
+            .request(method, self.url(path))
+            .timeout(FILE_REQUEST_TIMEOUT);
         self.authorize(builder).await
     }
 
@@ -559,7 +544,7 @@ impl ApiClient {
 /// invaluable for diagnosing transparent-proxy regressions like the
 /// Clash `:7890` interception that produced bare 502s in
 /// production.
-fn transport_error(err: reqwest::Error) -> BoxliteError {
+pub(super) fn transport_error(err: reqwest::Error) -> BoxliteError {
     let url_hint = err.url().map(|u| u.as_str().to_string());
     let kind = if err.is_connect() {
         "connect failed"
@@ -639,11 +624,38 @@ mod tests {
     use super::ensure_capability;
     use super::*;
     use crate::rest::credential::{AccessToken, Credential};
+    use crate::rest::error::map_http_error;
+    use crate::rest::types::FlatErrorResponse;
     use async_trait::async_trait;
     use boxlite_shared::errors::BoxliteError;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+
+    async fn serve_response_body_on_signal(
+        listener: TcpListener,
+        response_started: oneshot::Sender<()>,
+        finish_body: oneshot::Receiver<()>,
+    ) {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut headers = Vec::new();
+        while !headers.ends_with(b"\r\n\r\n") {
+            headers.push(socket.read_u8().await.unwrap());
+        }
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\n\
+                  Content-Type: application/json\r\n\
+                  Content-Length: 2\r\n\
+                  Connection: close\r\n\r\n{",
+            )
+            .await
+            .unwrap();
+        response_started.send(()).unwrap();
+        finish_body.await.unwrap();
+        let _ = socket.write_all(b"}").await;
+    }
 
     /// Rotating credential with a finite expiry already in the past, so
     /// `current_bearer` must re-request on every call. Proves the cache
@@ -673,6 +685,74 @@ mod tests {
     fn client_with(cred: Arc<dyn Credential>) -> ApiClient {
         let opts = BoxliteRestOptions::new("http://localhost:1").with_credential(cred);
         ApiClient::new(&opts).expect("client")
+    }
+
+    #[tokio::test]
+    async fn file_request_outlives_default_timeout() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (response_started_tx, response_started_rx) = oneshot::channel();
+        let (finish_body_tx, finish_body_rx) = oneshot::channel();
+        let server = tokio::spawn(serve_response_body_on_signal(
+            listener,
+            response_started_tx,
+            finish_body_rx,
+        ));
+
+        let client =
+            ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let request = client
+            .authorized_request(Method::GET, "/boxes/box1/files")
+            .await
+            .unwrap();
+        let response = request.send().await.unwrap();
+
+        response_started_rx.await.unwrap();
+        tokio::time::pause();
+        tokio::time::sleep(Duration::from_secs(301)).await;
+        tokio::time::resume();
+        finish_body_tx.send(()).unwrap();
+
+        let bytes = tokio::time::timeout(Duration::from_secs(5), response.bytes())
+            .await
+            .expect("file response body must arrive after the timeout boundary")
+            .expect("file request must outlive the default 300-second timeout");
+        assert_eq!(bytes.as_ref(), b"{}");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn control_request_keeps_total_timeout() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (response_started_tx, response_started_rx) = oneshot::channel();
+        let (finish_body_tx, finish_body_rx) = oneshot::channel();
+        let server = tokio::spawn(serve_response_body_on_signal(
+            listener,
+            response_started_tx,
+            finish_body_rx,
+        ));
+
+        let client =
+            ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let control_request =
+            tokio::spawn(async move { client.get::<serde_json::Value>("/slow").await });
+
+        response_started_rx.await.unwrap();
+        tokio::time::pause();
+        tokio::time::sleep(Duration::from_secs(301)).await;
+        tokio::time::resume();
+
+        let error = control_request
+            .await
+            .unwrap()
+            .expect_err("control request must retain its total timeout");
+        assert!(
+            matches!(&error, BoxliteError::Network(detail) if detail.contains("timed out")),
+            "control request must fail because its total timeout elapsed, got {error:?}"
+        );
+        finish_body_tx.send(()).unwrap();
+        server.await.unwrap();
     }
 
     #[tokio::test]
@@ -722,6 +802,50 @@ mod tests {
             "unexpected error: {error}"
         );
 
+        server.await.unwrap();
+    }
+
+    /// `prepare_box_tunnel` sends its descriptor request through the shared
+    /// control-request path, so this pins the wire contract that path owes it:
+    /// POST to the prefixed tunnel URL, JSON accepted, descriptor parsed back.
+    #[tokio::test]
+    async fn prepare_box_tunnel_posts_descriptor_request_and_parses_uri() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                headers.push(socket.read_u8().await.unwrap());
+            }
+            let headers = String::from_utf8(headers).unwrap().to_lowercase();
+            assert!(
+                headers.starts_with("post /v1/boxes/box1/network/tunnel?port=8080 http/1.1"),
+                "unexpected request line: {headers}"
+            );
+            assert!(
+                headers.contains("accept: application/json"),
+                "descriptor request must ask for json: {headers}"
+            );
+            let body = r#"{"uri":"http://127.0.0.1:9/tunnel"}"#;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+
+        let client =
+            ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let uri = client.prepare_box_tunnel("box1", 8080).await.unwrap();
+
+        assert_eq!(uri, "http://127.0.0.1:9/tunnel");
         server.await.unwrap();
     }
 

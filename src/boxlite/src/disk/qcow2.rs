@@ -462,9 +462,8 @@ impl Qcow2Helper {
             .write_all(&hdr)
             .map_err(|e| BoxliteError::Storage(format!("flatten: header write: {}", e)))?;
 
-        output
-            .sync_all()
-            .map_err(|e| BoxliteError::Storage(format!("flatten: sync: {}", e)))?;
+        // Export consumes this transient image immediately; syncing it here would
+        // only extend the VM quiesce window.
 
         tracing::info!(
             dst = %dst.display(),
@@ -1259,8 +1258,10 @@ impl FlattenLayer {
             ))
         })?;
         let l1_table: Vec<u64> = l1_buf
-            .chunks_exact(8)
-            .map(|c| u64::from_be_bytes(c.try_into().unwrap()))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| u64::from_be_bytes(*c))
             .collect();
 
         Ok((

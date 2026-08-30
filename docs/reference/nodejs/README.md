@@ -147,13 +147,33 @@ interface JsEnvVar {
 
 #### `JsVolumeSpec`
 
+A mount has exactly one origin — a managed volume or a host bind path:
+
 ```typescript
-interface JsVolumeSpec {
-  hostPath: string;    // Path on host
-  guestPath: string;   // Path in container
-  readOnly?: boolean;  // Default: false
-}
+type JsVolumeSpec =
+  | {
+      // The volume's server-assigned id or its name - the server resolves either.
+      managedVolume: string;
+      guestPath: string;
+      // Read-only managed mounts are not implemented yet; `true` is rejected.
+      readOnly?: false;
+    }
+  | {
+      hostPath: string;    // Path on host
+      guestPath: string;   // Path in container
+      readOnly?: boolean;  // Default: false
+    };
 ```
+
+```typescript
+volumes: [
+  { managedVolume: "my-data", guestPath: "/data" },
+  { managedVolume: "vol_01K2EXAMPLE", guestPath: "/cache" },
+];
+```
+
+Setting both origins, or neither, is rejected. Host bind mounts are
+local-runtime only; a REST runtime refuses them.
 
 #### `JsPortSpec`
 
@@ -168,7 +188,7 @@ interface JsPortSpec {
 
 Port publication is available only with a local runtime. For code that should
 work with both local and remote runtimes, use `box.network.tunnel(port)`; each
-tunnel handle represents one connection.
+tunnel is one-shot; call `forward()` to consume it into a listener.
 OCI `EXPOSE` declarations do not publish host ports.
 
 #### `Secret`
@@ -219,17 +239,26 @@ Metadata about a box.
 | `name` | `string \| undefined` | User-defined name |
 | `state` | `JsBoxStateInfo` | Runtime state with `status`, `running`, and optional `pid` and `exitCode` fields. `exitCode` holds the init command's exit code once the box has stopped because that command exited, and is absent otherwise |
 | `createdAt` | `string` | Creation timestamp (ISO 8601) |
-| `startedAt` | `string \| undefined` | Most recent successful container start timestamp (RFC 3339); absent if not recorded or unavailable over REST |
+| `startedAt` | `string \| undefined` | Time when the box most recently entered `Running` (RFC 3339); absent if not recorded or unavailable over REST |
 | `image` | `string` | OCI image reference or rootfs path |
 | `cpus` | `number` | Allocated CPU count |
 | `memoryMib` | `number` | Allocated memory in MiB |
 | `network` | `JsNetworkInfo \| null` | Current network configuration and resolved local publications |
 
 ```typescript
-interface JsNetworkInfo {
+interface JsNetworkDirectionInfo {
   mode: string;
   allowNet: string[];
+}
+
+interface JsNetworkInfo {
+  outbound: JsNetworkDirectionInfo;
+  inbound: JsNetworkDirectionInfo;
   publishedPorts: JsPublishedPort[] | null;
+  /** @deprecated Mirrors outbound.mode. */
+  mode: string;
+  /** @deprecated Mirrors outbound.allowNet. */
+  allowNet: string[];
 }
 
 interface JsPublishedPort {
@@ -261,14 +290,19 @@ live binding data yet, so box, get, or list info may report
 
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
-| Prepare | `await box.network.tunnel(port)` | Return a `JsBoxTunnel` or `BoxTunnel` for one TCP connection |
-| Inspect | `tunnel.uri(): string \| null` | Public URL of a remotely served tunnel; `null` for a local one |
-| Connect | `await tunnel.connect()` | Consume the tunnel and return its bidirectional connection |
+| Tunnel | `await box.network.tunnel(port)` | Prepare a one-shot `JsBoxTunnel` or `BoxTunnel` |
+| Forward | `await tunnel.forward(listen)` | Return a listener-backed `TunnelForwarder` |
+| Inspect | `tunnel.uri(): string \| null` | Read the prepared public URL; `null` for a local box |
+| Connect | `await tunnel.connect()` | Consume the prepared tunnel into its connection |
 | Read/write | `await connection.read(maxBytes)`, `await connection.write(data)` | Exchange bytes with the service |
 | Close | `await connection.close()` | Close the connection |
 
-Each tunnel handle carries exactly one connection. Call `tunnel()` again for
-each additional or concurrent connection. This differs from `ports`, which
+`listen` is `{ type: "tcp", host?: string, port: number }` or
+`{ type: "unix", path: string }`. The forwarder exposes `localAddr()`, `wait()`,
+and repeatable `close()`.
+
+Each tunnel is one-shot. Choose `connect()` or `forward()`; a forwarder opens
+fresh tunnels for additional clients. This differs from `ports`, which
 creates a persistent, local-only host listener that accepts repeated
 connections from ordinary host applications.
 
@@ -382,7 +416,7 @@ interface SimpleBoxOptions {
   detach?: boolean;       // Default: false
   workingDir?: string;    // Working directory
   env?: Record<string, string>;  // Environment variables
-  volumes?: VolumeSpec[]; // Volume mounts
+  volumes?: JsVolumeSpec[]; // Volume mounts (managedVolume or hostPath)
   network?: NetworkSpec;
   ports?: PortSpec[];     // Port mappings
   secrets?: Secret[];

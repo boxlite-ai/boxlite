@@ -1,1 +1,0 @@
-../../.agents/hooks/preflight-verdict-check.sh

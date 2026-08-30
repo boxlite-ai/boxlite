@@ -8,7 +8,7 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, OneToOne, Uniqu
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
-import { BoxVolume } from '../dto/box.dto'
+import { BoxSecret, BoxVolume } from '../dto/box.dto'
 import { nanoid } from 'nanoid'
 import { BoxLastActivity } from './box-last-activity.entity'
 import { BOX_ID_LENGTH, BOX_ID_REGEX, generateBoxId } from '../utils/box-id.util'
@@ -93,8 +93,29 @@ export class Box {
   })
   desiredState = BoxDesiredState.STARTED
 
+  // Daytona-era provisioning label. It only ever surfaced as a
+  // DAYTONA_SANDBOX_USER env var for a computer-use daemon that never read it;
+  // today it keys the warm pool (see warm_pool_find_idx) and is echoed back as
+  // `user` by box.dto.ts. It is NOT the container's process user — that is
+  // `runAsUser` below.
   @Column()
   osUser: string
+
+  // OCI process.user override (docker `-u`), resolved inside the guest against
+  // the container image's /etc/passwd. Null leaves the image's USER directive
+  // in force, which is the default the runner has had since 16d9248bb
+  // ("VM provides isolation, run as root").
+  @Column({ nullable: true })
+  runAsUser?: string
+
+  @Column({ nullable: true })
+  workingDir?: string
+
+  @Column({ type: 'jsonb', nullable: true })
+  entrypoint?: string[]
+
+  @Column({ type: 'jsonb', nullable: true })
+  cmd?: string[]
 
   @Column({ nullable: true })
   errorReason?: string
@@ -137,6 +158,12 @@ export class Box {
     default: [],
   })
   volumes: BoxVolume[] = []
+
+  @Column({
+    type: 'jsonb',
+    default: [],
+  })
+  secrets: BoxSecret[] = []
 
   @CreateDateColumn({
     type: 'timestamp with time zone',
@@ -275,5 +302,18 @@ export class Box {
     }
 
     return changes
+  }
+
+  /**
+   * Drops the secrets field whenever the entity is serialized with
+   * JSON.stringify — analytics debug logs and the Redis box-event channel both
+   * do this. Secrets are plaintext in this column by design (POL-303), so the
+   * field must never ride a JSON dump out of the API process, not even as a
+   * count placeholder: consumers of the event channel expect the key to be
+   * absent.
+   */
+  toJSON() {
+    const { secrets, ...rest } = this
+    return rest
   }
 }

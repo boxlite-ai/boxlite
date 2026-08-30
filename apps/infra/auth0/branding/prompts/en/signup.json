@@ -1,0 +1,7 @@
+{
+  "_comment": "Signup is the visitor's first contact, so this title names the product.",
+  "signup": {
+    "title": "Welcome to BoxLite",
+    "description": "Agentic cloud platform for AI Agent builder"
+  }
+}

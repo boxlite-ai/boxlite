@@ -9,6 +9,7 @@ pub mod controller;
 pub mod engine;
 pub mod exit_info;
 pub mod factory;
+pub(crate) mod guest_artifacts;
 pub mod guest_binary;
 pub mod guest_check;
 #[cfg(feature = "krun")]

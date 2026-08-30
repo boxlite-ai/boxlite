@@ -898,6 +898,20 @@ impl EmbeddedManifest {
             &profile,
             Self::find_prebuilt_guest,
         );
+        // Guest e2fsprogs tools, embedded under distinct names so they never
+        // shadow the host mke2fs bundled by bundle_boxlite_deps (disk/ext4.rs).
+        self.copy_prebuilt_binary(
+            workspace_root,
+            "guest-mke2fs",
+            &profile,
+            Self::find_prebuilt_guest_mke2fs,
+        );
+        self.copy_prebuilt_binary(
+            workspace_root,
+            "guest-resize2fs",
+            &profile,
+            Self::find_prebuilt_guest_resize2fs,
+        );
 
         let entries = self.scan_entries();
         Self::emit_manifest(&manifest_path, &entries);
@@ -997,6 +1011,38 @@ impl EmbeddedManifest {
                 .join(format!("{}-unknown-linux-musl", arch))
                 .join(profile)
                 .join("boxlite-guest");
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+
+        None
+    }
+
+    /// Find a pre-built guest e2fsprogs tool for the given build profile.
+    ///
+    /// Same musl-triple + arch-preference logic as `find_prebuilt_guest`, but for
+    /// the standalone `mke2fs`/`resize2fs` emitted by build-guest-deps.sh.
+    fn find_prebuilt_guest_mke2fs(workspace_root: &Path, profile: &str) -> Option<PathBuf> {
+        Self::find_prebuilt_guest_tool(workspace_root, profile, "mke2fs")
+    }
+
+    fn find_prebuilt_guest_resize2fs(workspace_root: &Path, profile: &str) -> Option<PathBuf> {
+        Self::find_prebuilt_guest_tool(workspace_root, profile, "resize2fs")
+    }
+
+    fn find_prebuilt_guest_tool(
+        workspace_root: &Path,
+        profile: &str,
+        name: &str,
+    ) -> Option<PathBuf> {
+        let target_dir = workspace_root.join("target");
+
+        for arch in Self::preferred_arches() {
+            let path = target_dir
+                .join(format!("{}-unknown-linux-musl", arch))
+                .join(profile)
+                .join(name);
             if path.is_file() {
                 return Some(path);
             }

@@ -99,8 +99,10 @@ export { getNativeModule, getJsBoxlite };
 export {
   SimpleBox,
   BoxTunnel,
+  TunnelForwarder,
   NetworkHandle,
   type NetworkSpec,
+  type SocketAddress,
   type AdvancedBoxOptions,
   type ContainerCapabilities,
   type SimpleBoxOptions,

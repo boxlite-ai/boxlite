@@ -1,0 +1,20 @@
+name: Set up Go
+description: >-
+  Installs the Go toolchain the runner binary and the Go SDK build with.
+
+inputs:
+  go-version:
+    description: >-
+      Go version to install. The default matches config.yml's go-version output,
+      so a job with no config dependency can stay silent rather than grow a
+      needs: edge to name the same version. Jobs that already depend on config
+      pass its output, which keeps the one place a bump has to happen.
+    required: false
+    default: '1.24'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}

@@ -219,7 +219,7 @@ func newHarness(t *testing.T, configure func(*harness)) *harness {
 		// actually made.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"id":%q,"type":"EXPORT_BOX","status":%q,"resourceType":"box","resourceId":%q,"createdAt":"2026-01-01T00:00:00Z"}`,
+		_, _ = fmt.Fprintf(w, `{"id":%q,"type":"EXPORT_BOX","status":%q,"resourceType":"backup","resourceId":%q,"createdAt":"2026-01-01T00:00:00Z"}`,
 			testJobId, body.Status, testBoxId)
 	}))
 	t.Cleanup(server.Close)

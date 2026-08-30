@@ -25,6 +25,11 @@ export enum RoutePath {
   VOLUMES = '/dashboard/volumes',
   LIMITS = '/dashboard/limits',
   BILLING_SPENDING = '/dashboard/billing/spending',
+  /** Parent of BILLING_PLAN_CHANGE. Carries no id of its own, so it only redirects. */
+  BILLING_PLAN = '/dashboard/billing/plan',
+  /** Confirming a switch to `:planId`. Cancelling a subscription outright is not
+   *  reachable here — it takes a null plan id, which this segment cannot carry. */
+  BILLING_PLAN_CHANGE = '/dashboard/billing/plan/:planId',
   BILLING_WALLET = '/dashboard/billing/wallet',
   MEMBERS = '/dashboard/members',
   ROLES = '/dashboard/roles',

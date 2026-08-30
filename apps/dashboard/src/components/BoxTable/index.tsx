@@ -11,11 +11,13 @@ import { cn, getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
 import { OrganizationRolePermissionsEnum, Box, BoxState } from '@boxlite-ai/api-client'
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
   Container,
+  Copy,
   Loader2,
   MoreHorizontal,
   Pause,
@@ -23,7 +25,7 @@ import {
   RotateCcw,
   Trash2,
 } from '@/components/ui/icon'
-import { type ReactNode } from 'react'
+import { type ReactNode, useState } from 'react'
 import { BoxTableProps } from './types'
 import { PAGE_SIZE_OPTIONS } from '@/constants/Pagination'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -66,6 +68,38 @@ function statusOf(box: Box): { label: string; color: string } {
 // Proportional columns so the gaps stay even as the table widens, instead of
 // dumping all the slack into the Name column.
 const GRID = 'grid-cols-[2fr_1.3fr_1fr_120px] gap-x-4'
+
+// Releasing a drag-selection (e.g. selecting a box name to copy it) fires a
+// click on the row; navigating away then would discard the selection mid-copy.
+function isSelectingText(): boolean {
+  const selection = window.getSelection()
+  return selection != null && !selection.isCollapsed
+}
+
+// One-click name copy that must not trigger the row's navigation click.
+function CopyNameButton({ name, className }: { name: string; className?: string }) {
+  const [copied, setCopied] = useState(false)
+
+  return (
+    <button
+      type="button"
+      title="Copy name"
+      onClick={(e) => {
+        e.stopPropagation()
+        try {
+          navigator.clipboard?.writeText(name)
+        } catch {
+          /* clipboard may be unavailable */
+        }
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1300)
+      }}
+      className={`shrink-0 text-muted-foreground transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none ${className ?? ''}`}
+    >
+      {copied ? <Check className="size-[13px]" style={{ color: STATUS.running }} /> : <Copy className="size-[13px]" />}
+    </button>
+  )
+}
 
 function IconButton({
   title,
@@ -252,17 +286,21 @@ export function BoxTable({
             return (
               <div
                 key={box.id}
-                onClick={() => onRowClick?.(box)}
-                className={`grid ${GRID} items-center border-b border-border px-[18px] py-3 text-[13px] transition-colors hover:bg-card ${
+                onClick={() => {
+                  if (isSelectingText()) return
+                  onRowClick?.(box)
+                }}
+                className={`group grid ${GRID} items-center border-b border-border px-[18px] py-3 text-[13px] transition-colors hover:bg-card ${
                   onRowClick ? 'cursor-pointer' : ''
                 } ${busy ? 'pointer-events-none opacity-70' : ''} ${transitioning ? 'animate-pulse' : ''}`}
               >
                 {/* name */}
-                <span className="inline-flex items-center gap-2 truncate font-semibold">
+                <span className="inline-flex min-w-0 items-center gap-2 font-semibold">
                   <span style={{ color: 'hsl(var(--brand))' }} className="text-[10px]">
                     ▸
                   </span>
                   <span className="truncate">{name}</span>
+                  <CopyNameButton name={name} className="opacity-0 group-hover:opacity-100" />
                 </span>
 
                 {/* box id */}
@@ -319,7 +357,10 @@ export function BoxTable({
                 key={box.id}
                 role={onRowClick ? 'button' : undefined}
                 tabIndex={onRowClick ? 0 : undefined}
-                onClick={() => onRowClick?.(box)}
+                onClick={() => {
+                  if (isSelectingText()) return
+                  onRowClick?.(box)
+                }}
                 onKeyDown={(e) => {
                   if (!onRowClick || (e.key !== 'Enter' && e.key !== ' ')) return
                   e.preventDefault()
@@ -336,6 +377,7 @@ export function BoxTable({
                         ▸
                       </span>
                       <span className="truncate">{name}</span>
+                      <CopyNameButton name={name} />
                     </span>
                     <span className="mt-1 block truncate font-mono text-[11px] text-muted-foreground">
                       {getBoxPublicIdLabel(box)}

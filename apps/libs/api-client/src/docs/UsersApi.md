@@ -209,7 +209,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new UsersApi(configuration);
 
-let id: string; // (default to undefined)
+let id: string; //
 
 const { status, data } = await apiInstance.getUser(
     id
@@ -220,7 +220,7 @@ const { status, data } = await apiInstance.getUser(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] |  | defaults to undefined|
+| **id** | [**string**] |  | |
 
 
 ### Return type
@@ -353,7 +353,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new UsersApi(configuration);
 
-let id: string; // (default to undefined)
+let id: string; //
 
 const { status, data } = await apiInstance.regenerateKeyPair(
     id
@@ -364,7 +364,7 @@ const { status, data } = await apiInstance.regenerateKeyPair(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] |  | defaults to undefined|
+| **id** | [**string**] |  | |
 
 
 ### Return type
@@ -403,8 +403,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new UsersApi(configuration);
 
-let provider: string; // (default to undefined)
-let providerUserId: string; // (default to undefined)
+let provider: string; //
+let providerUserId: string; //
 
 const { status, data } = await apiInstance.unlinkAccount(
     provider,
@@ -416,8 +416,8 @@ const { status, data } = await apiInstance.unlinkAccount(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **provider** | [**string**] |  | defaults to undefined|
-| **providerUserId** | [**string**] |  | defaults to undefined|
+| **provider** | [**string**] |  | |
+| **providerUserId** | [**string**] |  | |
 
 
 ### Return type

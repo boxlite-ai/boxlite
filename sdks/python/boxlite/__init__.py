@@ -33,10 +33,13 @@ try:
         ImageInfo,
         ImagePullResult,
         ImageRegistry,
+        InboundNetworkSpec,
+        NetworkDirectionInfo,
         NetworkHandle,
         NetworkInfo,
         NetworkSpec,
         Options,
+        OutboundNetworkSpec,
         PublishedPort,
         RuntimeMetrics,
         Secret,
@@ -44,6 +47,8 @@ try:
         SnapshotHandle,
         SnapshotInfo,
         SnapshotOptions,
+        SocketAddress,
+        TunnelForwarder,
         VolumeHandle,
         VolumeInfo,
     )
@@ -60,8 +65,13 @@ try:
         "AccessToken",
         "Boxlite",
         "NetworkSpec",
+        "OutboundNetworkSpec",
+        "InboundNetworkSpec",
         "NetworkHandle",
+        "SocketAddress",
+        "TunnelForwarder",
         "NetworkInfo",
+        "NetworkDirectionInfo",
         "Box",
         "Execution",
         "ExecStdout",
@@ -170,6 +180,7 @@ try:
         SyncNetworkHandle,
         SyncSimpleBox,
         SyncSkillBox,
+        SyncTunnelForwarder,
     )
 
     __all__.extend(
@@ -184,6 +195,7 @@ try:
             "SyncNetworkHandle",
             "SyncSimpleBox",
             "SyncSkillBox",
+            "SyncTunnelForwarder",
         ]
     )
 except ImportError:

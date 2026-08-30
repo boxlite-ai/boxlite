@@ -12,6 +12,7 @@ import BoxDetails from './BoxDetails'
 
 const mocks = vi.hoisted(() => ({
   box: undefined as unknown,
+  volumes: [] as { id: string; name: string }[],
   boxRefetch: vi.fn(),
   terminalRefetch: vi.fn(),
   terminalReset: vi.fn(),
@@ -79,6 +80,10 @@ vi.mock('@/hooks/queries/useBoxQuery', () => ({
   }),
 }))
 
+vi.mock('@/hooks/queries/useVolumesQuery', () => ({
+  useVolumesQuery: () => ({ data: mocks.volumes }),
+}))
+
 vi.mock('@/hooks/queries/useTerminalSessionQuery', () => ({
   useTerminalSessionQuery: () => ({
     data: { url: 'https://terminal.example/session-1', expiresAt: Date.now() + 300000 },
@@ -140,6 +145,7 @@ describe('BoxDetails refresh', () => {
 
   beforeEach(() => {
     mocks.box = makeRunningBox()
+    mocks.volumes = []
     vi.clearAllMocks()
   })
 
@@ -182,5 +188,37 @@ describe('BoxDetails refresh', () => {
     expect(mocks.boxRefetch).toHaveBeenCalledTimes(1)
     expect(mocks.terminalRefetch).toHaveBeenCalledTimes(1)
     expect(document.querySelector('[data-testid="terminal-frame"]')).toBe(frameBeforeRefresh)
+  })
+
+  // The list page navigates here by id, so the name the user gave the box must
+  // survive the transition — the id alone is not how they recognize it.
+  it('shows the box name in the identity strip', async () => {
+    await renderBoxDetails()
+
+    expect(document.body.textContent).toContain('box-one')
+  })
+
+  // A box stores an opaque volume handle, so the mount list is only readable
+  // once it is resolved back to the volume's name. The fallback matters just as
+  // much: a volume deleted out from under a running box must still render its
+  // mount path rather than disappearing from the box's own spec sheet.
+  it('resolves mounted volume handles to names, falling back to the raw handle', async () => {
+    mocks.volumes = [{ id: 'vol-a1b2c3d4', name: 'subtitle-models' }]
+    mocks.box = {
+      ...(makeRunningBox() as object),
+      volumes: [
+        { volumeId: 'vol-a1b2c3d4', mountPath: '/models' },
+        { volumeId: 'vol-deleted', mountPath: '/data', subpath: 'acme' },
+      ],
+    }
+
+    await renderBoxDetails()
+
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('subtitle-models')
+    expect(text).toContain('/models')
+    // Unresolvable handle degrades to the handle itself, not a blank label.
+    expect(text).toContain('vol-deleted')
+    expect(text).toContain('/data (acme)')
   })
 })

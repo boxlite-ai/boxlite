@@ -209,6 +209,14 @@ pub(crate) type CExecutionSignalFn = extern "C" fn(*mut crate::CBoxliteError, *m
 pub type CExecutionResizeCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CExecutionResizeFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
+/// Tunnel forwarder wait completion.
+pub type CTunnelForwarderWaitCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CTunnelForwarderWaitFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
+/// Tunnel forwarder close completion.
+pub type CTunnelForwarderCloseCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CTunnelForwarderCloseFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
 // ─── Owned FFI payload ─────────────────────────────────────────────────────
 //
 // Wraps a `Box::into_raw`'d FFI struct that will eventually be transferred
@@ -438,6 +446,16 @@ pub enum RuntimeEvent {
     },
     Resize {
         cb: CExecutionResizeFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    TunnelForwarderWait {
+        cb: CTunnelForwarderWaitFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    TunnelForwarderClose {
+        cb: CTunnelForwarderCloseFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
     },
@@ -1214,6 +1232,7 @@ mod owned_ffi_ptr_nested_leak_tests {
     use crate::images::{CImageInfoList, CImagePullResult};
     use crate::info::{CBoxInfo, CBoxInfoList};
     use boxlite::runtime::options::PortProtocol;
+    use boxlite::runtime::types::NetworkDirectionInfo;
     use boxlite::{NetworkInfo, NetworkMode, PublishedPort};
     use std::ffi::CString;
     use std::sync::atomic::Ordering as AtomicOrdering;
@@ -1264,16 +1283,22 @@ mod owned_ffi_ptr_nested_leak_tests {
             auto_delete: 0,
             auto_resume: 1,
             created_at: 0,
-            network: crate::info::network_to_c_ptr(&Some(NetworkInfo {
-                mode: NetworkMode::Enabled,
-                allow_net: vec!["api.example.com".to_string()],
-                published_ports: Some(vec![PublishedPort {
+            network: crate::info::network_to_c_ptr(&Some(NetworkInfo::new(
+                NetworkDirectionInfo {
+                    mode: NetworkMode::Enabled,
+                    allow_net: vec!["api.example.com".to_string()],
+                },
+                NetworkDirectionInfo {
+                    mode: NetworkMode::Enabled,
+                    allow_net: Vec::new(),
+                },
+                Some(vec![PublishedPort {
                     guest_port: 3000,
                     host_ip: "127.0.0.1".to_string(),
                     host_port: 49152,
                     protocol: PortProtocol::Tcp,
                 }]),
-            })),
+            ))),
             started_at: 0,
             exit_code: 0,
             has_exit_code: 0,

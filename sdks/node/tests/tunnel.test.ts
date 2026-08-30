@@ -69,6 +69,39 @@ describe("SimpleBox", () => {
     expect(connect).toHaveBeenCalledTimes(2);
   });
 
+  test("forward delegates address and lifecycle operations", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const listen = { type: "tcp" as const, port: 0 };
+    const nativeForwarder = {
+      localAddr: vi.fn(() => ({
+        type: "tcp" as const,
+        host: "127.0.0.1",
+        port: 49152,
+      })),
+      wait: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    };
+    const forward = vi.fn(async () => nativeForwarder);
+    const nativeTunnel = { uri: vi.fn(), connect: vi.fn(), forward };
+    const box = new SimpleBox({ image: "alpine:latest" }) as SimpleBox & {
+      _box: { network: { tunnel: () => Promise<typeof nativeTunnel> } };
+    };
+    box._box = { network: { tunnel: async () => nativeTunnel } };
+
+    const tunnel = await box.network.tunnel(3000);
+    const forwarder = await tunnel.forward(listen);
+    expect(forward).toHaveBeenCalledWith(listen);
+    expect(forwarder.localAddr()).toEqual({
+      type: "tcp",
+      host: "127.0.0.1",
+      port: 49152,
+    });
+    await forwarder.wait();
+    await forwarder.close();
+    expect(nativeForwarder.wait).toHaveBeenCalledOnce();
+    expect(nativeForwarder.close).toHaveBeenCalledOnce();
+  });
+
   test("info resolves asynchronously", async () => {
     const { SimpleBox } = await import("../lib/simplebox.js");
     const metadata = { id: "box-1" };

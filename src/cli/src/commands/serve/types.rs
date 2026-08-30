@@ -52,6 +52,17 @@ pub(super) struct CreateBoxRequest {
     pub auto_resume: Option<bool>,
     #[serde(default)]
     pub detach: Option<bool>,
+    /// Secret placeholder rules for outbound HTTP(S) requests. Placeholder
+    /// defaults to `<BOXLITE_SECRET:{name}>` when omitted — applied in
+    /// `build_box_options`, matching the Go SDK's own default.
+    #[serde(default)]
+    pub secrets: Option<Vec<SecretSpecRequest>>,
+    /// Managed volumes are not supported by `boxlite serve` (no volume
+    /// backend). Accepted here only so a combined secrets+volumes request does
+    /// not fail deserialization on an unrelated field; rejected explicitly in
+    /// `build_box_options` when non-empty.
+    #[serde(default)]
+    pub volumes: Option<Vec<serde_json::Value>>,
     // `security` / `security_settings` are intentionally absent from
     // the REST wire schema. Sandbox security is the operator's
     // policy, set server-side. Because the struct carries
@@ -62,10 +73,26 @@ pub(super) struct CreateBoxRequest {
     // below for the wire-shape pin.
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SecretSpecRequest {
+    pub name: String,
+    pub value: String,
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    #[serde(default)]
+    pub placeholder: Option<String>,
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct CreateBoxAdvancedOptions {
-    pub capabilities: ContainerCapabilitiesRequest,
+    /// `None` when the wire omits `capabilities` (or sends `null`) — distinct
+    /// from `Some` of an empty policy, the same distinction the core
+    /// `AdvancedBoxOptions.capabilities` makes and for the same reason: an
+    /// explicit empty policy conflicts with `privileged`, an unspecified one
+    /// doesn't, and `archive_version_for_options` keys off which one this is.
+    pub capabilities: Option<ContainerCapabilitiesRequest>,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -78,6 +105,44 @@ pub(super) struct ContainerCapabilitiesRequest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct NetworkSpec {
+    #[serde(default)]
+    pub outbound: Option<OutboundNetworkSpec>,
+    #[serde(default)]
+    pub inbound: Option<InboundNetworkSpec>,
+    #[serde(flatten)]
+    pub legacy: LegacyNetworkSpec,
+}
+
+impl NetworkSpec {
+    pub(super) fn uses_legacy_fields(&self) -> bool {
+        self.legacy.mode.is_some() || self.legacy.allow_net.is_some()
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct LegacyNetworkSpec {
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub allow_net: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct OutboundNetworkSpec {
+    pub mode: String,
+    #[serde(default)]
+    pub allow_net: Vec<String>,
+}
+
+/// Aligned field-for-field with [`OutboundNetworkSpec`]: `mode="enabled"`
+/// means services the box exposes are publicly reachable, `mode="disabled"`
+/// means private. `allow_net` exists for shape symmetry only — no layer
+/// enforces an inbound allowlist yet, so a non-empty value is rejected.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct InboundNetworkSpec {
     pub mode: String,
     #[serde(default)]
     pub allow_net: Vec<String>,
@@ -117,8 +182,16 @@ pub(super) struct ListBoxesResponse {
 #[derive(Serialize)]
 pub(super) struct VolumeResponse {
     pub id: String,
+    pub name: String,
     pub created_at: String,
     pub size_bytes: Option<u64>,
+}
+
+/// Body for `POST /v1/volumes`. An absent body means an unnamed volume.
+#[derive(Deserialize, Default)]
+pub(super) struct CreateVolumeRequest {
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Serialize)]

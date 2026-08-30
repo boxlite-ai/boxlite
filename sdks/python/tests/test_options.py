@@ -36,11 +36,19 @@ class TestBoxOptionsDefaults:
         # Python side defaults to None, Rust side defaults to False
         assert opts.detach is None
 
-    def test_capability_lists_default_to_empty(self):
-        """Test that capability overrides are empty under advanced options."""
+    def test_capabilities_default_to_unspecified(self):
+        """An AdvancedBoxOptions that never mentions capabilities must leave
+        the policy unspecified (None), not an explicit-but-empty override —
+        the two carry different meaning (see the Rust-side
+        AdvancedBoxOptions.capabilities doc comment)."""
         advanced = boxlite.AdvancedBoxOptions()
-        assert advanced.capabilities.add == []
-        assert advanced.capabilities.drop == []
+        assert advanced.capabilities is None
+
+    def test_security_only_advanced_options_leaves_capabilities_unspecified(self):
+        """Setting an unrelated advanced option must not implicitly turn
+        capabilities into an explicit, empty override."""
+        advanced = boxlite.AdvancedBoxOptions(security=boxlite.SecurityOptions())
+        assert advanced.capabilities is None
 
     def test_custom_capability_lists_are_preserved(self):
         """Test supplying Docker-style capability additions and removals."""

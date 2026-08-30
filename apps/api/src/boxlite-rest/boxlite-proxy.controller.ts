@@ -16,6 +16,7 @@ import {
   UseGuards,
   Logger,
   NotFoundException,
+  ConflictException,
   ForbiddenException,
   HttpCode,
   HttpStatus,
@@ -33,6 +34,7 @@ import { OrganizationAuthContext } from '../common/interfaces/auth-context.inter
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import { BoxAutoResumeService } from './box-auto-resume.service'
+import { BoxState } from '../box/enums/box-state.enum'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -176,6 +178,7 @@ export class BoxliteProxyController {
       res,
       next,
       USER_OPERATION,
+      { proxyTimeoutMs: 0 },
     )
   }
 
@@ -205,6 +208,28 @@ export class BoxliteProxyController {
     @Param('boxId') boxId: string,
     @Query('port', ParseIntPipe) port: number,
   ) {
+    // findOneByIdOrName already 404s for a missing/destroyed box. Unlike
+    // proxyToRunner's other routes, this endpoint just resolves a URL — it
+    // never reaches the runner, so a non-running box would otherwise hand
+    // back a tunnel URI that CONNECTs successfully and then goes silently
+    // dead. Whitelist STARTED rather than blacklist STOPPED: a box that's
+    // still CREATING/STARTING/ERROR/ARCHIVED/etc. isn't reachable either.
+    //
+    // No auto-resume here, even for autoResume boxes: wake-on-CONNECT is
+    // out of scope for POL-214 and tracked separately.
+    const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+
+    if (box.state !== BoxState.STARTED) {
+      throw new ConflictException(`Box ${boxId} is not running (state: ${box.state})`)
+    }
+
+    // POL-205: tunnel URLs expose the box to the public internet. Require the
+    // caller to have explicitly opted in by setting public: true on the box.
+    // A private box should be accessed via the authenticated API, not a tunnel.
+    if (!box.public) {
+      throw new ConflictException(`Box ${boxId} is not public; set public: true before opening a tunnel`)
+    }
+
     const uri = await this.boxService.getNetworkTunnelUrl(boxId, authContext.organizationId, port)
     return { uri }
   }
@@ -217,7 +242,7 @@ export class BoxliteProxyController {
     res: Response,
     next: NextFunction,
     policy: ProxyActivityPolicy,
-    opts?: { ws?: boolean },
+    opts?: { ws?: boolean; proxyTimeoutMs?: number },
   ) {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     if (!box) {
@@ -231,6 +256,23 @@ export class BoxliteProxyController {
       await this.boxService
         .updateLastActivityAt(box.id, new Date())
         .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
+    }
+
+    if (policy.activity && typeof box.autoStop === 'number' && box.autoStop > 0) {
+      // A long-running operation (a file upload/download, a streaming exec) is
+      // still activity for its whole lifetime, not just its first request.
+      // Refresh the idle timer periodically so the AutoStop sweeper does not
+      // reap the box mid-transfer; stop once the response completes or errors.
+      const stopHeartbeat = this.startActivityHeartbeat(box.id, box.autoStop)
+      let stopped = false
+      const stop = (): void => {
+        if (stopped) return
+        stopped = true
+        stopHeartbeat()
+      }
+      res.once('close', stop)
+      res.once('finish', stop)
+      res.once('error', stop)
     }
 
     if (policy.autoResume && box.autoResume) {
@@ -260,9 +302,23 @@ export class BoxliteProxyController {
           fixRequestBody(proxyReq, originalReq)
         },
       },
-      proxyTimeout: 5 * 60 * 1000,
+      proxyTimeout: opts?.proxyTimeoutMs ?? 5 * 60 * 1000,
     }
 
     return createProxyMiddleware(proxyOptions)(req, res, next)
+  }
+
+  private startActivityHeartbeat(boxId: string, autoStopSeconds: number): () => void {
+    // Half the autoStop window (in ms) so the idle deadline can never lapse
+    // between two beats, however the sweeper samples it. Redis writes are
+    // throttled by the activity service's own per-box lock.
+    const intervalMs = autoStopSeconds * 500
+    const timer = setInterval(() => {
+      void this.boxService
+        .updateLastActivityAt(boxId, new Date())
+        .catch((err) => this.logger.warn(`updateLastActivityAt heartbeat failed for ${boxId}: ${err}`))
+    }, intervalMs)
+    timer.unref?.()
+    return () => clearInterval(timer)
   }
 }

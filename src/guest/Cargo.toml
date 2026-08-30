@@ -29,7 +29,6 @@ futures = "0.3"
 async-stream = "0.3"
 clap = { version = "4.5", features = ["derive"] }
 rayon = "1.10"
-tar = "0.4"
 russh = { version = "0.62.4", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.3.0"
 
@@ -37,7 +36,7 @@ russh-sftp = "2.3.0"
 procfs = "0.18.0"
 tokio-vsock = { version = "0.7", features = ["tonic012"] }
 libcontainer = { version = "0.6", default-features = false, features = ["v2", "libseccomp"] }
-oci-spec = "0.6"
+oci-spec = "0.9"
 rtnetlink = "0.14"
 futures = "0.3"
 

@@ -45,8 +45,10 @@ func main() {
 		boxlite.WithCPUs(1),
 		boxlite.WithMemory(512),
 		boxlite.WithNetwork(boxlite.NetworkSpec{
-			Mode:     boxlite.NetworkModeEnabled,
-			AllowNet: []string{"api.openai.com"},
+			Outbound: boxlite.OutboundNetworkSpec{
+				Mode:     boxlite.NetworkModeEnabled,
+				AllowNet: []string{"api.openai.com"},
+			},
 		}),
 		boxlite.WithSecret(boxlite.Secret{
 			Name:  "openai",
@@ -117,8 +119,10 @@ for _, image := range cached {
 
 ## Box Options
 
-- `WithNetwork(boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled, AllowNet: []string{"api.openai.com"}})` restricts outbound traffic while keeping networking enabled.
-- `WithNetwork(boxlite.NetworkSpec{Mode: boxlite.NetworkModeDisabled})` disables the guest network interface entirely.
+- `WithNetwork(boxlite.NetworkSpec{Outbound: boxlite.OutboundNetworkSpec{Mode: boxlite.NetworkModeEnabled, AllowNet: []string{"api.openai.com"}}})` restricts outbound traffic while keeping networking enabled.
+- `WithNetwork(boxlite.NetworkSpec{Outbound: boxlite.OutboundNetworkSpec{Mode: boxlite.NetworkModeDisabled}})` disables the guest network interface entirely.
+- `WithNetwork(boxlite.NetworkSpec{Inbound: boxlite.InboundNetworkSpec{Mode: boxlite.NetworkModeDisabled}})` keeps the box private. The two directions are independent.
+- The deprecated flat fields `NetworkSpec{Mode, AllowNet}` still configure the outbound direction. Setting them together with `Outbound` is rejected when the options are built. `NetworkInfo.Mode` and `NetworkInfo.AllowNet` likewise remain readable as views onto `NetworkInfo.Outbound`.
 - `WithPort(boxlite.PortSpec{Guest: 3000})` publishes TCP locally on an OS-selected host port; after checking `BoxInfo.Network != nil`, read the concrete binding from `Network.PublishedPorts`.
 - A nil `PublishedPorts` slice means the current handle does not know the bindings; a non-nil empty slice means there are no active publications. `Box.Info`, `Runtime.GetInfo`, and `Runtime.ListInfo` use callback-backed runtime operations and honor context cancellation.
 - `WithSecret(boxlite.Secret{...})` configures host-side HTTP(S) secret substitution; `Placeholder` defaults to `<BOXLITE_SECRET:{Name}>`.
@@ -136,20 +140,24 @@ for _, image := range cached {
   ```
 
 Port publication is local-only. Remote runtimes reject it with guidance to use
-the existing network tunnel API. Each tunnel handle represents one connection.
+the existing network tunnel API. Each tunnel handle is one-shot.
 OCI `EXPOSE` metadata does not publish ports.
 
 ## Service Tunnels
 
-The same one-connection workflow works with local and remote runtimes:
+The same route workflow works with local and remote runtimes:
 
 - `box.Network() (*Network, error)` returns box-scoped network operations.
-- `network.Tunnel(ctx, port) (*BoxTunnel, error)` prepares one TCP connection.
+- `network.Tunnel(ctx, port) (*BoxTunnel, error)` prepares a one-shot tunnel.
+- `TCPListenAddress(host, port)` and `UnixListenAddress(path)` return validated
+  standard `net.Addr` values for `tunnel.Forward(ctx, addr)`. The returned
+  `TunnelForwarder` has `Addr() net.Addr`, `Wait(ctx) error`, and repeatable
+  `Close() error`; canceling a wait context does not close the listener.
 - `tunnel.URI() (string, error)` returns the public URL of a remotely served tunnel, or an empty string for a local one.
-- `tunnel.Connect(ctx) (net.Conn, error)` consumes the tunnel's single connection.
+- `tunnel.Connect(ctx) (net.Conn, error)` consumes the prepared connection.
 
-Call `Tunnel` again for each additional or concurrent connection, and close the
-returned `net.Conn`. This differs from `WithPort`, which creates a persistent,
+Choose `Connect` or `Forward`; a forwarder prepares fresh tunnels for later
+clients. This differs from `WithPort`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 
 ## Development

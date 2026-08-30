@@ -110,13 +110,26 @@ fn options_from_manifest(
     if options.advanced.nested_virtualization {
         return Err(rejected_upload("nested virtualization"));
     }
+    if options.advanced.privileged {
+        return Err(rejected_upload("privileged mode"));
+    }
     if matches!(options.rootfs, RootfsSpec::RootfsPath(_)) {
         return Err(rejected_upload("host rootfs paths"));
     }
+    // Every mount, not just a host bind: a managed volume reference in an
+    // uploaded archive would also select storage the uploader does not own.
     if !options.volumes.is_empty() {
-        return Err(rejected_upload("host volume mounts"));
+        return Err(rejected_upload("volume mounts"));
     }
     options.advanced.security = SecurityOptions::default();
+    // That reset also restores the default's hardcoded 1 GiB RLIMIT_FSIZE —
+    // the ceiling #1152 is about — because it replaces the whole struct rather
+    // than just the isolation fields it means to. The box still boots on a
+    // disk sized from its own `disk_size_gb`, so re-derive the limit.
+    // `sanitize` assigns it outright, so running it twice is idempotent.
+    options.sanitize().map_err(|error| {
+        BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
+    })?;
 
     Ok(options)
 }
@@ -174,32 +187,18 @@ fn extract_and_validate(
         }
     }
 
-    let extracted_guest = temp_dir.path().join(disk_filenames::GUEST_ROOTFS_DISK);
-    if extracted_guest.exists() && !manifest.guest_disk_checksum.is_empty() {
-        let actual = sha256_file(&extracted_guest)?;
-        if actual != manifest.guest_disk_checksum {
-            return Err(BoxliteError::Storage(format!(
-                "Guest disk checksum mismatch: expected {}, got {}",
-                manifest.guest_disk_checksum, actual
-            )));
-        }
-    }
-
     Ok((manifest, temp_dir))
 }
 
 /// Validate disk security and move disks into box_home/disks/.
 fn install_disks(temp_dir: &Path, box_home: &Path) -> BoxliteResult<()> {
-    // Security: Reject imported disks that reference backing files.
-    // A crafted archive could include a qcow2 with a backing reference to
-    // /etc/shadow or another box's disk, leaking data on first read.
+    // Security: the disk about to become a box's own must be a file this
+    // extraction produced, and must not reach any further on its own. A
+    // crafted archive would otherwise point it at /etc/shadow or another
+    // box's disk, leaking data on first read.
     let extracted_container = temp_dir.join(disk_filenames::CONTAINER_DISK);
+    ensure_within_extraction_dir(&extracted_container, temp_dir)?;
     validate_no_backing_references(&extracted_container)?;
-
-    let extracted_guest = temp_dir.join(disk_filenames::GUEST_ROOTFS_DISK);
-    if extracted_guest.exists() {
-        validate_no_backing_references(&extracted_guest)?;
-    }
 
     let disks_dir = box_home.join("disks");
     std::fs::create_dir_all(&disks_dir).map_err(|e| {
@@ -215,11 +214,34 @@ fn install_disks(temp_dir: &Path, box_home: &Path) -> BoxliteResult<()> {
         &disks_dir.join(disk_filenames::CONTAINER_DISK),
     )?;
 
-    if extracted_guest.exists() {
-        move_file(
-            &extracted_guest,
-            &disks_dir.join(disk_filenames::GUEST_ROOTFS_DISK),
-        )?;
+    Ok(())
+}
+
+/// Reject an imported disk that resolves outside the extraction directory.
+///
+/// Extraction already refuses link members, so this is the assertion rather
+/// than the control — but it is the last look before the rename turns this
+/// path into a box's own disk, and a path that escaped would hand the new box
+/// someone else's.
+fn ensure_within_extraction_dir(disk_path: &Path, extraction_dir: &Path) -> BoxliteResult<()> {
+    let resolve = |path: &Path| -> BoxliteResult<std::path::PathBuf> {
+        path.canonicalize().map_err(|e| {
+            BoxliteError::Storage(format!("Failed to resolve {}: {}", path.display(), e))
+        })
+    };
+
+    // Both sides are resolved: the extraction directory itself can sit under a
+    // symlinked home, and comparing a resolved disk against an unresolved root
+    // would reject every such install.
+    let resolved_disk = resolve(disk_path)?;
+    let resolved_root = resolve(extraction_dir)?;
+
+    if !resolved_disk.starts_with(&resolved_root) {
+        return Err(BoxliteError::InvalidState(format!(
+            "Imported disk '{}' resolves outside the extraction directory. \
+             This is not allowed for security reasons.",
+            disk_path.display()
+        )));
     }
 
     Ok(())
@@ -227,20 +249,28 @@ fn install_disks(temp_dir: &Path, box_home: &Path) -> BoxliteResult<()> {
 
 /// Reject qcow2 disks with backing file references (security check).
 pub(crate) fn validate_no_backing_references(disk_path: &Path) -> BoxliteResult<()> {
-    if let Ok(Some(backing)) = crate::disk::read_backing_file_path(disk_path) {
-        return Err(BoxliteError::InvalidState(format!(
+    match crate::disk::read_backing_file_path(disk_path) {
+        Ok(None) => Ok(()),
+        Ok(Some(backing)) => Err(BoxliteError::InvalidState(format!(
             "Imported disk '{}' has backing file reference '{}'. \
              This is not allowed for security reasons.",
             disk_path.display(),
             backing
-        )));
+        ))),
+        // A disk the parser cannot read is a disk this check cannot clear.
+        // Reading the error as "no backing reference" hands the verdict to
+        // whatever the file happens to be.
+        Err(error) => Err(BoxliteError::InvalidState(format!(
+            "Imported disk '{}' is not a readable qcow2 image: {error}",
+            disk_path.display()
+        ))),
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::types::Bytes;
     use tempfile::TempDir;
 
     fn v3_manifest(options: BoxOptions) -> ArchiveManifest {
@@ -295,11 +325,10 @@ mod tests {
 
     #[test]
     fn untrusted_import_rejects_nested_virtualization() {
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.nested_virtualization = true;
         let options = BoxOptions {
-            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
-                nested_virtualization: true,
-                ..Default::default()
-            },
+            advanced,
             ..Default::default()
         };
 
@@ -309,6 +338,23 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
         assert!(error.to_string().contains("nested virtualization"));
+    }
+
+    #[test]
+    fn untrusted_import_rejects_privileged() {
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.privileged = true;
+        let options = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let error =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .unwrap_err();
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("privileged mode"));
     }
 
     #[test]
@@ -332,18 +378,39 @@ mod tests {
     #[test]
     fn untrusted_import_rejects_host_volumes() {
         let mut options = BoxOptions::default();
-        options.volumes.push(crate::runtime::options::VolumeSpec {
-            host_path: "/".to_string(),
-            guest_path: "/host".to_string(),
-            read_only: false,
-        });
+        options
+            .volumes
+            .push(crate::runtime::options::VolumeSpec::bind_mount(
+                "/", "/host",
+            ));
 
         let error =
             options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
                 .expect_err("untrusted archives must not select server host paths");
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
-        assert!(error.to_string().contains("host volume mounts"));
+        assert!(error.to_string().contains("volume mounts"));
+    }
+
+    /// The second mount kind is refused by the same gate. A managed volume
+    /// names storage the uploader does not necessarily own, so an archive
+    /// arriving over REST must not be able to select one either.
+    #[test]
+    fn untrusted_import_rejects_managed_volumes() {
+        let mut options = BoxOptions::default();
+        options
+            .volumes
+            .push(crate::runtime::options::VolumeSpec::managed_volume(
+                "someone-elses-data",
+                "/data",
+            ));
+
+        let error =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .expect_err("untrusted archives must not select managed volumes");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("volume mounts"));
     }
 
     #[test]
@@ -370,41 +437,76 @@ mod tests {
             options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
                 .unwrap();
 
-        assert_eq!(resolved.advanced.security, SecurityOptions::default());
+        // Everything but the file-size ceiling is the server default; that one
+        // is derived from the box's own disk (#1152), so it is the default's
+        // stale 1 GiB that must NOT come back.
+        let mut expected = SecurityOptions::default();
+        expected.resource_limits.max_file_size = Some(Bytes::from_gib(20).as_bytes());
+        assert_eq!(resolved.advanced.security, expected);
+    }
+
+    /// The server-default reset must not put the 1 GiB ceiling back: an
+    /// uploaded archive's box boots on a disk sized from its own
+    /// `disk_size_gb` and needs a limit that covers it.
+    #[test]
+    fn untrusted_import_derives_the_fsize_limit_from_the_disk() {
+        let options = BoxOptions {
+            disk_size_gb: Some(20),
+            ..BoxOptions::default()
+        };
+
+        let resolved =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .unwrap();
+
+        assert_eq!(
+            resolved.advanced.security.resource_limits.max_file_size,
+            Some(Bytes::from_gib(40).as_bytes())
+        );
     }
 
     #[test]
     fn trusted_import_preserves_archive_configuration() {
-        let mut options = BoxOptions {
-            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
-                nested_virtualization: true,
-                ..Default::default()
-            },
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.nested_virtualization = true;
+        advanced.privileged = true;
+        advanced.security = SecurityOptions::disabled();
+        let options = BoxOptions {
+            advanced,
             ..Default::default()
         };
-        options.advanced.security = SecurityOptions::disabled();
 
         let resolved =
             options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::Trusted).unwrap();
 
         assert!(resolved.advanced.nested_virtualization);
-        assert_eq!(resolved.advanced.security, SecurityOptions::disabled());
+        assert!(resolved.advanced.privileged);
+
+        // `sanitize` derives RLIMIT_FSIZE from `disk_size_gb` (#1152), so the
+        // one security field a trusted import does not carry over verbatim is
+        // the file-size ceiling. Everything else is preserved.
+        let mut expected = SecurityOptions::disabled();
+        expected.resource_limits.max_file_size = Some(Bytes::from_gib(20).as_bytes());
+        assert_eq!(resolved.advanced.security, expected);
     }
 
     #[test]
     fn imported_capability_policy_is_validated_before_install() {
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced
+            .set_capabilities(Some(
+                crate::runtime::advanced_options::ContainerCapabilities {
+                    drop: vec!["NET-ADMIN".into()],
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
         let manifest = ArchiveManifest {
             version: 3,
             box_name: Some("untrusted".into()),
             image: "alpine:latest".into(),
             box_options: Some(BoxOptions {
-                advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
-                    capabilities: crate::runtime::advanced_options::ContainerCapabilities {
-                        drop: vec!["NET-ADMIN".into()],
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
+                advanced,
                 ..Default::default()
             }),
             guest_disk_checksum: String::new(),
@@ -449,5 +551,23 @@ mod tests {
 
         let result = validate_no_backing_references(&disk);
         assert!(result.is_ok());
+    }
+
+    /// The backing-file scan is the import path's only disk-level security
+    /// decision, so it has to fail closed. A disk it cannot parse is a disk it
+    /// cannot clear — treating the parse error as "no backing reference" hands
+    /// the verdict to whatever the file happens to be.
+    #[test]
+    fn test_validate_no_backing_references_rejects_unparsable_disk() {
+        let dir = TempDir::new_in("/tmp").unwrap();
+        let disk = dir.path().join("not-a-qcow2.qcow2");
+        std::fs::write(&disk, b"this is not a qcow2 header at all").unwrap();
+
+        let error = validate_no_backing_references(&disk)
+            .expect_err("an unparsable disk must not be treated as safe");
+        assert!(
+            error.to_string().contains("qcow2"),
+            "the error must say the disk is not a usable qcow2, got: {error}"
+        );
     }
 }

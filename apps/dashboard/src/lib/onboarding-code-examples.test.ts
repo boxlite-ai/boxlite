@@ -30,6 +30,23 @@ describe('onboarding code examples', () => {
     }
   })
 
+  it('labels every entry with its own technology, not with the group it belongs to', () => {
+    const interfaces = getOnboardingInterfaces()
+
+    // 'SDK' scopes the language group in the picker; no single entry may claim it as a label,
+    // otherwise the other languages read as "not an SDK".
+    expect(interfaces.map((item) => item.label)).toEqual(['Python', 'Node', 'Go', 'Rust', 'C', 'CLI', 'REST'])
+
+    expect(interfaces.filter((item) => item.group === 'sdk').map((item) => item.id)).toEqual([
+      'python',
+      'typescript',
+      'go',
+      'rust',
+      'c',
+    ])
+    expect(interfaces.filter((item) => item.group === 'direct').map((item) => item.id)).toEqual(['cli', 'rest'])
+  })
+
   it('reads API keys from environment variables instead of interactive prompts', () => {
     const examples = getOnboardingCodeExamples()
 

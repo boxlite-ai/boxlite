@@ -1,378 +1,200 @@
-# BoxLite CI/CD Workflows
+# CI/CD workflows
 
-This directory contains GitHub Actions workflows for building and publishing BoxLite SDKs.
+Every GitHub Actions workflow in the repository: the pull-request checks, the SDK build and
+publish chain, the cloud deploy path, the three end-to-end suites, and the box images.
 
-## Workflow Architecture
+Shared step bundles live one directory over, in [`.github/actions/`](../actions) — GitHub does not
+support subdirectories under `.github/workflows/`, so composite actions are where reuse goes.
 
+## How they fit together
+
+```text
+PULL REQUEST / PUSH                     lint · test · codeql · api-client-drift
+                                        e2e-stack · e2e-local · build-box-images
+
+BUILD CHAIN (workflow_run)              warm-caches ──▶ build-runtime
+                                        build-c ──▶ build-go
+                                                └──▶ build-runner-binary
+
+RELEASE (release event)                 build-runtime · build-c · build-node · build-wheels
+                                        apps/box-images/v* tag ──▶ release-box-images
+
+DEPLOY (manual dispatch)                deploy-infra ─┬─▶ build-apps-api-image
+                                                      ├─▶ build-c ──▶ build-runner-binary
+                                                      └─▶ e2e-cloud
+                                        deploy-release   (no builds; consumes published artifacts)
+
+CONFIG                                  config ◀── every build workflow, lint, test, warm-caches
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         config.yml                                   │
-│                    (shared configuration)                            │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-        ┌───────────────────────┼───────────────────────┐
-        ↓                       ↓                       ↓
-┌───────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│warm-caches    │     │build-wheels     │     │build-node       │
-│               │     │                 │     │                 │
-│ Triggers:     │     │ Triggers:       │     │ Triggers:       │
-│ - push main   │     │ - release       │     │ - release       │
-│ - weekly      │     │ - manual        │     │ - manual        │
-│               │     │                 │     │                 │
-│ Warms sccache │     │ Uses sccache    │     │ Uses sccache    │
-└───────┬───────┘     └─────────────────┘     └─────────────────┘
-        │ [completed]
-        ↓
-┌───────────────┐
-│build-runtime  │
-│               │
-│ Triggers:     │
-│ - warm-caches │
-│ - release     │
-│ - manual      │
-│               │
-│ Uses sccache  │
-└───────────────┘
-```
-
-## Key Design: sccache Compilation Caching
-
-All Rust compilation is cached via **sccache** using the GHA cache API:
-
-- Caches individual compilation units (object files) by content hash
-- Works on host runners and inside Docker/manylinux containers
-- Pre-warmed by `warm-caches.yml` on push to main
-- `build-runtime.yml` chains after warm-caches via `workflow_run` for cache hits
-- Requires `CARGO_INCREMENTAL=0` (sccache and incremental compilation are incompatible)
-- Graceful fallback: if sccache fails to set up, builds proceed without caching
 
 ## Workflows
 
-### `config.yml`
+**Callable** marks a workflow another one can invoke with `uses:`. `config.yml` is the only one that
+is *exclusively* callable; the other four can also be dispatched on their own.
 
-Shared configuration loaded by all workflows.
+| Workflow | Triggers | Callable | Purpose |
+| --- | --- | --- | --- |
+| `config.yml` | `workflow_call` | call-only | Single source of the platform matrix and language versions |
+| `lint.yml` | push, PR, merge_group | — | Format and lint per language, plus the infra suite. `Lint (conclusion)` is the required check |
+| `test.yml` | push, PR, merge_group | — | Unit tests for every SDK. No VM tests — hosted runners have no nested virtualization |
+| `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
+| `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs |
+| `warm-caches.yml` | push, weekly, dispatch | — | Populates the sccache the other Rust builds read |
+| `build-runtime.yml` | `workflow_run`, release, dispatch | — | Core runtime and CLI; publishes crates |
+| `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
+| `build-go.yml` | `workflow_run`, dispatch | — | Tests the Go SDK and tags its module |
+| `build-node.yml` | release, dispatch | — | Node.js SDK, napi-rs addon and platform packages |
+| `build-wheels.yml` | release, dispatch | — | Python wheels via cibuildwheel |
+| `build-runner-binary.yml` | `workflow_run`, dispatch, `workflow_call` | yes | Linux amd64 runner binary |
+| `build-apps-api-image.yml` | dispatch, `workflow_call` | yes | The `apps/api` image: build a commit, build a release, or promote one between stages |
+| `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. The normal deploy path |
+| `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing |
+| `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage. Run by `deploy-infra` after it applies |
+| `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted EC2 runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
+| `e2e-stack.yml` | push, PR, dispatch | — | SDK → API → runner → VM on a nested-KVM runner |
+| `build-box-images.yml` | PR, push, dispatch | — | Builds every box image flavor for both arches without publishing |
+| `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | The only workflow that writes to GHCR |
 
-**Outputs:**
-- `platforms` - Platform configurations with os and target (`[{"os":"macos-15","target":"darwin-arm64"},{"os":"ubuntu-latest","target":"linux-x64-gnu"}]`)
-- `python-versions` - Python versions (`["3.10", "3.11", "3.12", "3.13"]`)
-- `node-versions` - Node.js versions (`["18", "20", "22"]`)
-- `node-build-version` - Node.js version for building (`"20"`)
-- `rust-toolchain` - Rust toolchain version (`"stable"`)
-- `artifact-retention-days` - Days to keep artifacts (`7`)
+Longer treatments live with their subject rather than here: [E2E local
+runbook](../../docs/ci/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
 
-### `build-runtime.yml`
+## Composite actions
 
-Builds BoxLite runtime, uploads to GitHub Release, and publishes Rust crates to crates.io.
+In [`.github/actions/`](../actions). Each replaces a step bundle that was previously copied into
+every consumer.
 
-**Triggers:**
-- After `Warm Caches` workflow completes on `main` (via `workflow_run`)
-- Release published
-- Manual dispatch
+| Action | Sites | Used by |
+| --- | --- | --- |
+| `setup-rust` | 13 | build-c, build-node, build-runtime ×2, build-wheels, lint ×3, test ×4, warm-caches |
+| `sccache` | 9 | build-c, build-node, build-runtime, build-wheels, lint ×2, test ×2, warm-caches |
+| `build-guest` | 5 | build-c, build-node, build-runtime, build-wheels, warm-caches |
+| `upload-to-release` | 5 | build-c, build-node, build-runner-binary, build-runtime, build-wheels |
+| `run-in-manylinux` | 4 | build-c, build-node, build-runtime, warm-caches |
+| `setup-go` | 4 | build-go, build-runner-binary, lint, test |
+| `setup-python` | 3 | build-wheels, lint, test |
+| `setup-buildx` | 2 | build-box-images, release-box-images |
 
-**What it builds:**
-- `boxlite-guest` - VM guest agent
-- `boxlite-shim` - Process isolation shim
-- `libkrun`, `libkrunfw`, `libgvproxy` - Hypervisor libraries
-- `debugfs`, `mke2fs` - Filesystem tools
+Two ordering rules, stated in each action's own header: `sccache` runs after `setup-rust`, and
+`build-guest` and `run-in-manylinux` run after both. They are separate actions rather than one
+because sccache is job-scoped — `run-in-manylinux` mounts the sccache binary and reads the
+variables `sccache` exported, long after `build-guest` is done with them.
 
-**Jobs:**
-1. `config` - Load shared configuration
-2. `build` - Build runtime for each platform (matrix: macOS ARM64, Linux x64)
-3. `upload_to_release` - Upload runtime tarballs to GitHub Release (release only)
-4. `publish_crates` - Publish Rust crates to crates.io (release only, after upload)
+A `uses: ./...` action is resolved from the **checked-out tree**, not from the ref that defines the
+workflow. Jobs that check out a caller-selected commit — `build-c` and `build-runner-binary`, when
+`deploy-infra` drives them — therefore need `.github/actions/` to exist in *that* commit. A commit
+predating these directories fails with `Can't find 'action.yml'`; select a newer one.
 
-### `build-wheels.yml`
+## sccache
 
-Builds, tests, and publishes Python SDK.
+Rust compilation is cached with [sccache](https://github.com/mozilla-actions/sccache-action) over
+the GitHub Actions cache API **in the jobs that invoke `./.github/actions/sccache`** — not in every
+job that compiles Rust. `test.yml`'s `rust` and `guest_artifacts` jobs set up the toolchain without it,
+so they compile uncached. The action owns the whole configuration; a caller only invokes it.
 
-**Triggers:**
-- Releases
-- Manual dispatch
+- Caches individual compilation units by content hash, so it works on the host and inside the
+  Docker and cibuildwheel manylinux containers alike.
+- Pre-warmed by `warm-caches.yml` on push to main; `build-runtime.yml` chains off it via
+  `workflow_run` so the cache is hot.
+- **`RUSTC_WRAPPER=sccache` and `SCCACHE_GHA_ENABLED` are set by the action.** The upstream
+  `sccache-action` installs the binary and exports the cache credentials but sets neither, so a job
+  that only installed it compiled uncached while still looking healthy. Setting them is what makes
+  the cache take effect.
+- `CARGO_INCREMENTAL=0` is set by the action too, unconditionally — sccache cannot cache
+  incremental compilation, so it is a precondition rather than a caller's choice.
+- `SCCACHE_BASEDIRS` strips the workspace prefix from cache keys, `$GITHUB_WORKSPACE` on the host
+  and `/work` inside the container, so the two sides can share an entry instead of keying the same
+  crate twice by absolute path.
+- The sccache version is pinned in the action rather than floating on `latest`, which is what an
+  omitted `version` means.
+- Degrades rather than fails, **on the host**: `RUSTC_WRAPPER` is set only once the server is
+  actually serving, so both a missing binary and a server that will not start leave it unset —
+  pointing cargo at an sccache that cannot answer would turn a tolerated cache failure into a hard
+  build failure. A tolerant job additionally gets `SCCACHE_IGNORE_SERVER_IO_ERROR`, which narrowly
+  turns a failure to read the compile response from the server into a local compile rather than a
+  failed build. Diagnostics land in `$RUNNER_TEMP/sccache-error.log`, and the action's post step
+  prints hit/miss stats.
+- **The containers decide separately, and depend on the host having sccache at all.**
+  `run-in-manylinux` builds its whole `-e` list — the bind-mount, `RUSTC_WRAPPER`,
+  `SCCACHE_GHA_ENABLED`, the basedir — inside `if command -v sccache` evaluated *on the host*, so a
+  host with no binary caches nowhere. Given a binary, the container runs its own server and its
+  prologue drops `RUSTC_WRAPPER` only if the mount did not arrive: it degrades on a missing binary,
+  not on a failed startup, and `SCCACHE_IGNORE_SERVER_IO_ERROR` is not forwarded. cibuildwheel's
+  container is the one that installs its own sccache (`sdks/python/pyproject.toml`), but it wraps
+  cargo through the `RUSTC_WRAPPER` its `environment-pass` inherits from the host.
+- `warm-caches.yml` passes `tolerate-failure: 'false'` and is the deliberate exception: populating
+  the cache is its entire purpose, so every one of those paths fails the job rather than warning.
 
-**Jobs:**
-1. `build_wheels` - Builds Python wheels using cibuildwheel
-2. `test_wheels` - Tests import on Python 3.10-3.13
-3. `publish` - Publishes to PyPI (on release)
-4. `upload_to_release` - Uploads wheels to GitHub Release
+## CodeQL
 
-### `build-node.yml`
+`codeql.yml` uses CodeQL **advanced** setup rather than default setup, because default setup does
+not analyze pull requests from forks — which makes the `code_scanning` ruleset rule ("Require code
+scanning results") permanently block fork PRs. Advanced setup runs on `pull_request`, so fork PRs
+in this public repo are scanned and the gate is satisfiable without an admin bypass.
 
-Builds, tests, and publishes Node.js SDK.
+GitHub rejects advanced CodeQL uploads while default setup is enabled, so the workflow is dormant
+until the repository variable `CODEQL_ADVANCED_SETUP_ENABLED` is `true` (`codeql.yml:35`).
 
-**Triggers:**
-- Releases
-- Manual dispatch
+**Activation, in this order:**
 
-**Package structure:**
-- `@boxlite-ai/boxlite` - Main package with TypeScript wrappers
-- `@boxlite-ai/boxlite-darwin-arm64` - macOS ARM64 native binary
-- `@boxlite-ai/boxlite-linux-x64-gnu` - Linux x64 glibc native binary
-
-**Jobs:**
-1. `build` - Builds Node.js addon with napi-rs, outputs tarballs
-2. `test` - Tests import on Node 18, 20, 22
-3. `publish` - Publishes to npm (on release)
-4. `upload-to-release` - Uploads tarballs to GitHub Release
-
-### `lint.yml`
-
-Runs code quality checks.
-
-**Triggers:**
-- Push to `main`
-- Pull requests
-
-**Jobs:**
-1. `rustfmt` - Check Rust formatting via `make fmt:check:rust`
-2. `clippy` - Run Clippy linter via `make clippy` on all platforms
-3. `python` - Run Python lint and format checks via `make lint:python` and `make fmt:check:python`
-4. `node` - Run Node lint and format checks via `make lint:node` and `make fmt:check:node`
-5. `c` - Run C SDK lint and format checks via `make lint:c` and `make fmt:check:c`
-
-### `codeql.yml`
-
-Runs CodeQL code scanning (advanced setup) across all analyzed languages.
-
-**Why advanced setup:** CodeQL *default setup* does not analyze pull requests
-from forks, so the `code_scanning` ruleset rule ("Require code scanning
-results") permanently blocks fork PRs. Advanced setup runs on `pull_request`,
-so fork PRs in this public repo are scanned and the gate is satisfiable without
-an admin bypass.
-
-**Bootstrap guard:** GitHub rejects advanced CodeQL uploads while default setup
-is enabled. The workflow is dormant until repository variable
-`CODEQL_ADVANCED_SETUP_ENABLED` is set to `true`.
-
-**Triggers:**
-- Push to `main`
-- Pull requests against `main` (including fork PRs)
-- Manual dispatch
-- Weekly schedule (Mondays 03:31 UTC)
-
-**Jobs:**
-1. `analyze` - Matrix over `actions`, `c-cpp`, `go`, `javascript-typescript`, `python`, `rust`. All use `build-mode: none` (source-only, no compile) except `go`, which requires `autobuild` (Go's extractor must observe a build). Uses `github/codeql-action@v4`.
-
-**Activation sequence:**
-1. Merge this workflow while `CODEQL_ADVANCED_SETUP_ENABLED` is unset or `false`, so default setup remains the active scanner.
+1. Merge the workflow while `CODEQL_ADVANCED_SETUP_ENABLED` is unset or `false`, so default setup
+   remains the active scanner.
 2. Disable CodeQL default setup.
-3. Set repository variable `CODEQL_ADVANCED_SETUP_ENABLED=true`.
-4. Trigger a new push, pull request update, or manual dispatch and verify CodeQL analysis uploads successfully.
-5. Roll back by setting `CODEQL_ADVANCED_SETUP_ENABLED=false` and re-enabling default setup.
+3. Set the repository variable `CODEQL_ADVANCED_SETUP_ENABLED=true`.
+4. Trigger a push, pull request update, or manual dispatch, and verify the analysis uploads.
 
-### `deploy-infra.yml`
+**Rollback:** set `CODEQL_ADVANCED_SETUP_ENABLED=false` and re-enable default setup.
 
-Previews or deploys the full stack from one commit, on a native AMD64 GitHub
-runner, for a `workflow_dispatch`-selected `stage` (an allowlisted `choice`
-input, `dev` today). That commit is either already on `main` (current `main` by
-default) or the merge of an open pull request with `main`, so a change can reach
-a stage before it merges.
+The `analyze` job is a matrix over `actions`, `c-cpp`, `go`, `javascript-typescript`, `python` and
+`rust`. All use `build-mode: none` (source only, no compile) except `go`, whose extractor has to
+observe a real build and therefore uses `autobuild`.
 
-The merge commit rather than the head: the workflow definition comes from the
-dispatch ref while the deploy job checks out the resolved commit, so a head that
-is behind `main` would pair new workflow YAML with old `apps/infra` tooling.
-GitHub recomputes that merge whenever `main` or the head moves, so the resolved
-SHA is a snapshot rather than a commit in anyone's history.
+## Do not rename these
 
-A fork's PR is accepted: dispatching already requires write access, and the
-credential-bearing jobs sit behind the stage Environment's required reviewer.
-`build-c`/`build-runner` are the exception — neither declares an `environment:`,
-so a fork's build code runs on a hosted runner with no second look; the risk
-there is compute abuse and build-time tampering, not credential theft.
+Three workflows chain off another's **display name**, not its filename. Changing a `name:` below
+silently stops the chain — no error, the downstream workflow simply never fires.
 
-Each component is built by its own job, and the two legs share only
-`resolve-ref`, so they run side by side: the reusable C/Runner workflows produce
-a Linux AMD64 Runner with `<workspace-version>+<sha>` identity and stage it in
-the stage's private commit-keyed S3 path, while `build-api` calls
-`build-apps-api-image.yml` for the same commit and pushes
-`boxlite-app-<stage>-api:v<version>-<sha>`. The deploy itself compiles neither.
-Deployment safety tests first enforce the Runner lifecycle options. Dispatch defaults to
-preview-only; `apply=true` repeats the full structured preview and deploys only
-when the Runner safety gate accepts the
-plan. Routine control-plane deployment rejects every Runner create, delete,
-replacement, or protected-property change; the routine workflow does not
-provision Runners. The job rejects `--target` deploys outright — a targeted
-update omits the shared and provider resources it still depends on, which is
-how a `--target Api` dispatch stalled this stack on `StorageBucket`
-mid-provider-migration — and accepts `--exclude` only for the two scopes the
-`components` input can produce. It is serialized, uses the
-selected stage's protected GitHub Environment, and authenticates to AWS with
-short-lived OIDC credentials. Docker runs entirely in CI; no developer machine
-or public SSH builder participates.
+| `name:` | Depended on by |
+| --- | --- |
+| `Build C SDK` | `build-go.yml`, `build-runner-binary.yml` |
+| `Warm Caches` | `build-runtime.yml` |
 
-`components` (`api+runner`, `api`, `runner`) narrows a dispatch to one
-deployable leg: the other leg's build jobs are skipped and its mutable half — the
-service or instance, and the binary-upgrade commands — leaves the plan, so an
-Api-only change need not rebuild the Runner. Its ref-independent scaffolding
-(IAM role, instance profile, security group) still reconciles as a no-op. The
-exclusion covers `sst.config.ts` as well as the SST command line — the
-`UpgradeRunnerBinary-*` commands are siblings of the Runner instance rather
-than children, so `--exclude Runner` alone would leave them firing against an
-artifact the skipped build never published. `apps/infra/scripts/deployment-scope.mjs`
-is the allowlist for both halves. A narrowed deploy leaves the excluded leg on
-whatever commit an earlier run put there, so the stack is then mixed-commit.
+## Adding a stage
 
-The `stage` and `components` inputs are allowlists rather than free text: a
-required-reviewers Environment cannot be targeted by an unbootstrapped or
-misspelled name, and a deploy scope is picked from reviewed shapes rather than
-composed on the spot. Every workflow that binds `environment:` to an input follows
-this rule, and each list is independent — it names the stages *that* path is
-meant to reach. Today the commit-build path (`deploy-infra.yml`) lists `dev`,
-while the release path (`deploy-release.yml`, and `build-apps-api-image.yml`'s
-`stage` and `source_stage`) lists `dev` and `prod`. Bootstrapping a stage means
-adding it to whichever of those lists should reach it.
+`stage` inputs are allowlists rather than free text, so a required-reviewers Environment cannot be
+targeted by an unbootstrapped or misspelled name. Each list is independent — it names the stages
+*that* path is meant to reach. Today `deploy-infra.yml` lists `dev`, while `deploy-release.yml` and
+`build-apps-api-image.yml` (`stage` and `source_stage`) list `dev` and `prod`. Bootstrapping a
+stage means adding it to whichever lists should reach it.
 
-### `build-apps-api-image.yml` / `deploy-release.yml`
+Each stage also needs its GitHub Environment to exist under exactly the stage name — the deploy
+role's trust policy pins `repo:<owner>/<repo>:environment:<stage>` — and that is where required
+reviewers are enforced.
 
-`build-apps-api-image.yml` has three operations, all writing immutable tags into
-`boxlite-app-<stage>-api`:
+## Deploy configuration
 
-| Operation | Entry point                | Checks out    | Tag                  | Target        |
-| --------- | -------------------------- | ------------- | -------------------- | ------------- |
-| `commit`  | `workflow_call` only       | the given SHA | `v<version>-<sha>`   | caller's stage |
-| `build`   | dispatch                   | `v<version>`  | `<version>`          | `dev` only    |
-| `promote` | dispatch                   | nothing       | `<version>`          | another stage |
+Per stage, on the GitHub side:
 
-`commit` is how `deploy-infra.yml` builds the API for the commit it deploys; the
-`ref` input is call-only, so no dispatch can tag an image for a commit the
-deployable-commit guard never saw. The two tag shapes cannot collide, which matters
-because the repository is `IMMUTABLE` and a collision would be unrepairable.
-`promote` copies an exact manifest registry-side, addressed by digest, and
-verifies the digest survived; it never rebuilds. The dispatched operations run
-from `main`, because a release event runs on a tag ref that the branch-scoped
-deployment Environments block before the job can obtain AWS credentials.
+- **Environment variables** `AWS_ACCOUNT_ID` and `AWS_REGION`. Neither can live in the stage's SST
+  secret store, because `configure-aws-credentials` reads them before any AWS credentials exist.
+  - `AWS_ACCOUNT_ID` is **required**. The workflows compose
+    `arn:aws:iam::<id>:role/boxlite-<stage>-github-deploy` from it; only the account id is unknown,
+    since the role name follows from the stage.
+  - `AWS_REGION` is **optional**, and only for a stage outside the default. The workflows fall back
+    to `DEFAULT_AWS_REGION`, pinned to the code by a test.
+- **Environment secrets** `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_DEFAULT_ACCOUNT_ID`. These cannot
+  move to the SST secret store either: reading that store initializes the Cloudflare provider, so a
+  token kept there would be needed in order to read itself.
 
-`deploy-release.yml` accepts one stable `X.Y.Z` for both that API image and the
-matching Runner GitHub Release assets, verifies both before SST runs, and
-compiles neither component.
+Everything else for a stage lives in its SST secret store, seeded by `npm run bootstrap` and read
+by `apps/infra/deployment/sst.ts`. Bootstrap the scoped role, permissions boundary, immutable API
+ECR repository and private runner artifact bucket with
+`apps/infra/bootstrap/aws/github-deploy-role.yaml`.
 
-Required Environment configuration (per stage):
+## Publishing secrets
 
-- Variable `AWS_DEPLOY_ROLE_ARN`
-- Variable `AWS_REGION` (defaults to `ap-southeast-1`)
-- Secret `DEPLOY_ENV` containing the stage's dotenv configuration
+Repository secrets, in Settings → Secrets and variables → Actions:
 
-Bootstrap the scoped role, runtime permissions boundary, immutable API ECR
-repository, and private Runner artifact bucket with
-`apps/infra/ci/github-deploy-role.yaml`. Redeploy that CloudFormation stack when
-its policy/resources change, then require reviewers before enabling deployments.
-
-### `e2e-local.yml`
-
-Runs VM-based integration tests on a persistent, self-hosted AWS EC2 runner — GitHub-hosted
-runners can't expose `/dev/kvm`, which BoxLite's libkrun microVMs need. The instance is
-started before a run and stopped (not terminated) after, so caches persist. AWS auth is
-GitHub OIDC → STS; runner registration is a GitHub App. A pull request must carry the
-`e2e-local` label (the cost gate) to run; fork PRs run via `pull_request_target` and only
-the labeled head commit — re-label after new pushes.
-
-See the **[E2E Local CI runbook](../../docs/ci/e2e-local.md)** for the jobs, the instance,
-one-time provisioning (`scripts/ci/setup-ci-runner.sh`), and troubleshooting.
-
-### `build-box-images.yml` / `release-box-images.yml`
-
-The box images in `apps/box-images/` (`base`, `python`, `node`) carry their own `VERSION`,
-independent of the product version, so build and release are split:
-
-- **`build-box-images.yml`** validates. On PRs and `main` it builds all three flavors for
-  `linux/amd64` and `linux/arm64` with `PUSH=0`, which exercises every layer without
-  publishing. It holds `contents: read` only and has no registry login, so it cannot write
-  to GHCR.
-- **`release-box-images.yml`** publishes, and is the only workflow that can. It runs on an
-  `apps/box-images/vMAJOR.MINOR.PATCH` tag — the same path-prefixed convention as the
-  `sdks/go/v*` tags — or on manual dispatch, and only from a release tag or `main`. The tag
-  must agree with `apps/box-images/VERSION`, and publishing aborts if that version already
-  exists on GHCR unless dispatched with `allow-overwrite`, so a rebuild cannot silently move
-  the tag a running box pulls. The existence check reads the registry API and branches on the
-  HTTP status: only a 404 counts as free, so a 5xx or an expired token stops the release
-  instead of reading as "not published".
-
-Releasing is therefore an explicit tag; merging to `main` does not publish.
-
-## Trigger Behavior
-
-| Change | warm-caches | build-runtime | build-wheels | build-node |
-|--------|-------------|---------------|--------------|------------|
-| `src/boxlite/**` | ✅ Runs | ✅ Chains after warm-caches | ❌ Skips | ❌ Skips |
-| `sdks/python/**` | ❌ Skips | ❌ Skips | ❌ Skips | ❌ Skips |
-| `sdks/node/**` | ❌ Skips | ❌ Skips | ❌ Skips | ❌ Skips |
-| Release published | ❌ Skips | ✅ Runs directly | ✅ Runs | ✅ Runs |
-
-## Cache Strategy
-
-### Compilation Cache (sccache)
-
-All Rust compilation is cached via sccache using the GHA cache API:
-
-- Caches individual compilation units (object files)
-- Works on host runners and inside Docker containers
-- Pre-warmed by the `warm-caches.yml` workflow on push to main
-- Requires `CARGO_INCREMENTAL=0` (sccache and incremental compilation are incompatible)
-- Graceful fallback: if sccache fails to set up, builds proceed without caching
-
-## Platform Matrix
-
-Currently supporting 2 platforms:
-
-| Platform | OS Runner | Target |
-|----------|-----------|--------|
-| macOS ARM64 | `macos-15` | `darwin-arm64` |
-| Linux x64 | `ubuntu-latest` | `linux-x64-gnu` |
-
-Additional platforms (darwin-x64, linux-arm64-gnu) can be added to `config.yml` when needed.
-
-## Time Savings
-
-**Scenario: Only Python SDK changed**
-
-| Without separation | With separation |
-|-------------------|-----------------|
-| Build runtime: 8 min | ❌ Skipped |
-| Build Python: 2 min | ✅ 2 min (cache hit) |
-| Build Node: 2 min | ❌ Skipped |
-| **Total: 12 min** | **Total: 2 min** |
-
-**Savings: 83% faster**
-
-## Secrets Required
-
-- `CARGO_REGISTRY_TOKEN` - crates.io API token for publishing Rust crates
-- `PYPI_API_TOKEN` - PyPI API token for publishing Python wheels
-- `NPM_TOKEN` - npm access token for publishing Node.js packages
-- `GH_APP_PRIVATE_KEY` - GitHub App private key for self-hosted E2E runner registration (see the [E2E Local CI runbook](../../docs/ci/e2e-local.md))
-
-Set these in repository Settings → Secrets and variables → Actions.
-
-## Local Development
-
-```bash
-# Build runtime once
-make runtime
-
-# Build Python SDK (reuses runtime)
-make dev:python
-
-# Build Node.js SDK (reuses runtime)
-make dev:node
-```
-
-## Troubleshooting
-
-**Cache miss when expected hit:**
-- sccache caches expire after 7 days of non-use (weekly warm-caches schedule prevents this)
-- Branch-based cache isolation may apply
-- Check sccache stats in build logs for hit/miss rates
-
-**Build taking too long:**
-- Check sccache stats — low hit rate means cache is cold
-- Verify warm-caches workflow completed successfully before build-runtime
-- Check GHA cache usage (Settings > Actions > Caches) for eviction
-
-**Node.js package install fails:**
-- Platform package must be installed before main package
-- Check that tarballs were uploaded correctly
-
-## References
-
-- [mozilla-actions/sccache-action](https://github.com/mozilla-actions/sccache-action)
-- [cibuildwheel](https://cibuildwheel.readthedocs.io/)
-- [napi-rs](https://napi.rs/)
+- `CARGO_REGISTRY_TOKEN` — crates.io, for the Rust crates
+- `PYPI_API_TOKEN` — PyPI, for the wheels
+- `NPM_TOKEN` — npm, for the Node packages
+- `GH_APP_PRIVATE_KEY` — GitHub App key that registers the self-hosted E2E runner

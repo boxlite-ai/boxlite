@@ -13,7 +13,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Repository, Not, In } from 'typeorm'
+import { Repository, Not, In, FindOptionsWhere } from 'typeorm'
 import { Volume } from '../entities/volume.entity'
 import { VolumeState } from '../enums/volume-state.enum'
 import { CreateVolumeDto } from '../dto/create-volume.dto'
@@ -29,6 +29,10 @@ import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxRepository } from '../repositories/box.repository'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { setTimeout as sleep } from 'timers/promises'
+
+// Shape Postgres accepts for a `uuid` column. Used to keep plain names out of
+// an id predicate, not to validate ids - the database is the authority.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 @Injectable()
 export class VolumeService {
@@ -197,33 +201,61 @@ export class VolumeService {
     return volume
   }
 
-  async validateVolumes(organizationId: string, volumeIdOrNames: string[]): Promise<void> {
+  /**
+   * Resolve each selector to the volume it names, or throw.
+   *
+   * Returns a selector -> canonical id map rather than void: a selector may be
+   * a *name*, and a name is only unique within an organization. Everything
+   * downstream - the persisted box, the runner dispatch, the derived bucket
+   * `boxlite-volume-<id>` - treats the stored value as a globally canonical id.
+   * Persisting the caller's selector instead would let one tenant name a volume
+   * after another tenant's id and have the runner resolve it there.
+   */
+  async validateVolumes(organizationId: string, volumeIdOrNames: string[]): Promise<Map<string, string>> {
     if (!volumeIdOrNames.length) {
-      return
+      return new Map()
     }
 
-    const volumes = await this.volumeRepository.find({
-      where: [
-        { id: In(volumeIdOrNames), organizationId, state: Not(VolumeState.DELETED) },
-        { name: In(volumeIdOrNames), organizationId, state: Not(VolumeState.DELETED) },
-      ],
-    })
+    // `id` is a Postgres uuid column, so comparing it against a plain name
+    // raises `invalid input syntax for type uuid` and takes the whole query
+    // down - including the name branch that would have matched. Only
+    // uuid-shaped selectors reach the id predicate; every selector is safe
+    // against `name`, which is a varchar.
+    const uuidShaped = volumeIdOrNames.filter((selector) => UUID_PATTERN.test(selector))
 
-    // Check if all requested volumes were found and are in a READY state
-    const foundIds = new Set(volumes.map((v) => v.id))
-    const foundNames = new Set(volumes.map((v) => v.name))
+    const where: FindOptionsWhere<Volume>[] = [
+      { name: In(volumeIdOrNames), organizationId, state: Not(VolumeState.DELETED) },
+    ]
+    if (uuidShaped.length) {
+      where.push({ id: In(uuidShaped), organizationId, state: Not(VolumeState.DELETED) })
+    }
 
-    for (const idOrName of volumeIdOrNames) {
-      if (!foundIds.has(idOrName) && !foundNames.has(idOrName)) {
-        throw new NotFoundException(`Volume '${idOrName}' not found`)
+    const volumes = await this.volumeRepository.find({ where })
+
+    const byId = new Map(volumes.map((volume) => [volume.id, volume]))
+    const byName = new Map(volumes.map((volume) => [volume.name, volume]))
+
+    // Resolve every selector before judging any of them. Ids win over names: an
+    // id is globally unique, a name only unique per organization.
+    const selected = new Map<string, Volume>()
+    for (const selector of volumeIdOrNames) {
+      const volume = byId.get(selector) ?? byName.get(selector)
+      if (!volume) {
+        throw new NotFoundException(`Volume '${selector}' not found`)
       }
+      selected.set(selector, volume)
     }
 
-    for (const volume of volumes) {
+    // Readiness is checked on the volumes actually selected, not on every row
+    // the query returned: a non-ready volume whose *name* collides with a ready
+    // volume's id is not part of this request and must not fail it.
+    for (const volume of new Set(selected.values())) {
       if (volume.state !== VolumeState.READY) {
         throw new BadRequestError(`Volume '${volume.name}' is not in a ready state. Current state: ${volume.state}`)
       }
     }
+
+    return new Map(Array.from(selected, ([selector, volume]) => [selector, volume.id]))
   }
 
   async getOrganizationId(params: { id: string } | { name: string; organizationId: string }): Promise<string> {

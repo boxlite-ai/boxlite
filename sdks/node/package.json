@@ -1,6 +1,6 @@
 {
   "name": "@boxlite-ai/boxlite",
-  "version": "0.9.7",
+  "version": "0.10.0",
   "description": "BoxLite - Embeddable micro-VM runtime for secure, isolated code execution",
   "type": "module",
   "main": "dist/index.js",
@@ -37,7 +37,7 @@
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^3.0.0-alpha.62",
+    "@napi-rs/cli": "3.7.2",
     "@types/node": "^22.0.0",
     "playwright-core": "1.58.0",
     "prettier": "^3.6.2",

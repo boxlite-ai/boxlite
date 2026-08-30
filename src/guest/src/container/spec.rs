@@ -14,6 +14,17 @@ use oci_spec::runtime::{
     PosixRlimitType, ProcessBuilder, RootBuilder, Spec, SpecBuilder, UserBuilder,
 };
 
+/// Host-resolved source/options override for one of the guest's own standard
+/// mounts. Which mount is a separate concern, handled at the RPC boundary
+/// (`container::mount_override`) before this is ever built — by the time
+/// one of these exists, its two fields are already known to belong to `/sys`,
+/// so the type itself doesn't need to say so.
+#[derive(Debug, Clone)]
+pub struct MountOverride {
+    pub source: String,
+    pub options: Vec<String>,
+}
+
 /// User-specified bind mount for container
 #[derive(Debug, Clone)]
 pub struct UserMount {
@@ -147,10 +158,7 @@ fn validate_device_path(field: &str, value: &str) -> BoxliteResult<PathBuf> {
 /// - Resource limits (rlimits)
 /// - No new privileges disabled (allows sudo)
 ///
-/// NOTE: Cgroups are disabled for performance (~105ms savings on container startup).
-/// Since we're inside a VM with single-tenant isolation, cgroup resource limits
-/// provide minimal benefit. See comments in build_default_namespaces() and
-/// build_standard_mounts() to re-enable if needed.
+/// Build an OCI spec from the atomic security choices resolved by the host.
 #[allow(clippy::too_many_arguments)]
 pub fn create_oci_spec(
     container_id: &str,
@@ -161,14 +169,23 @@ pub fn create_oci_spec(
     uid: u32,
     gid: u32,
     capabilities: &CapabilitySet,
+    readonly_paths: &[String],
+    mount_override: &MountOverride,
     bundle_path: &Path,
     user_mounts: &[UserMount],
     tty: bool,
     devices: &ContainerDevices,
 ) -> BoxliteResult<Spec> {
     let caps = capabilities.to_oci()?;
+    tracing::info!(
+        container_id,
+        mount_source = mount_override.source,
+        mount_options = ?mount_override.options,
+        readonly_paths_count = readonly_paths.len(),
+        "building container spec"
+    );
     let namespaces = build_default_namespaces()?;
-    let mut mounts = build_standard_mounts(bundle_path)?;
+    let mut mounts = build_standard_mounts(bundle_path, mount_override.clone())?;
 
     // Add user-specified bind mounts
     for user_mount in user_mounts {
@@ -203,7 +220,12 @@ pub fn create_oci_spec(
 
     let process = build_process_spec(entrypoint, env, workdir, uid, gid, caps, tty)?;
     let root = build_root_spec(rootfs)?;
-    let linux = build_linux_spec(container_id, namespaces, devices.as_slice())?;
+    let linux = build_linux_spec(
+        container_id,
+        namespaces,
+        devices.as_slice(),
+        readonly_paths.to_vec(),
+    )?;
 
     SpecBuilder::default()
         .version("1.0.2")
@@ -214,6 +236,47 @@ pub fn create_oci_spec(
         .linux(linux)
         .build()
         .map_err(|e| BoxliteError::Internal(format!("Failed to build OCI spec: {}", e)))
+}
+
+/// Destinations of every mount `spec` declares, in spec order.
+///
+/// Kept next to the builder so the two cannot drift: a mount added above is
+/// reported here without anyone having to remember to.
+pub(super) fn mount_destinations(spec: &Spec) -> Vec<PathBuf> {
+    spec.mounts()
+        .iter()
+        .flatten()
+        .map(|mount| canonical_destination(mount.destination()))
+        .collect()
+}
+
+/// A mount destination as the path it actually covers.
+///
+/// `UserMount::destination` is caller-supplied text that reaches the spec
+/// unchanged, and the runtime resolves it against the rootfs when it mounts —
+/// so `/workspace/../tmp` mounts over `/tmp`. Cached verbatim it would compare
+/// equal to neither, and the copy path's reachability check would wave through
+/// a write that lands under the mount after all. Collapsing the path here is
+/// what keeps that check honest about what is mounted where.
+///
+/// Lexical on purpose: the kernel's own resolution of a `..` that crosses a
+/// symlink can differ, so a destination is normalized, never trusted as proof
+/// the mount is where it claims.
+fn canonical_destination(destination: &Path) -> PathBuf {
+    let mut out = PathBuf::from("/");
+    for component in destination.components() {
+        match component {
+            Component::Normal(part) => out.push(part),
+            // `/..` has nowhere to go: the runtime cannot mount above the
+            // rootfs, so the destination clamps at the root rather than
+            // escaping it.
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir | Component::RootDir | Component::Prefix(_) => continue,
+        }
+    }
+    out
 }
 
 // ====================
@@ -375,18 +438,17 @@ fn find_group_in_group_file(rootfs: &str, name: &str) -> BoxliteResult<u32> {
 // Spec Component Builders
 // ====================
 
-/// Build default namespaces for container isolation
+/// Build default namespaces for container isolation.
+///
+/// No cgroup namespace: tested and found unnecessary for DinD (see
+/// docs/architecture/privileged-mode-design.md, Trade-offs) — `dockerd`
+/// tolerates writing cgroup limits without a private cgroup namespace view.
 fn build_default_namespaces() -> BoxliteResult<Vec<oci_spec::runtime::LinuxNamespace>> {
     Ok(vec![
         build_namespace(LinuxNamespaceType::Pid)?,
         build_namespace(LinuxNamespaceType::Ipc)?,
         build_namespace(LinuxNamespaceType::Uts)?,
         build_namespace(LinuxNamespaceType::Mount)?,
-        // NOTE: Cgroup namespace disabled for performance
-        // Mounting cgroup2 filesystem takes ~105ms due to kernel initialization overhead.
-        // Since we're inside a VM with single-tenant isolation, cgroup namespace provides
-        // minimal additional security benefit. Re-enable if resource limits are needed.
-        // build_namespace(LinuxNamespaceType::Cgroup)?,
         // build_namespace(LinuxNamespaceType::User)?,
     ])
 }
@@ -484,10 +546,19 @@ fn build_root_spec(rootfs: &str) -> BoxliteResult<oci_spec::runtime::Root> {
 }
 
 /// Build Linux-specific configuration
+///
+/// `readonly_paths` is a host-resolved literal OCI value, assigned verbatim —
+/// the guest no longer decides what "unconfined" means for it (see
+/// docs/architecture/privileged-mode-design.md, Trade-offs, option F).
+/// Masked paths are deliberately absent here: nothing in the DinD workflow
+/// reads a masked path, so this never calls `.masked_paths(..)` at all and
+/// the builder fills its own oci-spec default, unconditionally, exactly as it
+/// did before `privileged` existed.
 fn build_linux_spec(
     container_id: &str,
     namespaces: Vec<oci_spec::runtime::LinuxNamespace>,
     devices: &[LinuxDevice],
+    readonly_paths: Vec<String>,
 ) -> BoxliteResult<oci_spec::runtime::Linux> {
     // UID/GID mappings for user namespace
     // Map full range of UIDs/GIDs to allow non-root users (nginx=33, etc.)
@@ -505,40 +576,19 @@ fn build_linux_spec(
         .build()
         .map_err(|e| BoxliteError::Internal(format!("Failed to build GID mapping: {}", e)))?];
 
-    // Masked paths for security (hide sensitive /proc and /sys entries)
-    #[allow(unused)]
-    let masked_paths = vec![
-        "/proc/acpi".to_string(),
-        "/proc/asound".to_string(),
-        "/proc/kcore".to_string(),
-        "/proc/keys".to_string(),
-        "/proc/latency_stats".to_string(),
-        "/proc/timer_list".to_string(),
-        "/proc/timer_stats".to_string(),
-        "/proc/sched_debug".to_string(),
-        "/sys/firmware".to_string(),
-        "/sys/devices/virtual/powercap".to_string(),
-    ];
-
-    // Readonly paths
-    #[allow(unused)]
-    let readonly_paths = [
-        "/proc/bus".to_string(),
-        "/proc/fs".to_string(),
-        "/proc/irq".to_string(),
-        "/proc/sys".to_string(),
-        "/proc/sysrq-trigger".to_string(),
-    ];
-
-    // NOTE: Cgroup path disabled for performance (see cgroup mount comment above)
-    // Re-enable together with cgroup namespace and mount if resource limits are needed.
-    // let cgroups_path = format!("/boxlite/{}", container_id);
+    // The cgroup namespace gets its view from the guest init's cgroup2 mount;
+    // no per-container resource limits are configured by this OCI spec.
     let _ = container_id; // Suppress unused warning
 
     let mut builder = LinuxBuilder::default()
         .namespaces(namespaces)
         .uid_mappings(uid_mappings)
-        .gid_mappings(gid_mappings);
+        .gid_mappings(gid_mappings)
+        .readonly_paths(readonly_paths);
+
+    // No device-cgroup rule: tested and found unnecessary for DinD (see
+    // docs/architecture/privileged-mode-design.md, Trade-offs) — the guest
+    // never enforced a restrictive device-cgroup default in the first place.
 
     // Leave `devices` unset when empty so the spec keeps its historical shape.
     if !devices.is_empty() {
@@ -546,15 +596,26 @@ fn build_linux_spec(
     }
 
     builder
-        // .masked_paths(masked_paths)
-        // .readonly_paths(readonly_paths)
         // .cgroups_path(cgroups_path)
         .build()
         .map_err(|e| BoxliteError::Internal(format!("Failed to build linux spec: {}", e)))
 }
 
 /// Build standard mounts for container filesystem
-fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
+///
+/// `mount_override` is the host-resolved, literal source and option list for
+/// the `/sys` bind — assigned verbatim, no flag to reinterpret (see
+/// docs/architecture/privileged-mode-design.md, Trade-offs, option F).
+fn build_standard_mounts(
+    bundle_path: &Path,
+    mount_override: MountOverride,
+) -> BoxliteResult<Vec<Mount>> {
+    let dev_mount_options = vec![
+        "nosuid".to_string(),
+        "strictatime".to_string(),
+        "mode=755".to_string(),
+        "size=65536k".to_string(),
+    ];
     let mut mounts = vec![
         // /proc - Process information
         MountBuilder::default()
@@ -563,17 +624,14 @@ fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
             .source("proc")
             .build()
             .map_err(|e| BoxliteError::Internal(format!("Failed to build /proc mount: {}", e)))?,
-        // /dev - Device filesystem
+        // /dev - Device filesystem. Privileged containers keep the same
+        // guest-local tmpfs but receive an allow-all device cgroup rule, so
+        // device nodes can be explicitly injected or created in the guest.
         MountBuilder::default()
             .destination("/dev")
             .typ("tmpfs")
             .source("tmpfs")
-            .options(vec![
-                "nosuid".to_string(),
-                "strictatime".to_string(),
-                "mode=755".to_string(),
-                "size=65536k".to_string(),
-            ])
+            .options(dev_mount_options)
             .build()
             .map_err(|e| BoxliteError::Internal(format!("Failed to build /dev mount: {}", e)))?,
         // /dev/pts - Pseudo-terminals
@@ -610,41 +668,20 @@ fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
             })?,
         // NOTE: /dev/mqueue removed - libkrunfw kernel doesn't have CONFIG_POSIX_MQUEUE
         // Most containers don't need POSIX message queues
-        // /sys - Sysfs (readonly)
+        // /sys - Sysfs. Source and options are the host's resolved values
+        // verbatim (see the `rro`-vs-`ro` note where the guest's cgroup2
+        // submount lives).
         MountBuilder::default()
             .destination("/sys")
             .typ("none")
-            .source("/sys")
-            .options(vec![
-                "rbind".to_string(),
-                "nosuid".to_string(),
-                "noexec".to_string(),
-                "nodev".to_string(),
-                "ro".to_string(),
-            ])
+            .source(mount_override.source)
+            .options(mount_override.options)
             .build()
             .map_err(|e| BoxliteError::Internal(format!("Failed to build /sys mount: {}", e)))?,
-        // NOTE: /sys/fs/cgroup mount disabled for performance
-        // Mounting cgroup2 filesystem takes ~105ms due to kernel cgroup hierarchy initialization.
-        // This is the main bottleneck in container startup. Since we're inside a VM with
-        // single-tenant isolation, cgroup resource limits provide minimal benefit.
-        // Re-enable if you need to enforce CPU/memory limits within the container.
-        //
-        // MountBuilder::default()
-        //     .destination("/sys/fs/cgroup")
-        //     .typ("cgroup")
-        //     .source("cgroup")
-        //     .options(vec![
-        //         "nosuid".to_string(),
-        //         "noexec".to_string(),
-        //         "nodev".to_string(),
-        //         "relatime".to_string(),
-        //         "ro".to_string(),
-        //     ])
-        //     .build()
-        //     .map_err(|e| {
-        //         BoxliteError::Internal(format!("Failed to build /sys/fs/cgroup mount: {}", e))
-        //     })?,
+        // The guest init mounts cgroup2 at /sys/fs/cgroup. It is carried in as
+        // a submount of the recursive /sys bind, so it is the `rro` above —
+        // not a plain `ro` — that keeps it read-only for an ordinary
+        // container; a privileged container gets it writable.
         // /tmp - Temporary filesystem
         MountBuilder::default()
             .destination("/tmp")
@@ -706,7 +743,7 @@ mod tests {
         }])
         .unwrap();
 
-        let linux = build_linux_spec("test-box", vec![], devices.as_slice()).unwrap();
+        let linux = build_linux_spec("test-box", vec![], devices.as_slice(), Vec::new()).unwrap();
         let mapped = linux.devices().as_ref().expect("mapped device");
         assert_eq!(mapped.len(), 1);
         let device = &mapped[0];
@@ -721,8 +758,13 @@ mod tests {
 
     #[test]
     fn empty_device_mapping_adds_no_devices() {
-        let linux =
-            build_linux_spec("test-box", vec![], ContainerDevices::default().as_slice()).unwrap();
+        let linux = build_linux_spec(
+            "test-box",
+            vec![],
+            ContainerDevices::default().as_slice(),
+            Vec::new(),
+        )
+        .unwrap();
 
         assert!(linux.devices().is_none());
     }
@@ -1192,5 +1234,277 @@ mod tests {
         // Malformed entries are silently skipped (not enough fields to match)
         let err = resolve_user(r, "short").unwrap_err().to_string();
         assert!(err.contains("User 'short' not found"), "got: {}", err);
+    }
+
+    // ==================
+    // Privileged (DinD) plumbing
+    // ==================
+
+    /// `build_linux_spec` assigns whatever readonly paths it is given,
+    /// verbatim — it no longer decides what "unconfined" means for them (see
+    /// docs/architecture/privileged-mode-design.md, Trade-offs, option F).
+    /// The privileged-vs-hardened decision itself is tested where it's made:
+    /// `advanced_options::resolve_container_security`. Masked paths are
+    /// deliberately absent from the function's inputs — see the next test.
+    #[test]
+    fn linux_spec_assigns_host_resolved_readonly_paths_verbatim() {
+        let devices = ContainerDevices::default();
+        let readonly = vec!["/proc/sys".to_string()];
+
+        let linux = build_linux_spec("c", vec![], devices.as_slice(), readonly.clone()).unwrap();
+
+        assert_eq!(linux.readonly_paths().as_deref(), Some(readonly.as_slice()));
+    }
+
+    /// Nothing in the DinD workflow reads a masked path (see
+    /// docs/architecture/privileged-mode-design.md, Trade-offs), so
+    /// `build_linux_spec` never calls `.masked_paths(..)` at all — this stays
+    /// at oci-spec's own default regardless of what `readonly_paths` carries.
+    /// Pinned to the exact list for the same no-silent-drift reason as
+    /// `advanced_options::unprivileged_resolves_hardened_path_defaults`.
+    #[test]
+    fn linux_spec_never_touches_masked_paths() {
+        let devices = ContainerDevices::default();
+        let expected_default = oci_spec::runtime::get_default_maskedpaths();
+
+        let hardened = build_linux_spec(
+            "c",
+            vec![],
+            devices.as_slice(),
+            vec!["/proc/sys".to_string()],
+        )
+        .unwrap();
+        let unconfined = build_linux_spec("c", vec![], devices.as_slice(), Vec::new()).unwrap();
+
+        assert_eq!(
+            hardened.masked_paths().as_deref(),
+            Some(expected_default.as_slice())
+        );
+        assert_eq!(
+            unconfined.masked_paths().as_deref(),
+            Some(expected_default.as_slice())
+        );
+
+        // Device-cgroup policy no longer varies with path shape either —
+        // tested and found unnecessary for DinD; both get whatever oci-spec's
+        // own Linux::default() supplies, unmodified.
+        assert_eq!(hardened.resources(), unconfined.resources());
+    }
+
+    /// `build_standard_mounts` assigns the `/sys` bind's source and options
+    /// verbatim — no flag to reinterpret. The actual `rro`-vs-writable
+    /// decision is tested where it's made:
+    /// `advanced_options::mount_options`.
+    #[test]
+    fn sys_bind_uses_host_resolved_source_and_options_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        // Deliberately not the real "/sys": proves the value is threaded
+        // through rather than hardcoded to coincidentally match.
+        let source = "/sys-from-host".to_string();
+        let options = vec![
+            "rbind".to_string(),
+            "nosuid".to_string(),
+            "noexec".to_string(),
+            "nodev".to_string(),
+            "rro".to_string(),
+        ];
+
+        let mount_override = MountOverride {
+            source: source.clone(),
+            options: options.clone(),
+        };
+        let mounts = build_standard_mounts(dir.path(), mount_override).unwrap();
+        let sys = mounts
+            .iter()
+            .find(|mount| mount.destination().to_str() == Some("/sys"))
+            .expect("/sys mount");
+
+        assert_eq!(sys.source().as_deref(), Some(Path::new(&source)));
+        assert_eq!(sys.options().as_deref(), Some(options.as_slice()));
+    }
+
+    /// Capabilities and the OCI path/mount shape are separate knobs the host
+    /// resolves independently: `create_oci_spec` threads `readonly_paths` and
+    /// `mount_override` straight through, with no branching of its own —
+    /// a full capability set does not silently relax the shape.
+    #[test]
+    fn create_oci_spec_threads_security_fields_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path();
+        let Ok(full_caps) = CapabilitySet::resolve(&["ALL".to_string()], &[]) else {
+            // Reading the kernel ceiling needs a live /proc; skip where absent
+            // rather than assert on an environment this test does not control.
+            return;
+        };
+
+        let spec_for = |readonly_paths: Vec<String>, options: Vec<String>| {
+            let mount_override = MountOverride {
+                source: "/sys".to_string(),
+                options,
+            };
+            create_oci_spec(
+                "c",
+                "/rootfs",
+                &["/bin/sh".to_string()],
+                &[],
+                "/",
+                0,
+                0,
+                &full_caps,
+                &readonly_paths,
+                &mount_override,
+                bundle,
+                &[],
+                false,
+                &ContainerDevices::default(),
+            )
+            .expect("spec builds")
+        };
+
+        let hardened = spec_for(
+            vec!["/proc/sys".to_string()],
+            vec![
+                "rbind".to_string(),
+                "nosuid".to_string(),
+                "noexec".to_string(),
+                "nodev".to_string(),
+                "rro".to_string(),
+            ],
+        );
+        let linux = hardened.linux().as_ref().expect("linux section");
+        assert_eq!(
+            linux.readonly_paths().as_deref(),
+            Some(["/proc/sys".to_string()].as_slice())
+        );
+
+        let unconfined = spec_for(
+            Vec::new(),
+            vec![
+                "rbind".to_string(),
+                "nosuid".to_string(),
+                "noexec".to_string(),
+                "nodev".to_string(),
+            ],
+        );
+        let linux = unconfined.linux().as_ref().expect("linux section");
+        assert!(linux
+            .readonly_paths()
+            .as_ref()
+            .is_some_and(|p| p.is_empty()));
+        // Masked paths never move with the hardened/unconfined shape — both
+        // specs get the same oci-spec default, unconditionally (see
+        // linux_spec_never_touches_masked_paths).
+        assert_eq!(
+            hardened.linux().as_ref().unwrap().masked_paths(),
+            linux.masked_paths()
+        );
+
+        let sys_mount = unconfined
+            .mounts()
+            .as_ref()
+            .expect("mount list")
+            .iter()
+            .find(|mount| mount.destination() == Path::new("/sys"))
+            .expect("/sys mount");
+        assert!(!sys_mount.options().as_ref().is_some_and(|options| options
+            .iter()
+            .any(|option| option == "ro" || option == "rro")));
+
+        let dev_mount = unconfined
+            .mounts()
+            .as_ref()
+            .expect("mount list")
+            .iter()
+            .find(|mount| mount.destination() == Path::new("/dev"))
+            .expect("/dev mount");
+        assert_eq!(dev_mount.typ().as_deref(), Some("tmpfs"));
+        assert_eq!(dev_mount.source().as_deref(), Some(Path::new("tmpfs")));
+    }
+
+    /// A `..` or `.` in a mount destination reaches the spec unchanged — it is
+    /// caller-supplied text — and the runtime resolves it when it mounts. The
+    /// cached list has to name the path actually covered, or file transfer's
+    /// reachability check compares a request against a destination nothing is
+    /// mounted on and waves the write through into the shadow.
+    #[test]
+    fn a_mount_destination_names_the_path_the_runtime_covers() {
+        assert_eq!(
+            canonical_destination(Path::new("/workspace/../tmp")),
+            PathBuf::from("/tmp")
+        );
+        assert_eq!(
+            canonical_destination(Path::new("/tmp/./inner")),
+            PathBuf::from("/tmp/inner")
+        );
+        // Nowhere above the rootfs to go, so it clamps rather than escapes.
+        assert_eq!(
+            canonical_destination(Path::new("/../../etc")),
+            PathBuf::from("/etc")
+        );
+        // A destination already canonical is returned unchanged.
+        assert_eq!(
+            canonical_destination(Path::new("/dev/shm")),
+            PathBuf::from("/dev/shm")
+        );
+    }
+
+    /// A container answers `mount_destinations()` from the spec object it built,
+    /// not by re-reading `config.json`. The two must name the same mounts, or
+    /// file transfer would guard a mount list the runtime never applied.
+    ///
+    /// Round-tripped through `save`/`load` rather than compared to a literal:
+    /// the risk is a field that survives in memory but not on disk, which only
+    /// a real serialize/deserialize can show.
+    #[test]
+    fn mount_destinations_survive_the_config_json_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path();
+        let user_mounts = [UserMount {
+            source: "/run/boxlite/volumes/data".to_string(),
+            destination: "/workspace/data".to_string(),
+            read_only: false,
+            owner_uid: 0,
+            owner_gid: 0,
+        }];
+
+        let spec = create_oci_spec(
+            "c",
+            "/rootfs",
+            &["/bin/sh".to_string()],
+            &[],
+            "/",
+            0,
+            0,
+            &CapabilitySet::default(),
+            &[],
+            &MountOverride {
+                source: "/sys".to_string(),
+                options: vec!["rbind".to_string(), "rro".to_string()],
+            },
+            bundle,
+            &user_mounts,
+            false,
+            &ContainerDevices::default(),
+        )
+        .expect("spec builds");
+
+        let config_path = bundle.join("config.json");
+        spec.save(&config_path).expect("spec saves");
+        let reloaded = Spec::load(&config_path).expect("spec loads");
+
+        assert_eq!(
+            mount_destinations(&spec),
+            mount_destinations(&reloaded),
+            "the cached list must equal what reading config.json back gives"
+        );
+        // Both halves of what file transfer guards: the standard mounts the
+        // guest always applies, and the volume the caller asked for.
+        for expected in ["/tmp", "/dev/shm", "/proc", "/sys", "/workspace/data"] {
+            assert!(
+                mount_destinations(&spec).contains(&PathBuf::from(expected)),
+                "{expected} missing from {:?}",
+                mount_destinations(&spec)
+            );
+        }
     }
 }

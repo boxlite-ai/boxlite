@@ -4,15 +4,26 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { OrganizationEmail, OrganizationTier, OrganizationWallet } from '@/billing-api'
-import { Invoice, PaginatedInvoices, PaymentUrl } from '@/billing-api/types/Invoice'
-import { Tier } from '@/billing-api/types/tier'
+import {
+  OrganizationEmail,
+  OrganizationPlan,
+  OrganizationWallet,
+  PaginatedPaymentMethods,
+  PaymentMethod,
+  UsagePrices,
+} from '@/billing-api'
+import { Invoice, PaginatedInvoices } from '@/billing-api/types/Invoice'
+import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
+import { Plan } from '@/billing-api/types/Plan'
+import type { UsageConcurrencySeriesDto } from '@boxlite-ai/api-client'
 import { http, HttpResponse } from 'msw'
 import {
   MOCK_BOXES,
   MOCK_ORGANIZATION,
   MOCK_ORGANIZATION_MEMBER,
   MOCK_PAGINATED_BOXES,
+  MOCK_VOLUMES,
+  MOCK_VOLUME_USAGE,
   buildMockConfig,
 } from './fixtures'
 
@@ -24,19 +35,89 @@ export const handlers = [
   // backend and no login (see MockAuthProvider for the fake session).
   http.get(`${API_URL}/config`, () => HttpResponse.json(buildMockConfig(BILLING_API_URL))),
   http.get(`${API_URL}/organizations`, () => HttpResponse.json([MOCK_ORGANIZATION])),
+  http.get(`${API_URL}/organizations/:organizationId/concurrency`, ({ request }) => {
+    const url = new URL(request.url)
+    const to = new Date(url.searchParams.get('to') ?? Date.now())
+    const from = new Date(url.searchParams.get('from') ?? to.getTime() - 30 * 86_400_000)
+    const dayMs = 86_400_000
+    const pointCount = Math.max(2, Math.floor((to.getTime() - from.getTime()) / dayMs) + 1)
+    const points = Array.from({ length: pointCount }, (_, index) => {
+      const progress = index / (pointCount - 1)
+      const wave = Math.sin(progress * Math.PI * 2) * 18
+      const capacityRun = Math.max(0, 1 - Math.abs(progress - 0.78) / 0.12) * 55
+      return {
+        observedAt: new Date(from.getTime() + index * dayMs),
+        runningBoxes: Math.max(0, Math.round(48 + wave + capacityRun)),
+      }
+    })
+    points[points.length - 1] = { observedAt: to, runningBoxes: 62 }
+
+    return HttpResponse.json<UsageConcurrencySeriesDto>({
+      from,
+      to,
+      granularity: 'day',
+      current: points.at(-1)?.runningBoxes ?? 0,
+      points,
+    })
+  }),
   http.get(`${API_URL}/organizations/:organizationId/users`, () => HttpResponse.json([MOCK_ORGANIZATION_MEMBER])),
   http.get(`${API_URL}/box/paginated`, ({ request }) => {
     // Respect the ?states=… filter so the fleet count cards (running / stopped)
     // show real per-state counts in mock, not just the unfiltered total.
-    const states = new URL(request.url).searchParams.getAll('states').flatMap((s) => s.split(','))
+    const searchParams = new URL(request.url).searchParams
+    const states = searchParams.getAll('states').flatMap((s) => s.split(','))
     if (states.length === 0) return HttpResponse.json(MOCK_PAGINATED_BOXES)
     const items = MOCK_BOXES.filter((b) => b.state != null && states.includes(b.state))
+    const isRunningCount = states.length === 1 && states[0] === 'started' && searchParams.get('limit') === '1'
+    if (isRunningCount) return HttpResponse.json({ items: items.slice(0, 1), total: 62, page: 1, totalPages: 62 })
     return HttpResponse.json({ items, total: items.length, page: 1, totalPages: 1 })
   }),
   http.get(`${API_URL}/box/:boxIdOrName`, ({ params }) => {
     const box = MOCK_BOXES.find((b) => b.id === params.boxIdOrName) ?? MOCK_BOXES[0]
     return box ? HttpResponse.json(box) : new HttpResponse(null, { status: 404 })
   }),
+  // Volumes. Deletion mirrors the real service (volume.service.ts:74-113):
+  // a volume still mounted by a live box is refused with 409, and a successful
+  // delete only moves the row to `pending_delete` — the reconciler finishes it
+  // later, so the row must not vanish from the list.
+  http.get(`${API_URL}/volumes`, () => HttpResponse.json(MOCK_VOLUMES)),
+  http.post(`${API_URL}/volumes`, async ({ request }) => {
+    const body = (await request.json()) as { name?: string }
+    const created = {
+      id: `vol-${Math.abs(Date.now() % 100000000)}`,
+      name: body?.name || 'unnamed-volume',
+      organizationId: MOCK_ORGANIZATION.id,
+      state: 'creating',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    MOCK_VOLUMES.unshift(created as (typeof MOCK_VOLUMES)[number])
+    // Creation is asynchronous upstream; become mountable shortly after.
+    setTimeout(() => {
+      const row = MOCK_VOLUMES.find((v) => v.id === created.id)
+      if (row) row.state = 'ready' as (typeof row)['state']
+    }, 2500)
+    return HttpResponse.json(created, { status: 201 })
+  }),
+  http.delete(`${API_URL}/volumes/:volumeId`, ({ params }) => {
+    const id = String(params.volumeId)
+    const inUse = MOCK_VOLUME_USAGE[id] ?? []
+    if (inUse.length > 0) {
+      return HttpResponse.json(
+        {
+          statusCode: 409,
+          message: `Volume cannot be deleted because it is in use by one or more boxes (e.g. ${inUse[0].boxName})`,
+          error: 'Conflict',
+        },
+        { status: 409 },
+      )
+    }
+    const row = MOCK_VOLUMES.find((v) => v.id === id)
+    if (!row) return new HttpResponse(null, { status: 404 })
+    row.state = 'pending_delete' as (typeof row)['state']
+    return new HttpResponse(null, { status: 204 })
+  }),
+
   http.get(`${API_URL}/shared-regions`, () => HttpResponse.json([])),
   http.get(`${API_URL}/regions`, () => HttpResponse.json([])),
   http.get(`${API_URL}/api-keys`, () => HttpResponse.json([])),
@@ -53,47 +134,56 @@ export const handlers = [
   http.get(`${BILLING_API_URL}/organization/:organizationId/portal-url`, async () => {
     return HttpResponse.json<string>(`${BILLING_API_URL}/portal`)
   }),
-  http.get(`${BILLING_API_URL}/tier`, async () => {
-    return HttpResponse.json<Tier[]>([
+  http.get(`${BILLING_API_URL}/usage-prices`, async () => {
+    // The live dev response, verbatim — including the fractional cents that make
+    // disk $0.00 under whole-cent formatting.
+    return HttpResponse.json<UsagePrices>({
+      schemaVersion: 1,
+      currency: 'USD',
+      prices: [
+        { code: 'cpu', unit: 'core_hour', unitPriceCents: 5.04 },
+        { code: 'gpu', unit: 'gpu_hour', unitPriceCents: 100 },
+        { code: 'mem', unit: 'gib_hour', unitPriceCents: 1.44 },
+        { code: 'disk', unit: 'gib_hour', unitPriceCents: 0.018 },
+      ],
+    })
+  }),
+  http.get(`${BILLING_API_URL}/plan`, async () => {
+    // Mirrors the billing service's own standard-plan catalog (Subscription.md
+    // v2 §3). Enterprise carries nulls — the contact-sales card, not missing
+    // data — and is not self-serve.
+    return HttpResponse.json<Plan[]>([
       {
-        tier: 1,
-        tierLimit: {
-          concurrentCPU: 10,
-          concurrentRAMGiB: 20,
-          concurrentDiskGiB: 30,
-        },
-        minTopUpAmountCents: 0,
-        topUpIntervalDays: 0,
+        id: 'starter',
+        name: 'Starter',
+        priceMonthlyCents: 1_900,
+        includedQuotaCents: 3_000,
+        concurrencyLimit: 20,
+        selfServe: true,
       },
       {
-        tier: 2,
-        tierLimit: {
-          concurrentCPU: 100,
-          concurrentRAMGiB: 200,
-          concurrentDiskGiB: 300,
-        },
-        minTopUpAmountCents: 2500,
-        topUpIntervalDays: 0,
+        id: 'pro',
+        name: 'Pro',
+        priceMonthlyCents: 14_900,
+        includedQuotaCents: 25_000,
+        concurrencyLimit: 100,
+        selfServe: true,
       },
       {
-        tier: 3,
-        tierLimit: {
-          concurrentCPU: 250,
-          concurrentRAMGiB: 500,
-          concurrentDiskGiB: 2000,
-        },
-        minTopUpAmountCents: 50000,
-        topUpIntervalDays: 0,
+        id: 'max',
+        name: 'Max',
+        priceMonthlyCents: 49_900,
+        includedQuotaCents: 90_000,
+        concurrencyLimit: 1_000,
+        selfServe: true,
       },
       {
-        tier: 4,
-        tierLimit: {
-          concurrentCPU: 500,
-          concurrentRAMGiB: 1000,
-          concurrentDiskGiB: 5000,
-        },
-        minTopUpAmountCents: 200000,
-        topUpIntervalDays: 30,
+        id: 'enterprise',
+        name: 'Enterprise',
+        priceMonthlyCents: null,
+        includedQuotaCents: null,
+        concurrencyLimit: null,
+        selfServe: false,
       },
     ])
   }),
@@ -102,19 +192,98 @@ export const handlers = [
       balanceCents: 1000,
       ongoingBalanceCents: 1000,
       name: 'Wallet',
-      creditCardConnected: false,
+      creditCardConnected: true,
       automaticTopUp: undefined,
-      hasFailedOrPendingInvoice: true,
+      creditGrantedCents: 10_000,
+      creditRemainingCents: 1_000,
     })
   }),
-  http.get(`${BILLING_API_URL}/organization/:organizationId/tier`, async () => {
-    return HttpResponse.json<OrganizationTier>({
-      tier: 2,
-      largestSuccessfulPaymentDate: new Date(),
-      largestSuccessfulPaymentCents: 1000,
-      expiresAt: new Date(),
-      hasVerifiedBusinessEmail: true,
+  http.get(`${BILLING_API_URL}/organization/:organizationId/payment-methods`, async ({ request }) => {
+    const url = new URL(request.url)
+    const page = parseInt(url.searchParams.get('page') || '1', 10)
+    const perPage = Math.min(parseInt(url.searchParams.get('perPage') || '20', 10), 100)
+    const paymentMethods: PaymentMethod[] = [
+      {
+        id: '0f04d55c-7d77-4a19-af78-f4a18b2d5f91',
+        isDefault: true,
+        paymentProviderType: 'stripe',
+        providerMethodId: 'pm_mock_visa',
+        details: { brand: 'visa', last4: '4242', expMonth: 8, expYear: 2027 },
+      },
+      {
+        id: 'bce26ca7-771d-47c4-898c-b73c93fd52a7',
+        isDefault: false,
+        paymentProviderType: 'stripe',
+        providerMethodId: 'pm_mock_mastercard',
+        details: { brand: 'mastercard', last4: '4444', expMonth: 12, expYear: 2029 },
+      },
+    ]
+    const totalCount = paymentMethods.length
+    const totalPages = Math.ceil(totalCount / perPage)
+    const start = (page - 1) * perPage
+
+    return HttpResponse.json<PaginatedPaymentMethods>({
+      paymentMethods: paymentMethods.slice(start, start + perPage),
+      meta: {
+        currentPage: page,
+        totalPages,
+        totalCount,
+        nextPage: page < totalPages ? page + 1 : null,
+        prevPage: page > 1 ? page - 1 : null,
+      },
     })
+  }),
+  http.get(`${BILLING_API_URL}/organization/:organizationId/plan`, async () => {
+    // Mirrors the billing service's own mock seed: pro, a quarter used,
+    // pinned mid-cycle so the meter renders deterministically. The real
+    // route wraps this in a `plan` key ({} means no live plan), never a
+    // bare object or null.
+    return HttpResponse.json<{ plan?: OrganizationPlan }>({
+      plan: {
+        planId: 'pro',
+        planName: 'Pro',
+        status: 'active',
+        cycleFrom: new Date(Date.UTC(2026, 7, 5)),
+        cycleTo: new Date(Date.UTC(2026, 8, 5)),
+        includedQuotaCents: 25000,
+        quotaConsumedCents: 6250,
+        quotaRemainingCents: 18750,
+      },
+    })
+  }),
+  http.post(`${BILLING_API_URL}/organization/:organizationId/plan/upgrade`, async () => {
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.post(`${BILLING_API_URL}/organization/:organizationId/plan/downgrade`, async () => {
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.delete(`${BILLING_API_URL}/organization/:organizationId/plan/pending`, async () => {
+    return new HttpResponse(null, { status: 204 })
+  }),
+  // Deterministic funding series: quota-first against the seeded remaining
+  // quota, wallet after — dense buckets so the chart shows honest zeros.
+  http.get(`${BILLING_API_URL}/organization/:organizationId/usage/series`, async ({ request }) => {
+    const url = new URL(request.url)
+    const granularity = url.searchParams.get('granularity') === 'hour' ? 'hour' : 'day'
+    const stepMs = granularity === 'hour' ? 3_600_000 : 86_400_000
+    const to = Date.parse(url.searchParams.get('to') ?? '') || Date.now()
+    const from = Date.parse(url.searchParams.get('from') ?? '') || to - 30 * 86_400_000
+
+    let quotaLeft = 18750
+    const buckets = []
+    for (let start = from; start + stepMs <= to; start += stepMs) {
+      const index = Math.floor(start / stepMs)
+      const totalCents = granularity === 'day' ? 420 + ((index * 37) % 350) : 30 + ((index * 13) % 40)
+      const quotaCoveredCents = Math.min(totalCents, Math.max(0, quotaLeft))
+      quotaLeft -= quotaCoveredCents
+      buckets.push({
+        from: new Date(start).toISOString(),
+        to: new Date(start + stepMs).toISOString(),
+        quotaCoveredCents,
+        fromWalletCents: totalCents - quotaCoveredCents,
+      })
+    }
+    return HttpResponse.json(buckets)
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/email`, async () => {
     return HttpResponse.json<OrganizationEmail[]>([
@@ -127,7 +296,7 @@ export const handlers = [
       },
     ])
   }),
-  http.get(`${BILLING_API_URL}/organization/:organizationId/invoices`, async ({ request, params }) => {
+  http.get(`${BILLING_API_URL}/organization/:organizationId/invoices`, async ({ request }) => {
     const url = new URL(request.url)
     const page = parseInt(url.searchParams.get('page') || '1', 10)
     const perPage = parseInt(url.searchParams.get('perPage') || '50', 10)
@@ -136,62 +305,38 @@ export const handlers = [
       {
         id: 'inv-001',
         number: 'INV-2026-001',
-        currency: 'USD',
-        issuingDate: new Date('2026-01-01').toISOString(),
-        paymentDueDate: new Date('2026-01-15').toISOString(),
-        paymentOverdue: false,
-        paymentStatus: 'succeeded',
         sequentialId: 1,
-        status: 'finalized',
+        chargedAt: new Date('2026-01-01').toISOString(),
         totalAmountCents: 9847,
-        totalDueAmountCents: 0,
-        type: 'subscription',
-        fileUrl: 'https://example.com/invoices/inv-001.pdf',
+        quotaCoveredCents: 8_000,
+        voided: false,
       },
       {
         id: 'inv-004',
         number: 'INV-2025-010',
-        currency: 'USD',
-        issuingDate: new Date('2025-10-01').toISOString(),
-        paymentDueDate: new Date('2025-10-15').toISOString(),
-        paymentOverdue: true,
-        paymentStatus: 'pending',
         sequentialId: 10,
-        status: 'finalized',
+        chargedAt: new Date('2025-10-01').toISOString(),
         totalAmountCents: 12150,
-        totalDueAmountCents: 12150,
-        type: 'subscription',
-        fileUrl: 'https://example.com/invoices/inv-004.pdf',
+        quotaCoveredCents: 12_150,
+        voided: false,
       },
       {
         id: 'inv-009',
         number: 'INV-2030-010',
-        currency: 'USD',
-        issuingDate: new Date('2025-10-01').toISOString(),
-        paymentDueDate: new Date('2030-10-15').toISOString(),
-        paymentOverdue: false,
-        paymentStatus: 'pending',
         sequentialId: 10,
-        status: 'pending',
+        chargedAt: new Date('2025-10-01').toISOString(),
         totalAmountCents: 12150,
-        totalDueAmountCents: 12150,
-        type: 'subscription',
-        fileUrl: 'https://example.com/invoices/inv-004.pdf',
+        quotaCoveredCents: 10_000,
+        voided: true,
       },
       {
         id: 'inv-005',
         number: 'INV-2025-009',
-        currency: 'USD',
-        issuingDate: new Date('2025-09-01').toISOString(),
-        paymentDueDate: new Date('2025-09-15').toISOString(),
-        paymentOverdue: false,
-        paymentStatus: 'failed',
         sequentialId: 9,
-        status: 'failed',
+        chargedAt: new Date('2025-09-01').toISOString(),
         totalAmountCents: 8900,
-        totalDueAmountCents: 0,
-        type: 'add_on',
-        fileUrl: 'https://example.com/invoices/inv-005.pdf',
+        quotaCoveredCents: 0,
+        voided: false,
       },
     ]
 
@@ -206,14 +351,6 @@ export const handlers = [
       totalItems,
       totalPages,
     })
-  }),
-  http.post(`${BILLING_API_URL}/organization/:organizationId/invoices/:invoiceId/payment-url`, async () => {
-    return HttpResponse.json<PaymentUrl>({
-      url: 'https://checkout.stripe.com/pay/cs_test_1234567890',
-    })
-  }),
-  http.post(`${BILLING_API_URL}/organization/:organizationId/invoices/:invoiceId/void`, async () => {
-    return HttpResponse.json({})
   }),
   http.post(`${BILLING_API_URL}/organization/:organizationId/wallet/top-up`, async () => {
     return HttpResponse.json<PaymentUrl>({

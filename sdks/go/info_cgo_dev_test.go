@@ -19,6 +19,8 @@ func TestCNetworkInfoToGoTraversesNativeStruct(t *testing.T) {
 			name: "publications unresolved",
 			got:  fixtures[1],
 			want: &NetworkInfo{
+				Outbound:       NetworkDirectionInfo{Mode: NetworkModeEnabled, AllowNet: []string{"api.example.com"}},
+				Inbound:        NetworkDirectionInfo{Mode: NetworkModeDisabled, AllowNet: []string{}},
 				Mode:           NetworkModeEnabled,
 				AllowNet:       []string{"api.example.com"},
 				PublishedPorts: nil,
@@ -28,6 +30,8 @@ func TestCNetworkInfoToGoTraversesNativeStruct(t *testing.T) {
 			name: "publications resolved empty",
 			got:  fixtures[2],
 			want: &NetworkInfo{
+				Outbound:       NetworkDirectionInfo{Mode: NetworkModeDisabled, AllowNet: []string{}},
+				Inbound:        NetworkDirectionInfo{Mode: NetworkModeEnabled, AllowNet: []string{}},
 				Mode:           NetworkModeDisabled,
 				AllowNet:       []string{},
 				PublishedPorts: []PublishedPort{},
@@ -37,6 +41,8 @@ func TestCNetworkInfoToGoTraversesNativeStruct(t *testing.T) {
 			name: "populated values",
 			got:  fixtures[3],
 			want: &NetworkInfo{
+				Outbound: NetworkDirectionInfo{Mode: NetworkModeEnabled, AllowNet: []string{"api.example.com"}},
+				Inbound:  NetworkDirectionInfo{Mode: NetworkModeEnabled, AllowNet: []string{}},
 				Mode:     NetworkModeEnabled,
 				AllowNet: []string{"api.example.com"},
 				PublishedPorts: []PublishedPort{

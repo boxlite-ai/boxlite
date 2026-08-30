@@ -515,6 +515,16 @@ func goBoxliteOnExecutionResize(errPtr *C.CBoxliteError, userData unsafe.Pointer
 	deliverUnitResult(userData, errPtr)
 }
 
+//export goBoxliteOnTunnelForwarderWait
+func goBoxliteOnTunnelForwarderWait(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
+//export goBoxliteOnTunnelForwarderClose
+func goBoxliteOnTunnelForwarderClose(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
 // ─── Generic delivery helpers ──────────────────────────────────────────────
 
 // deliverUnitResult sends an error-only result to the channel referenced by

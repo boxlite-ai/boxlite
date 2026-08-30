@@ -239,13 +239,13 @@ Configuration options for creating a box.
 - `disk_size_gb: int | None` - Persistent disk size in GB (default: None)
 - `working_dir: str` - Working directory in container (default: `"/root"`)
 - `env: List[Tuple[str, str]]` - Environment variables as (key, value) pairs
-- `volumes: List[Tuple[str, str, str]]` - Volume mounts as (host_path, guest_path, mode)
-  - Mode: `"ro"` (read-only) or `"rw"` (read-write)
+- `volumes: List[Tuple | Dict]` - Volume mounts; a tuple is a host bind, a dict takes `managed_volume` (id or name) or `host_path`
+  - `read_only` is a bool and defaults to `False`
 - `network: NetworkSpec | None` - Structured network configuration
 - `ports: List[Tuple | Dict]` - Local TCP forwarding; omit `host_port` in a dict for automatic allocation
   - Protocol: `"tcp"`; UDP is rejected
-  - Portable local/remote code uses `box.network.tunnel(port)`; each tunnel
-    handle represents one connection
+  - Portable local/remote code uses `box.network.tunnel(port)`; each tunnel is
+    a prepared one-shot tunnel; call `forward()` for a listener
 - `secrets: List[Secret]` - Host-side HTTP(S) secret substitution rules
 - `advanced: AdvancedBoxOptions | None` - Expert-only container options
   - `capabilities.add: List[str]` - Capabilities added to BoxLite's baseline
@@ -254,8 +254,13 @@ Configuration options for creating a box.
 
 `NetworkSpec` uses:
 
-- `mode: str` - `"enabled"` or `"disabled"`
-- `allow_net: List[str]` - Optional outbound allowlist when `mode="enabled"`
+- `outbound: OutboundNetworkSpec` - Guest egress policy
+- `inbound: InboundNetworkSpec` - Service access policy
+
+The pre-split form `NetworkSpec(mode=..., allow_net=...)` still works and
+configures the outbound direction, positionally as well as by keyword.
+Supplying it together with `outbound` raises `ValueError`. `spec.mode` and
+`spec.allow_net` remain readable as views onto `outbound`.
 
 `allow_net` restricts both TCP and UDP egress. Hostname entries are enforced by
 inspecting TLS SNI / HTTP Host, which only TCP carries, so an `allow_net`
@@ -277,14 +282,17 @@ options = boxlite.BoxOptions(
         ("POSTGRES_DB", "mydb"),
     ],
     volumes=[
-        ("/host/data", "/mnt/data", "ro"),  # Read-only mount
+        ("/host/data", "/mnt/data", True),  # Read-only mount
     ],
     ports=[
         (5432, 5432, "tcp"),  # PostgreSQL
     ],
     network=boxlite.NetworkSpec(
-        mode="enabled",
-        allow_net=["api.openai.com"],
+        outbound=boxlite.OutboundNetworkSpec(
+            mode="enabled",
+            allow_net=["api.openai.com"],
+        ),
+        inbound=boxlite.InboundNetworkSpec(mode="disabled"),
     ),
     advanced=boxlite.AdvancedBoxOptions(
         capabilities=boxlite.ContainerCapabilities(
@@ -639,9 +647,9 @@ boxlite.BoxOptions(
 boxlite.BoxOptions(
     volumes=[
         # Read-only mount
-        ("/host/config", "/etc/app/config", "ro"),
+        ("/host/config", "/etc/app/config", True),
         # Read-write mount
-        ("/host/data", "/mnt/data", "rw"),
+        ("/host/data", "/mnt/data", False),
     ]
 )
 ```

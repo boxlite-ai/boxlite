@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use boxlite::runtime::advanced_options::{AdvancedBoxOptions, HealthCheckOptions, SecurityOptions};
+use boxlite::runtime::advanced_options::{
+    AdvancedBoxOptions, ContainerCapabilities, HealthCheckOptions, SecurityOptions,
+};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, NetworkConfig, NetworkMode,
-    NetworkSpec, PortProtocol, PortSpec, RegistryTransport, RootfsSpec, Secret, VolumeSpec,
+    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, InboundNetworkConfig,
+    NetworkMode, NetworkSpec, OutboundNetworkConfig, PortProtocol, PortSpec, RegistryTransport,
+    RootfsSpec, Secret, VolumeSpec,
 };
 use napi::bindgen_prelude::Error;
 use napi_derive::napi;
@@ -255,12 +258,14 @@ pub struct JsEnvVar {
 
 /// Volume mount specification.
 ///
-/// Maps a host directory to a guest path inside the container.
+/// Maps either a managed volume or a host directory to a guest path inside the
+/// container. Exactly one origin may be set.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsVolumeSpec {
-    /// Scheme-qualified source such as `volume://vol_123`.
-    pub source: Option<String>,
+    /// Managed volume, by server-assigned id **or** by name — the server
+    /// resolves either.
+    pub managed_volume: Option<String>,
 
     /// Path on host machine for local host-path mounts.
     pub host_path: Option<String>,
@@ -276,27 +281,26 @@ impl TryFrom<JsVolumeSpec> for VolumeSpec {
     type Error = boxlite_shared::errors::BoxliteError;
 
     fn try_from(v: JsVolumeSpec) -> Result<Self, Self::Error> {
-        let host_path = match (v.source, v.host_path) {
-            (Some(source), _) => {
-                if !source.starts_with("volume://") {
-                    return Err(Self::Error::InvalidArgument(
-                        "volume source must use the volume:// scheme".into(),
-                    ));
-                }
-                source
+        let spec = match (v.managed_volume, v.host_path) {
+            (Some(_), Some(_)) => {
+                return Err(Self::Error::InvalidArgument(
+                    "volume takes managedVolume or hostPath, not both".into(),
+                ));
             }
-            (None, Some(host_path)) => host_path,
+            (Some(managed_volume), None) => {
+                VolumeSpec::managed_volume(managed_volume, v.guest_path)
+            }
+            (None, Some(host_path)) => VolumeSpec::bind_mount(host_path, v.guest_path),
             (None, None) => {
                 return Err(Self::Error::InvalidArgument(
-                    "volume source or hostPath is required".into(),
+                    "volume requires managedVolume or hostPath".into(),
                 ));
             }
         };
 
         Ok(VolumeSpec {
-            host_path,
-            guest_path: v.guest_path,
             read_only: v.read_only.unwrap_or(false),
+            ..spec
         })
     }
 }
@@ -344,6 +348,28 @@ pub struct JsSecret {
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsNetworkSpec {
+    /// Outbound guest network policy.
+    pub outbound: Option<JsOutboundNetworkSpec>,
+
+    /// Inbound service access policy.
+    pub inbound: Option<JsInboundNetworkSpec>,
+
+    /// Legacy outbound mode, kept so pre-split callers keep working.
+    ///
+    /// @deprecated Use `outbound.mode`. Supplying this together with
+    /// `outbound` is rejected rather than silently picking one.
+    pub mode: Option<String>,
+
+    /// Legacy outbound allowlist, kept so pre-split callers keep working.
+    ///
+    /// @deprecated Use `outbound.allowNet`.
+    #[napi(js_name = "allowNet")]
+    pub allow_net: Option<Vec<String>>,
+}
+
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsOutboundNetworkSpec {
     /// Network mode: "enabled" or "disabled".
     pub mode: String,
 
@@ -351,6 +377,22 @@ pub struct JsNetworkSpec {
     /// Hostname entries rely on TLS SNI / HTTP Host inspection, which only TCP
     /// carries, so a hostname-only list denies all UDP egress — add the IP or
     /// CIDR to keep UDP open.
+    #[napi(js_name = "allowNet")]
+    pub allow_net: Option<Vec<String>>,
+}
+
+/// Aligned field-for-field with `JsOutboundNetworkSpec`: `mode="enabled"`
+/// means services the box exposes are publicly reachable, `mode="disabled"`
+/// means private. `allowNet` exists for shape symmetry only — no layer
+/// enforces an inbound allowlist yet, so a non-empty value is rejected.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsInboundNetworkSpec {
+    /// Inbound mode: "enabled" or "disabled".
+    pub mode: String,
+
+    /// Not supported yet: a non-empty value is rejected. Exists for shape
+    /// symmetry with the outbound spec; inbound access follows `mode` alone.
     #[napi(js_name = "allowNet")]
     pub allow_net: Option<Vec<String>>,
 }
@@ -387,15 +429,51 @@ impl From<PortSpec> for JsPortSpec {
     }
 }
 
-impl TryFrom<JsNetworkSpec> for NetworkSpec {
+/// Both directions of the JS-facing network spec, converted into the two
+/// independent `BoxOptions` fields.
+impl TryFrom<JsNetworkSpec> for (NetworkSpec, NetworkSpec) {
     type Error = boxlite_shared::errors::BoxliteError;
 
     fn try_from(js_spec: JsNetworkSpec) -> Result<Self, Self::Error> {
-        let mode = js_spec.mode.parse::<NetworkMode>()?;
-        NetworkSpec::try_from(NetworkConfig {
+        let JsNetworkSpec {
+            outbound,
+            inbound,
             mode,
-            allow_net: js_spec.allow_net.unwrap_or_default(),
-        })
+            allow_net,
+        } = js_spec;
+
+        // Legacy flat shape (`{ mode, allowNet }`) maps onto the outbound
+        // direction, which is what it configured before the split. Mixing the
+        // two shapes is a caller error, not something to resolve silently.
+        let outbound = match (outbound, mode, allow_net) {
+            (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
+                return Err(Self::Error::InvalidArgument(
+                    "network cannot mix outbound with legacy mode/allowNet".to_string(),
+                ));
+            }
+            (Some(outbound), None, None) => Some(outbound),
+            (None, None, None) => None,
+            (None, mode, allow_net) => Some(JsOutboundNetworkSpec {
+                mode: mode.unwrap_or_else(|| "enabled".to_string()),
+                allow_net,
+            }),
+        };
+
+        let outbound = match outbound {
+            Some(outbound) => NetworkSpec::try_from(OutboundNetworkConfig {
+                mode: outbound.mode.parse::<NetworkMode>()?,
+                allow_net: outbound.allow_net.unwrap_or_default(),
+            })?,
+            None => NetworkSpec::default(),
+        };
+        let inbound = match inbound {
+            Some(inbound) => NetworkSpec::try_from(InboundNetworkConfig {
+                mode: inbound.mode.parse::<NetworkMode>()?,
+                allow_net: inbound.allow_net.unwrap_or_default(),
+            })?,
+            None => NetworkSpec::default(),
+        };
+        Ok((outbound, inbound))
     }
 }
 
@@ -414,10 +492,10 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .map(VolumeSpec::try_from)
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Convert network spec
-        let network = match js_opts.network {
-            Some(spec) => NetworkSpec::try_from(spec)?,
-            None => NetworkSpec::default(),
+        // Convert network spec — the two directions become two fields
+        let (network, inbound_network) = match js_opts.network {
+            Some(spec) => <(NetworkSpec, NetworkSpec)>::try_from(spec)?,
+            None => (NetworkSpec::default(), NetworkSpec::default()),
         };
 
         // Convert ports
@@ -454,11 +532,10 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .unwrap_or_default();
 
         let health_check = js_opts.health_check.map(HealthCheckOptions::from);
-        let capabilities = js_opts
+        let capabilities: Option<ContainerCapabilities> = js_opts
             .advanced
             .and_then(|advanced| advanced.capabilities)
-            .map(Into::into)
-            .unwrap_or_default();
+            .map(Into::into);
         let secrets = js_opts
             .secrets
             .unwrap_or_default()
@@ -473,6 +550,11 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             })
             .collect();
 
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.set_capabilities(capabilities)?;
+        advanced.security = security;
+        advanced.health_check = health_check;
+
         Ok(BoxOptions {
             cpus: js_opts.cpus,
             memory_mib: js_opts.memory_mib,
@@ -482,14 +564,10 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             rootfs,
             volumes,
             network,
+            inbound_network,
             ports,
             auto_remove,
-            advanced: AdvancedBoxOptions {
-                capabilities,
-                security,
-                health_check,
-                ..Default::default()
-            },
+            advanced,
             auto_stop: js_opts.auto_stop,
             auto_delete,
             auto_resume: js_opts.auto_resume,
@@ -498,8 +576,11 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             cmd: js_opts.cmd,
             user: js_opts.user,
             // Not surfaced on JsBoxOptions yet: a TTY is only useful to a
-            // client that attaches to the main command, which the SDKs cannot
-            // do until they grow `attach()` (see sdk-run-semantics-api.md).
+            // client that attaches to the main command, which this SDK cannot
+            // do until it grows `attach()` (see sdk-run-semantics-api.md).
+            // Python does surface it, because the reference server builds
+            // BoxOptions through PyBoxOptions and the REST wire schema carries
+            // `tty`; Node has no such caller yet.
             tty: false,
             secrets,
         })
@@ -613,6 +694,7 @@ impl From<&JsBoxliteRestOptions> for boxlite::BoxliteRestOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boxlite::runtime::options::NetworkSpec;
 
     fn js_registry(host: &str) -> JsImageRegistry {
         JsImageRegistry {
@@ -718,39 +800,50 @@ mod tests {
         }
     }
 
+    /// A managed volume is taken verbatim — by id or by name, no scheme, no
+    /// rewriting. Whatever the caller wrote is what the server resolves.
     #[test]
-    fn js_volume_source_requires_volume_scheme() {
-        let volume = VolumeSpec::try_from(JsVolumeSpec {
-            source: Some("volume://vol_123".into()),
-            host_path: None,
+    fn js_managed_volume_is_taken_verbatim() {
+        for reference in ["vol_01K2EXAMPLE", "my-data"] {
+            let volume = VolumeSpec::try_from(JsVolumeSpec {
+                managed_volume: Some(reference.into()),
+                host_path: None,
+                guest_path: "/data".into(),
+                read_only: None,
+            })
+            .unwrap();
+
+            assert_eq!(volume.managed_volume.as_deref(), Some(reference));
+            assert_eq!(volume.host_path, "");
+            assert_eq!(volume.guest_path, "/data");
+            assert!(!volume.read_only);
+        }
+    }
+
+    #[test]
+    fn js_volume_requires_exactly_one_origin() {
+        let err = VolumeSpec::try_from(JsVolumeSpec {
+            managed_volume: Some("my-data".into()),
+            host_path: Some("/tmp/data".into()),
             guest_path: "/data".into(),
             read_only: None,
         })
-        .unwrap();
+        .unwrap_err();
 
-        assert_eq!(volume.host_path, "volume://vol_123");
-        assert_eq!(volume.guest_path, "/data");
-        assert!(!volume.read_only);
+        assert!(err.to_string().contains("not both"), "{err}");
 
         let err = VolumeSpec::try_from(JsVolumeSpec {
-            source: Some("vol_123".into()),
+            managed_volume: None,
             host_path: None,
             guest_path: "/data".into(),
             read_only: None,
         })
         .unwrap_err();
 
-        assert!(err.to_string().contains("volume:// scheme"));
-
-        let err = VolumeSpec::try_from(JsVolumeSpec {
-            source: None,
-            host_path: None,
-            guest_path: "/data".into(),
-            read_only: None,
-        })
-        .unwrap_err();
-
-        assert!(err.to_string().contains("source or hostPath is required"));
+        assert!(
+            err.to_string().contains("managedVolume or hostPath"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -808,8 +901,16 @@ mod tests {
             env: None,
             volumes: None,
             network: Some(JsNetworkSpec {
-                mode: "enabled".into(),
-                allow_net: Some(vec!["example.com".into(), "*.openai.com".into()]),
+                outbound: Some(JsOutboundNetworkSpec {
+                    mode: "enabled".into(),
+                    allow_net: Some(vec!["example.com".into(), "*.openai.com".into()]),
+                }),
+                inbound: Some(JsInboundNetworkSpec {
+                    mode: "enabled".into(),
+                    allow_net: None,
+                }),
+                mode: None,
+                allow_net: None,
             }),
             ports: None,
             auto_remove: None,
@@ -841,20 +942,21 @@ mod tests {
             }),
         });
         let with_capabilities = BoxOptions::try_from(with_capabilities).unwrap();
-        assert_eq!(
-            with_capabilities.advanced.capabilities.add,
-            ["NET_ADMIN", "SYS_PTRACE"]
-        );
-        assert_eq!(
-            with_capabilities.advanced.capabilities.drop,
-            ["MKNOD", "NET_RAW"]
-        );
+        let capabilities = with_capabilities
+            .advanced
+            .capabilities()
+            .expect("capabilities set");
+        assert_eq!(capabilities.add, ["NET_ADMIN", "SYS_PTRACE"]);
+        assert_eq!(capabilities.drop, ["MKNOD", "NET_RAW"]);
 
         let opts = BoxOptions::try_from(js).unwrap();
         assert!(!opts.auto_remove);
         assert_eq!(opts.auto_delete, None);
-        assert!(opts.advanced.capabilities.add.is_empty());
-        assert!(opts.advanced.capabilities.drop.is_empty());
+        assert!(opts.advanced.capabilities().is_none());
+        assert!(matches!(
+            opts.inbound_network,
+            NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty()
+        ));
         match opts.network {
             NetworkSpec::Enabled { allow_net } => {
                 assert_eq!(allow_net, vec!["example.com", "*.openai.com"]);
@@ -904,12 +1006,72 @@ mod tests {
 
     #[test]
     fn disabled_network_rejects_allow_net() {
-        let err = NetworkSpec::try_from(JsNetworkSpec {
-            mode: "disabled".into(),
-            allow_net: Some(vec!["example.com".into()]),
+        let err = <(NetworkSpec, NetworkSpec)>::try_from(JsNetworkSpec {
+            outbound: Some(JsOutboundNetworkSpec {
+                mode: "disabled".into(),
+                allow_net: Some(vec!["example.com".into()]),
+            }),
+            inbound: None,
+            mode: None,
+            allow_net: None,
         })
         .unwrap_err();
 
-        assert!(err.to_string().contains("network.mode=\"disabled\""));
+        assert!(
+            err.to_string()
+                .contains("network.outbound.mode=\"disabled\"")
+        );
+    }
+
+    #[test]
+    fn nested_network_spec_converts() {
+        let (outbound, inbound) = <(NetworkSpec, NetworkSpec)>::try_from(JsNetworkSpec {
+            outbound: None,
+            inbound: Some(JsInboundNetworkSpec {
+                mode: "disabled".into(),
+                allow_net: None,
+            }),
+            mode: None,
+            allow_net: None,
+        })
+        .unwrap();
+
+        assert!(matches!(inbound, NetworkSpec::Disabled));
+        assert!(matches!(outbound, NetworkSpec::Enabled { .. }));
+    }
+
+    /// The pre-split shape configured the outbound direction; it must keep
+    /// doing exactly that, and leave inbound at its default.
+    #[test]
+    fn legacy_flat_network_spec_converts_to_outbound() {
+        let (outbound, inbound) = <(NetworkSpec, NetworkSpec)>::try_from(JsNetworkSpec {
+            outbound: None,
+            inbound: None,
+            mode: Some("disabled".into()),
+            allow_net: None,
+        })
+        .unwrap();
+
+        assert!(matches!(outbound, NetworkSpec::Disabled));
+        assert!(matches!(inbound, NetworkSpec::Enabled { .. }));
+    }
+
+    #[test]
+    fn legacy_flat_network_spec_rejects_mixing_with_outbound() {
+        let err = <(NetworkSpec, NetworkSpec)>::try_from(JsNetworkSpec {
+            outbound: Some(JsOutboundNetworkSpec {
+                mode: "enabled".into(),
+                allow_net: None,
+            }),
+            inbound: None,
+            mode: Some("disabled".into()),
+            allow_net: None,
+        })
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("cannot mix outbound with legacy mode/allowNet")
+        );
     }
 }

@@ -38,8 +38,24 @@ type PublishedPort struct {
 }
 
 // NetworkInfo describes the box network and its resolved local publications.
-type NetworkInfo struct {
+// NetworkDirectionInfo is the mode and allowlist for one traffic direction.
+type NetworkDirectionInfo struct {
 	Mode     NetworkMode
+	AllowNet []string
+}
+
+type NetworkInfo struct {
+	Outbound NetworkDirectionInfo
+	Inbound  NetworkDirectionInfo
+
+	// Mode mirrors Outbound.Mode for pre-split readers.
+	//
+	// Deprecated: read Outbound.Mode.
+	Mode NetworkMode
+
+	// AllowNet mirrors Outbound.AllowNet for pre-split readers.
+	//
+	// Deprecated: read Outbound.AllowNet.
 	AllowNet []string
 	// PublishedPorts is nil when this handle does not know the bindings. A
 	// non-nil empty slice means that the box has no active publications.
@@ -61,11 +77,11 @@ type BoxInfo struct {
 	AutoDelete uint32
 	AutoResume bool
 	CreatedAt  time.Time
-	// StartedAt is when the guest's Container.Start most recently returned
-	// success; the zero time means no successful start has been recorded. It is
-	// preserved after stop or reboot, and describes PID whenever PID is nonzero.
-	// State alone cannot answer whether the current init launched — a box reports
-	// Running from the moment its VM is up, before its init is started.
+	// StartedAt is when the box most recently entered Running; the zero time
+	// means no such start time has been recorded. It is preserved after stop or
+	// reboot and describes PID whenever PID is nonzero. It does not report when
+	// the configured user task becomes ready, exits, or completes; those are
+	// workload lifecycle outcomes.
 	StartedAt time.Time
 	// ExitCode is the init's exit code, when the box stopped because its command
 	// exited; nil when no code has been recorded. A pointer, not a plain int,
@@ -210,16 +226,22 @@ func portProtocolFromCValue(protocol uint32) PortProtocol {
 	}
 }
 
+func cNetworkDirectionInfoToGo(direction C.CNetworkDirectionInfo) NetworkDirectionInfo {
+	allowNet := make([]string, 0, int(direction.allow_net_count))
+	if direction.allow_net != nil && direction.allow_net_count > 0 {
+		for _, host := range unsafe.Slice(direction.allow_net, int(direction.allow_net_count)) {
+			allowNet = append(allowNet, cString(host))
+		}
+	}
+	return NetworkDirectionInfo{
+		Mode:     networkModeFromCValue(direction.mode),
+		AllowNet: allowNet,
+	}
+}
+
 func cNetworkInfoToGo(network *C.CNetworkInfo) *NetworkInfo {
 	if network == nil {
 		return nil
-	}
-
-	allowNet := make([]string, 0, int(network.allow_net_count))
-	if network.allow_net != nil && network.allow_net_count > 0 {
-		for _, host := range unsafe.Slice(network.allow_net, int(network.allow_net_count)) {
-			allowNet = append(allowNet, cString(host))
-		}
 	}
 
 	var publishedPorts []PublishedPort
@@ -238,9 +260,12 @@ func cNetworkInfoToGo(network *C.CNetworkInfo) *NetworkInfo {
 		}
 	}
 
+	outbound := cNetworkDirectionInfoToGo(network.outbound)
 	return &NetworkInfo{
-		Mode:           networkModeFromCValue(network.mode),
-		AllowNet:       allowNet,
+		Outbound:       outbound,
+		Inbound:        cNetworkDirectionInfoToGo(network.inbound),
+		Mode:           outbound.Mode,
+		AllowNet:       outbound.AllowNet,
 		PublishedPorts: publishedPorts,
 	}
 }

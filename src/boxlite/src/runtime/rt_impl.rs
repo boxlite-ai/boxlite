@@ -537,10 +537,6 @@ impl RuntimeImpl {
         actual: &BoxConfig,
     ) -> BoxliteResult<()> {
         let box_name = actual.name.as_deref().unwrap_or_else(|| actual.id.as_str());
-        requested
-            .advanced
-            .capabilities
-            .check_compatibility(&actual.options.advanced.capabilities, box_name)?;
 
         // One-way: a nested-capable box satisfies any request, but a plain box
         // cannot satisfy one that needs /dev/kvm. Reusing it would look like a
@@ -552,6 +548,32 @@ impl RuntimeImpl {
                 "box '{box_name}' was created without nested virtualization and cannot satisfy a required nested virtualization request; use a different name or recreate the box"
             )));
         }
+        if requested.advanced.privileged && !actual.options.advanced.privileged {
+            return Err(BoxliteError::Unsupported(format!(
+                "box '{box_name}' was created without privileged support and cannot satisfy a required privileged request; use a different name or recreate the box"
+            )));
+        }
+        // The mirror case: privileged governs mount hardening (readonly
+        // paths, /sys write access) as well as capabilities, so a privileged
+        // box can look capability-compatible with a non-privileged request
+        // (e.g. one that explicitly asks for `capabilities.add = ["ALL"]`)
+        // while still granting more than that request asked for. Reject
+        // instead of silently upgrading it.
+        if !requested.advanced.privileged && actual.options.advanced.privileged {
+            return Err(BoxliteError::Unsupported(format!(
+                "box '{box_name}' was created with privileged mode and would grant more than the requested non-privileged security policy; use a different name or recreate the box"
+            )));
+        }
+
+        // Compare effective capabilities, not the raw field: a privileged
+        // box persisted by an earlier version of this option has `add=["ALL"]`
+        // mutated into its stored capabilities, while a new privileged
+        // request idiomatically leaves capabilities empty — both resolve to
+        // the same thing.
+        requested
+            .advanced
+            .effective_capabilities()
+            .check_compatibility(&actual.options.advanced.effective_capabilities(), box_name)?;
 
         Ok(())
     }
@@ -1448,7 +1470,12 @@ impl RuntimeImpl {
                             box_id.as_str(),
                             None,
                         );
-                        state.mark_failed(&report.user_message);
+                        state.mark_failed(&report.client_message);
+                        tracing::error!(
+                            box_id = %box_id,
+                            "Box crashed in a prior lifecycle:\n{}",
+                            report.operator_report
+                        );
                         tracing::warn!(
                             box_id = %box_id,
                             "Box crashed; marked Failed with crash report"
@@ -1713,7 +1740,7 @@ impl std::fmt::Debug for RuntimeImpl {
 /// Trait methods use `&self`. This newtype holds the Arc as a field to bridge the gap.
 pub(crate) struct LocalRuntime(pub(crate) SharedRuntimeImpl);
 
-fn reject_local_lifecycle_policy(options: &BoxOptions) -> BoxliteResult<()> {
+fn reject_local_unsupported_options(options: &BoxOptions) -> BoxliteResult<()> {
     // Local runtimes support auto_delete as a remove-on-stop policy, but AutoStop
     // needs a sweeper that the local runtime does not have, so it stays REST-only.
     if options.auto_stop.is_some_and(|seconds| seconds > 0) {
@@ -1721,6 +1748,21 @@ fn reject_local_lifecycle_policy(options: &BoxOptions) -> BoxliteResult<()> {
             "AutoStop is only supported by REST runtimes".into(),
         ));
     }
+
+    // `resolve_user_volumes` catches this too, but only once boot is under way
+    // — after the image is pulled and the box record exists. Fail here instead,
+    // mirroring `BoxOptions::sanitize_remote`'s mount rules on the REST side.
+    if let Some(volume) = options
+        .volumes
+        .iter()
+        .find_map(|volume| volume.managed_volume.as_deref())
+    {
+        return Err(BoxliteError::Unsupported(format!(
+            "managed volume {volume:?} is only supported by REST runtimes; the local runtime has \
+             no volume backend to resolve it against"
+        )));
+    }
+
     Ok(())
 }
 
@@ -1728,8 +1770,10 @@ async fn sanitize_local_options(
     features: &ExperimentalFeatures,
     options: BoxOptions,
 ) -> BoxliteResult<BoxOptions> {
+    reject_local_unsupported_options(&options)?;
     features.require_for_options(&options)?;
     tokio::task::spawn_blocking(move || {
+        let mut options = options;
         options.sanitize()?;
         Ok(options)
     })
@@ -1744,7 +1788,6 @@ async fn sanitize_local_options(
 #[async_trait::async_trait]
 impl super::backend::RuntimeBackend for LocalRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
-        reject_local_lifecycle_policy(&options)?;
         let options = sanitize_local_options(&self.0.experimental_features, options).await?;
         self.0.create(options, name).await
     }
@@ -1754,7 +1797,6 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
-        reject_local_lifecycle_policy(&options)?;
         let options = sanitize_local_options(&self.0.experimental_features, options).await?;
         self.0.get_or_create(options, name).await
     }
@@ -1827,7 +1869,10 @@ impl super::images::ImageBackend for LocalRuntime {
 // future managed volume backend, so every operation returns `Unsupported`.
 #[async_trait::async_trait]
 impl super::volumes::VolumeBackend for LocalRuntime {
-    async fn create_volume(&self) -> BoxliteResult<crate::volumes::VolumeInfo> {
+    async fn create_volume(
+        &self,
+        _name: Option<&str>,
+    ) -> BoxliteResult<crate::volumes::VolumeInfo> {
         Err(volumes_unsupported())
     }
 
@@ -1904,41 +1949,115 @@ mod tests {
         );
     }
 
-    #[test]
-    fn local_runtime_rejects_explicit_lifecycle_policy() {
+    #[tokio::test]
+    async fn local_runtime_rejects_explicit_lifecycle_policy() {
+        let features = ExperimentalFeatures::default();
         let mut options = BoxOptions::default();
-        assert!(reject_local_lifecycle_policy(&options).is_ok());
+        assert!(
+            sanitize_local_options(&features, options.clone())
+                .await
+                .is_ok()
+        );
 
         options.auto_stop = Some(0);
-        assert!(reject_local_lifecycle_policy(&options).is_ok());
+        assert!(
+            sanitize_local_options(&features, options.clone())
+                .await
+                .is_ok()
+        );
 
         options.auto_stop = Some(1);
         assert!(matches!(
-            reject_local_lifecycle_policy(&options),
+            sanitize_local_options(&features, options.clone()).await,
             Err(BoxliteError::Unsupported(_))
         ));
         options.auto_stop = None;
         options.auto_delete = Some(3600);
-        assert!(reject_local_lifecycle_policy(&options).is_ok());
+        assert!(sanitize_local_options(&features, options).await.is_ok());
+    }
+
+    /// The local runtime has no volume backend. `resolve_user_volumes` also
+    /// refuses a managed volume, but only once boot is under way — after the
+    /// image is pulled and the box record exists. This guard is the whole
+    /// reason the failure is cheap, so it needs its own test: without it every
+    /// suite still passes and the rejection silently moves back to boot time.
+    #[tokio::test]
+    async fn local_runtime_rejects_managed_volumes_before_boot() {
+        use crate::runtime::options::VolumeSpec;
+
+        let features = ExperimentalFeatures::default();
+        let host_bind = BoxOptions {
+            volumes: vec![VolumeSpec::bind_mount("/tmp/data", "/data")],
+            ..Default::default()
+        };
+        assert!(sanitize_local_options(&features, host_bind).await.is_ok());
+
+        let managed = BoxOptions {
+            volumes: vec![VolumeSpec::managed_volume("my-data", "/data")],
+            ..Default::default()
+        };
+        let error = sanitize_local_options(&features, managed)
+            .await
+            .expect_err("a managed volume has no local backend to resolve against");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        let message = error.to_string();
+        assert!(message.contains("my-data"), "{message}");
+        assert!(message.contains("REST runtime"), "{message}");
     }
 
     #[test]
     fn options_compatibility_normalizes_capability_names() {
         let mut actual = test_box_config(false);
-        actual.options.advanced.capabilities.add =
-            vec!["NET_ADMIN".to_string(), "CAP_SYS_ADMIN".to_string()];
-        let requested = BoxOptions {
-            advanced: crate::AdvancedBoxOptions {
-                capabilities: crate::ContainerCapabilities {
-                    add: vec!["sys_admin".to_string(), "CAP_NET_ADMIN".to_string()],
-                    ..Default::default()
-                },
+        actual
+            .options
+            .advanced
+            .set_capabilities(Some(crate::ContainerCapabilities {
+                add: vec!["NET_ADMIN".to_string(), "CAP_SYS_ADMIN".to_string()],
                 ..Default::default()
-            },
+            }))
+            .unwrap();
+        let mut requested_advanced = crate::AdvancedBoxOptions::default();
+        requested_advanced
+            .set_capabilities(Some(crate::ContainerCapabilities {
+                add: vec!["sys_admin".to_string(), "CAP_NET_ADMIN".to_string()],
+                ..Default::default()
+            }))
+            .unwrap();
+        let requested = BoxOptions {
+            advanced: requested_advanced,
             ..Default::default()
         };
 
         assert!(RuntimeImpl::check_options_compatibility(&requested, &actual).is_ok());
+    }
+
+    #[test]
+    fn check_options_compatibility_rejects_non_privileged_request_reusing_a_privileged_box() {
+        // A privileged box's effective capabilities are `add=["ALL"]` — the
+        // same shape a non-privileged request can reach explicitly. Matching
+        // only on effective capabilities would let this request silently
+        // adopt the privileged box and inherit its cleared readonly paths
+        // and writable /sys, even though it never asked for privileged mode.
+        let mut actual = test_box_config(false);
+        actual.options.advanced.privileged = true;
+
+        let mut requested_advanced = crate::AdvancedBoxOptions::default();
+        requested_advanced
+            .set_capabilities(Some(crate::ContainerCapabilities {
+                add: vec!["ALL".to_string()],
+                ..Default::default()
+            }))
+            .unwrap();
+        let requested = BoxOptions {
+            advanced: requested_advanced,
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            RuntimeImpl::check_options_compatibility(&requested, &actual),
+            Err(BoxliteError::Unsupported(_))
+        ));
     }
 
     #[tokio::test]
@@ -1946,7 +2065,14 @@ mod tests {
         let (runtime, _dir) = create_test_runtime();
         let mut config = test_box_config_in_layout(false, &runtime);
         config.name = Some("existing".to_string());
-        config.options.advanced.capabilities.drop = vec!["NET_RAW".to_string()];
+        config
+            .options
+            .advanced
+            .set_capabilities(Some(crate::ContainerCapabilities {
+                drop: vec!["NET_RAW".to_string()],
+                ..Default::default()
+            }))
+            .unwrap();
         runtime
             .box_manager
             .add_box(&config, &BoxState::new())
@@ -1987,11 +2113,10 @@ mod tests {
 
     #[tokio::test]
     async fn nested_virtualization_validation_uses_injected_features() {
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.nested_virtualization = true;
         let options = BoxOptions {
-            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
-                nested_virtualization: true,
-                ..Default::default()
-            },
+            advanced,
             ..Default::default()
         };
 
@@ -2006,6 +2131,20 @@ mod tests {
 
         let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
         sanitize_local_options(&enabled, options).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn privileged_options_do_not_require_experimental_features() {
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.privileged = true;
+        let options = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        sanitize_local_options(&ExperimentalFeatures::default(), options)
+            .await
+            .expect("privileged mode should be available without an experimental opt-in");
     }
 
     /// Create a RuntimeImpl with isolated temp directory.
@@ -3070,14 +3209,13 @@ mod tests {
             .unwrap();
         assert!(created);
 
+        let mut nested_advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        nested_advanced.nested_virtualization = true;
         let result = runtime
             .get_or_create(
                 BoxOptions {
                     rootfs: RootfsSpec::Image("alpine:latest".into()),
-                    advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
-                        nested_virtualization: true,
-                        ..Default::default()
-                    },
+                    advanced: nested_advanced,
                     ..Default::default()
                 },
                 name,
@@ -3095,18 +3233,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_or_create_rejects_privileged_upgrade() {
+        let (runtime, _dir) = create_test_runtime();
+        let name = Some("plain-box".to_string());
+
+        let (_, created) = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    ..Default::default()
+                },
+                name.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(created);
+
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.set_privileged(true);
+
+        let result = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    advanced,
+                    ..Default::default()
+                },
+                name,
+            )
+            .await;
+
+        match result {
+            Err(BoxliteError::Unsupported(message)) => {
+                assert!(message.contains("privileged"));
+                assert!(message.contains("plain-box"));
+            }
+            Err(other) => panic!("expected Unsupported error, got: {other}"),
+            Ok(_) => panic!("get_or_create must not reuse a non-privileged box"),
+        }
+    }
+
+    #[tokio::test]
     async fn get_or_create_allows_nested_box_for_default_request() {
         let (runtime, _dir) = create_test_runtime();
         let name = Some("nested-box".to_string());
 
+        let mut nested_advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        nested_advanced.nested_virtualization = true;
         let (nested_box, created) = runtime
             .get_or_create(
                 BoxOptions {
                     rootfs: RootfsSpec::Image("alpine:latest".into()),
-                    advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
-                        nested_virtualization: true,
-                        ..Default::default()
-                    },
+                    advanced: nested_advanced,
                     ..Default::default()
                 },
                 name.clone(),

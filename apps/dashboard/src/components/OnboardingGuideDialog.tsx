@@ -6,10 +6,10 @@
 
 import goIcon from '@/assets/go.svg'
 import pythonIcon from '@/assets/python.svg'
-import rustIcon from '@/assets/rust.svg'
+import { RustIcon } from '@/assets/RustIcon'
 import typescriptIcon from '@/assets/typescript.svg'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { KeyRound, Server, Terminal } from '@/components/ui/icon'
+import { FileText, KeyRound, Server, Terminal } from '@/components/ui/icon'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
 import { getRestApiUrl } from '@/lib/environment'
@@ -22,8 +22,7 @@ import {
   renderOnboardingCodeExample,
   type OnboardingInterface,
 } from '@/lib/onboarding-code-examples'
-import type { QuickstartIconName, QuickstartInterfaceDefinition } from '@/lib/quickstart/types'
-import { setLocalStorageItem } from '@/lib/local-storage'
+import type { QuickstartGroup, QuickstartIconName, QuickstartInterfaceDefinition } from '@/lib/quickstart/types'
 import { cn } from '@/lib/utils'
 import type { OnboardingProgress } from '@/lib/onboarding-progress'
 import {
@@ -68,33 +67,80 @@ type ScenarioId = (typeof SCENARIOS)[number]['id']
 
 const QUICKSTART_INTERFACES = getOnboardingInterfaces()
 const DEFAULT_INTERFACE = QUICKSTART_INTERFACES[0]?.id ?? 'python'
+// Multi-color brand marks ship as assets; single-color marks render inline so they
+// inherit `currentColor` and stay visible in both themes.
 const ICON_ASSETS: Partial<Record<QuickstartIconName, string>> = {
   go: goIcon,
   python: pythonIcon,
-  rust: rustIcon,
   typescript: typescriptIcon,
 }
 const ICON_COMPONENTS: Partial<Record<QuickstartIconName, React.ComponentType<{ className?: string }>>> = {
+  file: FileText,
+  rust: RustIcon,
   server: Server,
   terminal: Terminal,
 }
 
+const GROUPS: ReadonlyArray<{ id: QuickstartGroup; label: string }> = [
+  { id: 'sdk', label: 'SDK' },
+  { id: 'direct', label: 'Direct' },
+]
+
 function QuickstartInterfaceIcon({ item }: { item: QuickstartInterfaceDefinition }) {
   const iconSrc = ICON_ASSETS[item.icon]
-  const Icon = ICON_COMPONENTS[item.icon]
   if (iconSrc) {
     return <img src={iconSrc} alt="" className="size-3.5" />
   }
-  if (Icon) {
-    return <Icon className="size-3.5" />
-  }
+  const Icon = ICON_COMPONENTS[item.icon]
+  return Icon ? <Icon className="size-3.5" /> : null
+}
+
+/**
+ * Interface picker. Rendered once for the whole flow — the choice spans steps 2 and 3,
+ * so it does not belong to either one. Grouped explicitly: "SDK" scopes the languages,
+ * which is why no single entry has to carry that word in its own label.
+ */
+function InterfacePicker({
+  selected,
+  onSelect,
+}: {
+  selected: OnboardingInterface
+  onSelect: (id: OnboardingInterface) => void
+}) {
   return (
-    <span
-      aria-hidden="true"
-      className="flex size-3.5 items-center justify-center border border-current text-[9px] leading-none"
-    >
-      {item.badge}
-    </span>
+    <div className="flex flex-col gap-3 sm:flex-row sm:gap-5">
+      {GROUPS.map((group) => {
+        const items = QUICKSTART_INTERFACES.filter((item) => item.group === group.id)
+        if (items.length === 0) return null
+        return (
+          <div key={group.id} className="min-w-0">
+            <div className="mb-[9px] text-[9px] uppercase tracking-[1.5px] text-muted-foreground">{group.label}</div>
+            <div className="flex flex-wrap gap-2">
+              {items.map((item) => {
+                const on = selected === item.id
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => onSelect(item.id)}
+                    className={cn(
+                      'flex min-h-[34px] items-center justify-center gap-2 border px-[12px] py-[7px] text-[12px] transition-colors',
+                      on
+                        ? 'border-brand bg-[hsl(var(--brand)/0.12)] font-semibold text-brand'
+                        : 'border-border text-muted-foreground hover:border-brand/70 hover:text-foreground',
+                    )}
+                  >
+                    <QuickstartInterfaceIcon item={item} />
+                    {item.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -208,7 +254,6 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
       const next = [...prev] as [boolean, boolean, boolean]
       next[i] = true
       if (next.every(Boolean)) {
-        setLocalStorageItem('boxlite-quickstart-done', '1')
         onProgressChange({ boxCreated: true, sdkConnected: true })
       }
       return next
@@ -373,6 +418,13 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
               })}
             </div>
 
+            {/* interface picker — spans steps 2 and 3, so it lives outside the step body */}
+            {step > 0 && (
+              <div className="shrink-0 border-t border-border px-5 py-[14px]">
+                <InterfacePicker selected={language} onSelect={setLanguage} />
+              </div>
+            )}
+
             {/* body */}
             <div
               className={cn(
@@ -453,28 +505,6 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
 
               {step === 1 && (
                 <div className="px-5 py-[18px]" style={{ animation: 'stat-in .25s ease' }}>
-                  <div className="mb-[14px] grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {QUICKSTART_INTERFACES.map((item) => {
-                      const on = language === item.id
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          aria-label={item.ariaLabel}
-                          onClick={() => setLanguage(item.id)}
-                          className={cn(
-                            'flex min-h-[34px] items-center justify-center gap-2 border px-[10px] py-[7px] text-[12px] transition-colors',
-                            on
-                              ? 'border-brand bg-[hsl(var(--brand)/0.12)] font-semibold text-brand'
-                              : 'border-border text-muted-foreground hover:border-brand/70 hover:text-foreground',
-                          )}
-                        >
-                          <QuickstartInterfaceIcon item={item} />
-                          {item.label}
-                        </button>
-                      )
-                    })}
-                  </div>
                   <div className="mb-[9px] text-[9px] uppercase tracking-[1.5px] text-muted-foreground">
                     {activeExample.setupLabel ?? 'Run in your local terminal'}
                   </div>
@@ -510,28 +540,6 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
 
               {step === 2 && (
                 <div className="flex h-full min-h-0 flex-col px-5 py-[18px]" style={{ animation: 'stat-in .25s ease' }}>
-                  <div className="mb-[14px] grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {QUICKSTART_INTERFACES.map((item) => {
-                      const on = language === item.id
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          aria-label={item.ariaLabel}
-                          onClick={() => setLanguage(item.id)}
-                          className={cn(
-                            'flex min-h-[34px] items-center justify-center gap-2 border px-[10px] py-[7px] text-[12px] transition-colors',
-                            on
-                              ? 'border-brand bg-[hsl(var(--brand)/0.12)] font-semibold text-brand'
-                              : 'border-border text-muted-foreground hover:border-brand/70 hover:text-foreground',
-                          )}
-                        >
-                          <QuickstartInterfaceIcon item={item} />
-                          {item.label}
-                        </button>
-                      )
-                    })}
-                  </div>
                   <div className="mb-[9px] text-[9px] uppercase tracking-[1.5px] text-muted-foreground">
                     Run this from your local machine
                   </div>

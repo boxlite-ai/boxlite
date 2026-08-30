@@ -15,7 +15,7 @@ import (
 // TestCreateHasNoFallibleStepAfterStart guards the coupling documented at the
 // bx.Start call in Create.
 //
-// A successful bx.Start makes BoxLite publish the box's StartedAt, which
+// A successful bx.Start publishes StartedAt when BoxLite moves the box to Running, which
 // BoxSync reads as evidence that this whole job body succeeded. That only holds
 // while Start is the last step of Create that can fail. Nothing about the
 // current code enforces it — replacing the hardcoded daemon version with a real

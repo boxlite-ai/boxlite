@@ -284,8 +284,8 @@ curl http://localhost:8080
 
 Port publication is local-only and TCP-only. It creates a listener that ordinary
 host applications can use for repeated connections. Remote runtimes reject
-`ports`; use `box.network.tunnel(port)` for portable SDK access. Each tunnel
-handle carries one connection.
+`ports`; use `box.network.tunnel(port)` for portable SDK access. Each tunnel is
+a prepared one-shot connection; call `forward()` to turn it into a listener.
 Image `EXPOSE` declarations do not publish host ports.
 
 See [Configuring Networking](./guides/README.md#configuring-networking) for details.
@@ -297,7 +297,7 @@ See [Configuring Networking](./guides/README.md#configuring-networking) for deta
 **Alternatives:**
 1. **Share data via volumes:**
    ```python
-   volumes=[("/host/shared", "/mnt/shared", "rw")]
+   volumes=[("/host/shared", "/mnt/shared", False)]
    ```
 
 2. **Use host network:**

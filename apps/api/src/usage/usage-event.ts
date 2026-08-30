@@ -19,6 +19,9 @@ export const USAGE_EXPORT_SCHEMA_VERSION = 1
  */
 const MAX_QUANTITY = 1e15
 
+/** Matches Commerce's identity ceiling for usage events and snapshots. */
+const MAX_IDENTITY_LENGTH = 200
+
 /** Digits kept when encoding a quantity. Trailing zeros are stripped. */
 const QUANTITY_DECIMALS = 12
 
@@ -134,8 +137,10 @@ export function timestampString(value: Date, field: string): string {
 }
 
 export function identityString(value: string, field: string): string {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new InvalidUsagePeriodError(`${field} must be a non-empty string`)
+  if (typeof value !== 'string' || !value.trim() || value.length > MAX_IDENTITY_LENGTH) {
+    throw new InvalidUsagePeriodError(
+      `${field} must be a non-empty string of at most ${MAX_IDENTITY_LENGTH} characters`,
+    )
   }
   return value
 }

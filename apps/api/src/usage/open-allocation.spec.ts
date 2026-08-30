@@ -50,6 +50,7 @@ describe('toOpenAllocationDto', () => {
     ['a negative quantity', { disk: -1 }],
     ['a blank organizationId', { organizationId: '  ' }],
     ['a blank boxId', { boxId: '' }],
+    ['a region longer than Commerce accepts', { region: 'r'.repeat(201) }],
     ['an invalid startAt', { startAt: new Date('nonsense') }],
     ['a quantity past the encodable ceiling', { mem: 1e16 }],
     ['a quantity that rounds away to zero', { cpu: 1e-13 }],

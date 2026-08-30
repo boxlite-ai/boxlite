@@ -82,12 +82,14 @@ jobs:
       contents: read
 
     steps:
+      # As in build-c.yml: this job builds a caller-selected commit, and a `uses: ./...` action
+      # resolves from the checked-out tree, so .github/actions/ must exist in that commit. One
+      # predating it fails with "Can't find 'action.yml'"; select a newer commit.
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.resolve-ref.outputs.sha }}
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: ./.github/actions/setup-go
         with:
           go-version: ${{ needs.config.outputs.go-version }}
 
@@ -222,11 +224,9 @@ jobs:
           pattern: runner-*
           merge-multiple: true
 
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
+      - uses: ./.github/actions/upload-to-release
         with:
-          tag_name: v${{ steps.version.outputs.version }}
+          tag-name: v${{ steps.version.outputs.version }}
           files: |
             dist/boxlite-runner-v*.tar.gz
             dist/boxlite-runner-v*.tar.gz.sha256
-          fail_on_unmatched_files: true

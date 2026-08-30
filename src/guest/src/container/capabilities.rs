@@ -57,9 +57,10 @@ const CAPABILITIES_BY_NUMBER: [Capability; 41] = [
 
 /// The resolved Linux capability policy for every process in one container.
 ///
-/// This is the guest's single semantic boundary: external APIs carry familiar
-/// add/drop strings, then this type parses and resolves them once before the
-/// OCI spec or any exec process is built.
+/// The host resolves high-level security semantics before sending the request;
+/// this is the guest's capability boundary, where canonical add/drop names are
+/// parsed against the guest kernel before the OCI spec or an exec process is
+/// built.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub(crate) struct CapabilitySet(HashSet<Capability>);
@@ -169,12 +170,12 @@ impl CapabilitySet {
     }
 
     #[cfg(test)]
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.0.len()
     }
 
     #[cfg(test)]
-    fn contains(&self, capability: &Capability) -> bool {
+    pub(crate) fn contains(&self, capability: &Capability) -> bool {
         self.0.contains(capability)
     }
 

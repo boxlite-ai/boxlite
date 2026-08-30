@@ -71,12 +71,17 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
   }
   const boxRepository = { findOne: jest.fn() }
   const usageExportOutboxService = { enqueue: jest.fn().mockResolvedValue(0) }
+  // The reconcile pass builds a left join through the query builder, which this
+  // fake cannot stand in for; its behaviour is covered in
+  // usage.service.integration.spec.ts against a real Postgres.
+  const runnerRepository = { find: jest.fn().mockResolvedValue([]) }
 
   const service = new UsageService(
     usagePeriodRepository as any,
     redisLockProvider as any,
     boxRepository as any,
     usageExportOutboxService as any,
+    runnerRepository as any,
   )
 
   return {

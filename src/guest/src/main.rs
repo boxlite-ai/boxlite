@@ -21,6 +21,8 @@ mod reaper;
 mod service;
 #[cfg(target_os = "linux")]
 mod storage;
+#[cfg(target_os = "linux")]
+mod sysctl;
 
 #[cfg(target_os = "linux")]
 use boxlite_shared::errors::BoxliteResult;
@@ -101,6 +103,14 @@ fn main() -> BoxliteResult<()> {
 
     info!("BoxLite Guest Agent starting");
 
+    // libkrun's minimal init mounts /proc but does not apply a distro's sysctl
+    // defaults. Harden the guest before it can spawn any workload processes.
+    sysctl::apply_boot_hardening()?;
+    eprintln!(
+        "[guest] T+{}ms: kernel hardening applied",
+        boot_elapsed_ms()
+    );
+
     // Start zygote BEFORE tokio creates any threads.
     // The zygote handles all clone3() calls in a single-threaded context,
     // avoiding musl's __malloc_lock deadlock. See docs/investigations/concurrent-exec-deadlock.md
@@ -122,19 +132,6 @@ async fn async_main() -> BoxliteResult<()> {
     // Needed because virtio-fs doesn't support open-unlink-fstat pattern
     mounts::mount_essential_tmpfs()?;
     eprintln!("[guest] T+{}ms: tmpfs mounted", boot_elapsed_ms());
-
-    // Seal the root before any container — and therefore any tenant process —
-    // can exist, so a workload that enters the container by fork cannot have
-    // its inherited /proc/self/exe reopened for write. The host key is created
-    // first because it is the one guest-root write that outlives startup; a
-    // failure here is not fatal to the box, it only leaves SSH unable to start
-    // later, which is the same outcome the lazy path already reported through
-    // `SshStartError::HostKey`.
-    if let Err(error) = service::ssh::provision_host_key() {
-        tracing::warn!(%error, "SSH host key not provisioned; SSH cannot start on this boot");
-    }
-    mounts::seal_root_readonly()?;
-    eprintln!("[guest] T+{}ms: root sealed read-only", boot_elapsed_ms());
 
     // Install the child-reaper before serving: one waitpid(-1) loop reaps the
     // container init, exec tenants (both reparent to us via as_sibling), and

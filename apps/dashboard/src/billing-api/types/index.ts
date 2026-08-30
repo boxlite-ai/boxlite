@@ -4,9 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-export * from './OrganizationTier'
-export * from './OrganizationUsage'
+export * from './OrganizationPlan'
 export * from './OrganizationWallet'
-export * from './tier'
+export * from './Plan'
 export * from './OrganizationEmail'
 export * from './Invoice'
+export * from './UsageFundingBucket'
+export * from './UsagePrices'
+export * from './PaymentMethod'

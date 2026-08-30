@@ -45,11 +45,11 @@ function die(msg: string): never {
     console.log(`BOX_ID=${boxId}`);
 
     // copy in
-    await box.copyIn(uploadPath, '/tmp/e2e-copy-test.txt');
+    await box.copyIn(uploadPath, '/workspace/e2e-copy-test.txt');
     console.log('COPY_IN=ok');
 
     // verify via exec
-    const ex = await box.exec('cat', ['/tmp/e2e-copy-test.txt'], null, false);
+    const ex = await box.exec('cat', ['/workspace/e2e-copy-test.txt'], null, false);
     const stdoutStream = await ex.stdout();
     let stdout = '';
     while (true) {
@@ -66,7 +66,7 @@ function die(msg: string): never {
     }
 
     // copy out
-    await box.copyOut('/tmp/e2e-copy-test.txt', downloadPath);
+    await box.copyOut('/workspace/e2e-copy-test.txt', downloadPath);
     const downloaded = fs.readFileSync(downloadPath, 'utf-8');
     if (downloaded.trim() === content.trim()) {
       console.log('COPY_OUT=ok');

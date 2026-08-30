@@ -10,10 +10,8 @@ import { ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
 
 /**
- * Page-level billing state banners. They sit above every section because they
- * gate the actions below them — an outstanding invoice blocks adding funds.
- * The wallet query is the same one the wallet section uses; React Query serves
- * both from one cache entry.
+ * Page-level billing state banners. Every message is derived from a state the
+ * current wallet or identity contract actually exposes.
  */
 export function BillingAlerts() {
   const { selectedOrganization } = useSelectedOrganization()
@@ -28,17 +26,8 @@ export function BillingAlerts() {
     <>
       {user && !user.profile.email_verified && (
         <StatusBanner tone="warning" icon={<TriangleAlertIcon className="size-4 shrink-0" />} title="Verify your email">
-          {wallet.balanceCents && wallet.balanceCents > 0 ? (
-            <>
-              Please verify your email address to complete your account setup.
-              <br />A verification email was sent to you.
-            </>
-          ) : (
-            <>
-              Verify your email address to receive $100 of credits.
-              <br />A verification email was sent to you.
-            </>
-          )}
+          Please verify your email address to complete your account setup.
+          <br />A verification email was sent to you.
         </StatusBanner>
       )}
       {user &&
@@ -46,19 +35,9 @@ export function BillingAlerts() {
         user.profile.email_verified &&
         selectedOrganization?.isDefaultForAuthenticatedUser && (
           <StatusBanner tone="neutral" icon={<SparklesIcon className="size-4 shrink-0" />}>
-            Connect a credit card to receive an additional $100 of credits.
+            Connect a credit card to enable automatic top-ups.
           </StatusBanner>
         )}
-      {wallet.hasFailedOrPendingInvoice && (
-        <StatusBanner
-          tone="destructive"
-          icon={<TriangleAlertIcon className="size-4 shrink-0" />}
-          title="Outstanding invoices"
-        >
-          You have failed or pending invoices that need to be resolved before adding new funds. Open the Wallet tab to
-          review them and complete or void any outstanding payments.
-        </StatusBanner>
-      )}
     </>
   )
 }

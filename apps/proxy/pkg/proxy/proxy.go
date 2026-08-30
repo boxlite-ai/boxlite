@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
@@ -26,8 +27,6 @@ import (
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
 	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
-
-	log "github.com/sirupsen/logrus"
 )
 
 type RunnerInfo struct {
@@ -220,7 +219,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 		return err
 	}
 
-	log.Infof("Proxy server is running on port %d", config.ProxyPort)
+	slog.Info("Proxy server is running", "port", config.ProxyPort)
 
 	serveErr := make(chan error, 1)
 	go func() {
@@ -249,9 +248,9 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 			wgChan := make(chan struct{})
 
 			go func() {
-				log.Info("Waiting for active requests to finish...")
+				slog.Info("Waiting for active requests to finish...")
 				shutdownWg.Wait()
-				log.Info("All active requests finished, shutting down proxy")
+				slog.Info("All active requests finished, shutting down proxy")
 				close(wgChan)
 			}()
 

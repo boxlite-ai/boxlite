@@ -95,36 +95,6 @@ fn mount_tmpfs(cfg: &TmpfsMount) -> BoxliteResult<()> {
     Ok(())
 }
 
-/// Remount the guest's own root filesystem read-only.
-///
-/// Direct tenant workloads (SFTP, socket forwarding) enter the container by
-/// fork without execve, so their `/proc/<pid>/exe` still names this agent's
-/// binary. Any container process in the same pid namespace can take an `O_PATH`
-/// handle to it, wait for that process to exit, and reopen the handle for write
-/// — CVE-2019-5736. `MS_REMOUNT` is what closes that: it flips `MNT_READONLY`
-/// on the *existing* mount rather than stacking a new one, so handles already
-/// derived from it are covered as well. A bind mount would not be — it creates
-/// a separate mount that older handles never reference.
-///
-/// Every runtime write target lives on another mount: `/tmp`, `/var/tmp` and
-/// `/run` are tmpfs (see [`mount_essential_tmpfs`]), and container rootfs trees
-/// live under `/run/boxlite/shared` on virtio-fs. Call this only once those are
-/// in place and nothing on the root is still open for write, or the kernel
-/// rejects the remount with `EBUSY`.
-pub fn seal_root_readonly() -> BoxliteResult<()> {
-    mount(
-        None::<&str>,
-        "/",
-        None::<&str>,
-        MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY,
-        None::<&str>,
-    )
-    .map_err(|e| BoxliteError::Internal(format!("Failed to remount / read-only: {}", e)))?;
-
-    tracing::info!("Remounted / read-only");
-    Ok(())
-}
-
 fn is_tmpfs(path: &Path) -> BoxliteResult<bool> {
     let mounts = match fs::read_to_string("/proc/mounts") {
         Ok(content) => content,

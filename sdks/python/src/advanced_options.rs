@@ -308,8 +308,15 @@ pub struct PyAdvancedBoxOptions {
     pub health_check: Option<PyHealthCheckOptions>,
 
     /// Linux capability policy for the container process.
+    ///
+    /// `None` when the caller never passes `capabilities=` — distinct from
+    /// an explicit, empty policy, the same distinction the core
+    /// `AdvancedBoxOptions.capabilities` makes. Collapsing this to a
+    /// concrete default here would make every security/health-check-only
+    /// `AdvancedBoxOptions` look like it explicitly asked for an empty
+    /// capability override.
     #[pyo3(get, set)]
-    pub capabilities: PyContainerCapabilities,
+    pub capabilities: Option<PyContainerCapabilities>,
 }
 
 #[pymethods]
@@ -324,7 +331,7 @@ impl PyAdvancedBoxOptions {
         Self {
             security,
             health_check,
-            capabilities: capabilities.unwrap_or_default(),
+            capabilities,
         }
     }
 }
