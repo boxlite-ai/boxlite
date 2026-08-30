@@ -50,6 +50,7 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
   }
   const transactionalEntityManager = {
     find: jest.fn().mockResolvedValue([]),
+    findOne: jest.fn(),
     delete: jest.fn().mockResolvedValue(undefined),
     save: jest.fn().mockImplementation(async (value) => value),
   }
@@ -91,6 +92,7 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
     usageExportOutboxService,
     lease,
     transactionalEntityManager,
+    boxRepository,
   }
 }
 
@@ -336,6 +338,84 @@ describe('UsageService.handleBoxDesiredStateUpdate', () => {
     )
 
     expect(lease.release).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('UsageService.closeAndReopenUsagePeriods', () => {
+  const previousPeriod = () =>
+    Object.assign(new BoxUsagePeriod(), {
+      id: 'period-1',
+      boxId: box.id,
+      organizationId: 'org-previous',
+      region: 'us',
+      startAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+      endAt: null,
+      cpu: 1,
+      gpu: 0,
+      mem: 2,
+      disk: 5,
+    })
+
+  const currentBox = {
+    ...box,
+    organizationId: 'org-current',
+    region: 'eu',
+    state: BoxState.STARTED,
+    cpu: 6,
+    gpu: 2,
+    mem: 12,
+    disk: 80,
+  } as Box
+
+  it('rollover locks the current Box before the eligible open period and uses current attribution', async () => {
+    const previous = previousPeriod()
+    const { service, usagePeriodRepository, transactionalEntityManager, boxRepository } = makeService()
+    usagePeriodRepository.find.mockResolvedValue([previous])
+    boxRepository.findOne.mockResolvedValue(currentBox)
+    transactionalEntityManager.findOne.mockResolvedValueOnce(currentBox).mockResolvedValueOnce(previous)
+
+    await service.closeAndReopenUsagePeriods()
+
+    expect(transactionalEntityManager.findOne).toHaveBeenNthCalledWith(1, Box, {
+      where: { id: box.id },
+      lock: { mode: 'pessimistic_write' },
+      loadEagerRelations: false,
+    })
+    expect(transactionalEntityManager.findOne).toHaveBeenNthCalledWith(2, BoxUsagePeriod, {
+      where: { id: previous.id, boxId: box.id, endAt: expect.anything() },
+      lock: { mode: 'pessimistic_write' },
+    })
+    expect(boxRepository.findOne).not.toHaveBeenCalled()
+
+    const [closed, opened] = transactionalEntityManager.save.mock.calls.map(([period]) => period)
+    expect(closed).toBe(previous)
+    expect(closed.endAt).toBeInstanceOf(Date)
+    expect(opened.startAt).toEqual(closed.endAt)
+    expect(opened).toEqual(
+      expect.objectContaining({
+        boxId: box.id,
+        organizationId: currentBox.organizationId,
+        region: currentBox.region,
+        cpu: currentBox.cpu,
+        gpu: currentBox.gpu,
+        mem: currentBox.mem,
+        disk: currentBox.disk,
+        endAt: null,
+      }),
+    )
+  })
+
+  it('rollover skips a candidate that is no longer open when its transaction begins', async () => {
+    const previous = previousPeriod()
+    const { service, usagePeriodRepository, transactionalEntityManager, boxRepository } = makeService()
+    usagePeriodRepository.find.mockResolvedValue([previous])
+    boxRepository.findOne.mockResolvedValue(currentBox)
+    transactionalEntityManager.findOne.mockResolvedValueOnce(currentBox).mockResolvedValueOnce(null)
+
+    await service.closeAndReopenUsagePeriods()
+
+    expect(transactionalEntityManager.save).not.toHaveBeenCalled()
+    expect(previous.endAt).toBeNull()
   })
 })
 
