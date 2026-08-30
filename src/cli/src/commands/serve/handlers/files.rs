@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use boxlite::CopyOptions;
 
 use super::super::types::FileQuery;
-use super::super::{AppState, error_from_boxlite, error_response, get_or_fetch_box};
+use super::super::{AppState, error_from_boxlite, error_response, get_or_resume_box};
 
 pub(in crate::commands::serve) async fn upload_files(
     State(state): State<Arc<AppState>>,
@@ -18,7 +18,7 @@ pub(in crate::commands::serve) async fn upload_files(
     Query(query): Query<FileQuery>,
     body: Bytes,
 ) -> Response {
-    let litebox = match get_or_fetch_box(&state, &box_id).await {
+    let litebox = match get_or_resume_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };
@@ -71,7 +71,7 @@ pub(in crate::commands::serve) async fn download_files(
     Path(box_id): Path<String>,
     Query(query): Query<FileQuery>,
 ) -> Response {
-    let litebox = match get_or_fetch_box(&state, &box_id).await {
+    let litebox = match get_or_resume_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };

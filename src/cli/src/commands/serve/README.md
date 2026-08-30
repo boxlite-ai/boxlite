@@ -29,9 +29,11 @@ execute(ServeArgs, GlobalFlags)
   │
   ├─ GlobalFlags::create_runtime()          — build local BoxliteRuntime
   │
-  ├─ Arc::new(AppState { runtime, boxes, executions })
+  ├─ Arc::new(AppState { runtime, boxes, executions,
+  │                      api_key, lifecycle, last_activity })
   │                                          — shared state for all handlers
-  ├─ tokio::spawn(reaper_loop(state))       — background orphan reaper (30 s tick)
+  ├─ tokio::spawn(reaper_loop(state))       — orphan reaper + lifecycle sweep
+  │                                            (30 s tick)
   │
   ├─ build_router(state)                    — register 26 routes on axum::Router
   │
@@ -72,7 +74,7 @@ execute(ServeArgs, GlobalFlags)
 │  Handlers:  config · boxes · executions                │
 │             files · metrics · snapshots · advanced     │
 │                                                        │
-│  Background:  reaper_loop  (orphan cleanup)            │
+│  Background:  reaper_loop  (orphans + lifecycle sweep)  │
 └───────────────────────────────────────────────────────┘
                          │
                          ▼
@@ -84,7 +86,9 @@ execute(ServeArgs, GlobalFlags)
 
 `AppState.boxes` is a lazy cache — `get_or_fetch_box()` populates it from `runtime.get()` on first
 access. `AppState.executions` maps execution IDs to `Arc<ActiveExecution>` for the active-session
-registry.
+registry. `AppState.lifecycle` holds the AutoStop/AutoDelete deadlines the sweep acts on — the
+engine accepts neither on a local runtime — and `AppState.last_activity` is the idle clock, stamped
+by the request middleware and by client data frames on an attach.
 
 ## Handler Reference
 
@@ -162,6 +166,11 @@ client on an attached main session gets 409, same as for an exec.
 | GET    | `/v1/metrics`                       | `metrics::runtime_metrics`| Runtime-wide counters     |
 | GET    | `/v1/boxes/{box_id}/metrics`        | `metrics::box_metrics`   | Per-box metrics + boot timing |
 
+Serving per-box metrics boots a box that is not running, and a scrape is not
+counted as use — so on a box with an AutoStop deadline it would only be stopped
+again on the next tick. `box_metrics` answers 409 rather than start that cycle.
+A box with no deadline still boots on scrape, as it always has.
+
 ### Snapshots
 
 | Method | Path                                                        | Handler                       | Description          |
@@ -187,7 +196,8 @@ client on an attached main session gets 409, same as for an exec.
 ```
 POST /v1/boxes/{box_id}/exec
   │
-  ├─ get_or_fetch_box(state, box_id)          — resolve LiteBox from cache or runtime
+  ├─ get_or_resume_box(state, box_id)         — resolve LiteBox; 409 if the box
+  │                                             is down and AutoResume is off
   ├─ build_box_command(req)                    — JSON body → BoxCommand
   ├─ litebox.run(cmd)                          — start command (returns Execution)
   │
@@ -229,7 +239,7 @@ GET /v1/boxes/{box_id}/executions/{id}/attach
   ├─ WebSocketUpgrade → on_upgrade             — HTTP → WS handshake
   │    └─ on_failed_upgrade: mark_disconnected()
   │
-  └─ run_attach_session(socket, active)
+  └─ run_attach_session(socket, active, state)
        │
        ├─ stdout_bus.subscribe()               — BacklogReceiver (replay + live)
        ├─ stderr_bus.subscribe()
@@ -310,7 +320,7 @@ reaper_loop(state)
   ├─ resolve_duration("BOXLITE_SHUTDOWN_GRACE",   30 s)
   ├─ resolve_duration("BOXLITE_MAX_SESSION_LIFETIME", 86400 s)
   │
-  └─ loop { ticker.tick(); run_reap_once(...) }
+  └─ loop { ticker.tick(); run_reap_once(...); run_lifecycle_once(...) }
 
 run_reap_once(state, now, ...)
   │

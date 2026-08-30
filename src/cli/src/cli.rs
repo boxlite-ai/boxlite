@@ -298,6 +298,21 @@ impl GlobalFlags {
             .map_err(Into::into)
     }
 
+    /// Whether this invocation talks to a server rather than the embedded
+    /// runtime.
+    ///
+    /// Resolved exactly as `create_runtime` does, so the two cannot disagree
+    /// about which backend a command is aimed at. It re-reads the credential
+    /// file rather than threading the resolution through; the cost is one extra
+    /// read on the two commands that ask.
+    pub fn targets_rest(&self) -> bool {
+        let stored = crate::credentials::load_named(&self.resolved_profile())
+            .ok()
+            .flatten();
+        let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
+        self.resolve_rest_options(stored, env_api_key).is_some()
+    }
+
     pub fn create_runtime(&self) -> anyhow::Result<BoxliteRuntime> {
         let stored = crate::credentials::load_named(&self.resolved_profile())
             .ok()
@@ -861,6 +876,33 @@ impl VolumeFlags {
 // MANAGEMENT FLAGS
 // ============================================================================
 
+/// Parse a lifecycle duration: bare seconds, or one `s`/`m`/`h`/`d` suffix.
+///
+/// Bare digits stay seconds so the flags accept the same integers the wire
+/// contract carries; the suffixes exist because a fortnight in seconds is not
+/// a thing anyone should have to type.
+fn parse_duration_seconds(raw: &str) -> Result<u32, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("duration must not be empty".to_string());
+    }
+
+    let (digits, multiplier) = match raw.as_bytes()[raw.len() - 1] {
+        b's' => (&raw[..raw.len() - 1], 1),
+        b'm' => (&raw[..raw.len() - 1], 60),
+        b'h' => (&raw[..raw.len() - 1], 3_600),
+        b'd' => (&raw[..raw.len() - 1], 86_400),
+        _ => (raw, 1),
+    };
+
+    let value: u32 = digits.parse().map_err(|_| {
+        format!("duration {raw:?} must be a whole number of seconds, or use s/m/h/d")
+    })?;
+    value
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("duration {raw:?} is too large"))
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct ManagementFlags {
     /// Assign a name to the box
@@ -872,8 +914,40 @@ pub struct ManagementFlags {
     pub detach: bool,
 
     /// Automatically remove the box when it exits
-    #[arg(long)]
+    ///
+    /// Conflicts with both deadlines. `--rm` is carried on the wire as the
+    /// shortest possible `auto_delete`, and the contract requires
+    /// `auto_delete > auto_stop`, so `--rm --auto-stop N` fails server-side for
+    /// every N the caller would write it for, naming a field they never set.
+    /// Rejecting the pair here says so in the caller's own vocabulary.
+    #[arg(long, conflicts_with_all = ["auto_delete", "auto_stop"])]
     pub rm: bool,
+
+    /// Stop the box after this much inactivity; `0` disables.
+    ///
+    /// Seconds when bare, or a suffixed duration: `30s`, `15m`, `2h`, `7d`.
+    /// Requires a server (`--url`, or a configured profile): the deadline is
+    /// swept on a timer, which only `boxlite serve` and the cloud run. Against
+    /// the embedded runtime a non-zero value is rejected.
+    #[arg(long = "auto-stop", value_name = "DURATION", value_parser = parse_duration_seconds)]
+    pub auto_stop: Option<u32>,
+
+    /// Delete the box this long after it stops; `0` disables.
+    ///
+    /// Same grammar and the same server requirement as `--auto-stop`.
+    /// Conflicts with `--rm`, which deletes as soon as the box stops rather
+    /// than after a delay.
+    #[arg(long = "auto-delete", value_name = "DURATION", value_parser = parse_duration_seconds)]
+    pub auto_delete: Option<u32>,
+
+    /// Refuse operations that would implicitly wake a stopped box.
+    ///
+    /// Without this, exec/files/attach against a stopped box start it first.
+    /// A box that has never run is unaffected: its first boot is not a resume.
+    /// Enforced by the server; the embedded runtime records the preference but
+    /// has no request path to refuse.
+    #[arg(long = "no-auto-resume")]
+    pub no_auto_resume: bool,
 
     /// Sandbox security: `enable` (default) or `disable` (case-insensitive).
     /// Absent → the box uses `SecurityOptions::default()` = enable, the
@@ -897,11 +971,54 @@ impl ManagementFlags {
         features.require(ExperimentalFeature::NestedVirtualization)
     }
 
+    /// Refuse a deadline nothing will act on.
+    ///
+    /// Both deadlines need a sweeper, which only a server runs. Against the
+    /// embedded runtime `--auto-stop` is refused by the engine anyway
+    /// (`reject_local_unsupported_options`), and `--auto-delete` is worse than
+    /// refused: `removes_on_stop()` is `effective_auto_delete() > 0`, so it
+    /// would silently delete the box at its stop — the `--rm` behaviour the
+    /// parser declares mutually exclusive with it. Failing here says so, and
+    /// says it the same way for both flags.
+    pub fn require_sweeper(&self, targets_rest: bool) -> anyhow::Result<()> {
+        if targets_rest {
+            return Ok(());
+        }
+        for (flag, seconds) in [
+            ("--auto-stop", self.auto_stop),
+            ("--auto-delete", self.auto_delete),
+        ] {
+            if seconds.is_some_and(|seconds| seconds > 0) {
+                anyhow::bail!(
+                    "{flag} needs a server to enforce it — point at one with --url \
+                     (or a configured profile). Use --rm to delete the box as soon \
+                     as it stops on the local runtime."
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
         opts.detach = self.detach;
         // `--rm` is the CLI spelling of "delete when stopped"; the CLI
         // default (like `docker run`) is to keep the box.
         opts.auto_delete = Some(if self.rm { 1 } else { 0 });
+
+        // An explicit deadline replaces that sentinel. It has to be written
+        // after it, not before: the line above is unconditional, so setting
+        // these first would have `--auto-delete 3600` overwritten by the `0`
+        // that means "no deadline". `--rm` and `--auto-delete` are mutually
+        // exclusive at the parser, so only one of them is ever meaningful.
+        if let Some(seconds) = self.auto_delete {
+            opts.auto_delete = Some(seconds);
+        }
+        if let Some(seconds) = self.auto_stop {
+            opts.auto_stop = Some(seconds);
+        }
+        if self.no_auto_resume {
+            opts.auto_resume = Some(false);
+        }
         if let Some(ref preset) = self.security {
             // Bubble the typo'd-preset error all the way back to the
             // CLI exit so the operator sees the offending value.
@@ -1179,6 +1296,9 @@ mod tests {
     fn nested_virtualization_gate_uses_explicit_feature_state() {
         let flags = ManagementFlags {
             nested_virtualization: true,
+            auto_stop: None,
+            auto_delete: None,
+            no_auto_resume: false,
             name: None,
             detach: false,
             rm: false,
@@ -1849,6 +1969,153 @@ mod tests {
     // `from_preset(preset)?` call in apply_to flips both red.
     // ============================================================
 
+    fn lifecycle_flags(
+        auto_stop: Option<u32>,
+        auto_delete: Option<u32>,
+        no_auto_resume: bool,
+    ) -> ManagementFlags {
+        ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            security: None,
+            nested_virtualization: false,
+            auto_stop,
+            auto_delete,
+            no_auto_resume,
+        }
+    }
+
+    #[test]
+    fn an_explicit_delete_deadline_survives_the_rm_sentinel() {
+        // `apply_to` writes `auto_delete = Some(0)` unconditionally as the
+        // "no --rm" default. Applying the flag before that line would have the
+        // deadline silently overwritten by 0 — the box would never be swept.
+        let mut opts = BoxOptions::default();
+        lifecycle_flags(None, Some(3_600), false)
+            .apply_to(&mut opts)
+            .expect("flags must apply");
+
+        assert_eq!(opts.auto_delete, Some(3_600));
+    }
+
+    #[test]
+    fn lifecycle_flags_reach_box_options() {
+        let mut opts = BoxOptions::default();
+        lifecycle_flags(Some(900), None, true)
+            .apply_to(&mut opts)
+            .expect("flags must apply");
+
+        assert_eq!(opts.auto_stop, Some(900));
+        assert_eq!(opts.auto_resume, Some(false));
+    }
+
+    #[test]
+    fn omitted_lifecycle_flags_leave_the_existing_defaults_alone() {
+        // Absent flags must not invent policy: auto_stop and auto_resume stay
+        // unset, and auto_delete keeps the historical `--rm` encoding.
+        let mut opts = BoxOptions::default();
+        lifecycle_flags(None, None, false)
+            .apply_to(&mut opts)
+            .expect("flags must apply");
+
+        assert_eq!(opts.auto_stop, None);
+        assert_eq!(opts.auto_resume, None);
+        assert_eq!(opts.auto_delete, Some(0));
+    }
+
+    #[test]
+    fn durations_accept_bare_seconds_and_suffixes() {
+        assert_eq!(parse_duration_seconds("30"), Ok(30));
+        assert_eq!(parse_duration_seconds("30s"), Ok(30));
+        assert_eq!(parse_duration_seconds("15m"), Ok(900));
+        assert_eq!(parse_duration_seconds("2h"), Ok(7_200));
+        assert_eq!(parse_duration_seconds("7d"), Ok(604_800));
+        assert_eq!(parse_duration_seconds("0"), Ok(0));
+
+        for bad in ["", "m", "-5", "1.5h", "abc", "10x"] {
+            assert!(
+                parse_duration_seconds(bad).is_err(),
+                "{bad:?} must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn a_deadline_without_a_server_is_refused_not_silently_reinterpreted() {
+        // Against the embedded runtime `--auto-stop` is rejected by the engine
+        // and `--auto-delete` would quietly become remove-on-stop, deleting the
+        // box at its stop instead of after the delay. Both must fail here, with
+        // the flag named.
+        for (auto_stop, auto_delete, flag) in [
+            (Some(900), None, "--auto-stop"),
+            (None, Some(3_600), "--auto-delete"),
+        ] {
+            let err = lifecycle_flags(auto_stop, auto_delete, false)
+                .require_sweeper(false)
+                .expect_err("a deadline with no sweeper must be refused");
+            assert!(
+                err.to_string().contains(flag),
+                "error must name {flag}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_deadline_is_allowed_against_a_server_and_zero_is_always_allowed() {
+        assert!(
+            lifecycle_flags(Some(900), Some(3_600), false)
+                .require_sweeper(true)
+                .is_ok(),
+            "a server runs the sweeper, so both deadlines are fine"
+        );
+        // `0` disables rather than requesting enforcement, so it needs nothing.
+        assert!(
+            lifecycle_flags(Some(0), Some(0), false)
+                .require_sweeper(false)
+                .is_ok(),
+            "a disabled deadline asks nothing of the runtime"
+        );
+    }
+
+    #[test]
+    fn rm_and_auto_delete_cannot_be_combined() {
+        // They mean different things — remove on stop versus remove after a
+        // delay — and `apply_to` resolves them by letting --auto-delete win,
+        // so the parser has to be what stops a caller asking for both.
+        let conflict = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "--rm",
+            "--auto-delete",
+            "1h",
+            "alpine:latest",
+        ]);
+
+        assert!(
+            conflict.is_err(),
+            "--rm with --auto-delete must be rejected"
+        );
+
+        // `--rm` rides on the wire as `auto_delete = 1`, and the contract
+        // requires `auto_delete > auto_stop`, so this pair could only ever fail
+        // server-side complaining about a field the caller never set. The
+        // parser has to be what says no.
+        let with_auto_stop = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "--rm",
+            "--auto-stop",
+            "60",
+            "alpine:latest",
+        ]);
+
+        assert!(
+            with_auto_stop.is_err(),
+            "--rm with --auto-stop must be rejected"
+        );
+    }
+
     #[test]
     fn management_security_preset_applies_to_box_options() {
         let flags = ManagementFlags {
@@ -1857,6 +2124,9 @@ mod tests {
             rm: false,
             security: Some("disable".to_string()),
             nested_virtualization: false,
+            auto_stop: None,
+            auto_delete: None,
+            no_auto_resume: false,
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts).expect("setting must apply");
@@ -1875,6 +2145,9 @@ mod tests {
             rm: false,
             security: None,
             nested_virtualization: false,
+            auto_stop: None,
+            auto_delete: None,
+            no_auto_resume: false,
         };
         let mut opts = BoxOptions::default();
         flags
@@ -1895,6 +2168,9 @@ mod tests {
             rm: false,
             security: Some("ultra".to_string()),
             nested_virtualization: false,
+            auto_stop: None,
+            auto_delete: None,
+            no_auto_resume: false,
         };
         let mut opts = BoxOptions::default();
         let err = flags

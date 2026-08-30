@@ -336,9 +336,18 @@ silently restarting it, because restarting would run the command a second time.
 | `--name NAME` | | Name the box |
 | `--detach` | `-d` | Run in background, print box ID |
 | `--rm` | | Remove the box when it exits |
+| `--auto-stop DURATION` | | Stop the box after this much inactivity; `0` disables |
+| `--auto-delete DURATION` | | Delete the box this long after it stops; `0` disables |
+| `--no-auto-resume` | | Refuse operations that would implicitly wake a stopped box |
 
 `-p` is explicit local publication. Remote REST profiles reject it and direct
 the caller to `boxlite network tunnel`.
+
+`DURATION` is seconds when bare, or suffixed: `30s`, `15m`, `2h`, `7d`. The two
+deadlines are swept by a server — `boxlite serve` or the cloud — so against the
+embedded runtime they are refused rather than silently reinterpreted. See the
+[CLI reference](../../docs/reference/cli/README.md) for the sweep's granularity
+and how `--rm` differs between the two.
 
 **Examples:**
 

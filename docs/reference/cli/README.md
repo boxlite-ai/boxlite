@@ -128,7 +128,7 @@ These flags can appear before *or* after the subcommand and apply to every comma
 | `--config PATH` | path | none | — | JSON config file (see [Configuration File](#configuration-file)) |
 | `--url URL` | string | none | `BOXLITE_REST_URL` | Connect to a remote BoxLite REST API server instead of the local runtime |
 
-**Precedence** (from `src/cli/src/cli.rs:163-201`):
+**Precedence** (from `src/cli/src/cli.rs`):
 
 1. `--url` short-circuits to the REST runtime — no local hypervisor is touched. `--home`, `--registry`, and `--config` are ignored.
 2. Otherwise, `--config` is loaded as the base options, then `--home` overrides `home_dir`, and `--registry` flags are prepended to `image_registries`.
@@ -671,7 +671,7 @@ Several commands flatten shared `clap` `Args` structs. Each is documented here o
 
 ### `ProcessFlags`
 
-Used by `run` and `exec` (defined at `src/cli/src/cli.rs:208-281`).
+Used by `run` and `exec` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -700,7 +700,7 @@ containing only `NET_BIND_SERVICE`.
 
 ### `ResourceFlags`
 
-Used by `run` and `create` (defined at `src/cli/src/cli.rs:287-310`).
+Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Type | Description |
 |------|------|-------------|
@@ -710,7 +710,7 @@ Used by `run` and `create` (defined at `src/cli/src/cli.rs:287-310`).
 
 ### `PublishFlags`
 
-Used by `run` and `create` (defined at `src/cli/src/cli.rs:489-559`).
+Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -720,7 +720,7 @@ TCP is the only supported publication protocol; UDP is rejected.
 
 ### `VolumeFlags`
 
-Used by `run` and `create` (defined at `src/cli/src/cli.rs:407-578`).
+Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -728,15 +728,24 @@ Used by `run` and `create` (defined at `src/cli/src/cli.rs:407-578`).
 
 ### `ManagementFlags`
 
-Used by `run` and `create` (defined at `src/cli/src/cli.rs:584-604`).
+Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--name NAME` | — | Assign a name to the box |
 | `--detach` | `-d` | Run in the background; print box ID and return |
-| `--rm` | — | Automatically remove the box when it exits |
+| `--rm` | — | Remove the box when it stops; conflicts with `--auto-stop` and `--auto-delete` |
+| `--auto-stop DURATION` | — | Stop the box after this much inactivity; `0` disables |
+| `--auto-delete DURATION` | — | Delete the box this long after it stops; `0` disables |
+| `--no-auto-resume` | — | Refuse operations that would implicitly wake a stopped box |
 
-> `--rm` with `--detach` on `run` is silently downgraded — `run -d` always sets `auto_remove=false` (`src/cli/src/commands/run.rs:106`) so the detached box outlives the CLI process. Use `boxlite rm` to clean up.
+`DURATION` is seconds when bare, or a suffixed value: `30s`, `15m`, `2h`, `7d`.
+
+> `--auto-stop` and `--auto-delete` are deadlines a sweeper acts on, so they need a server — `boxlite serve` or the cloud. Against the embedded runtime a non-zero value is refused rather than silently reinterpreted. The sweep runs on a 30s tick, so a deadline fires on the first tick at or after it. A server also requires `auto_delete` to exceed `auto_stop`; a box cannot be scheduled for deletion sooner than it is scheduled to stop.
+
+> `--rm` removes the box when it stops. Against the embedded runtime that is synchronous, at the stop itself. Against `boxlite serve` it is carried as the shortest possible deadline and swept on the same 30s tick, so removal can lag the stop by up to one tick — and, because `serve` holds that policy in memory, is skipped entirely if the server restarts in between.
+
+> `--rm` with `--detach` on `run` is silently downgraded — a detached box outlives the CLI process, so it keeps manual lifecycle control. An explicit `--auto-delete` survives detaching, which is the pairing the flag exists for. Use `boxlite rm` to clean up.
 
 ---
 
@@ -795,7 +804,7 @@ The anonymous-volume base directory is resolved as: `--home`, else `$BOXLITE_HOM
 ## Port Publish Syntax
 
 `-p`/`--publish` accepts the grammar implemented at
-`src/cli/src/cli.rs:489-559`:
+`src/cli/src/cli.rs`:
 
 ```
 PORT := [HOST_PORT ':'] BOX_PORT ['/tcp']
