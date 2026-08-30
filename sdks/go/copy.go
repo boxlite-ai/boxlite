@@ -84,7 +84,8 @@ func (b *Box) CopyOut(ctx context.Context, guestSrc, hostDst string) error {
 	}
 }
 
-const copyOutBufferSize = 1 << 20
+const copyStreamBufferSize = 1 << 20 // 1 MiB
+const copyInMaxConsecutiveEmptyReads = 100
 
 // copyOutBoundaryError prevents a pull from entering the C ABI after its
 // caller has cancelled or the owning runtime has started closing. The same
@@ -159,7 +160,7 @@ func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer, o
 	}
 	deliverCopyOutMeta(CopySourceKind(sourceKind), onMeta)
 
-	buf := make([]byte, copyOutBufferSize)
+	buf := make([]byte, copyStreamBufferSize)
 	for {
 		if err := copyOutBoundaryError(ctx, b.runtime.closing); err != nil {
 			return err
@@ -209,12 +210,25 @@ const (
 	CopySourceDir
 )
 
+func normalizeCopySourceKind(kind CopySourceKind) CopySourceKind {
+	switch kind {
+	case CopySourceFile, CopySourceDir:
+		return kind
+	default:
+		return CopySourceUnknown
+	}
+}
+
 // CopyInStream streams r (raw tar) into guestDst without staging to disk.
 //
 // sourceKind is the archive shape (directory tree vs single file); use
 // CopySourceUnknown when the caller cannot tell — the guest then peeks the
 // tar to decide.
 func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind CopySourceKind, r io.Reader) error {
+	if r == nil {
+		return &Error{Code: ErrInvalidArgument, Message: "copy-in reader must not be nil"}
+	}
+
 	b.runtime.ensureDrainRunning()
 
 	cDst := toCString(guestDst)
@@ -227,7 +241,7 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 	// The C ABI takes the discriminant as int32_t (an out-of-range value a
 	// C caller might pass must map to Unknown, not an invalid Rust enum);
 	// cgo needs the explicit conversion.
-	kind := C.int32_t(sourceKind)
+	kind := C.int32_t(normalizeCopySourceKind(sourceKind))
 	stream := C.boxlite_copy_in_start(b.handle, cDst, kind, C.cbCopy(), handleToPtr(h), &cerr)
 	if stream == nil {
 		deleteHandleForDispatch(h)
@@ -236,7 +250,7 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 
 	var writeErr error
 	noProgress := 0
-	buf := make([]byte, 1<<20) // 1 MiB chunks
+	buf := make([]byte, copyStreamBufferSize)
 	for {
 		n, readErr := r.Read(buf)
 		if n > 0 {
@@ -257,7 +271,7 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 			// A reader may return (0, nil) transiently, but never
 			// indefinitely — bail instead of spinning forever.
 			noProgress++
-			if noProgress >= 100 {
+			if noProgress >= copyInMaxConsecutiveEmptyReads {
 				writeErr = io.ErrNoProgress
 				break
 			}
