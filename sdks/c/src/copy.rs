@@ -556,7 +556,9 @@ pub unsafe extern "C" fn boxlite_copy_in_abort(
             return BoxliteErrorCode::InvalidState;
         };
 
-        let send = stream_ref
+        // A failed send means the consumer is already gone, so the stream is
+        // already terminal and there is nothing left to signal.
+        let _ = stream_ref
             .tokio_rt
             .block_on(tx.send(Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
@@ -565,17 +567,7 @@ pub unsafe extern "C" fn boxlite_copy_in_abort(
         // Drop the sender either way: the terminal error (if the consumer is
         // still alive) precedes EOF, and no further writes are accepted.
         stream_ref.tx.take();
-        match send {
-            Ok(()) => BoxliteErrorCode::Ok,
-            Err(_) => {
-                // The guest consumer is already gone; nothing to signal.
-                write_error(
-                    out_error,
-                    boxlite::BoxliteError::Internal("guest upload aborted".to_string()),
-                );
-                BoxliteErrorCode::Internal
-            }
-        }
+        BoxliteErrorCode::Ok
     }
 }
 

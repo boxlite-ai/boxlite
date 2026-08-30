@@ -118,28 +118,35 @@ struct PipeWriter {
 }
 
 impl PipeWriter {
+    fn send_chunk(&self, chunk: Vec<u8>) -> io::Result<()> {
+        self.tx
+            .blocking_send(Ok(chunk))
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "tar stream consumer dropped"))
+    }
+
     fn flush_pending(&mut self) -> io::Result<()> {
         if self.pending.is_empty() {
             return Ok(());
         }
         let chunk = std::mem::take(&mut self.pending);
-        self.tx
-            .blocking_send(Ok(chunk))
-            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "tar stream consumer dropped"))
+        self.send_chunk(chunk)
     }
 }
 
 impl Write for PipeWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.pending.extend_from_slice(buf);
-        while self.pending.len() >= PIPE_CHUNK_SIZE {
-            let rest = self.pending.split_off(PIPE_CHUNK_SIZE);
-            let chunk = std::mem::replace(&mut self.pending, rest);
-            self.tx.blocking_send(Ok(chunk)).map_err(|_| {
-                io::Error::new(io::ErrorKind::BrokenPipe, "tar stream consumer dropped")
-            })?;
+        if buf.is_empty() {
+            return Ok(0);
         }
-        Ok(buf.len())
+
+        let write_len = (PIPE_CHUNK_SIZE - self.pending.len()).min(buf.len());
+        self.pending.extend_from_slice(&buf[..write_len]);
+        if self.pending.len() == PIPE_CHUNK_SIZE {
+            let chunk = std::mem::take(&mut self.pending);
+            self.send_chunk(chunk)?;
+            self.pending = Vec::with_capacity(PIPE_CHUNK_SIZE);
+        }
+        Ok(write_len)
     }
 
     fn flush(&mut self) -> io::Result<()> {
