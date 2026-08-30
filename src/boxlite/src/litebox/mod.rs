@@ -42,7 +42,7 @@ use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
 use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
 use crate::{BoxID, BoxInfo};
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use config::BoxConfig;
 
 /// LiteBox - Handle to a box.
@@ -163,6 +163,65 @@ impl LiteBox {
         self.box_backend
             .copy_out(container_src.as_ref(), host_dst.as_ref(), opts)
             .await
+    }
+
+    /// Stream a tar byte stream into the container at `container_dst`.
+    ///
+    /// `source_is_dir` is the archive shape (directory tree vs single file);
+    /// `None` when the caller cannot tell — the guest then peeks the archive
+    /// to decide. Only the local backend supports this.
+    ///
+    /// Returns a `BoxFuture` (rather than being an `async fn`) so the future
+    /// owns the downcast backend and never borrows `&self` across an await —
+    /// which avoids an HRTB `Send` bound on `&LiteBox`.
+    pub fn copy_in_tar_stream<S>(
+        &self,
+        tar: S,
+        container_dst: &str,
+        source_is_dir: Option<bool>,
+        opts: copy::CopyOptions,
+    ) -> futures::future::BoxFuture<'static, BoxliteResult<()>>
+    where
+        S: futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static,
+    {
+        let backend = self
+            .box_backend
+            .clone()
+            .as_any_arc()
+            .downcast::<box_impl::BoxImpl>();
+        let dst = container_dst.to_string();
+        Box::pin(async move {
+            let backend = backend.map_err(|_| {
+                BoxliteError::Unsupported("streaming copy-in requires the local backend".into())
+            })?;
+            backend
+                .copy_in_tar_stream(tar, dst, source_is_dir, opts)
+                .await
+        })
+    }
+
+    /// Download `container_src` as a tar byte stream plus the archive-shape
+    /// hint. Only the local backend supports this.
+    pub fn copy_out_tar(
+        &self,
+        container_src: &str,
+        opts: copy::CopyOptions,
+    ) -> futures::future::BoxFuture<
+        'static,
+        BoxliteResult<(boxlite_shared::BoxTarStream, Option<bool>)>,
+    > {
+        let backend = self
+            .box_backend
+            .clone()
+            .as_any_arc()
+            .downcast::<box_impl::BoxImpl>();
+        let src = container_src.to_string();
+        Box::pin(async move {
+            let backend = backend.map_err(|_| {
+                BoxliteError::Unsupported("streaming copy-out requires the local backend".into())
+            })?;
+            backend.copy_out_tar(src, opts).await
+        })
     }
 
     /// Get a network handle for raw tunnel operations.

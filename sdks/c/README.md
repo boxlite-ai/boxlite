@@ -922,6 +922,10 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
   queued; call `boxlite_runtime_drain()` to dispatch the callback. On success,
   the callback owns the `CBoxInfo *` and must release it with
   `boxlite_free_box_info()`.
+- `boxlite_copy_in_start` takes a `BoxliteCopySourceKind source_kind` as its
+  third argument instead of `bool source_is_dir`. Use `Dir` for a directory
+  tree, `File` for a single file, or `Unknown` when the caller cannot tell
+  (older clients); with `Unknown` the guest peeks the archive to decide.
 
 Before:
 ```c
@@ -962,6 +966,18 @@ boxlite_box_info(box, on_info, user_data, &error);
 while (!request_done) {
     boxlite_runtime_drain(runtime, -1, &error);
 }
+```
+
+Before:
+```c
+boxlite_copy_in_start(handle, "/dst", true, copy_cb, user_data, &error);
+```
+
+After:
+```c
+boxlite_copy_in_start(handle, "/dst", Dir,     copy_cb, user_data, &error);  /* dir tree  */
+boxlite_copy_in_start(handle, "/dst", File,    copy_cb, user_data, &error);  /* one file  */
+boxlite_copy_in_start(handle, "/dst", Unknown, copy_cb, user_data, &error);  /* old client */
 ```
 
 ### From 0.1.x to 0.2.0

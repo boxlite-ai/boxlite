@@ -54,3 +54,21 @@ pub mod mount_tags {
     /// Tag for shared container directory (contains overlayfs/ and rootfs/)
     pub const SHARED: &str = "BoxLiteShared";
 }
+
+/// File-transfer constants shared between host, guest, and runner.
+pub mod files {
+    /// Upper bound for the size-capped *fallback* path used when a peer is too
+    /// old to stream end-to-end. Transfers that must be buffered to disk/memory
+    /// (because the peer omits the `source_is_dir` shape hint) are rejected past
+    /// this size instead of buffering unboundedly. Matches the guest's legacy
+    /// `MAX_UPLOAD_BYTES`.
+    pub const FALLBACK_CAP_BYTES: u64 = 512 * 1024 * 1024;
+
+    /// In-flight chunk count for the bounded channel that bridges blocking tar
+    /// I/O with the async stream (backpressure window ≈ `PIPE_CHUNK_SIZE` ×
+    /// this).
+    pub const PIPE_CHUNKS: usize = 4;
+
+    /// Chunk size emitted by the stream pack side (1 MiB).
+    pub const PIPE_CHUNK_SIZE: usize = 1 << 20;
+}

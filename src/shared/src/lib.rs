@@ -33,6 +33,7 @@ pub mod generated {
 }
 
 pub use errors::{BoxliteError, BoxliteResult};
+pub use tar::BoxTarStream;
 pub use transport::BoxTransport;
 
 // Container service

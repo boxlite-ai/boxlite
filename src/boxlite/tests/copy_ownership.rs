@@ -156,3 +156,93 @@ async fn copy_in_hands_files_to_the_box_user() {
     let _ = runtime.remove(bx.id().as_str(), true).await;
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
+
+/// The streaming (hinted) copy-in arm must hand created files to the box
+/// user exactly like the staged arm does — the extraction recording is the
+/// list that decides what changes owner.
+#[tokio::test(flavor = "multi_thread")]
+async fn streaming_copy_in_hands_files_to_the_box_user() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let opts = BoxOptions {
+        rootfs: RootfsSpec::Image("alpine:latest".into()),
+        auto_delete: Some(0),
+        user: Some(format!("{BOX_UID}:{BOX_GID}")),
+        ..Default::default()
+    };
+    let bx = runtime.create(opts, None).await.expect("create box");
+    bx.start().await.expect("start box");
+
+    let tmp = TempDir::new_in("/tmp").unwrap();
+    let src = tmp.path().join("stream-payload.txt");
+    std::fs::write(&src, "PAYLOAD-STREAM-OWNED\n").unwrap();
+    let mut perms = std::fs::metadata(&src).unwrap().permissions();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o600);
+    }
+    std::fs::set_permissions(&src, perms).unwrap();
+
+    let (source_is_dir, tar) = boxlite_shared::tar::pack_stream(
+        src.clone(),
+        boxlite_shared::tar::PackContext {
+            follow_symlinks: false,
+            include_parent: false,
+        },
+    )
+    .await
+    .expect("pack_stream");
+    assert!(!source_is_dir);
+
+    bx.copy_in_tar_stream(
+        tar,
+        "/srv/probe/stream-payload.txt",
+        Some(source_is_dir),
+        CopyOptions::default(),
+    )
+    .await
+    .expect("streaming copy_in failed");
+
+    let file_owner = exec_stdout(
+        &bx,
+        BoxCommand::new("stat").args(["-c", "%u:%g", "/srv/probe/stream-payload.txt"]),
+    )
+    .await;
+    assert_eq!(
+        file_owner.trim(),
+        format!("{BOX_UID}:{BOX_GID}"),
+        "streamed file must belong to the box user"
+    );
+
+    // mkdir_parents conjured /srv/probe — the staged arm hands it over, and
+    // the streamed arm must match, or the workload cannot replace its file.
+    let dir_owner = exec_stdout(
+        &bx,
+        BoxCommand::new("stat").args(["-c", "%u:%g", "/srv/probe"]),
+    )
+    .await;
+    assert_eq!(
+        dir_owner.trim(),
+        format!("{BOX_UID}:{BOX_GID}"),
+        "directories created for the streamed copy must belong to the box user too"
+    );
+
+    let content = exec_stdout(
+        &bx,
+        BoxCommand::new("cat").args(["/srv/probe/stream-payload.txt"]),
+    )
+    .await;
+    assert_eq!(
+        content, "PAYLOAD-STREAM-OWNED\n",
+        "box user must be able to read it"
+    );
+
+    let _ = bx.stop().await;
+    let _ = runtime.remove(bx.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
+}
