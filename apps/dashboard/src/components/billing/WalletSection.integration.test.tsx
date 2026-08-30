@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   redeemCoupon: vi.fn(),
   setAutomaticTopUp: vi.fn(),
   topUpWallet: vi.fn(),
+  walletTransactionsQuery: vi.fn(),
   wallet: {
     automaticTopUp: undefined as AutomaticTopUp | undefined,
     balanceCents: 0,
@@ -43,7 +44,30 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
   useFetchOwnerCheckoutUrlQuery: () => mocks.fetchCheckoutUrl,
   useIsOwnerCheckoutUrlFetching: () => false,
   useOwnerBillingPortalUrlQuery: () => ({ data: undefined, isLoading: false }),
-  useOwnerWalletTransactionsQuery: () => ({ data: { items: [], totalItems: 0, totalPages: 0 }, isLoading: false }),
+  useOwnerWalletTransactionsQuery: (page = 1, perPage?: number) => {
+    mocks.walletTransactionsQuery(page, perPage)
+    return {
+      data: {
+        items: [
+          {
+            id: `transaction-${page}`,
+            direction: 'outbound',
+            kind: 'invoiced',
+            status: 'settled',
+            source: 'usage',
+            amountCents: page === 1 ? 420 : 810,
+            name: null,
+            subscriptionCreditKind: null,
+            createdAt: page === 1 ? '2026-07-18T00:00:00.000Z' : '2026-07-15T00:00:00.000Z',
+            settledAt: page === 1 ? '2026-07-18T00:00:00.000Z' : '2026-07-15T00:00:00.000Z',
+          },
+        ],
+        totalItems: 101,
+        totalPages: 2,
+      },
+      isLoading: false,
+    }
+  },
   useOwnerPaymentMethodsQuery: () => ({ data: mocks.paymentMethods, isLoading: false, isError: false }),
   useOwnerPlanQuery: () => ({ data: { quotaRemainingCents: 0 } }),
   useOwnerWalletQuery: () => ({ data: mocks.wallet, isLoading: false }),
@@ -61,7 +85,6 @@ vi.mock('@/hooks/mutations/useTopUpWalletMutation', () => ({
   useTopUpWalletMutation: () => ({ mutateAsync: mocks.topUpWallet, isPending: false }),
 }))
 
-vi.mock('@/components/WalletTransactions', () => ({ WalletTransactionsTable: () => null }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 function typeInto(element: HTMLInputElement, value: string) {
@@ -87,6 +110,7 @@ describe('WalletSection top-up checkout', () => {
     mocks.wallet.ongoingBalanceCents = 0
     mocks.wallet.creditCardConnected = false
     mocks.topUpWallet.mockClear()
+    mocks.walletTransactionsQuery.mockClear()
     mocks.topUpWallet.mockResolvedValue({ url: 'https://checkout.stripe.com/pay/cs_top_up' })
   })
 
@@ -128,6 +152,31 @@ describe('WalletSection top-up checkout', () => {
     expect(open).toHaveBeenCalledWith('', '_blank')
     expect(mocks.topUpWallet).toHaveBeenCalledWith({ organizationId: 'org-without-card', amountCents: 10_000 })
     expect(checkoutWindow.location.href).toBe('https://checkout.stripe.com/pay/cs_top_up')
+  })
+
+  it('loads older transactions when history exceeds the first page', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection />)
+    })
+    await flush()
+
+    expect(mocks.walletTransactionsQuery).toHaveBeenCalledWith(1, 100)
+    expect(document.body.textContent).toContain('2026-07-18')
+
+    const nextPage = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'Next →',
+    )
+    expect(nextPage).toBeDefined()
+
+    await act(async () => nextPage?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flush()
+
+    expect(mocks.walletTransactionsQuery).toHaveBeenLastCalledWith(2, 100)
+    expect(document.body.textContent).toContain('2026-07-15')
   })
 
   it('rounds a custom two-decimal dollar amount to integer cents', async () => {

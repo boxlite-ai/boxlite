@@ -54,6 +54,48 @@ export function topUpGate(amountDollars: number | undefined): { enabled: boolean
   return { enabled: true, reason: null }
 }
 
+/** Own the server page so the PR #829 grid can stay a presentation-only component. */
+function WalletTransactionsSection() {
+  const [page, setPage] = useState(1)
+  const transactionsQuery = useOwnerWalletTransactionsQuery(page, TRANSACTION_HISTORY_LIMIT)
+  const totalPages = transactionsQuery.data?.totalPages ?? 0
+
+  useEffect(() => {
+    if (totalPages > 0 && page > totalPages) {
+      setPage(totalPages)
+    }
+  }, [page, totalPages])
+
+  return (
+    <section>
+      <SectionTitle
+        title="Transactions"
+        count={transactionsQuery.data ? `${transactionsQuery.data.totalItems} records` : undefined}
+      />
+      <WalletTransactionsTable
+        data={transactionsQuery.data?.items ?? []}
+        loading={Boolean(transactionsQuery.isLoading || transactionsQuery.isFetching)}
+      />
+      {totalPages > 1 && (
+        <div className="flex items-center justify-end gap-3 border-b border-border/40 py-3 font-mono text-[11px] text-muted-foreground">
+          <span>
+            Page {page} of {totalPages}
+          </span>
+          <AsciiButton onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>
+            ← Previous
+          </AsciiButton>
+          <AsciiButton
+            onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+            disabled={page >= totalPages}
+          >
+            Next →
+          </AsciiButton>
+        </div>
+      )}
+    </section>
+  )
+}
+
 export function WalletSection() {
   const { selectedOrganization } = useSelectedOrganization()
   const { user } = useAuth()
@@ -69,7 +111,6 @@ export function WalletSection() {
   const [couponOpen, setCouponOpen] = useState(false)
   const walletQuery = useOwnerWalletQuery({ refetchOnMount: 'always' })
   const billingPortalUrlQuery = useOwnerBillingPortalUrlQuery()
-  const transactionsQuery = useOwnerWalletTransactionsQuery(1, TRANSACTION_HISTORY_LIMIT)
   const paymentMethodsQuery = useOwnerPaymentMethodsQuery()
   const planQuery = useOwnerPlanQuery()
 
@@ -512,13 +553,7 @@ export function WalletSection() {
             </Panel>
           </section>
 
-          <section>
-            <SectionTitle
-              title="Transactions"
-              count={transactionsQuery.data?.totalItems ? `${transactionsQuery.data.totalItems} records` : undefined}
-            />
-            <WalletTransactionsTable data={transactionsQuery.data?.items ?? []} loading={transactionsQuery.isLoading} />
-          </section>
+          <WalletTransactionsSection key={selectedOrganization?.id ?? 'no-organization'} />
         </div>
       )}
     </div>
