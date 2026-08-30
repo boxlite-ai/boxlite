@@ -9,8 +9,6 @@ import (
 	"context"
 	"io"
 	"runtime/cgo"
-	"sync"
-	"sync/atomic"
 	"unsafe"
 )
 
@@ -86,129 +84,124 @@ func (b *Box) CopyOut(ctx context.Context, guestSrc, hostDst string) error {
 	}
 }
 
-// copyStreamState is the shared state referenced by the single cgo.Handle that
-// services the meta/data/completion callbacks of a streaming copy-out. The
-// data and meta callbacks never delete the handle (mirroring the exec stream
-// pattern); only the completion callback (goBoxliteOnCopy) deletes it, and
-// Rust orders it strictly last.
-type copyStreamState struct {
-	mu       sync.Mutex
-	w        io.Writer
-	onMeta   func(bool)
-	released atomic.Bool
-	done     chan error
+const copyOutBufferSize = 1 << 20
+
+// copyOutBoundaryError prevents a pull from entering the C ABI after its
+// caller has cancelled or the owning runtime has started closing. The same
+// check after each blocking read prevents a late chunk from reaching w.
+func copyOutBoundaryError(ctx context.Context, closing <-chan struct{}) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	select {
+	case <-closing:
+		return ErrRuntimeClosed
+	default:
+		return nil
+	}
 }
 
-func newCopyStreamState(w io.Writer, onMeta func(bool)) *copyStreamState {
-	return &copyStreamState{w: w, onMeta: onMeta, done: make(chan error, 1)}
-}
-
-func (s *copyStreamState) deliverMeta(sourceIsDir bool) {
-	if s.released.Load() {
+func deliverCopyOutMeta(sourceKind CopySourceKind, onMeta func(bool)) {
+	if onMeta == nil {
 		return
 	}
-	s.mu.Lock()
-	onMeta := s.onMeta
-	s.mu.Unlock()
-	if onMeta != nil {
-		onMeta(sourceIsDir)
+	switch sourceKind {
+	case CopySourceFile:
+		onMeta(false)
+	case CopySourceDir:
+		onMeta(true)
 	}
 }
 
-func (s *copyStreamState) deliverData(data []byte) {
-	if s.released.Load() {
-		return
-	}
-	s.mu.Lock()
-	w := s.w
-	s.mu.Unlock()
+func writeCopyOutChunk(w io.Writer, data []byte) error {
 	if w == nil {
-		return
+		return nil
 	}
-	if _, err := w.Write(data); err != nil {
-		s.fail(err)
+	n, err := w.Write(data)
+	if err != nil {
+		return err
 	}
-}
-
-// fail signals completion exactly once; the first error wins. A destination
-// write failure surfaces through here before Rust's final copy callback.
-func (s *copyStreamState) fail(err error) {
-	if s.released.Swap(true) {
-		return
+	if n != len(data) {
+		return io.ErrShortWrite
 	}
-	s.done <- err
-}
-
-func (s *copyStreamState) deliverDone(err error) {
-	s.fail(err)
-}
-
-// abandonCopyOutStream reclaims the shared copy-out callback handle after the
-// stream reports a result. During Runtime.Close it waits for the drain loop to
-// finish first, because queued meta/data callbacks read the handle via Value()
-// without claiming it.
-func abandonCopyOutStream(ch chan error, h cgo.Handle, closing <-chan struct{}, drainDone <-chan struct{}) {
-	go func() {
-		select {
-		case <-ch:
-			deleteHandleForDispatch(h)
-		case <-closing:
-			if drainDone != nil {
-				<-drainDone
-			}
-			deleteHandleForDispatch(h)
-		}
-	}()
+	return nil
 }
 
 // CopyOutStream streams a tar of guestSrc to w without staging to disk.
 //
-// onMeta (optional) fires exactly once — before the first write to w — with
-// the source-is-directory hint, so callers can set response headers before
-// the body. It is never invoked when the guest predates the hint.
+// onMeta (optional) fires before the first write to w when the peer provides
+// a source-is-directory hint. An older peer reports CopySourceUnknown, for
+// which onMeta is not called.
+//
+// Context cancellation and Runtime closure are observed between blocking
+// guest reads. They do not interrupt a read or Writer.Write already in
+// progress.
 func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer, onMeta func(bool)) error {
-	b.runtime.ensureDrainRunning()
+	if err := copyOutBoundaryError(ctx, b.runtime.closing); err != nil {
+		return err
+	}
 
 	cSrc := toCString(guestSrc)
 	defer C.free(unsafe.Pointer(cSrc))
 
-	state := newCopyStreamState(w, onMeta)
-	h := registerHandleForDispatch(cgo.NewHandle(state))
-
+	var sourceKind C.int32_t
 	var cerr C.CBoxliteError
-	code := C.boxlite_copy_out_stream(
-		b.handle,
-		cSrc,
-		C.cbCopyMeta(),
-		C.cbCopyData(),
-		C.cbCopy(),
-		handleToPtr(h),
-		&cerr,
-	)
-	if code != C.Ok {
-		deleteHandleForDispatch(h)
+	stream := C.boxlite_copy_out_start(b.handle, cSrc, &sourceKind, &cerr)
+	if stream == nil {
 		return freeError(&cerr)
 	}
+	defer C.boxlite_copy_out_free(stream)
 
-	select {
-	case err := <-state.done:
+	if err := copyOutBoundaryError(ctx, b.runtime.closing); err != nil {
 		return err
-	case <-ctx.Done():
-		abandonCopyOutStream(state.done, h, b.runtime.closing, b.runtime.drainDone)
-		return ctx.Err()
-	case <-b.runtime.closing:
-		abandonCopyOutStream(state.done, h, b.runtime.closing, b.runtime.drainDone)
-		return ErrRuntimeClosed
+	}
+	deliverCopyOutMeta(CopySourceKind(sourceKind), onMeta)
+
+	buf := make([]byte, copyOutBufferSize)
+	for {
+		if err := copyOutBoundaryError(ctx, b.runtime.closing); err != nil {
+			return err
+		}
+
+		var outLen C.size_t
+		var readErr C.CBoxliteError
+		code := C.boxlite_copy_out_read(
+			stream,
+			(*C.uint8_t)(unsafe.Pointer(&buf[0])),
+			C.size_t(len(buf)),
+			&outLen,
+			&readErr,
+		)
+		if code != C.Ok {
+			return freeError(&readErr)
+		}
+		if err := copyOutBoundaryError(ctx, b.runtime.closing); err != nil {
+			return err
+		}
+		if outLen == 0 {
+			return nil
+		}
+		if outLen > C.size_t(len(buf)) {
+			return &Error{
+				Code:    ErrInternal,
+				Message: "copy-out read exceeded the caller buffer",
+			}
+		}
+		if err := writeCopyOutChunk(w, buf[:int(outLen)]); err != nil {
+			return err
+		}
 	}
 }
 
-// CopySourceKind describes the archive shape streamed into a box by
-// CopyInStream.
+// CopySourceKind describes the archive shape used by streaming copy operations.
 type CopySourceKind int
 
 const (
-	// CopySourceUnknown means the caller cannot tell (older clients); the
-	// guest peeks the archive to decide.
+	// CopySourceUnknown means no archive-shape hint is available. For copy-in,
+	// the guest peeks the archive to decide; for copy-out, the metadata callback
+	// is not called.
 	CopySourceUnknown CopySourceKind = iota
 	// CopySourceFile is a single regular file archive.
 	CopySourceFile

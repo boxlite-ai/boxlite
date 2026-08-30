@@ -1,61 +1,60 @@
 package boxlite
 
 import (
+	"context"
 	"errors"
-	"runtime/cgo"
+	"io"
 	"testing"
-	"time"
 )
 
 type failingWriter struct{ err error }
 
 func (f failingWriter) Write([]byte) (int, error) { return 0, f.err }
 
-// A destination write failure must surface as the copy result, not be
-// swallowed — a runner writing a tar to a vanished client has to learn the
-// body was not fully delivered. deliverDone must then be a no-op (the first
-// error wins, completion is signalled at most once).
-func TestCopyOutStreamSurfacesWriterError(t *testing.T) {
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
+
+func TestWriteCopyOutChunkSurfacesWriterError(t *testing.T) {
 	want := errors.New("client gone")
-	s := newCopyStreamState(failingWriter{err: want}, nil)
-
-	s.deliverData([]byte("first chunk"))
-
-	select {
-	case err := <-s.done:
-		if !errors.Is(err, want) {
-			t.Fatalf("got %v, want %v", err, want)
-		}
-	default:
-		t.Fatal("destination write error did not surface")
+	if err := writeCopyOutChunk(failingWriter{err: want}, []byte("chunk")); !errors.Is(err, want) {
+		t.Fatalf("writeCopyOutChunk() error = %v, want %v", err, want)
 	}
-
-	// The final callback arriving later must not re-signal (which would block
-	// on the already-full buffered channel) and must not override the winner.
-	s.deliverDone(nil)
-
-	// Once completion is signalled, further data callbacks are ignored.
-	s.deliverData([]byte("late chunk"))
 }
 
-// Copy-out meta/data callbacks read their shared handle via Value() without
-// claiming it. Runtime shutdown must therefore finish draining queued callbacks
-// before the abandoned operation reclaims that handle.
-func TestAbandonCopyOutStream_CloseBranchWaitsForDrainDone(t *testing.T) {
-	ch := make(chan error, 1)
-	h := registerHandleForDispatch(cgo.NewHandle(ch))
+func TestWriteCopyOutChunkRejectsShortWrite(t *testing.T) {
+	if err := writeCopyOutChunk(shortWriter{}, []byte("chunk")); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("writeCopyOutChunk() error = %v, want %v", err, io.ErrShortWrite)
+	}
+}
+
+func TestDeliverCopyOutMetaMapsKnownKinds(t *testing.T) {
+	var got []bool
+	onMeta := func(sourceIsDir bool) { got = append(got, sourceIsDir) }
+
+	deliverCopyOutMeta(CopySourceUnknown, onMeta)
+	deliverCopyOutMeta(CopySourceFile, onMeta)
+	deliverCopyOutMeta(CopySourceDir, onMeta)
+
+	if len(got) != 2 || got[0] || !got[1] {
+		t.Fatalf("metadata callbacks = %v, want [false true]", got)
+	}
+}
+
+func TestCopyOutBoundaryError(t *testing.T) {
 	closing := make(chan struct{})
-	drainDone := make(chan struct{})
-
-	abandonCopyOutStream(ch, h, closing, drainDone)
-	close(closing)
-
-	time.Sleep(100 * time.Millisecond)
-	if _, ok := activeHandles.Load(uintptr(h)); !ok {
-		t.Fatal("handle was deleted before the drain finished")
+	if err := copyOutBoundaryError(context.Background(), closing); err != nil {
+		t.Fatalf("open boundary error = %v, want nil", err)
 	}
 
-	close(drainDone)
-	time.Sleep(100 * time.Millisecond)
-	expectAlreadyDeleted(t, h)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := copyOutBoundaryError(ctx, closing); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled boundary error = %v, want %v", err, context.Canceled)
+	}
+
+	close(closing)
+	if err := copyOutBoundaryError(context.Background(), closing); !errors.Is(err, ErrRuntimeClosed) {
+		t.Fatalf("closed boundary error = %v, want %v", err, ErrRuntimeClosed)
+	}
 }

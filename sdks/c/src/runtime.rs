@@ -612,16 +612,6 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_unit_event(result, user_data, cb),
-            RuntimeEvent::CopyMeta {
-                cb,
-                user_data,
-                source_is_dir,
-            } => cb(source_is_dir, user_data as *mut c_void),
-            RuntimeEvent::CopyData {
-                cb,
-                user_data,
-                data,
-            } => cb(data.as_ptr(), data.len(), user_data as *mut c_void),
             RuntimeEvent::Copy {
                 cb,
                 user_data,
