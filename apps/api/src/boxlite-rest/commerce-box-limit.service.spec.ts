@@ -99,6 +99,14 @@ describe('CommerceBoxLimitService', () => {
     await expect(makeService().service.resolveMaxCreatedBoxes('org-1')).resolves.toBeUndefined()
   })
 
+  it('does not limit a subscribed plan that is absent from the public catalog', async () => {
+    get
+      .mockResolvedValueOnce({ data: catalog })
+      .mockResolvedValueOnce({ data: { plan: { planId: 'custom' } } })
+
+    await expect(makeService().service.resolveMaxCreatedBoxes('org-1')).resolves.toBeUndefined()
+  })
+
   it('rejects a configured Commerce API without the shared token before making a request', async () => {
     const { service } = makeService({ 'usageExport.token': undefined })
 
@@ -114,7 +122,6 @@ describe('CommerceBoxLimitService', () => {
     ['invalid catalog', { data: [{ id: 'starter', concurrencyLimit: -1 }] }, { data: {} }],
     ['invalid organization response', { data: catalog }, { data: { plan: null } }],
     ['unexpected no-plan fields', { data: catalog }, { data: { subscription: null } }],
-    ['unknown subscribed plan', { data: catalog }, { data: { plan: { planId: 'custom' } } }],
   ])('fails closed for %s', async (_label, catalogResult, organizationResult) => {
     if (catalogResult instanceof Error) {
       get.mockRejectedValueOnce(catalogResult).mockResolvedValueOnce(organizationResult)

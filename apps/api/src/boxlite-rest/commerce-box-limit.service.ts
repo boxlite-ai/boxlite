@@ -63,11 +63,9 @@ export class CommerceBoxLimitService {
         ? catalog[0]
         : catalog.find((plan) => plan.id === organizationPlan.planId)
 
-    if (!selectedPlan) {
-      throw new BoxCreationAdmissionUnavailableError('Organization subscription plan is not in the public catalog')
-    }
-
-    return selectedPlan.concurrencyLimit ?? undefined
+    // A plan absent from the public catalog may be a negotiated subscription;
+    // leave it unlimited until Commerce exposes its effective limit.
+    return selectedPlan?.concurrencyLimit ?? undefined
   }
 
   private normalizeBaseUrl(rawBaseUrl: string): string {
