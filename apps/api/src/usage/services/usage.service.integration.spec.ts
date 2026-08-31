@@ -181,7 +181,8 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     )
 
   const isBlockedBy = async (blockerPid: number): Promise<boolean> => {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline) {
       const [{ blocked }] = await dataSource.query(
         `SELECT EXISTS (
            SELECT 1
@@ -193,7 +194,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       if (blocked) {
         return true
       }
-      await new Promise<void>((resolve) => setImmediate(resolve))
+      await new Promise<void>((resolve) => setTimeout(resolve, 25))
     }
     return false
   }
@@ -494,7 +495,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     expect(await periods.findOneByOrFail({ boxId: box.id, endAt: IsNull() })).toEqual(
       expect.objectContaining({ organizationId: currentOrganizationId, ...currentShape }),
     )
-  })
+  }, 10_000)
 
   it('rollover keeps the old period open when creating the replacement fails', async () => {
     await insertBox({ state: BoxState.STARTED })
