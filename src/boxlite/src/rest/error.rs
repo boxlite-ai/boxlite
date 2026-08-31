@@ -23,7 +23,18 @@ pub(crate) fn map_http_body(status: StatusCode, text: &str) -> BoxliteError {
     if let Ok(err_resp) = serde_json::from_str::<ErrorResponse>(text) {
         map_http_error(status, &err_resp.error)
     } else if let Ok(err_resp) = serde_json::from_str::<FlatErrorResponse>(text) {
-        map_http_error(status, &err_resp.into_error_model())
+        if err_resp.code.is_some() {
+            // A real machine code was given — dispatch on it as usual.
+            map_http_error(status, &err_resp.into_error_model())
+        } else {
+            // No machine code: this shape also matches a framework
+            // exception's default body (e.g. Nest's `NotFoundException`
+            // bypassing the API's own envelope), which carries no `code`
+            // field to dispatch on. Guessing "internal" here would bury
+            // the HTTP status the framework already committed to — trust
+            // it instead, the same as a body that fails to parse at all.
+            map_http_status(status, &err_resp.message)
+        }
     } else {
         map_http_status(status, text)
     }
@@ -268,5 +279,26 @@ mod tests {
     fn bare_404_is_not_found() {
         let err = map_http_status(StatusCode::NOT_FOUND, "");
         assert!(matches!(err, BoxliteError::NotFound(_)));
+    }
+
+    /// A guard/framework exception (e.g. Nest's `NotFoundException`)
+    /// bypasses the API's structured envelope and serializes through
+    /// Nest's default filter: `{statusCode, error, message}`, no `code`
+    /// field. `FlatErrorResponse` still parses this (unknown fields are
+    /// ignored, `code` is `Option`), so it must not be treated as a
+    /// same-confidence "no code was given" signal as a body that never
+    /// had a `code` field to begin with — the HTTP status is still
+    /// authoritative and must win over a manufactured "internal" guess.
+    /// Regression for POL-306: `get_or_create` against a fresh name
+    /// raised `Internal` instead of returning `None` from the `get`
+    /// probe, so it never reached the create fallback.
+    #[test]
+    fn nest_default_404_without_code_is_not_found() {
+        let text = r#"{"path":"/api/v1/x/boxes/missing","timestamp":"2026-08-31T00:00:00.000Z","statusCode":404,"error":"Not Found","message":"Box with ID or name missing not found"}"#;
+        let err = map_http_body(StatusCode::NOT_FOUND, text);
+        assert!(
+            matches!(err, BoxliteError::NotFound(_)),
+            "expected NotFound for a codeless 404 body, got {err:?}"
+        );
     }
 }
