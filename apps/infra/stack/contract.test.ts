@@ -19,6 +19,7 @@ const stackSource = [
   readFileSync(new URL('./edge.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('./mail.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('./runners.ts', import.meta.url), 'utf8'),
+  readFileSync(new URL('./status.ts', import.meta.url), 'utf8'),
 ].join('\n')
 const source = `${entrypointSource}\n${stackSource}`
 const environmentExample = readFileSync(new URL('../.env.example', import.meta.url), 'utf8')
@@ -61,6 +62,7 @@ test('loads local helpers dynamically inside SST config callbacks', () => {
 test('deploys domain builders in dependency order without ComponentResource parents', () => {
   const deploySource = liveText('scriptEmittingShell', readFileSync(new URL('./deploy.ts', import.meta.url), 'utf8'))
   const calls = [
+    'buildPublicStatus({',
     'createFoundation(',
     'buildClickHouseStorage(',
     'buildObservability(',
@@ -72,6 +74,33 @@ test('deploys domain builders in dependency order without ComponentResource pare
   assert.ok(calls.every((index) => index >= 0), 'a stack domain builder is missing')
   assert.deepEqual([...calls].sort((left, right) => left - right), calls)
   assert.doesNotMatch(stackSource, /ComponentResource/)
+})
+
+test('hosts public status independently and exposes only its exact snapshot object', () => {
+  const deploy = liveText('scriptEmittingShell', readFileSync(new URL('./deploy.ts', import.meta.url), 'utf8'))
+  const edge = liveText('scriptEmittingShell', readFileSync(new URL('./edge.ts', import.meta.url), 'utf8'))
+  const status = configSection('export function buildPublicStatus')
+
+  assert.match(deploy, /const isProd = \$app\.stage === PRODUCTION_STAGE[\s\S]*if \(isProd\) \{\s*buildPublicStatus\(\{/)
+  assert.match(deploy, /new sst\.aws\.Router\('ApiCdn',[\s\S]*domain: \{ name: stackDomain, dns: cloudflareDns \}/)
+  assert.match(edge, /router\.route\('\/', api\.url\)/)
+  assert.match(status, /const statusDomain = `status\.\$\{input\.stackDomain\}`/)
+  assert.match(status, /new sst\.aws\.StaticSite\('PublicStatusSite'/)
+  assert.match(status, /path: '\.\.\/status'/)
+  assert.match(status, /VITE_CONSOLE_URL: `https:\/\/\$\{input\.stackDomain\}`/)
+  assert.doesNotMatch(status, /versioning:\s*true/)
+  assert.match(status, /new sst\.aws\.Cron\('PublicStatusCollector'/)
+  assert.match(status, /schedule: 'rate\(1 minute\)'/)
+  assert.match(stackSource, /const STATUS_OBJECT_KEY = 'public-status\.json'/)
+  assert.match(status, /event\.request\.uri === "\/\$\{STATUS_OBJECT_KEY\}"/)
+  assert.doesNotMatch(status, /event\.request\.uri\.startsWith/)
+  assert.match(status, /STATUS_SNAPSHOT_BUCKET: snapshotBucket\.name/)
+  assert.match(status, /STATUS_RUNNERS: input\.runnerNames\.join\(','\)/)
+  assert.match(status, /actions: \['s3:PutObject'\]/)
+  assert.match(status, /cloudwatch:GetMetricData/)
+  assert.match(status, /cacheControl: 'public,max-age=31536000,immutable'/)
+  assert.match(status, /cacheControl: 'no-cache,no-store,must-revalidate'/)
+  assert.match(status, /content-security-policy/)
 })
 
 test('does not force a laptop-managed remote builder', () => {
@@ -274,8 +303,11 @@ test('keeps the AWS region in run scope and passes it into Runner user data', ()
   assert.match(runSource, /const REGION = resolveAwsRegion\(\)/)
   assert.equal(runSource.match(/awsRegion: REGION/g)?.length, 1)
   assert.match(runSource, /const runnerUserDataFor[\s\S]*awsRegion: REGION/)
-  assert.match(runSource, /runnerUserDataFor\(defaultRunnerApiKey\.result\)/)
-  assert.match(runSource, /runnerUserDataFor\(apiKey\.result\)/)
+  assert.match(
+    runSource,
+    /runnerUserDataFor\(defaultRunnerApiKey\.result, defaultRunnerConfig\.controlPlaneRunnerName\)/,
+  )
+  assert.match(runSource, /runnerUserDataFor\(apiKey\.result, runner\.controlPlaneRunnerName\)/)
   assert.match(runnerUserDataSource, /awsRegion: string/)
   assert.match(runnerUserDataSource, /Environment=AWS_REGION=\$\{input\.awsRegion\}/)
 })
@@ -290,7 +322,10 @@ test('tags Runner instances with their exact control-plane identity', () => {
     runnerResources,
     /makeRunner\([\s\S]*defaultRunnerConfig\.resourceName,[\s\S]*defaultRunnerConfig\.nameTag,[\s\S]*defaultRunnerConfig\.controlPlaneRunnerName,[\s\S]*runnerUserData/,
   )
-  assert.match(runnerResources, /runnerInventory\.slice\(1\)\.map\([\s\S]*runner\.nameTag,[\s\S]*runnerUserDataFor\(apiKey\.result\)/)
+  assert.match(
+    runnerResources,
+    /runnerInventory\.slice\(1\)\.map\([\s\S]*runner\.nameTag,[\s\S]*runnerUserDataFor\(apiKey\.result, runner\.controlPlaneRunnerName\)/,
+  )
 })
 
 test('keeps every Runner instance protected from replacement during full-stack deploys', () => {
@@ -575,8 +610,14 @@ test('upgrades every Runner through a dependsOn chain, one host per command', ()
 
   // Every Runner gets a command: the default (captured for exactly this) plus each extra.
   assert.match(liveConfig, /const defaultRunner = makeRunner\(/)
-  assert.match(upgrades, /\{ label: 'default', instance: defaultRunner \}/)
-  assert.match(upgrades, /\.\.\.extraRunners\.map\(\(r\) => \(\{ label: r\.name, instance: r\.instance \}\)\)/)
+  assert.match(
+    upgrades,
+    /\{ label: 'default', runnerName: defaultRunnerConfig\.controlPlaneRunnerName, instance: defaultRunner \}/,
+  )
+  assert.match(
+    upgrades,
+    /\.\.\.extraRunners\.map\(\(r\) => \(\{ label: r\.name, runnerName: r\.name, instance: r\.instance \}\)\)/,
+  )
   assert.match(upgrades, /new command\.local\.Command\(\s*`UpgradeRunnerBinary-\$\{label\}`/)
 
   // Each command waits on the previous one, so two Runners never restart at once.
@@ -595,12 +636,21 @@ test('upgrades every Runner through a dependsOn chain, one host per command', ()
   assert.match(upgrades, /`build:\$\{runnerArtifactSource\.version\}:\$\{runnerArtifactSource\.ref\}`/)
   assert.match(upgrades, /`release:\$\{runnerArtifactSource\.version\}`/)
   assert.match(upgrades, /RUNNER_VERSION: runnerTargetVersion/)
-  assert.match(upgrades, /triggers: \[runnerArtifactTrigger, instance\.id\]/)
+  assert.match(upgrades, /triggers: \[\s*runnerArtifactTrigger,\s*instance\.id,\s*'status-heartbeat-v1'/)
   // `triggers` replaces the resource, so `create` must carry the same body as `update`.
   assert.match(
     upgrades,
     /create: 'node scripts\/runner-update-binary\.mjs',\s*update: 'node scripts\/runner-update-binary\.mjs',/,
   )
+})
+
+test('migrates public status heartbeat settings onto existing runners', () => {
+  const upgrades = configSection('── Rolling runner binary upgrade')
+
+  assert.match(upgrades, /STATUS_HEARTBEAT_NAMESPACE: statusHeartbeatNamespace/)
+  assert.match(upgrades, /STATUS_HEARTBEAT_STAGE: \$app\.stage/)
+  assert.match(upgrades, /STATUS_HEARTBEAT_RUNNER: runnerName/)
+  assert.match(upgrades, /status-heartbeat-v1/)
 })
 
 test('no longer points operators at the deleted shell updater', () => {

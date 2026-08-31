@@ -32,6 +32,11 @@ const REF = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
 const BUCKET = 'boxlite-dev-artifacts-123456789012'
 // The module reads its region once at import; mirror that rather than assume a default.
 const REGION = process.env.AWS_REGION || 'ap-southeast-1'
+const STATUS_HEARTBEAT = {
+  namespace: 'BoxLite/PublicStatus',
+  stage: 'prod',
+  runner: 'runner-1',
+}
 
 // Both upgrades come out of the production resolver rather than hand-built literals, so a change
 // to how a source is turned into an artifact reaches every payload assertion below.
@@ -257,6 +262,39 @@ test('buildRemoteScript leaves a still-bootstrapping host alone', () => {
   assert.ok(script.indexOf('still bootstrapping') < script.indexOf('CURRENT=$(probe_version'))
 })
 
+test('buildRemoteScript migrates heartbeat configuration before a same-version no-op', () => {
+  const script = liveText('shell', buildRemoteScript(releaseUpgrade(), { statusHeartbeat: STATUS_HEARTBEAT }))
+  const migration = script.indexOf('STATUS_HEARTBEAT_NAMESPACE=BoxLite/PublicStatus')
+  const sameVersionGuard = script.indexOf('if [ "$CURRENT" = "$TARGET" ]; then')
+
+  assert.notEqual(migration, -1, 'the payload must install the heartbeat configuration')
+  assert.ok(migration < sameVersionGuard, 'the migration must run before the same-version exit')
+  assert.match(script, /STATUS_HEARTBEAT_STAGE=prod/)
+  assert.match(script, /STATUS_HEARTBEAT_RUNNER=runner-1/)
+  assert.match(script, /heartbeat_runtime_matches/)
+  assert.match(script, /\/proc\/\$STATUS_HEARTBEAT_PID\/environ/)
+
+  const noOpBranch = script.slice(sameVersionGuard, script.indexOf('\nfi', sameVersionGuard) + 3)
+  assert.match(noOpBranch, /load_status_heartbeat_configuration "\$CURRENT"/)
+
+  const loaderStart = script.indexOf('load_status_heartbeat_configuration()')
+  const loader = script.slice(loaderStart, script.indexOf('\n}\n', loaderStart) + 2)
+  assert.match(loader, /STATUS_HEARTBEAT_CONFIG_CHANGED/)
+  assert.match(loader, /systemctl daemon-reload/)
+  assert.match(loader, /systemctl restart boxlite-runner/)
+  assert.match(loader, /wait_for_version "\$1"/)
+})
+
+test('buildRemoteScript loads heartbeat configuration before refusing a downgrade', () => {
+  const script = liveText('shell', buildRemoteScript(releaseUpgrade(), { statusHeartbeat: STATUS_HEARTBEAT }))
+  const downgradeGuard = script.indexOf('if [ "${ALLOW_DOWNGRADE:-}" != "1" ] && live_is_newer; then')
+  const downgradeExit = script.indexOf('exit 0', downgradeGuard)
+  const noDowngradeBranch = script.slice(downgradeGuard, downgradeExit)
+
+  assert.notEqual(downgradeGuard, -1, 'release payload must retain its downgrade guard')
+  assert.match(noDowngradeBranch, /load_status_heartbeat_configuration "\$CURRENT"/)
+})
+
 test('buildRemoteScript threads ALLOW_DOWNGRADE through to the host', () => {
   assert.ok(buildRemoteScript(releaseUpgrade()).includes('ALLOW_DOWNGRADE=""'))
   assert.ok(buildRemoteScript(releaseUpgrade(), { allowDowngrade: true }).includes('ALLOW_DOWNGRADE="1"'))
@@ -309,10 +347,7 @@ test('a persistent polling failure surfaces its cause, not a bare timeout', () =
 test('a stalled-but-healthy command reports the status it was stuck on', () => {
   const run = () => ({ ok: true, stdout: 'InProgress', stderr: '' })
   let sleeps = 0
-  assert.throws(
-    () => waitForTerminalStatus([], 'i-1', { run, sleep: () => (sleeps += 1) }),
-    /last status: InProgress/,
-  )
+  assert.throws(() => waitForTerminalStatus([], 'i-1', { run, sleep: () => (sleeps += 1) }), /last status: InProgress/)
   assert.equal(sleeps, 359, 'does not sleep after the final poll')
 })
 
@@ -408,24 +443,26 @@ test('runs as a script from a path that needs percent-encoding', (t) => {
   // without moving the script back out of the spaced path.
   symlinkSync(join(infraDirectory, 'node_modules'), join(root, 'node_modules'), 'dir')
 
-  const result = spawnSync(
-    process.execPath,
-    ['--import', 'tsx', join(copiedInfra, 'runner', 'update.ts'), VERSION],
-    {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', join(copiedInfra, 'runner', 'update.ts'), VERSION], {
     encoding: 'utf8',
     env: { ...process.env, PATH: '/nonexistent', INSTANCE_IDS: 'i-1' },
-    },
-  )
+  })
 
   assert.equal(result.status, 1, `expected the roll to run and fail on the missing CLI:\n${result.stdout}`)
   assert.match(result.stderr, /aws` CLI is required/)
 })
 
-const bash = (script: any, args: string[] = []) => spawnSync('bash', ['-c', script, 'test', ...args], { encoding: 'utf8' })
+const bash = (script: any, args: string[] = []) =>
+  spawnSync('bash', ['-c', script, 'test', ...args], { encoding: 'utf8' })
 
 test('the generated payload is valid bash', () => {
-  const check = spawnSync('bash', ['-n'], { input: buildRemoteScript(releaseUpgrade()), encoding: 'utf8' })
-  assert.equal(check.status, 0, check.stderr)
+  for (const payload of [
+    buildRemoteScript(releaseUpgrade()),
+    buildRemoteScript(releaseUpgrade(), { statusHeartbeat: STATUS_HEARTBEAT }),
+  ]) {
+    const check = spawnSync('bash', ['-n'], { input: payload, encoding: 'utf8' })
+    assert.equal(check.status, 0, check.stderr)
+  }
 })
 
 test('live_is_newer orders releases and prereleases the way semver does', () => {

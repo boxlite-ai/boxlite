@@ -1,0 +1,22 @@
+{
+  "name": "status",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "status/src",
+  "projectType": "application",
+  "tags": [],
+  "targets": {
+    "build": {
+      "configurations": {
+        "production": {
+          "mode": "production"
+        }
+      }
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cd {projectRoot} && prettier --write \"**/*.{ts,tsx,js,json,css,mjs,html}\" --config ../../.prettierrc"
+      }
+    }
+  }
+}

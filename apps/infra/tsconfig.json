@@ -26,6 +26,7 @@
     "runner/**/*.ts",
     "scripts/**/*.ts",
     "shared/**/*.ts",
-    "stack/**/*.ts"
+    "stack/**/*.ts",
+    "status/**/*.ts"
   ]
 }

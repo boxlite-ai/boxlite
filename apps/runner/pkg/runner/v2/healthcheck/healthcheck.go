@@ -16,6 +16,7 @@ import (
 	"github.com/boxlite-ai/runner/internal/metrics"
 	runnerapiclient "github.com/boxlite-ai/runner/pkg/apiclient"
 	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
+	"github.com/boxlite-ai/runner/pkg/runner/v2/heartbeat"
 )
 
 type HealthcheckServiceConfig struct {
@@ -28,6 +29,7 @@ type HealthcheckServiceConfig struct {
 	ProxyPort  int
 	TlsEnabled bool
 	Boxlite    *blclient.Client
+	Heartbeat  heartbeat.Publisher
 }
 
 type Service struct {
@@ -41,6 +43,7 @@ type Service struct {
 	proxyPort  int
 	tlsEnabled bool
 	boxlite    *blclient.Client
+	heartbeat  heartbeat.Publisher
 }
 
 func NewService(cfg *HealthcheckServiceConfig) (*Service, error) {
@@ -69,6 +72,7 @@ func NewService(cfg *HealthcheckServiceConfig) (*Service, error) {
 		proxyPort:  cfg.ProxyPort,
 		tlsEnabled: cfg.TlsEnabled,
 		boxlite:    cfg.Boxlite,
+		heartbeat:  cfg.Heartbeat,
 	}, nil
 }
 
@@ -147,9 +151,16 @@ func (s *Service) sendHealthcheck(ctx context.Context) error {
 	}
 
 	req := s.client.RunnersAPI.RunnerHealthcheck(reqCtx).RunnerHealthcheck(*healthcheck)
-	_, err = req.Execute()
-	if err != nil {
-		return err
+	_, apiErr := req.Execute()
+	if s.heartbeat != nil {
+		heartbeatCtx, cancelHeartbeat := context.WithTimeout(ctx, min(s.timeout, 5*time.Second))
+		if err := s.heartbeat.Publish(heartbeatCtx, runtimeHealth.Healthy); err != nil {
+			s.log.WarnContext(heartbeatCtx, "Failed to publish public status heartbeat", "error", err)
+		}
+		cancelHeartbeat()
+	}
+	if apiErr != nil {
+		return apiErr
 	}
 
 	s.log.DebugContext(reqCtx, "Healthcheck sent successfully")

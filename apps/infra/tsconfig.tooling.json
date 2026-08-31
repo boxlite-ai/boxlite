@@ -24,6 +24,7 @@
     "policies/**/*.ts",
     "runner/**/*.ts",
     "shared/**/*.ts",
+    "status/**/*.ts",
     "stack/**/*.test.ts",
     "stack/app.ts",
     "stack/settings.ts"

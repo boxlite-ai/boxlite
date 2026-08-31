@@ -149,6 +149,11 @@ const FORBIDDEN_DEPLOYMENT_KEYS = new Set([
   'RUNNER_ARTIFACT_BUCKET',
   'RUNNER_ARTIFACT_REF',
   'RUNNER_ARTIFACT_SOURCE',
+  // These values are derived by the stack for each Runner. A shared stage value could
+  // redirect a host's health evidence to the wrong public metric dimensions.
+  'STATUS_HEARTBEAT_NAMESPACE',
+  'STATUS_HEARTBEAT_RUNNER',
+  'STATUS_HEARTBEAT_STAGE',
   'SST_BIN_PATH',
 ])
 

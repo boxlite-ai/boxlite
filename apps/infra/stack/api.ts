@@ -111,6 +111,13 @@ const api = new sst.aws.Service('Api', {
   // Paired with Node `keepAliveTimeout` in apps/api/src/main.ts (AWS HTTP 502
   // guidance: target keep-alive must be >= LB idle).
   transform: {
+    service: (serviceArgs: any) => {
+      serviceArgs.tags = {
+        ...serviceArgs.tags,
+        'boxlite:stage': $app.stage,
+        'boxlite:status-service': 'api',
+      }
+    },
     loadBalancer: (lbArgs: any) => {
       lbArgs.loadBalancerType = 'application'
       lbArgs.idleTimeout = 3600

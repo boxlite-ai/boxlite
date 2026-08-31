@@ -6,7 +6,7 @@
   "scripts": {
     "deploy": "tsx deployment/sst.ts deploy",
     "remove": "tsx deployment/sst.ts remove",
-    "test": "tsx --test artifacts/*.test.ts auth0/*.test.ts bootstrap/*.test.ts deployment/*.test.ts policies/runner/*.test.ts runner/*.test.ts runner/model/*.test.ts scripts/*.test.mjs shared/*.test.ts stack/*.test.ts",
+    "test": "tsx --test artifacts/*.test.ts auth0/*.test.ts bootstrap/*.test.ts deployment/*.test.ts policies/runner/*.test.ts runner/*.test.ts runner/model/*.test.ts scripts/*.test.mjs shared/*.test.ts stack/*.test.ts status/*.test.ts",
     "typecheck": "tsc --noEmit",
     "typecheck:tooling": "tsc --noEmit -p tsconfig.tooling.json",
     "sst": "tsx deployment/sst.ts",
@@ -33,6 +33,12 @@
     "typescript": "5.8.3"
   },
   "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.901.0",
+    "@aws-sdk/client-ec2": "^3.901.0",
+    "@aws-sdk/client-ecs": "^3.901.0",
+    "@aws-sdk/client-elastic-load-balancing-v2": "^3.901.0",
+    "@aws-sdk/client-resource-groups-tagging-api": "^3.901.0",
+    "@aws-sdk/client-s3": "^3.901.0",
     "@pulumi/random": "^4.19.2",
     "dotenv": "^17.4.0"
   }

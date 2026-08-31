@@ -157,6 +157,23 @@ Resources:
               - !Sub arn:${AWS::Partition}:s3:::boxlite-${GitHubEnvironment}-*/*
               - !Sub arn:${AWS::Partition}:s3:::boxlite-app-${GitHubEnvironment}-*/*
               - !Sub arn:${AWS::Partition}:s3:::boxlite-volume-*/*
+          - Sid: PublicStatusHealthReads
+            Effect: Allow
+            Action:
+              - tag:GetResources
+              - ecs:DescribeServices
+              - elasticloadbalancing:DescribeTargetHealth
+              - ec2:DescribeInstances
+              - ec2:DescribeInstanceStatus
+              - cloudwatch:GetMetricData
+            Resource: '*'
+          - Sid: PublicStatusRunnerHeartbeat
+            Effect: Allow
+            Action: cloudwatch:PutMetricData
+            Resource: '*'
+            Condition:
+              StringEquals:
+                cloudwatch:namespace: BoxLite/PublicStatus
           - Sid: AssumeBoxLiteRuntimeRoles
             Effect: Allow
             Action: sts:AssumeRole
