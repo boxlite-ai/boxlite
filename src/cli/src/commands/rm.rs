@@ -11,7 +11,7 @@ pub struct RmArgs {
     pub all: bool,
 
     /// Name or ID of the box(es) to remove
-    #[arg(required_unless_present = "all", num_args = 1..)]
+    #[arg(required_unless_present = "all", num_args = 1.., conflicts_with = "all")]
     pub targets: Vec<String>,
 }
 

@@ -35,6 +35,14 @@ use crate::defaults::{LOCAL_SERVE_HOST, LOCAL_SERVE_PORT};
 
 use self::types::{BoxResponse, CreateBoxRequest, ErrorBody, ErrorDetail, ExecRequest};
 
+fn parse_api_key(raw: &str) -> Result<String, String> {
+    if raw.is_empty() {
+        Err("API key must not be empty".to_string())
+    } else {
+        Ok(raw.to_string())
+    }
+}
+
 // ============================================================================
 // CLI Args
 // ============================================================================
@@ -53,7 +61,12 @@ pub struct ServeArgs {
     /// `GET /v1/config` requires `Authorization: Bearer <this>` (constant-time
     /// match) and returns 401 otherwise. Unset = permissive (accepts any/no
     /// bearer) — the zero-config local-dev default.
-    #[arg(long, env = "BOXLITE_SERVE_API_KEY")]
+    #[arg(
+        long,
+        env = "BOXLITE_SERVE_API_KEY",
+        hide_env_values = true,
+        value_parser = parse_api_key
+    )]
     pub api_key: Option<String>,
 }
 
@@ -1871,7 +1884,11 @@ fn build_router(state: Arc<AppState>) -> Router {
 // ============================================================================
 
 pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()> {
-    let runtime = global.create_runtime()?;
+    // A server owns an embedded runtime. Client connection settings must not
+    // turn it into a proxy merely because a credential profile or REST URL is
+    // present in the environment.
+    let options = global.resolve_runtime_options()?;
+    let runtime = global.create_runtime_with_options(options)?;
 
     let state = Arc::new(AppState {
         runtime,
@@ -1887,8 +1904,8 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
     tokio::spawn(reaper_loop(Arc::clone(&state)));
 
     let app = build_router(state.clone());
-    let addr = format!("{}:{}", args.host, args.port);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let listener = tokio::net::TcpListener::bind((args.host.as_str(), args.port)).await?;
+    let addr = listener.local_addr()?;
 
     tracing::info!("boxlite serve listening on {}", addr);
     eprintln!("BoxLite REST API server listening on http://{addr}");

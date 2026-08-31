@@ -11,7 +11,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use boxlite::{BoxliteError, BoxliteRuntime, Principal};
 use secrecy::SecretString;
 
-use crate::credentials::{self, Profile};
+use crate::credentials::{self, CredentialStore, Profile};
 use crate::defaults::LOCAL_SERVE_URL;
 
 const URL_ENV: &str = "BOXLITE_REST_URL";
@@ -21,8 +21,13 @@ const URL_ENV: &str = "BOXLITE_REST_URL";
 /// - `url_flag`: explicit `--url`, if any.
 /// - `api_key_stdin`: when `true`, read the key from stdin (single line).
 ///   When `false`, prompt with `rpassword` for an interactive paste.
-/// - `profile_name`: which profile in `~/.boxlite/credentials.toml` to write.
-pub async fn run(url_flag: Option<&str>, api_key_stdin: bool, profile_name: &str) -> Result<()> {
+/// - `profile_name`: which profile in `<BOXLITE_HOME>/credentials.toml` to write.
+pub async fn run(
+    url_flag: Option<&str>,
+    api_key_stdin: bool,
+    profile_name: &str,
+    store: &CredentialStore,
+) -> Result<()> {
     let url = resolve_url(url_flag, api_key_stdin)?;
 
     let api_key = if api_key_stdin {
@@ -45,7 +50,9 @@ pub async fn run(url_flag: Option<&str>, api_key_stdin: bool, profile_name: &str
     if let Some(p) = identity.as_ref() {
         profile.path_prefix = p.path_prefix.clone();
     }
-    credentials::save_named(profile_name, &profile).context("saving credentials")?;
+    store
+        .save_named(profile_name, &profile)
+        .context("saving credentials")?;
 
     // Don't log profile.url — CodeQL flags the success line as cleartext
     // logging of sensitive info (the profile carries the api_key). The
@@ -58,10 +65,7 @@ pub async fn run(url_flag: Option<&str>, api_key_stdin: bool, profile_name: &str
                 Some(path_prefix) => {
                     println!("Logged in as {} (path prefix: {})", who, path_prefix)
                 }
-                None => println!(
-                    "Logged in as {} (no path prefix; use --path-prefix or BOXLITE_REST_PATH_PREFIX for multi-tenant servers)",
-                    who
-                ),
+                None => println!("Logged in as {} (the server returned no path prefix)", who),
             }
         }
         None => println!("Logged in (API key)"),

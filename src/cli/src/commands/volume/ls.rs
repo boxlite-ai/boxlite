@@ -11,7 +11,7 @@ use tabled::Tabled;
 #[derive(Args, Debug)]
 pub struct LsArgs {
     /// Only show volume ids.
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "format")]
     pub quiet: bool,
 
     /// Output format (table, json, yaml).

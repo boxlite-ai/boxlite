@@ -27,7 +27,9 @@ let rt = BoxliteRuntime::rest(BoxliteRestOptions::new("http://localhost:8100"))?
 ```
 execute(ServeArgs, GlobalFlags)
   │
-  ├─ GlobalFlags::create_runtime()          — build local BoxliteRuntime
+  ├─ GlobalFlags::resolve_runtime_options() — resolve local runtime settings
+  ├─ GlobalFlags::create_runtime_with_options()
+  │                                          — build local BoxliteRuntime
   │
   ├─ Arc::new(AppState { runtime, boxes, executions,
   │                      api_key, lifecycle, last_activity })

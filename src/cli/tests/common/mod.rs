@@ -7,15 +7,22 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-fn apply_registries(cmd: &mut Command) {
-    for reg in TEST_REGISTRIES {
-        cmd.arg("--registry").arg(reg);
-    }
+fn write_registry_config(home: &std::path::Path) -> PathBuf {
+    let path = home.join("test-runtime-config.json");
+    let registries = TEST_REGISTRIES
+        .iter()
+        .map(|host| serde_json::json!({ "host": host, "search": true }))
+        .collect::<Vec<_>>();
+    let config = serde_json::to_vec(&serde_json::json!({ "image_registries": registries }))
+        .expect("serialize test runtime config");
+    fs::write(&path, config).expect("write test runtime config");
+    path
 }
 
 pub struct TestContext {
     pub cmd: Command,
     pub home: PathBuf,
+    registry_config: Option<PathBuf>,
     _home: PerTestBoxHome,
 }
 
@@ -26,7 +33,9 @@ impl TestContext {
         let mut cmd = Command::new(bin_path);
         cmd.timeout(Duration::from_secs(60));
         cmd.arg("--home").arg(&self.home);
-        apply_registries(&mut cmd);
+        if let Some(config) = &self.registry_config {
+            cmd.arg("--config").arg(config);
+        }
         cmd
     }
 
@@ -90,6 +99,7 @@ pub fn boxlite_bare() -> TestContext {
     TestContext {
         cmd,
         home,
+        registry_config: None,
         _home: home_dir,
     }
 }
@@ -101,11 +111,13 @@ pub fn boxlite() -> TestContext {
     let mut cmd = Command::new(bin_path);
     cmd.timeout(Duration::from_secs(60));
     cmd.arg("--home").arg(&home);
-    apply_registries(&mut cmd);
+    let registry_config = write_registry_config(&home);
+    cmd.arg("--config").arg(&registry_config);
 
     TestContext {
         cmd,
         home,
+        registry_config: Some(registry_config),
         _home: home_dir,
     }
 }

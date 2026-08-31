@@ -19,7 +19,7 @@ The BoxLite CLI (`boxlite`) lets you create, run, and manage BoxLite boxes from 
 - **Create** — Create a box from an image or prepared rootfs without running; supports `-p` and `-v`
 - **Lifecycle** — Start, stop, restart, remove boxes
 - **Inspect** — Show detailed box info (JSON, YAML, or Go template)
-- **Exec** — Run commands inside a running box
+- **Exec** — Run commands in a running or safely resumable box
 - **Images** — Pull and list OCI images
 - **Copy** — Copy files between host and box (`boxlite cp`)
 - **Output formats** — Table, JSON, or YAML for list/images
@@ -152,7 +152,8 @@ echo "$KEY" | boxlite --profile local auth login --url http://localhost:8100 --a
 BOXLITE_API_KEY=$KEY BOXLITE_REST_URL=https://<your-server> boxlite list
 ```
 
-Credentials are stored at `~/.boxlite/credentials.toml` (perms `0600`). OIDC
+Credentials are stored at `<BOXLITE_HOME>/credentials.toml` (default
+`~/.boxlite/credentials.toml`, perms `0600`). OIDC
 sessions auto-refresh on use when within 5 minutes of expiry; if the refresh
 token is rejected (`invalid_grant`) the CLI prompts you to re-run `auth login`.
 
@@ -164,22 +165,28 @@ token is rejected (`invalid_grant`) the CLI prompts you to re-run `auth login`.
 
 ### Global flags
 
-Available for all commands:
+Place these options before the top-level command or after the complete command
+path. A parent command accepts only options shared by all of its children, so
+write `boxlite auth status --url URL` (or `boxlite --url URL auth status`), not
+`boxlite auth --url URL status`. Each command's help shows only options it can
+use. Executing invocations reject unsupported options; Clap's `--help` and
+`--version` display actions remain terminal.
 
-| Flag | Description |
-|------|-------------|
-| `--debug` | Enable debug output. Precedence: `--debug` > `RUST_LOG` env > default (`warn`). |
-| `--home PATH` | BoxLite home directory (default: `~/.boxlite`). Overridden by `BOXLITE_HOME` |
-| `--registry REGISTRY` | Image registry (repeatable; prepended to config) |
-| `--config PATH` | JSON config file path (e.g. for `image_registries`) |
-| `--url URL` | Connect to a remote BoxLite REST server instead of the local runtime. Env: `BOXLITE_REST_URL`. |
-| `--profile NAME` | Named credential profile in `~/.boxlite/credentials.toml`. Lets one machine hold separate logins (e.g. `local` for `boxlite serve`, `cloud` for a remote control plane). Default `default`. Env: `BOXLITE_PROFILE`. |
-| `--path-prefix VALUE` | Routing-slot value for the URL path (`/v1/<prefix>/boxes/...`). Opaque — the server decides what it means (organization, workspace, catalog, …). Captured automatically at `auth login` time from `Principal.path_prefix`. This flag overrides the stored profile's value for credentials with scope over multiple routing values. Unset / empty → URL skips the segment (`/v1/boxes/...`), the canonical shape for single-tenant deployments like `boxlite serve`. Env: `BOXLITE_REST_PATH_PREFIX`. |
+| Flag | Scope | Description |
+|------|-------|-------------|
+| `--debug` | all commands except `completion` | Enable debug output. Precedence: `--debug` > `RUST_LOG` env > default (`warn`). |
+| `--home PATH` | local runtime + credentials | Absolute BoxLite home directory (default: `~/.boxlite`). `BOXLITE_HOME` is the env spelling. |
+| `--registry REGISTRY` | `run`, `create`, `pull`, `serve` | Image registry (repeatable; prepended to config). |
+| `--config PATH` | local-capable commands | JSON config file path (e.g. for `home_dir` and `image_registries`). |
+| `--url URL` | REST-capable commands | Connect to a remote BoxLite REST server instead of the local runtime. Env: `BOXLITE_REST_URL`. |
+| `--profile NAME` | REST-capable commands + `auth` | Named credential profile in `<BOXLITE_HOME>/credentials.toml`. Default `default`. Env: `BOXLITE_PROFILE`. |
+| `--path-prefix VALUE` | REST box/volume commands | Routing-slot value for `/v1/<prefix>/...`; overrides the selected profile. Env: `BOXLITE_REST_PATH_PREFIX`. |
 
 ### `boxlite auth login`
 
 Log in to a BoxLite REST server. Supports three flows that all save to
-`~/.boxlite/credentials.toml` (perms `0600`):
+`<BOXLITE_HOME>/credentials.toml` (default `~/.boxlite/credentials.toml`,
+perms `0600`):
 
 - **API key** — paste or stdin. Long-lived, org-scoped. Good for CI, SDK
   integrations, `boxlite serve` setups.
@@ -204,23 +211,24 @@ non-interactive exchanges. An SSH user should finish verification through the
 BoxLite dashboard in a separate browser, then retry the device login.
 
 When `--method` is unset, the CLI infers it: piped stdin → `api-key` (CI-safe),
-TTY → interactive picker, `$SSH_CONNECTION` set → silent fallback to `device`.
+while a TTY opens the interactive picker. If Browser is selected from that
+picker in a detected headless/SSH environment, the CLI falls back to `device`.
 
 **Usage:** `boxlite auth login [OPTIONS]`
 
 | Option | Description |
 |--------|-------------|
-| `--url URL` | Server URL (default: `http://localhost:8100`, matching `boxlite serve`). For cloud control planes include the `/api` prefix, e.g. `https://api.example.com/api`. |
+| `--url URL` | Server URL (precedence: flag, `BOXLITE_REST_URL`, selected profile URL, then `http://localhost:8100`). For cloud control planes include the `/api` prefix. |
 | `--method <api-key\|browser\|device>` | Explicit flow choice. Overrides inference. |
-| `--api-key-stdin` | Read the API key from stdin (one line). The flag takes no value, so the secret never appears on argv. Implies `--method api-key`. |
-| `--no-browser` | Skip the browser; use device code instead. Implies `--method device`. |
+| `--api-key-stdin` | Read the API key from stdin (one line). The flag takes no value, so the secret never appears on argv. Selects API-key login and conflicts with explicit browser/device methods. |
+| `--no-browser` | Use device code when no method is explicit; conflicts with API-key stdin and explicit API-key/browser methods. |
 | `--callback-port <PORT>` | Local port for the browser-flow callback (default `5555`). **Must match an entry in the IdP's allow-list byte-for-byte** — a different port produces "Callback URL mismatch" exactly like no entry at all. |
 | `--issuer URL` | OIDC issuer URL. Overrides what `GET /api/config` returns. Useful for self-hosted Dex tenants where the discovery is wrong. |
 | `--client-id ID` | OIDC client_id. Overrides `/api/config`. |
 | `--audience VAL` | OIDC audience. Auth0 requires it; Dex tolerates `None`. |
 
-Global flags also apply — most importantly `--profile NAME` to log in to a
-specific credential profile (default `default`).
+`--profile NAME` selects the credential profile (default `default`), and
+`--home PATH` selects the credential-store root.
 
 **Examples:**
 
@@ -250,7 +258,8 @@ URL goes under the `boxlite` static client's `redirectURIs`, plus
 
 ### `boxlite auth logout`
 
-Remove stored credentials at `~/.boxlite/credentials.toml`. Prompts for confirmation unless `--yes` is given.
+Remove the selected profile from `<BOXLITE_HOME>/credentials.toml` (default
+`~/.boxlite/credentials.toml`). Prompts for confirmation unless `--yes` is given.
 
 **Usage:** `boxlite auth logout [OPTIONS]`
 
@@ -265,20 +274,20 @@ Print the current authentication state: the logged-in URL, the source
 OIDC sessions the access token's expiry. Offline — no network calls,
 no secret material printed.
 
-**Usage:** `boxlite auth status [--profile NAME]`
+**Usage:** `boxlite auth status [--url URL] [--profile NAME]`
 
 **Example output (API key):**
 
 ```
 Logged in to:    http://localhost:8100
-Credential:      API key (from ~/.boxlite/credentials.toml [local])
+Credential:      API key (from <BOXLITE_HOME>/credentials.toml [local])
 ```
 
 **Example output (OIDC session):**
 
 ```
 Logged in to:    https://api.boxlite.ai/api
-Credential:      OIDC bearer token (from ~/.boxlite/credentials.toml [cloud])
+Credential:      OIDC bearer token (from <BOXLITE_HOME>/credentials.toml [cloud])
 Expires:         2026-05-21T15:42:00+00:00
 ```
 
@@ -287,10 +296,10 @@ Expires:         2026-05-21T15:42:00+00:00
 Confirm the active credential's identity by making one authenticated
 request to `GET /v1/me`. Unlike `auth status` (offline, only reports where
 the credential came from), `whoami` shows the server-resolved principal,
-organization, and scopes. Triggers a silent OIDC refresh if the access
+path prefix, and scopes. Triggers a silent OIDC refresh if the access
 token is within 5 minutes of expiry.
 
-**Usage:** `boxlite auth whoami [--profile NAME]`
+**Usage:** `boxlite auth whoami [--url URL] [--profile NAME]`
 
 **Example output:**
 
@@ -298,7 +307,7 @@ token is within 5 minutes of expiry.
 Logged in as:    dev@acme.test
 Name:            Dev McAcme
 Principal:       auth0|abc123 (user)
-Organization:    acme
+Path prefix:     acme
 Server:          https://api.boxlite.ai/api
 Scopes:          box:read, box:write, box:exec, image:read, snapshot:read
 ```
@@ -323,22 +332,29 @@ silently restarting it, because restarting would run the command a second time.
 | Option | Short | Description |
 |--------|-------|-------------|
 | `--rootfs PATH` | | Use a prepared rootfs path instead of pulling/resolving an image |
-| `--interactive` | `-i` | Keep STDIN open |
-| `--tty` | `-t` | Allocate a pseudo-TTY |
-| `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
+| `--interactive` | `-i` | Keep STDIN open; conflicts with `--detach` |
+| `--tty` | `-t` | Allocate a pseudo-TTY; requires TTY-attached stdin, even with `--detach` |
+| `--env KEY[=VALUE]` | `-e` | Set environment variables; a bare key inherits its host value (repeatable) |
 | `--workdir PATH` | `-w` | Working directory in the box |
+| `--user NAME[:GROUP]` | `-u` | Run as a name/uid and optional group/gid |
+| `--entrypoint EXEC` | | Override the image entrypoint |
 | `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
 | `--volume VOLUME` | `-v` | Mount a volume: `name:/box` for a managed volume, `./path:/box` for a host bind, `/box` for anonymous |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
+| `--disk-size GB` | | Sparse rootfs disk size; smaller values than the base image are ignored |
 | `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
+| `--network <enabled\|disabled>` | | Outbound network mode (default `enabled`) |
+| `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IP, or CIDR; repeatable and implies enabled networking |
+| `--inbound <enabled\|disabled>` | | Inbound network mode (default `enabled`) |
 | `--name NAME` | | Name the box |
 | `--detach` | `-d` | Run in background, print box ID |
-| `--rm` | | Remove the box when it exits |
+| `--rm` | | Remove the box when it stops; conflicts with lifecycle deadlines and is ignored with `--detach` |
 | `--auto-stop DURATION` | | Stop the box after this much inactivity; `0` disables |
 | `--auto-delete DURATION` | | Delete the box this long after it stops; `0` disables |
-| `--no-auto-resume` | | Refuse operations that would implicitly wake a stopped box |
+| `--no-auto-resume` | | Ask a REST server to refuse implicit resume after a box has run; first boot is unaffected, and the embedded runtime records but does not enforce it |
+| `--security <enable\|disable>` | | Embedded-runtime sandbox security (default `enable`; env `BOXLITE_SECURITY`); REST servers own this policy |
 
 `-p` is explicit local publication. Remote REST profiles reject it and direct
 the caller to `boxlite network tunnel`.
@@ -379,16 +395,23 @@ default, and `exec` still starts it on demand.
 |--------|-------|-------------|
 | `--rootfs PATH` | | Use a prepared rootfs path instead of pulling/resolving an image |
 | `--name NAME` | | Name the box |
-| `--env KEY=VALUE` | `-e` | Environment variables |
+| `--env KEY[=VALUE]` | `-e` | Environment variables; a bare key inherits its host value |
 | `--workdir PATH` | `-w` | Working directory |
+| `--entrypoint EXEC` | | Override the image entrypoint |
 | `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
 | `--volume VOLUME` | `-v` | Mount a volume: `name:/box` for a managed volume, `./path:/box` for a host bind, `/box` for anonymous |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
+| `--disk-size GB` | | Sparse rootfs disk size; smaller values than the base image are ignored |
 | `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
-| `--detach` | `-d` | (create always “detaches”) |
-| `--rm` | | Auto-remove when stopped |
+| `--network <enabled\|disabled>` | | Outbound network mode (default `enabled`) |
+| `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IP, or CIDR; repeatable and implies enabled networking |
+| `--inbound <enabled\|disabled>` | | Inbound network mode (default `enabled`) |
+| `--auto-stop DURATION` | | Stop the box after this much inactivity; `0` disables; requires a REST server |
+| `--auto-delete DURATION` | | Delete the box this long after it stops; `0` disables; requires a REST server |
+| `--no-auto-resume` | | Ask a REST server to refuse implicit resume after a box has run; first boot is unaffected, and the embedded runtime records but does not enforce it |
+| `--security <enable\|disable>` | | Embedded-runtime sandbox security (default `enable`; env `BOXLITE_SECURITY`); REST servers own this policy |
 
 `-p` is explicit local publication. Remote REST profiles reject it and direct
 the caller to `boxlite network tunnel`.
@@ -406,22 +429,25 @@ boxlite start openclaw
 
 ### `boxlite exec`
 
-Run a command in a running box.
+Run a command in a box. A safely resumable stopped box starts implicitly; a
+job box whose start would run or re-run its user-selected main command is
+refused, so start that box deliberately with `boxlite start` first.
 
-**Usage:** `boxlite exec [OPTIONS] BOX COMMAND [ARGS]...`
+**Usage:** `boxlite exec [OPTIONS] BOX -- COMMAND [ARGS]...`
 
 | Option | Short | Description |
 |--------|-------|-------------|
-| `--interactive` | `-i` | Keep STDIN open |
-| `--tty` | `-t` | Allocate a TTY |
-| `--env KEY=VALUE` | `-e` | Environment variables |
+| `--interactive` | `-i` | Keep STDIN open; conflicts with `--detach` |
+| `--tty` | `-t` | Allocate a TTY; foreground mode requires TTY-attached stdin, while detached mode attaches no stdin |
+| `--env KEY[=VALUE]` | `-e` | Environment variables; a bare key inherits its host value |
 | `--workdir PATH` | `-w` | Working directory |
+| `--user NAME[:GROUP]` | `-u` | Run as a name/uid and optional group/gid |
 | `--detach` | `-d` | Run in background (don’t wait) |
 
 **Example:**
 
 ```bash
-boxlite exec -it mybox /bin/sh
+boxlite exec -it mybox -- /bin/sh
 ```
 
 ### `boxlite list` (alias: `ls`, `ps`)
@@ -433,8 +459,8 @@ List boxes.
 | Option | Short | Description |
 |--------|-------|-------------|
 | `--all` | `-a` | Show all boxes (default: running only) |
-| `--quiet` | `-q` | Show only IDs |
-| `--format FMT` | | Output format: `table`, `json`, `yaml` (default: `table`) |
+| `--quiet` | `-q` | Show only IDs; conflicts with `--format` |
+| `--format FMT` | | Output format: `table`, `json`, `yaml`; conflicts with `--quiet` (default: `table`) |
 
 ### `boxlite start`
 
@@ -503,9 +529,8 @@ List cached images.
 
 | Option | Short | Description |
 |--------|-------|-------------|
-| `--all` | `-a` | Show all images (including intermediate) |
-| `--quiet` | `-q` | Show only image IDs |
-| `--format FMT` | | Output format: `table`, `json`, `yaml` |
+| `--quiet` | `-q` | Show only image IDs; conflicts with `--format` |
+| `--format FMT` | | Output format: `table`, `json`, `yaml`; conflicts with `--quiet` |
 
 ### `boxlite cp`
 
@@ -517,9 +542,9 @@ Copy files or directories between host and box.
 
 | Option | Description |
 |--------|-------------|
-| `--follow-symlinks` | Follow symlinks when copying |
-| `--no-overwrite` | Do not overwrite existing files |
-| `--include-parent` | Include parent directory when copying from box (default: true) |
+| `--follow-symlinks` | Follow symlinks when copying (local runtime only) |
+| `--no-overwrite` | Do not overwrite existing files (local runtime only) |
+| `--no-include-parent` | Copy directory contents without their parent (local runtime only) |
 
 **Examples:**
 
@@ -583,8 +608,20 @@ Then reload your shell or source the file.
 
 | Variable | Description |
 |----------|-------------|
-| `BOXLITE_HOME` | Runtime home directory (default: `~/.boxlite`). Overridden by `--home`. |
+| `BOXLITE_HOME` | Runtime and credential home directory (default: `~/.boxlite`). Overridden by `--home`. |
+| `BOXLITE_REST_URL` | REST server endpoint; equivalent to `--url`. |
 | `BOXLITE_API_KEY` | Long-lived API key sent as `Authorization: Bearer`. Overrides any stored credentials. |
+| `BOXLITE_PROFILE` | Credential profile; equivalent to `--profile` (default `default`). |
+| `BOXLITE_REST_PATH_PREFIX` | REST routing path segment; equivalent to `--path-prefix`. |
+| `BOXLITE_SECURITY` | `run`/`create` sandbox preset; equivalent to `--security`. |
+| `BOXLITE_SERVE_API_KEY` | Expected bearer key for `serve`; equivalent to `serve --api-key`. |
+| `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_AUDIENCE` | OIDC login fallbacks after flags and server discovery. |
+| `BOXLITE_LOG_FILE` | Explicit JSON log-file path for any command; `serve` otherwise defaults to `<BOXLITE_HOME>/logs/serve.log`. |
+| `BOXLITE_EXPERIMENTAL` | Comma-separated RC features: `custom-kernel`, `nested-virtualization`. |
+| `BOXLITE_RECONNECT_GRACE` | `serve` reconnect grace (default `5m`). |
+| `BOXLITE_SHUTDOWN_GRACE` | `serve` shutdown-stage grace (default `30s`). |
+| `BOXLITE_MAX_SESSION_LIFETIME` | `serve` session hard cap (default `24h`). |
+| `SSH_CONNECTION` | `auth login` headless detection; choosing Browser from the TTY picker falls back to device flow when set. |
 | `RUST_LOG` | Log level: `trace`, `debug`, `info`, `warn`, `error`. Use `RUST_LOG=debug` for troubleshooting. |
 
 ## Configuration file

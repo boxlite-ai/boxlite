@@ -31,6 +31,20 @@ pub struct RunArgs {
     #[command(flatten)]
     pub management: ManagementFlags,
 
+    /// Run the box in the background (detach)
+    #[arg(short = 'd', long)]
+    pub detach: bool,
+
+    /// Automatically remove the box when it exits. Conflicts with lifecycle
+    /// deadlines; ignored with `--detach` so the box outlives this CLI.
+    #[arg(long, conflicts_with_all = ["auto_delete", "auto_stop"])]
+    pub rm: bool,
+
+    /// Override the image entrypoint with a single executable. Any trailing
+    /// COMMAND replaces the image CMD and is appended to the entrypoint.
+    #[arg(long = "entrypoint", value_name = "EXEC")]
+    pub entrypoint: Option<String>,
+
     /// Path to an already prepared rootfs
     #[arg(long = "rootfs", value_name = "PATH")]
     pub rootfs: Option<String>,
@@ -55,7 +69,7 @@ pub async fn execute(args: RunArgs, global: &GlobalFlags) -> anyhow::Result<i32>
     args.boot.require_enabled(global.experimental_features())?;
     args.management
         .require_enabled(global.experimental_features())?;
-    args.management.require_sweeper(global.targets_rest())?;
+    args.management.require_sweeper(global.targets_rest()?)?;
     let (rootfs, command_args) = args.rootfs_and_command()?;
     let command_args = command_args.to_vec();
     let mut runner = BoxRunner::new(args, global)?;
@@ -89,11 +103,19 @@ fn build_options(
     args.network.apply_to(&mut options)?;
     args.process.apply_to(&mut options)?;
 
+    options.detach = args.detach;
+    if args.rm {
+        options.auto_delete = Some(1);
+    }
+    if let Some(ref exec) = args.entrypoint {
+        options.entrypoint = Some(vec![exec.clone()]);
+    }
+
     // Detached boxes keep manual lifecycle control: detach silently overrides
     // `--rm` (historical CLI behaviour). An explicit `--auto-delete` is a
     // deferred deadline, not remove-on-stop, so it survives detaching — that
     // pairing is the point of the flag.
-    if args.management.detach && args.management.auto_delete.is_none() {
+    if args.detach && args.management.auto_delete.is_none() {
         options.auto_delete = Some(0);
     }
 
@@ -127,7 +149,7 @@ impl BoxRunner {
 
         // Detach mode: start it and get out of the way. Nobody is reading the
         // output, so there is nothing to be attached for.
-        if self.args.management.detach {
+        if self.args.detach {
             litebox.start().await?;
             println!("{}", litebox.id());
             return Ok(0);

@@ -131,7 +131,8 @@ curl -s -X POST http://localhost:8100/v1/boxes \
   -d '{"image": "alpine:latest"}'
 ```
 
-Every CLI command also works against a running server with `--url`: `boxlite --url http://localhost:8100 list`.
+REST-capable CLI commands also work against a running server with `--url`:
+`boxlite --url http://localhost:8100 list`.
 
 </details>
 

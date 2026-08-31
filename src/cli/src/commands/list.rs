@@ -13,7 +13,7 @@ pub struct ListArgs {
     pub all: bool,
 
     /// Only show IDs
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "format")]
     pub quiet: bool,
 
     /// Output format (table, json, yaml)

@@ -8,12 +8,8 @@ use tabled::Tabled;
 /// List images
 #[derive(Args, Debug)]
 pub struct ImagesArgs {
-    /// Show all images (default hides intermediate images)
-    #[arg(short = 'a', long)]
-    pub all: bool,
-
     /// Only show image IDs
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "format")]
     pub quiet: bool,
 
     /// Output format (table, json, yaml)
@@ -54,7 +50,8 @@ impl From<&ImageInfo> for ImagePresenter {
 }
 
 pub async fn execute(args: ImagesArgs, global: &GlobalFlags) -> anyhow::Result<()> {
-    let rt = global.create_runtime()?;
+    let options = global.resolve_runtime_options()?;
+    let rt = global.create_runtime_with_options(options)?;
     let image_handle = rt.images()?;
     let images = image_handle.list().await?;
 

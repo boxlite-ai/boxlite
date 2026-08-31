@@ -1,3 +1,4 @@
+use assert_cmd::Command;
 use predicates::prelude::*;
 
 mod common;
@@ -79,4 +80,17 @@ fn test_images_yaml_format() {
     assert!(stdout.contains("Tag:") || stdout.trim() == "[]");
     assert!(stdout.contains("ID:") || stdout.trim() == "[]");
     assert!(stdout.contains("CreatedAt:") || stdout.trim() == "[]");
+}
+
+#[test]
+fn images_ignores_an_ambient_rest_url_and_stays_local() {
+    let home = tempfile::tempdir().unwrap();
+    Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+        .env("BOXLITE_HOME", home.path())
+        .env("BOXLITE_REST_URL", "http://127.0.0.1:1")
+        .env_remove("BOXLITE_API_KEY")
+        .args(["images", "--format", "json"])
+        .assert()
+        .success()
+        .stdout(predicate::eq("[]\n"));
 }

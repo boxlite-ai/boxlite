@@ -71,7 +71,7 @@ impl CreateArgs {
         self.boot.require_enabled(global.experimental_features())?;
         self.management
             .require_enabled(global.experimental_features())?;
-        self.management.require_sweeper(global.targets_rest())?;
+        self.management.require_sweeper(global.targets_rest()?)?;
         let mut options = BoxOptions::default();
         self.resource.apply_to(&mut options);
         self.capability.apply_to(&mut options);
@@ -88,16 +88,9 @@ impl CreateArgs {
         // non-detached created box is killed by the exiting `start` CLI (its
         // watchdog + the runtime's drop-time auto-stop) before its main command
         // records an exit code — the box then reports 0 instead of its real
-        // code. Detached boxes have no foreground watcher, so auto-remove cannot
-        // apply — the same rule `run -d` enforces (remove-on-stop with detach is
-        // rejected at sanitize).
+        // code. Remove-on-stop belongs to `run`; create exposes only deferred
+        // lifecycle deadlines, which a server can enforce after this CLI exits.
         options.detach = true;
-        // Clears the `--rm` encoding, which cannot apply to a box that is
-        // always detached — but must not clobber an explicit `--auto-delete`,
-        // which is a deferred deadline rather than remove-on-stop.
-        if self.management.auto_delete.is_none() {
-            options.auto_delete = Some(0);
-        }
         options.working_dir = self.workdir.clone();
         if let Some(ref exec) = self.entrypoint {
             options.entrypoint = Some(vec![exec.clone()]);
@@ -126,10 +119,9 @@ mod tests {
     use crate::cli::{Cli, Commands};
     use clap::Parser;
 
-    /// `create` always detaches and clears the `--rm` encoding afterwards, so
-    /// an explicit deadline is exactly what that line can clobber. This is the
-    /// consuming boundary — `ManagementFlags::apply_to` gets the order right on
-    /// its own and still could not have caught a later overwrite here.
+    /// `ManagementFlags::apply_to` writes the keep-on-stop sentinel before an
+    /// optional deadline. `create` then sets detach without changing lifecycle
+    /// policy, so the explicit deadline must survive this consuming boundary.
     #[test]
     fn an_explicit_delete_deadline_survives_creates_detach_default() {
         let cli = Cli::try_parse_from([
@@ -155,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn create_without_a_deadline_keeps_the_rm_encoding() {
+    fn create_without_a_deadline_disables_remove_on_stop() {
         let opts = {
             let cli = Cli::try_parse_from(["boxlite", "create", "alpine:latest"])
                 .expect("create should parse");

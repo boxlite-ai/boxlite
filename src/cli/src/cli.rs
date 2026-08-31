@@ -2,6 +2,7 @@
 //! This module contains all CLI-related code including the main CLI structure,
 //! subcommands, and flag definitions.
 
+use anyhow::Context;
 use boxlite::experimental::custom_kernel::{KernelFormat, KernelOptions, configure};
 use boxlite::experimental::{
     EXPERIMENTAL_FEATURES_ENV, ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder,
@@ -13,8 +14,13 @@ use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime,
     ContainerCapabilities, ImageRegistry, NetworkSpec,
 };
-use clap::{Args, Command, Parser, Subcommand, ValueEnum};
+use clap::error::ErrorKind;
+use clap::parser::ValueSource;
+use clap::{
+    Arg, ArgMatches, Args, Command, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum,
+};
 use clap_complete::shells::{Bash, Fish, Zsh};
+use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
@@ -28,11 +34,19 @@ pub fn apply_env_vars_with_lookup<F>(env: &[String], opts: &mut BoxOptions, look
 where
     F: Fn(&str) -> Option<String>,
 {
+    opts.env.extend(resolve_env_vars_with_lookup(env, lookup));
+}
+
+fn resolve_env_vars_with_lookup<F>(env: &[String], lookup: F) -> Vec<(String, String)>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut resolved = Vec::with_capacity(env.len());
     for env_str in env {
         if let Some((k, v)) = env_str.split_once('=') {
-            opts.env.push((k.to_string(), v.to_string()));
+            resolved.push((k.to_string(), v.to_string()));
         } else if let Some(val) = lookup(env_str) {
-            opts.env.push((env_str.to_string(), val));
+            resolved.push((env_str.to_string(), val));
         } else {
             tracing::warn!(
                 "Environment variable '{}' not found on host, skipping",
@@ -40,6 +54,7 @@ where
             );
         }
     }
+    resolved
 }
 
 // ============================================================================
@@ -54,6 +69,497 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Commands,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GlobalOption {
+    Debug,
+    Home,
+    Registry,
+    Config,
+    Url,
+    Profile,
+    PathPrefix,
+}
+
+impl GlobalOption {
+    const ALL: &'static [Self] = &[
+        Self::Debug,
+        Self::Home,
+        Self::Registry,
+        Self::Config,
+        Self::Url,
+        Self::Profile,
+        Self::PathPrefix,
+    ];
+
+    const fn id(self) -> &'static str {
+        match self {
+            Self::Debug => "debug",
+            Self::Home => "home",
+            Self::Registry => "registry",
+            Self::Config => "config",
+            Self::Url => "url",
+            Self::Profile => "profile",
+            Self::PathPrefix => "path_prefix",
+        }
+    }
+
+    const fn long(self) -> &'static str {
+        match self {
+            Self::PathPrefix => "path-prefix",
+            _ => self.id(),
+        }
+    }
+
+    const fn propagates_value(self) -> bool {
+        !matches!(self, Self::Registry)
+    }
+
+    fn clear(self, global: &mut GlobalFlags) {
+        match self {
+            Self::Debug => global.debug = false,
+            Self::Home => global.home = None,
+            Self::Registry => global.registry.clear(),
+            Self::Config => global.config = None,
+            Self::Url => global.url = None,
+            Self::Profile => global.profile = None,
+            Self::PathPrefix => global.path_prefix = None,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CommandScope {
+    name: &'static str,
+    globals: &'static [GlobalOption],
+    children: &'static [CommandScope],
+}
+
+impl CommandScope {
+    fn allows(&self, option: GlobalOption) -> bool {
+        self.globals.contains(&option)
+    }
+}
+
+const ALL_GLOBALS: &[GlobalOption] = GlobalOption::ALL;
+const BOX_GLOBALS: &[GlobalOption] = &[
+    GlobalOption::Debug,
+    GlobalOption::Home,
+    GlobalOption::Config,
+    GlobalOption::Url,
+    GlobalOption::Profile,
+    GlobalOption::PathPrefix,
+];
+const LOCAL_IMAGE_GLOBALS: &[GlobalOption] = &[
+    GlobalOption::Debug,
+    GlobalOption::Home,
+    GlobalOption::Registry,
+    GlobalOption::Config,
+];
+const LOCAL_GLOBALS: &[GlobalOption] = &[
+    GlobalOption::Debug,
+    GlobalOption::Home,
+    GlobalOption::Config,
+];
+const AUTH_GLOBALS: &[GlobalOption] = &[
+    GlobalOption::Debug,
+    GlobalOption::Home,
+    GlobalOption::Profile,
+];
+const AUTH_URL_GLOBALS: &[GlobalOption] = &[
+    GlobalOption::Debug,
+    GlobalOption::Home,
+    GlobalOption::Url,
+    GlobalOption::Profile,
+];
+const VOLUME_GLOBALS: &[GlobalOption] = &[
+    GlobalOption::Debug,
+    GlobalOption::Home,
+    GlobalOption::Url,
+    GlobalOption::Profile,
+    GlobalOption::PathPrefix,
+];
+
+const AUTH_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "login",
+        globals: AUTH_URL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "logout",
+        globals: AUTH_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "status",
+        globals: AUTH_URL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "whoami",
+        globals: AUTH_URL_GLOBALS,
+        children: &[],
+    },
+];
+const NETWORK_SCOPES: &[CommandScope] = &[CommandScope {
+    name: "tunnel",
+    globals: BOX_GLOBALS,
+    children: &[],
+}];
+const VOLUME_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "create",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "ls",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "get",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "rm",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+];
+const COMMAND_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "run",
+        globals: ALL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "exec",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "create",
+        globals: ALL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "list",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "rm",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "start",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "stop",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "restart",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "pull",
+        globals: LOCAL_IMAGE_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "images",
+        globals: LOCAL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "inspect",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "cp",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "info",
+        globals: LOCAL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "logs",
+        globals: LOCAL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "stats",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "network",
+        globals: BOX_GLOBALS,
+        children: NETWORK_SCOPES,
+    },
+    CommandScope {
+        name: "serve",
+        globals: LOCAL_IMAGE_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "auth",
+        globals: AUTH_GLOBALS,
+        children: AUTH_SCOPES,
+    },
+    CommandScope {
+        name: "volume",
+        globals: VOLUME_GLOBALS,
+        children: VOLUME_SCOPES,
+    },
+    CommandScope {
+        name: "completion",
+        globals: &[],
+        children: &[],
+    },
+];
+
+/// Build one command tree for runtime parsing, help, and completion.
+///
+/// Root copies preserve `boxlite --option command` compatibility but are not
+/// global. Each command receives only the positive set it owns, so Clap itself
+/// rejects an irrelevant option written after the command and renders the same
+/// scope in help. Environment bindings live on those scoped copies so an
+/// irrelevant ambient value is never parsed. Singular values use Clap's
+/// documented propagation back to the root `GlobalFlags`; repeatable values
+/// are folded explicitly because propagation selects one level's `MatchedArg`
+/// rather than appending values from independently defined levels.
+pub fn command() -> Command {
+    let command = Cli::command();
+    let global_args = command
+        .get_arguments()
+        .filter(|argument| argument.is_global_set())
+        .cloned()
+        .collect::<Vec<_>>();
+    let command = command.mut_args(|argument| {
+        if argument.is_global_set() {
+            argument.global(false).env(None::<&'static str>)
+        } else {
+            argument
+        }
+    });
+    apply_command_scopes(command, COMMAND_SCOPES, &global_args)
+}
+
+fn apply_command_scopes(
+    command: Command,
+    scopes: &'static [CommandScope],
+    global_args: &[Arg],
+) -> Command {
+    for subcommand in command.get_subcommands() {
+        assert!(
+            scopes
+                .iter()
+                .any(|scope| scope.name == subcommand.get_name()),
+            "missing global-option scope for `boxlite {}`",
+            subcommand.get_name()
+        );
+    }
+    for scope in scopes {
+        assert!(
+            command
+                .get_subcommands()
+                .any(|subcommand| subcommand.get_name() == scope.name),
+            "global-option scope references missing command `{}`",
+            scope.name
+        );
+    }
+
+    command.mut_subcommands(|subcommand| {
+        let scope = scopes
+            .iter()
+            .find(|scope| scope.name == subcommand.get_name())
+            .expect("command scope checked above");
+        let local_ids = subcommand
+            .get_arguments()
+            .map(|argument| argument.get_id().clone())
+            .collect::<Vec<_>>();
+        let scoped_args = global_args
+            .iter()
+            .filter(|argument| {
+                scope
+                    .globals
+                    .iter()
+                    .any(|option| option.id() == argument.get_id().as_str())
+            })
+            .filter(|argument| !local_ids.contains(argument.get_id()))
+            .cloned()
+            .map(|argument| {
+                let option = GlobalOption::ALL
+                    .iter()
+                    .copied()
+                    .find(|option| option.id() == argument.get_id().as_str())
+                    .expect("scoped argument must be a declared global option");
+                argument.global(option.propagates_value())
+            });
+        apply_command_scopes(subcommand.args(scoped_args), scope.children, global_args)
+    })
+}
+
+/// Parse through [`command`] so the runtime parser and rendered help use the
+/// same command-capability policy.
+pub fn parse() -> Cli {
+    try_parse_from(std::env::args_os()).unwrap_or_else(|error| error.exit())
+}
+
+pub(crate) fn try_parse_from<I, T>(args: I) -> Result<Cli, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    let mut parser = command();
+    let mut matches = parser.clone().try_get_matches_from(args)?;
+    let command_path = selected_command_path(&matches);
+    let scope = command_scope(&command_path).expect("parsed command must have a declared scope");
+
+    if let Some(option) = GlobalOption::ALL.iter().copied().find(|option| {
+        !scope.allows(*option)
+            && matches.value_source(option.id()) == Some(ValueSource::CommandLine)
+    }) {
+        return Err(irrelevant_global_error(&mut parser, &command_path, option));
+    }
+
+    if let Some(home) = matches.get_one::<PathBuf>("home")
+        && scope.allows(GlobalOption::Home)
+        && !home.is_absolute()
+    {
+        return Err(parser.error(
+            ErrorKind::ValueValidation,
+            format!(
+                "BoxLite home must be an absolute path, got: {}",
+                home.display()
+            ),
+        ));
+    }
+
+    for id in ["url", "profile", "path_prefix", "config"] {
+        if scope.globals.iter().any(|option| option.id() == id)
+            && matches.value_source(id) == Some(ValueSource::CommandLine)
+            && matches.get_one::<String>(id).is_some_and(String::is_empty)
+        {
+            let option = id.replace('_', "-");
+            return Err(parser.error(
+                ErrorKind::ValueValidation,
+                format!("--{option} cannot be empty"),
+            ));
+        }
+    }
+    let registry_values = command_line_values_along_selected_path(&matches, "registry");
+    if scope.allows(GlobalOption::Registry) && registry_values.iter().any(String::is_empty) {
+        return Err(parser.error(ErrorKind::ValueValidation, "--registry cannot be empty"));
+    }
+
+    let mut cli = Cli::from_arg_matches_mut(&mut matches)?;
+    if scope.allows(GlobalOption::Registry) {
+        cli.global.registry = registry_values;
+    }
+    clear_irrelevant_environment_globals(&mut cli.global, scope);
+    merge_root_login_url(&mut cli);
+    normalize_empty_urls(&mut cli);
+    Ok(cli)
+}
+
+fn command_line_values_along_selected_path(matches: &ArgMatches, id: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut current = matches;
+    loop {
+        if let Ok(Some(level_values)) = current.try_get_many::<String>(id) {
+            values.extend(level_values.cloned());
+        }
+        let Some((_, child)) = current.subcommand() else {
+            break;
+        };
+        current = child;
+    }
+    values
+}
+
+fn selected_command_path(matches: &ArgMatches) -> Vec<&str> {
+    let mut path = Vec::new();
+    let mut current = matches;
+    while let Some((name, child)) = current.subcommand() {
+        path.push(name);
+        current = child;
+    }
+    path
+}
+
+fn command_scope(path: &[&str]) -> Option<&'static CommandScope> {
+    let mut scopes = COMMAND_SCOPES;
+    let mut selected = None;
+    for name in path {
+        let scope = scopes.iter().find(|scope| scope.name == *name)?;
+        selected = Some(scope);
+        scopes = scope.children;
+    }
+    selected
+}
+
+fn irrelevant_global_error(
+    parser: &mut Command,
+    command_path: &[&str],
+    option: GlobalOption,
+) -> clap::Error {
+    parser.error(
+        ErrorKind::UnknownArgument,
+        format!(
+            "--{} is not valid for `boxlite {}`",
+            option.long(),
+            command_path.join(" ")
+        ),
+    )
+}
+
+/// Irrelevant values supplied by ambient environment variables are ignored:
+/// they are not command options and must not make an unrelated command fail.
+fn clear_irrelevant_environment_globals(global: &mut GlobalFlags, scope: &CommandScope) {
+    for option in GlobalOption::ALL {
+        if !scope.allows(*option) {
+            option.clear(global);
+        }
+    }
+}
+
+fn merge_root_login_url(cli: &mut Cli) {
+    if let Commands::Auth(crate::commands::auth::AuthArgs {
+        command: crate::commands::auth::AuthCommand::Login(login),
+    }) = &mut cli.command
+        && login.url.is_none()
+    {
+        login.url.clone_from(&cli.global.url);
+    }
+}
+
+fn normalize_empty_urls(cli: &mut Cli) {
+    if cli.global.url.as_deref() == Some("") {
+        cli.global.url = None;
+    }
+    if let Commands::Auth(crate::commands::auth::AuthArgs {
+        command: crate::commands::auth::AuthCommand::Login(login),
+    }) = &mut cli.command
+        && login.url.as_deref() == Some("")
+    {
+        login.url = None;
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -112,7 +618,7 @@ pub enum Commands {
     /// Authenticate with a remote BoxLite server
     Auth(crate::commands::auth::AuthArgs),
 
-    /// Manage named local volumes
+    /// Manage named volumes on a REST server
     Volume(crate::commands::volume::VolumeArgs),
 
     /// Generate shell completion script (hidden from help)
@@ -137,11 +643,8 @@ pub struct CompletionArgs {
 }
 
 /// Writes a completion script for the given shell to `out`.
-pub fn generate_completion(shell: &Shell, cmd: &mut Command, name: &str, out: &mut dyn Write) {
-    // clap_complete's AOT generators enumerate hidden arguments. Generate
-    // from a projection of the affected commands so RC flags remain
-    // parseable without becoming a discovery surface.
-    let mut cmd = completion_projection(cmd);
+pub fn generate_completion(shell: &Shell, name: &str, out: &mut dyn Write) {
+    let mut cmd = completion_command();
     match shell {
         Shell::Bash => clap_complete::generate(Bash, &mut cmd, name, out),
         Shell::Zsh => clap_complete::generate(Zsh, &mut cmd, name, out),
@@ -149,8 +652,11 @@ pub fn generate_completion(shell: &Shell, cmd: &mut Command, name: &str, out: &m
     }
 }
 
-fn completion_projection(cmd: &Command) -> Command {
-    cmd.clone()
+fn completion_command() -> Command {
+    // clap_complete's AOT generators enumerate hidden arguments. Runtime,
+    // help, and scoped globals already share `command()`; this final projection
+    // removes only experimental arguments from completion discovery.
+    command()
         .mut_subcommand("run", without_hidden_arguments)
         .mut_subcommand("create", without_hidden_arguments)
 }
@@ -204,7 +710,7 @@ pub struct GlobalFlags {
     #[arg(long, global = true)]
     pub debug: bool,
 
-    /// BoxLite home directory
+    /// Absolute BoxLite runtime and credential home directory
     #[arg(long, global = true, env = "BOXLITE_HOME")]
     pub home: Option<std::path::PathBuf>,
 
@@ -223,14 +729,13 @@ pub struct GlobalFlags {
     #[arg(long, global = true, env = "BOXLITE_REST_URL")]
     pub url: Option<String>,
 
-    /// Named credential profile in `~/.boxlite/credentials.toml`. Lets one
-    /// machine hold separate logins for, e.g., a local `boxlite serve` and a
-    /// remote control plane. Defaults to `default` if neither flag nor env
-    /// is set.
+    /// Named profile in `<BOXLITE_HOME>/credentials.toml`. Lets one machine
+    /// hold separate remote logins. Defaults to `default` if neither flag nor
+    /// env is set.
     #[arg(long, global = true, env = "BOXLITE_PROFILE")]
     pub profile: Option<String>,
 
-    /// Routing-slot value for the URL path (`/v1/<prefix>/boxes/...`).
+    /// Routing-slot value for the URL path (`/v1/<prefix>/...`).
     /// Opaque — the server decides what this means (org id, workspace,
     /// catalog, …); the value typically comes from the `auth login`
     /// flow capturing `Principal.path_prefix`. This flag overrides
@@ -247,6 +752,10 @@ pub struct GlobalFlags {
 }
 
 impl GlobalFlags {
+    pub(crate) fn credential_store(&self) -> crate::credentials::CredentialStore {
+        crate::credentials::CredentialStore::new(self.home.clone())
+    }
+
     /// Resolve which credential profile to read/write. Order: explicit
     /// `--profile` flag (which clap also fills from `BOXLITE_PROFILE`) > the
     /// hard-coded `default` name. Keeping this in one helper means a future
@@ -305,18 +814,14 @@ impl GlobalFlags {
     /// about which backend a command is aimed at. It re-reads the credential
     /// file rather than threading the resolution through; the cost is one extra
     /// read on the two commands that ask.
-    pub fn targets_rest(&self) -> bool {
-        let stored = crate::credentials::load_named(&self.resolved_profile())
-            .ok()
-            .flatten();
+    pub fn targets_rest(&self) -> anyhow::Result<bool> {
+        let stored = self.load_selected_profile()?;
         let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
-        self.resolve_rest_options(stored, env_api_key).is_some()
+        Ok(self.resolve_rest_options(stored, env_api_key).is_some())
     }
 
     pub fn create_runtime(&self) -> anyhow::Result<BoxliteRuntime> {
-        let stored = crate::credentials::load_named(&self.resolved_profile())
-            .ok()
-            .flatten();
+        let stored = self.load_selected_profile()?;
         // Clap reads BOXLITE_REST_URL into `self.url`; BOXLITE_API_KEY is the
         // one credential env we still consult directly here.
         let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
@@ -329,6 +834,13 @@ impl GlobalFlags {
                 self.create_runtime_with_options(options)
             }
         }
+    }
+
+    fn load_selected_profile(&self) -> anyhow::Result<Option<crate::credentials::Profile>> {
+        let profile = self.resolved_profile();
+        self.credential_store()
+            .load_named(&profile)
+            .with_context(|| format!("loading credential profile `{profile}`"))
     }
 
     /// Build REST connection options from the selected credential profile and
@@ -349,7 +861,7 @@ impl GlobalFlags {
     /// Building the options bare in that branch (instead of starting from the
     /// profile) was the cause of the prefix-less `/v1/boxes` 404 against a
     /// multi-tenant server.
-    fn resolve_rest_options(
+    pub(crate) fn resolve_rest_options(
         &self,
         stored: Option<crate::credentials::Profile>,
         env_api_key: Option<String>,
@@ -395,7 +907,7 @@ impl GlobalFlags {
 #[derive(Args, Debug, Clone)]
 pub struct ProcessFlags {
     /// Keep STDIN open even if not attached
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "detach")]
     pub interactive: bool,
 
     /// Allocate a pseudo-TTY (stdout and stderr are merged in TTY mode)
@@ -413,13 +925,6 @@ pub struct ProcessFlags {
     /// User to run the command as (format: <name|uid>[:<group|gid>])
     #[arg(short = 'u', long = "user")]
     pub user: Option<String>,
-
-    /// Override the image entrypoint with a single executable, mirroring
-    /// `docker run --entrypoint`. Any trailing COMMAND replaces the image's
-    /// CMD and is appended to it, and the result runs as the container's
-    /// init.
-    #[arg(long = "entrypoint", value_name = "EXEC")]
-    pub entrypoint: Option<String>,
 }
 
 impl ProcessFlags {
@@ -435,9 +940,6 @@ impl ProcessFlags {
     {
         opts.working_dir = self.workdir.clone();
         apply_env_vars_with_lookup(&self.env, opts, lookup);
-        if let Some(ref exec) = self.entrypoint {
-            opts.entrypoint = Some(vec![exec.clone()]);
-        }
         if let Some(ref user) = self.user {
             opts.user = Some(user.clone());
         }
@@ -459,12 +961,8 @@ impl ProcessFlags {
 
     /// Configures a BoxCommand with process flags (env, workdir, tty)
     pub fn configure_command(&self, mut cmd: BoxCommand) -> BoxCommand {
-        for env_str in &self.env {
-            if let Some((k, v)) = env_str.split_once('=') {
-                cmd = cmd.env(k, v);
-            } else if let Ok(val) = std::env::var(env_str) {
-                cmd = cmd.env(env_str, val);
-            }
+        for (key, value) in resolve_env_vars_with_lookup(&self.env, |key| std::env::var(key).ok()) {
+            cmd = cmd.env(key, value);
         }
 
         if let Some(ref w) = self.workdir {
@@ -909,20 +1407,6 @@ pub struct ManagementFlags {
     #[arg(long)]
     pub name: Option<String>,
 
-    /// Run the box in the background (detach)
-    #[arg(short = 'd', long)]
-    pub detach: bool,
-
-    /// Automatically remove the box when it exits
-    ///
-    /// Conflicts with both deadlines. `--rm` is carried on the wire as the
-    /// shortest possible `auto_delete`, and the contract requires
-    /// `auto_delete > auto_stop`, so `--rm --auto-stop N` fails server-side for
-    /// every N the caller would write it for, naming a field they never set.
-    /// Rejecting the pair here says so in the caller's own vocabulary.
-    #[arg(long, conflicts_with_all = ["auto_delete", "auto_stop"])]
-    pub rm: bool,
-
     /// Stop the box after this much inactivity; `0` disables.
     ///
     /// Seconds when bare, or a suffixed duration: `30s`, `15m`, `2h`, `7d`.
@@ -935,8 +1419,6 @@ pub struct ManagementFlags {
     /// Delete the box this long after it stops; `0` disables.
     ///
     /// Same grammar and the same server requirement as `--auto-stop`.
-    /// Conflicts with `--rm`, which deletes as soon as the box stops rather
-    /// than after a delay.
     #[arg(long = "auto-delete", value_name = "DURATION", value_parser = parse_duration_seconds)]
     pub auto_delete: Option<u32>,
 
@@ -991,8 +1473,8 @@ impl ManagementFlags {
             if seconds.is_some_and(|seconds| seconds > 0) {
                 anyhow::bail!(
                     "{flag} needs a server to enforce it — point at one with --url \
-                     (or a configured profile). Use --rm to delete the box as soon \
-                     as it stops on the local runtime."
+                     (or a configured profile). Use `boxlite run --rm` when \
+                     immediate local cleanup is required."
                 );
             }
         }
@@ -1000,10 +1482,10 @@ impl ManagementFlags {
     }
 
     pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
-        opts.detach = self.detach;
-        // `--rm` is the CLI spelling of "delete when stopped"; the CLI
-        // default (like `docker run`) is to keep the box.
-        opts.auto_delete = Some(if self.rm { 1 } else { 0 });
+        // The CLI default (like `docker run`) is to keep the box. `run --rm`
+        // overrides this sentinel at its command boundary; `create` does not
+        // expose remove-on-stop because it always creates a detached box.
+        opts.auto_delete = Some(0);
 
         // An explicit deadline replaces that sentinel. It has to be written
         // after it, not before: the line above is unconditional, so setting
@@ -1036,8 +1518,363 @@ impl ManagementFlags {
 mod tests {
     use super::*;
     use boxlite::runtime::options::NetworkSpec;
-    use clap::CommandFactory;
     use std::fs;
+
+    fn parse_projected(args: &[&str]) -> Cli {
+        try_parse_from(args).expect("parse")
+    }
+
+    #[test]
+    fn command_tree_owns_after_command_scope_rejection() {
+        for args in [
+            &["boxlite", "serve", "--url", "https://irrelevant.test"][..],
+            &["boxlite", "ls", "--registry", "registry.example.test"][..],
+            &[
+                "boxlite",
+                "auth",
+                "logout",
+                "--url",
+                "https://irrelevant.test",
+            ][..],
+            &[
+                "boxlite",
+                "volume",
+                "list",
+                "--config",
+                "/tmp/irrelevant.json",
+            ][..],
+            &["boxlite", "completion", "bash", "--debug"][..],
+        ] {
+            let error = command()
+                .try_get_matches_from(args)
+                .expect_err("the command tree must reject an out-of-scope option");
+            assert_eq!(error.kind(), ErrorKind::UnknownArgument, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn scoped_command_tree_is_valid_and_preserves_root_and_leaf_flag_positions() {
+        command().debug_assert();
+
+        for args in [
+            ["boxlite", "--url", "https://example.test", "run", "alpine"],
+            ["boxlite", "run", "--url", "https://example.test", "alpine"],
+        ] {
+            let cli = parse_projected(&args);
+            assert_eq!(cli.global.url.as_deref(), Some("https://example.test"));
+            assert!(matches!(cli.command, Commands::Run(_)));
+        }
+
+        for args in [
+            &["boxlite", "run", "--path-prefix", "", "alpine"][..],
+            &["boxlite", "run", "--profile", "", "alpine"][..],
+            &["boxlite", "run", "--registry", "", "alpine"][..],
+            &["boxlite", "run", "--config", "", "alpine"][..],
+        ] {
+            let error = try_parse_from(args).expect_err("empty global value must be rejected");
+            assert_eq!(error.kind(), ErrorKind::ValueValidation, "{args:?}");
+        }
+
+        for args in [
+            ["boxlite", "--url", "https://example.test", "auth", "login"],
+            ["boxlite", "auth", "login", "--url", "https://example.test"],
+        ] {
+            let cli = parse_projected(&args);
+            let Commands::Auth(auth) = cli.command else {
+                panic!("expected auth");
+            };
+            let crate::commands::auth::AuthCommand::Login(login) = auth.command else {
+                panic!("expected login");
+            };
+            assert_eq!(login.url.as_deref(), Some("https://example.test"));
+        }
+
+        for args in [
+            &["boxlite", "--url", "https://example.test", "auth", "status"][..],
+            &["boxlite", "auth", "status", "--url", "https://example.test"][..],
+        ] {
+            let cli = parse_projected(args);
+            assert_eq!(cli.global.url.as_deref(), Some("https://example.test"));
+        }
+
+        let error = try_parse_from(["boxlite", "auth", "--url", "https://example.test", "status"])
+            .expect_err("leaf-only --url must follow the auth leaf");
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn root_and_leaf_repeatable_global_values_are_both_preserved() {
+        let cli = parse_projected(&[
+            "boxlite",
+            "--registry",
+            "root.example.test",
+            "run",
+            "--registry",
+            "leaf.example.test",
+            "alpine",
+        ]);
+
+        assert_eq!(
+            cli.global.registry,
+            ["root.example.test", "leaf.example.test"]
+        );
+    }
+
+    #[test]
+    fn auth_login_rejects_an_explicit_empty_leaf_url() {
+        let error = try_parse_from(["boxlite", "auth", "login", "--url", ""])
+            .expect_err("an explicit empty URL must not fall through to another target");
+
+        assert_eq!(error.kind(), ErrorKind::InvalidValue);
+    }
+
+    fn global_option_tokens(id: &str) -> Vec<&'static str> {
+        match id {
+            "debug" => vec!["--debug"],
+            "home" => vec!["--home", "/tmp/boxlite-strict-options"],
+            "registry" => vec!["--registry", "registry.example.test"],
+            "config" => vec!["--config", "/tmp/boxlite-config.json"],
+            "url" => vec!["--url", "https://example.test"],
+            "profile" => vec!["--profile", "test-profile"],
+            "path_prefix" => vec!["--path-prefix", "tenant"],
+            other => panic!("missing command-line spelling for {other}"),
+        }
+    }
+
+    const REGISTRY: &[&str] = &["registry"];
+    const LOCAL_WITHOUT_REGISTRY: &[&str] = &["registry", "url", "profile", "path_prefix"];
+    const LOCAL_WITH_REGISTRY: &[&str] = &["url", "profile", "path_prefix"];
+    const AUTH_WITH_URL: &[&str] = &["registry", "config", "path_prefix"];
+    const AUTH_WITHOUT_URL: &[&str] = &["registry", "config", "url", "path_prefix"];
+    const VOLUME: &[&str] = &["registry", "config"];
+    const ALL_GLOBALS: &[&str] = &[
+        "debug",
+        "home",
+        "registry",
+        "config",
+        "url",
+        "profile",
+        "path_prefix",
+    ];
+    const IRRELEVANT_GLOBAL_CASES: &[(&[&str], usize, &[&str])] = &[
+        (&["boxlite", "exec", "box", "--", "true"], 1, REGISTRY),
+        (&["boxlite", "list"], 1, REGISTRY),
+        (&["boxlite", "ls"], 1, REGISTRY),
+        (&["boxlite", "ps"], 1, REGISTRY),
+        (&["boxlite", "rm", "box"], 1, REGISTRY),
+        (&["boxlite", "start", "box"], 1, REGISTRY),
+        (&["boxlite", "stop", "box"], 1, REGISTRY),
+        (&["boxlite", "restart", "box"], 1, REGISTRY),
+        (&["boxlite", "inspect", "box"], 1, REGISTRY),
+        (&["boxlite", "cp", "box:/src", "/tmp/dst"], 1, REGISTRY),
+        (&["boxlite", "stats", "box"], 1, REGISTRY),
+        (
+            &["boxlite", "network", "tunnel", "box", "3000"],
+            2,
+            REGISTRY,
+        ),
+        (&["boxlite", "images"], 1, LOCAL_WITHOUT_REGISTRY),
+        (&["boxlite", "info"], 1, LOCAL_WITHOUT_REGISTRY),
+        (&["boxlite", "logs", "box"], 1, LOCAL_WITHOUT_REGISTRY),
+        (&["boxlite", "pull", "alpine"], 1, LOCAL_WITH_REGISTRY),
+        (&["boxlite", "serve"], 1, LOCAL_WITH_REGISTRY),
+        (&["boxlite", "auth", "login"], 2, AUTH_WITH_URL),
+        (&["boxlite", "auth", "status"], 2, AUTH_WITH_URL),
+        (&["boxlite", "auth", "whoami"], 2, AUTH_WITH_URL),
+        (&["boxlite", "auth", "logout"], 2, AUTH_WITHOUT_URL),
+        (&["boxlite", "volume", "create"], 2, VOLUME),
+        (&["boxlite", "volume", "ls"], 2, VOLUME),
+        (&["boxlite", "volume", "list"], 2, VOLUME),
+        (&["boxlite", "volume", "get", "volume"], 2, VOLUME),
+        (&["boxlite", "volume", "inspect", "volume"], 2, VOLUME),
+        (&["boxlite", "volume", "rm", "volume"], 2, VOLUME),
+        (&["boxlite", "volume", "delete", "volume"], 2, VOLUME),
+        (&["boxlite", "completion", "bash"], 1, ALL_GLOBALS),
+    ];
+
+    fn assert_irrelevant_global_rejected(base: &[&str], command_depth: usize, id: &str) {
+        let tokens = global_option_tokens(id);
+        let mut positions = vec![1, command_depth + 1];
+        if command_depth > 1 {
+            positions.push(2);
+        }
+        positions.push(
+            base.iter()
+                .position(|token| *token == "--")
+                .unwrap_or(base.len()),
+        );
+        positions.sort_unstable();
+        positions.dedup();
+
+        for position in positions {
+            let mut args = base.to_vec();
+            args.splice(position..position, tokens.iter().copied());
+            let error = try_parse_from(&args).expect_err("irrelevant option must be rejected");
+            assert_eq!(error.kind(), ErrorKind::UnknownArgument, "{args:?}");
+            assert!(
+                error.to_string().contains(tokens[0]),
+                "error must identify {}: {error}",
+                tokens[0]
+            );
+        }
+    }
+
+    #[test]
+    fn every_command_path_rejects_irrelevant_global_options() {
+        for (base, command_depth, hidden) in IRRELEVANT_GLOBAL_CASES {
+            for id in *hidden {
+                assert_irrelevant_global_rejected(base, *command_depth, id);
+            }
+        }
+    }
+
+    #[test]
+    fn command_tree_rejects_irrelevant_options_encountered_before_help() {
+        for args in [
+            &[
+                "boxlite",
+                "exec",
+                "--registry",
+                "registry.example.test",
+                "--help",
+            ][..],
+            &[
+                "boxlite",
+                "auth",
+                "logout",
+                "--url=https://irrelevant.test",
+                "--help",
+            ][..],
+            &[
+                "boxlite",
+                "volume",
+                "list",
+                "--config",
+                "/tmp/irrelevant.json",
+                "--help",
+            ][..],
+            &["boxlite", "completion", "--debug", "bash", "--help"][..],
+        ] {
+            let error = try_parse_from(args).expect_err("irrelevant option precedes help");
+            assert_eq!(error.kind(), ErrorKind::UnknownArgument, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn display_actions_remain_terminal() {
+        for args in [
+            &[
+                "boxlite",
+                "--help",
+                "serve",
+                "--url",
+                "https://example.test",
+            ][..],
+            &[
+                "boxlite",
+                "-h",
+                "completion",
+                "--url",
+                "https://example.test",
+            ][..],
+            &[
+                "boxlite",
+                "serve",
+                "--help",
+                "--url",
+                "https://example.test",
+            ][..],
+            &[
+                "boxlite",
+                "auth",
+                "logout",
+                "--help",
+                "--url",
+                "https://example.test",
+            ][..],
+            &[
+                "boxlite",
+                "--registry",
+                "registry.example.test",
+                "exec",
+                "--help",
+            ][..],
+            &["boxlite", "--url", "https://example.test", "help", "serve"][..],
+        ] {
+            let error = try_parse_from(args).expect_err("help exits through clap");
+            assert_eq!(error.kind(), ErrorKind::DisplayHelp, "{args:?}");
+        }
+
+        let error = try_parse_from([
+            "boxlite",
+            "--registry",
+            "registry.example.test",
+            "--version",
+        ])
+        .expect_err("version exits through clap");
+        assert_eq!(error.kind(), ErrorKind::DisplayVersion);
+    }
+
+    #[test]
+    fn completion_uses_the_same_global_capability_matrix() {
+        let mut completion = completion_command();
+        completion.build();
+
+        let serve = completion
+            .get_subcommands()
+            .find(|subcommand| subcommand.get_name() == "serve")
+            .unwrap();
+        assert!(!serve.get_arguments().any(|arg| arg.get_id() == "url"));
+
+        let run = completion
+            .get_subcommands()
+            .find(|subcommand| subcommand.get_name() == "run")
+            .unwrap();
+        assert!(run.get_arguments().any(|arg| arg.get_id() == "url"));
+    }
+
+    #[test]
+    fn parser_rejects_options_that_cannot_affect_the_command() {
+        for args in [
+            &[
+                "boxlite",
+                "exec",
+                "--entrypoint",
+                "/bin/sh",
+                "box",
+                "--",
+                "true",
+            ][..],
+            &["boxlite", "create", "--detach", "alpine"][..],
+            &["boxlite", "create", "--rm", "alpine"][..],
+            &["boxlite", "images", "--all"][..],
+            &["boxlite", "run", "-i", "-d", "alpine"][..],
+            &["boxlite", "exec", "-i", "-d", "box", "--", "true"][..],
+            &["boxlite", "rm", "--all", "box"][..],
+            &["boxlite", "inspect", "--latest", "box"][..],
+            &["boxlite", "auth", "login", "--callback-port", "0"][..],
+            &["boxlite", "list", "--quiet", "--format", "json"][..],
+            &["boxlite", "images", "--quiet", "--format", "json"][..],
+            &["boxlite", "volume", "ls", "--quiet", "--format", "json"][..],
+            &["boxlite", "serve", "--api-key", ""][..],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err(), "accepted {args:?}");
+        }
+
+        let cli = Cli::try_parse_from(["boxlite", "run", "--entrypoint", "/bin/sh", "alpine"])
+            .expect("run owns --entrypoint");
+        let Commands::Run(run) = cli.command else {
+            panic!("expected run");
+        };
+        assert_eq!(run.entrypoint.as_deref(), Some("/bin/sh"));
+
+        let cli = Cli::try_parse_from(["boxlite", "cp", "--no-include-parent", "box:/src", "/dst"])
+            .expect("inverse parent option parses");
+        let Commands::Cp(cp) = cli.command else {
+            panic!("expected cp");
+        };
+        assert!(cp.no_include_parent);
+    }
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -1300,8 +2137,6 @@ mod tests {
             auto_delete: None,
             no_auto_resume: false,
             name: None,
-            detach: false,
-            rm: false,
             security: None,
         };
 
@@ -1348,7 +2183,7 @@ mod tests {
     fn experimental_flags_are_hidden_from_completions() {
         for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
             let mut output = Vec::new();
-            generate_completion(&shell, &mut Cli::command(), "boxlite", &mut output);
+            generate_completion(&shell, "boxlite", &mut output);
             let completion = String::from_utf8(output).unwrap();
 
             for name in [
@@ -1524,27 +2359,14 @@ mod tests {
         assert!(err.to_string().contains("network mode"));
     }
 
-    fn process_flags_with_entrypoint(entrypoint: Option<&str>) -> ProcessFlags {
+    fn process_flags() -> ProcessFlags {
         ProcessFlags {
             interactive: false,
             tty: false,
             env: Vec::new(),
             workdir: None,
             user: None,
-            entrypoint: entrypoint.map(str::to_string),
         }
-    }
-
-    #[test]
-    fn test_process_flags_entrypoint_override() {
-        // --entrypoint <EXEC> reaches BoxOptions.entrypoint as a single-token
-        // argv, which container_rootfs applies as config.entrypoint.
-        let mut opts = BoxOptions::default();
-        process_flags_with_entrypoint(Some("/bin/bash"))
-            .apply_to(&mut opts)
-            .expect("entrypoint apply");
-
-        assert_eq!(opts.entrypoint, Some(vec!["/bin/bash".to_string()]));
     }
 
     /// `-t` has to reach `BoxOptions.tty`, because the terminal now belongs to
@@ -1557,23 +2379,11 @@ mod tests {
         let mut opts = BoxOptions::default();
         assert!(!opts.tty, "a box is not a terminal by default");
 
-        let mut flags = process_flags_with_entrypoint(None);
+        let mut flags = process_flags();
         flags.tty = true;
         flags.apply_to(&mut opts).expect("tty apply");
 
         assert!(opts.tty, "-t must make the main command a terminal");
-    }
-
-    #[test]
-    fn test_process_flags_entrypoint_default_none() {
-        // No --entrypoint leaves BoxOptions.entrypoint None so the image's
-        // own entrypoint is used unchanged.
-        let mut opts = BoxOptions::default();
-        process_flags_with_entrypoint(None)
-            .apply_to(&mut opts)
-            .expect("no-op apply");
-
-        assert_eq!(opts.entrypoint, None);
     }
 
     #[test]
@@ -1976,8 +2786,6 @@ mod tests {
     ) -> ManagementFlags {
         ManagementFlags {
             name: None,
-            detach: false,
-            rm: false,
             security: None,
             nested_virtualization: false,
             auto_stop,
@@ -2120,8 +2928,6 @@ mod tests {
     fn management_security_preset_applies_to_box_options() {
         let flags = ManagementFlags {
             name: None,
-            detach: false,
-            rm: false,
             security: Some("disable".to_string()),
             nested_virtualization: false,
             auto_stop: None,
@@ -2141,8 +2947,6 @@ mod tests {
     fn management_security_preset_absent_leaves_default() {
         let flags = ManagementFlags {
             name: None,
-            detach: false,
-            rm: false,
             security: None,
             nested_virtualization: false,
             auto_stop: None,
@@ -2164,8 +2968,6 @@ mod tests {
     fn management_security_preset_typo_surfaces_anyhow_error() {
         let flags = ManagementFlags {
             name: None,
-            detach: false,
-            rm: false,
             security: Some("ultra".to_string()),
             nested_virtualization: false,
             auto_stop: None,

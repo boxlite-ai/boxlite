@@ -12,8 +12,6 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::OnceLock;
 
-use clap::CommandFactory;
-use clap::Parser;
 use cli::Cli;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -21,12 +19,11 @@ use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::Subs
 static FILE_LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
 fn main() {
-    let mut cli = Cli::parse();
+    let mut cli = cli::parse();
 
     // Handle shell completion before starting tokio or tracing
     if let cli::Commands::Completion(args) = &cli.command {
-        let mut cmd = Cli::command();
-        cli::generate_completion(&args.shell, &mut cmd, "boxlite", &mut std::io::stdout());
+        cli::generate_completion(&args.shell, "boxlite", &mut std::io::stdout());
         process::exit(0);
     }
 
@@ -75,16 +72,10 @@ async fn run_cli(cli: Cli) -> i32 {
 
     // For `boxlite serve`, the daemon's logs must land under the *resolved*
     // home_dir (config file + --home + BOXLITE_HOME), not just the --home flag.
-    // Other subcommands resolve options later inside their handlers.
-    //
-    // The `.ok()` here is intentionally best-effort: this resolution is only
-    // consulted for the log directory. In local mode the serve handler calls
-    // `create_runtime()` which re-runs `resolve_runtime_options()` and
-    // surfaces config errors to the user. In REST mode (`--url` /
-    // `BOXLITE_API_KEY` set) the resolver is *not* re-invoked, so a malformed
-    // config file is silently ignored here; `boxlite serve` is overwhelmingly
-    // a local-daemon operation, so we accept that narrow gap rather than
-    // duplicating the resolver call here.
+    // Other subcommands resolve options later inside their handlers. The
+    // `.ok()` here is intentionally best-effort because this first resolution
+    // only selects the log directory; the serve handler resolves again and
+    // surfaces any malformed config as the command error.
     let serve_mode = matches!(cli.command, cli::Commands::Serve(_));
     let serve_home_dir = if serve_mode {
         cli.global
