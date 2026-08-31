@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { DataSource, EntityManager, FindOptionsWhere } from 'typeorm'
+import { DataSource, EntityManager, FindOptionsWhere, In, Not } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
@@ -22,6 +22,10 @@ import { BoxDesiredStateUpdatedEvent } from '../events/box-desired-state-updated
 import { BoxPublicStatusUpdatedEvent } from '../events/box-public-status-updated.event'
 import { BoxOrganizationUpdatedEvent } from '../events/box-organization-updated.event'
 import { BoxLookupCacheInvalidationService } from '../services/box-lookup-cache-invalidation.service'
+import {
+  BoxCreationAdmissionUnavailableError,
+  BoxCreationLimitExceededError,
+} from '../errors/box-creation-limit.error'
 
 // SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
 // acquire a lock.
@@ -36,6 +40,23 @@ const PG_LOCK_TIMEOUT_CODE = '55P03'
 // race-lost no-op. Aligned with the caller-side wait cap in
 // boxlite-proxy.controller.ts (PROXY_START_HINT_TIMEOUT_MS).
 const PROXY_START_LOCK_TIMEOUT_MS = 2000
+
+// SERIALIZABLE protects the count-and-write admission decision without a
+// per-organization mutex. PostgreSQL aborts one conflicting transaction with
+// SQLSTATE 40001; retry the whole decision, never only the write.
+const PG_SERIALIZATION_FAILURE_CODE = '40001'
+const CREATION_ADMISSION_MAX_ATTEMPTS = 5
+const CREATION_ADMISSION_BASE_BACKOFF_MS = 5
+const CREATION_ADMISSION_MAX_BACKOFF_MS = 40
+const CREATION_ADMISSION_JITTER_MS = 5
+
+const BOX_CREATION_LIMIT_EXCLUDED_STATES = [
+  BoxState.ERROR,
+  BoxState.DESTROYING,
+  BoxState.DESTROYED,
+  BoxState.ARCHIVING,
+  BoxState.ARCHIVED,
+]
 
 // A box the migration marker may claim, with the stamp its claim copies.
 type ParkedBox = { id: string; updatedAt: Date }
@@ -52,7 +73,7 @@ export class BoxRepository extends BaseRepository<Box> {
     super(dataSource, eventEmitter, Box)
   }
 
-  async insert(box: Box): Promise<Box> {
+  async insert(box: Box, maxCreatedBoxes?: number): Promise<Box> {
     const now = new Date()
     if (!box.createdAt) {
       box.createdAt = now
@@ -64,7 +85,7 @@ export class BoxRepository extends BaseRepository<Box> {
     box.assertValid()
     box.enforceInvariants()
 
-    await this.dataSource.transaction(async (entityManager) => {
+    await this.withCreationAdmission(box.organizationId, maxCreatedBoxes, async (entityManager) => {
       await entityManager.insert(Box, box)
       await this.upsertLastActivity(entityManager, box.id, box.createdAt)
     })
@@ -80,7 +101,7 @@ export class BoxRepository extends BaseRepository<Box> {
    *
    * @returns `void` because a raw update is performed.
    */
-  async update(id: string, params: { updateData: Partial<Box> }, raw: true): Promise<void>
+  async update(id: string, params: { updateData: Partial<Box>; maxCreatedBoxes?: number }, raw: true): Promise<void>
   /**
    * @param id - The ID of the box to update.
    * @param params.updateData - The partial data to update.
@@ -88,9 +109,17 @@ export class BoxRepository extends BaseRepository<Box> {
    *
    * @returns The updated box.
    */
-  async update(id: string, params: { updateData: Partial<Box>; entity?: Box }, raw?: false): Promise<Box>
-  async update(id: string, params: { updateData: Partial<Box>; entity?: Box }, raw = false): Promise<Box | void> {
-    const { updateData, entity } = params
+  async update(
+    id: string,
+    params: { updateData: Partial<Box>; entity?: Box; maxCreatedBoxes?: number },
+    raw?: false,
+  ): Promise<Box>
+  async update(
+    id: string,
+    params: { updateData: Partial<Box>; entity?: Box; maxCreatedBoxes?: number },
+    raw = false,
+  ): Promise<Box | void> {
+    const { updateData, entity, maxCreatedBoxes } = params
 
     if (raw) {
       await this.repository.update(id, updateData)
@@ -108,7 +137,7 @@ export class BoxRepository extends BaseRepository<Box> {
     box.assertValid()
     const invariantChanges = box.enforceInvariants()
 
-    await this.dataSource.transaction(async (entityManager) => {
+    await this.withCreationAdmission(box.organizationId, maxCreatedBoxes, async (entityManager) => {
       const result = await entityManager.update(
         Box,
         {
@@ -134,6 +163,63 @@ export class BoxRepository extends BaseRepository<Box> {
     this.invalidateLookupCacheOnUpdate(box, previousBox)
 
     return box
+  }
+
+  private async withCreationAdmission<T>(
+    organizationId: string,
+    maxCreatedBoxes: number | undefined,
+    persist: (entityManager: EntityManager) => Promise<T>,
+  ): Promise<T> {
+    if (maxCreatedBoxes === undefined) {
+      return this.dataSource.transaction(persist)
+    }
+
+    for (let attempt = 0; attempt < CREATION_ADMISSION_MAX_ATTEMPTS; attempt++) {
+      try {
+        return await this.dataSource.transaction('SERIALIZABLE', async (entityManager) => {
+          const currentCount = await entityManager.count(Box, {
+            where: {
+              organizationId,
+              state: Not(In(BOX_CREATION_LIMIT_EXCLUDED_STATES)),
+            },
+          })
+          if (currentCount >= maxCreatedBoxes) {
+            throw new BoxCreationLimitExceededError(currentCount, maxCreatedBoxes)
+          }
+
+          return persist(entityManager)
+        })
+      } catch (error) {
+        if (!this.isSerializationFailure(error)) {
+          throw error
+        }
+        if (attempt === CREATION_ADMISSION_MAX_ATTEMPTS - 1) {
+          throw new BoxCreationAdmissionUnavailableError('Box creation admission remained contended; retry the request')
+        }
+
+        await this.waitBeforeAdmissionRetry(attempt)
+      }
+    }
+
+    throw new BoxCreationAdmissionUnavailableError()
+  }
+
+  private isSerializationFailure(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: unknown }).code === PG_SERIALIZATION_FAILURE_CODE
+    )
+  }
+
+  private async waitBeforeAdmissionRetry(attempt: number): Promise<void> {
+    const exponentialBackoff = Math.min(
+      CREATION_ADMISSION_BASE_BACKOFF_MS * 2 ** attempt,
+      CREATION_ADMISSION_MAX_BACKOFF_MS,
+    )
+    const jitter = Math.floor(Math.random() * (CREATION_ADMISSION_JITTER_MS + 1))
+    await new Promise((resolve) => setTimeout(resolve, exponentialBackoff + jitter))
   }
 
   /**

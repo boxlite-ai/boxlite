@@ -37,6 +37,7 @@ import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.map
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
+import { CommerceBoxLimitService } from './commerce-box-limit.service'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml, not the
 // generated product spec (which `:prefix` routes would render invalid).
@@ -67,6 +68,7 @@ export class BoxliteBoxController {
   constructor(
     private readonly boxService: BoxService,
     private readonly boxStateWaiter: BoxStateWaiterService,
+    private readonly commerceBoxLimitService: CommerceBoxLimitService,
   ) {}
 
   @Post()
@@ -113,8 +115,9 @@ export class BoxliteBoxController {
   ): Promise<BoxResponseDto> {
     const organization = authContext.organization
     const createBoxDto = createBoxToCreateBox(dto)
+    const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
 
-    let box = await this.boxService.create(createBoxDto, organization)
+    let box = await this.boxService.create(createBoxDto, organization, { maxCreatedBoxes })
     if (box.state !== BoxState.STARTED) {
       box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
     }

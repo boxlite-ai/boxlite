@@ -305,6 +305,10 @@ paths:
           $ref: "#/components/responses/ConflictError"
         "422":
           $ref: "#/components/responses/UnprocessableEntityError"
+        "429":
+          $ref: "#/components/responses/ResourceExhaustedError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
     get:
       operationId: listBoxes
@@ -1322,6 +1326,19 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
+
+    ResourceExhaustedError:
+      description: The organization has reached its active Box creation limit
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              message: "Organization box creation limit reached: 2 of 2 boxes are already counted"
+              type: ResourceExhaustedError
+              code: resource_exhausted
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     ServiceUnavailableError:
       description: A required backend service is not configured or available

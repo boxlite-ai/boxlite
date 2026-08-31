@@ -16,6 +16,7 @@ import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
+import { CommerceBoxLimitService } from './commerce-box-limit.service'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -42,6 +43,10 @@ describe('BoxLite REST routing', () => {
         },
         {
           provide: BoxStateWaiterService,
+          useValue: {},
+        },
+        {
+          provide: CommerceBoxLimitService,
           useValue: {},
         },
       ],

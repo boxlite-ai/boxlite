@@ -16,6 +16,7 @@ import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxAutoResumeService } from './box-auto-resume.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
+import { CommerceBoxLimitService } from './commerce-box-limit.service'
 
 @Module({
   imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule],
@@ -26,7 +27,7 @@ import { BoxliteVolumeController } from './boxlite-volume.controller'
     BoxliteProxyController,
     BoxliteVolumeController,
   ],
-  providers: [BoxliteWsProxyService, BoxAutoResumeService],
+  providers: [BoxliteWsProxyService, BoxAutoResumeService, CommerceBoxLimitService],
   exports: [BoxliteWsProxyService],
 })
 export class BoxliteRestModule {}
