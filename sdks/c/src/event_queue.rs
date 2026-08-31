@@ -1300,6 +1300,8 @@ mod owned_ffi_ptr_nested_leak_tests {
                 }]),
             ))),
             started_at: 0,
+            exit_code: 0,
+            has_exit_code: 0,
         });
 
         let owned = OwnedFfiPtr::new_with(payload, crate::info::free_box_info_ptr);
@@ -1372,6 +1374,8 @@ mod owned_ffi_ptr_nested_leak_tests {
             created_at: 0,
             network: std::ptr::null_mut(),
             started_at: 0,
+            exit_code: 0,
+            has_exit_code: 0,
         }];
         let items_ptr = items_vec.as_mut_ptr();
         let items_len = items_vec.len();

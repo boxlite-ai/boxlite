@@ -71,3 +71,28 @@ func TestCNetworkInfoToGoTraversesNativeStruct(t *testing.T) {
 		})
 	}
 }
+
+// TestCBoxInfoToGoTraversesExitCode checks that the has_exit_code flag, not the
+// code's value, decides whether ExitCode is set — a recorded 0 is a successful
+// workload, not an absent result.
+func TestCBoxInfoToGoTraversesExitCode(t *testing.T) {
+	fixtures := cBoxInfoExitCodeTestFixtures()
+	zero, three := 0, 3
+	tests := []struct {
+		name string
+		got  *int
+		want *int
+	}{
+		{name: "no code recorded", got: fixtures[0]},
+		{name: "nonzero exit code", got: fixtures[1], want: &three},
+		{name: "zero exit code is not absence", got: fixtures[2], want: &zero},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if !reflect.DeepEqual(test.got, test.want) {
+				t.Fatalf("cBoxInfoToGo().ExitCode = %v, want %v", test.got, test.want)
+			}
+		})
+	}
+}

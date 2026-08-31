@@ -269,6 +269,8 @@ export interface JsBoxStateInfo {
   status: string;
   running: boolean;
   pid?: number;
+  /** Init exit code, when the box stopped because its command exited. */
+  exitCode?: number;
 }
 
 export interface JsPublishedPort {

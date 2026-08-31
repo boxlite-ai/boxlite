@@ -83,6 +83,10 @@ type BoxInfo struct {
 	// the configured user task becomes ready, exits, or completes; those are
 	// workload lifecycle outcomes.
 	StartedAt time.Time
+	// ExitCode is the init's exit code, when the box stopped because its command
+	// exited; nil when no code has been recorded. A pointer, not a plain int,
+	// because 0 is the most common valid exit code.
+	ExitCode *int
 }
 
 // Info returns information about the box.
@@ -175,6 +179,11 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 	if ms := int64(info.started_at); ms > 0 {
 		boxStartedAt = time.UnixMilli(ms)
 	}
+	var exitCode *int
+	if info.has_exit_code != 0 {
+		code := int(info.exit_code)
+		exitCode = &code
+	}
 	return BoxInfo{
 		ID:         cString(info.id),
 		Name:       cString(info.name),
@@ -191,6 +200,7 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 		CreatedAt:  time.Unix(int64(info.created_at), 0),
 
 		StartedAt: boxStartedAt,
+		ExitCode:  exitCode,
 	}
 }
 

@@ -345,6 +345,12 @@ typedef struct CBoxInfo {
   // Milliseconds — not `created_at`'s seconds — preserve sub-second ordering
   // against a job's timeline.
   int64_t started_at;
+  // Init exit code, when the box stopped because its command exited. Read it
+  // only when [`Self::has_exit_code`] is nonzero — `0` is a valid exit code,
+  // so it cannot double as "none recorded" the way [`Self::pid`] does.
+  int exit_code;
+  // Nonzero when [`Self::exit_code`] holds a recorded exit code.
+  int has_exit_code;
 } CBoxInfo;
 
 // Box info completion. On success the callback owns the non-null metadata and
