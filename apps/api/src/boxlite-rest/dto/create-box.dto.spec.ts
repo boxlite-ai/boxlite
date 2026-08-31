@@ -221,72 +221,70 @@ describe('CreateBoxDto managed volumes', () => {
       ?.children?.[0]?.children?.find((error) => error.property === 'read_only')?.constraints
   }
 
-  it('accepts read-write managed volume mounts', async () => {
-    const errors = await validate(
-      plainToInstance(CreateBoxDto, {
-        volumes: [{ source: 'volume://volume-123', guest_path: '/data', read_only: false }],
-      }),
-    )
+  it('accepts a managed volume mount by id and by name', async () => {
+    for (const managed_volume of ['volume-123', 'customer-data']) {
+      const errors = await validate(
+        plainToInstance(CreateBoxDto, {
+          volumes: [{ managed_volume, guest_path: '/data', read_only: false }],
+        }),
+      )
 
-    expect(errors).toHaveLength(0)
+      expect(errors).toHaveLength(0)
+    }
   })
 
-  it('rejects volume mounts with neither source nor host_path', async () => {
+  it('rejects a volume mount with no managed_volume', async () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
         volumes: [{ guest_path: '/data', read_only: false }],
       }),
     )
 
-    expect(JSON.stringify(errors)).toContain('hasVolumeSource')
+    expect(JSON.stringify(errors)).toContain('isString')
   })
 
-  it('accepts the deprecated host_path in place of source', async () => {
+  it('rejects an empty managed_volume', async () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
-        volumes: [{ host_path: 'volume://volume-123', guest_path: '/data' }],
-      }),
-    )
-
-    expect(errors).toHaveLength(0)
-  })
-
-  it('rejects an empty source', async () => {
-    const errors = await validate(
-      plainToInstance(CreateBoxDto, {
-        volumes: [{ source: '', guest_path: '/data' }],
+        volumes: [{ managed_volume: '', guest_path: '/data' }],
       }),
     )
 
     expect(JSON.stringify(errors)).toContain('isNotEmpty')
   })
 
-  it('rejects an empty host_path', async () => {
-    const errors = await validate(
-      plainToInstance(CreateBoxDto, {
-        volumes: [{ host_path: '', guest_path: '/data' }],
-      }),
-    )
+  // This API mounts managed volumes only. A path here would name the server's
+  // filesystem, so it gets a message that says so rather than a "not found"
+  // for a volume the caller never meant to reference.
+  it.each(['/host/data', './data', '../data', '~/data', 'C:\\data', 'D:/data', '\\\\server\\share'])(
+    'rejects the host path %s with a host-bind message',
+    async (managed_volume) => {
+      const errors = await validate(
+        plainToInstance(CreateBoxDto, {
+          volumes: [{ managed_volume, guest_path: '/data' }],
+        }),
+      )
 
-    expect(JSON.stringify(errors)).toContain('isNotEmpty')
-  })
+      expect(JSON.stringify(errors)).toContain('host bind mounts are not supported')
+    },
+  )
 
-  it('rejects an empty source even with a valid host_path fallback available', async () => {
-    // An empty string is a malformed `source`, not an absent one - it must
-    // not be silently swapped for host_path in the mapper.
-    const errors = await validate(
-      plainToInstance(CreateBoxDto, {
-        volumes: [{ source: '', host_path: 'volume://volume-123', guest_path: '/data' }],
-      }),
-    )
+  it('still accepts a name that merely contains a dot or dash', async () => {
+    for (const managed_volume of ['my.data', 'my-data', 'a.b-c_d']) {
+      const errors = await validate(
+        plainToInstance(CreateBoxDto, {
+          volumes: [{ managed_volume, guest_path: '/data' }],
+        }),
+      )
 
-    expect(JSON.stringify(errors)).toContain('isNotEmpty')
+      expect(errors).toHaveLength(0)
+    }
   })
 
   it('rejects read-only cloud volume mounts until the backend supports them', async () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
-        volumes: [{ source: 'volume://volume-123', guest_path: '/data', read_only: true }],
+        volumes: [{ managed_volume: 'volume-123', guest_path: '/data', read_only: true }],
       }),
     )
 
@@ -296,7 +294,7 @@ describe('CreateBoxDto managed volumes', () => {
   it('rejects null read_only values', async () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
-        volumes: [{ source: 'volume://volume-123', guest_path: '/data', read_only: null }],
+        volumes: [{ managed_volume: 'volume-123', guest_path: '/data', read_only: null }],
       }),
     )
 
@@ -349,5 +347,70 @@ describe('CreateBoxDto legacy network compatibility through the request pipeline
 
   it('rejects a non-empty array for network, as before', async () => {
     await expect(pipe.transform({ image: 'alpine:latest', network: [{ mode: 'enabled' }] }, meta)).rejects.toThrow()
+  })
+})
+
+// The runner always detaches, so `detach` is accepted and ignored. Refusing
+// `false` is the tempting mistake and would be a breaking one:
+// CreateBoxRequest::from_options sends `detach` unconditionally and
+// BoxOptions::detach defaults to false, so the Rust core — and the CLI and
+// every SDK riding it — puts `"detach": false` on every create that did not
+// pass `-d`. Both values must validate.
+describe('CreateBoxDto detach policy', () => {
+  it.each([
+    ['true', true],
+    ['false, which is what an un-flagged first-party client sends', false],
+  ])('accepts detach: %s', async (_label, detach) => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { image: 'alpine:latest', detach }))
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('accepts a request that omits detach', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { image: 'alpine:latest' }))
+
+    expect(errors).toHaveLength(0)
+  })
+})
+
+describe('CreateBoxDto secrets', () => {
+  it('accepts a secret with name+value and optional hosts/placeholder', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        secrets: [{ name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' }],
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('accepts a secret with only name+value', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: 'sk-test' }] }))
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('rejects a secret missing its name', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ value: 'sk-test' }] }))
+
+    expect(errors).not.toHaveLength(0)
+    // @ValidateNested({ each: true }) reports one child per array slot, and the
+    // slot's children hold the per-property errors, so constraints sit two
+    // levels below the top-level secrets error.
+    expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isNotEmpty')
+  })
+
+  it('rejects a secret missing its value', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai' }] }))
+
+    expect(errors).not.toHaveLength(0)
+    expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isString')
+  })
+
+  it('rejects a secret with an empty value', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: '' }] }))
+
+    expect(errors).not.toHaveLength(0)
+    expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isNotEmpty')
   })
 })

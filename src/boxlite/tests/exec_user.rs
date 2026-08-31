@@ -116,3 +116,84 @@ async fn test_exec_user_overrides() {
 
     tb.teardown().await;
 }
+
+/// A non-root exec-user image (grafana/grafana, User="472") must satisfy two
+/// properties inside the running box:
+///
+/// 1. **Exec user** — `id -u` returns 472 (resolved from OCI config User field
+///    via /etc/passwd inside the image).
+/// 2. **Inode ownership** — `/etc/grafana` is owned by uid=472 in the ext4
+///    filesystem. This is the regression guard: before commit 5f23beec the ext4
+///    build stamped all inodes as uid=0, so grafana (uid=472) could not write
+///    its own config. `normalize_inodes_with_debugfs` fixes this at build time
+///    by reading `user.containers.override_stat` xattr per inode.
+///
+/// Both assertions use the image-declared uid (472), not the host process uid,
+/// which is intentionally different from 472 on any normal developer machine.
+#[tokio::test]
+async fn test_non_root_image_user_exec_uid_and_inode_ownership() {
+    // The test proves that the box runs as the *image-declared* uid (472), not
+    // the host process uid.  If they happen to be equal the assertion is
+    // tautological — skip rather than give a false green.
+    const IMAGE_UID: u32 = 472;
+    let host_uid = unsafe { libc::getuid() };
+    if host_uid == IMAGE_UID {
+        eprintln!(
+            "skipping: host uid={host_uid} == image uid={IMAGE_UID}; \
+             test would be vacuous"
+        );
+        return;
+    }
+
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime
+        .create(
+            boxlite::runtime::options::BoxOptions {
+                rootfs: boxlite::runtime::options::RootfsSpec::Image(
+                    "grafana/grafana:latest".into(),
+                ),
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .expect("create grafana box");
+    handle.start().await.expect("start grafana box");
+
+    // 1. Exec user must be uid=472, not the host uid.
+    let exec_uid = exec_stdout(&handle, BoxCommand::new("id").arg("-u")).await;
+    assert_eq!(
+        exec_uid.trim(),
+        "472",
+        "exec uid must be 472 (OCI User=\"472\"), got: {exec_uid:?}"
+    );
+
+    // 2. /var/lib/grafana inode must be owned by uid=472 — normalize_inodes guarantee.
+    //    The grafana image explicitly chowns this dir to uid=472 so the process
+    //    can write its database. If normalize_inodes regresses (all inodes → uid=0),
+    //    grafana gets EACCES trying to write /var/lib/grafana and crashes on startup.
+    //    Note: /etc/grafana is root-owned by design; /var/lib/grafana is the
+    //    canonical uid=472 path in the official grafana/grafana image.
+    let inode_uid = exec_stdout(
+        &handle,
+        BoxCommand::new("stat").args(["-c", "%u", "/var/lib/grafana"]),
+    )
+    .await;
+    assert_eq!(
+        inode_uid.trim(),
+        "472",
+        "/var/lib/grafana inode must be uid=472 (image-declared), not uid=0 (root): \
+         normalize_inodes_with_debugfs stamps ownership at ext4 build time"
+    );
+
+    handle.stop().await.expect("stop");
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
+}

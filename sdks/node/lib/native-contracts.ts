@@ -27,10 +27,12 @@ export interface ImageHandle {
   list(): Promise<ImageInfo[]>;
 }
 
-/** Metadata for a named volume returned by the native runtime. */
+/** Metadata for a managed volume returned by the native runtime. */
 export interface VolumeInfo {
   /** Server-assigned volume id used by get and remove operations. */
   id: string;
+  /** Volume name, mountable in place of the id. Defaults to the id. */
+  name: string;
   /** Creation timestamp formatted as an RFC 3339 string. */
   createdAt: string;
   /** Volume size in bytes when the backend can report it. */
@@ -40,13 +42,15 @@ export interface VolumeInfo {
 /** Runtime-scoped handle for named-volume operations. */
 export interface VolumeHandle {
   /**
-   * Creates a new named volume.
+   * Creates a new managed volume.
    *
+   * @param name Optional volume name, mountable in place of the returned id.
+   * The server names the volume after its id when omitted.
    * @returns Metadata for the created volume.
    * @throws A native BoxLite error when the backend does not support volumes or
    * the volume cannot be created.
    */
-  create(): Promise<VolumeInfo>;
+  create(name?: string): Promise<VolumeInfo>;
   /**
    * Lists named volumes visible to this runtime.
    *
@@ -77,36 +81,53 @@ export interface JsEnvVar {
   value: string;
 }
 
-export type JsVolumeSpec =
-  | {
-      /** Scheme-qualified managed volume source, e.g. volume://vol_123. */
-      source: string;
-      guestPath: string;
-      readOnly?: boolean;
-    }
-  | {
-      /** Path on the local host for host-path mounts. */
-      hostPath: string;
-      guestPath: string;
-      readOnly?: boolean;
-    };
+export type JsVolumeSpec = JsManagedVolumeSpec | JsHostPathVolumeSpec;
 
-export interface JsVolumeSourceSpec {
-  /** Scheme-qualified managed volume source, e.g. volume://vol_123. */
-  source: string;
+export interface JsManagedVolumeSpec {
+  /** Managed volume, by server-assigned id or by name — the server resolves either. */
+  managedVolume: string;
   guestPath: string;
-  readOnly?: boolean;
+  /**
+   * Read-only managed mounts are not implemented yet; `true` is rejected
+   * rather than silently downgraded to read-write.
+   */
+  readOnly?: false;
 }
 
 export interface JsHostPathVolumeSpec {
-  /** Path on the local host for host-path mounts. */
+  /** Path on the local host for host-path mounts. Local runtimes only. */
   hostPath: string;
   guestPath: string;
   readOnly?: boolean;
 }
 
 export interface JsNetworkSpec {
+  outbound?: JsOutboundNetworkSpec;
+  inbound?: JsInboundNetworkSpec;
+  /**
+   * @deprecated Use `outbound.mode`. Accepted as a legacy alias; supplying it
+   * together with `outbound` is rejected.
+   */
+  mode?: "enabled" | "disabled";
+  /**
+   * @deprecated Use `outbound.allowNet`. Accepted as a legacy alias; supplying
+   * it together with `outbound` is rejected.
+   */
+  allowNet?: string[];
+}
+
+export interface JsOutboundNetworkSpec {
   mode: "enabled" | "disabled";
+  allowNet?: string[];
+}
+
+export interface JsInboundNetworkSpec {
+  /** Inbound mode: "enabled" (publicly reachable) or "disabled" (private). */
+  mode: "enabled" | "disabled";
+  /**
+   * Not supported yet: a non-empty value is rejected. Exists for shape
+   * symmetry with the outbound spec; inbound access follows `mode` alone.
+   */
   allowNet?: string[];
 }
 
@@ -257,8 +278,17 @@ export interface JsPublishedPort {
   protocol: "tcp" | "udp";
 }
 
-export interface JsNetworkInfo {
+export interface JsNetworkDirectionInfo {
   mode: "enabled" | "disabled";
+  allowNet: string[];
+}
+
+export interface JsNetworkInfo {
+  outbound: JsNetworkDirectionInfo;
+  inbound: JsNetworkDirectionInfo;
+  /** @deprecated Use `outbound.mode`. Mirrors it for legacy readers. */
+  mode: "enabled" | "disabled";
+  /** @deprecated Use `outbound.allowNet`. Mirrors it for legacy readers. */
   allowNet: string[];
   /** `null` means unknown to this handle; `[]` means no active publications. */
   publishedPorts: JsPublishedPort[] | null;

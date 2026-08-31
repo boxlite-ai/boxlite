@@ -32,6 +32,8 @@ export const queryKeys = {
         [...queryKeys.organization.all, organizationId, 'usage', 'overview'] as const,
       series: (organizationId: string, params: object) =>
         [...queryKeys.organization.all, organizationId, 'usage', 'series', params] as const,
+      concurrency: (organizationId: string, params: object) =>
+        [...queryKeys.organization.all, organizationId, 'usage', 'concurrency', params] as const,
     },
 
     plan: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'plan'] as const,
@@ -48,11 +50,12 @@ export const queryKeys = {
     emails: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'emails'] as const,
     portalUrl: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'portal-url'] as const,
     checkoutUrl: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'checkout-url'] as const,
-    invoices: (organizationId: string, page?: number, perPage?: number) =>
+    paymentMethods: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'payment-methods'] as const,
+    transactions: (organizationId: string, page?: number, perPage?: number) =>
       [
         ...queryKeys.billing.all,
         organizationId,
-        'invoices',
+        'transactions',
         ...(page !== undefined && perPage !== undefined ? [{ page, perPage }] : []),
       ] as const,
   },

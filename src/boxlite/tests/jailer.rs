@@ -84,27 +84,25 @@ impl JailerHome {
 }
 
 fn jailer_enabled_options() -> BoxOptions {
+    let mut advanced = AdvancedBoxOptions::default();
+    advanced.security = SecurityOptions {
+        jailer_enabled: true,
+        ..SecurityOptions::default()
+    };
     BoxOptions {
-        advanced: AdvancedBoxOptions {
-            security: SecurityOptions {
-                jailer_enabled: true,
-                ..SecurityOptions::default()
-            },
-            ..Default::default()
-        },
+        advanced,
         ..common::alpine_opts()
     }
 }
 
 fn jailer_disabled_options() -> BoxOptions {
+    let mut advanced = AdvancedBoxOptions::default();
+    advanced.security = SecurityOptions {
+        jailer_enabled: false,
+        ..SecurityOptions::default()
+    };
     BoxOptions {
-        advanced: AdvancedBoxOptions {
-            security: SecurityOptions {
-                jailer_enabled: false,
-                ..SecurityOptions::default()
-            },
-            ..Default::default()
-        },
+        advanced,
         ..common::alpine_opts()
     }
 }
@@ -219,6 +217,38 @@ async fn jailer_enabled_box_starts_and_executes() {
     assert!(
         out.contains("jailer-test"),
         "Command should succeed with jailer enabled"
+    );
+}
+
+/// #1072: dropping the jailer's own network grants must not take the shim's
+/// AF_UNIX control plane with it.
+///
+/// `security.network_enabled=false` gates host-side grants only, but on macOS
+/// those grants carried the profile's sole `network-bind`/`network-outbound`
+/// rules — which is how the shim binds `box.sock` and dials `ready.sock`. The
+/// box therefore died on `bind: operation not permitted` about a millisecond
+/// after start, for any network mode. Paired here with `NetworkSpec::Disabled`
+/// because that is the only combination config validation still accepts.
+#[tokio::test]
+async fn host_network_grants_off_box_starts_and_executes() {
+    let jh = JailerHome::new();
+    let mut advanced = AdvancedBoxOptions::default();
+    advanced.security = SecurityOptions {
+        jailer_enabled: true,
+        network_enabled: false,
+        ..SecurityOptions::default()
+    };
+    let options = BoxOptions {
+        advanced,
+        ..common::alpine_opts()
+    };
+    let t = BoxTestBase::with_home(jh.home, options).await;
+    t.bx.start().await.unwrap();
+
+    let out = t.exec_stdout("echo", &["no-net-grants"]).await;
+    assert!(
+        out.contains("no-net-grants"),
+        "Box must start without the jailer's network grants"
     );
 }
 

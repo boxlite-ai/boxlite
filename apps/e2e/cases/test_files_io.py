@@ -12,9 +12,9 @@ focuses on the bytes-over-the-wire surface: the parts where the
 REST/runner path could plausibly diverge from local FFI.
 
 Path note: copy_in / copy_out operate on the box's container rootfs,
-not tmpfs mounts. `/tmp` in the guest is a tmpfs (its writes never hit
-the rootfs disk and so are invisible to copy_out). Always copy under
-`/workspace/...` to keep tests deterministic.
+not tmpfs mounts. `/tmp` in the guest is a tmpfs, so both directions
+now refuse paths under it rather than transferring the shadowed rootfs
+copy. Copy under `/workspace/...` — this is enforced, not advisory.
 """
 
 from __future__ import annotations

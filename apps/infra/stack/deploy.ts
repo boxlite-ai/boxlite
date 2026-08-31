@@ -12,6 +12,7 @@ import { buildApi } from './api.js'
 import { buildEdge } from './edge.js'
 import { buildRunners } from './runners.js'
 import { buildClickHouseStorage, buildClickHouseWriterReady } from './clickhouse.js'
+import { buildMail } from './mail.js'
 
 export async function deployStack() {
     const {
@@ -20,7 +21,9 @@ export async function deployStack() {
       requireIamPermissionsBoundaryStage,
       requireOidcIssuer,
       resolveAwsRegion,
+      resolveMailDomain,
       resolvePublicDeploymentConfig,
+      sesSmtpEndpoint,
     } = await import('../deployment/environment.js')
     // eslint-disable-next-line @nx/enforce-module-boundaries -- Stack synthesis shares the policy host's CommonJS Runner model.
     const { resolveRunnerInventory } = await import('../runner/model/inventory.js')
@@ -68,7 +71,6 @@ export async function deployStack() {
     const defaultRunnerApiKey = randomKey('DefaultRunnerApiKey')
     const defaultRunnerConfig = runnerInventory[0]
     const defaultRunnerName = defaultRunnerConfig.controlPlaneRunnerName
-    const pgAdminPassword = randomKey('PgAdminPassword', 24)
     // App secrets — set via `npm run sst -- secret set <NAME> --stage <stage>`
     // (or bulk `npm run sst -- secret load <dotenv>`); stored encrypted in SST
     // state and shared per-stage by anyone with deploy access. OIDC_CLIENT_ID is
@@ -83,6 +85,10 @@ export async function deployStack() {
     const oidcMgmtClientSecret = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_SECRET')
     const posthogApiKey = new sst.Secret('POSTHOG_API_KEY', '')
     const svixAuthToken = new sst.Secret('SVIX_AUTH_TOKEN', '')
+    // The API key the status sync presents to incident.io — scoped to alert
+    // events + heartbeat pings only. Empty means the sync stays off; see
+    // STATUS_SYNC_ENABLED below.
+    const incidentIoToken = new sst.Secret('INCIDENT_IO_TOKEN', '')
     // The credential the usage exporter presents to Commerce's ingest route:
     // half of a shared secret whose other half is a Secrets Manager container
     // owned by boxlite-commerce's own stack, so both ends are set out of band
@@ -100,6 +106,17 @@ export async function deployStack() {
     //
     // Empty means the exporter stays off; see USAGE_EXPORT_ENABLED below.
     const usageExportToken = new sst.Secret('USAGE_EXPORT_TOKEN', '')
+
+    // SES SMTP credentials for outbound mail (stack/mail.ts). Optional, so a
+    // stage without them deploys and simply sends nothing.
+    //
+    // Secrets rather than stack resources because the deploy role cannot mint
+    // them: bootstrap/aws/github-deploy-role.yaml grants IAM on roles only, and
+    // an SES SMTP credential is an IAM user's access key. `npm run bootstrap --
+    // --provision-ses` creates that user with the operator's own credentials and
+    // stores both halves here, the same shape as OIDC_CLIENT_ID above.
+    const smtpUser = new sst.Secret('SMTP_USER', '')
+    const smtpPassword = new sst.Secret('SMTP_PASSWORD', '')
 
     // ─── 2. PLATFORM ─────────────────────────────────────────────────────────
     // Network model + rationale (subnets / NAT / egress-only public IP, AWS citations): docs/networking.md
@@ -132,12 +149,9 @@ export async function deployStack() {
       region: REGION,
       accountId,
     })
+    // One list for all three pipelines: traces used to fan out to Jaeger as well,
+    // which was a second copy of spans ClickHouse already held.
     const collectorExporters = clickHouseResources.active ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
-    // Traces additionally fan out to Jaeger; metrics/logs stay off it (Jaeger
-    // ingests traces only).
-    const collectorTraceExporters = clickHouseResources.active
-      ? '[boxlite_exporter,clickhouse,otlphttp/jaeger]'
-      : '[boxlite_exporter,otlphttp/jaeger]'
 
     // ─── 3. IAM ──────────────────────────────────────────────────────────────
     // Box-storage credential vending. The Api's ECS task role assumes the
@@ -185,18 +199,12 @@ export async function deployStack() {
     // Created before Api so API, runner, host, and box can all emit OTLP to the
     // same Collector. ClickHouse is either the private single-node backend or
     // an existing managed service; ECS stdout/stderr remains in CloudWatch.
-    // Jaeger is VPC-internal only: the trace UI exposes every span (URLs,
-    // headers, IDs, SQL, error bodies) with no auth over plain HTTP, and its
-    // OTLP ingest is equally unauthenticated — reach the UI via VPN / bastion /
-    // `aws ssm start-session`. JAEGER_PUBLIC is rejected (fail loud) like
-    // MAILDEV_PUBLIC: no auth gate or TLS story makes public exposure safe.
     const { otelCollector, otelCollectorOtlpHttpUrl } = buildObservability({
       cluster,
       stackDomain,
       adminApiKey,
       clickHouseResources,
       collectorExporters,
-      collectorTraceExporters,
       stripTrailingSlash,
     })
     const clickHouseWriterReadyDependency = buildClickHouseWriterReady({
@@ -204,6 +212,18 @@ export async function deployStack() {
       resources: clickHouseResources,
       otelCollector,
       otelCollectorOtlpHttpUrl,
+    })
+
+    // ─── 5b. OUTBOUND MAIL ───────────────────────────────────────────────────
+    // Ahead of the Api because it produces that service's SMTP_* settings.
+    // Verification blocks on DNS, so a first deploy of a new MAIL_DOMAIN waits
+    // here rather than at the first send.
+    const { smtpEnvironment } = buildMail({
+      dns: cloudflareDns,
+      senderDomain: resolveMailDomain(),
+      smtpHost: sesSmtpEndpoint(REGION),
+      smtpUser,
+      smtpPassword,
     })
 
     // ─── 6. API (NestJS control plane) ───────────────────────────────────────
@@ -249,9 +269,11 @@ export async function deployStack() {
       posthogApiKey,
       svixAuthToken,
       usageExportToken,
+      incidentIoToken,
       oidcIssuer,
       publicOidcIssuer,
       otelCollectorOtlpHttpUrl,
+      smtpEnvironment,
       clickHouseResources,
       clickHouseReadyDependency: clickHouseWriterReadyDependency,
     })
@@ -269,7 +291,6 @@ export async function deployStack() {
       oidcIssuer,
       publicOidcIssuer,
       otelCollectorOtlpHttpUrl,
-      pgAdminPassword,
       stripTrailingSlash,
     })
 

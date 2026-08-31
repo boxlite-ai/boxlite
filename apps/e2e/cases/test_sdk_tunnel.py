@@ -210,10 +210,6 @@ async def test_python_sdk_tunnel_proxies_http_from_rest_box(rt, image):
         await rt.remove(box.id, force=True)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="stopped boxes may remain reachable through existing tunnel routing",
-)
 @pytest.mark.asyncio
 async def test_python_sdk_tunnel_rejects_stopped_box(rt, image):
     box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
@@ -226,17 +222,11 @@ async def test_python_sdk_tunnel_rejects_stopped_box(rt, image):
         await box.stop()
         await asyncio.sleep(1)
 
-        try:
-            stopped_response = await asyncio.wait_for(
-                _request(
-                    await box.network.tunnel(SERVICES[0][0]),
-                    b"GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n",
-                ),
-                timeout=10,
-            )
-        except (OSError, RuntimeError, asyncio.TimeoutError):
-            return
-        assert SERVICES[0][1] not in stopped_response
+        # A stopped, non-auto-resumable box must reject the tunnel request
+        # up front (POL-214) rather than handing back a URI that CONNECTs
+        # successfully and then silently drops the stream.
+        with pytest.raises(RuntimeError):
+            await asyncio.wait_for(box.network.tunnel(SERVICES[0][0]), timeout=10)
     finally:
         await rt.remove(box.id, force=True)
 

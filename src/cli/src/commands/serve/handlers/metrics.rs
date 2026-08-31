@@ -7,7 +7,7 @@ use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 
 use super::super::types::{BootTimingResponse, BoxMetricsResponse, RuntimeMetricsResponse};
-use super::super::{AppState, error_from_boxlite, get_or_fetch_box};
+use super::super::{AppState, error_from_boxlite, get_box_for_metrics};
 
 pub(in crate::commands::serve) async fn runtime_metrics(
     State(state): State<Arc<AppState>>,
@@ -31,7 +31,7 @@ pub(in crate::commands::serve) async fn box_metrics(
     State(state): State<Arc<AppState>>,
     Path(box_id): Path<String>,
 ) -> Response {
-    let litebox = match get_or_fetch_box(&state, &box_id).await {
+    let litebox = match get_box_for_metrics(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };

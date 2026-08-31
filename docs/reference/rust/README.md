@@ -262,10 +262,19 @@ pub struct BoxInfo {
     pub labels: HashMap<String, String>,
 }
 
-pub struct NetworkInfo {
+pub struct NetworkDirectionInfo {
     pub mode: NetworkMode,
     pub allow_net: Vec<String>,
+}
+
+pub struct NetworkInfo {
+    pub outbound: NetworkDirectionInfo,
+    pub inbound: NetworkDirectionInfo,
     pub published_ports: Option<Vec<PublishedPort>>,
+    // Deprecated mirrors of `outbound`, kept so pre-split readers keep
+    // compiling. Build with `NetworkInfo::new` so they cannot disagree.
+    pub mode: NetworkMode,
+    pub allow_net: Vec<String>,
 }
 
 pub struct PublishedPort {
@@ -614,11 +623,7 @@ let options = BoxOptions {
         ("PYTHONPATH".to_string(), "/app".to_string()),
     ],
     volumes: vec![
-        VolumeSpec {
-            host_path: "/home/user/project".to_string(),
-            guest_path: "/app".to_string(),
-            read_only: false,
-        },
+        VolumeSpec::bind_mount("/home/user/project", "/app"),
     ],
     ports: vec![
         PortSpec {
@@ -683,11 +688,15 @@ impl Default for RootfsSpec {
 
 ### VolumeSpec
 
-Filesystem mount specification.
+Filesystem mount specification. A mount has exactly one origin: a managed
+volume, or a host bind path.
 
 ```rust
 pub struct VolumeSpec {
-    /// Path on host
+    /// Managed volume, by server-assigned id or by name.
+    pub managed_volume: Option<String>,
+
+    /// Path on host. Empty when `managed_volume` is set.
     pub host_path: String,
 
     /// Path inside guest
@@ -697,6 +706,36 @@ pub struct VolumeSpec {
     pub read_only: bool,
 }
 ```
+
+The constructor names the operation; the `host_path` field names what it holds.
+The field keeps its name because it is persisted box config: boxes on disk carry
+a `host_path` key, so renaming the field would strand every box written before
+such a rename. Renaming the constructor, as here, does not touch what is stored.
+
+Build one with a constructor rather than by hand:
+
+```rust
+use boxlite::runtime::options::VolumeSpec;
+
+// Managed volume, addressed by name — `"vol_01K2EXAMPLE"` works the same way.
+let by_name = VolumeSpec::managed_volume("my-data", "/data");
+
+// Host bind mount, read-only.
+let bind = VolumeSpec {
+    read_only: true,
+    ..VolumeSpec::bind_mount("/tmp/data", "/data")
+};
+```
+
+The reference is taken verbatim and reaches the wire unchanged — nothing
+decorates or narrows it.
+
+The two origins are not interchangeable across runtimes:
+
+| Origin | Local runtime | REST runtime |
+| --- | --- | --- |
+| `VolumeSpec::managed_volume` | rejected — no volume backend | mounted |
+| `VolumeSpec::bind_mount` | mounted | rejected — the path is the server's, not yours |
 
 ### NetworkSpec
 
@@ -1167,9 +1206,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rootfs: RootfsSpec::Image("python:3.11-slim".to_string()),
         volumes: vec![
             VolumeSpec {
-                host_path: "/home/user/code".to_string(),
-                guest_path: "/app".to_string(),
                 read_only: true,
+                ..VolumeSpec::bind_mount("/home/user/code", "/app")
             },
         ],
         advanced: AdvancedBoxOptions {

@@ -134,6 +134,92 @@ impl FilesInterface {
     }
 }
 
+/// Preserve the guest's error class instead of flattening it to `Internal`.
+///
+/// The guest rejects bad requests with real gRPC codes — an unreachable
+/// destination, a missing source, a malformed path, a payload over its size
+/// cap. Collapsing all of them into `Internal` turned every one into a 500 and
+/// buried the reason inside a `status: …` string, which is exactly how a caller
+/// ends up thinking a deliberate refusal was a server fault.
+///
+/// The arms are the complete set of codes `boxlite-guest`'s files service
+/// emits; anything else is genuinely unclassified and stays a server fault.
 fn map_tonic_err(err: tonic::Status) -> BoxliteError {
-    BoxliteError::Internal(err.to_string())
+    let message = err.message().to_owned();
+    match err.code() {
+        tonic::Code::FailedPrecondition => BoxliteError::Unsupported(message),
+        tonic::Code::InvalidArgument => BoxliteError::InvalidArgument(message),
+        tonic::Code::NotFound => BoxliteError::NotFound(message),
+        tonic::Code::ResourceExhausted => BoxliteError::ResourceExhausted(message),
+        _ => BoxliteError::Internal(err.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tonic::Status;
+
+    /// A destination the guest cannot reach is the caller's problem, not the
+    /// server's — it must not arrive as a 500.
+    #[test]
+    fn unreachable_destination_maps_to_unsupported() {
+        let error = map_tonic_err(Status::failed_precondition(
+            "/tmp/x is under the container's '/tmp' mount",
+        ));
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert_eq!(error.http().0, 400);
+    }
+
+    #[test]
+    fn missing_source_maps_to_not_found() {
+        let error = map_tonic_err(Status::not_found("source path does not exist"));
+
+        assert!(matches!(error, BoxliteError::NotFound(_)));
+        assert_eq!(error.http().0, 404);
+    }
+
+    #[test]
+    fn malformed_path_maps_to_invalid_argument() {
+        let error = map_tonic_err(Status::invalid_argument("path must not contain .."));
+
+        assert!(matches!(error, BoxliteError::InvalidArgument(_)));
+        assert_eq!(error.http().0, 400);
+    }
+
+    /// The guest caps an upload at 512 MiB and says so with `ResourceExhausted`.
+    /// Flattened to `Internal` it reaches the caller as a 500 — the server
+    /// blaming itself for a payload the caller chose.
+    #[test]
+    fn oversized_upload_maps_to_resource_exhausted() {
+        let error = map_tonic_err(Status::resource_exhausted("upload too large"));
+
+        assert!(
+            matches!(error, BoxliteError::ResourceExhausted(_)),
+            "{error:?}"
+        );
+        assert_eq!(error.http().0, 429);
+    }
+
+    /// Anything the guest did not classify stays a server fault, and keeps the
+    /// full status text so the code is not lost.
+    #[test]
+    fn unclassified_status_stays_internal() {
+        let error = map_tonic_err(Status::internal("failed to create temp file"));
+
+        assert!(matches!(error, BoxliteError::Internal(_)));
+        assert_eq!(error.http().0, 500);
+    }
+
+    /// The message must survive the remap — a refusal that arrives without the
+    /// mount name in it is useless to the caller.
+    #[test]
+    fn refusal_message_survives_the_remap() {
+        let error = map_tonic_err(Status::failed_precondition(
+            "/tmp/x is under the container's '/tmp' mount",
+        ));
+
+        assert!(error.to_string().contains("'/tmp' mount"), "{error}");
+    }
 }

@@ -24,17 +24,16 @@ fn health_check_opts(
     retries: u32,
     start_period: Duration,
 ) -> BoxOptions {
+    let mut advanced = AdvancedBoxOptions::default();
+    advanced.health_check = Some(HealthCheckOptions {
+        interval,
+        timeout,
+        retries,
+        start_period,
+    });
     BoxOptions {
         rootfs: RootfsSpec::Image("alpine:latest".into()),
-        advanced: AdvancedBoxOptions {
-            health_check: Some(HealthCheckOptions {
-                interval,
-                timeout,
-                retries,
-                start_period,
-            }),
-            ..Default::default()
-        },
+        advanced,
         auto_delete: Some(0),
         ..Default::default()
     }

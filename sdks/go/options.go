@@ -69,13 +69,61 @@ const (
 	NetworkModeDisabled NetworkMode = "disabled"
 )
 
-// NetworkSpec configures guest networking. A non-empty AllowNet restricts
-// both TCP and UDP egress. Hostname entries are enforced by TLS SNI / HTTP
-// Host inspection, which only TCP carries, so a hostname-only AllowNet denies
-// all UDP egress — add the IP or CIDR to keep UDP open.
-type NetworkSpec struct {
+// OutboundNetworkSpec configures guest-initiated egress. A non-empty
+// AllowNet restricts both TCP and UDP egress. Hostname entries are enforced
+// by TLS SNI / HTTP Host inspection, which only TCP carries, so a
+// hostname-only AllowNet denies all UDP egress — add the IP or CIDR to keep
+// UDP open.
+type OutboundNetworkSpec struct {
 	Mode     NetworkMode
 	AllowNet []string
+}
+
+// InboundNetworkSpec configures whether services running inside the box are
+// reachable from outside it. Aligned field-for-field with
+// OutboundNetworkSpec: ModeEnabled means publicly reachable, ModeDisabled
+// means private. AllowNet exists for shape symmetry only — no layer
+// enforces an inbound allowlist yet, so a non-empty value is rejected.
+type InboundNetworkSpec struct {
+	Mode     NetworkMode
+	AllowNet []string
+}
+
+// NetworkSpec configures guest networking: Outbound covers guest-initiated
+// egress, Inbound covers whether services the box exposes are reachable
+// from outside it. The two are independent — set either, both, or neither.
+type NetworkSpec struct {
+	Outbound OutboundNetworkSpec
+	Inbound  InboundNetworkSpec
+
+	// Mode is the pre-split outbound mode, kept so existing callers keep
+	// compiling and behaving the same.
+	//
+	// Deprecated: use Outbound.Mode. Setting both Mode and Outbound is
+	// rejected when the options are converted rather than resolved silently.
+	Mode NetworkMode
+
+	// AllowNet is the pre-split outbound allowlist.
+	//
+	// Deprecated: use Outbound.AllowNet.
+	AllowNet []string
+}
+
+// resolve folds the deprecated flat fields into Outbound, which is the
+// direction they configured before the outbound/inbound split. Returns an
+// error when a caller supplies both shapes.
+func (s NetworkSpec) resolve() (NetworkSpec, error) {
+	legacySet := s.Mode != "" || len(s.AllowNet) > 0
+	nestedSet := s.Outbound.Mode != "" || len(s.Outbound.AllowNet) > 0
+	if legacySet && nestedSet {
+		return NetworkSpec{}, fmt.Errorf("network cannot mix Outbound with deprecated Mode/AllowNet")
+	}
+	if legacySet {
+		s.Outbound = OutboundNetworkSpec{Mode: s.Mode, AllowNet: s.AllowNet}
+	}
+	s.Mode = ""
+	s.AllowNet = nil
+	return s, nil
 }
 
 // PortProtocol selects the transport protocol for a port forwarding rule.
@@ -179,6 +227,7 @@ type boxConfig struct {
 	volumes    []volumeEntry
 	ports      []PortSpec
 	workDir    string
+	user       string
 	entrypoint []string
 	cmd        []string
 	autoRemove *bool
@@ -187,14 +236,18 @@ type boxConfig struct {
 	autoResume *bool
 	detach     *bool
 	network    *NetworkSpec
+	networkErr error // deferred WithNetwork validation error, surfaced at conversion
 	secrets    []Secret
 	advanced   *AdvancedBoxOptions // nil = runtime defaults; non-nil = caller-owned advanced opts applied via boxlite_options_set_advanced
 }
 
+// volumeEntry is one mount. Exactly one origin is set: managedVolume for a
+// server-side managed volume, hostPath for a bind from the local filesystem.
 type volumeEntry struct {
-	hostPath  string
-	guestPath string
-	readOnly  bool
+	managedVolume string
+	hostPath      string
+	guestPath     string
+	readOnly      bool
 }
 
 // WithName sets a human-readable name for the box.
@@ -239,19 +292,39 @@ func WithEnv(key, value string) BoxOption {
 	}
 }
 
-// WithVolume mounts a host path into the box.
-func WithVolume(hostPath, containerPath string) BoxOption {
+// WithBindMount binds a host path into the box.
+//
+// Host binds are local-runtime only; a REST runtime rejects them at create.
+// Use [WithManagedVolume] against a REST runtime.
+func WithBindMount(hostPath, guestPath string) BoxOption {
 	return func(c *boxConfig) {
-		c.volumes = append(c.volumes, volumeEntry{hostPath, containerPath, false})
+		c.volumes = append(c.volumes, volumeEntry{hostPath: hostPath, guestPath: guestPath})
 	}
 }
 
-// WithVolumeReadOnly mounts a host path into the box as read-only.
-func WithVolumeReadOnly(hostPath, containerPath string) BoxOption {
+// WithBindMountReadOnly binds a host path into the box as read-only.
+func WithBindMountReadOnly(hostPath, guestPath string) BoxOption {
 	return func(c *boxConfig) {
-		c.volumes = append(c.volumes, volumeEntry{hostPath, containerPath, true})
+		c.volumes = append(c.volumes, volumeEntry{hostPath: hostPath, guestPath: guestPath, readOnly: true})
 	}
 }
+
+// WithManagedVolume mounts a managed volume into the box.
+//
+// managedVolume is the volume's server-assigned id or its name — the server
+// resolves either.
+//
+// Managed volumes need a REST runtime; the local runtime has no volume backend
+// and rejects one at create.
+func WithManagedVolume(managedVolume, guestPath string) BoxOption {
+	return func(c *boxConfig) {
+		c.volumes = append(c.volumes, volumeEntry{managedVolume: managedVolume, guestPath: guestPath})
+	}
+}
+
+// Read-only managed volumes have no WithManagedVolumeReadOnly counterpart:
+// the server rejects read_only on a managed mount, so the option could only
+// ever produce an error. Host binds keep WithBindMountReadOnly.
 
 // WithPort publishes a guest port on a host port.
 //
@@ -268,6 +341,13 @@ func WithWorkDir(dir string) BoxOption {
 	return func(c *boxConfig) { c.workDir = dir }
 }
 
+// WithUser sets the user the container process runs as, in Docker's
+// `<name|uid>[:<group|gid>]` form. Empty leaves the image's USER directive
+// in force.
+func WithUser(user string) BoxOption {
+	return func(c *boxConfig) { c.user = user }
+}
+
 // WithEntrypoint overrides the image's ENTRYPOINT.
 func WithEntrypoint(args ...string) BoxOption {
 	return func(c *boxConfig) { c.entrypoint = args }
@@ -281,10 +361,23 @@ func WithCmd(args ...string) BoxOption {
 // WithNetwork sets the structured network configuration for the box.
 func WithNetwork(spec NetworkSpec) BoxOption {
 	return func(c *boxConfig) {
-		allowNet := append([]string(nil), spec.AllowNet...)
+		resolved, err := spec.resolve()
+		if err != nil {
+			c.networkErr = err
+			return
+		}
+		spec = resolved
+		outboundAllowNet := append([]string(nil), spec.Outbound.AllowNet...)
+		inboundAllowNet := append([]string(nil), spec.Inbound.AllowNet...)
 		c.network = &NetworkSpec{
-			Mode:     spec.Mode,
-			AllowNet: allowNet,
+			Outbound: OutboundNetworkSpec{
+				Mode:     spec.Outbound.Mode,
+				AllowNet: outboundAllowNet,
+			},
+			Inbound: InboundNetworkSpec{
+				Mode:     spec.Inbound.Mode,
+				AllowNet: inboundAllowNet,
+			},
 		}
 	}
 }
@@ -406,6 +499,11 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		C.boxlite_options_set_workdir(cOpts, cDir)
 		C.free(unsafe.Pointer(cDir))
 	}
+	if cfg.user != "" {
+		cUser := toCString(cfg.user)
+		C.boxlite_options_set_user(cOpts, cUser)
+		C.free(unsafe.Pointer(cUser))
+	}
 	for _, env := range cfg.env {
 		cKey := toCString(env[0])
 		cValue := toCString(env[1])
@@ -414,14 +512,20 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		C.free(unsafe.Pointer(cValue))
 	}
 	for _, volume := range cfg.volumes {
-		cHost := toCString(volume.hostPath)
 		cGuest := toCString(volume.guestPath)
 		readOnly := C.int(0)
 		if volume.readOnly {
 			readOnly = 1
 		}
-		C.boxlite_options_add_volume(cOpts, cHost, cGuest, readOnly)
-		C.free(unsafe.Pointer(cHost))
+		if volume.managedVolume != "" {
+			cVolume := toCString(volume.managedVolume)
+			C.boxlite_options_add_managed_volume(cOpts, cVolume, cGuest, readOnly)
+			C.free(unsafe.Pointer(cVolume))
+		} else {
+			cHost := toCString(volume.hostPath)
+			C.boxlite_options_add_bind_mount(cOpts, cHost, cGuest, readOnly)
+			C.free(unsafe.Pointer(cHost))
+		}
 		C.free(unsafe.Pointer(cGuest))
 	}
 	for _, port := range cfg.ports {
@@ -449,24 +553,44 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 			return nil, fmt.Errorf("add port %d:%d failed with code %d", cPort.host_port, cPort.guest_port, int(code))
 		}
 	}
+	if cfg.networkErr != nil {
+		C.boxlite_options_free(cOpts)
+		return nil, cfg.networkErr
+	}
 	if cfg.network != nil {
-		switch cfg.network.Mode {
+		switch cfg.network.Outbound.Mode {
 		case "", NetworkModeEnabled:
 			C.boxlite_options_set_network_enabled(cOpts)
-			for _, host := range cfg.network.AllowNet {
+			for _, host := range cfg.network.Outbound.AllowNet {
 				cHost := toCString(host)
 				C.boxlite_options_add_network_allow(cOpts, cHost)
 				C.free(unsafe.Pointer(cHost))
 			}
 		case NetworkModeDisabled:
-			if len(cfg.network.AllowNet) > 0 {
+			if len(cfg.network.Outbound.AllowNet) > 0 {
 				C.boxlite_options_free(cOpts)
-				return nil, fmt.Errorf("network.mode=%q is incompatible with allow_net", NetworkModeDisabled)
+				return nil, fmt.Errorf("network.outbound.mode=%q is incompatible with allow_net", NetworkModeDisabled)
 			}
 			C.boxlite_options_set_network_disabled(cOpts)
 		default:
 			C.boxlite_options_free(cOpts)
-			return nil, fmt.Errorf("invalid network mode %q", cfg.network.Mode)
+			return nil, fmt.Errorf("invalid outbound network mode %q", cfg.network.Outbound.Mode)
+		}
+		// The field exists for shape symmetry with Outbound, but no layer
+		// enforces an inbound allowlist yet — reject rather than accept a
+		// restriction that silently doesn't apply.
+		if len(cfg.network.Inbound.AllowNet) > 0 {
+			C.boxlite_options_free(cOpts)
+			return nil, fmt.Errorf("inbound.allow_net is not supported yet; remove it (inbound access is controlled by mode only)")
+		}
+		switch cfg.network.Inbound.Mode {
+		case "", NetworkModeEnabled:
+			C.boxlite_options_set_network_inbound_enabled(cOpts)
+		case NetworkModeDisabled:
+			C.boxlite_options_set_network_inbound_disabled(cOpts)
+		default:
+			C.boxlite_options_free(cOpts)
+			return nil, fmt.Errorf("invalid inbound network mode %q", cfg.network.Inbound.Mode)
 		}
 	}
 	for _, secret := range cfg.secrets {

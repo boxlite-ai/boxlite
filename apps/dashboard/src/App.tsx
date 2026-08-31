@@ -40,6 +40,7 @@ import Boxes from './pages/Boxes'
 const Keys = React.lazy(() => import('./pages/Keys'))
 // Billing pulls in the plan/wallet/usage sections (and recharts) behind this one chunk.
 const Billing = React.lazy(() => import('./pages/Billing'))
+const BillingPlanChange = React.lazy(() => import('./pages/BillingPlanChange'))
 const Volumes = React.lazy(() => import('./pages/Volumes'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
@@ -190,6 +191,10 @@ function App() {
             hooks/queries/billingQueries.ts, and the plan-switching surface is gated
             on the owner role inside components/billing/PlanSection.tsx. */}
         <Route path={getRouteSubPath(RoutePath.BILLING)} element={<Billing />} />
+        <Route path={getRouteSubPath(RoutePath.BILLING_PLAN_CHANGE)} element={<BillingPlanChange />} />
+        {/* Without this the bare path falls past the dashboard shell to the
+            top-level NotFound instead of the plan grid it is missing an id for. */}
+        <Route path={getRouteSubPath(RoutePath.BILLING_PLAN)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route
           path={getRouteSubPath(RoutePath.BILLING_SPENDING)}
           element={<Navigate to={RoutePath.BILLING} replace />}

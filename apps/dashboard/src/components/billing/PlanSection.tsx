@@ -65,6 +65,10 @@ export function PlanSection() {
               organizationPlan={organizationPlan}
               catalogPlan={activeCatalogPlan}
               catalogIndex={activeCatalogIndex >= 0 ? activeCatalogIndex : undefined}
+              // Unfiltered: a queued plan should still be named even when it is
+              // not one the organization could have picked itself.
+              catalog={plansQuery.data}
+              organizationId={selectedOrganization?.id}
               plansAnchorId={ALL_PLANS_ANCHOR}
             />
           )}
@@ -75,11 +79,7 @@ export function PlanSection() {
               {isLoading ? (
                 <PlanCardsSkeleton count={4} />
               ) : (
-                <PlanCards
-                  plans={plans || []}
-                  organizationPlan={organizationPlan}
-                  organizationId={selectedOrganization.id}
-                />
+                <PlanCards plans={plans || []} organizationPlan={organizationPlan} />
               )}
             </section>
           )}

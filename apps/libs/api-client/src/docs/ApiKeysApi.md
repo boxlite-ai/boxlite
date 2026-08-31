@@ -80,7 +80,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new ApiKeysApi(configuration);
 
-let name: string; // (default to undefined)
+let name: string; //
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.deleteApiKey(
@@ -93,7 +93,7 @@ const { status, data } = await apiInstance.deleteApiKey(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **name** | [**string**] |  | defaults to undefined|
+| **name** | [**string**] |  | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -133,8 +133,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new ApiKeysApi(configuration);
 
-let userId: string; // (default to undefined)
-let name: string; // (default to undefined)
+let userId: string; //
+let name: string; //
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.deleteApiKeyForUser(
@@ -148,8 +148,8 @@ const { status, data } = await apiInstance.deleteApiKeyForUser(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **userId** | [**string**] |  | defaults to undefined|
-| **name** | [**string**] |  | defaults to undefined|
+| **userId** | [**string**] |  | |
+| **name** | [**string**] |  | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -189,7 +189,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new ApiKeysApi(configuration);
 
-let name: string; // (default to undefined)
+let name: string; //
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.getApiKey(
@@ -202,7 +202,7 @@ const { status, data } = await apiInstance.getApiKey(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **name** | [**string**] |  | defaults to undefined|
+| **name** | [**string**] |  | |
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 

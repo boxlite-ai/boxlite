@@ -81,6 +81,7 @@ test('parseBootstrapOptions refuses an inline value on a boolean flag', () => {
 
 test('parseBootstrapOptions refuses a flag this script does not define', () => {
   assert.throws(() => parseBootstrapOptions(['--privision-auth0']), /Unknown option/i)
+  assert.throws(() => parseBootstrapOptions(['--provision-auth0-branding']), /Unknown option/i)
 })
 
 test('validateGitHubRepo accepts a community fork owner/name', () => {

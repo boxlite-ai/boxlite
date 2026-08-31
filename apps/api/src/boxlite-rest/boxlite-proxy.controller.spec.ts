@@ -22,7 +22,9 @@ const activeAuth = {
 
 function makeHarness() {
   const boxService = {
-    findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true }),
+    findOneByIdOrName: jest
+      .fn()
+      .mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true, state: 'started', public: true }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
     getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://3000-box.proxy.test'),
   }
@@ -76,6 +78,59 @@ describe('BoxliteProxyController', () => {
     expect(boxService.getNetworkTunnelUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
     expect(result).toEqual({ uri: 'https://3000-box.proxy.test' })
   })
+
+  it('rejects a tunnel request for a private box with 409', async () => {
+    const { controller, boxService } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+      state: 'started',
+      public: false,
+    })
+
+    await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
+      status: 409,
+    })
+    expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
+  })
+
+  it('rejects a tunnel request for a stopped box with 409, without auto-resuming it', async () => {
+    // Wake-on-CONNECT is explicitly out of scope for POL-214 (tracked
+    // separately) — a stopped box stays stopped and is rejected, even when
+    // box.autoResume is on.
+    const { controller, boxService, autoResume } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+      state: 'stopped',
+    })
+
+    await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
+      status: 409,
+    })
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
+    expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
+  })
+
+  it.each(['creating', 'starting', 'error', 'archived', 'unknown'])(
+    'rejects a tunnel request for a non-started box in state %s',
+    async (state) => {
+      const { controller, boxService } = makeHarness()
+      boxService.findOneByIdOrName.mockResolvedValue({
+        id: 'box-uuid',
+        runnerId: 'runner-1',
+        autoResume: false,
+        state,
+      })
+
+      await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
+        status: 409,
+      })
+      expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
+    },
+  )
 
   it('auto-resumes exec and files but treats metrics as observation-only', async () => {
     jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)

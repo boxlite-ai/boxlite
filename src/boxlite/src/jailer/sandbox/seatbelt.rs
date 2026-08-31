@@ -18,7 +18,12 @@
 //! | Base capabilities (process, sysctl, mach, iokit) | `seatbelt_base_policy.sbpl` |
 //! | Static system file read/write paths | `seatbelt_file_read_policy.sbpl`, `seatbelt_file_write_policy.sbpl` |
 //! | Dynamic file read/write paths | Computed from [`PathAccess`] in `build_sandbox_policy()` |
-//! | Network access (optional) | `seatbelt_network_policy.sbpl` when `network_enabled=true` |
+//! | Unix-domain socket endpoints (always) | Explicit socket paths in [`SandboxContext`] |
+//! | IP networking (optional) | `seatbelt_network_policy.sbpl` when `network_enabled=true` |
+//!
+//! Unix-domain sockets and IP networking are granted separately on purpose:
+//! the shim's own control plane is AF_UNIX and must work even for a box with
+//! no guest network. See [`build_unix_socket_grants`].
 //!
 //! ## Debugging Sandbox Violations
 //!
@@ -27,7 +32,7 @@
 //! log show --predicate 'subsystem == "com.apple.sandbox"' --last 5m
 //! ```
 
-use super::{PathAccess, Sandbox, SandboxContext};
+use super::{PathAccess, Sandbox, SandboxContext, UnixSocketAccess};
 use boxlite_shared::errors::BoxliteResult;
 use std::ffi::CStr;
 use std::path::{Path, PathBuf};
@@ -109,6 +114,7 @@ impl Sandbox for SeatbeltSandbox {
         let binary_path = std::path::Path::new(&binary);
         let (sandbox_cmd, sandbox_args) = build_sandbox_exec_args(
             &ctx.paths,
+            &ctx.unix_sockets,
             binary_path,
             ctx.network_enabled,
             ctx.sandbox_profile,
@@ -153,6 +159,7 @@ pub fn get_network_policy() -> &'static str {
 /// Returns the command and arguments to prepend when spawning the shim.
 fn build_sandbox_exec_args(
     paths: &[PathAccess],
+    unix_sockets: &UnixSocketAccess,
     binary_path: &Path,
     network_enabled: bool,
     sandbox_profile: Option<&Path>,
@@ -165,7 +172,7 @@ fn build_sandbox_exec_args(
         args.push(profile_path.display().to_string());
     } else {
         // Build strict modular policy: base + file permissions + optional network
-        let policy = build_sandbox_policy(paths, binary_path, network_enabled);
+        let policy = build_sandbox_policy(paths, unix_sockets, binary_path, network_enabled);
         if std::env::var_os("BOXLITE_DEBUG_PRINT_SEATBELT").is_some() {
             eprintln!(
                 "BOXLITE_DEBUG seatbelt policy for {}:\n{}",
@@ -195,7 +202,12 @@ fn build_sandbox_exec_args(
 // ============================================================================
 
 /// Build the complete sandbox policy by combining static .sbpl files + dynamic paths.
-fn build_sandbox_policy(paths: &[PathAccess], binary_path: &Path, network_enabled: bool) -> String {
+fn build_sandbox_policy(
+    paths: &[PathAccess],
+    unix_sockets: &UnixSocketAccess,
+    binary_path: &Path,
+    network_enabled: bool,
+) -> String {
     let mut policy = String::new();
 
     // Header
@@ -232,11 +244,15 @@ fn build_sandbox_policy(paths: &[PathAccess], binary_path: &Path, network_enable
     policy.push_str(&build_dynamic_write_paths(paths));
     policy.push('\n');
 
-    // 6. Network policy (optional)
+    // 6. Unix-domain socket endpoints (always — not gated on network_enabled)
+    policy.push_str(&build_unix_socket_grants(unix_sockets));
+    policy.push('\n');
+
+    // 7. IP networking (optional)
     if network_enabled {
         policy.push_str(SEATBELT_NETWORK_POLICY);
     } else {
-        policy.push_str("; Network disabled\n");
+        policy.push_str("; IP networking disabled\n");
     }
 
     policy
@@ -321,33 +337,86 @@ fn build_dynamic_write_paths(paths: &[PathAccess]) -> String {
     policy
 }
 
+/// Grant the shim's own AF_UNIX endpoints, independent of `network_enabled`.
+///
+/// A box always needs the gRPC control and guest-ready sockets; a box with a
+/// network backend additionally needs gvproxy's control and datagram sockets
+/// (see [`BoxSockets`](crate::net::socket_path::BoxSockets)). macOS gates
+/// AF_UNIX `bind()` under `network-bind` and `connect()` under
+/// `network-outbound`; `system-socket` does not apply. Folding these grants into
+/// `seatbelt_network_policy.sbpl` therefore made `network_enabled=false` kill
+/// every box a millisecond after start (issue #1072).
+///
+/// Scope: only the exact socket endpoints pre-computed by the jailer. A literal
+/// path filter never matches an AF_INET/AF_INET6 socket, so this grants no IP
+/// networking, which stays the sole responsibility of `network_enabled`.
+fn build_unix_socket_grants(access: &UnixSocketAccess) -> String {
+    if access.bind.is_empty() && access.connect.is_empty() {
+        return String::from("; No Unix-domain socket endpoints\n");
+    }
+
+    let mut policy =
+        String::from("; Unix-domain socket endpoints (AF_UNIX only — filtered by path)\n");
+    for (operation, paths) in [
+        ("network-bind", access.bind.as_slice()),
+        ("network-outbound", access.connect.as_slice()),
+    ] {
+        if paths.is_empty() {
+            continue;
+        }
+        policy.push_str(&format!("(allow {operation}\n"));
+        for path in paths {
+            let path = canonicalize_or_original(path);
+            policy.push_str(&format!("    (literal \"{}\")\n", path.display()));
+        }
+        policy.push_str(")\n");
+    }
+    policy
+}
+
 // ============================================================================
 // Utilities (private)
 // ============================================================================
 
 /// Canonicalize a path, falling back to the original if canonicalization fails.
 ///
-/// When the path ITSELF is a symlink (e.g. the `/tmp/bl-{uid}/{box_id}`
-/// socket binding symlink — see `net::socket_path::BoxSockets`), only the
-/// parent is canonicalized and the leaf is kept literal: the sandbox checks
-/// `bind()`/`connect()` against the symlink's own location
-/// (`/private/tmp/bl-{uid}/{box_id}/...`), not its fully-resolved target —
-/// resolving through the leaf would emit a rule for the target instead and
-/// the access would be denied. The target directory is covered by its own
-/// policy entry.
+/// When the path itself or its nearest existing ancestor is a symlink (e.g.
+/// `/tmp/bl-{uid}/{box_id}/box.sock`, where `{box_id}` is the binding symlink),
+/// only the symlink's parent is canonicalized and its leaf stays literal. The
+/// sandbox checks `bind()`/`connect()` against that short symlink location,
+/// not its fully-resolved target. Missing descendants are appended afterward.
 fn canonicalize_or_original(path: &Path) -> PathBuf {
-    let is_symlink = std::fs::symlink_metadata(path)
+    let mut existing = path;
+    let mut missing = Vec::new();
+    while std::fs::symlink_metadata(existing).is_err() {
+        let (Some(parent), Some(leaf)) = (existing.parent(), existing.file_name()) else {
+            return path.to_path_buf();
+        };
+        missing.push(leaf.to_os_string());
+        existing = parent;
+    }
+
+    let is_symlink = std::fs::symlink_metadata(existing)
         .map(|m| m.file_type().is_symlink())
         .unwrap_or(false);
-    if is_symlink {
-        if let (Some(parent), Some(leaf)) = (path.parent(), path.file_name())
+    let mut canonical = if is_symlink {
+        if let (Some(parent), Some(leaf)) = (existing.parent(), existing.file_name())
             && let Ok(canonical_parent) = parent.canonicalize()
         {
-            return canonical_parent.join(leaf);
+            canonical_parent.join(leaf)
+        } else {
+            existing.to_path_buf()
         }
-        return path.to_path_buf();
+    } else {
+        existing
+            .canonicalize()
+            .unwrap_or_else(|_| existing.to_path_buf())
+    };
+
+    for component in missing.iter().rev() {
+        canonical.push(component);
     }
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    canonical
 }
 
 /// Get the Darwin user cache directory using confstr.
@@ -436,7 +505,13 @@ mod tests {
         }];
         let binary_path = PathBuf::from("/usr/local/bin/boxlite-shim");
 
-        let (cmd, _args) = build_sandbox_exec_args(&paths, &binary_path, true, None);
+        let (cmd, _args) = build_sandbox_exec_args(
+            &paths,
+            &UnixSocketAccess::default(),
+            &binary_path,
+            true,
+            None,
+        );
 
         assert_eq!(cmd, "/usr/bin/sandbox-exec");
     }
@@ -481,6 +556,26 @@ mod tests {
     }
 
     #[test]
+    fn test_canonicalize_keeps_symlink_ancestor_literal_for_socket() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = tmp.path().join("real_sockets");
+        std::fs::create_dir_all(&target).unwrap();
+        let link = tmp.path().join("binding_link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let result = canonicalize_or_original(&link.join("box.sock"));
+
+        assert_eq!(
+            result,
+            tmp.path()
+                .canonicalize()
+                .unwrap()
+                .join("binding_link/box.sock"),
+            "socket path must preserve its binding symlink ancestor"
+        );
+    }
+
+    #[test]
     fn test_build_policy_includes_network_when_enabled() {
         let paths = vec![PathAccess {
             path: PathBuf::from("/tmp/test/boxes/test-box"),
@@ -488,7 +583,7 @@ mod tests {
         }];
         let binary_path = PathBuf::from("/usr/local/bin/boxlite-shim");
 
-        let policy = build_sandbox_policy(&paths, &binary_path, true);
+        let policy = build_sandbox_policy(&paths, &UnixSocketAccess::default(), &binary_path, true);
 
         assert!(policy.contains("(allow network-outbound)"));
     }
@@ -501,10 +596,124 @@ mod tests {
         }];
         let binary_path = PathBuf::from("/usr/local/bin/boxlite-shim");
 
-        let policy = build_sandbox_policy(&paths, &binary_path, false);
+        let policy =
+            build_sandbox_policy(&paths, &UnixSocketAccess::default(), &binary_path, false);
 
-        assert!(!policy.contains("(allow network-outbound)"));
-        assert!(policy.contains("Network disabled"));
+        // Unfiltered grants are the IP-networking ones; they must be absent.
+        for grant in [
+            "(allow network-outbound)",
+            "(allow network-inbound)",
+            "(allow system-socket)",
+        ] {
+            assert!(!policy.contains(grant), "must not emit `{grant}`");
+        }
+        assert!(policy.contains("IP networking disabled"));
+    }
+
+    /// #1072: the shim's AF_UNIX control plane must be granted regardless of
+    /// `network_enabled` — it is how the host talks to the box at all.
+    #[test]
+    fn test_unix_socket_grants_are_independent_of_network_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let sockets_dir = dir.path().join("sockets");
+        std::fs::create_dir_all(&sockets_dir).unwrap();
+        let bind_socket = sockets_dir.join("box.sock");
+        let connect_socket = sockets_dir.join("ready.sock");
+        let expected_bind = format!(
+            "(literal \"{}\")",
+            canonicalize_or_original(&bind_socket).display()
+        );
+        let expected_connect = format!(
+            "(literal \"{}\")",
+            canonicalize_or_original(&connect_socket).display()
+        );
+
+        let paths = vec![PathAccess {
+            path: sockets_dir,
+            writable: true,
+        }];
+        let unix_sockets = UnixSocketAccess {
+            bind: vec![bind_socket],
+            connect: vec![connect_socket],
+        };
+        let binary_path = PathBuf::from("/usr/local/bin/boxlite-shim");
+
+        for network_enabled in [true, false] {
+            let policy = build_sandbox_policy(&paths, &unix_sockets, &binary_path, network_enabled);
+            let socket_grants = policy
+                .split("(allow ")
+                .filter(|section| {
+                    section.starts_with("network-bind\n")
+                        || section.starts_with("network-outbound\n")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                socket_grants.len(),
+                2,
+                "network_enabled={network_enabled} must emit path-filtered \
+                 network-bind and network-outbound blocks:\n{policy}"
+            );
+            assert!(
+                policy.contains(&expected_bind) && policy.contains(&expected_connect),
+                "network_enabled={network_enabled} must scope each operation to its \
+                 exact socket ({expected_bind}, {expected_connect}):\n{policy}"
+            );
+            assert!(
+                !socket_grants.join("\n").contains(&format!(
+                    "(subpath \"{}\")",
+                    canonicalize_or_original(&paths[0].path).display()
+                )),
+                "AF_UNIX grants must not cover the entire sockets directory:\n{policy}"
+            );
+        }
+    }
+
+    /// File-write paths must not become bindable just because they are in the
+    /// profile. AF_UNIX grants follow the explicit shim socket path list.
+    #[test]
+    fn test_unix_socket_grants_only_include_explicit_socket_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let writable_volume = dir.path().join("volume");
+        let sockets_dir = dir.path().join("sockets");
+        std::fs::create_dir_all(&writable_volume).unwrap();
+        std::fs::create_dir_all(&sockets_dir).unwrap();
+        let socket = sockets_dir.join("box.sock");
+
+        let policy = build_sandbox_policy(
+            &[PathAccess {
+                path: writable_volume.clone(),
+                writable: true,
+            }],
+            &UnixSocketAccess {
+                bind: vec![socket.clone()],
+                connect: vec![],
+            },
+            &PathBuf::from("/usr/local/bin/boxlite-shim"),
+            false,
+        );
+        let socket_grant_sections = policy
+            .split("(allow ")
+            .filter(|section| {
+                section.starts_with("network-bind\n") || section.starts_with("network-outbound\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            !socket_grant_sections.contains(writable_volume.to_string_lossy().as_ref()),
+            "writable non-socket path received AF_UNIX grant: {policy}"
+        );
+        assert!(
+            socket_grant_sections.contains(socket.to_string_lossy().as_ref()),
+            "explicit socket path missing: {policy}"
+        );
+        assert!(
+            !socket_grant_sections.contains(&format!(
+                "(subpath \"{}\")",
+                canonicalize_or_original(&sockets_dir).display()
+            )),
+            "socket grant must not include its whole directory: {policy}"
+        );
     }
 
     #[test]
@@ -611,7 +820,8 @@ mod tests {
         }];
         let binary_path = PathBuf::from("/tmp/test/boxlite-shim");
 
-        let policy = build_sandbox_policy(&paths, &binary_path, false);
+        let policy =
+            build_sandbox_policy(&paths, &UnixSocketAccess::default(), &binary_path, false);
 
         assert!(
             !policy.contains("(subpath \"/usr\")"),
@@ -795,7 +1005,7 @@ mod tests {
 
         let paths = crate::jailer::build_path_access(&layout, &[]);
         let binary = PathBuf::from("/usr/local/bin/boxlite-shim");
-        let policy = build_sandbox_policy(&paths, &binary, false);
+        let policy = build_sandbox_policy(&paths, &UnixSocketAccess::default(), &binary, false);
 
         let mounts_str = mounts_base.to_string_lossy().to_string();
         assert!(
@@ -872,8 +1082,13 @@ mod tests {
         shell_snippet: &str,
         arg: &std::path::Path,
     ) -> std::process::Output {
-        let (sandbox_cmd, sandbox_args) =
-            build_sandbox_exec_args(paths, std::path::Path::new("/bin/sh"), false, None);
+        let (sandbox_cmd, sandbox_args) = build_sandbox_exec_args(
+            paths,
+            &UnixSocketAccess::default(),
+            std::path::Path::new("/bin/sh"),
+            false,
+            None,
+        );
         std::process::Command::new(sandbox_cmd)
             .args(sandbox_args)
             .arg("/bin/sh")
@@ -936,8 +1151,13 @@ mod tests {
             writable: false,
         }];
 
-        let (sandbox_cmd, sandbox_args) =
-            build_sandbox_exec_args(&paths, std::path::Path::new("/bin/sh"), false, None);
+        let (sandbox_cmd, sandbox_args) = build_sandbox_exec_args(
+            &paths,
+            &UnixSocketAccess::default(),
+            std::path::Path::new("/bin/sh"),
+            false,
+            None,
+        );
         let output = std::process::Command::new(sandbox_cmd)
             .args(sandbox_args)
             .arg("/bin/sh")
@@ -1019,5 +1239,208 @@ mod tests {
             "Expected sandbox denial, got stderr: {}",
             stderr
         );
+    }
+
+    /// Listener probe binary. Part of the macOS base system; the probes skip
+    /// themselves rather than misreport a denial if it is ever absent.
+    #[cfg(target_os = "macos")]
+    const PROBE_BIN: &str = "/usr/bin/nc";
+
+    /// What a listener probe did under a generated profile.
+    #[cfg(target_os = "macos")]
+    enum ProbeOutcome {
+        /// Acquired the socket and kept running.
+        Listening,
+        /// Exited immediately; carries the probe's stderr.
+        Denied(String),
+    }
+
+    /// Run `/usr/bin/nc` as a listener under a generated profile.
+    ///
+    /// `nc` blocks once it owns the socket and exits at once when the sandbox
+    /// denies the bind, so the two outcomes are unambiguous. `bound_marker` is
+    /// the node that appears on success, letting the allow case finish as soon
+    /// as it shows up instead of waiting out the deadline.
+    #[cfg(target_os = "macos")]
+    fn probe_listener(
+        paths: &[PathAccess],
+        unix_sockets: &UnixSocketAccess,
+        network_enabled: bool,
+        nc_args: &[&str],
+        bound_marker: Option<&Path>,
+    ) -> ProbeOutcome {
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+
+        let (sandbox_cmd, sandbox_args) = build_sandbox_exec_args(
+            paths,
+            unix_sockets,
+            Path::new(PROBE_BIN),
+            network_enabled,
+            None,
+        );
+        let mut child = Command::new(sandbox_cmd)
+            .args(sandbox_args)
+            .arg(PROBE_BIN)
+            .args(nc_args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn sandbox-exec");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let outcome = loop {
+            if bound_marker.is_some_and(|marker| marker.exists()) {
+                break ProbeOutcome::Listening;
+            }
+            match child.try_wait().expect("poll nc") {
+                Some(_) => {
+                    let mut stderr = String::new();
+                    if let Some(mut pipe) = child.stderr.take() {
+                        let _ = pipe.read_to_string(&mut stderr);
+                    }
+                    break ProbeOutcome::Denied(stderr.trim().to_string());
+                }
+                None if Instant::now() >= deadline => break ProbeOutcome::Listening,
+                None => std::thread::sleep(Duration::from_millis(20)),
+            }
+        };
+
+        let _ = child.kill();
+        let _ = child.wait();
+        outcome
+    }
+
+    /// Regression guard for #1072: `security.network_enabled = false` must not
+    /// take the shim's own AF_UNIX control plane down with it. Before the fix
+    /// this bind failed with EPERM and every box died ~1ms after start.
+    ///
+    /// Probes under `/private/tmp` for two reasons: `sun_path` caps the whole
+    /// socket path at 104 bytes, and it keeps the probe off the deep workspace
+    /// path a checkout may sit under.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_seatbelt_runtime_allows_unix_socket_bind_without_network() {
+        if !is_sandbox_available() || !Path::new(PROBE_BIN).exists() {
+            eprintln!("Skipping: sandbox-exec or {PROBE_BIN} not available");
+            return;
+        }
+
+        let dir = tempfile::tempdir_in("/private/tmp").expect("tempdir");
+        let sockets_dir = dir.path().join("sockets");
+        std::fs::create_dir_all(&sockets_dir).expect("create sockets dir");
+        let binding_dir = dir.path().join("binding");
+        std::os::unix::fs::symlink(&sockets_dir, &binding_dir).expect("create binding symlink");
+        let sock = binding_dir.join("net.sock");
+        let real_sock = sockets_dir.join("net.sock");
+        assert!(
+            sock.as_os_str().len() < 104,
+            "probe path must fit sun_path: {}",
+            sock.display()
+        );
+
+        let paths = vec![
+            PathAccess {
+                path: sockets_dir,
+                writable: true,
+            },
+            PathAccess {
+                path: binding_dir.clone(),
+                writable: true,
+            },
+            PathAccess {
+                path: dir.path().to_path_buf(),
+                writable: false,
+            },
+        ];
+
+        match probe_listener(
+            &paths,
+            &UnixSocketAccess {
+                bind: vec![sock.clone(), real_sock.clone()],
+                connect: vec![],
+            },
+            false,
+            &["-lU", sock.to_str().expect("utf-8 socket path")],
+            Some(&sock),
+        ) {
+            ProbeOutcome::Listening => assert!(
+                sock.exists(),
+                "probe kept running but bound no socket at {}",
+                sock.display()
+            ),
+            ProbeOutcome::Denied(stderr) => panic!(
+                "network_enabled=false denied the AF_UNIX bind at {}: {stderr}",
+                sock.display()
+            ),
+        }
+
+        let blocked = binding_dir.join("unexpected.sock");
+        match probe_listener(
+            &paths,
+            &UnixSocketAccess {
+                bind: vec![sock, real_sock],
+                connect: vec![],
+            },
+            false,
+            &["-lU", blocked.to_str().expect("utf-8 socket path")],
+            Some(&blocked),
+        ) {
+            ProbeOutcome::Denied(stderr) => assert!(
+                stderr.contains("Operation not permitted"),
+                "expected exact-path sandbox denial, got: {stderr}"
+            ),
+            ProbeOutcome::Listening => panic!(
+                "exact AF_UNIX grant must deny a sibling socket at {}",
+                blocked.display()
+            ),
+        }
+    }
+
+    /// The Unix-domain grants are filtered by path, so they must not smuggle
+    /// in IP networking — `network_enabled` stays the only switch for that.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_seatbelt_runtime_still_denies_tcp_without_network() {
+        if !is_sandbox_available() || !Path::new(PROBE_BIN).exists() {
+            eprintln!("Skipping: sandbox-exec or {PROBE_BIN} not available");
+            return;
+        }
+
+        let dir = tempfile::tempdir_in("/private/tmp").expect("tempdir");
+        let sockets_dir = dir.path().join("sockets");
+        std::fs::create_dir_all(&sockets_dir).expect("create sockets dir");
+
+        let paths = vec![PathAccess {
+            path: sockets_dir,
+            writable: true,
+        }];
+        let port_guard =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("reserve TCP probe port");
+        let port = port_guard
+            .local_addr()
+            .expect("read TCP probe port")
+            .port()
+            .to_string();
+
+        match probe_listener(
+            &paths,
+            &UnixSocketAccess {
+                bind: vec![paths[0].path.join("net.sock")],
+                connect: vec![],
+            },
+            false,
+            &["-l", "127.0.0.1", &port],
+            None,
+        ) {
+            ProbeOutcome::Denied(stderr) => assert!(
+                stderr.contains("Operation not permitted"),
+                "expected a sandbox denial, got: {stderr}"
+            ),
+            ProbeOutcome::Listening => {
+                panic!("network_enabled=false must still deny TCP listeners")
+            }
+        }
     }
 }

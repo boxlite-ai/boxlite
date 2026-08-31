@@ -1383,4 +1383,97 @@ mod tests {
             "write \"/Users/user/Library/Application Support/boxlite/runtimes/v0.6.0/boxlite-guest\" /boxlite/bin/boxlite-guest\n"
         ));
     }
+
+    /// `normalize_inodes_with_debugfs` must stamp the image-declared uid/gid
+    /// (from the `user.containers.override_stat` xattr) into ext4 inodes, not
+    /// the host process uid.
+    ///
+    /// Scenario: unprivileged host with uid=X builds an ext4 containing a file
+    /// whose layer declares uid=888. After normalization the ext4 inode for that
+    /// file must carry uid=888, not uid=X.
+    ///
+    /// This is the correctness property that guards against OwnershipFixer-style
+    /// regressions: once the image is built, the guest sees the image's declared
+    /// ownership, not the host's identity.
+    #[test]
+    fn normalize_inodes_stamps_image_uid_not_host_uid() {
+        if util::find_binary("mke2fs").is_err() || util::find_binary("debugfs").is_err() {
+            eprintln!("skipping: mke2fs/debugfs not found (run `make runtime:debug`)");
+            return;
+        }
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipping: root uses mke2fs -d which already writes correct ownership");
+            return;
+        }
+
+        let image_uid: u32 = 888;
+        let image_gid: u32 = 888;
+
+        // Sanity: the test only proves anything if the host uid differs from 888.
+        let host_uid = unsafe { libc::getuid() };
+        if host_uid == image_uid {
+            eprintln!("skipping: host uid == image uid ({image_uid}); test would be vacuous");
+            return;
+        }
+
+        let src_root = tempfile::tempdir().expect("source tempdir");
+        let src = src_root.path().join("rootfs");
+        std::fs::create_dir_all(&src).expect("mkdir rootfs");
+
+        // Write a file and park uid=888 in the override_stat xattr, exactly as
+        // LayerExtractor does during unprivileged OCI extraction.
+        let file_path = src.join("image-owned");
+        std::fs::write(&file_path, b"data").expect("write file");
+        let stat = crate::images::OverrideStat::new(
+            image_uid,
+            image_gid,
+            0o644,
+            crate::images::OverrideFileType::File,
+        );
+        stat.write_xattr(&file_path)
+            .expect("set override_stat xattr");
+
+        let out_root = tempfile::tempdir().expect("output tempdir");
+        let out = out_root.path().join("rootfs.ext4");
+        // Hold `_disk` — its Drop impl removes the file.
+        let _disk = create_ext4_from_dir(&src, &out, 0).expect("ext4 build");
+
+        // Ask debugfs for the inode's stat — output contains "User: NNN   Group: NNN".
+        // Use stdin mode (same as normalize_inodes_with_debugfs) so the filesystem
+        // is opened before the command is executed.
+        let debugfs = util::find_binary("debugfs").expect("debugfs");
+        let mut child = std::process::Command::new(&debugfs)
+            .args(["-f", "-"])
+            .arg(&out)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn debugfs");
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write as _;
+            stdin
+                .write_all(b"stat /image-owned\n")
+                .expect("write debugfs cmd");
+        }
+        let result = child.wait_with_output().expect("debugfs stat");
+        let all_output = format!(
+            "{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr),
+        );
+
+        // Parse the "User: NNN" field.
+        let found_uid: Option<u32> = all_output.lines().find_map(|line| {
+            let after = line.split("User:").nth(1)?;
+            after.split_whitespace().next()?.parse().ok()
+        });
+
+        assert_eq!(
+            found_uid,
+            Some(image_uid),
+            "inode /image-owned must carry uid={image_uid} (image-declared), \
+             not host uid={host_uid}; debugfs output:\n{all_output}"
+        );
+    }
 }

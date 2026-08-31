@@ -218,6 +218,7 @@ int main() {
         return 1;
     }
     boxlite_options_set_network_enabled(opts);
+    boxlite_options_set_network_inbound_disabled(opts);
 
     CAdvancedBoxOptions* advanced = NULL;
     if (boxlite_advanced_options_new(&advanced, &error) != Ok) {
@@ -567,8 +568,12 @@ BoxliteErrorCode boxlite_box_metrics(
 ```
 
 `CBoxInfo.network` is an owned `CNetworkInfo*` and is `NULL` when network
-metadata is unavailable. `CNetworkInfo` exposes `mode`, the `allow_net` string
-array and count, and a nullable `CPublishedPortList*`. A `NULL`
+metadata is unavailable. `CNetworkInfo` exposes a `CNetworkDirectionInfo` per
+direction (`outbound`, `inbound`) — each with `mode`, the `allow_net` string
+array and count — plus a nullable `CPublishedPortList*`. The deprecated
+top-level `mode`, `allow_net` and `allow_net_count` fields remain at their
+pre-split offsets and alias `outbound`, so callers built against the old header
+keep working; they are borrowed views and must not be freed separately. A `NULL`
 `published_ports` pointer means the current handle does not know the bindings,
 a non-`NULL` list with `count == 0` means there are no active publications, and
 a populated list contains typed `CPublishedPort` entries with `guest_port`,
@@ -894,6 +899,18 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
 ### Unreleased
 
 **Breaking Changes:**
+- `boxlite_options_add_volume` is renamed `boxlite_options_add_bind_mount`, and
+  the new `boxlite_options_add_managed_volume` mounts a managed volume by its
+  server-assigned id or its name. The two mount origins are distinct: a host
+  path is local-runtime only, a managed volume REST-runtime only.
+- `boxlite_volume_create` takes a new `const char *name` as its second
+  argument, before the callback. Pass `NULL` for an unnamed volume. A non-NULL
+  name that is not valid UTF-8 returns `InvalidArgument` rather than silently
+  creating an unnamed volume.
+- `CVolumeInfo` gains a `name` field between `id` and `created_at`, changing
+  the struct layout. Recompile any consumer that reads it; the field is a
+  heap-owned string released by the existing
+  `boxlite_free_volume_info` / `boxlite_free_volume_info_list`.
 - `boxlite_options_add_port` signature changed. Parameters are now host-first
   (matching `PortSpec`, the other SDKs, and Docker's `host:guest` convention),
   ports are `uint16_t`, the new `BoxlitePortProtocol` enum and a nullable
@@ -905,6 +922,23 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
   queued; call `boxlite_runtime_drain()` to dispatch the callback. On success,
   the callback owns the `CBoxInfo *` and must release it with
   `boxlite_free_box_info()`.
+
+Before:
+```c
+boxlite_options_add_volume(opts, "/host/data", "/data", 0);
+boxlite_volume_create(handle, on_created, user_data, &err);
+```
+
+After:
+```c
+/* host bind (local runtime) */
+boxlite_options_add_bind_mount(opts, "/host/data", "/data", 0);
+/* managed volume by id or name (REST runtime) */
+boxlite_options_add_managed_volume(opts, "my-data", "/data", 0);
+
+boxlite_volume_create(handle, "my-data", on_created, user_data, &err);
+boxlite_volume_create(handle, NULL, on_created, user_data, &err);  /* unnamed */
+```
 
 Before:
 ```c

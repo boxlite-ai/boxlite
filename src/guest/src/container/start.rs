@@ -93,6 +93,18 @@ pub(crate) fn create_container_etc_files(
     Ok(())
 }
 
+/// An OCI bundle on disk, plus the part of its spec callers keep asking for.
+pub(crate) struct OciBundle {
+    /// Directory holding `config.json` and the rootfs reference.
+    pub path: PathBuf,
+    /// Destinations of every mount the saved spec declares.
+    ///
+    /// Handed back rather than left to be re-read: `config.json` is written
+    /// once, here, and never rewritten, so parsing it again later costs a file
+    /// read and a deserialize for an answer that cannot have changed.
+    pub mount_destinations: Vec<PathBuf>,
+}
+
 /// Create OCI bundle (config.json + rootfs reference)
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn create_oci_bundle(
@@ -110,7 +122,7 @@ pub(crate) fn create_oci_bundle(
     user_mounts: &[spec::UserMount],
     tty: bool,
     devices: &spec::ContainerDevices,
-) -> BoxliteResult<PathBuf> {
+) -> BoxliteResult<OciBundle> {
     let bundle_path = bundle_root.join(container_id);
 
     fs::create_dir_all(&bundle_path).map_err(|e| {
@@ -163,7 +175,10 @@ pub(crate) fn create_oci_bundle(
         "Created OCI bundle"
     );
 
-    Ok(bundle_path)
+    Ok(OciBundle {
+        path: bundle_path,
+        mount_destinations: spec::mount_destinations(&spec),
+    })
 }
 
 // ====================

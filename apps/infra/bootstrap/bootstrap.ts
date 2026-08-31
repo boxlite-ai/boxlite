@@ -46,10 +46,13 @@
  *   --force      re-prompt for a Cloudflare credential that is already seeded
  *                (decideCredentialRotation() in bootstrap/cloudflare-credentials.ts)
  *   --provision-auth0
- *                Create the Auth0 SPA app, custom API, and post-login Action
- *                (requires `npm run login` first). NOT idempotent — Auth0 has no
- *                upsert for apps or APIs, so rerunning creates duplicates.
- *
+ *                Create the Auth0 SPA app and custom API (requires `npm run
+ *                login` first), then print the exact login-policy preview.
+ *                NOT idempotent — rerunning creates duplicate apps and APIs.
+ *   --provision-ses
+ *                Mint the stage's send-only SES SMTP credential and store both
+ *                halves, then ask AWS for production access once the sender
+ *                domain verifies. Rerunning rotates the credential.
  * Sign-in: run `npm run login` first, which walks the browser sign-in for every
  * provider this needs (AWS via `aws login`, AWS CLI 2.32.0+ — no IAM user,
  * access keys, or IAM Identity Center setup required). An existing profile or
@@ -66,7 +69,12 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { decideCredentialRotation, writeCloudflareCredential } from './cloudflare-credentials.js'
-import { loadDeploymentEnvironment, resolveAwsRegion, resolveSstStage } from '../deployment/environment.js'
+import {
+  loadDeploymentEnvironment,
+  resolveAwsRegion,
+  resolveMailDomain,
+  resolveSstStage,
+} from '../deployment/environment.js'
 import {
   GITHUB_OIDC_PROVIDER_URL,
   MINIMUM_AWS_CLI_VERSION,
@@ -84,14 +92,8 @@ import {
   withStageConfigFile,
 } from './environment.js'
 import { validateDotenvSyntax } from '../deployment/key-policy.js'
-import {
-  bindActionArgs,
-  createActionArgs,
-  customApiArgs,
-  deployActionArgs,
-  enableRpLogoutDiscoveryArgs,
-  spaApplicationArgs,
-} from './auth0.js'
+import { promptSecret, requireNonEmptySecret } from './secret-prompt.js'
+import { customApiArgs, spaApplicationArgs, tenantSettingsArgs } from './auth0.js'
 import {
   environmentApiPath,
   githubEnvironmentPayload,
@@ -99,6 +101,7 @@ import {
   parseReviewerIds,
 } from './github.js'
 import { resolveAwsCliPath } from '../shared/exec.js'
+import { sesProductionAccess, sesSmtpPasswordV4 } from './ses-smtp.js'
 
 const SCRIPT_NAME = 'bootstrap-environment'
 // The one stage that must never end up with an unreviewed deploy path. Matches
@@ -115,8 +118,6 @@ const SST_INSTALL_TIMEOUT_MS = 240_000
 // been needed, while waiting the full budget on an install that is not
 // progressing costs four minutes of silence.
 const SST_COLD_INSTALL_TIMEOUT_MS = 90_000
-const ACTION_SOURCE_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'set-custom-claims.js')
-
 const CLOUDFLARE_CREDENTIALS = [
   {
     envVar: 'CLOUDFLARE_API_TOKEN',
@@ -222,71 +223,6 @@ function currentAwsIdentity(awsCliPath: any, region: any) {
     throw new Error('aws sts get-caller-identity returned an unexpected response')
   }
   return identity
-}
-
-// A blank answer at the prompt, or an env var set to '', would otherwise be
-// stored as a real secret and only surface as an auth failure at deploy time.
-function requireNonEmptySecret(label: any, value: any) {
-  const trimmed = value?.trim()
-  if (!trimmed) throw new Error(`${label} cannot be empty`)
-  return trimmed
-}
-
-// No native masked-input in node:readline — a minimal raw-mode reader avoids
-// pulling in a prompt dependency for two secrets. TTY-gated: a non-interactive
-// caller (CI, a script) must supply the value through the matching env var
-// instead of hanging on a prompt that can never be answered.
-function promptSecret(label: any) {
-  if (!process.stdin.isTTY) {
-    throw new Error(`${label} has no value and stdin is not a TTY to prompt for one; set the matching env var instead`)
-  }
-  process.stdout.write(label)
-  return new Promise((resolvePrompt, reject) => {
-    const { stdin } = process
-    stdin.resume()
-    stdin.setRawMode(true)
-    stdin.setEncoding('utf8')
-    let value = ''
-    const cleanup = () => {
-      stdin.setRawMode(false)
-      stdin.pause()
-      stdin.removeListener('data', onData)
-    }
-    // Raw mode delivers a chunk, not a keystroke: a pasted token arrives as one
-    // string, usually with its terminator attached. Comparing the chunk itself
-    // sends the whole paste to `default`, so the secret keeps the trailing
-    // control character and the prompt never resolves. Step through characters,
-    // and stop at the first terminator so anything typed after it is ignored.
-    let settled = false
-    const onData = (chunk: any) => {
-      for (const char of chunk) {
-        if (settled) return
-        switch (char) {
-          case '\n':
-          case '\r':
-          case '\u0004':
-            settled = true
-            cleanup()
-            process.stdout.write('\n')
-            resolvePrompt(value)
-            break
-          case '\u0003':
-            settled = true
-            cleanup()
-            process.stdout.write('\n')
-            reject(new Error('interrupted'))
-            break
-          case '\u007f':
-          case '\b':
-            value = value.slice(0, -1)
-            break
-          default:
-            value += char
-        }
-      }
-    }
-    stdin.on('data', onData)
-  })
 }
 
 function ssmParameterExists(awsCliPath: any, region: any, name: any) {
@@ -679,21 +615,26 @@ function auth0Run(args: any) {
   execFileSync('auth0', args, { stdio: ['ignore', 'ignore', 'pipe'], timeout: 60_000, killSignal: 'SIGTERM' })
 }
 
+function requireAuth0Session() {
+  try {
+    execFileSync('auth0', ['tenants', 'list'], { stdio: 'ignore', timeout: 30_000, killSignal: 'SIGTERM' })
+  } catch (cause) {
+    throw new Error('the auth0 CLI is not authenticated; run `npm run login` and complete the browser consent', { cause })
+  }
+}
+
 /*
- * Collapses the five manual Auth0 dashboard steps in README's "OIDC provider
- * setup" into API calls. The `auth0 login` device-code token already carries
- * every scope this needs, so there is no create-an-M2M-app-first step.
+ * Creates the application and API identities. The email-provider configurator
+ * owns SES and the code templates; the login-policy configurator owns the
+ * database connection, Form/Flows, Action, and binding. Both are previewable
+ * and write rollback receipts.
  *
  * Not idempotent the way the AWS/GitHub steps are: Auth0 has no upsert for
  * applications or APIs, so rerunning creates duplicates. Gated behind an
  * explicit flag for that reason.
  */
 function provisionAuth0({ stackDomain }: any) {
-  try {
-    execFileSync('auth0', ['tenants', 'list'], { stdio: 'ignore', timeout: 30_000, killSignal: 'SIGTERM' })
-  } catch (cause) {
-    throw new Error('the auth0 CLI is not authenticated; run `npm run login` and complete the browser consent', { cause })
-  }
+  requireAuth0Session()
 
   const app = auth0Json(spaApplicationArgs({ stackDomain }))
   const clientId = app.client_id ?? app.clientId
@@ -703,25 +644,265 @@ function provisionAuth0({ stackDomain }: any) {
   const api = auth0Json(customApiArgs({ stackDomain }))
   console.log(`[${SCRIPT_NAME}] Auth0 custom API ... created (audience ${api.identifier})`)
 
-  const actionCode = readFileSync(ACTION_SOURCE_PATH, 'utf8')
-  const action = auth0Json(createActionArgs({ code: actionCode }))
-  const actionId = action.id
-  if (!actionId) throw new Error('auth0 actions create returned no id')
+  auth0Run(tenantSettingsArgs())
+  console.log(`[${SCRIPT_NAME}] Auth0 tenant settings ... applied (logout discovery, public-signup error)`)
 
-  // deploy != bind: an Action must be deployed before it can be bound, and
-  // the CLI has no bind verb, so the binding goes through the raw API.
-  auth0Run(deployActionArgs(actionId))
-  const existingBindings = auth0Json(['api', 'get', 'actions/triggers/post-login/bindings']).bindings ?? []
-  auth0Run(bindActionArgs({ actionId, existingBindings }))
-  console.log(`[${SCRIPT_NAME}] Auth0 post-login Action ... created, deployed, and bound`)
-
-  auth0Run(enableRpLogoutDiscoveryArgs())
-  console.log(`[${SCRIPT_NAME}] Auth0 RP-initiated logout discovery ... enabled`)
+  const tenants = auth0Json(['tenants', 'list', '--json'])
+  const activeTenants = tenants.filter((tenant: any) => tenant.active)
+  if (activeTenants.length !== 1 || !activeTenants[0].name) {
+    throw new Error('auth0 tenants list did not return exactly one active tenant')
+  }
+  console.log(
+    `[${SCRIPT_NAME}] preview the email provider and email-first login policy from apps/infra:\n` +
+      `  npm run auth0:configure-email -- --tenant ${activeTenants[0].name} --from <verified-sender> --region <ses-region>\n` +
+      `  npm run auth0:configure-login -- --tenant ${activeTenants[0].name} --client-id ${clientId} --connection <database-connection-name>`,
+  )
 
   // OIDC_CLIENT_ID is an SST secret, not a .env key — seeded below by
   // ensureOidcClientId. Only OIDC_AUDIENCE belongs in .env.
   console.log(`[${SCRIPT_NAME}] add to .env: OIDC_AUDIENCE=${api.identifier}`)
   console.log(`[${SCRIPT_NAME}] supply this when prompted for the OIDC client ID: ${clientId}`)
+}
+
+function iamJson(awsCliPath: any, args: readonly string[]) {
+  const stdout = execFileSync(awsCliPath, ['iam', ...args, '--output', 'json'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 30_000,
+    killSignal: 'SIGTERM',
+  })
+  return stdout.trim() ? JSON.parse(stdout) : {}
+}
+
+/*
+ * The stage's SES SMTP credential: a send-only IAM user whose access key, converted
+ * by SES's SigV4 chain, is the SMTP password the Api authenticates with.
+ *
+ * Here rather than in the stack because the deploy role cannot mint it. Every IAM
+ * grant in aws/github-deploy-role.yaml is scoped to roles — deliberately, so a CI job
+ * can never create a principal that outlives it — and an SES SMTP credential is an
+ * IAM user's access key. This step runs with the operator's own credentials, the same
+ * ones that deploy that template, and leaves both halves in the stage's secret store
+ * where stack/mail.ts reads them.
+ *
+ * Rerunning rotates rather than reuses: IAM returns a secret access key once, at
+ * creation, so an existing key cannot be recovered — and a user is capped at two.
+ * Deleting the old keys first keeps that cap clear, and revokes a leaked credential
+ * as a side effect.
+ */
+function provisionSesSmtpUser({ awsCliPath, region, stage, accountId, senderDomain }: any) {
+  const userName = `boxlite-${stage}-smtp`
+  const identityArn = `arn:aws:ses:${region}:${accountId}:identity/${senderDomain}`
+
+  try {
+    iamJson(awsCliPath, ['get-user', '--user-name', userName])
+    console.log(`[${SCRIPT_NAME}] IAM user ${userName} ... exists`)
+  } catch {
+    iamJson(awsCliPath, ['create-user', '--user-name', userName])
+    console.log(`[${SCRIPT_NAME}] IAM user ${userName} ... created`)
+  }
+
+  // Sending only, and only as this identity. Scoped by identity ARN rather than by a
+  // ses:FromAddress condition: the domain IS the identity, the Api's From address is
+  // derived from that same value in stack/mail.ts, and an address-level condition that
+  // drifted would refuse each send at runtime rather than fail at deploy.
+  const policy = JSON.stringify({
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Effect: 'Allow',
+        // The SMTP interface issues SendRawEmail; SendEmail is what a later move to the
+        // SESv2 SDK would call, and both are confined to this one identity either way.
+        Action: ['ses:SendRawEmail', 'ses:SendEmail'],
+        Resource: identityArn,
+      },
+    ],
+  })
+  iamJson(awsCliPath, [
+    'put-user-policy',
+    '--user-name',
+    userName,
+    '--policy-name',
+    'BoxLiteSesSend',
+    '--policy-document',
+    policy,
+  ])
+  console.log(`[${SCRIPT_NAME}] send-only policy ... attached (${identityArn})`)
+
+  /*
+   * Replace before revoke, never the other way round.
+   *
+   * Deleting first leaves a window where the stage's stored credential names a key
+   * that no longer exists: if create-access-key or either secret write then fails,
+   * the deploy still turns SMTP on — stack/mail.ts only checks that both halves are
+   * non-empty — and every invitation is refused by SES until someone reruns this.
+   * Creating first means the worst case is an unused key, which the next run cleans up.
+   *
+   * IAM caps a user at two keys, so a rerun makes room by dropping the oldest before
+   * asking for a new one; the steady state is one key, and that branch only fires
+   * after a run that died between create and revoke.
+   */
+  const keysBefore = iamJson(awsCliPath, ['list-access-keys', '--user-name', userName]).AccessKeyMetadata ?? []
+  if (keysBefore.length >= 2) {
+    const oldest = [...keysBefore].sort((a: any, b: any) => String(a.CreateDate).localeCompare(String(b.CreateDate)))[0]
+    iamJson(awsCliPath, ['delete-access-key', '--user-name', userName, '--access-key-id', oldest.AccessKeyId])
+    console.log(`[${SCRIPT_NAME}] dropped the oldest access key ${oldest.AccessKeyId} to make room`)
+  }
+
+  const created = iamJson(awsCliPath, ['create-access-key', '--user-name', userName]).AccessKey
+  if (!created?.AccessKeyId || !created?.SecretAccessKey) {
+    throw new Error('aws iam create-access-key returned no credential')
+  }
+
+  setStageSecret({ stage, name: 'SMTP_USER', value: created.AccessKeyId })
+  setStageSecret({ stage, name: 'SMTP_PASSWORD', value: sesSmtpPasswordV4(created.SecretAccessKey, region) })
+  console.log(`[${SCRIPT_NAME}] SMTP_USER / SMTP_PASSWORD ... set for ${senderDomain} in ${region}`)
+
+  // Only now is the old credential safe to revoke: the store holds a working one.
+  for (const key of keysBefore.filter((key: any) => key.AccessKeyId !== created.AccessKeyId)) {
+    iamJson(awsCliPath, ['delete-access-key', '--user-name', userName, '--access-key-id', key.AccessKeyId])
+    console.log(`[${SCRIPT_NAME}] revoked previous access key ${key.AccessKeyId}`)
+  }
+
+  // Auth0's provider is per-tenant state this script does not own. Auth0's SES
+  // provider requires the raw AWS secret rather than this derived SMTP password,
+  // so its reconciler deliberately uses a separate send-only access key.
+  console.log(
+    `[${SCRIPT_NAME}] configure Auth0 email delivery with a separate SES API credential:\n` +
+      `  npm run auth0:configure-email -- --tenant <tenant.auth0.com> --from <verified-sender> --region ${region}`,
+  )
+}
+
+// Transactional only, and specific about what it sends: a vague answer is the common
+// reason an SES production-access request comes back asking for one.
+const SES_USE_CASE_DESCRIPTION =
+  'Transactional only. Two senders: organization invitation emails from the BoxLite control plane, ' +
+  'and login verification and password-reset codes from our identity provider. Recipients are people ' +
+  'who signed up for the product or were invited to an organization by a member of it. No marketing ' +
+  'or bulk mail. Bounces and complaints are handled through the SES account-level suppression list.'
+
+function firstLine(error: any) {
+  return String(error?.stderr || error?.message || error).trim().split('\n')[0]
+}
+
+// The CLI reports a missing identity as a NotFoundException on stderr and exits 254.
+// Matching the name rather than the exit status keeps a future exit-code change from
+// turning every failure into "the identity does not exist yet".
+function isSesNotFound(error: any) {
+  return /NotFoundException/.test(String(error?.stderr ?? ''))
+}
+
+/*
+ * Whether SES considers the sender domain verified. `NOT_STARTED` covers the case that
+ * matters most on a first bootstrap: the identity does not exist yet, because the deploy
+ * that creates it has not run.
+ */
+function sesIdentityVerification({ awsCliPath, region, senderDomain }: any) {
+  let stdout
+  try {
+    stdout = execFileSync(
+      awsCliPath,
+      ['sesv2', 'get-email-identity', '--region', region, '--email-identity', senderDomain, '--output', 'json'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000, killSignal: 'SIGTERM' },
+    )
+  } catch (cause: any) {
+    // NotFoundException is the expected answer on a first bootstrap: the deploy that
+    // creates the identity has not run. Anything else — no credentials, no ses:
+    // permission, a region that rejects the call — must not read as "not created yet",
+    // which would defer the production-access request and say the domain is the reason.
+    if (isSesNotFound(cause)) return 'NOT_STARTED'
+    throw new Error(
+      `could not read the SES identity ${senderDomain} in ${region}: ${firstLine(cause)}`,
+      { cause },
+    )
+  }
+  return JSON.parse(stdout).VerifiedForSendingStatus === true ? 'SUCCESS' : 'PENDING'
+}
+
+/*
+ * Ask AWS to take the account out of the SES sandbox, where sending is capped at 200
+ * messages a day to verified recipients only.
+ *
+ * Account-and-region wide rather than per stage, so the first stage bootstrapped in a
+ * region carries every later one — which is also why this cannot key off whether this
+ * script has run before. There is exactly one submission to spend: PutAccountDetails is
+ * refused while a review is open AND after one closes, so the state is read first
+ * (sesProductionAccess) and a rerun is a no-op while pending, reports the case id of a
+ * review that closed DENIED or FAILED, and does nothing at all once sending is live.
+ */
+function requestSesProductionAccess({ awsCliPath, region, senderDomain }: any) {
+  const account = JSON.parse(
+    execFileSync(awsCliPath, ['sesv2', 'get-account', '--region', region, '--output', 'json'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30_000,
+      killSignal: 'SIGTERM',
+    }),
+  )
+
+  const access = sesProductionAccess(account)
+  if (access.state === 'granted') {
+    console.log(`[${SCRIPT_NAME}] SES production access ... already granted in ${region}`)
+    return
+  }
+  if (access.state === 'pending') {
+    console.log(
+      `[${SCRIPT_NAME}] SES production access ... review already open${access.caseId ? ` (case ${access.caseId})` : ''}; leaving it alone`,
+    )
+    return
+  }
+  if (access.state === 'closed') {
+    console.warn(
+      `[${SCRIPT_NAME}] SES production access ... last review closed ${access.status}` +
+        `${access.caseId ? ` (case ${access.caseId})` : ''}. AWS refuses a second submission, so this is` +
+        ' worked through that support case, not from here. Sending stays capped at 200/day to verified' +
+        ' recipients until it is resolved.',
+    )
+    return
+  }
+
+  /*
+   * Not before the domain is verified.
+   *
+   * AWS says verifying first helps the request through, and a request made with no
+   * identity and no sending history is the shape that gets denied — which is not
+   * recoverable by asking again. The identity is created by the deploy, not here, so on
+   * a first bootstrap this correctly defers rather than spending the one submission.
+   */
+  const identityStatus = sesIdentityVerification({ awsCliPath, region, senderDomain })
+  if (identityStatus !== 'SUCCESS') {
+    console.log(
+      `[${SCRIPT_NAME}] SES production access ... deferred: ${senderDomain} is ${identityStatus.toLowerCase()}.` +
+        ' Deploy the stage first, then rerun this to ask with a verified domain behind the request.',
+    )
+    return
+  }
+
+  // The sender domain is a subdomain of the site AWS is being pointed at, not the site.
+  const websiteUrl = `https://${senderDomain.replace(/^mail\./, '')}`
+  execFileSync(
+    awsCliPath,
+    [
+      'sesv2',
+      'put-account-details',
+      '--region',
+      region,
+      '--production-access-enabled',
+      '--mail-type',
+      'TRANSACTIONAL',
+      '--website-url',
+      websiteUrl,
+      '--contact-language',
+      'EN',
+      '--use-case-description',
+      SES_USE_CASE_DESCRIPTION,
+    ],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000, killSignal: 'SIGTERM' },
+  )
+  console.log(
+    `[${SCRIPT_NAME}] SES production access ... requested for ${region} (${websiteUrl}), with ${senderDomain}` +
+      ' verified. AWS answers within 24h; until then sending stays capped at 200/day to verified recipients.',
+  )
 }
 
 function deployGithubDeployRoleStack({ awsCliPath, region, stage, repo }: any) {
@@ -870,11 +1051,34 @@ async function main() {
     }
     provisionAuth0({ stackDomain })
   }
+
   await ensureCloudflareCredentials({ awsCliPath, region, stage, repo, force })
   // Before the first timed sst call, not inside it — see ensureSstPlatform. Both steps below are
   // `sst secret` calls, so neither can run until the platform sst needs is installed.
   ensureSstPlatform(stage)
   await ensureOidcClientId(stage)
+  if (options['provision-ses']) {
+    // From the snapshot about to be stored, for the same reason provisionAuth0 reads
+    // STACK_DOMAIN there: the deploy reads MAIL_DOMAIN out of the store, so a shell
+    // override would pin this credential to a domain the stack never sends from.
+    const senderDomain = resolveMailDomain(stageConfigLoad.payload)
+    provisionSesSmtpUser({ awsCliPath, region, stage, accountId: identity.Account, senderDomain })
+    /*
+     * After the credential, and never fatal.
+     *
+     * The sandbox is a property of the account, not of this stage: the steps below still
+     * have to run, and they are what makes the stage deployable at all. A first run
+     * proved the failure mode — AWS refused the submission and took the whole bootstrap
+     * down with it, leaving the stage config unstored and the deploy role un-updated.
+     */
+    try {
+      requestSesProductionAccess({ awsCliPath, region, senderDomain })
+    } catch (cause: any) {
+      console.warn(
+        `[${SCRIPT_NAME}] SES production access ... could not be requested: ${cause.message?.split('\n')[0] ?? cause}`,
+      )
+    }
+  }
   ensureStageConfig(stage, stageConfigLoad)
   // The role is deployed after the store is seeded so a failure here leaves a stage that is
   // configured but not yet deployable, rather than one the workflow can reach with no configuration.

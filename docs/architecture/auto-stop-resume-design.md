@@ -4,7 +4,7 @@
 
 The first phase reuses the existing `Stop` / `Start` paths. It does not create memory snapshots, does not add a `Paused` state, and does not promise retention of memory, processes, terminal sessions, or network connections. Persistent disks and volumes continue to be managed by existing storage lifecycle policies.
 
-The feature is implemented by the cloud control plane. The REST backend forwards policies to the runner; the embedded local backend does not run a sweeper and returns `BoxliteError::Unsupported` for explicit non-default lifecycle configurations, to avoid silently ignoring them.
+The feature is implemented by the cloud control plane, and by `boxlite serve`, which keeps the policy in memory and sweeps it on its existing 30s reaper tick. The REST backend forwards policies to the runner; the embedded local backend does not run a sweeper and returns `BoxliteError::Unsupported` for explicit non-default lifecycle configurations, to avoid silently ignoring them.
 
 ## Public Contract
 
@@ -16,7 +16,7 @@ auto_delete: integer seconds, 0 disables
 auto_resume: boolean, default true; user operations resume an auto-stopped box when enabled
 ```
 
-The default `auto_stop` is `900` seconds, the default `auto_delete` is `0`, and the default `auto_resume` is `true`. Create and read APIs and the Rust, Python, Node.js, C, and Go SDK boundaries use these same modern lifecycle semantics. AutoResume is implemented by the cloud control plane; the embedded local runtime has no auto-stopped state to resume. SDKs continue to accept deprecated `auto_remove` for embedded remove-on-stop compatibility, and explicit `auto_delete` takes precedence there. The REST API does not expose `auto_remove`; leaving `auto_delete` unset preserves the remote server's default instead of translating the deprecated field to a timer.
+The default `auto_stop` is `900` seconds, the default `auto_delete` is `0`, and the default `auto_resume` is `true`. Create and read APIs and the Rust, Python, Node.js, C, and Go SDK boundaries use these same modern lifecycle semantics. AutoResume is implemented by the REST runtimes — the cloud control plane, and `boxlite serve`, which refuses an implicit wake with 409 on the operations that would boot the box. The embedded local runtime has no request path on which to refuse, and no auto-stopped state to resume. SDKs continue to accept deprecated `auto_remove` for embedded remove-on-stop compatibility, and explicit `auto_delete` takes precedence there. The REST API does not expose `auto_remove`; leaving `auto_delete` unset preserves the remote server's default instead of translating the deprecated field to a timer.
 
 The internal database columns are `autoStop`, `autoDelete`, `autoResume`, and `lastActivityAt`. Public names remain stable.
 

@@ -39,15 +39,19 @@ describe("SkillBox constructor defaults", { timeout: 120_000 }, () => {
     const box = new SkillBox({
       oauthToken: "tok",
       network: {
-        mode: "enabled",
-        allowNet: ["example.com"],
+        outbound: {
+          mode: "enabled",
+          allowNet: ["example.com"],
+        },
       },
       secrets: [{ name: "api", value: "secret", hosts: ["example.com"] }],
     });
     const opts = (box as any)._boxOpts;
     expect(opts.network).toEqual({
-      mode: "enabled",
-      allowNet: ["example.com"],
+      outbound: {
+        mode: "enabled",
+        allowNet: ["example.com"],
+      },
     });
     expect(opts.secrets).toEqual([
       { name: "api", value: "secret", hosts: ["example.com"] },

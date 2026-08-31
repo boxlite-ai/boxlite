@@ -71,6 +71,7 @@ impl CreateArgs {
         self.boot.require_enabled(global.experimental_features())?;
         self.management
             .require_enabled(global.experimental_features())?;
+        self.management.require_sweeper(global.targets_rest())?;
         let mut options = BoxOptions::default();
         self.resource.apply_to(&mut options);
         self.capability.apply_to(&mut options);
@@ -91,7 +92,12 @@ impl CreateArgs {
         // apply — the same rule `run -d` enforces (remove-on-stop with detach is
         // rejected at sanitize).
         options.detach = true;
-        options.auto_delete = Some(0);
+        // Clears the `--rm` encoding, which cannot apply to a box that is
+        // always detached — but must not clobber an explicit `--auto-delete`,
+        // which is a deferred deadline rather than remove-on-stop.
+        if self.management.auto_delete.is_none() {
+            options.auto_delete = Some(0);
+        }
         options.working_dir = self.workdir.clone();
         if let Some(ref exec) = self.entrypoint {
             options.entrypoint = Some(vec![exec.clone()]);
@@ -119,6 +125,53 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Commands};
     use clap::Parser;
+
+    /// `create` always detaches and clears the `--rm` encoding afterwards, so
+    /// an explicit deadline is exactly what that line can clobber. This is the
+    /// consuming boundary — `ManagementFlags::apply_to` gets the order right on
+    /// its own and still could not have caught a later overwrite here.
+    #[test]
+    fn an_explicit_delete_deadline_survives_creates_detach_default() {
+        let cli = Cli::try_parse_from([
+            "boxlite",
+            "--url",
+            "http://127.0.0.1:1",
+            "create",
+            "--auto-delete",
+            "1h",
+            "alpine:latest",
+        ])
+        .expect("create --auto-delete should parse");
+        let Commands::Create(args) = cli.command else {
+            panic!("expected create command");
+        };
+
+        let opts = args
+            .to_box_options(&cli.global)
+            .expect("options should build");
+
+        assert!(opts.detach, "create always detaches");
+        assert_eq!(opts.auto_delete, Some(3_600));
+    }
+
+    #[test]
+    fn create_without_a_deadline_keeps_the_rm_encoding() {
+        let opts = {
+            let cli = Cli::try_parse_from(["boxlite", "create", "alpine:latest"])
+                .expect("create should parse");
+            let Commands::Create(args) = cli.command else {
+                panic!("expected create command");
+            };
+            args.to_box_options(&cli.global)
+                .expect("options should build")
+        };
+
+        assert_eq!(
+            opts.auto_delete,
+            Some(0),
+            "a detached box cannot remove on stop, so the sentinel is cleared"
+        );
+    }
 
     #[test]
     fn create_rootfs_flag_sets_rootfs_path() {
@@ -186,7 +239,8 @@ mod tests {
         let opts = args
             .to_box_options(&cli.global)
             .expect("options should build");
-        assert_eq!(opts.advanced.capabilities.add, vec!["SYS_ADMIN"]);
-        assert_eq!(opts.advanced.capabilities.drop, vec!["CAP_NET_RAW"]);
+        let capabilities = opts.advanced.capabilities().expect("capabilities set");
+        assert_eq!(capabilities.add, vec!["SYS_ADMIN"]);
+        assert_eq!(capabilities.drop, vec!["CAP_NET_RAW"]);
     }
 }

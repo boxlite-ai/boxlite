@@ -192,6 +192,17 @@ Log in to a BoxLite REST server. Supports three flows that all save to
   code + URL to enter on any browser on another device. Same token type
   and refresh behavior as the browser flow.
 
+On a BoxLite Auth0 deployment, an existing unverified database account must
+complete the hosted verification Form through browser login:
+
+```bash
+boxlite --profile cloud auth login --url https://<your-control-plane>/api --method browser
+```
+
+Auth0 Forms cannot run inside refresh-token, device-code, or other
+non-interactive exchanges. An SSH user should finish verification through the
+BoxLite dashboard in a separate browser, then retry the device login.
+
 When `--method` is unset, the CLI infers it: piped stdin → `api-key` (CI-safe),
 TTY → interactive picker, `$SSH_CONNECTION` set → silent fallback to `device`.
 
@@ -317,7 +328,7 @@ silently restarting it, because restarting would run the command a second time.
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
 | `--workdir PATH` | `-w` | Working directory in the box |
 | `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
-| `--volume VOLUME` | `-v` | Mount a volume (e.g. `hostPath:boxPath`, `boxPath` for anonymous) |
+| `--volume VOLUME` | `-v` | Mount a volume: `name:/box` for a managed volume, `./path:/box` for a host bind, `/box` for anonymous |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
@@ -325,9 +336,18 @@ silently restarting it, because restarting would run the command a second time.
 | `--name NAME` | | Name the box |
 | `--detach` | `-d` | Run in background, print box ID |
 | `--rm` | | Remove the box when it exits |
+| `--auto-stop DURATION` | | Stop the box after this much inactivity; `0` disables |
+| `--auto-delete DURATION` | | Delete the box this long after it stops; `0` disables |
+| `--no-auto-resume` | | Refuse operations that would implicitly wake a stopped box |
 
 `-p` is explicit local publication. Remote REST profiles reject it and direct
 the caller to `boxlite network tunnel`.
+
+`DURATION` is seconds when bare, or suffixed: `30s`, `15m`, `2h`, `7d`. The two
+deadlines are swept by a server — `boxlite serve` or the cloud — so against the
+embedded runtime they are refused rather than silently reinterpreted. See the
+[CLI reference](../../docs/reference/cli/README.md) for the sweep's granularity
+and how `--rm` differs between the two.
 
 **Examples:**
 
@@ -362,7 +382,7 @@ default, and `exec` still starts it on demand.
 | `--env KEY=VALUE` | `-e` | Environment variables |
 | `--workdir PATH` | `-w` | Working directory |
 | `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
-| `--volume VOLUME` | `-v` | Mount a volume (e.g. `hostPath:boxPath`, or box path for anonymous) |
+| `--volume VOLUME` | `-v` | Mount a volume: `name:/box` for a managed volume, `./path:/box` for a host bind, `/box` for anonymous |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
@@ -504,9 +524,22 @@ Copy files or directories between host and box.
 **Examples:**
 
 ```bash
-boxlite cp ./local.txt mybox:/tmp/
+boxlite cp ./local.txt mybox:/workspace/
 boxlite cp mybox:/app/out ./output
 ```
+
+Paths at or under a mount inside the box are refused in both directions — `/tmp`,
+`/dev/shm`, volumes, and the `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf` binds.
+`cp` works on the rootfs layer from outside the box's mount namespace, so such a
+copy would write where nothing in the box can see it, or read back the image's file
+rather than the one the box has.
+
+A directory that merely *contains* a mount differs by direction: copying one **out** is
+refused (`boxlite cp box:/etc ./etc`), while copying **in** is allowed and refused only
+if a file would land on a mount — so `boxlite cp ./x box:/etc` works.
+
+Copy a path outside the mount, or pipe a tar through
+`boxlite exec`. Files copied in are owned by the box's exec user.
 
 ### `boxlite info`
 

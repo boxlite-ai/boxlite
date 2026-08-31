@@ -100,6 +100,50 @@ describe('OrganizationService.unsuspend', () => {
   })
 })
 
+describe('OrganizationService.handleUserEmailVerifiedEvent', () => {
+  const verificationReason = 'Please verify your email address'
+
+  const eventContext = (found: Organization) => {
+    const entityManager = {
+      findOne: jest.fn().mockResolvedValue({ organization: found }),
+      save: jest.fn().mockImplementation((org: Organization) => Promise.resolve(org)),
+    }
+    const { service } = makeService(null)
+    return { service, entityManager, payload: { entityManager, userId: 'user-1' } as any }
+  }
+
+  it('clears the default organization suspension created by email verification', async () => {
+    const suspendedAt = new Date()
+    const { service, entityManager, payload } = eventContext(
+      organization({ suspended: true, suspensionReason: verificationReason, suspendedAt }),
+    )
+
+    await service.handleUserEmailVerifiedEvent(payload)
+
+    expect(entityManager.save).toHaveBeenCalledWith(
+      expect.objectContaining({ suspended: false, suspensionReason: null, suspendedAt: null }),
+    )
+  })
+
+  it('preserves an unrelated administrator or billing suspension', async () => {
+    const suspended = organization({ suspended: true, suspensionReason: 'Payment method required' })
+    const { service, entityManager, payload } = eventContext(suspended)
+
+    await service.handleUserEmailVerifiedEvent(payload)
+
+    expect(entityManager.save).not.toHaveBeenCalled()
+    expect(suspended).toMatchObject({ suspended: true, suspensionReason: 'Payment method required' })
+  })
+
+  it('does nothing when the organization is already active', async () => {
+    const { service, entityManager, payload } = eventContext(organization())
+
+    await service.handleUserEmailVerifiedEvent(payload)
+
+    expect(entityManager.save).not.toHaveBeenCalled()
+  })
+})
+
 describe('OrganizationService.assertOrganizationIsNotSuspended', () => {
   it('does not throw for an active organization', () => {
     const { service } = makeService(organization())

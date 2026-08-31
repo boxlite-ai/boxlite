@@ -88,6 +88,7 @@ mod tests {
         SandboxContext {
             id: "test",
             paths: vec![],
+            unix_sockets: Default::default(),
             resource_limits: limits,
             network_enabled: false,
             sandbox_profile: None,

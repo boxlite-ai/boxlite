@@ -2,18 +2,6 @@
   "env": {
     "VERDICT_GATE_HARD_BLOCK": "1"
   },
-  "extraKnownMarketplaces": {
-    "boxlite-agent-tooling": {
-      "source": {
-        "source": "github",
-        "repo": "boxlite-ai/agent-tooling",
-        "ref": "main"
-      }
-    }
-  },
-  "enabledPlugins": {
-    "boxlite-agent-tooling@boxlite-agent-tooling": true
-  },
   "hooks": {
     "SessionStart": [
       {
@@ -25,7 +13,52 @@
             "timeout": 600
           }
         ]
+      },
+      {
+        "matcher": "^(startup|resume|fork|clear)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/env",
+            "args": [
+              "bash",
+              "${CLAUDE_PROJECT_DIR}/.agent-tooling/claude-plugin-bootstrap.sh"
+            ],
+            "timeout": 180,
+            "statusMessage": "Checking BoxLite agent tooling"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/env",
+            "args": [
+              "bash",
+              "-c",
+              "/usr/bin/env bash \"$1\" --check; status=$?; [ \"$status\" -eq 0 ] && exit 0; exit 2",
+              "agent-tooling-prompt-gate",
+              "${CLAUDE_PROJECT_DIR}/.agent-tooling/claude-plugin-bootstrap.sh"
+            ],
+            "timeout": 5
+          }
+        ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "boxlite-agent-tooling@boxlite-agent-tooling": true
+  },
+  "extraKnownMarketplaces": {
+    "boxlite-agent-tooling": {
+      "source": {
+        "source": "github",
+        "repo": "boxlite-ai/agent-tooling",
+        "ref": "main"
+      }
+    }
   }
 }

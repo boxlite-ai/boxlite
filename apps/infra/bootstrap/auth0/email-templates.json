@@ -1,0 +1,16 @@
+[
+  {
+    "template": "verify_email_by_code",
+    "subject": "Verify your BoxLite email",
+    "syntax": "liquid",
+    "enabled": true,
+    "render_html": "./email-templates/verify-email-by-code.html"
+  },
+  {
+    "template": "reset_email_by_code",
+    "subject": "Reset your BoxLite password",
+    "syntax": "liquid",
+    "enabled": true,
+    "render_html": "./email-templates/reset-email-by-code.html"
+  }
+]

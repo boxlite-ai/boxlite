@@ -19,6 +19,42 @@ Complete API documentation for each SDK:
 |---------|---------------|-------------|
 | **`boxlite`** | [CLI Reference](cli/README.md) | All subcommands, global flags, volume/port grammar, installation & verification, exit codes |
 
+## HTTP API Reference
+
+| Surface | Documentation | Description |
+|---------|---------------|-------------|
+| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 26 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images |
+| **Reference server** | [`openapi/reference-server/`](../../openapi/reference-server/README.md) | A partial implementation used as a client test fixture, not a conformance target |
+
+The spec is the contract, not an inventory of any one server, and no
+implementation currently serves all 26 paths:
+
+| Server | Serves | Does not serve |
+|--------|--------|----------------|
+| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | `network/tunnel`, the three `images/*` paths. Volume routes are registered but every operation answers `400 UnsupportedError` |
+| reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, `network/tunnel`, attach, and `DELETE …/executions/{exec_id}` (kill) |
+
+Read each server's routes rather than either README — both under-report.
+`GET /config` does not close this gap: it carries feature flags
+(`tty_enabled`, `streaming_enabled`, `snapshots_enabled`, `clone_enabled`,
+`export_enabled`, `import_enabled`), not route availability, has no flag at all
+for volumes, images or tunnel, and can disagree with the routes — the reference
+server advertises `streaming_enabled: true` while serving no attach route.
+
+`{prefix}` is a deployment-defined routing slot, opaque to the client, published
+by a server as `Principal.path_prefix`. A single-tenant server may omit the
+segment entirely — that is the contract's null-prefix case, and what `boxlite
+serve` does, so its `/v1/boxes/…` routes are conformant. The field name is not:
+both servers serialize it as `prefix` (`serve/handlers/me.rs`,
+`reference-server/server.py`) where the contract says `path_prefix`. The Rust
+client sidesteps discovery altogether and takes `path_prefix` from its own
+options. Treat the segment as server-supplied configuration; never hardcode one.
+
+A deployed BoxLite platform also runs services of its own — control plane,
+runner, preview proxy, telemetry collector — catalogued separately in
+[`apps/API.md`](../../apps/API.md). Those are deployment internals, not part of
+the portable contract above.
+
 ---
 
 ## Quick Reference
@@ -311,11 +347,12 @@ env=[
 - Use to override image defaults (e.g., `PATH`)
 - Sensitive values (API keys, passwords) are visible in box metadata
 
-#### `volumes: List[Tuple[str, str, str]]`
+#### `volumes: List[Tuple | Dict]`
 
-Volume mounts as (host_path, guest_path, mode) tuples.
+Volume mounts. A tuple is always a host bind; a dict takes either
+`managed_volume` (a volume's id or name) or `host_path`, never both.
 
-**Format:** `(host_path, guest_path, "ro"|"rw")`
+**Format:** `(host_path, guest_path[, read_only])` - `read_only` is a bool, default `False`.
 
 **Default:** `[]` (no mounts)
 
@@ -323,13 +360,13 @@ Volume mounts as (host_path, guest_path, mode) tuples.
 ```python
 volumes=[
     # Read-only mount (data input)
-    ("/host/config", "/etc/app/config", "ro"),
+    ("/host/config", "/etc/app/config", True),
 
     # Read-write mount (data output)
-    ("/host/data", "/mnt/data", "rw"),
+    ("/host/data", "/mnt/data", False),
 
     # Home directory mount
-    (os.path.expanduser("~/Documents"), "/mnt/docs", "ro"),
+    (os.path.expanduser("~/Documents"), "/mnt/docs", True),
 ]
 ```
 
@@ -458,6 +495,22 @@ Override temporary directory for BoxLite operations.
 ```bash
 export BOXLITE_TMPDIR=/custom/tmp
 python script.py
+```
+
+#### `BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE`
+
+Cap on total decompressed bytes written while extracting OCI image layers.
+A single extractor used for a whole image enforces this as a per-image cap;
+per-layer extraction enforces it per layer. Exceeding the cap aborts the
+pull with a `resource_exhausted` error (HTTP 429).
+
+**Default:** `21474836480` (20 GiB)
+
+**Example:**
+```bash
+# Allow larger images (e.g. ML images with huge layers)
+export BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE=53687091200
+boxlite pull my-image:latest
 ```
 
 ## Error Codes & Handling

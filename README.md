@@ -218,7 +218,7 @@ How BoxLite embeds a runtime and runs OCI containers inside micro-VMs. Details �
 
 ## Documentation
 
-- [API & CLI Reference](./docs/reference/) — SDK API references (Python, Node.js, Rust, C) and the `boxlite` CLI reference
+- [API & CLI Reference](./docs/reference/) — SDK API references (Python, Node.js, Rust, C), the `boxlite` CLI reference, and the REST API contract ([`openapi/box.openapi.yaml`](./openapi/box.openapi.yaml))
 - [Using BoxLite with AI agents](./docs/guides/ai-agent-integration.md) — concurrency, timeouts, security, file transfer
 - [Examples](./examples/) — Sample code for common use cases
 - [Architecture](./docs/architecture/) — How BoxLite works under the hood
@@ -245,6 +245,7 @@ How BoxLite embeds a runtime and runs OCI containers inside micro-VMs. Details �
 
 - [GitHub Issues](https://github.com/boxlite-ai/boxlite/issues) — Bug reports and feature requests
 - [Discord](https://go.boxlite.ai/discord) — Questions and community support
+- [Status page](https://status.boxlite.ai) — Live platform status and incident history
 - [Security Policy](./SECURITY.md) — How to privately report a vulnerability
 
 ## Contributing

@@ -5,7 +5,7 @@
 
 import type { ApiResources } from './api.js'
 import type { FoundationResources } from './foundation.js'
-import { IMAGES, PORTS, envOr, httpHealth } from './settings.js'
+import { PORTS, envOr } from './settings.js'
 
 export interface EdgeInputs {
   foundation: FoundationResources
@@ -19,7 +19,6 @@ export interface EdgeInputs {
   oidcIssuer: string
   publicOidcIssuer: string | undefined
   otelCollectorOtlpHttpUrl: $util.Output<string>
-  pgAdminPassword: random.RandomPassword
   stripTrailingSlash: (url: $util.Output<string>) => $util.Output<string>
 }
 
@@ -36,7 +35,6 @@ export function buildEdge(input: EdgeInputs): void {
     oidcIssuer,
     publicOidcIssuer,
     otelCollectorOtlpHttpUrl,
-    pgAdminPassword,
     stripTrailingSlash,
   } = input
 
@@ -97,61 +95,6 @@ new sst.aws.Service('Proxy', {
       }
       opts.protect = true
     },
-  },
-})
-
-// ─── 8. ADMIN UIs ────────────────────────────────────────────────────────
-// pgAdmin security gate. pgAdmin is a Postgres admin console one hop from RDS
-// and its listener is plain HTTP, so it must remain VPC-internal regardless of
-// its login settings. Reach it through a private path such as SSM forwarding.
-if (envOr('PGADMIN_PUBLIC', 'false') === 'true') {
-  throw new Error(
-    'PGADMIN_PUBLIC is not supported: pgAdmin serves plain HTTP, so public exposure ' +
-      'would disclose credentials and session cookies. Reach it via VPN / bastion / ' +
-      '`aws ssm start-session` instead.',
-  )
-}
-const pgAdminServerMode = envOr('PGADMIN_CONFIG_SERVER_MODE', 'True')
-const pgAdminMasterPassword = envOr('PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED', 'True')
-new sst.aws.Service('PgAdmin', {
-  cluster,
-  image: IMAGES.pgadmin,
-  loadBalancer: {
-    // Reachable only from inside the VPC (VPN / bastion / SSM port-forward).
-    public: false,
-    rules: [{ listen: '80/http', forward: `${PORTS.PGADMIN}/http` }],
-    health: { [`${PORTS.PGADMIN}/http`]: httpHealth('/', { successCodes: '200-399' }) },
-  },
-  environment: {
-    PGADMIN_DEFAULT_EMAIL: envOr('PGADMIN_DEFAULT_EMAIL', 'admin@boxlite.dev'),
-    PGADMIN_DEFAULT_PASSWORD: envOr('PGADMIN_DEFAULT_PASSWORD', pgAdminPassword.result),
-    // Server mode enables the login screen (desktop mode skips auth
-    // entirely); master password gates saved server credentials.
-    PGADMIN_CONFIG_SERVER_MODE: pgAdminServerMode,
-    PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: pgAdminMasterPassword,
-  },
-  transform: {
-    loadBalancer: (lbArgs: any) => { lbArgs.loadBalancerType = 'application' },
-  },
-})
-
-// MailDev is an unauthenticated mail catcher with no first-class web auth, so it
-// is VPC-internal only — reach it via VPN / bastion / `aws ssm start-session`.
-// Anything it captures (password resets, magic links, invites) would otherwise be
-// world-readable. MAILDEV_PUBLIC is rejected (fail loud) rather than silently
-// honored: unlike pgAdmin there is no auth gate that would make public exposure safe.
-if (envOr('MAILDEV_PUBLIC', 'false') === 'true') {
-  throw new Error(
-    'MAILDEV_PUBLIC is not supported: MailDev has no built-in auth, so it cannot be ' +
-      'safely exposed to the internet. Reach it via VPN / bastion / `aws ssm start-session`.',
-  )
-}
-new sst.aws.Service('MailDev', {
-  cluster,
-  image: IMAGES.maildev,
-  loadBalancer: { public: false, rules: [{ listen: '80/http', forward: `${PORTS.MAILDEV_UI}/http` }] },
-  transform: {
-    loadBalancer: (lbArgs: any) => { lbArgs.loadBalancerType = 'application' },
   },
 })
 

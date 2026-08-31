@@ -293,17 +293,35 @@ typedef struct CPublishedPortList {
   int count;
 } CPublishedPortList;
 
-// Typed network metadata owned by an enclosing [`CBoxInfo`].
-//
-// `allow_net` points to `allow_net_count` owned strings. `published_ports`
-// is null when the current handle does not know the bindings, non-null and
-// empty when there are no active publications, and otherwise contains
-// concrete bindings.
-typedef struct CNetworkInfo {
+// Mode and allowlist for one traffic direction. `allow_net` points to
+// `allow_net_count` owned strings, owned by the enclosing [`CNetworkInfo`].
+typedef struct CNetworkDirectionInfo {
   enum BoxliteNetworkMode mode;
   char **allow_net;
   int allow_net_count;
+} CNetworkDirectionInfo;
+
+// Typed network metadata owned by an enclosing [`CBoxInfo`].
+//
+// `published_ports` is null when the current handle does not know the
+// bindings, non-null and empty when there are no active publications, and
+// otherwise contains concrete bindings.
+// The first four fields are byte-compatible with the pre-split struct
+// (`mode`, `allow_net`, `allow_net_count`, `published_ports`), so callers
+// compiled against the old header keep reading valid data at the same
+// offsets. They alias `outbound`'s allocations — never free them separately;
+// [`free_network_info`] releases each allocation exactly once through
+// `outbound`/`inbound`.
+typedef struct CNetworkInfo {
+  // Deprecated: read `outbound.mode`. Mirrors it for old callers.
+  enum BoxliteNetworkMode mode;
+  // Deprecated: read `outbound.allow_net`. Aliases it — do not free.
+  char **allow_net;
+  // Deprecated: read `outbound.allow_net_count`.
+  int allow_net_count;
   struct CPublishedPortList *published_ports;
+  struct CNetworkDirectionInfo outbound;
+  struct CNetworkDirectionInfo inbound;
 } CNetworkInfo;
 
 typedef struct CBoxInfo {
@@ -421,6 +439,8 @@ typedef void (*CRuntimeShutdownCb)(CBoxliteError*, void*);
 // meaningful only when `has_size` is non-zero.
 typedef struct CVolumeInfo {
   char *id;
+  // Volume name, mountable in place of the id. Defaults to the id.
+  char *name;
   char *created_at;
   uint64_t size_bytes;
   int has_size;
@@ -797,12 +817,32 @@ void boxlite_options_set_disk_size_gb(CBoxliteOptions *opts, int disk_size_gb);
 
 void boxlite_options_set_workdir(CBoxliteOptions *opts, const char *workdir);
 
+void boxlite_options_set_user(CBoxliteOptions *opts, const char *user);
+
 void boxlite_options_add_env(CBoxliteOptions *opts, const char *key, const char *val);
 
-void boxlite_options_add_volume(CBoxliteOptions *opts,
-                                const char *host_path,
-                                const char *guest_path,
-                                int read_only);
+// Bind a host directory or file into the box.
+//
+// Host bind mounts are local-runtime only; a REST runtime rejects them at
+// create. Use [`boxlite_options_add_managed_volume`] against a REST runtime.
+void boxlite_options_add_bind_mount(CBoxliteOptions *opts,
+                                    const char *host_path,
+                                    const char *guest_path,
+                                    int read_only);
+
+// Mount a managed volume, addressed by its server-assigned id **or** by its
+// name — the server resolves either.
+//
+// `managed_volume` is the volume's id or name (`"my-data"`, `"vol_01K2…"`).
+// Managed volumes need a REST runtime; the local runtime has no volume backend
+// and rejects one at create.
+//
+// A NULL `opts`, `managed_volume`, or `guest_path` is ignored, matching
+// [`boxlite_options_add_bind_mount`].
+void boxlite_options_add_managed_volume(CBoxliteOptions *opts,
+                                        const char *managed_volume,
+                                        const char *guest_path,
+                                        int read_only);
 
 // Forward `host_port` on the host to `guest_port` inside the box.
 //
@@ -831,6 +871,15 @@ void boxlite_options_set_network_disabled(CBoxliteOptions *opts);
 // CIDR to keep UDP open.
 void boxlite_options_add_network_allow(CBoxliteOptions *opts, const char *host);
 
+// Marks services the box exposes as publicly reachable (the default).
+// Mirrors `boxlite_options_set_network_enabled` for the inbound direction.
+void boxlite_options_set_network_inbound_enabled(CBoxliteOptions *opts);
+
+// Marks services the box exposes as private — unreachable from outside the
+// box. Mirrors `boxlite_options_set_network_disabled` for the inbound
+// direction.
+void boxlite_options_set_network_inbound_disabled(CBoxliteOptions *opts);
+
 void boxlite_options_add_secret(CBoxliteOptions *opts,
                                 const char *name,
                                 const char *value,
@@ -841,10 +890,22 @@ void boxlite_options_add_secret(CBoxliteOptions *opts,
 // Deprecated: use `boxlite_options_set_auto_delete_interval`.
 void boxlite_options_set_auto_remove(CBoxliteOptions *opts, int val);
 
+// Set how long an idle box may remain paused before the runtime pauses it.
+//
+// The value is expressed in seconds. `0` preserves the runtime/control-plane
+// default. A null options pointer is treated as a no-op.
 void boxlite_options_set_auto_stop_interval(CBoxliteOptions *opts, uint32_t seconds);
 
+// Set how long a stopped box may remain before the runtime deletes it.
+//
+// The value is expressed in seconds. `0` disables automatic deletion for
+// persistent boxes. A null options pointer is treated as a no-op.
 void boxlite_options_set_auto_delete_interval(CBoxliteOptions *opts, uint32_t seconds);
 
+// Configure whether stopped boxes may automatically resume on demand.
+//
+// Any non-zero `val` enables auto-resume; `0` disables it. A null options
+// pointer is treated as a no-op.
 void boxlite_options_set_auto_resume_enabled(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
@@ -1021,6 +1082,7 @@ void boxlite_free_string(char *s);
 // remain valid until this function returns. A successful callback must release
 // its metadata with `boxlite_free_volume_info`; the error pointer is borrowed.
 enum BoxliteErrorCode boxlite_volume_create(CBoxliteVolumeHandle *handle,
+                                            const char *name,
                                             CBoxVolumeCreateCb cb,
                                             void *user_data,
                                             CBoxliteError *out_error);

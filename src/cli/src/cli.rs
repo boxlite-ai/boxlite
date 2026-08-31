@@ -7,11 +7,11 @@ use boxlite::experimental::{
     EXPERIMENTAL_FEATURES_ENV, ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder,
 };
 use boxlite::runtime::options::{
-    NetworkMode, OutboundNetworkConfig, PortProtocol, PortSpec, VolumeSpec,
+    InboundNetworkConfig, NetworkMode, OutboundNetworkConfig, PortProtocol, PortSpec, VolumeSpec,
 };
 use boxlite::{
-    BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime, ImageRegistry,
-    NetworkSpec,
+    BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime,
+    ContainerCapabilities, ImageRegistry, NetworkSpec,
 };
 use clap::{Args, Command, Parser, Subcommand, ValueEnum};
 use clap_complete::shells::{Bash, Fish, Zsh};
@@ -298,6 +298,21 @@ impl GlobalFlags {
             .map_err(Into::into)
     }
 
+    /// Whether this invocation talks to a server rather than the embedded
+    /// runtime.
+    ///
+    /// Resolved exactly as `create_runtime` does, so the two cannot disagree
+    /// about which backend a command is aimed at. It re-reads the credential
+    /// file rather than threading the resolution through; the cost is one extra
+    /// read on the two commands that ask.
+    pub fn targets_rest(&self) -> bool {
+        let stored = crate::credentials::load_named(&self.resolved_profile())
+            .ok()
+            .flatten();
+        let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
+        self.resolve_rest_options(stored, env_api_key).is_some()
+    }
+
     pub fn create_runtime(&self) -> anyhow::Result<BoxliteRuntime> {
         let stored = crate::credentials::load_named(&self.resolved_profile())
             .ok()
@@ -485,8 +500,15 @@ pub struct CapabilityFlags {
 
 impl CapabilityFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) {
-        opts.advanced.capabilities.add.clone_from(&self.cap_add);
-        opts.advanced.capabilities.drop.clone_from(&self.cap_drop);
+        if self.cap_add.is_empty() && self.cap_drop.is_empty() {
+            return;
+        }
+        opts.advanced
+            .set_capabilities(Some(ContainerCapabilities {
+                add: self.cap_add.clone(),
+                drop: self.cap_drop.clone(),
+            }))
+            .expect("apply_to runs before options are resolved");
     }
 }
 
@@ -638,22 +660,37 @@ pub struct NetworkFlags {
     /// disabled`.
     #[arg(long = "allow-net", value_name = "HOST")]
     pub allow_net: Vec<String>,
+
+    /// Inbound mode: "enabled" (default — services the box exposes are
+    /// publicly reachable) or "disabled" (private, unreachable from outside
+    /// the box).
+    #[arg(long = "inbound", value_name = "MODE")]
+    pub inbound: Option<String>,
 }
 
 impl NetworkFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
-        // Leave BoxOptions::default() (Enabled, full access) untouched when
-        // neither flag is given, so a bare `run` behaves as before.
-        if self.network.is_none() && self.allow_net.is_empty() {
+        // Leave BoxOptions::default() (outbound Enabled/full access, inbound
+        // Enabled/public) untouched when no flag is given, so a bare `run`
+        // behaves as before.
+        if self.network.is_none() && self.allow_net.is_empty() && self.inbound.is_none() {
             return Ok(());
         }
         let mode = match self.network.as_deref() {
             Some(value) => value.parse::<NetworkMode>()?,
             None => NetworkMode::Enabled,
         };
+        let inbound_mode = match self.inbound.as_deref() {
+            Some(value) => value.parse::<NetworkMode>()?,
+            None => NetworkMode::Enabled,
+        };
         opts.network = NetworkSpec::try_from(OutboundNetworkConfig {
             mode,
             allow_net: self.allow_net.clone(),
+        })?;
+        opts.inbound_network = NetworkSpec::try_from(InboundNetworkConfig {
+            mode: inbound_mode,
+            allow_net: Vec::new(),
         })?;
         Ok(())
     }
@@ -739,125 +776,13 @@ fn parse_port(s: &str) -> anyhow::Result<u16> {
 // VOLUME FLAGS
 // ============================================================================
 
-/// Result of parsing a volume spec. Anonymous volumes have host_path = None.
-struct ParsedVolumeSpec {
-    host_path: Option<String>,
-    guest_path: String,
-    read_only: bool,
-}
-
 #[derive(Args, Debug, Clone)]
 pub struct VolumeFlags {
-    /// Mount a volume (format: hostPath:boxPath[:options], or boxPath for anonymous volume, e.g. /data:/app/data, /data:ro)
+    /// Mount a volume: VOLUME:BOX_PATH for a managed volume, HOST_PATH:BOX_PATH[:options]
+    /// for a host bind (host paths start with `/`, `./`, `~` or a drive letter), or
+    /// BOX_PATH[:options] for an anonymous volume
     #[arg(short = 'v', long = "volume", value_name = "VOLUME")]
     pub volume: Vec<String>,
-}
-
-/// True if the segment is a single ASCII letter (Windows drive, e.g. "C" in "C:\path").
-fn is_windows_drive(segment: &str) -> bool {
-    let s = segment.trim();
-    s.len() == 1
-        && s.chars()
-            .next()
-            .map(|c| c.is_ascii_alphabetic())
-            .unwrap_or(false)
-}
-
-/// True if path looks like a Windows absolute path (e.g. `C:\foo` or `D:/bar`).
-fn is_windows_absolute_path(path: &str) -> bool {
-    let b = path.as_bytes();
-    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
-}
-
-/// Parse options string (e.g. "ro" or "rw,nocopy") and return read_only. Other options are ignored.
-fn parse_volume_read_only(opts: &str) -> bool {
-    opts.split(',').any(|o| o.trim().eq_ignore_ascii_case("ro"))
-}
-
-/// Parse a single volume spec.
-/// - Anonymous : `boxPath` or `boxPath:ro` (e.g. `/data`, `/data:ro`).
-/// - Bind mount: `hostPath:boxPath[:options]` (e.g. `/data:/app/data`, `/data:/app/data:ro`).
-///
-/// Options: `ro` (read-only), `rw` (read-write, default). Other options are ignored.
-///   Windows: host path may be a drive path like `C:\data`; the colon after the drive letter is not
-///   treated as a separator (e.g. `C:\data:/app/data` → host=`C:\data`, guest=`/app/data`).
-fn parse_volume_spec(s: &str) -> anyhow::Result<ParsedVolumeSpec> {
-    let s = s.trim();
-    if s.is_empty() {
-        anyhow::bail!("empty volume spec");
-    }
-    let parts: Vec<&str> = s.split(':').map(str::trim).collect();
-
-    let (host_path, guest_path, read_only) = match parts.len() {
-        1 => {
-            // Anonymous volume: box path only (e.g. /data)
-            let guest = parts[0].to_string();
-            if guest.is_empty() {
-                anyhow::bail!("volume box path must be non-empty");
-            }
-            if !guest.starts_with('/') && !is_windows_drive(parts[0]) {
-                anyhow::bail!(
-                    "anonymous volume box path must be absolute (e.g. /data), got {:?}",
-                    guest
-                );
-            }
-            (None, guest, false)
-        }
-        2 => {
-            // Either anonymous with options (guest:ro) or bind (host:guest)
-            let second = parts[1];
-            if second.eq_ignore_ascii_case("ro") || second.eq_ignore_ascii_case("rw") {
-                let guest = parts[0].to_string();
-                if guest.is_empty() {
-                    anyhow::bail!("volume box path must be non-empty");
-                }
-                (None, guest, second.eq_ignore_ascii_case("ro"))
-            } else {
-                (Some(parts[0].to_string()), parts[1].to_string(), false)
-            }
-        }
-        3 => {
-            if is_windows_drive(parts[0]) {
-                let host = format!("{}:{}", parts[0], parts[1]);
-                (Some(host), parts[2].to_string(), false)
-            } else {
-                let ro = parse_volume_read_only(parts[2]);
-                (Some(parts[0].to_string()), parts[1].to_string(), ro)
-            }
-        }
-        4.. => {
-            if is_windows_drive(parts[0]) {
-                let host = format!("{}:{}", parts[0], parts[1]);
-                let ro = parse_volume_read_only(parts[3]);
-                (Some(host), parts[2].to_string(), ro)
-            } else {
-                anyhow::bail!(
-                    "invalid volume spec {:?}; use hostPath:boxPath[:options] (e.g. /data:/app/data or C:\\data:/app/data:ro)",
-                    s
-                );
-            }
-        }
-        _ => {
-            anyhow::bail!(
-                "invalid volume spec {:?}; use hostPath:boxPath[:options] or boxPath[:options] for anonymous volume",
-                s
-            );
-        }
-    };
-
-    if let Some(ref host) = host_path
-        && host.is_empty()
-    {
-        anyhow::bail!("volume host path must be non-empty");
-    }
-    if guest_path.is_empty() {
-        anyhow::bail!("volume box path must be non-empty");
-    }
-    Ok(ParsedVolumeSpec {
-        host_path,
-        guest_path,
-        read_only,
-    })
 }
 
 /// Resolve base directory for anonymous volumes: explicit home, or BOXLITE_HOME, or ~/.boxlite, or temp dir.
@@ -877,6 +802,26 @@ fn anonymous_volume_base(home: Option<&std::path::Path>) -> std::path::PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
+/// Make a host bind path absolute.
+///
+/// `volumespec` classified this as a path without touching the filesystem, so a
+/// relative one is resolved here — the same split Docker uses, where the client
+/// absolutizes and only the resolved path travels on.
+fn resolve_host_path(path: String) -> anyhow::Result<String> {
+    // A Windows path is absolute even where `Path::is_relative` says otherwise:
+    // on Unix `C:\data` has no leading `/`, so without this it would be
+    // canonicalized against the working directory and fail.
+    if !std::path::Path::new(&path).is_relative()
+        || crate::volumespec::is_windows_drive_prefix(&path)
+    {
+        return Ok(path);
+    }
+
+    let absolute = std::fs::canonicalize(&path)
+        .map_err(|e| anyhow::anyhow!("volume host path {:?}: {}", path, e))?;
+    Ok(absolute.to_string_lossy().into_owned())
+}
+
 impl VolumeFlags {
     /// Apply volume flags to options. Pass `home` for anonymous volume storage (e.g. from GlobalFlags).
     pub fn apply_to(
@@ -885,39 +830,42 @@ impl VolumeFlags {
         home: Option<&std::path::Path>,
     ) -> anyhow::Result<()> {
         let base = anonymous_volume_base(home);
-        for s in self.volume.iter() {
-            let spec = parse_volume_spec(s)?;
-            let host_path = match spec.host_path {
-                // TODO(#942): when the host side of a `-v <src>:<guest>` spec is a
-                // bare name (not a path) that matches a named volume, resolve it
-                // to the volume's mountpoint here (via the volume backend) and
-                // bind that payload dir instead of treating the name as a literal
-                // host path.
-                Some(host) => {
-                    let mut path = host;
-                    if std::path::Path::new(&path).is_relative() && !is_windows_absolute_path(&path)
-                    {
-                        let abs = std::fs::canonicalize(&path)
-                            .map_err(|e| anyhow::anyhow!("volume host path {:?}: {}", path, e))?;
-                        path = abs.to_string_lossy().into_owned();
+        for value in self.volume.iter() {
+            let mount = crate::volumespec::parse(value)?;
+
+            let spec = match mount.origin {
+                // Held as written; the server resolves an id or a name.
+                crate::volumespec::MountOrigin::ManagedVolume(volume) => {
+                    // Neither the server nor the REST client accepts one yet;
+                    // saying so here beats a downgrade the caller never sees.
+                    if mount.read_only {
+                        anyhow::bail!(
+                            "read-only managed volumes are not supported yet; \
+                             mount {volume:?} read-write"
+                        );
                     }
-                    path
+                    VolumeSpec::managed_volume(volume, mount.guest_path)
                 }
-                None => {
-                    // Anonymous volume: use a random ID for the directory name (same approach as
-                    // Podman: cryptographically random ID to avoid collisions under any load).
+
+                crate::volumespec::MountOrigin::BindMount(path) => {
+                    VolumeSpec::bind_mount(resolve_host_path(path)?, mount.guest_path)
+                }
+
+                crate::volumespec::MountOrigin::Anonymous => {
+                    // Random id for the directory name (same approach as Podman:
+                    // cryptographically random to avoid collisions under any load).
                     let unique = ulid::Ulid::new().to_string();
                     let dir = base.join("volumes").join("anonymous").join(unique);
                     std::fs::create_dir_all(&dir).map_err(|e| {
                         anyhow::anyhow!("failed to create anonymous volume dir {:?}: {}", dir, e)
                     })?;
-                    dir.to_string_lossy().into_owned()
+                    VolumeSpec::bind_mount(dir.to_string_lossy().into_owned(), mount.guest_path)
                 }
             };
+
             opts.volumes.push(VolumeSpec {
-                host_path,
-                guest_path: spec.guest_path,
-                read_only: spec.read_only,
+                read_only: mount.read_only,
+                ..spec
             });
         }
         Ok(())
@@ -927,6 +875,33 @@ impl VolumeFlags {
 // ============================================================================
 // MANAGEMENT FLAGS
 // ============================================================================
+
+/// Parse a lifecycle duration: bare seconds, or one `s`/`m`/`h`/`d` suffix.
+///
+/// Bare digits stay seconds so the flags accept the same integers the wire
+/// contract carries; the suffixes exist because a fortnight in seconds is not
+/// a thing anyone should have to type.
+fn parse_duration_seconds(raw: &str) -> Result<u32, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("duration must not be empty".to_string());
+    }
+
+    let (digits, multiplier) = match raw.as_bytes()[raw.len() - 1] {
+        b's' => (&raw[..raw.len() - 1], 1),
+        b'm' => (&raw[..raw.len() - 1], 60),
+        b'h' => (&raw[..raw.len() - 1], 3_600),
+        b'd' => (&raw[..raw.len() - 1], 86_400),
+        _ => (raw, 1),
+    };
+
+    let value: u32 = digits.parse().map_err(|_| {
+        format!("duration {raw:?} must be a whole number of seconds, or use s/m/h/d")
+    })?;
+    value
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("duration {raw:?} is too large"))
+}
 
 #[derive(Args, Debug, Clone)]
 pub struct ManagementFlags {
@@ -939,8 +914,40 @@ pub struct ManagementFlags {
     pub detach: bool,
 
     /// Automatically remove the box when it exits
-    #[arg(long)]
+    ///
+    /// Conflicts with both deadlines. `--rm` is carried on the wire as the
+    /// shortest possible `auto_delete`, and the contract requires
+    /// `auto_delete > auto_stop`, so `--rm --auto-stop N` fails server-side for
+    /// every N the caller would write it for, naming a field they never set.
+    /// Rejecting the pair here says so in the caller's own vocabulary.
+    #[arg(long, conflicts_with_all = ["auto_delete", "auto_stop"])]
     pub rm: bool,
+
+    /// Stop the box after this much inactivity; `0` disables.
+    ///
+    /// Seconds when bare, or a suffixed duration: `30s`, `15m`, `2h`, `7d`.
+    /// Requires a server (`--url`, or a configured profile): the deadline is
+    /// swept on a timer, which only `boxlite serve` and the cloud run. Against
+    /// the embedded runtime a non-zero value is rejected.
+    #[arg(long = "auto-stop", value_name = "DURATION", value_parser = parse_duration_seconds)]
+    pub auto_stop: Option<u32>,
+
+    /// Delete the box this long after it stops; `0` disables.
+    ///
+    /// Same grammar and the same server requirement as `--auto-stop`.
+    /// Conflicts with `--rm`, which deletes as soon as the box stops rather
+    /// than after a delay.
+    #[arg(long = "auto-delete", value_name = "DURATION", value_parser = parse_duration_seconds)]
+    pub auto_delete: Option<u32>,
+
+    /// Refuse operations that would implicitly wake a stopped box.
+    ///
+    /// Without this, exec/files/attach against a stopped box start it first.
+    /// A box that has never run is unaffected: its first boot is not a resume.
+    /// Enforced by the server; the embedded runtime records the preference but
+    /// has no request path to refuse.
+    #[arg(long = "no-auto-resume")]
+    pub no_auto_resume: bool,
 
     /// Sandbox security: `enable` (default) or `disable` (case-insensitive).
     /// Absent → the box uses `SecurityOptions::default()` = enable, the
@@ -964,11 +971,54 @@ impl ManagementFlags {
         features.require(ExperimentalFeature::NestedVirtualization)
     }
 
+    /// Refuse a deadline nothing will act on.
+    ///
+    /// Both deadlines need a sweeper, which only a server runs. Against the
+    /// embedded runtime `--auto-stop` is refused by the engine anyway
+    /// (`reject_local_unsupported_options`), and `--auto-delete` is worse than
+    /// refused: `removes_on_stop()` is `effective_auto_delete() > 0`, so it
+    /// would silently delete the box at its stop — the `--rm` behaviour the
+    /// parser declares mutually exclusive with it. Failing here says so, and
+    /// says it the same way for both flags.
+    pub fn require_sweeper(&self, targets_rest: bool) -> anyhow::Result<()> {
+        if targets_rest {
+            return Ok(());
+        }
+        for (flag, seconds) in [
+            ("--auto-stop", self.auto_stop),
+            ("--auto-delete", self.auto_delete),
+        ] {
+            if seconds.is_some_and(|seconds| seconds > 0) {
+                anyhow::bail!(
+                    "{flag} needs a server to enforce it — point at one with --url \
+                     (or a configured profile). Use --rm to delete the box as soon \
+                     as it stops on the local runtime."
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
         opts.detach = self.detach;
         // `--rm` is the CLI spelling of "delete when stopped"; the CLI
         // default (like `docker run`) is to keep the box.
         opts.auto_delete = Some(if self.rm { 1 } else { 0 });
+
+        // An explicit deadline replaces that sentinel. It has to be written
+        // after it, not before: the line above is unconditional, so setting
+        // these first would have `--auto-delete 3600` overwritten by the `0`
+        // that means "no deadline". `--rm` and `--auto-delete` are mutually
+        // exclusive at the parser, so only one of them is ever meaningful.
+        if let Some(seconds) = self.auto_delete {
+            opts.auto_delete = Some(seconds);
+        }
+        if let Some(seconds) = self.auto_stop {
+            opts.auto_stop = Some(seconds);
+        }
+        if self.no_auto_resume {
+            opts.auto_resume = Some(false);
+        }
         if let Some(ref preset) = self.security {
             // Bubble the typo'd-preset error all the way back to the
             // CLI exit so the operator sees the offending value.
@@ -1246,6 +1296,9 @@ mod tests {
     fn nested_virtualization_gate_uses_explicit_feature_state() {
         let flags = ManagementFlags {
             nested_virtualization: true,
+            auto_stop: None,
+            auto_delete: None,
+            no_auto_resume: false,
             name: None,
             detach: false,
             rm: false,
@@ -1348,6 +1401,7 @@ mod tests {
         NetworkFlags {
             network: network.map(str::to_string),
             allow_net: allow_net.iter().map(|s| s.to_string()).collect(),
+            inbound: None,
         }
     }
 
@@ -1413,6 +1467,59 @@ mod tests {
         let err = network_flags(Some("bridge"), &[])
             .apply_to(&mut opts)
             .expect_err("unknown mode must error");
+
+        assert!(err.to_string().contains("network mode"));
+    }
+
+    #[test]
+    fn test_network_flags_inbound_disabled_sets_private() {
+        // --inbound disabled alone (no --network/--allow-net) still applies,
+        // and leaves outbound at its Enabled/full-access default.
+        let mut opts = BoxOptions::default();
+        let mut flags = network_flags(None, &[]);
+        flags.inbound = Some("disabled".to_string());
+        flags.apply_to(&mut opts).expect("disabled is valid");
+
+        assert!(matches!(opts.inbound_network, NetworkSpec::Disabled));
+        assert!(
+            matches!(opts.network, NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty())
+        );
+    }
+
+    #[test]
+    fn cli_rejects_inbound_allow_net_flag() {
+        // The flag is deliberately not exposed until inbound allowlist
+        // enforcement exists — a flag that always errors would advertise a
+        // feature that doesn't work.
+        let err = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "--inbound-allow-net",
+            "10.0.0.0/8",
+            "alpine:latest",
+        ])
+        .expect_err("unknown flag must fail parsing");
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn cli_parses_run_with_inbound_flags() {
+        let cli = Cli::try_parse_from(["boxlite", "run", "--inbound", "disabled", "alpine:latest"])
+            .expect("parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected Run")
+        };
+        assert_eq!(args.network.inbound.as_deref(), Some("disabled"));
+    }
+
+    #[test]
+    fn test_network_flags_invalid_inbound_mode_is_rejected() {
+        let mut opts = BoxOptions::default();
+        let mut flags = network_flags(None, &[]);
+        flags.inbound = Some("bridge".to_string());
+        let err = flags
+            .apply_to(&mut opts)
+            .expect_err("unknown inbound mode must error");
 
         assert!(err.to_string().contains("network mode"));
     }
@@ -1524,111 +1631,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_volume_spec_host_guest() {
-        let spec = super::parse_volume_spec("/data:/app/data").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some("/data"));
-        assert_eq!(spec.guest_path, "/app/data");
-        assert!(!spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_read_only() {
-        let spec = super::parse_volume_spec("/data:/app/data:ro").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some("/data"));
-        assert_eq!(spec.guest_path, "/app/data");
-        assert!(spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_rw_explicit() {
-        let spec = super::parse_volume_spec("/data:/app/data:rw").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some("/data"));
-        assert_eq!(spec.guest_path, "/app/data");
-        assert!(!spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_anonymous() {
-        let spec = super::parse_volume_spec("/data").unwrap();
-        assert!(spec.host_path.is_none());
-        assert_eq!(spec.guest_path, "/data");
-        assert!(!spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_anonymous_ro() {
-        let spec = super::parse_volume_spec("/data:ro").unwrap();
-        assert!(spec.host_path.is_none());
-        assert_eq!(spec.guest_path, "/data");
-        assert!(spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_anonymous_relative_invalid() {
-        assert!(super::parse_volume_spec("data").is_err());
-    }
-
-    #[test]
-    fn test_parse_volume_spec_invalid_empty_parts() {
-        assert!(super::parse_volume_spec(":/app").is_err());
-        assert!(super::parse_volume_spec("/data:").is_err());
-    }
-
-    // --- Windows drive compatibility ---
-
-    #[test]
-    fn test_parse_volume_spec_windows_drive_two_parts() {
-        // "C:\data:/app/data" → host=C:\data, guest=/app/data (3 segments after split)
-        let spec = super::parse_volume_spec(r"C:\data:/app/data").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some(r"C:\data"));
-        assert_eq!(spec.guest_path, "/app/data");
-        assert!(!spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_windows_drive_with_ro() {
-        // "C:\data:/app/data:ro" → 4 segments
-        let spec = super::parse_volume_spec(r"C:\data:/app/data:ro").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some(r"C:\data"));
-        assert_eq!(spec.guest_path, "/app/data");
-        assert!(spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_windows_drive_with_rw() {
-        let spec = super::parse_volume_spec(r"D:\path:/mnt:rw").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some(r"D:\path"));
-        assert_eq!(spec.guest_path, "/mnt");
-        assert!(!spec.read_only);
-    }
-
-    #[test]
-    fn test_parse_volume_spec_windows_drive_long_path() {
-        // "D:\host\path:/app" → host=D:\host\path, guest=/app
-        let spec = super::parse_volume_spec(r"D:\host\path:/app").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some(r"D:\host\path"));
-        assert_eq!(spec.guest_path, "/app");
-    }
-
-    #[test]
-    fn test_parse_volume_spec_unix_three_colons_invalid() {
-        // Unix path with 4+ segments and no Windows drive → error
-        assert!(super::parse_volume_spec("/a:b:c:d").is_err());
-    }
-
-    #[test]
-    fn test_parse_volume_spec_linux_unchanged() {
-        // Linux/macOS style must still work
-        let spec = super::parse_volume_spec("/data:/app/data").unwrap();
-        assert_eq!(spec.host_path.as_deref(), Some("/data"));
-        assert_eq!(spec.guest_path, "/app/data");
-        let spec2 = super::parse_volume_spec("/data:/app/data:ro").unwrap();
-        assert_eq!(spec2.host_path.as_deref(), Some("/data"));
-        assert_eq!(spec2.guest_path, "/app/data");
-        assert!(spec2.read_only);
-    }
-
-    #[test]
     fn test_volume_flags_apply_to() {
         let flags = VolumeFlags {
             volume: vec![
@@ -1666,6 +1668,80 @@ mod tests {
         assert!(opts.volumes[1].read_only);
     }
 
+    /// `-v my-data:/data` reaches `BoxOptions` as a managed volume, not a host
+    /// bind — the whole point of adopting Docker's rule. It must not touch the
+    /// filesystem on the way: no canonicalize, no "path does not exist".
+    #[test]
+    fn test_volume_flags_apply_to_managed_volume() {
+        let flags = VolumeFlags {
+            volume: vec![
+                "my-data:/data".to_string(),
+                "vol_01K2EXAMPLE:/cache".to_string(),
+            ],
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts, None).unwrap();
+
+        assert_eq!(opts.volumes.len(), 2);
+        assert_eq!(opts.volumes[0].managed_volume.as_deref(), Some("my-data"));
+        assert_eq!(opts.volumes[0].host_path, "");
+        assert_eq!(opts.volumes[0].guest_path, "/data");
+        assert!(!opts.volumes[0].read_only);
+        assert_eq!(
+            opts.volumes[1].managed_volume.as_deref(),
+            Some("vol_01K2EXAMPLE")
+        );
+        assert_eq!(opts.volumes[1].guest_path, "/cache");
+    }
+
+    /// `:ro` on a managed volume is refused, not quietly downgraded. Neither
+    /// the server nor the REST client accepts one, and a caller who believes a
+    /// mount is protected when it is writable is the failure worth preventing.
+    #[test]
+    fn test_volume_flags_reject_read_only_managed_volume() {
+        let flags = VolumeFlags {
+            volume: vec!["my-data:/data:ro".to_string()],
+        };
+        let mut opts = BoxOptions::default();
+
+        let error = flags
+            .apply_to(&mut opts, None)
+            .expect_err("read-only managed volumes must be refused")
+            .to_string();
+
+        assert!(error.contains("read-only"), "{error}");
+        assert!(error.contains("my-data"), "{error}");
+        assert!(opts.volumes.is_empty());
+    }
+
+    /// A host bind may still be read-only — the restriction is specific to
+    /// managed volumes, not to `:ro`.
+    #[test]
+    fn test_volume_flags_still_allow_read_only_host_binds() {
+        let flags = VolumeFlags {
+            volume: vec!["/host/data:/data:ro".to_string()],
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts, None).unwrap();
+
+        assert_eq!(opts.volumes[0].host_path, "/host/data");
+        assert!(opts.volumes[0].read_only);
+    }
+
+    /// A host bind keeps `managed_volume` unset, so the two `-v` forms stay
+    /// distinguishable all the way to the wire.
+    #[test]
+    fn test_volume_flags_apply_to_leaves_host_binds_unmanaged() {
+        let flags = VolumeFlags {
+            volume: vec!["/host/data:/guest/data".to_string()],
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts, None).unwrap();
+
+        assert_eq!(opts.volumes[0].managed_volume, None);
+        assert_eq!(opts.volumes[0].host_path, "/host/data");
+    }
+
     #[test]
     fn test_volume_flags_apply_to_anonymous() {
         let base = std::env::temp_dir();
@@ -1695,18 +1771,13 @@ mod tests {
     // ─── tunnel parse tests ────────────────────────────────────────────────
 
     #[test]
-    fn network_tunnel_parses_box_and_port() {
-        Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "3000"]).expect("parse");
-    }
-
-    #[test]
-    fn network_tunnel_preserves_box_and_port() {
+    fn tunnel_parses_box_and_port() {
         let cli =
             Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "3000"]).expect("parse");
-        let Commands::Network(args) = cli.command else {
+        let Commands::Network(network) = cli.command else {
             panic!("expected Commands::Network");
         };
-        let NetworkCommand::Tunnel(args) = args.command;
+        let NetworkCommand::Tunnel(args) = network.command;
         assert_eq!(args.target, "mybox");
         assert_eq!(args.port, 3000);
         assert!(args.listen.is_none());
@@ -1751,7 +1822,7 @@ mod tests {
     }
 
     #[test]
-    fn network_tunnel_rejects_port_zero_at_parse() {
+    fn tunnel_rejects_port_zero_at_parse() {
         let result = Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "0"]);
         assert!(result.is_err(), "port 0 must be rejected by the parser");
     }
@@ -1800,14 +1871,28 @@ mod tests {
     use crate::commands::volume::VolumeCommand;
 
     #[test]
-    fn volume_create_takes_no_args() {
-        // `create` takes no arguments — the id is server-assigned and printed.
+    fn volume_create_takes_an_optional_name() {
+        // Without --name the server names the volume after its id.
         let cli = Cli::try_parse_from(["boxlite", "volume", "create"]).expect("parse");
         let Commands::Volume(args) = cli.command else {
             panic!("expected Commands::Volume");
         };
-        assert!(matches!(args.command, VolumeCommand::Create(_)));
-        // A positional argument must be rejected.
+        let VolumeCommand::Create(create) = args.command else {
+            panic!("expected VolumeCommand::Create");
+        };
+        assert_eq!(create.name, None);
+
+        let cli = Cli::try_parse_from(["boxlite", "volume", "create", "--name", "my-data"])
+            .expect("parse");
+        let Commands::Volume(args) = cli.command else {
+            panic!("expected Commands::Volume");
+        };
+        let VolumeCommand::Create(create) = args.command else {
+            panic!("expected VolumeCommand::Create");
+        };
+        assert_eq!(create.name.as_deref(), Some("my-data"));
+
+        // The name is a flag, not a positional: a bare argument is still rejected.
         assert!(Cli::try_parse_from(["boxlite", "volume", "create", "data"]).is_err());
     }
 
@@ -1884,6 +1969,153 @@ mod tests {
     // `from_preset(preset)?` call in apply_to flips both red.
     // ============================================================
 
+    fn lifecycle_flags(
+        auto_stop: Option<u32>,
+        auto_delete: Option<u32>,
+        no_auto_resume: bool,
+    ) -> ManagementFlags {
+        ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            security: None,
+            nested_virtualization: false,
+            auto_stop,
+            auto_delete,
+            no_auto_resume,
+        }
+    }
+
+    #[test]
+    fn an_explicit_delete_deadline_survives_the_rm_sentinel() {
+        // `apply_to` writes `auto_delete = Some(0)` unconditionally as the
+        // "no --rm" default. Applying the flag before that line would have the
+        // deadline silently overwritten by 0 — the box would never be swept.
+        let mut opts = BoxOptions::default();
+        lifecycle_flags(None, Some(3_600), false)
+            .apply_to(&mut opts)
+            .expect("flags must apply");
+
+        assert_eq!(opts.auto_delete, Some(3_600));
+    }
+
+    #[test]
+    fn lifecycle_flags_reach_box_options() {
+        let mut opts = BoxOptions::default();
+        lifecycle_flags(Some(900), None, true)
+            .apply_to(&mut opts)
+            .expect("flags must apply");
+
+        assert_eq!(opts.auto_stop, Some(900));
+        assert_eq!(opts.auto_resume, Some(false));
+    }
+
+    #[test]
+    fn omitted_lifecycle_flags_leave_the_existing_defaults_alone() {
+        // Absent flags must not invent policy: auto_stop and auto_resume stay
+        // unset, and auto_delete keeps the historical `--rm` encoding.
+        let mut opts = BoxOptions::default();
+        lifecycle_flags(None, None, false)
+            .apply_to(&mut opts)
+            .expect("flags must apply");
+
+        assert_eq!(opts.auto_stop, None);
+        assert_eq!(opts.auto_resume, None);
+        assert_eq!(opts.auto_delete, Some(0));
+    }
+
+    #[test]
+    fn durations_accept_bare_seconds_and_suffixes() {
+        assert_eq!(parse_duration_seconds("30"), Ok(30));
+        assert_eq!(parse_duration_seconds("30s"), Ok(30));
+        assert_eq!(parse_duration_seconds("15m"), Ok(900));
+        assert_eq!(parse_duration_seconds("2h"), Ok(7_200));
+        assert_eq!(parse_duration_seconds("7d"), Ok(604_800));
+        assert_eq!(parse_duration_seconds("0"), Ok(0));
+
+        for bad in ["", "m", "-5", "1.5h", "abc", "10x"] {
+            assert!(
+                parse_duration_seconds(bad).is_err(),
+                "{bad:?} must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn a_deadline_without_a_server_is_refused_not_silently_reinterpreted() {
+        // Against the embedded runtime `--auto-stop` is rejected by the engine
+        // and `--auto-delete` would quietly become remove-on-stop, deleting the
+        // box at its stop instead of after the delay. Both must fail here, with
+        // the flag named.
+        for (auto_stop, auto_delete, flag) in [
+            (Some(900), None, "--auto-stop"),
+            (None, Some(3_600), "--auto-delete"),
+        ] {
+            let err = lifecycle_flags(auto_stop, auto_delete, false)
+                .require_sweeper(false)
+                .expect_err("a deadline with no sweeper must be refused");
+            assert!(
+                err.to_string().contains(flag),
+                "error must name {flag}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_deadline_is_allowed_against_a_server_and_zero_is_always_allowed() {
+        assert!(
+            lifecycle_flags(Some(900), Some(3_600), false)
+                .require_sweeper(true)
+                .is_ok(),
+            "a server runs the sweeper, so both deadlines are fine"
+        );
+        // `0` disables rather than requesting enforcement, so it needs nothing.
+        assert!(
+            lifecycle_flags(Some(0), Some(0), false)
+                .require_sweeper(false)
+                .is_ok(),
+            "a disabled deadline asks nothing of the runtime"
+        );
+    }
+
+    #[test]
+    fn rm_and_auto_delete_cannot_be_combined() {
+        // They mean different things — remove on stop versus remove after a
+        // delay — and `apply_to` resolves them by letting --auto-delete win,
+        // so the parser has to be what stops a caller asking for both.
+        let conflict = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "--rm",
+            "--auto-delete",
+            "1h",
+            "alpine:latest",
+        ]);
+
+        assert!(
+            conflict.is_err(),
+            "--rm with --auto-delete must be rejected"
+        );
+
+        // `--rm` rides on the wire as `auto_delete = 1`, and the contract
+        // requires `auto_delete > auto_stop`, so this pair could only ever fail
+        // server-side complaining about a field the caller never set. The
+        // parser has to be what says no.
+        let with_auto_stop = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "--rm",
+            "--auto-stop",
+            "60",
+            "alpine:latest",
+        ]);
+
+        assert!(
+            with_auto_stop.is_err(),
+            "--rm with --auto-stop must be rejected"
+        );
+    }
+
     #[test]
     fn management_security_preset_applies_to_box_options() {
         let flags = ManagementFlags {
@@ -1892,6 +2124,9 @@ mod tests {
             rm: false,
             security: Some("disable".to_string()),
             nested_virtualization: false,
+            auto_stop: None,
+            auto_delete: None,
+            no_auto_resume: false,
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts).expect("setting must apply");
@@ -1910,6 +2145,9 @@ mod tests {
             rm: false,
             security: None,
             nested_virtualization: false,
+            auto_stop: None,
+            auto_delete: None,
+            no_auto_resume: false,
         };
         let mut opts = BoxOptions::default();
         flags
@@ -1930,6 +2168,9 @@ mod tests {
             rm: false,
             security: Some("ultra".to_string()),
             nested_virtualization: false,
+            auto_stop: None,
+            auto_delete: None,
+            no_auto_resume: false,
         };
         let mut opts = BoxOptions::default();
         let err = flags

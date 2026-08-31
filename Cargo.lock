@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite"
-version = "0.9.7"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -601,7 +601,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-c"
-version = "0.9.7"
+version = "0.10.0"
 dependencies = [
  "boxlite",
  "cbindgen",
@@ -612,7 +612,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-cli"
-version = "0.9.7"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -633,6 +633,7 @@ dependencies = [
  "nix 0.30.1",
  "notify",
  "openidconnect",
+ "percent-encoding",
  "predicates",
  "reqwest",
  "rpassword",
@@ -647,6 +648,7 @@ dependencies = [
  "tempfile",
  "term_size",
  "tokio",
+ "tokio-tungstenite 0.29.0",
  "toml 0.8.23",
  "tower-http",
  "tracing",
@@ -659,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-guest"
-version = "0.9.7"
+version = "0.10.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -678,7 +680,6 @@ dependencies = [
  "russh-sftp",
  "serde",
  "serde_json",
- "tar",
  "tempfile",
  "tokio",
  "tokio-stream",
@@ -691,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-node"
-version = "0.9.7"
+version = "0.10.0"
 dependencies = [
  "boxlite",
  "boxlite-shared",
@@ -705,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-python"
-version = "0.9.7"
+version = "0.10.0"
 dependencies = [
  "boxlite",
  "futures",
@@ -718,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-shared"
-version = "0.9.7"
+version = "0.10.0"
 dependencies = [
  "proptest",
  "prost",
@@ -734,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-shim"
-version = "0.9.7"
+version = "0.10.0"
 dependencies = [
  "boxlite",
  "boxlite-shared",
@@ -783,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "bubblewrap-sys"
-version = "0.9.7"
+version = "0.10.0"
 dependencies = [
  "num_cpus",
 ]
@@ -1593,7 +1594,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "e2fsprogs-sys"
-version = "0.9.7"
+version = "0.10.0"
 dependencies = [
  "num_cpus",
 ]
@@ -2999,14 +3000,14 @@ dependencies = [
 
 [[package]]
 name = "libgvproxy-sys"
-version = "0.9.7"
+version = "0.10.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "libkrun-sys"
-version = "0.9.7"
+version = "0.10.0"
 dependencies = [
  "libc",
  "num_cpus",

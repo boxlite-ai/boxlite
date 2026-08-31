@@ -7,7 +7,7 @@
 import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, IsInt, Min } from 'class-validator'
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
-import { BoxVolume } from './box.dto'
+import { BoxSecret, BoxVolume } from './box.dto'
 
 @ApiSchema({ name: 'CreateBox' })
 export class CreateBoxDto {
@@ -35,6 +35,44 @@ export class CreateBoxDto {
   @IsOptional()
   @IsString()
   user?: string
+
+  @ApiPropertyOptional({
+    description:
+      'User the container process runs as (OCI process.user), as <name|uid>[:<group|gid>]. ' +
+      "Omit to keep the image's USER directive. Distinct from `user`, which is a warm-pool label.",
+    example: '1000:1000',
+  })
+  @IsOptional()
+  @IsString()
+  runAsUser?: string
+
+  @ApiPropertyOptional({
+    description: 'Working directory inside the container',
+    example: '/workspace',
+  })
+  @IsOptional()
+  @IsString()
+  workingDir?: string
+
+  @ApiPropertyOptional({
+    description: "Override the image's ENTRYPOINT",
+    type: [String],
+    example: ['python'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  entrypoint?: string[]
+
+  @ApiPropertyOptional({
+    description: "Override the image's CMD",
+    type: [String],
+    example: ['-c', 'print(1)'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  cmd?: string[]
 
   @ApiPropertyOptional({
     description: 'Environment variables for the box',
@@ -170,4 +208,13 @@ export class CreateBoxDto {
   @IsOptional()
   @IsArray()
   volumes?: BoxVolume[]
+
+  @ApiPropertyOptional({
+    description: 'Secret placeholder rules for outbound HTTP(S) requests',
+    type: [BoxSecret],
+    required: false,
+  })
+  @IsOptional()
+  @IsArray()
+  secrets?: BoxSecret[]
 }

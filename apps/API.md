@@ -109,6 +109,7 @@ serves and the events it emits are catalogued below alongside its routes.
 | `GET`    | `/api/organizations`                                                     | Lists organizations available to the caller.             |
 | `POST`   | `/api/organizations`                                                     | Creates an organization.                                 |
 | `GET`    | `/api/organizations/{organizationId}`                                    | Gets an organization by ID.                              |
+| `GET`    | `/api/organizations/{organizationId}/concurrency`                        | Gets a bounded concurrency timeline from usage periods.  |
 | `DELETE` | `/api/organizations/{organizationId}`                                    | Deletes an organization.                                 |
 | `PATCH`  | `/api/organizations/{organizationId}/name`                               | Changes an organization's name.                          |
 | `PATCH`  | `/api/organizations/{organizationId}/default-region`                     | Sets the organization's default region.                  |
@@ -521,7 +522,7 @@ bound on the developer's machine; the host ports are fixed literals in
 inside a box the same listeners are reachable as `host.boxlite.internal:<port>`.
 
 <details>
-<summary><b>Unified entry point</b> · 9 routes</summary>
+<summary><b>Unified entry point</b> · 10 routes</summary>
 
 | Method | Host and path                                | What it does                                                       |
 | ------ | -------------------------------------------- | ------------------------------------------------------------------ |
@@ -533,6 +534,7 @@ inside a box the same listeners are reachable as `host.boxlite.internal:<port>`.
 | `ANY`  | `localhost:28080/minio-console/*`            | Reverse-proxies the MinIO console UI.                              |
 | `ANY`  | `localhost:28080/registry/*`                 | Reverse-proxies the Docker registry v2 API.                        |
 | `ANY`  | `localhost:28080/registry-ui/*`              | Reverse-proxies the registry browser UI.                           |
+| `ANY`  | `localhost:28080/maildev/*`                  | Reverse-proxies the MailDev caught-mail UI.                        |
 | `ANY`  | `localhost:28080/`                           | Responds with a plain-text index of the routes above.              |
 
 Caddy serves these over plain HTTP with `auto_https off`; host `28443` is
@@ -543,7 +545,7 @@ each of the other services below carries one of its own.
 </details>
 
 <details>
-<summary><b>Dependency services</b> · 10 services</summary>
+<summary><b>Dependency services</b> · 11 services</summary>
 
 | Service       | Host port to container port                           | Interface                                                                         |
 | ------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------- |
@@ -556,6 +558,7 @@ each of the other services below carries one of its own.
 | `dex`         | `25556` → `5556`                                      | OIDC provider served under the `/dex` issuer path.                                |
 | `jaeger`      | `26686` → `16686`, `26687` → `4317`                   | Trace UI, plus an OTLP/gRPC receiver fed by the local collector.                  |
 | `pgadmin`     | `25051` → `80`                                        | Postgres administration UI; probed at `/misc/ping`.                               |
+| `maildev`     | `25053` → `1080`, `25054` → `1025`                    | Caught-mail UI and the SMTP sink the API sends to; probed at `/healthz`.          |
 | `otel`        | `24317` → `4317`, `24318` → `4318`, `23133` → `13133` | OTLP gRPC and HTTP receivers, plus a `health_check` extension at `/`.             |
 
 The local collector is the upstream `otel/opentelemetry-collector` image with an
@@ -590,7 +593,8 @@ a separate environment — see
 
 The local API listens on `3001` rather than the deployed `3000`, which the
 dashboard dev server uses; `BOXLITE_LOCAL_API_PORT` overrides it. This stack
-starts no mail service and sets no `SMTP_HOST`.
+points the API's `SMTP_HOST` at its own MailDev box, so the one email the API
+sends — the organization invitation — is caught rather than dropped.
 
 </details>
 
@@ -641,14 +645,15 @@ their base URL from `GET /api/config` and disable the corresponding UI when it
 is unset; the same document carries PostHog's key and host to the browser.
 
 <details>
-<summary><b>External interfaces</b> · 2 APIs, 2 SaaS integrations</summary>
+<summary><b>External interfaces</b> · 3 APIs, 2 SaaS integrations</summary>
 
-| Interface     | Client                                                                                 | Base URL source                  | What it covers                                                                                                                                               |
-| ------------- | -------------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Analytics API | [`libs/analytics-api-client`](./libs/analytics-api-client/), generated                 | `analyticsApiUrl`                | 8 routes: per-box and organization usage, aggregates, and charts, plus box logs, metrics, and traces.                                                        |
-| Billing API   | [`billingApiClient.ts`](./dashboard/src/billing-api/billingApiClient.ts), hand-written | `billingApiUrl`                  | 20 routes: usage, wallet and top-ups, plans, invoices, coupons, billing emails, portal and checkout URLs.                                                    |
-| PostHog       | `posthog-js` in the dashboard; `posthog-node` in the API                               | `posthog.apiKey`, `posthog.host` | Browser product analytics; server-side `api_*` operation events from the global metrics interceptor, two `groupIdentify` calls, and feature-flag evaluation. |
-| Pylon         | [`App.tsx`](./dashboard/src/App.tsx) widget, production builds only                    | `pylonAppId`                     | Outbound support-chat widget; it registers no route here.                                                                                                    |
+| Interface     | Client                                                                                 | Base URL source                  | What it covers                                                                                                                                                                                             |
+| ------------- | -------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Analytics API | [`libs/analytics-api-client`](./libs/analytics-api-client/), generated                 | `analyticsApiUrl`                | 8 routes: per-box and organization usage, aggregates, and charts, plus box logs, metrics, and traces.                                                                                                      |
+| Billing API   | [`billingApiClient.ts`](./dashboard/src/billing-api/billingApiClient.ts), hand-written | `billingApiUrl`                  | 20 routes: wallet and top-ups, plans, payment methods, invoices, usage series and prices, coupons, billing emails, portal and checkout URLs.                                                               |
+| Usage export  | [`api/src/usage/services`](./api/src/usage/services/), hand-written                    | `usageExport.url`                | 2 routes on the same Commerce service, server-side: `POST /internal/usage-events` and `POST /internal/allocation-snapshot`, bearer `USAGE_EXPORT_TOKEN`, which must equal Commerce's `USAGE_INGEST_TOKEN`. |
+| PostHog       | `posthog-js` in the dashboard; `posthog-node` in the API                               | `posthog.apiKey`, `posthog.host` | Browser product analytics; server-side `api_*` operation events from the global metrics interceptor, two `groupIdentify` calls, and feature-flag evaluation.                                               |
+| Pylon         | [`App.tsx`](./dashboard/src/App.tsx) widget, production builds only                    | `pylonAppId`                     | Outbound support-chat widget; it registers no route here.                                                                                                                                                  |
 
 The analytics client is generated from
 [`swagger.json`](./libs/analytics-api-client/swagger.json). Its four telemetry
@@ -657,12 +662,41 @@ routes, and the dashboard's box telemetry views call the analytics client only �
 they disable themselves when `analyticsApiUrl` is unset rather than falling back.
 Nothing in this directory registers the analytics or billing paths.
 
+The Billing API and Usage export rows are the same Commerce service reached two
+ways, on URLs that normally differ by path rather than host: the browser API
+lives under `/api/billing`, which `BILLING_API_URL` already includes, while the
+internal routes are served off the bare origin because they authenticate a
+service rather than a user. The API itself requires `USAGE_EXPORT_URL` whenever
+export is on and never derives it
+([`configuration.ts`](./api/src/config/configuration.ts)); it is the SST stack
+that supplies a default of `BILLING_API_URL`'s origin
+([`api.ts`](./infra/stack/api.ts)), so a deployment outside that stack must set
+it explicitly. The two stay separate settings because pointing the dashboard at
+a billing service and shipping usage to it remain separate decisions. One
+caveat on the credential: a `USAGE_EXPORT_URL` carrying userinfo makes Axios
+build Basic auth and drop the bearer header, so the publisher then sends the
+URL's credentials rather than `USAGE_EXPORT_TOKEN`. Commerce reaches back
+in one direction only: it resolves organization ownership against this control
+plane using the caller's own token. The `billing` API role and `BILLING_API_KEY`
+that widen [organization suspend/unsuspend](#control-plane-api) exist for
+Commerce, which does not currently call them.
+
+Because the billing client is hand-written rather than generated, neither side
+detects divergence. Five of its 20 routes — the billing-email group — have no
+implementation in Commerce, of which only `email/verify` has a live caller here
+([`EmailVerify.tsx`](./dashboard/src/pages/EmailVerify.tsx)); Commerce in turn
+serves card default/delete, `plan/pay-open-charge`, and a credit admission API
+that nothing in this repository calls. The full inventory and the open decisions
+are catalogued in `docs/boxlite-client-contract.md` in the `boxlite-commerce`
+repository — a companion change that lands there separately, so that path
+resolves only once it has merged.
+
 </details>
 
 ## Services without a first-party API
 
 <details>
-<summary><b>Non-API services and bundled tools</b> · 10 entries</summary>
+<summary><b>Non-API services and bundled tools</b> · 7 entries</summary>
 
 | Service                     | Role                                                                                                                                                                                                                                                                                                                                                                                     |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -673,13 +707,10 @@ Nothing in this directory registers the analytics or billing paths.
 | `apps/e2e`                  | End-to-end test client; it calls deployed APIs but does not expose one.                                                                                                                                                                                                                                                                                                                  |
 | `apps/box-images`           | Image build inputs; they produce box images and do not run a service.                                                                                                                                                                                                                                                                                                                    |
 | `apps/hack`, `apps/scripts` | Development and code-generation utilities; they register no API of their own, though `apps/scripts` starts the [container-based local environment](#container-based-local-environment).                                                                                                                                                                                                  |
-| Jaeger                      | Bundled third-party trace ingestion and UI, not a BoxLite-owned API; deployed behind an internal load balancer on `80` for the UI (`16686`) and `4318` for OTLP/HTTP.                                                                                                                                                                                                                    |
-| PgAdmin                     | Bundled third-party database administration UI; deployed behind an internal load balancer on `80`, reachable only from inside the VPC.                                                                                                                                                                                                                                                   |
-| MailDev                     | Bundled third-party SMTP test service and UI in deployed environments, behind an internal load balancer on `80` (UI `1080`); not part of the local stack.                                                                                                                                                                                                                                |
 
-MinIO, the registry UI, and Caddy are bundled only in the local development
-stack, and a Docker registry appears in both local environments, so all of their
-interfaces are listed under
+MinIO, the registry UI, MailDev, Jaeger, pgAdmin and Caddy are bundled only in
+the local development stack, and a Docker registry appears in both local
+environments, so all of their interfaces are listed under
 [Local development stack](#local-development-stack) and
 [Container-based local environment](#container-based-local-environment) rather
 than here.

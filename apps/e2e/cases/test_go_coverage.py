@@ -74,15 +74,6 @@ def test_go_exec_options(go_env):
     assert "ENV_VALUE=MY_VALUE" in r.stdout
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Go SDK exec stdout comes back empty — same drain race as #563. "
-        "The copy-in succeeds but the verification `cat` returns no "
-        "stdout, so the driver exits with FATAL. When #563 lands, this "
-        "xfail flips xpass-strict — drop the marker then."
-    ),
-)
 def test_go_copy(go_env):
     """Copy in/out round-trip."""
     r = _run_go(go_env, "e2e_copy.go")

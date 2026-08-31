@@ -1,0 +1,154 @@
+{
+  "version": "4.0.0",
+  "form": {
+    "name": "BoxLite email verification",
+    "languages": {
+      "primary": "en"
+    },
+    "nodes": [
+      {
+        "id": "step_email_verification",
+        "type": "STEP",
+        "coordinates": { "x": 422, "y": -100 },
+        "alias": "Email verification",
+        "config": {
+          "components": [
+            {
+              "id": "verification_instructions",
+              "category": "BLOCK",
+              "type": "RICH_TEXT",
+              "config": {
+                "content": "<h2>Check your email</h2><p>Enter the 6-digit verification code sent to <strong>{{context.user.email}}</strong>. The code is valid for 5 minutes.</p>"
+              }
+            },
+            {
+              "id": "verification_code",
+              "category": "FIELD",
+              "type": "NUMBER",
+              "label": "Verification code",
+              "required": true,
+              "sensitive": false
+            },
+            {
+              "id": "continue_button",
+              "category": "BLOCK",
+              "type": "NEXT_BUTTON",
+              "config": { "text": "Continue" }
+            },
+            {
+              "id": "resend_button",
+              "category": "BLOCK",
+              "type": "RESEND_BUTTON",
+              "config": {
+                "active_text": "Didn't receive the code?",
+                "button_text": "Resend",
+                "waiting_text": "Resend in {{remaining_seconds}} seconds",
+                "text_alignment": "CENTER",
+                "flow_id": "#FLOW-1#",
+                "max_attempts": 3,
+                "waiting_time": 60
+              }
+            }
+          ],
+          "next_node": "flow_verify_otp"
+        }
+      },
+      {
+        "id": "flow_verify_otp",
+        "type": "FLOW",
+        "coordinates": { "x": 982, "y": 52 },
+        "config": { "flow_id": "#FLOW-2#", "next_node": "$ending" }
+      },
+      {
+        "id": "flow_generate_otp",
+        "type": "FLOW",
+        "coordinates": { "x": 56, "y": 56 },
+        "config": { "flow_id": "#FLOW-1#", "next_node": "step_email_verification" }
+      }
+    ],
+    "start": { "next_node": "flow_generate_otp", "coordinates": { "x": -197, "y": 41 } },
+    "ending": { "resume_flow": true, "coordinates": { "x": 1357, "y": 29 } }
+  },
+  "flows": {
+    "#FLOW-1#": {
+      "name": "BoxLite generate email OTP",
+      "actions": [
+        {
+          "id": "generate_otp",
+          "type": "OTP",
+          "action": "GENERATE_CODE",
+          "allow_failure": false,
+          "mask_output": false,
+          "params": { "reference": "{{context.user.email}}", "length": 6 }
+        },
+        {
+          "id": "send_email",
+          "type": "AUTH0",
+          "action": "SEND_EMAIL",
+          "allow_failure": false,
+          "mask_output": false,
+          "params": {
+            "to": "{{context.user.email}}",
+            "subject": "{{custom_vars.code}} is your BoxLite verification code",
+            "body": "<p>Hello,</p><p>{{custom_vars.code}} is your BoxLite verification code.</p>",
+            "custom_vars": { "code": "{{actions.generate_otp.code}}" }
+          }
+        }
+      ]
+    },
+    "#FLOW-2#": {
+      "name": "BoxLite verify email OTP",
+      "actions": [
+        {
+          "id": "verify_otp",
+          "type": "OTP",
+          "action": "VERIFY_CODE",
+          "allow_failure": false,
+          "mask_output": false,
+          "params": { "reference": "{{context.user.email}}", "code": "{{fields.verification_code}}" }
+        },
+        {
+          "id": "is_otp_valid",
+          "alias": "Is the OTP valid?",
+          "type": "FLOW",
+          "action": "BOOLEAN_CONDITION",
+          "allow_failure": false,
+          "mask_output": false,
+          "params": {
+            "if": {
+              "operands": [{ "operands": ["{{actions.verify_otp.valid}}", true], "operator": "EQ" }],
+              "operator": "AND"
+            },
+            "then": [
+              {
+                "id": "update_user_email_verified",
+                "type": "AUTH0",
+                "action": "UPDATE_USER",
+                "allow_failure": false,
+                "mask_output": false,
+                "params": {
+                  "connection_id": "#CONN-1#",
+                  "user_id": "{{context.user.user_id}}",
+                  "changes": { "email_verified": true }
+                }
+              }
+            ],
+            "else": [
+              {
+                "id": "invalid_code_error",
+                "type": "FLOW",
+                "action": "ERROR_MESSAGE",
+                "allow_failure": false,
+                "mask_output": false,
+                "params": { "message": "That verification code is invalid. Check it and try again." }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "connections": {
+    "#CONN-1#": { "id": "#CONN-1#", "app_id": "AUTH0", "name": "BoxLite Forms Auth0 Management API" }
+  }
+}

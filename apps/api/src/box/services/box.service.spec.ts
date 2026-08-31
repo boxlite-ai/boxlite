@@ -290,28 +290,56 @@ describe('BoxService public defaults', () => {
     [{ networkBlockAll: true }, { boxLimitedNetworkEgress: false }, { networkBlockAll: true }],
     [{ networkAllowList: '10.0.0.0/8' }, { boxLimitedNetworkEgress: false }, { networkAllowList: '10.0.0.0/8' }],
     [{}, { boxLimitedNetworkEgress: true }, { networkBlockAll: true }],
-  ])('creates a fresh box instead of claiming a warm box when network policy is required', async (request, org, expected) => {
-    const { service, boxRepository, warmPoolService } = makeCreateService()
-    ;(service as any).redis.exists.mockResolvedValue(0)
+  ])(
+    'creates a fresh box instead of claiming a warm box when network policy is required',
+    async (request, org, expected) => {
+      const { service, boxRepository, warmPoolService } = makeCreateService()
+      ;(service as any).redis.exists.mockResolvedValue(0)
 
-    await service.create(
-      { name: 'restricted-box', image: 'base', ...request } as any,
-      { id: 'org-1', ...org } as any,
-    )
+      await service.create({ name: 'restricted-box', image: 'base', ...request } as any, { id: 'org-1', ...org } as any)
 
-    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
-    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining(expected))
-  })
+      expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+      expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining(expected))
+    },
+  )
 
   it.each([
-    [undefined, true],
-    [false, false],
+    [undefined, false],
+    [true, true],
   ])('defaults a fresh box to public=%s', async (requestedPublic, expectedPublic) => {
     const { service, boxRepository } = makeCreateService()
 
     await service.create({ name: 'fresh-box', public: requestedPublic } as any, { id: 'org-1' } as any)
 
     expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ public: expectedPublic }))
+  })
+
+  it('persists secrets on a freshly created box', async () => {
+    const { service, boxRepository } = makeCreateService()
+
+    await service.create(
+      { name: 'secret-box', image: 'base', secrets: [{ name: 'openai', value: 'sk-test' }] } as any,
+      { id: 'org-1' } as any,
+    )
+
+    expect(boxRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ secrets: [{ name: 'openai', value: 'sk-test' }] }),
+    )
+  })
+
+  it('creates a fresh box instead of claiming a warm box when secrets are present', async () => {
+    const { service, boxRepository, warmPoolService } = makeCreateService()
+    // Default exists=1 would skip the warm-pool branch outright; clear it so
+    // the assertion below actually guards the secrets needsFreshBox path.
+    ;(service as any).redis.exists.mockResolvedValue(0)
+
+    await service.create(
+      { name: 'secret-box', image: 'base', secrets: [{ name: 'openai', value: 'sk-test' }] } as any,
+      { id: 'org-1' } as any,
+    )
+
+    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+    expect(boxRepository.insert).toHaveBeenCalled()
   })
 
   it('rechecks runner eligibility under the assignment fence before inserting', async () => {
@@ -345,8 +373,8 @@ describe('BoxService public defaults', () => {
   })
 
   it.each([
-    [undefined, true],
-    [false, false],
+    [undefined, false],
+    [true, true],
   ])('defaults an assigned warm-pool box to public=%s', async (requestedPublic, expectedPublic) => {
     const warmPoolBox = { id: 'warm-box', runnerId: 'runner-1', name: 'warm-box' } as any
     const update = jest.fn().mockResolvedValue(warmPoolBox)

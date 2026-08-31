@@ -5,6 +5,7 @@ use std::sync::Arc;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::metrics::RuntimeMetrics;
+use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::backend::RuntimeBackend;
 use crate::runtime::options::{BoxArchive, BoxOptions};
 use crate::{BoxInfo, LiteBox};
@@ -31,18 +32,6 @@ impl RestRuntime {
     }
 }
 
-fn validate_remote_box_options(options: &BoxOptions) -> BoxliteResult<()> {
-    if options.ports.is_empty() {
-        return Ok(());
-    }
-
-    Err(BoxliteError::Unsupported(
-        "Host port publication (-p/ports) is local-only for remote runtimes. \
-         Use box.network.tunnel(port) or `boxlite network tunnel BOX PORT` instead."
-            .to_string(),
-    ))
-}
-
 #[async_trait::async_trait]
 impl AuthBackend for RestRuntime {
     async fn whoami(&self) -> BoxliteResult<Principal> {
@@ -52,11 +41,11 @@ impl AuthBackend for RestRuntime {
 
 #[async_trait::async_trait]
 impl VolumeBackend for RestRuntime {
-    async fn create_volume(&self) -> BoxliteResult<VolumeInfo> {
-        let resp: VolumeResponse = self
-            .client
-            .post("/volumes", &CreateVolumeRequest {})
-            .await?;
+    async fn create_volume(&self, name: Option<&str>) -> BoxliteResult<VolumeInfo> {
+        let request = CreateVolumeRequest {
+            name: name.map(str::to_string),
+        };
+        let resp: VolumeResponse = self.client.post("/volumes", &request).await?;
         Ok(resp.to_volume_info())
     }
 
@@ -90,29 +79,125 @@ fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
     LiteBox::new(box_backend, network_backend, snapshot_backend)
 }
 
-/// Host-only RC options a REST server never accepts from a client: they
-/// configure the server's own hardware, not the box the caller asked for.
-fn reject_remote_experimental_options(options: &BoxOptions) -> BoxliteResult<()> {
-    if options.advanced.kernel.is_some() {
-        return Err(BoxliteError::Unsupported(
-            "custom kernels are only supported by the local runtime".to_string(),
-        ));
-    }
+impl BoxOptions {
+    /// The remote sibling of [`BoxOptions::sanitize`]: check these options
+    /// against what a REST server accepts from a client, before any network I/O.
+    ///
+    /// Separate from `sanitize` rather than folded into it because these rules
+    /// are not about validity — a local box may legitimately set every option
+    /// refused here. They configure the server's own host: its hardware, its
+    /// filesystem, its sandbox policy. The caller gets a typed
+    /// [`BoxliteError::Unsupported`] naming the specific knob instead of
+    /// whatever status an individual server happens to return.
+    ///
+    /// Rejects rather than strips, deliberately: quietly dropping these would
+    /// hand back a box that ignored the request, which is the failure this whole
+    /// admission path exists to prevent.
+    ///
+    /// Sandbox security is the load-bearing one: a client that could hand the
+    /// server a [`SecurityOptions`](crate::runtime::advanced_options::SecurityOptions)
+    /// would be choosing its own isolation level, and `SecurityOptions::disabled()`
+    /// turns jailer and seccomp off. The same refusal is spelled out on the wire
+    /// types (`CreateBoxRequest::from_options`), in `boxlite serve`
+    /// (`src/cli/src/commands/serve/types.rs`), and in the spec.
+    fn sanitize_remote(&self) -> BoxliteResult<()> {
+        if !self.ports.is_empty() {
+            return Err(BoxliteError::Unsupported(
+                "Host port publication (-p/ports) is local-only for remote runtimes. \
+                 Use box.network.tunnel(port) or `boxlite network tunnel BOX PORT` instead."
+                    .to_string(),
+            ));
+        }
 
-    if options.advanced.nested_virtualization {
-        return Err(BoxliteError::Unsupported(
-            "nested virtualization is only supported by the local runtime".to_string(),
-        ));
-    }
+        if self.advanced.security != SecurityOptions::default() {
+            return Err(BoxliteError::Unsupported(
+                "sandbox security (advanced.security) is the remote server's own policy \
+                 and is only configurable by the local runtime"
+                    .to_string(),
+            ));
+        }
 
-    Ok(())
+        if self.advanced.privileged {
+            return Err(BoxliteError::Unsupported(
+                "privileged mode is only supported by the local runtime".to_string(),
+            ));
+        }
+
+        if self.advanced.isolate_mounts {
+            return Err(BoxliteError::Unsupported(
+                "mount isolation (advanced.isolate_mounts) is only supported by the local runtime"
+                    .to_string(),
+            ));
+        }
+
+        if self.advanced.health_check.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "health checks (advanced.health_check) are only supported by the local runtime"
+                    .to_string(),
+            ));
+        }
+
+        if self.advanced.kernel.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "custom kernels are only supported by the local runtime".to_string(),
+            ));
+        }
+
+        if self.advanced.nested_virtualization {
+            return Err(BoxliteError::Unsupported(
+                "nested virtualization is only supported by the local runtime".to_string(),
+            ));
+        }
+
+        // Mounts. `BoxOptions::sanitize` is local-only, so
+        // `VolumeSpec::validate` — the "exactly one origin" invariant that C and
+        // Go callers can violate by setting the fields directly — has no other
+        // chance to run before the request goes out.
+        //
+        // A host bind has no meaning against a REST runtime either: the path
+        // names the *server's* filesystem, not the caller's. The rejected path
+        // is deliberately not quoted back — the caller already knows what they
+        // asked for, and echoing a server-side path into a client error is a
+        // leak, not a diagnostic.
+
+        for volume in &self.volumes {
+            volume.validate()?;
+        }
+
+        if self
+            .volumes
+            .iter()
+            .any(|volume| volume.managed_volume.is_none())
+        {
+            return Err(BoxliteError::Unsupported(
+                "host bind mounts are only supported by the local runtime; mount a managed volume \
+                 by id or name instead"
+                    .to_string(),
+            ));
+        }
+
+        // The server rejects `read_only: true` on a managed mount. Refusing here
+        // says so plainly instead of surfacing a field-level 400, and — more to the
+        // point — never lets a caller believe a writable mount is protected.
+        if let Some(volume) = self
+            .volumes
+            .iter()
+            .find(|volume| volume.read_only)
+            .and_then(|volume| volume.managed_volume.as_deref())
+        {
+            return Err(BoxliteError::Unsupported(format!(
+                "read-only managed volumes are not supported yet; mount {volume:?} read-write"
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
-        validate_remote_box_options(&options)?;
-        reject_remote_experimental_options(&options)?;
+        options.sanitize_remote()?;
 
         // Validate only the caller's requested policy. An unset auto_stop means
         // "no auto-stop", so it must not borrow the server's default here —
@@ -127,7 +212,10 @@ impl RuntimeBackend for RestRuntime {
 
         // A server that does not advertise the capability policy would accept
         // the request and drop the field, silently granting default privileges.
-        if !options.advanced.capabilities.is_empty() {
+        // `Some` alone is the trigger, even an explicitly empty policy: the
+        // caller configured something, and a server that can't represent the
+        // concept at all can't be trusted to preserve that from a no-op value.
+        if options.advanced.capabilities().is_some() {
             self.client.require_linux_capabilities_enabled().await?;
         }
 
@@ -143,8 +231,7 @@ impl RuntimeBackend for RestRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
-        validate_remote_box_options(&options)?;
-        reject_remote_experimental_options(&options)?;
+        options.sanitize_remote()?;
 
         // Try to get existing box by name first
         if let Some(ref box_name) = name
@@ -284,7 +371,7 @@ mod tests {
             ..Default::default()
         };
 
-        let err = validate_remote_box_options(&options).unwrap_err();
+        let err = options.sanitize_remote().unwrap_err();
         assert!(err.to_string().contains("-p/ports"));
         assert!(err.to_string().contains("network.tunnel"));
         assert!(err.to_string().contains("boxlite network tunnel"));
@@ -296,14 +383,15 @@ mod tests {
     const BOX_RESPONSE: &str = r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{}}"#;
 
     fn capability_options() -> BoxOptions {
-        BoxOptions {
-            advanced: crate::AdvancedBoxOptions {
-                capabilities: crate::ContainerCapabilities {
-                    drop: vec!["NET_RAW".into()],
-                    ..Default::default()
-                },
+        let mut advanced = crate::AdvancedBoxOptions::default();
+        advanced
+            .set_capabilities(Some(crate::ContainerCapabilities {
+                drop: vec!["NET_RAW".into()],
                 ..Default::default()
-            },
+            }))
+            .unwrap();
+        BoxOptions {
+            advanced,
             ..Default::default()
         }
     }
@@ -399,6 +487,34 @@ mod tests {
         assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
     }
 
+    /// An explicitly empty policy is still explicit — the caller configured
+    /// something, even if it happens to be a no-op value. A server that
+    /// can't advertise the capability feature at all can't be trusted to
+    /// honor that distinction either, so this must still be probed for.
+    #[tokio::test]
+    async fn explicit_empty_capabilities_still_require_server_advertisement() {
+        let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let mut advanced = crate::AdvancedBoxOptions::default();
+        advanced
+            .set_capabilities(Some(crate::ContainerCapabilities::default()))
+            .unwrap();
+        let opts = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let error = match RuntimeBackend::create(&runtime, opts, None).await {
+            Err(error) => error,
+            Ok(_) => panic!("an explicit, even empty, capability policy must still be probed for"),
+        };
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
+    }
+
     #[tokio::test]
     async fn advertised_capability_support_creates_on_the_shared_route() {
         let (port, server) = json_server(vec![
@@ -464,13 +580,12 @@ mod tests {
         std::fs::write(&kernel, b"custom kernel").unwrap();
         let options = BoxliteRestOptions::new("http://localhost:1");
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.kernel = Some(crate::experimental::custom_kernel::KernelOptions::new(
+            kernel,
+        ));
         let opts = BoxOptions {
-            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
-                kernel: Some(crate::experimental::custom_kernel::KernelOptions::new(
-                    kernel,
-                )),
-                ..Default::default()
-            },
+            advanced,
             ..Default::default()
         };
 
@@ -487,11 +602,10 @@ mod tests {
     async fn create_rejects_nested_virtualization_in_rest_mode() {
         let options = BoxliteRestOptions::new("http://localhost:1");
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.nested_virtualization = true;
         let box_options = BoxOptions {
-            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
-                nested_virtualization: true,
-                ..Default::default()
-            },
+            advanced,
             ..Default::default()
         };
 
@@ -504,6 +618,188 @@ mod tests {
         assert!(error.to_string().contains("local runtime"));
     }
 
+    /// A host path has no meaning against a REST runtime — the server's
+    /// filesystem is not the caller's. The path must not leave the client at
+    /// all: it is the caller's own business, and a server-side "not found"
+    /// naming it would leak it into logs on the way back.
+    #[tokio::test]
+    async fn create_rejects_host_bind_mount_in_rest_mode() {
+        use crate::runtime::options::VolumeSpec;
+
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let box_options = BoxOptions {
+            volumes: vec![VolumeSpec::bind_mount("/tmp/secrets", "/mnt/ro")],
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("REST host bind mounts must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("host bind mounts"));
+        assert!(
+            !error.to_string().contains("/tmp/secrets"),
+            "the rejected host path must not be echoed back: {error}"
+        );
+    }
+
+    /// The server rejects `read_only: true` on a managed mount. Refusing it
+    /// here keeps a caller from believing a writable mount is protected — the
+    /// failure mode that matters is the silent downgrade, not the 400.
+    #[tokio::test]
+    async fn create_rejects_read_only_managed_volume() {
+        use crate::runtime::options::VolumeSpec;
+
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let box_options = BoxOptions {
+            volumes: vec![VolumeSpec {
+                read_only: true,
+                ..VolumeSpec::managed_volume("my-data", "/data")
+            }],
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("read-only managed volumes must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("read-only"), "{error}");
+    }
+
+    /// The guard is about host paths, not about mounts: a managed volume gets
+    /// past it and on to the request, addressed by id or by name alike.
+    #[tokio::test]
+    async fn create_accepts_managed_volume_by_id_or_name() {
+        use crate::runtime::options::VolumeSpec;
+
+        for reference in ["vol_01K2EXAMPLE", "my-data"] {
+            let options = BoxliteRestOptions::new("http://localhost:1");
+            let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+            let box_options = BoxOptions {
+                volumes: vec![VolumeSpec::managed_volume(reference, "/data")],
+                ..Default::default()
+            };
+
+            // localhost:1 refuses the connection, so reaching *any* transport
+            // error is the proof that the mount cleared client-side validation.
+            let error = RuntimeBackend::create(&runtime, box_options, None)
+                .await
+                .err()
+                .expect("no server is listening on localhost:1");
+
+            assert!(
+                !matches!(error, BoxliteError::Unsupported(_)),
+                "managed volume {reference:?} must not be refused client-side: {error:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn create_rejects_client_supplied_sandbox_security() {
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.security = crate::runtime::advanced_options::SecurityOptions::disabled();
+        let box_options = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("a client must not choose the remote server's sandbox policy");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local runtime"));
+    }
+
+    #[tokio::test]
+    async fn create_leaves_the_default_sandbox_security_alone() {
+        // The guard compares against the default, so an untouched BoxOptions
+        // must reach the wire. Without this the check would reject every
+        // remote create, and the test above would still pass.
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+
+        let error = RuntimeBackend::create(&runtime, BoxOptions::default(), None)
+            .await
+            .err()
+            .expect("no server is listening on port 1, so this must still fail");
+
+        assert!(
+            !matches!(error, BoxliteError::Unsupported(_)),
+            "a default box must fail on transport, not on the sandbox guard: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_privileged_mode_in_rest_mode() {
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.privileged = true;
+        let box_options = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("REST privileged mode must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local runtime"));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_mount_isolation_in_rest_mode() {
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.isolate_mounts = true;
+        let box_options = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("REST mount isolation must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local runtime"));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_health_check_in_rest_mode() {
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.health_check =
+            Some(crate::runtime::advanced_options::HealthCheckOptions::default());
+        let box_options = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("REST health checks must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local runtime"));
+    }
+
     #[tokio::test]
     async fn get_or_create_rejects_custom_kernel_for_rest_runtime() {
         let temp = tempfile::tempdir().unwrap();
@@ -511,13 +807,12 @@ mod tests {
         std::fs::write(&kernel, b"custom kernel").unwrap();
         let options = BoxliteRestOptions::new("http://localhost:1");
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.kernel = Some(crate::experimental::custom_kernel::KernelOptions::new(
+            kernel,
+        ));
         let opts = BoxOptions {
-            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
-                kernel: Some(crate::experimental::custom_kernel::KernelOptions::new(
-                    kernel,
-                )),
-                ..Default::default()
-            },
+            advanced,
             ..Default::default()
         };
 
@@ -534,11 +829,10 @@ mod tests {
     async fn get_or_create_rejects_nested_virtualization_in_rest_mode() {
         let options = BoxliteRestOptions::new("http://localhost:1");
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.nested_virtualization = true;
         let box_options = BoxOptions {
-            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
-                nested_virtualization: true,
-                ..Default::default()
-            },
+            advanced,
             ..Default::default()
         };
 

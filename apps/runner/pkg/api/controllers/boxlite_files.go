@@ -2,12 +2,14 @@ package controllers
 
 import (
 	"archive/tar"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 
+	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 )
@@ -15,14 +17,14 @@ import (
 func BoxliteFileUpload(ctx *gin.Context) {
 	r, err := runner.GetInstance(nil)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(ctx, http.StatusInternalServerError, err.Error(), "InternalError", "internal")
 		return
 	}
 
 	boxId := ctx.Param("boxId")
 	destPath := ctx.Query("path")
 	if destPath == "" {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "path query parameter required"})
+		respondError(ctx, http.StatusBadRequest, "path query parameter required", "InvalidArgumentError", "invalid_argument")
 		return
 	}
 
@@ -35,14 +37,14 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	// silently breaks both single-file and directory uploads).
 	stagingDir, err := os.MkdirTemp("", "boxlite-upload-stage-*")
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create staging dir"})
+		respondError(ctx, http.StatusInternalServerError, "failed to create staging dir", "InternalError", "internal")
 		return
 	}
 	defer os.RemoveAll(stagingDir)
 
 	stagedPath, isSingleFile, err := extractTarToDir(ctx.Request.Body, stagingDir)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("failed to extract upload tar: %s", err)})
+		respondError(ctx, http.StatusBadRequest, fmt.Sprintf("failed to extract upload tar: %s", err), "InvalidArgumentError", "invalid_argument")
 		return
 	}
 
@@ -56,7 +58,7 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	}
 
 	if err := r.Boxlite.CopyInto(ctx.Request.Context(), boxId, src, destPath); err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("copy failed: %s", err)})
+		respondCopyError(ctx, err)
 		return
 	}
 
@@ -133,26 +135,26 @@ func extractTarToDir(r io.Reader, destDir string) (lastFilePath string, isSingle
 func BoxliteFileDownload(ctx *gin.Context) {
 	r, err := runner.GetInstance(nil)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(ctx, http.StatusInternalServerError, err.Error(), "InternalError", "internal")
 		return
 	}
 
 	boxId := ctx.Param("boxId")
 	srcPath := ctx.Query("path")
 	if srcPath == "" {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "path query parameter required"})
+		respondError(ctx, http.StatusBadRequest, "path query parameter required", "InvalidArgumentError", "invalid_argument")
 		return
 	}
 
 	tmpDir, err := os.MkdirTemp("", "boxlite-download-*")
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp dir"})
+		respondError(ctx, http.StatusInternalServerError, "failed to create temp dir", "InternalError", "internal")
 		return
 	}
 	defer os.RemoveAll(tmpDir)
 
 	if err := r.Boxlite.CopyOut(ctx.Request.Context(), boxId, srcPath, tmpDir); err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("copy failed: %s", err)})
+		respondCopyError(ctx, err)
 		return
 	}
 
@@ -183,4 +185,89 @@ func BoxliteFileDownload(ctx *gin.Context) {
 		_, err = io.Copy(tw, f)
 		return err
 	})
+}
+
+// copyErrorClass is the (status, type, code) triple a BoxLite error crosses the
+// wire as. Mirrors `BoxliteError::http()` in src/shared/src/errors.rs, which the
+// client inverts in src/boxlite/src/rest/error.rs by dispatching on `code` —
+// both sides have to name the same triple or a refusal arrives as something
+// else.
+type copyErrorClass struct {
+	status    int
+	errorType string
+	code      string
+}
+
+var internalCopyErrorClass = copyErrorClass{http.StatusInternalServerError, "InternalError", "internal"}
+
+// copyErrorClasses covers every code the Go SDK can return (sdks/go/errors.go),
+// which is every runtime error variant — the FFI maps them one-for-one in
+// sdks/c/src/error.rs. The whole table rather than the mount refusal alone: a
+// copy also reports a missing source, an oversized upload and a stopped box,
+// and every one of those was being reported as a server fault too.
+var copyErrorClasses = map[boxlite.ErrorCode]copyErrorClass{
+	boxlite.ErrInternal:          internalCopyErrorClass,
+	boxlite.ErrNotFound:          {http.StatusNotFound, "NotFoundError", "not_found"},
+	boxlite.ErrAlreadyExists:     {http.StatusConflict, "AlreadyExistsError", "already_exists"},
+	boxlite.ErrInvalidState:      {http.StatusConflict, "InvalidStateError", "invalid_state"},
+	boxlite.ErrInvalidArgument:   {http.StatusBadRequest, "InvalidArgumentError", "invalid_argument"},
+	boxlite.ErrConfig:            {http.StatusInternalServerError, "ConfigError", "config_error"},
+	boxlite.ErrStorage:           {http.StatusInternalServerError, "StorageError", "storage_error"},
+	boxlite.ErrImage:             {http.StatusUnprocessableEntity, "ImageError", "image_pull_failed"},
+	boxlite.ErrNetwork:           {http.StatusServiceUnavailable, "NetworkError", "network_unavailable"},
+	boxlite.ErrExecution:         {http.StatusUnprocessableEntity, "ExecutionError", "execution_failed"},
+	boxlite.ErrStopped:           {http.StatusConflict, "StoppedError", "stopped"},
+	boxlite.ErrEngine:            {http.StatusServiceUnavailable, "EngineError", "engine_unavailable"},
+	boxlite.ErrUnsupported:       {http.StatusBadRequest, "UnsupportedError", "unsupported"},
+	boxlite.ErrDatabase:          {http.StatusInternalServerError, "DatabaseError", "database_error"},
+	boxlite.ErrPortal:            {http.StatusServiceUnavailable, "UpstreamUnavailableError", "upstream_unavailable"},
+	boxlite.ErrRpc:               {http.StatusServiceUnavailable, "UpstreamUnavailableError", "upstream_unavailable"},
+	boxlite.ErrRpcTransport:      {http.StatusServiceUnavailable, "UpstreamUnavailableError", "upstream_unavailable"},
+	boxlite.ErrMetadata:          {http.StatusInternalServerError, "MetadataError", "metadata_error"},
+	boxlite.ErrUnsupportedEngine: {http.StatusBadRequest, "UnsupportedError", "unsupported"},
+	boxlite.ErrResourceExhausted: {http.StatusTooManyRequests, "ResourceExhaustedError", "resource_exhausted"},
+	boxlite.ErrSessionReaped:     {http.StatusGone, "SessionReapedError", "session_reaped"},
+}
+
+// respondCopyError answers a failed copy with the class the runtime gave it.
+//
+// A destination the guest refuses because a mount hides it is the caller's
+// mistake, and openapi/box.openapi.yaml declares that refusal a `400` on both
+// file routes. The class survives every hop up to here — the guest answers
+// FailedPrecondition, and the FFI hands Go an *Error carrying ErrUnsupported —
+// so calling every copy failure a 500 threw away an answer the runtime had
+// already worked out, and left the client (src/boxlite/src/rest/error.rs) no
+// envelope to read it from.
+func respondCopyError(ctx *gin.Context, err error) {
+	class, message := internalCopyErrorClass, err.Error()
+
+	var runtimeErr *boxlite.Error
+	if errors.As(err, &runtimeErr) {
+		if known, ok := copyErrorClasses[runtimeErr.Code]; ok {
+			class = known
+		}
+		// Message already holds the runtime's own rendering of the failure,
+		// which is exactly what the local `boxlite serve` route emits for the
+		// same refusal. `err.Error()` would wrap it in Go framing that route
+		// never adds, leaving the two servers answering one refusal in two
+		// different wordings.
+		message = runtimeErr.Message
+	}
+
+	respondError(ctx, class.status, message, class.errorType, class.code)
+}
+
+// respondError writes the error envelope openapi/box.openapi.yaml declares for
+// these routes: `{error: {message, type, code}}`.
+//
+// A bare `{"error": "<text>"}` names no class, so the client
+// (src/boxlite/src/rest/error.rs) falls back to reading the status alone — and
+// that fallback has no 400 arm, so every refusal these routes state plainly
+// still reached the caller as a server fault.
+func respondError(ctx *gin.Context, status int, message, errorType, code string) {
+	ctx.JSON(status, gin.H{"error": gin.H{
+		"message": message,
+		"type":    errorType,
+		"code":    code,
+	}})
 }

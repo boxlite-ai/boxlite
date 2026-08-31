@@ -1,0 +1,7 @@
+{
+  "dev": {
+    "stackOrigin": "https://dev.boxlite.ai",
+    "publicOidcIssuer": "https://auth.dev.boxlite.ai/",
+    "auth0TenantDomain": "dev-j60pjpmu6neaeaga.us.auth0.com"
+  }
+}

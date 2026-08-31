@@ -34,6 +34,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite stats`](#boxlite-stats)
   - [`boxlite network tunnel`](#boxlite-network-tunnel)
   - [`boxlite serve`](#boxlite-serve)
+  - [`boxlite volume`](#boxlite-volume)
   - [`boxlite completion`](#boxlite-completion)
 - [Shared Flag Groups](#shared-flag-groups)
 - [Volume Mount Syntax](#volume-mount-syntax)
@@ -127,7 +128,7 @@ These flags can appear before *or* after the subcommand and apply to every comma
 | `--config PATH` | path | none | — | JSON config file (see [Configuration File](#configuration-file)) |
 | `--url URL` | string | none | `BOXLITE_REST_URL` | Connect to a remote BoxLite REST API server instead of the local runtime |
 
-**Precedence** (from `src/cli/src/cli.rs:163-201`):
+**Precedence** (from `src/cli/src/cli.rs`):
 
 1. `--url` short-circuits to the REST runtime — no local hypervisor is touched. `--home`, `--registry`, and `--config` are ignored.
 2. Otherwise, `--config` is loaded as the base options, then `--home` overrides `home_dir`, and `--registry` flags are prepended to `image_registries`.
@@ -494,6 +495,20 @@ Copy files/folders between host and box. Exactly one of `SRC` or `DST` must be a
 
 If the box is stopped at copy time, it's started temporarily and stopped again afterwards.
 
+Paths at or under a mount inside the box are refused in both directions — `/tmp`,
+`/dev/shm`, volumes, and the `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf` binds.
+`cp` works on the rootfs layer from outside the box's mount namespace, so such a copy
+would write where nothing in the box can see it, or read back the image's file rather
+than the one the box has.
+
+A directory that merely *contains* a mount is treated differently per direction. Copying
+one **out** is refused (`boxlite cp box:/etc ./etc`), since the archive would carry the
+image's files rather than the mounted ones. Copying **in** is allowed, and refused only
+if a file being written would land on a mount — so `boxlite cp ./x box:/etc` works.
+
+Copy a path outside the mount, or pipe a tar through `boxlite exec`. Files copied in are
+owned by the box's exec user.
+
 **Examples:**
 
 ```bash
@@ -596,6 +611,42 @@ boxlite serve --host 127.0.0.1 --port 9000
 
 ---
 
+### `boxlite volume`
+
+**Synopsis:** `boxlite volume <create|ls|get|rm>`
+
+Manage managed persistent volumes. Volumes are a REST-runtime capability — the
+local runtime has no volume backend, so every subcommand returns
+`named volumes are not supported yet` against it. See
+[Connecting to the cloud](#connecting-to-the-cloud).
+
+| Subcommand | Synopsis | Notes |
+|---|---|---|
+| `create` | `boxlite volume create [--name NAME]` | Prints the new id |
+| `ls` (`list`) | `boxlite volume ls [-q] [--format FORMAT]` | Columns: ID, NAME, CREATED, SIZE |
+| `get` (`inspect`) | `boxlite volume get ID [--format FORMAT]` | By id |
+| `rm` (`delete`) | `boxlite volume rm ID... [--force]` | By id |
+
+**`--name`** is mountable in place of the id, so a box can ask for the volume it
+wants without knowing the id:
+
+```bash
+boxlite volume create --name my-data       # prints e.g. vol_01K2EXAMPLE
+boxlite run -v my-data:/data alpine        # by name
+boxlite run -v vol_01K2EXAMPLE:/data alpine # or by id
+```
+
+Names must be at least two characters of `[a-zA-Z0-9][a-zA-Z0-9_.-]` — Docker's
+rule, and for the same reason: the name has to survive
+[`-v` parsing](#volume-mount-syntax). A leading `.`, `/` or `~` would classify
+the source as a host path; a `:` would split the spec into the wrong fields.
+Neither name could ever be mounted. Without `--name` the server names the
+volume after its id, which stays mountable.
+
+`get` and `rm` take an id only; mounting is what accepts either.
+
+---
+
 ### `boxlite completion`
 
 **Synopsis:** `boxlite completion <SHELL>`
@@ -620,7 +671,7 @@ Several commands flatten shared `clap` `Args` structs. Each is documented here o
 
 ### `ProcessFlags`
 
-Used by `run` and `exec` (defined at `src/cli/src/cli.rs:208-281`).
+Used by `run` and `exec` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -649,7 +700,7 @@ containing only `NET_BIND_SERVICE`.
 
 ### `ResourceFlags`
 
-Used by `run` and `create` (defined at `src/cli/src/cli.rs:287-310`).
+Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Type | Description |
 |------|------|-------------|
@@ -659,7 +710,7 @@ Used by `run` and `create` (defined at `src/cli/src/cli.rs:287-310`).
 
 ### `PublishFlags`
 
-Used by `run` and `create` (defined at `src/cli/src/cli.rs:489-559`).
+Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -669,7 +720,7 @@ TCP is the only supported publication protocol; UDP is rejected.
 
 ### `VolumeFlags`
 
-Used by `run` and `create` (defined at `src/cli/src/cli.rs:407-578`).
+Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -677,36 +728,74 @@ Used by `run` and `create` (defined at `src/cli/src/cli.rs:407-578`).
 
 ### `ManagementFlags`
 
-Used by `run` and `create` (defined at `src/cli/src/cli.rs:584-604`).
+Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--name NAME` | — | Assign a name to the box |
 | `--detach` | `-d` | Run in the background; print box ID and return |
-| `--rm` | — | Automatically remove the box when it exits |
+| `--rm` | — | Remove the box when it stops; conflicts with `--auto-stop` and `--auto-delete` |
+| `--auto-stop DURATION` | — | Stop the box after this much inactivity; `0` disables |
+| `--auto-delete DURATION` | — | Delete the box this long after it stops; `0` disables |
+| `--no-auto-resume` | — | Refuse operations that would implicitly wake a stopped box |
 
-> `--rm` with `--detach` on `run` is silently downgraded — `run -d` always sets `auto_remove=false` (`src/cli/src/commands/run.rs:106`) so the detached box outlives the CLI process. Use `boxlite rm` to clean up.
+`DURATION` is seconds when bare, or a suffixed value: `30s`, `15m`, `2h`, `7d`.
+
+> `--auto-stop` and `--auto-delete` are deadlines a sweeper acts on, so they need a server — `boxlite serve` or the cloud. Against the embedded runtime a non-zero value is refused rather than silently reinterpreted. The sweep runs on a 30s tick, so a deadline fires on the first tick at or after it. A server also requires `auto_delete` to exceed `auto_stop`; a box cannot be scheduled for deletion sooner than it is scheduled to stop.
+
+> `--rm` removes the box when it stops. Against the embedded runtime that is synchronous, at the stop itself. Against `boxlite serve` it is carried as the shortest possible deadline and swept on the same 30s tick, so removal can lag the stop by up to one tick — and, because `serve` holds that policy in memory, is skipped entirely if the server restarts in between.
+
+> `--rm` with `--detach` on `run` is silently downgraded — a detached box outlives the CLI process, so it keeps manual lifecycle control. An explicit `--auto-delete` survives detaching, which is the pairing the flag exists for. Use `boxlite rm` to clean up.
 
 ---
 
 ## Volume Mount Syntax
 
-`-v`/`--volume` accepts the grammar implemented at `src/cli/src/cli.rs:442-519`:
+`-v`/`--volume` accepts the grammar implemented in `src/cli/src/volumespec.rs`:
 
 ```
-VOLUME := HOST_PATH ':' BOX_PATH [':' OPTIONS]          # bind mount
+VOLUME := SOURCE ':' BOX_PATH [':' OPTIONS]             # managed volume or bind mount
         | BOX_PATH [':' OPTIONS]                         # anonymous volume
 ```
+
+`SOURCE` is classified by its **first character**, the same rule Docker uses
+(`docker/cli/internal/volumespec`). Nothing inspects the filesystem, so a spec
+means the same thing on every machine:
+
+| `SOURCE` starts with | Meaning |
+|---|---|
+| `/`, `./`, `../`, `~` | Host path |
+| `\\` (UNC / named pipe) | Host path |
+| A drive letter, e.g. `C:\` or `D:/` | Host path |
+| Anything else | **Managed volume**, by id or by name |
 
 | Form | Example | Behavior |
 |------|---------|----------|
 | `BOX_PATH` | `/data` | Anonymous volume stored under `{home}/volumes/anonymous/<ulid>` |
 | `BOX_PATH:ro` / `BOX_PATH:rw` | `/data:ro` | Anonymous volume with explicit mode |
+| `VOLUME:BOX_PATH` | `my-data:/data` | Managed volume by name |
+| `VOLUME:BOX_PATH` | `vol_01K2EXAMPLE:/data` | Managed volume by server-assigned id |
 | `HOST_PATH:BOX_PATH` | `/host/data:/data` | Bind mount (host directory must exist) |
-| `HOST_PATH:BOX_PATH:OPTIONS` | `/host/data:/data:ro` | Bind mount with options |
+| `HOST_PATH:BOX_PATH:OPTIONS` | `./data:/data:ro` | Bind mount with options |
 | `C:\HOST\PATH:/BOX_PATH[:OPTIONS]` | `C:\data:/app/data:ro` | Windows drive paths are handled — the drive-letter colon is not treated as a separator |
 
 **Options:** `ro` (read-only) or `rw` (read-write, default). Other options are ignored. Relative host paths are canonicalized at parse time; missing host paths fail with `volume host path ...`.
+
+**Runtime support.** Managed volumes require a REST runtime — the local runtime
+has no volume backend and rejects them at create. Host binds are the mirror
+image: they name a path on the machine running the box, so a REST runtime
+refuses them. Manage volumes with [`boxlite volume`](#boxlite-volume).
+
+> **Behavior change.** A bare relative source is no longer a bind mount:
+> `-v data:/app` now means the managed volume `data`, not `./data`. Write
+> `./data:/app` for the bind. Unlike Docker, a mistyped name cannot silently
+> create an empty volume — boxlite never auto-creates, so an unknown reference
+> fails with "Volume 'data' not found".
+
+**Single-character names are not addressable via `-v`.** The parser cannot
+distinguish `a:` from a drive letter, so `-v a:/data` is read as one field and
+fails. Docker has the same limitation and rejects one-character volume names
+outright.
 
 The anonymous-volume base directory is resolved as: `--home`, else `$BOXLITE_HOME`, else `~/.boxlite`, else the system temp dir.
 
@@ -715,7 +804,7 @@ The anonymous-volume base directory is resolved as: `--home`, else `$BOXLITE_HOM
 ## Port Publish Syntax
 
 `-p`/`--publish` accepts the grammar implemented at
-`src/cli/src/cli.rs:489-559`:
+`src/cli/src/cli.rs`:
 
 ```
 PORT := [HOST_PORT ':'] BOX_PORT ['/tcp']

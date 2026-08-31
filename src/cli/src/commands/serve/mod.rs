@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::extract::{Request, State};
+use axum::http::Method;
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::middleware::{self, Next};
@@ -23,10 +24,10 @@ use tokio::sync::RwLock;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 
-use boxlite::runtime::options::{NetworkMode, OutboundNetworkConfig};
+use boxlite::runtime::options::{InboundNetworkConfig, NetworkMode, OutboundNetworkConfig};
 use boxlite::{
-    BoxCommand, BoxInfo, BoxOptions, BoxliteRuntime, ExecStdin, Execution, LiteBox, NetworkSpec,
-    RootfsSpec,
+    BoxCommand, BoxInfo, BoxOptions, BoxStatus, BoxliteRuntime, ExecStdin, Execution, LiteBox,
+    NetworkSpec, RootfsSpec,
 };
 
 use crate::cli::GlobalFlags;
@@ -71,6 +72,134 @@ struct AppState {
     /// Optional expected API key (`--api-key` / `$BOXLITE_SERVE_API_KEY`).
     /// `None` ⇒ permissive (no auth enforced).
     api_key: Option<String>,
+    /// Lifecycle deadlines per box, in seconds.
+    ///
+    /// Held here rather than in `BoxOptions` because the engine accepts neither
+    /// on a local runtime, which is what `serve` drives:
+    ///
+    /// - `auto_stop` is refused outright — `reject_local_unsupported_options`
+    ///   (`runtime/rt_impl.rs:1743`) returns Unsupported, because a local
+    ///   runtime has no sweeper of its own.
+    /// - `auto_delete` is accepted but means something else: `removes_on_stop()`
+    ///   is `effective_auto_delete() > 0`, so passing a deadline through makes
+    ///   the engine delete the box the instant it stops — the opposite of
+    ///   waiting — and forces it non-detached.
+    ///
+    /// `serve` is the sweeper, so it keeps the policy and acts on it.
+    ///
+    /// In memory only: a restart forgets every deadline, and a box created
+    /// before it is never swept.
+    lifecycle: RwLock<HashMap<String, LifecyclePolicy>>,
+    /// Last observed user activity per box, for AutoStop.
+    ///
+    /// `serve` holds the `$BOXLITE_HOME` lock for its whole life, so nothing
+    /// else can touch these boxes while it runs and this map is a complete
+    /// record. A box it has not seen is seeded at the current tick rather than
+    /// measured against `BoxInfo.last_updated`, which tracks state transitions
+    /// and would report a long-running busy box as idle since boot.
+    last_activity: RwLock<HashMap<String, Instant>>,
+}
+
+/// The deadlines `serve` enforces for one box. `0` disables either.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::commands::serve) struct LifecyclePolicy {
+    pub auto_stop: u32,
+    pub auto_delete: u32,
+}
+
+impl LifecyclePolicy {
+    fn is_empty(&self) -> bool {
+        self.auto_stop == 0 && self.auto_delete == 0
+    }
+}
+
+impl AppState {
+    /// Remember a box's deadlines. A policy with neither set is not stored.
+    pub(in crate::commands::serve) async fn set_lifecycle(
+        &self,
+        box_id: &str,
+        policy: LifecyclePolicy,
+    ) {
+        if policy.is_empty() {
+            return;
+        }
+        self.lifecycle
+            .write()
+            .await
+            .insert(box_id.to_string(), policy);
+    }
+
+    /// The box's deadlines, or an all-zero policy when it has none.
+    pub(in crate::commands::serve) async fn lifecycle_of(&self, box_id: &str) -> LifecyclePolicy {
+        self.lifecycle
+            .read()
+            .await
+            .get(box_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Render a box for the wire, with the deadlines this server holds.
+    ///
+    /// The single place a `BoxResponse` is built, because `BoxInfo` cannot
+    /// carry these two fields here: `build_box_options` withholds both from the
+    /// runtime, so `BoxInfo` reports the zeroes it was handed. Reading them off
+    /// `info` would answer with no deadline on a box the sweep is enforcing one
+    /// for. A box with no stored policy reports none, so a clone or an import
+    /// does not inherit the deadline of the box it came from.
+    pub(in crate::commands::serve) async fn box_response(&self, info: &BoxInfo) -> BoxResponse {
+        let mut resp = box_info_to_response(info);
+        // `auto_resume` is not overlaid: it *is* forwarded to the runtime, so
+        // `info` already carries the caller's value back.
+        let policy = self.lifecycle_of(info.id.as_ref()).await;
+        resp.auto_stop = policy.auto_stop;
+        resp.auto_delete = policy.auto_delete;
+        resp
+    }
+
+    /// Mark a box as used right now, resetting its AutoStop window.
+    ///
+    /// The single write site for the idle clock, so the request middleware and
+    /// the sweep agree on what "used" means.
+    pub(in crate::commands::serve) async fn record_box_activity(&self, box_id: &str) {
+        self.last_activity
+            .write()
+            .await
+            .insert(box_id.to_string(), Instant::now());
+    }
+
+    /// Forget everything held about a box that is gone.
+    ///
+    /// Without this both maps grow for the life of the process, one entry per
+    /// box ever deleted.
+    pub(in crate::commands::serve) async fn forget_box(&self, box_id: &str) {
+        self.lifecycle.write().await.remove(box_id);
+        self.last_activity.write().await.remove(box_id);
+    }
+
+    /// Drop idle clocks for spellings that name no box.
+    ///
+    /// `forget_box` covers boxes this server deleted, but not ids that were
+    /// never boxes: `record_activity` stamps the clock straight off the request
+    /// path, before any handler can reject an unknown id, so a client looping
+    /// over made-up ids would otherwise grow the map for the life of the
+    /// process — and `serve` binds `0.0.0.0` and may run with no API key.
+    ///
+    /// Only `last_activity` is pruned. It is the map unauthenticated input can
+    /// grow, and re-seeding a live box costs nothing but a fresh window. The
+    /// `lifecycle` map is written only by `create_box`, always with a canonical
+    /// id, so pruning it would buy nothing and would race: a box created after
+    /// the caller's `list_info` snapshot would have its deadline dropped and
+    /// never re-added.
+    pub(in crate::commands::serve) async fn retain_known_boxes(
+        &self,
+        live: &[(String, Option<String>)],
+    ) {
+        self.last_activity
+            .write()
+            .await
+            .retain(|spelling, _| box_named_by(spelling, live).is_some());
+    }
 }
 
 /// Which stdio session an [`ActiveExecution`] fronts.
@@ -517,6 +646,17 @@ impl ActiveExecution {
 
 const REAPER_TICK: std::time::Duration = std::time::Duration::from_secs(30);
 const REAPER_SIGNAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// Budget for one runtime call on the lifecycle sweep.
+///
+/// Stopping or removing a box is heavier than signalling an exec, so it gets a
+/// wider budget than `REAPER_SIGNAL_TIMEOUT` — but it is still bounded: the
+/// sweep shares its task with orphan-exec reaping, so an unbounded await on a
+/// wedged microVM would stall that too. A call that times out leaves the
+/// deadline unmet and the next tick retries it.
+///
+/// This bounds each call, not the pass: boxes are swept one at a time, as the
+/// orphan reaper walks its own candidates, so a tick can still run long.
+const LIFECYCLE_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 const DEFAULT_RECONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(300);
 const DEFAULT_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
 const DEFAULT_MAX_SESSION_LIFETIME: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
@@ -555,6 +695,260 @@ fn resolve_duration(var: &str, fallback: std::time::Duration) -> std::time::Dura
     }
 }
 
+/// What the sweep should do with one box.
+#[derive(Debug, PartialEq, Eq)]
+enum LifecycleAction {
+    Leave,
+    Stop,
+    Delete,
+}
+
+/// Decide one box's fate from its policy and observed clocks alone.
+///
+/// Split out from the sweep so the rule is testable without a VM, a runtime or
+/// a clock. `0` disables either deadline, matching the wire contract.
+fn decide_lifecycle(
+    status: BoxStatus,
+    auto_stop_secs: u32,
+    auto_delete_secs: u32,
+    idle: std::time::Duration,
+    since_stop: std::time::Duration,
+) -> LifecycleAction {
+    // A running box is stopped once it has been idle for the whole window.
+    if status == BoxStatus::Running
+        && auto_stop_secs > 0
+        && idle >= std::time::Duration::from_secs(u64::from(auto_stop_secs))
+    {
+        return LifecycleAction::Stop;
+    }
+
+    // A box that has come to rest is deleted once it has been at rest for the
+    // whole window, measured from that transition rather than from last use: a
+    // box that was busy right up to its stop must still age out on schedule.
+    //
+    // `Failed` counts as at rest — it will never run again on its own, so
+    // excluding it would leak exactly the boxes nobody goes back to clean up.
+    let at_rest = matches!(status, BoxStatus::Stopped | BoxStatus::Failed);
+    if at_rest
+        && auto_delete_secs > 0
+        && since_stop >= std::time::Duration::from_secs(u64::from(auto_delete_secs))
+    {
+        return LifecycleAction::Delete;
+    }
+
+    LifecycleAction::Leave
+}
+
+/// How long a box has been idle, seeding the clock if this `serve` has not seen
+/// it before.
+///
+/// The read guard must be released before the write lock is taken. Holding it
+/// across the `.write().await` — which is what a `match` on the guard does,
+/// since the scrutinee temporary outlives the arms — self-deadlocks on tokio's
+/// `RwLock` and hangs the whole reaper loop, orphan-exec reaping included.
+/// The clock is keyed by whatever spelling the caller used, so every stamp that
+/// resolves to this box counts and the newest wins. `boxes` is the live set,
+/// needed because resolving a prefix depends on what else exists. A box seen for
+/// the first time is seeded under its canonical id.
+async fn idle_or_seed(
+    last_activity: &RwLock<HashMap<String, Instant>>,
+    box_id: &str,
+    boxes: &[(String, Option<String>)],
+    now: Instant,
+) -> std::time::Duration {
+    let stamped = {
+        let clocks = last_activity.read().await;
+        clocks
+            .iter()
+            .filter(|(spelling, _)| box_named_by(spelling, boxes) == Some(box_id))
+            .map(|(_, stamped)| *stamped)
+            .max()
+    };
+    match stamped {
+        Some(stamped) => now.saturating_duration_since(stamped),
+        None => {
+            last_activity.write().await.insert(box_id.to_string(), now);
+            std::time::Duration::ZERO
+        }
+    }
+}
+
+/// The box a client's spelling resolves to, or `None` if it names none.
+///
+/// Mirrors `BoxManager::lookup_box` (litebox/manager.rs:102): an exact id, then
+/// an exact name, then a prefix — and a prefix matching more than one box
+/// resolves to nothing there, so it resolves to nothing here. The empty
+/// spelling is the one divergence, rejected here rather than treated as a
+/// prefix of everything; `activity_box_id` never yields one.
+///
+/// Resolving rather than enumerating, because prefixes cannot be listed: there
+/// are as many as the id is long. Without this, `boxlite --url … exec 01HJK4`
+/// would stamp a key the sweep never reads and its box would be AutoStopped
+/// mid-use.
+///
+/// Rejecting the ambiguous prefix is what keeps that from becoming a lever.
+/// `record_activity` stamps the raw path segment before any handler can reject
+/// it, and `serve` may run with no API key — so if a one-character prefix
+/// counted for every box it matched, `POST /v1/boxes/a/exec` would hold all of
+/// them open, and 62 such requests a tick would pin the whole server.
+fn box_named_by<'a>(spelling: &str, boxes: &'a [(String, Option<String>)]) -> Option<&'a str> {
+    if spelling.is_empty() {
+        return None;
+    }
+    if let Some((id, _)) = boxes.iter().find(|(id, _)| id == spelling) {
+        return Some(id);
+    }
+    if let Some((id, _)) = boxes
+        .iter()
+        .find(|(_, name)| name.as_deref() == Some(spelling))
+    {
+        return Some(id);
+    }
+    let mut prefixed = boxes.iter().filter(|(id, _)| id.starts_with(spelling));
+    match (prefixed.next(), prefixed.next()) {
+        (Some((id, _)), None) => Some(id),
+        _ => None,
+    }
+}
+
+/// Boxes with work in flight, which AutoStop must not interrupt.
+///
+/// A tenant exec counts: `record_activity` stamps once per HTTP request, so a
+/// long-running `POST /exec` never re-stamps and the box would look idle.
+///
+/// A `Main` session does not. It is the box's own init, it lives as long as the
+/// box runs, and `run_reap_once` never evicts it — so counting it would pin
+/// every started box and AutoStop could never fire at all. An idle box whose
+/// init is still running is exactly what AutoStop exists to stop; an
+/// *interactive* main session is kept alive by its data frames re-stamping the
+/// clock instead.
+fn busy_box_ids(
+    executions: &HashMap<String, Arc<ActiveExecution>>,
+) -> std::collections::HashSet<String> {
+    executions
+        .values()
+        .filter(|execution| execution.kind() != SessionKind::Main && !execution.is_done())
+        .map(|execution| execution.box_id.clone())
+        .collect()
+}
+
+/// One lifecycle pass: stop idle boxes, delete boxes that have been at rest
+/// long enough. Runs on the same tick as the orphan-exec reaper.
+async fn run_lifecycle_once(state: &AppState, now: Instant) {
+    let boxes = match tokio::time::timeout(LIFECYCLE_OP_TIMEOUT, state.runtime.list_info()).await {
+        Ok(Ok(boxes)) => boxes,
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "lifecycle sweep could not list boxes");
+            return;
+        }
+        Err(_) => {
+            tracing::warn!("lifecycle sweep timed out listing boxes");
+            return;
+        }
+    };
+
+    let busy = busy_box_ids(&*state.executions.read().await);
+
+    // The live set every recorded spelling is resolved against. A client may
+    // address a box as its canonical id, its name, or an unambiguous id prefix,
+    // and the middleware stamps whichever was written — so `box_named_by`
+    // resolves a spelling to the box it names, rather than trying to list a
+    // box's spellings, which is impossible for prefixes. Resolving a prefix
+    // needs the whole set, since ambiguity is a property of it.
+    let live: Vec<(String, Option<String>)> = boxes
+        .iter()
+        .map(|info| (info.id.to_string(), info.name.clone()))
+        .collect();
+    state.retain_known_boxes(&live).await;
+
+    let now_utc = chrono::Utc::now();
+    for info in boxes {
+        let box_id = info.id.to_string();
+        // The policy lives here, not on `BoxInfo`: neither deadline is handed
+        // to the runtime, so neither comes back from it.
+        let policy = state.lifecycle_of(&box_id).await;
+        if policy.is_empty() {
+            continue;
+        }
+        if busy
+            .iter()
+            .any(|spelling| box_named_by(spelling, &live) == Some(box_id.as_str()))
+        {
+            continue;
+        }
+
+        let idle = idle_or_seed(&state.last_activity, &box_id, &live, now).await;
+        // The delete deadline uses `last_updated`: for a box at rest that
+        // transition *is* the stop, which is the anchor AutoDelete wants.
+        let since_stop = (now_utc - info.last_updated)
+            .to_std()
+            .unwrap_or(std::time::Duration::ZERO);
+
+        match decide_lifecycle(
+            info.status,
+            policy.auto_stop,
+            policy.auto_delete,
+            idle,
+            since_stop,
+        ) {
+            LifecycleAction::Leave => {}
+            LifecycleAction::Stop => {
+                tracing::info!(
+                    box_id = %box_id,
+                    idle_secs = idle.as_secs(),
+                    auto_stop = policy.auto_stop,
+                    "AutoStop deadline reached, stopping box"
+                );
+                match tokio::time::timeout(LIFECYCLE_OP_TIMEOUT, state.runtime.get(&box_id)).await {
+                    Ok(Ok(Some(bx))) => {
+                        match tokio::time::timeout(LIFECYCLE_OP_TIMEOUT, bx.stop()).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => {
+                                tracing::warn!(box_id = %box_id, %error, "AutoStop failed to stop box");
+                            }
+                            Err(_) => {
+                                tracing::warn!(box_id = %box_id, "AutoStop timed out stopping box");
+                            }
+                        }
+                    }
+                    Ok(Ok(None)) => {}
+                    Ok(Err(error)) => {
+                        tracing::warn!(box_id = %box_id, %error, "AutoStop could not fetch box")
+                    }
+                    Err(_) => {
+                        tracing::warn!(box_id = %box_id, "AutoStop timed out fetching box")
+                    }
+                }
+            }
+            LifecycleAction::Delete => {
+                tracing::info!(
+                    box_id = %box_id,
+                    at_rest_secs = since_stop.as_secs(),
+                    auto_delete = policy.auto_delete,
+                    "AutoDelete deadline reached, removing box"
+                );
+                // Evict the cached handle first, as `remove_box` does: a removed
+                // box is never fetched again, so nothing else would drop it.
+                state.boxes.write().await.remove(&box_id);
+                match tokio::time::timeout(
+                    LIFECYCLE_OP_TIMEOUT,
+                    state.runtime.remove(&box_id, false),
+                )
+                .await
+                {
+                    Ok(Ok(())) => state.forget_box(&box_id).await,
+                    Ok(Err(error)) => {
+                        tracing::warn!(box_id = %box_id, %error, "AutoDelete failed to remove box");
+                    }
+                    Err(_) => {
+                        tracing::warn!(box_id = %box_id, "AutoDelete timed out removing box");
+                    }
+                }
+            }
+        }
+    }
+}
+
 async fn reaper_loop(state: Arc<AppState>) {
     let reconnect_grace = resolve_duration("BOXLITE_RECONNECT_GRACE", DEFAULT_RECONNECT_GRACE);
     let shutdown_grace = resolve_duration("BOXLITE_SHUTDOWN_GRACE", DEFAULT_SHUTDOWN_GRACE);
@@ -565,14 +959,9 @@ async fn reaper_loop(state: Arc<AppState>) {
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
-        run_reap_once(
-            &state,
-            Instant::now(),
-            reconnect_grace,
-            shutdown_grace,
-            max_lifetime,
-        )
-        .await;
+        let now = Instant::now();
+        run_reap_once(&state, now, reconnect_grace, shutdown_grace, max_lifetime).await;
+        run_lifecycle_once(&state, now).await;
     }
 }
 
@@ -720,6 +1109,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
 fn volume_info_to_response(info: &boxlite::runtime::types::VolumeInfo) -> types::VolumeResponse {
     types::VolumeResponse {
         id: info.id.clone(),
+        name: info.name.clone(),
         created_at: info.created_at.to_rfc3339(),
         size_bytes: info.size_bytes,
     }
@@ -738,11 +1128,13 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default();
 
-    let network = match &req.network {
+    let (network, inbound_network) = match &req.network {
         Some(network) => {
-            if network.uses_legacy_fields() && network.outbound.is_some() {
+            if network.uses_legacy_fields()
+                && (network.outbound.is_some() || network.inbound.is_some())
+            {
                 return Err(boxlite::BoxliteError::InvalidArgument(
-                    "network must use either nested outbound fields or legacy flat fields, not both"
+                    "network must use either nested outbound/inbound fields or legacy flat fields, not both"
                         .into(),
                 ));
             }
@@ -762,9 +1154,22 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                     network.legacy.allow_net.clone().unwrap_or_default(),
                 ),
             };
-            NetworkSpec::try_from(OutboundNetworkConfig { mode, allow_net })?
+            let (inbound_mode, inbound_allow_net) = match &network.inbound {
+                Some(inbound) => (
+                    inbound.mode.parse::<NetworkMode>()?,
+                    inbound.allow_net.clone(),
+                ),
+                None => (NetworkMode::Enabled, Vec::new()),
+            };
+            (
+                NetworkSpec::try_from(OutboundNetworkConfig { mode, allow_net })?,
+                NetworkSpec::try_from(InboundNetworkConfig {
+                    mode: inbound_mode,
+                    allow_net: inbound_allow_net,
+                })?,
+            )
         }
-        None => NetworkSpec::default(),
+        None => (NetworkSpec::default(), NetworkSpec::default()),
     };
 
     // SecurityOptions is deliberately NOT client-configurable over
@@ -774,7 +1179,51 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
     // uniformly. Operators who want a different policy run the
     // server with a different default; clients cannot relax it.
 
-    let auto_delete = req.auto_delete.unwrap_or(0);
+    if let Some(volumes) = &req.volumes
+        && !volumes.is_empty()
+    {
+        return Err(boxlite::BoxliteError::InvalidArgument(
+            "managed volumes are not supported by boxlite serve".into(),
+        ));
+    }
+
+    // An empty name or value can never substitute anything. Reject at the
+    // boundary so this server agrees with the Cloud API's IsNotEmpty and the
+    // runner's per-element `dive` required validation on what a secret is.
+    if let Some(secrets) = &req.secrets
+        && secrets
+            .iter()
+            .any(|s| s.name.is_empty() || s.value.is_empty())
+    {
+        return Err(boxlite::BoxliteError::InvalidArgument(
+            "secret name and value must be non-empty".into(),
+        ));
+    }
+
+    // Map secrets onto the core `Secret` type and apply the placeholder
+    // default. The local runtime does not synthesize `<BOXLITE_SECRET:{name}>`
+    // for an empty placeholder (unlike the Go SDK), so defaulting here is what
+    // keeps a placeholder-less secret from silently injecting an empty env var
+    // and no MITM substitution — the same failure class POL-303 fixes on Cloud.
+    let secrets: Vec<boxlite::runtime::options::Secret> = req
+        .secrets
+        .as_ref()
+        .map(|ss| {
+            ss.iter()
+                .map(|s| boxlite::runtime::options::Secret {
+                    name: s.name.clone(),
+                    value: s.value.clone(),
+                    hosts: s.hosts.clone(),
+                    placeholder: s
+                        .placeholder
+                        .clone()
+                        .filter(|p| !p.is_empty())
+                        .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", s.name)),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     Ok(BoxOptions {
         rootfs,
         cpus: req.cpus,
@@ -782,24 +1231,40 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         disk_size_gb: req.disk_size_gb,
         working_dir: req.working_dir.clone(),
         env,
+        secrets,
         network,
+        inbound_network,
         entrypoint: req.entrypoint.clone(),
         cmd: req.cmd.clone(),
         user: req.user.clone(),
         tty: req.tty.unwrap_or(false),
-        advanced: boxlite::AdvancedBoxOptions {
-            capabilities: boxlite::ContainerCapabilities {
-                add: req.advanced.capabilities.add.clone(),
-                drop: req.advanced.capabilities.drop.clone(),
-            },
-            ..Default::default()
+        advanced: {
+            let mut advanced = boxlite::AdvancedBoxOptions::default();
+            let capabilities = req.advanced.capabilities.as_ref().map(|capabilities| {
+                boxlite::ContainerCapabilities {
+                    add: capabilities.add.clone(),
+                    drop: capabilities.drop.clone(),
+                }
+            });
+            advanced.set_capabilities(capabilities)?;
+            advanced
         },
-        auto_stop: req.auto_stop,
-        auto_delete: Some(auto_delete),
+        // Neither deadline is forwarded; `serve` holds both and sweeps them.
+        //
+        // `auto_stop` cannot be forwarded at all: the local runtime this server
+        // drives refuses a non-zero value outright
+        // (`reject_local_unsupported_options`, runtime/rt_impl.rs:1743), so a
+        // create carrying one would 400 before anything could enforce it.
+        //
+        // `auto_delete` would be accepted but reinterpreted: `removes_on_stop()`
+        // is `effective_auto_delete() > 0`, so the engine would delete the box
+        // the moment it stopped rather than after the delay, and force it
+        // non-detached. `create_box` records both in `AppState`.
+        auto_stop: None,
+        auto_delete: Some(0),
         auto_resume: req.auto_resume,
-        // Preserve the serve API's historical detached default for persistent
-        // boxes, but do not synthesize an invalid detached remove-on-stop box.
-        detach: req.detach.unwrap_or(auto_delete == 0),
+        // Boxes made over the wire outlive the request that made them.
+        detach: req.detach.unwrap_or(true),
         ..Default::default()
     })
 }
@@ -900,6 +1365,56 @@ fn auth_allows(expected: Option<&str>, path: &str, bearer: Option<&str>) -> bool
     }
 }
 
+/// Whether a request path is user activity on a box, and if so which box.
+///
+/// Box-scoped paths count by default. Defaulting to "counts" means a newly
+/// added box operation cannot silently become invisible to the idle clock and
+/// get its box stopped mid-flight.
+///
+/// The exclusions are the paths a poller hits on a timer, which must never be
+/// able to hold a box open forever:
+///
+/// - `/metrics`, scraped on a schedule;
+/// - a bare `GET`/`HEAD` on the box, which reads metadata rather than using the
+///   box — a client watching `status` once a second would otherwise reset the
+///   idle window before every sweep and AutoStop would never fire;
+/// - `DELETE`, which is removing the box, not using it.
+///
+/// `/stop` is excluded because it cannot matter: AutoStop ignores a box that is
+/// already stopped, and AutoDelete measures from `last_updated`, not this clock.
+fn activity_box_id<'a>(method: &Method, path: &'a str) -> Option<&'a str> {
+    let rest = path.strip_prefix("/v1/boxes/")?;
+    let (box_id, tail) = match rest.split_once('/') {
+        Some((box_id, tail)) => (box_id, tail),
+        None => (rest, ""),
+    };
+    if box_id.is_empty() || matches!(tail, "metrics" | "stop") {
+        return None;
+    }
+    // A read of the box resource itself is metadata, not use.
+    if tail.is_empty() && matches!(*method, Method::GET | Method::HEAD | Method::DELETE) {
+        return None;
+    }
+    Some(box_id)
+}
+
+/// Stamp the idle clock for the box a request names, before it runs.
+async fn record_activity(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+    if let Some(segment) = activity_box_id(req.method(), req.uri().path()) {
+        // Decoded before it is stamped: the request path is raw, while the
+        // sweep resolves it through `box_named_by`, against names that arrive
+        // decoded. Any
+        // escaped spelling would file the box's activity under a key the sweep
+        // never queries, and the box would be AutoStopped while in continuous
+        // use. A client may escape an unreserved character in a perfectly legal
+        // name (`my%2Dbox` for `my-box`), so this does not rest on the contract's
+        // `name` pattern being unenforced here — which it is.
+        let box_id = percent_encoding::percent_decode_str(segment).decode_utf8_lossy();
+        state.record_box_activity(&box_id).await;
+    }
+    next.run(req).await
+}
+
 /// Auth middleware: thin axum adapter over [`auth_allows`]. 401 in the
 /// standard error shape when denied.
 async fn require_api_key(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
@@ -939,6 +1454,122 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 // ============================================================================
 // Box Handle Cache Helper
 // ============================================================================
+
+/// Whether an operation that would wake this box is allowed to proceed.
+///
+/// The flag governs *resuming* — bringing back a box that ran and was stopped,
+/// which is what AutoStop leaves behind. Only `Stopped` is that state.
+///
+/// Every other state is left alone deliberately. `Running`/`Paused` are already
+/// up, so no wake is involved. A `Configured` box has never run, and its first
+/// boot is not a resume: gating it would break `run --url`, which attaches
+/// before it starts the box, so `run --no-auto-resume` would refuse itself.
+/// `Failed` and `Stopping` are not states a caller asked to come back from.
+fn autoresume_allows(status: BoxStatus, auto_resume: bool) -> bool {
+    status != BoxStatus::Stopped || auto_resume
+}
+
+/// Resolve a box for an operation that drives the guest, refusing to wake it
+/// implicitly when the caller disabled AutoResume.
+///
+/// Only the operations that would actually boot the box use this — exec, files,
+/// attach. `start`/`stop`, snapshots, clone and export resolve through
+/// `get_or_fetch_box`: they either are the explicit lifecycle call or work off
+/// disk, and gating them would answer a metadata read with advice to start a box
+/// the caller never asked to run. Metrics boots too but never resumes, so it has
+/// its own resolver: see `get_box_for_metrics`.
+#[allow(clippy::result_large_err)]
+async fn get_or_resume_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>, Response> {
+    // `info()` reads persisted state and does not boot anything, so asking it
+    // first cannot itself perform the wake we may be about to refuse.
+    let info = match state.runtime.get_info(box_id).await {
+        Ok(Some(info)) => info,
+        Ok(None) => {
+            return Err(error_response(
+                StatusCode::NOT_FOUND,
+                format!("box not found: {box_id}"),
+                "NotFoundError",
+                "not_found",
+            ));
+        }
+        Err(e) => return Err(error_from_boxlite(&e)),
+    };
+
+    if !autoresume_allows(info.status, info.auto_resume) {
+        return Err(error_response(
+            StatusCode::CONFLICT,
+            format!(
+                "box {box_id} is {:?} and has AutoResume disabled; start it explicitly first",
+                info.status
+            ),
+            "ConflictError",
+            "conflict",
+        ));
+    }
+
+    get_or_fetch_box(state, box_id).await
+}
+
+/// Resolve a box for a metrics scrape, refusing to wake one the sweep would put
+/// straight back to sleep.
+///
+/// `serve` must not wake a box for an operation it does not count as use, and
+/// metrics is the only such operation: `LiteBox::metrics()` boots a box that is
+/// not running, while `activity_box_id` deliberately does not stamp the idle
+/// clock for a scrape. Together, on a box with an AutoStop deadline, they are a
+/// loop — the scrape wakes the box, the next tick finds it idle and stops it,
+/// the scrape after that wakes it again, each wake re-running the image's init.
+/// That is also what the guide has always promised: monitoring must not be able
+/// to start a box, or to hold one open.
+///
+/// Only a box the sweep would stop is refused. One with no AutoStop deadline
+/// keeps the historical boot-on-scrape: nothing would put it back to sleep, so
+/// there is no loop to break and no reason to change what a scrape did before.
+#[allow(clippy::result_large_err)]
+async fn get_box_for_metrics(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>, Response> {
+    // `get_info` reads persisted state and boots nothing, so asking it first
+    // cannot itself perform the wake we may be about to refuse.
+    let info = match state.runtime.get_info(box_id).await {
+        Ok(Some(info)) => info,
+        Ok(None) => {
+            return Err(error_response(
+                StatusCode::NOT_FOUND,
+                format!("box not found: {box_id}"),
+                "NotFoundError",
+                "not_found",
+            ));
+        }
+        Err(e) => return Err(error_from_boxlite(&e)),
+    };
+
+    // The deadline is looked up by the box's own id, never by the spelling the
+    // request used. The path segment may be a user-defined name (the wire
+    // contract says "the identifier, or a user-defined name"), while `create_box`
+    // only ever files the policy under the canonical id — so keying off the
+    // segment would read no deadline for `/v1/boxes/{name}/metrics` and wake the
+    // very box this exists to leave asleep. The sweep resolves the same aliasing
+    // from the other side, in `box_named_by`.
+    let policy = state.lifecycle_of(info.id.as_ref()).await;
+    if metrics_would_thrash(info.status, policy.auto_stop) {
+        let status = info.status;
+        return Err(error_response(
+            StatusCode::CONFLICT,
+            format!(
+                "box {box_id} is {status:?} and AutoStop is enabled; a metrics scrape does not \
+                 start a box, start it explicitly first"
+            ),
+            "ConflictError",
+            "conflict",
+        ));
+    }
+
+    get_or_fetch_box(state, box_id).await
+}
+
+/// Whether serving metrics would wake a box the sweep would then stop again.
+fn metrics_would_thrash(status: BoxStatus, auto_stop_secs: u32) -> bool {
+    status != BoxStatus::Running && auto_stop_secs > 0
+}
 
 #[allow(clippy::result_large_err)]
 async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>, Response> {
@@ -1081,7 +1712,7 @@ async fn get_or_attach_main_session(
         return Ok(active);
     }
 
-    let litebox = get_or_fetch_box(state, box_id).await?;
+    let litebox = get_or_resume_box(state, box_id).await?;
 
     // Attaching boots the box (creating its container) and subscribes to the main
     // command's session, but does *not* run init — `POST /start` does. So a client
@@ -1204,6 +1835,13 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/v1/boxes/{box_id}/export",
             post(advanced::export_box),
         )
+        // Applied before `require_api_key`, which therefore wraps it: an
+        // unauthenticated request must not be able to hold someone else's box
+        // open by resetting its idle clock.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            record_activity,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_api_key,
@@ -1240,6 +1878,8 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
         boxes: RwLock::new(HashMap::new()),
         executions: RwLock::new(HashMap::new()),
         api_key: args.api_key.clone(),
+        lifecycle: RwLock::new(HashMap::new()),
+        last_activity: RwLock::new(HashMap::new()),
     });
 
     // Phase 5.7: spawn the orphan reaper. Same escalation policy as the
@@ -1359,6 +1999,85 @@ mod tests {
     }
 
     #[test]
+    fn build_box_options_carries_secrets_from_the_wire() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","secrets":[{"name":"openai","value":"sk-test","hosts":["api.openai.com"]}]}"#,
+        )
+        .expect("body with secrets must deserialize");
+
+        let opts = build_box_options(&req).expect("build with secrets");
+        assert_eq!(opts.secrets.len(), 1, "one secret in, one secret out");
+        let secret = &opts.secrets[0];
+        assert_eq!(secret.name, "openai");
+        assert_eq!(secret.value, "sk-test");
+        assert_eq!(secret.hosts, vec!["api.openai.com"]);
+        // Placeholder omitted on the wire: serve applies the same default the
+        // Go SDK does, so a placeholder-less secret still substitutes.
+        assert_eq!(secret.placeholder, "<BOXLITE_SECRET:openai>");
+    }
+
+    #[test]
+    fn build_box_options_preserves_explicit_secret_placeholder() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","secrets":[{"name":"httpbin","value":"v","placeholder":"<MY_TOKEN>"}]}"#,
+        )
+        .expect("body with explicit placeholder must deserialize");
+
+        let opts = build_box_options(&req).expect("build");
+        assert_eq!(
+            opts.secrets[0].placeholder, "<MY_TOKEN>",
+            "caller placeholder wins"
+        );
+    }
+
+    #[test]
+    fn build_box_options_defaults_an_empty_secret_placeholder() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","secrets":[{"name":"openai","value":"v","placeholder":""}]}"#,
+        )
+        .expect("body with empty placeholder must deserialize");
+
+        let opts = build_box_options(&req).expect("build");
+        assert_eq!(
+            opts.secrets[0].placeholder, "<BOXLITE_SECRET:openai>",
+            "an empty placeholder is as absent as an omitted one"
+        );
+    }
+
+    #[test]
+    fn build_box_options_rejects_an_empty_secret_name_or_value() {
+        for secrets in [
+            r#"[{"name":"","value":"v"}]"#,
+            r#"[{"name":"n","value":""}]"#,
+        ] {
+            let req: super::types::CreateBoxRequest = serde_json::from_str(&format!(
+                r#"{{"image":"alpine:latest","secrets":{secrets}}}"#
+            ))
+            .expect("body with secrets must deserialize");
+
+            let err = build_box_options(&req).expect_err("empty secret fields must be rejected");
+            assert!(
+                matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("non-empty")),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_box_options_rejects_nonempty_volumes() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","volumes":[{"managed_volume":"v1","guest_path":"/data"}]}"#,
+        )
+        .expect("body with volumes must deserialize (accepted, then rejected)");
+
+        let err = build_box_options(&req).expect_err("non-empty volumes must be rejected");
+        assert!(
+            matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("managed volumes")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn build_box_options_carries_container_capabilities_from_the_wire() {
         let req: super::types::CreateBoxRequest = serde_json::from_str(
             r#"{"image":"alpine:latest","advanced":{"capabilities":{"add":["SYS_ADMIN"],"drop":["CAP_NET_RAW"]}}}"#,
@@ -1366,8 +2085,26 @@ mod tests {
         .expect("capability request must deserialize");
 
         let opts = build_box_options(&req).expect("build capability options");
-        assert_eq!(opts.advanced.capabilities.add, vec!["SYS_ADMIN"]);
-        assert_eq!(opts.advanced.capabilities.drop, vec!["CAP_NET_RAW"]);
+        let capabilities = opts.advanced.capabilities().expect("capabilities set");
+        assert_eq!(capabilities.add, vec!["SYS_ADMIN"]);
+        assert_eq!(capabilities.drop, vec!["CAP_NET_RAW"]);
+    }
+
+    /// A request that never mentions `advanced`/`capabilities` at all must
+    /// resolve to `None` (unspecified), not an explicit empty policy — that
+    /// distinction is what a privileged request needs, and what an older
+    /// archive importer needs (`archive_version_for_options` keys off it).
+    #[test]
+    fn build_box_options_leaves_capabilities_unspecified_when_the_wire_omits_them() {
+        let req: super::types::CreateBoxRequest =
+            serde_json::from_str(r#"{"image":"alpine:latest"}"#)
+                .expect("ordinary request must deserialize");
+
+        let opts = build_box_options(&req).expect("build ordinary options");
+        assert!(
+            opts.advanced.capabilities().is_none(),
+            "omitting capabilities on the wire must not become an explicit empty policy"
+        );
     }
 
     #[test]
@@ -1377,10 +2114,22 @@ mod tests {
         )
         .expect("lifecycle body must deserialize");
         let opts = build_box_options(&req).expect("build lifecycle options");
-        assert_eq!(opts.auto_stop, Some(900));
-        assert_eq!(opts.auto_delete, Some(3600));
+        assert_eq!(
+            opts.auto_stop, None,
+            "the local runtime refuses a non-zero auto_stop outright, so \
+             forwarding it would 400 the create"
+        );
         assert_eq!(opts.auto_resume, Some(false));
-        assert!(!opts.detach, "remove-on-stop must not default to detached");
+        assert_eq!(
+            opts.auto_delete,
+            Some(0),
+            "the deadline must not reach the runtime, which would read any \
+             non-zero value as remove-on-stop and delete the box at its stop"
+        );
+        assert!(
+            opts.detach,
+            "withholding the deadline is what keeps a deadlined box detachable"
+        );
 
         let persistent: super::types::CreateBoxRequest =
             serde_json::from_str(r#"{"auto_delete": 0}"#).expect("body must deserialize");
@@ -1388,6 +2137,518 @@ mod tests {
             build_box_options(&persistent).expect("build").detach,
             "persistent boxes keep the serve API's historical detached default"
         );
+    }
+
+    fn lifecycle_state() -> AppState {
+        let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+            "http://127.0.0.1:1".to_string(),
+        ))
+        .expect("rest runtime");
+        AppState {
+            runtime,
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// A `BoxInfo` shaped exactly as the runtime hands one back for a box
+    /// created through `serve`: `build_box_options` withheld both deadlines, so
+    /// the runtime recorded zeroes for them.
+    fn info_as_the_runtime_reports_it(status: &str) -> BoxInfo {
+        serde_json::from_value(serde_json::json!({
+            "id": "01HJK4TNRPQSXYZ8WM6NCVT9R5",
+            "name": "swept",
+            "status": status,
+            "created_at": "2026-01-01T00:00:00Z",
+            "last_updated": "2026-01-01T00:00:00Z",
+            "pid": null,
+            "image": "alpine:latest",
+            "cpus": 1,
+            "memory_mib": 512,
+            "labels": {},
+            "auto_stop": 0,
+            "auto_delete": 0,
+            "auto_resume": true,
+            "health_status": { "state": "None", "failures": 0, "last_check": null },
+            "exit_code": null,
+        }))
+        .expect("box info")
+    }
+
+    /// Every box response must report the deadlines `serve` holds, not the
+    /// zeroes it handed the runtime.
+    ///
+    /// `create_box` patching its own response is not enough: a client reading
+    /// the box back — `GET`, the list, or the response to its own `stop` —
+    /// would be told no deadline exists on a box the sweep is enforcing one
+    /// for, and an SDK would copy that straight into its own `BoxInfo`.
+    #[tokio::test]
+    async fn a_box_response_reports_the_deadlines_serve_holds() {
+        let state = lifecycle_state();
+        let info = info_as_the_runtime_reports_it("stopped");
+        assert_eq!(
+            (info.auto_stop, info.auto_delete),
+            (0, 0),
+            "the runtime has no deadline to report; the whole point is that serve holds it"
+        );
+
+        state
+            .set_lifecycle(
+                info.id.as_ref(),
+                LifecyclePolicy {
+                    auto_stop: 900,
+                    auto_delete: 604_800,
+                },
+            )
+            .await;
+
+        let resp = state.box_response(&info).await;
+        assert_eq!(resp.auto_stop, 900, "AutoStop must survive the round trip");
+        assert_eq!(
+            resp.auto_delete, 604_800,
+            "AutoDelete must survive the round trip"
+        );
+        assert!(
+            resp.auto_resume,
+            "auto_resume is forwarded to the runtime, so it is read off the info"
+        );
+    }
+
+    /// A box `serve` holds no policy for reports no deadline — a clone or an
+    /// import must not inherit the source box's.
+    #[tokio::test]
+    async fn a_box_with_no_stored_policy_reports_no_deadline() {
+        let state = lifecycle_state();
+        let resp = state
+            .box_response(&info_as_the_runtime_reports_it("running"))
+            .await;
+        assert_eq!((resp.auto_stop, resp.auto_delete), (0, 0));
+    }
+
+    /// A metrics scrape must not wake a box the sweep would stop again.
+    ///
+    /// `LiteBox::metrics()` boots a box that is not running, and a scrape never
+    /// stamps the idle clock — so on a box with an AutoStop deadline the two
+    /// are a loop: scrape wakes, next tick stops, next scrape wakes. A box with
+    /// no AutoStop deadline has nothing to put it back to sleep, so it keeps
+    /// the historical boot-on-scrape.
+    #[test]
+    fn metrics_refuses_to_wake_only_a_box_the_sweep_would_stop() {
+        for status in [
+            BoxStatus::Unknown,
+            BoxStatus::Configured,
+            BoxStatus::Stopping,
+            BoxStatus::Stopped,
+            BoxStatus::Paused,
+            BoxStatus::Failed,
+        ] {
+            assert!(
+                metrics_would_thrash(status, 900),
+                "{status:?} is not running, so serving metrics would boot it into the sweep"
+            );
+            assert!(
+                !metrics_would_thrash(status, 0),
+                "{status:?} has no AutoStop deadline, so nothing would stop it again"
+            );
+        }
+
+        assert!(
+            !metrics_would_thrash(BoxStatus::Running, 900),
+            "a running box is not booted by a scrape, so there is no wake to refuse"
+        );
+        assert!(!metrics_would_thrash(BoxStatus::Running, 0));
+    }
+
+    /// The engine used to reject an invalid pair for us; now that neither
+    /// deadline is forwarded, nothing behind this handler would. The runtime
+    /// here points at a dead port on purpose: a 400 must come back without the
+    /// request ever reaching `runtime.create`.
+    #[tokio::test]
+    async fn an_invalid_lifecycle_pair_is_refused_before_the_box_is_created() {
+        let req: types::CreateBoxRequest =
+            serde_json::from_str(r#"{"auto_stop": 3600, "auto_delete": 60}"#)
+                .expect("body must deserialize");
+
+        let response = handlers::boxes::create_box(
+            axum::extract::State(Arc::new(lifecycle_state())),
+            axum::Json(req),
+        )
+        .await;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "auto_delete <= auto_stop is forbidden by the contract"
+        );
+    }
+
+    #[tokio::test]
+    async fn only_a_tenant_exec_marks_a_box_busy() {
+        // Main is the box's own init: it lives as long as the box and
+        // `run_reap_once` never evicts it, so counting it would pin every
+        // started box and AutoStop could never fire. A tenant exec must count,
+        // or a long `POST /exec` looks idle and is killed mid-run.
+        let (main_exec, _main_ch) = stub_execution("cid-main");
+        let (tenant, _tenant_ch) = stub_execution("cid-exec");
+
+        let mut executions: HashMap<String, Arc<ActiveExecution>> = HashMap::new();
+        executions.insert(
+            "main".to_string(),
+            ActiveExecution::new("box-main".to_string(), SessionKind::Main, main_exec, None),
+        );
+        executions.insert(
+            "exec".to_string(),
+            ActiveExecution::new("box-exec".to_string(), SessionKind::Exec, tenant, None),
+        );
+
+        let busy = busy_box_ids(&executions);
+
+        assert!(busy.contains("box-exec"), "a live tenant exec is work");
+        assert!(
+            !busy.contains("box-main"),
+            "counting Main would make AutoStop unreachable for every started box"
+        );
+
+        // `ActiveExecution::new` spawns a pump and a wait task per session, and
+        // they stay parked for as long as the stub's channels are open — which
+        // has to be past `busy_box_ids`, since a completed execution is not
+        // busy. Closing the channels lets `wait()` return; waiting on the
+        // resulting `done` signal is what makes those tasks finish before the
+        // test does, rather than being left running for nextest to find.
+        // Subscribed before the drop on purpose: a `watch` receiver takes the
+        // current value as already seen, so one created after the session
+        // finished would wait for a second change that never comes.
+        let mut dones: Vec<_> = executions.values().map(|active| active.done_rx()).collect();
+        drop((_main_ch, _tenant_ch));
+        for done in &mut dones {
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_secs(5), done.changed())
+                    .await
+                    .is_ok(),
+                "a session whose channels are closed must finish"
+            );
+        }
+    }
+
+    /// Every spelling the runtime resolves must count as use — including an id
+    /// prefix, which is the one that cannot be enumerated.
+    ///
+    /// `BoxManager::lookup_box` accepts an exact id, a name, or any
+    /// unambiguous `id.starts_with(..)` prefix, and `RestBox` puts the caller's
+    /// spelling straight into the path. A sweep that listed a box's spellings
+    /// would have to produce every prefix — there are as many as the id is long
+    /// — so it matches instead. Getting this wrong AutoStops a box that
+    /// `boxlite --url … exec 01HJK4` is actively driving.
+    #[test]
+    fn a_spelling_resolves_the_way_the_runtime_resolves_it() {
+        let id = "01HJK4TNRPQSXYZ8WM6NCVT9R5";
+        let other = "01HJK9ZZZZZZZZZZZZZZZZZZZZ";
+        let one = [(id.to_string(), Some("web".to_string()))];
+        let two = [
+            (id.to_string(), Some("web".to_string())),
+            (other.to_string(), None),
+        ];
+
+        assert_eq!(box_named_by(id, &one), Some(id), "exact id");
+        assert_eq!(box_named_by("web", &one), Some(id), "exact name");
+        assert_eq!(box_named_by("01HJK4", &two), Some(id), "unique prefix");
+
+        assert_eq!(box_named_by("", &one), None, "an empty spelling names none");
+        assert_eq!(box_named_by("nope", &one), None, "names no box");
+        assert_eq!(
+            box_named_by("01HJK4TNRPQSXYZ8WM6NCVT9R5X", &one),
+            None,
+            "longer than the id is not a prefix of it"
+        );
+
+        // The one that matters: `BoxManager::lookup_box` errors on a prefix that
+        // matches more than one box, so it must resolve to nothing here too.
+        // Counting it would let one unauthenticated request stamp every box it
+        // matched — `record_activity` stamps before any handler can reject it.
+        assert_eq!(
+            box_named_by("01HJK", &two),
+            None,
+            "an ambiguous prefix names no box"
+        );
+        assert_eq!(
+            box_named_by("0", &two),
+            None,
+            "nor does a one-character one"
+        );
+    }
+
+    /// A box driven by an id prefix must not look idle.
+    ///
+    /// The end-to-end companion to the truth table above: this is the spelling
+    /// the sweep's old alias list could not represent at all.
+    #[tokio::test]
+    async fn a_box_driven_by_an_id_prefix_is_not_idle_under_its_full_id() {
+        let map: RwLock<HashMap<String, Instant>> = RwLock::new(HashMap::new());
+        let now = Instant::now();
+        map.write().await.insert("01HJK4".to_string(), now);
+
+        let idle = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            idle_or_seed(
+                &map,
+                "01HJK4TNRPQSXYZ8WM6NCVT9R5",
+                &[("01HJK4TNRPQSXYZ8WM6NCVT9R5".to_string(), None)],
+                now + std::time::Duration::from_secs(30),
+            ),
+        )
+        .await
+        .expect("reading must not deadlock");
+
+        assert_eq!(
+            idle,
+            std::time::Duration::from_secs(30),
+            "a prefix-addressed request is use of the box it resolves to"
+        );
+    }
+
+    /// ...and pruning must not throw that stamp away either.
+    #[tokio::test]
+    async fn pruning_keeps_a_stamp_made_under_an_id_prefix() {
+        let state = lifecycle_state();
+        state.record_box_activity("01HJK4").await;
+
+        state
+            .retain_known_boxes(&[("01HJK4TNRPQSXYZ8WM6NCVT9R5".to_string(), None)])
+            .await;
+
+        assert!(
+            state.last_activity.read().await.contains_key("01HJK4"),
+            "pruning dropped a stamp that names a live box"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_box_driven_by_name_is_not_idle_under_its_id() {
+        // The middleware stamps the raw URL segment, and the contract lets that
+        // be a name. Reading only the canonical id loses every request made by
+        // name, and AutoStop then stops a box in continuous use.
+        let map: RwLock<HashMap<String, Instant>> = RwLock::new(HashMap::new());
+        let now = Instant::now();
+        map.write().await.insert("web".to_string(), now);
+
+        let idle = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            idle_or_seed(
+                &map,
+                "bx-abc123",
+                &[("bx-abc123".to_string(), Some("web".to_string()))],
+                now + std::time::Duration::from_secs(30),
+            ),
+        )
+        .await
+        .expect("reading must not deadlock");
+
+        assert_eq!(idle, std::time::Duration::from_secs(30));
+    }
+
+    #[tokio::test]
+    async fn the_idle_clock_drops_spellings_that_name_no_box() {
+        // `record_activity` stamps before any handler can reject an unknown id,
+        // and serve may run with no API key, so this is unauthenticated input.
+        let state = lifecycle_state();
+        state.record_box_activity("real").await;
+        state.record_box_activity("never-existed").await;
+
+        state
+            .retain_known_boxes(&[("real".to_string(), None)])
+            .await;
+
+        let clocks = state.last_activity.read().await;
+        assert!(clocks.contains_key("real"));
+        assert!(
+            !clocks.contains_key("never-existed"),
+            "an id no box answers to must not hold a clock forever"
+        );
+    }
+
+    #[tokio::test]
+    async fn pruning_never_drops_a_deadline() {
+        // `lifecycle` is written by create_box after its box may already be
+        // missing from a caller's list_info snapshot. Pruning it against that
+        // snapshot would drop the deadline permanently and silently.
+        let state = lifecycle_state();
+        state
+            .set_lifecycle(
+                "fresh",
+                LifecyclePolicy {
+                    auto_stop: 60,
+                    auto_delete: 0,
+                },
+            )
+            .await;
+
+        state.retain_known_boxes(&[]).await;
+
+        assert_eq!(state.lifecycle_of("fresh").await.auto_stop, 60);
+    }
+
+    // --- AutoResume gate ---
+
+    /// The whole truth table, so inverting or dropping the rule fails here.
+    #[test]
+    fn autoresume_gates_only_a_stopped_box() {
+        // `Stopped` is what AutoStop leaves behind, so it is the one state a
+        // caller can be resumed *from*.
+        assert!(autoresume_allows(BoxStatus::Stopped, true));
+        assert!(
+            !autoresume_allows(BoxStatus::Stopped, false),
+            "a stopped box must refuse an implicit wake"
+        );
+
+        // Everything else is allowed whatever the flag says. Running/Paused are
+        // already up. `Configured` has never run, and its first boot is not a
+        // resume: gating it would make `run --url --no-auto-resume` refuse
+        // itself, since `run` attaches before it starts the box.
+        for status in [
+            BoxStatus::Running,
+            BoxStatus::Paused,
+            BoxStatus::Configured,
+            BoxStatus::Failed,
+            BoxStatus::Stopping,
+            BoxStatus::Unknown,
+        ] {
+            for auto_resume in [true, false] {
+                assert!(
+                    autoresume_allows(status, auto_resume),
+                    "{status:?} with auto_resume={auto_resume} is not a resume"
+                );
+            }
+        }
+    }
+
+    // --- Lifecycle sweep ---
+
+    #[test]
+    fn a_box_is_stopped_only_after_a_full_idle_window() {
+        use std::time::Duration;
+        let below = decide_lifecycle(
+            BoxStatus::Running,
+            60,
+            0,
+            Duration::from_secs(59),
+            Duration::ZERO,
+        );
+        assert_eq!(below, LifecycleAction::Leave);
+
+        // `>=`, so the boundary tick acts rather than waiting another 30s.
+        let at = decide_lifecycle(
+            BoxStatus::Running,
+            60,
+            0,
+            Duration::from_secs(60),
+            Duration::ZERO,
+        );
+        assert_eq!(at, LifecycleAction::Stop);
+    }
+
+    #[test]
+    fn a_zero_window_disables_its_deadline() {
+        use std::time::Duration;
+        let huge = Duration::from_secs(86_400);
+        assert_eq!(
+            decide_lifecycle(BoxStatus::Running, 0, 0, huge, huge),
+            LifecycleAction::Leave
+        );
+        assert_eq!(
+            decide_lifecycle(BoxStatus::Stopped, 0, 0, huge, huge),
+            LifecycleAction::Leave
+        );
+    }
+
+    #[test]
+    fn a_box_at_rest_is_deleted_on_its_own_deadline() {
+        use std::time::Duration;
+        // Anchored on the stop, not on last use: idle is zero here because the
+        // box was busy right up to the moment it stopped, and it must still go.
+        for status in [BoxStatus::Stopped, BoxStatus::Failed] {
+            assert_eq!(
+                decide_lifecycle(status, 0, 60, Duration::ZERO, Duration::from_secs(60)),
+                LifecycleAction::Delete,
+                "status {status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_running_box_is_never_deleted_by_the_delete_deadline() {
+        use std::time::Duration;
+        // AutoDelete waits for the box to come to rest; a long-lived running
+        // box must not be removed out from under its user.
+        assert_eq!(
+            decide_lifecycle(
+                BoxStatus::Running,
+                0,
+                60,
+                Duration::ZERO,
+                Duration::from_secs(86_400)
+            ),
+            LifecycleAction::Leave
+        );
+    }
+
+    #[test]
+    fn box_scoped_paths_count_as_activity_except_the_pollers() {
+        let post = Method::POST;
+        assert_eq!(activity_box_id(&post, "/v1/boxes/abc/exec"), Some("abc"));
+        assert_eq!(activity_box_id(&post, "/v1/boxes/abc/files"), Some("abc"));
+        assert_eq!(activity_box_id(&post, "/v1/boxes/abc/attach"), Some("abc"));
+        // `/start` counts: it is the one operation whose whole purpose is to
+        // make a box usable again, so it must reset the window.
+        assert_eq!(activity_box_id(&post, "/v1/boxes/abc/start"), Some("abc"));
+        // A read of a sub-resource is still use of the box.
+        assert_eq!(
+            activity_box_id(&Method::GET, "/v1/boxes/abc/files"),
+            Some("abc")
+        );
+
+        // Pollers must never hold a box open. A client watching `status` once a
+        // second would otherwise reset the window before every sweep.
+        assert_eq!(activity_box_id(&Method::GET, "/v1/boxes/abc"), None);
+        assert_eq!(activity_box_id(&Method::HEAD, "/v1/boxes/abc"), None);
+        assert_eq!(activity_box_id(&Method::DELETE, "/v1/boxes/abc"), None);
+        assert_eq!(activity_box_id(&post, "/v1/boxes/abc/metrics"), None);
+        assert_eq!(activity_box_id(&post, "/v1/boxes/abc/stop"), None);
+        assert_eq!(activity_box_id(&post, "/v1/metrics"), None);
+        assert_eq!(activity_box_id(&post, "/v1/boxes"), None);
+    }
+
+    #[tokio::test]
+    async fn an_unseen_box_starts_its_window_now_rather_than_looking_idle() {
+        // A box this `serve` has never seen reads as freshly used, not as idle
+        // since boot — otherwise the first tick after a restart stops every
+        // long-running box whose window is shorter than its uptime.
+        //
+        // Timeout-wrapped because the seeding path deadlocks rather than
+        // returning a wrong answer if the read guard is held across the write
+        // lock, and a hanging test stalls CI instead of failing it.
+        let map: RwLock<HashMap<String, Instant>> = RwLock::new(HashMap::new());
+        let now = Instant::now();
+        let budget = std::time::Duration::from_secs(3);
+
+        let first = tokio::time::timeout(
+            budget,
+            idle_or_seed(&map, "b", &[("b".to_string(), None)], now),
+        )
+        .await
+        .expect("seeding must not deadlock");
+        assert_eq!(first, std::time::Duration::ZERO);
+
+        let later = now + std::time::Duration::from_secs(600);
+        let second = tokio::time::timeout(
+            budget,
+            idle_or_seed(&map, "b", &[("b".to_string(), None)], later),
+        )
+        .await
+        .expect("reading a seeded box must not deadlock");
+        assert_eq!(second, std::time::Duration::from_secs(600));
     }
 
     #[test]
@@ -1419,6 +2680,9 @@ mod tests {
                     "outbound": {
                         "mode": "enabled",
                         "allow_net": ["api.openai.com"]
+                    },
+                    "inbound": {
+                        "mode": "disabled"
                     }
                 }
             }"#,
@@ -1431,9 +2695,7 @@ mod tests {
             }
             NetworkSpec::Disabled => panic!("network should be enabled"),
         }
-        assert!(
-            matches!(opts.inbound_network, NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty())
-        );
+        assert!(matches!(opts.inbound_network, NetworkSpec::Disabled));
     }
 
     #[test]
@@ -1616,6 +2878,8 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
         });
         let (control_status, control_error) =
             upload_v3_archive(state.clone(), serde_json::json!({})).await;
@@ -1664,7 +2928,25 @@ mod tests {
                     "read_only": false
                 }]
             }),
-            "host volume mounts",
+            "volume mounts",
+        )
+        .await;
+    }
+
+    /// The managed-volume shape is refused by the same gate, and reaches it
+    /// through the same deserialization — an archive naming someone else's
+    /// volume must not provision a box either.
+    #[tokio::test]
+    async fn serve_import_rejects_managed_volume_archive_before_provisioning() {
+        assert_uploaded_archive_rejected_before_provisioning(
+            serde_json::json!({
+                "volumes": [{
+                    "managed_volume": "someone-elses-data",
+                    "guest_path": "/data",
+                    "read_only": false
+                }]
+            }),
+            "volume mounts",
         )
         .await;
     }
@@ -1814,6 +3096,850 @@ mod tests {
         );
     }
 
+    const STUB_BOX_ID: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R5";
+    /// The same box's user-defined name. The wire contract lets a client address
+    /// a box by either, so both spellings belong in these tests.
+    const STUB_BOX_NAME: &str = "swept-box";
+
+    /// A running stub upstream, plus counters for the writes it is asked to make.
+    struct StubUpstream {
+        url: String,
+        task: tokio::task::JoinHandle<()>,
+        stops: Arc<std::sync::atomic::AtomicUsize>,
+        deletes: Arc<std::sync::atomic::AtomicUsize>,
+        execs: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl StubUpstream {
+        fn stops(&self) -> usize {
+            self.stops.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn deletes(&self) -> usize {
+            self.deletes.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        /// How many times the guest was actually asked to run something.
+        ///
+        /// A gate that let a request through is only distinguishable from one
+        /// the request never reached by whether the runtime call happened.
+        fn execs(&self) -> usize {
+            self.execs.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    /// An upstream that answers the box reads with one canned box, so a handler
+    /// can be driven end to end without a VM.
+    ///
+    /// The box it reports is shaped like one created through `serve`: both
+    /// deadlines are zero, because `build_box_options` withheld them from the
+    /// runtime. `auto_resume` is a parameter because the resolvers disagree
+    /// about it — one consults it, one consults the held AutoStop deadline —
+    /// and that disagreement is what lets a test tell them apart.
+    async fn stub_upstream(status: &'static str, auto_resume: bool) -> StubUpstream {
+        fn canned_box(status: &str, auto_resume: bool) -> serde_json::Value {
+            serde_json::json!({
+                "box_id": STUB_BOX_ID,
+                "name": STUB_BOX_NAME,
+                "status": status,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "pid": null,
+                "image": "alpine:latest",
+                "cpus": 1,
+                "memory_mib": 512,
+                "auto_stop": 0,
+                "auto_delete": 0,
+                "auto_resume": auto_resume,
+            })
+        }
+
+        let deletes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let stops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let execs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let app = axum::Router::new()
+            .route(
+                "/v1/boxes/{id}/exec",
+                axum::routing::post({
+                    let execs = Arc::clone(&execs);
+                    move |axum::extract::Path(id): axum::extract::Path<String>| {
+                        let execs = Arc::clone(&execs);
+                        async move {
+                            if id == STUB_BOX_ID || id == STUB_BOX_NAME {
+                                execs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            }
+                            // The reply shape does not matter: the counter is the
+                            // whole point, and every caller here is proving only
+                            // that the request got this far.
+                            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/v1/boxes",
+                axum::routing::get(move || async move {
+                    Json(serde_json::json!({ "boxes": [canned_box(status, auto_resume)] }))
+                })
+                // Creation reports the box back with both deadlines at zero,
+                // exactly as the real runtime does once `build_box_options` has
+                // withheld them — so a test can tell a stored policy from an
+                // echoed one.
+                .post(move |_body: Json<serde_json::Value>| async move {
+                    (StatusCode::CREATED, Json(canned_box(status, auto_resume)))
+                }),
+            )
+            .route(
+                "/v1/boxes/{id}/stop",
+                axum::routing::post({
+                    let stops = Arc::clone(&stops);
+                    move |axum::extract::Path(id): axum::extract::Path<String>| {
+                        let stops = Arc::clone(&stops);
+                        async move {
+                            // Gated on the id like the sibling delete, so the
+                            // counter says which box was stopped and not merely
+                            // that something was.
+                            if id == STUB_BOX_ID || id == STUB_BOX_NAME {
+                                stops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                Json(canned_box("stopped", auto_resume)).into_response()
+                            } else {
+                                StatusCode::NOT_FOUND.into_response()
+                            }
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/v1/boxes/{id}",
+                axum::routing::get(
+                    // Answers to either spelling with the same box, reporting its
+                    // canonical id — which is what the real runtime does, since
+                    // it resolves a name before returning info. A stub that
+                    // echoed the requested spelling back as `box_id` would hide
+                    // exactly the id-vs-name bugs these tests exist to catch.
+                    move |axum::extract::Path(id): axum::extract::Path<String>| async move {
+                        if id == STUB_BOX_ID || id == STUB_BOX_NAME {
+                            Json(canned_box(status, auto_resume)).into_response()
+                        } else {
+                            StatusCode::NOT_FOUND.into_response()
+                        }
+                    },
+                )
+                .delete({
+                    let deletes = Arc::clone(&deletes);
+                    move |axum::extract::Path(id): axum::extract::Path<String>| {
+                        let deletes = Arc::clone(&deletes);
+                        async move {
+                            if id == STUB_BOX_ID || id == STUB_BOX_NAME {
+                                deletes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                StatusCode::NO_CONTENT.into_response()
+                            } else {
+                                StatusCode::NOT_FOUND.into_response()
+                            }
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        StubUpstream {
+            url: format!("http://127.0.0.1:{port}"),
+            task,
+            stops,
+            deletes,
+            execs,
+        }
+    }
+
+    /// Serve `state` on an ephemeral port and return its base URL.
+    async fn serve_router(state: Arc<AppState>) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = tokio::spawn(async move {
+            let _ = axum::serve(listener, build_router(state)).await;
+        });
+        (format!("http://127.0.0.1:{port}"), handle)
+    }
+
+    /// Reading a box back over HTTP must report the deadlines `serve` holds.
+    ///
+    /// `box_response` being correct is not enough — the defect this guards is a
+    /// handler that does not call it. Rust lets these handlers reach
+    /// `box_info_to_response` directly from their parent module, so rewiring one
+    /// back to it compiles clean; only driving the real route catches it.
+    ///
+    /// Both read shapes are driven: the single value and the list's loop. The
+    /// remaining sites (`start`, `stop`, `clone`, `import`) build their response
+    /// from the same single value, but only after an operation a stub upstream
+    /// cannot stand in for.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reading_a_box_over_http_reports_the_deadlines_serve_holds() {
+        let upstream = stub_upstream("stopped", true).await;
+        let state = Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
+                .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        });
+        state
+            .set_lifecycle(
+                STUB_BOX_ID,
+                LifecyclePolicy {
+                    auto_stop: 900,
+                    auto_delete: 604_800,
+                },
+            )
+            .await;
+        let (base, server) = serve_router(Arc::clone(&state)).await;
+        let client = reqwest::Client::new();
+
+        let one: serde_json::Value = client
+            .get(format!("{base}/v1/boxes/{STUB_BOX_ID}"))
+            .send()
+            .await
+            .expect("request must reach the server")
+            .json()
+            .await
+            .expect("a box body");
+        assert_eq!(
+            one["auto_stop"], 900,
+            "GET must report the AutoStop deadline serve is sweeping, not the runtime's zero"
+        );
+        assert_eq!(
+            one["auto_delete"], 604_800,
+            "GET must report the AutoDelete deadline serve is sweeping, not the runtime's zero"
+        );
+
+        let listed: serde_json::Value = client
+            .get(format!("{base}/v1/boxes"))
+            .send()
+            .await
+            .expect("request must reach the server")
+            .json()
+            .await
+            .expect("a list body");
+        assert_eq!(
+            listed["boxes"][0]["auto_stop"], 900,
+            "the list must report the same deadlines the single read does"
+        );
+        assert_eq!(listed["boxes"][0]["auto_delete"], 604_800);
+
+        server.abort();
+        upstream.task.abort();
+    }
+
+    /// Removing a box by name must forget the deadline filed under its id.
+    ///
+    /// `retain_known_boxes` prunes the idle clock but deliberately never touches
+    /// the deadline map, so an entry missed here is missed for the life of the
+    /// process. Driven by name specifically: forgetting the spelling the request
+    /// used is what leaves the id-keyed entry behind.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn removing_a_box_by_name_forgets_the_deadline_filed_under_its_id() {
+        let upstream = stub_upstream("stopped", true).await;
+        let state = Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
+                .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        });
+        state
+            .set_lifecycle(
+                STUB_BOX_ID,
+                LifecyclePolicy {
+                    auto_stop: 900,
+                    auto_delete: 604_800,
+                },
+            )
+            .await;
+        let (base, server) = serve_router(Arc::clone(&state)).await;
+
+        let response = reqwest::Client::new()
+            .delete(format!("{base}/v1/boxes/{STUB_BOX_NAME}"))
+            .send()
+            .await
+            .expect("request must reach the server");
+        assert_eq!(
+            response.status(),
+            StatusCode::NO_CONTENT,
+            "the box must actually have been removed, or the forget is untested"
+        );
+
+        assert_eq!(
+            upstream.deletes(),
+            1,
+            "the box must have been removed upstream, not just forgotten locally"
+        );
+        assert!(
+            !state.lifecycle.read().await.contains_key(STUB_BOX_ID),
+            "the deadline outlived the box it belonged to"
+        );
+        server.abort();
+        upstream.task.abort();
+    }
+
+    /// The sweep itself must reach the runtime, not just decide correctly.
+    ///
+    /// `decide_lifecycle`, the busy set, the aliasing and the idle seeding are
+    /// each covered in isolation; this is the loop that wires them to
+    /// `list_info` and `remove`. Without it, every part could be right while
+    /// nothing is ever actually swept.
+    ///
+    /// This drives the AutoDelete arm; `the_sweep_stops_a_box_idle_past_its_
+    /// window` drives the Stop arm. `last_updated` on the canned box is long
+    /// past, so the deadline below is comfortably elapsed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_sweep_removes_a_box_whose_delete_deadline_has_passed() {
+        let upstream = stub_upstream("stopped", true).await;
+        let state = AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
+                .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        };
+        state
+            .set_lifecycle(
+                STUB_BOX_ID,
+                LifecyclePolicy {
+                    auto_stop: 0,
+                    auto_delete: 60,
+                },
+            )
+            .await;
+
+        run_lifecycle_once(&state, Instant::now()).await;
+
+        assert_eq!(
+            upstream.deletes(),
+            1,
+            "a box at rest past its AutoDelete window must actually be removed"
+        );
+        assert!(
+            !state.lifecycle.read().await.contains_key(STUB_BOX_ID),
+            "a removed box must not keep its deadline"
+        );
+        upstream.task.abort();
+    }
+
+    /// Creating a box over the wire must actually file its deadlines.
+    ///
+    /// `create_box`'s `set_lifecycle` is the only production write to the
+    /// lifecycle map — every other caller is a test seeding it by hand. Delete
+    /// that one line and the whole feature goes inert while the suite stays
+    /// green: no box acquires a deadline, every read reports zero, and the sweep
+    /// never acts. Nothing else here can catch that, so this drives the real
+    /// route and checks both the response and the map behind it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn creating_a_box_over_http_files_the_deadlines_it_asked_for() {
+        let upstream = stub_upstream("running", true).await;
+        let state = Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
+                .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        });
+        let (base, server) = serve_router(Arc::clone(&state)).await;
+
+        let created: serde_json::Value = reqwest::Client::new()
+            .post(format!("{base}/v1/boxes"))
+            .json(&serde_json::json!({
+                "image": "alpine:latest",
+                "auto_stop": 900,
+                "auto_delete": 604_800,
+            }))
+            .send()
+            .await
+            .expect("request must reach the server")
+            .json()
+            .await
+            .expect("a box body");
+
+        assert_eq!(
+            created["auto_stop"], 900,
+            "the create response must echo the policy, not the runtime's zero"
+        );
+        assert_eq!(created["auto_delete"], 604_800);
+        assert_eq!(
+            state.lifecycle.read().await.get(STUB_BOX_ID).copied(),
+            Some(LifecyclePolicy {
+                auto_stop: 900,
+                auto_delete: 604_800,
+            }),
+            "the sweep reads this map; a policy that never lands here is never enforced"
+        );
+
+        server.abort();
+        upstream.task.abort();
+    }
+
+    /// A box addressed by a name that needs escaping must still count as used.
+    ///
+    /// The idle clock is written from the raw request path and read from the
+    /// decoded `BoxInfo.name`, so without decoding at the write site the two
+    /// spellings never meet and a box in continuous use is swept as idle. The
+    /// contract's `name` pattern forbids a name that needs escaping, but `serve`
+    /// does not enforce it, so such a name reaches this code.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn activity_on_an_escaped_name_lands_under_the_name_the_sweep_reads() {
+        let upstream = stub_upstream("running", true).await;
+        let state = Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
+                .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        });
+        let (base, server) = serve_router(Arc::clone(&state)).await;
+
+        let _ = reqwest::Client::new()
+            .post(format!("{base}/v1/boxes/my%20box/exec"))
+            .json(&serde_json::json!({"command": "echo"}))
+            .send()
+            .await
+            .expect("request must reach the server");
+
+        // A legal name, escaped anyway. Percent-encoding an unreserved character
+        // is allowed, so this case does not depend on the contract's `name`
+        // pattern going unenforced — it would still arrive if that gap closed.
+        let _ = reqwest::Client::new()
+            .post(format!("{base}/v1/boxes/swept%2Dbox/exec"))
+            .json(&serde_json::json!({"command": "echo"}))
+            .send()
+            .await
+            .expect("request must reach the server");
+
+        let clocks = state.last_activity.read().await;
+        assert!(
+            clocks.contains_key("my box"),
+            "the stamp must be filed under the decoded name the sweep looks for, \
+             not the escaped spelling: {:?}",
+            clocks.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            clocks.contains_key(STUB_BOX_NAME),
+            "an escaped unreserved character must decode too: {:?}",
+            clocks.keys().collect::<Vec<_>>()
+        );
+
+        drop(clocks);
+        server.abort();
+        upstream.task.abort();
+    }
+
+    /// AutoResume must be enforced by the routes, not merely decided correctly.
+    ///
+    /// `autoresume_allows` is exhaustively unit-tested, but that says nothing
+    /// about whether any handler consults it: `get_or_resume_box` and
+    /// `get_or_fetch_box` have identical signatures, so rewiring a route to the
+    /// ungated one compiles clean and every predicate test stays green. Only
+    /// driving the route catches it. The body is asserted too, because a 409
+    /// alone would not distinguish this gate from the metrics one.
+    ///
+    /// All four call sites are driven, because each handler resolves for itself
+    /// and rewiring any one of them alone is invisible to the others' tests:
+    /// `exec`, both halves of `files` (upload and download are separate
+    /// handlers on one route), and `attach`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stopped_box_with_autoresume_off_refuses_the_routes_that_would_wake_it() {
+        let upstream = stub_upstream("stopped", false).await;
+        let state = Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
+                .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        });
+        let (base, server) = serve_router(Arc::clone(&state)).await;
+        let client = reqwest::Client::new();
+
+        let exec = client
+            .post(format!("{base}/v1/boxes/{STUB_BOX_ID}/exec"))
+            .json(&serde_json::json!({"command": "echo"}))
+            .send()
+            .await
+            .expect("request must reach the server");
+        assert_eq!(
+            exec.status().as_u16(),
+            409,
+            "exec must not implicitly wake a box whose caller disabled AutoResume"
+        );
+        let body = exec.text().await.expect("an error body");
+        assert!(
+            body.contains("has AutoResume disabled"),
+            "the refusal must be the AutoResume gate, not another 409: {body}"
+        );
+
+        let download = client
+            .get(format!("{base}/v1/boxes/{STUB_BOX_ID}/files?path=/tmp"))
+            .send()
+            .await
+            .expect("request must reach the server");
+        assert_eq!(
+            download.status().as_u16(),
+            409,
+            "reading files must be gated too; it drives the guest just as exec does"
+        );
+        assert!(
+            download
+                .text()
+                .await
+                .expect("an error body")
+                .contains("has AutoResume disabled"),
+            "the refusal must be the AutoResume gate, not another 409"
+        );
+
+        let upload = client
+            .put(format!("{base}/v1/boxes/{STUB_BOX_ID}/files?path=/tmp/x"))
+            .body(Vec::new())
+            .send()
+            .await
+            .expect("request must reach the server");
+        assert_eq!(
+            upload.status().as_u16(),
+            409,
+            "writing files is a separate handler and resolves for itself"
+        );
+        assert!(
+            upload
+                .text()
+                .await
+                .expect("an error body")
+                .contains("has AutoResume disabled"),
+            "the refusal must be the AutoResume gate, not another 409"
+        );
+
+        // Attach goes through a fourth resolver, and its `WebSocketUpgrade`
+        // extractor rejects a plain GET before the handler runs — so the refusal
+        // is only observable through a real handshake.
+        let ws_url = base.replacen("http://", "ws://", 1);
+        let refused =
+            tokio_tungstenite::connect_async(format!("{ws_url}/v1/boxes/{STUB_BOX_ID}/attach"))
+                .await
+                .expect_err("the handshake must be refused, not completed");
+        match refused {
+            tokio_tungstenite::tungstenite::Error::Http(response) => {
+                assert_eq!(
+                    response.status().as_u16(),
+                    409,
+                    "attach must not implicitly wake the box either"
+                );
+                // tungstenite fills this from whatever it had already buffered
+                // past the response headers, so in principle a split write
+                // would leave it empty. Asserted unconditionally anyway: the
+                // body does arrive over loopback, and tolerating an empty one
+                // would quietly reduce this to a status-only check the day it
+                // stopped. A flake here is worth more than a silent downgrade.
+                let body = String::from_utf8_lossy(response.body().as_deref().unwrap_or_default())
+                    .into_owned();
+                assert!(
+                    body.contains("has AutoResume disabled"),
+                    "the refusal must be the AutoResume gate, not the already-attached 409: {body}"
+                );
+            }
+            other => panic!("expected an HTTP refusal, got {other:?}"),
+        }
+
+        server.abort();
+        upstream.task.abort();
+    }
+
+    /// ...and must not refuse when the caller left AutoResume on.
+    ///
+    /// Without this the test above passes just as well against a route that
+    /// answers 409 unconditionally.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stopped_box_with_autoresume_on_is_not_refused() {
+        let upstream = stub_upstream("stopped", true).await;
+        let state = Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
+                .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        });
+        let (base, server) = serve_router(Arc::clone(&state)).await;
+
+        let exec = reqwest::Client::new()
+            .post(format!("{base}/v1/boxes/{STUB_BOX_ID}/exec"))
+            .json(&serde_json::json!({"command": "echo"}))
+            .send()
+            .await
+            .expect("request must reach the server");
+        assert_ne!(
+            exec.status().as_u16(),
+            409,
+            "AutoResume was enabled; the wake must not have been refused"
+        );
+        // A non-409 alone would also be satisfied by a request that never
+        // reached the gate at all. What proves it was let *through* is that the
+        // runtime went on to ask the guest to run something.
+        assert_eq!(
+            upstream.execs(),
+            1,
+            "the request must have reached the guest, not merely avoided a 409"
+        );
+
+        server.abort();
+        upstream.task.abort();
+    }
+
+    /// The Stop arm, likewise driven end to end.
+    ///
+    /// This one goes through `runtime.get` and `LiteBox::stop` rather than a
+    /// bare delete, so it covers the longer of the two paths out of
+    /// `decide_lifecycle`. The box has never been seen by this server, so
+    /// `idle_or_seed` would normally seed it at zero and spare it — the clock is
+    /// pre-stamped far enough back to put it past its window.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_sweep_stops_a_box_idle_past_its_window() {
+        let upstream = stub_upstream("running", true).await;
+        let state = AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
+                .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        };
+        state
+            .set_lifecycle(
+                STUB_BOX_ID,
+                LifecyclePolicy {
+                    auto_stop: 60,
+                    auto_delete: 0,
+                },
+            )
+            .await;
+        let now = Instant::now();
+        state
+            .last_activity
+            .write()
+            .await
+            .insert(STUB_BOX_ID.to_string(), now - Duration::from_secs(600));
+
+        run_lifecycle_once(&state, now).await;
+
+        assert_eq!(
+            upstream.stops(),
+            1,
+            "a running box idle past its AutoStop window must actually be stopped"
+        );
+        upstream.task.abort();
+    }
+
+    /// ...and must leave a box alone that is still inside its window.
+    ///
+    /// Without this the test above passes just as well against a sweep that
+    /// stops unconditionally.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_sweep_leaves_a_box_still_inside_its_idle_window() {
+        let upstream = stub_upstream("running", true).await;
+        let state = AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
+                .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        };
+        state
+            .set_lifecycle(
+                STUB_BOX_ID,
+                LifecyclePolicy {
+                    auto_stop: 600,
+                    auto_delete: 0,
+                },
+            )
+            .await;
+        let now = Instant::now();
+        state
+            .last_activity
+            .write()
+            .await
+            .insert(STUB_BOX_ID.to_string(), now - Duration::from_secs(60));
+
+        run_lifecycle_once(&state, now).await;
+
+        assert_eq!(
+            upstream.stops(),
+            0,
+            "the sweep stopped a box that had been used inside its window"
+        );
+        upstream.task.abort();
+    }
+
+    /// ...and must leave a box alone whose delete deadline has not passed.
+    ///
+    /// Without this the delete test passes just as well against a sweep that
+    /// removes unconditionally.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_sweep_leaves_a_box_whose_deadline_has_not_passed() {
+        let upstream = stub_upstream("stopped", true).await;
+        let state = AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
+                .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        };
+        // The canned box's `last_updated` is a fixed date in the past, so its
+        // time at rest grows as the calendar does. A century-long window
+        // out-reaches that for the life of this test.
+        state
+            .set_lifecycle(
+                STUB_BOX_ID,
+                LifecyclePolicy {
+                    auto_stop: 0,
+                    auto_delete: 60 * 60 * 24 * 365 * 100,
+                },
+            )
+            .await;
+
+        run_lifecycle_once(&state, Instant::now()).await;
+
+        assert_eq!(
+            upstream.deletes(),
+            0,
+            "the sweep removed a box that was still inside its AutoDelete window"
+        );
+        assert!(
+            state.lifecycle.read().await.contains_key(STUB_BOX_ID),
+            "a box that was not removed must keep its deadline"
+        );
+        upstream.task.abort();
+    }
+
+    /// A metrics scrape must be refused rather than wake a box the sweep would
+    /// stop again — checked through the real route, not the predicate.
+    ///
+    /// The stub box has `auto_resume: true`, so the AutoResume resolver would
+    /// let this through; only the metrics resolver refuses it. That is exactly
+    /// the rewiring that would silently restore the thrash loop.
+    ///
+    /// Both spellings are driven. The deadline is filed under the box's id, but
+    /// the path segment may be a user-defined name — so a lookup keyed off the
+    /// segment reads no deadline for the name and wakes the box, and only the
+    /// name half of this test can see that.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn scraping_metrics_will_not_wake_a_box_the_sweep_would_stop() {
+        let upstream = stub_upstream("stopped", true).await;
+        let state = Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
+                .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        });
+        state
+            .set_lifecycle(
+                STUB_BOX_ID,
+                LifecyclePolicy {
+                    auto_stop: 900,
+                    auto_delete: 604_800,
+                },
+            )
+            .await;
+        let (base, server) = serve_router(Arc::clone(&state)).await;
+
+        for spelling in [STUB_BOX_ID, STUB_BOX_NAME] {
+            let response = reqwest::Client::new()
+                .get(format!("{base}/v1/boxes/{spelling}/metrics"))
+                .send()
+                .await
+                .expect("request must reach the server");
+            assert_eq!(
+                response.status().as_u16(),
+                409,
+                "a scrape addressed by {spelling:?} must be refused, not answered by booting the box"
+            );
+            let body = response.text().await.expect("an error body");
+            assert!(
+                body.contains("a metrics scrape does not start a box"),
+                "the refusal must be the metrics rule, not the AutoResume gate: {body}"
+            );
+
+            assert!(
+                !state.last_activity.read().await.contains_key(spelling),
+                "a scrape must not stamp the idle clock either"
+            );
+        }
+        server.abort();
+        upstream.task.abort();
+    }
+
+    /// An unauthenticated request must not stamp a box's idle clock.
+    ///
+    /// This rests entirely on layer order: axum applies `.layer()` calls in
+    /// reverse, so `require_api_key` is added last to end up outermost and
+    /// short-circuit before `record_activity` runs. Swapping the two adjacent
+    /// calls inverts it silently, and any caller could then hold someone else's
+    /// box open past its AutoStop window.
+    #[tokio::test]
+    async fn a_rejected_request_does_not_stamp_the_idle_clock() {
+        let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+            "http://127.0.0.1:1".to_string(),
+        ))
+        .expect("rest runtime");
+        let state = Arc::new(AppState {
+            runtime,
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: Some("expected-key".to_string()),
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        });
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = {
+            let state = Arc::clone(&state);
+            tokio::spawn(async move {
+                let _ = axum::serve(listener, build_router(state)).await;
+            })
+        };
+
+        let unauthorized = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{port}/v1/boxes/victim/exec"))
+            .json(&serde_json::json!({"command": "echo"}))
+            .send()
+            .await
+            .expect("request must reach the server");
+        assert_eq!(unauthorized.status().as_u16(), 401);
+
+        assert!(
+            !state.last_activity.read().await.contains_key("victim"),
+            "a 401'd request must not have reset the box's idle window"
+        );
+        server.abort();
+    }
+
     // The container-attach route must be registered at the path the client
     // builds (`RestBox::attach` → `/v1/boxes/{id}/attach`). A method it
     // does not serve proves the path matched (405); an adjacent path that
@@ -1833,6 +3959,8 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
         });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2102,6 +4230,8 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
         };
 
         // The box's main command, and an ordinary exec running beside it.

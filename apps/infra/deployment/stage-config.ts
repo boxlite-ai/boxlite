@@ -8,7 +8,7 @@
  * ensureStageConfig), and this is the other half: the deploy wrapper hydrates process.env from it
  * before spawning sst, so stack/*.ts keeps reading plain `process.env` / `envOr()` values. That
  * matters — a config key promoted to `sst.Secret` would arrive as an Output<string> and break every
- * `envOr('JAEGER_PUBLIC','false') === 'true'` comparison and `new URL(...)` in the stack.
+ * `process.env.OIDC_MANAGEMENT_API_ENABLED === 'true'` comparison and `new URL(...)` in the stack.
  *
  * Two things are deliberately NOT here. The Cloudflare provider credentials cannot be, because
  * reading this store initializes that provider — see the note in deployment/sst.ts. And AWS_REGION

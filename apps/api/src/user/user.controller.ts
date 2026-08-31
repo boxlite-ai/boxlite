@@ -147,14 +147,11 @@ export class UserController {
     const token = await this.getManagementApiToken()
 
     try {
-      const response = await axios.get<{ name: string }[]>(
-        `${this.configService.getOrThrow('oidc.issuer')}/api/v2/connections`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+      const response = await axios.get<{ name: string }[]>(this.managementApiUrl('connections'), {
+        headers: {
+          Authorization: `Bearer ${token}`,
         },
-      )
+      })
 
       const supportedProviders = new Set([AccountProvider.GOOGLE, AccountProvider.GITHUB])
 
@@ -216,14 +213,11 @@ export class UserController {
 
     // Verify account is eligible to be linked (must be reachable via OIDC Management API)
     try {
-      await axios.get(
-        `${this.configService.getOrThrow('oidc.issuer')}/api/v2/users/${encodeURIComponent(userToLinkId)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+      await axios.get(this.managementApiUrl('users', userToLinkId), {
+        headers: {
+          Authorization: `Bearer ${token}`,
         },
-      )
+      })
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 404) {
         throw new BadRequestException('Account not found or already linked to another user')
@@ -234,7 +228,7 @@ export class UserController {
     // Link account
     try {
       await axios.post(
-        `${this.configService.getOrThrow('oidc.issuer')}/api/v2/users/${authContext.userId}/identities`,
+        this.managementApiUrl('users', authContext.userId, 'identities'),
         {
           provider: createLinkedAccountDto.provider,
           user_id: createLinkedAccountDto.userId,
@@ -282,14 +276,11 @@ export class UserController {
     const token = await this.getManagementApiToken()
 
     try {
-      await axios.delete(
-        `${this.configService.getOrThrow('oidc.issuer')}/api/v2/users/${authContext.userId}/identities/${provider}/${providerUserId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+      await axios.delete(this.managementApiUrl('users', authContext.userId, 'identities', provider, providerUserId), {
+        headers: {
+          Authorization: `Bearer ${token}`,
         },
-      )
+      })
     } catch (error) {
       this.logger.error('Failed to unlink account', error?.message || String(error))
       throw new UnauthorizedException()
@@ -316,7 +307,7 @@ export class UserController {
 
     try {
       const response = await axios.post(
-        `${this.configService.getOrThrow('oidc.issuer')}/api/v2/guardian/enrollments/ticket`,
+        this.managementApiUrl('guardian', 'enrollments', 'ticket'),
         {
           user_id: authContext.userId,
         },
@@ -356,16 +347,27 @@ export class UserController {
 
   private async getManagementApiToken(): Promise<string> {
     try {
-      const tokenResponse = await axios.post(`${this.configService.getOrThrow('oidc.issuer')}/oauth/token`, {
+      const body = new URLSearchParams({
         grant_type: 'client_credentials',
         client_id: this.configService.getOrThrow('oidc.managementApi.clientId'),
         client_secret: this.configService.getOrThrow('oidc.managementApi.clientSecret'),
         audience: this.configService.getOrThrow('oidc.managementApi.audience'),
+      })
+      const tokenResponse = await axios.post(this.configService.getOrThrow('oidc.managementApi.tokenUrl'), body, {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        maxRedirects: 0,
       })
       return tokenResponse.data.access_token
     } catch (error) {
       this.logger.error('Failed to get OIDC Management API token', error?.message || String(error))
       throw new UnauthorizedException()
     }
+  }
+
+  private managementApiUrl(...pathSegments: string[]): string {
+    const path = pathSegments.map(encodeURIComponent).join('/')
+    return `${this.configService.getOrThrow('oidc.managementApi.baseUrl')}/${path}`
   }
 }

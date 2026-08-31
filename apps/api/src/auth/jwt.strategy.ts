@@ -14,11 +14,31 @@ import { AuthContext } from '../common/interfaces/auth-context.interface'
 import { Request } from 'express'
 import { CustomHeaders } from '../common/constants/header.constants'
 import { TypedConfigService } from '../config/typed-config.service'
+import { EmailVerificationRequiredException } from '../exceptions/email-verification-required.exception'
 
 interface JwtStrategyConfig {
   jwksUri: string
   audience: string
   issuer: string
+}
+
+/**
+ * Auth0 database identities use the `auth0|` subject prefix. Social and
+ * enterprise identities have provider-specific prefixes and stay outside this
+ * database-account policy.
+ *
+ * Rejects with 403, not 401: the token itself is valid, so a client that
+ * recovers from 401 by re-authenticating would loop forever against a state
+ * only the user can clear. See EmailVerificationRequiredException.
+ */
+export function requireVerifiedAuth0DatabaseEmail(
+  payload: Pick<JWTPayload, 'sub'> & {
+    email_verified?: unknown
+  },
+): void {
+  if (payload.sub?.startsWith('auth0|') && payload.email_verified !== true) {
+    throw new EmailVerificationRequiredException()
+  }
 }
 
 @Injectable()
@@ -49,6 +69,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(request: Request, payload: any): Promise<AuthContext> {
+    // Keep this before JIT user creation: an already-issued unverified Auth0
+    // database token must not create local state while the Auth0 Action rollout
+    // is converging.
+    requireVerifiedAuth0DatabaseEmail(payload)
+
     // OKTA does not return the userId in access_token sub claim
     // real userId is in the uid claim and email is in the sub claim
     let userId = payload.sub
@@ -108,6 +133,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       issuer: this.options.issuer,
       algorithms: ['RS256'],
     })
+    // Gate direct verification consumers (Socket.IO and the WebSocket proxy),
+    // which do not enter Passport's validate callback.
+    requireVerifiedAuth0DatabaseEmail(payload)
     return payload
   }
 }

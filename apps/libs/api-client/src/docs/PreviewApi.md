@@ -24,8 +24,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new PreviewApi(configuration);
 
-let signedPreviewToken: string; //Signed preview URL token (default to undefined)
-let port: number; //Port number to get box ID from signed preview URL token (default to undefined)
+let signedPreviewToken: string; //Signed preview URL token
+let port: number; //Port number to get box ID from signed preview URL token
 
 const { status, data } = await apiInstance.getBoxIdFromSignedPreviewUrlToken(
     signedPreviewToken,
@@ -37,8 +37,8 @@ const { status, data } = await apiInstance.getBoxIdFromSignedPreviewUrlToken(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **signedPreviewToken** | [**string**] | Signed preview URL token | defaults to undefined|
-| **port** | [**number**] | Port number to get box ID from signed preview URL token | defaults to undefined|
+| **signedPreviewToken** | [**string**] | Signed preview URL token | |
+| **port** | [**number**] | Port number to get box ID from signed preview URL token | |
 
 
 ### Return type
@@ -77,7 +77,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new PreviewApi(configuration);
 
-let boxId: string; // (default to undefined)
+let boxId: string; //
 
 const { status, data } = await apiInstance.hasBoxAccess(
     boxId
@@ -88,7 +88,7 @@ const { status, data } = await apiInstance.hasBoxAccess(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] |  | defaults to undefined|
+| **boxId** | [**string**] |  | |
 
 
 ### Return type
@@ -127,7 +127,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new PreviewApi(configuration);
 
-let boxId: string; //ID of the box (default to undefined)
+let boxId: string; //ID of the box
 
 const { status, data } = await apiInstance.isBoxPublic(
     boxId
@@ -138,7 +138,7 @@ const { status, data } = await apiInstance.isBoxPublic(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] | ID of the box | defaults to undefined|
+| **boxId** | [**string**] | ID of the box | |
 
 
 ### Return type
@@ -177,8 +177,8 @@ import {
 const configuration = new Configuration();
 const apiInstance = new PreviewApi(configuration);
 
-let boxId: string; //ID of the box (default to undefined)
-let authToken: string; //Auth token of the box (default to undefined)
+let boxId: string; //ID of the box
+let authToken: string; //Auth token of the box
 
 const { status, data } = await apiInstance.isValidAuthToken(
     boxId,
@@ -190,8 +190,8 @@ const { status, data } = await apiInstance.isValidAuthToken(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] | ID of the box | defaults to undefined|
-| **authToken** | [**string**] | Auth token of the box | defaults to undefined|
+| **boxId** | [**string**] | ID of the box | |
+| **authToken** | [**string**] | Auth token of the box | |
 
 
 ### Return type

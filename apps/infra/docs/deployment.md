@@ -5,7 +5,7 @@ nested KVM, RDS Postgres, ElastiCache Redis, S3, and CloudFront.
 
 - **Region** — `AWS_REGION`, default `ap-southeast-1`
 - **IaC** — SST v4 (Pulumi underneath)
-- **Cost** — ~$600/month always-on; see [Cost](#cost)
+- **Cost** — ~$470/month always-on; see [Cost](#cost)
 
 **Where the "why" lives:** design rationale sits in comments next to the code it
 explains, mostly under `stack/` and `deployment/`. This file is the runbook.
@@ -37,12 +37,7 @@ flowchart TB
             s3[("S3")]
         end
 
-        subgraph obs["internal ALBs by default"]
-            otel["OtelCollector<br/>:4318"]
-            jaeger["Jaeger<br/>:16686"]
-            pgadmin["PgAdmin<br/>:80"]
-            maildev["MailDev<br/>:1080"]
-        end
+        otel["OtelCollector<br/>:4318<br/>internal ALB"]
     end
 
     browser -->|"dashboard SPA"| cf
@@ -62,7 +57,6 @@ flowchart TB
     api -->|"schedule boxes"| runner
     api -.->|"validate JWT via JWKS"| idp
     api --> otel
-    otel --> jaeger
     runner -->|"pull box images"| ghcr
 ```
 
@@ -76,7 +70,7 @@ and the stack itself:
 | An AWS account | `npm run login` runs `aws login` — no IAM user, no access keys |
 | A GitHub repo | `npm run login` runs `gh auth login` |
 | A Cloudflare domain + API token | One manual step — see [Cloudflare API token](#cloudflare-api-token) |
-| An OIDC tenant | Signup is always manual. `--provision-auth0` creates the app, API, and post-login Action **only on Auth0**; any other compliant IdP needs those created by hand |
+| An OIDC tenant | Signup is always manual. `--provision-auth0` creates the SPA app and API **only on Auth0**, then prints the login-policy preview command; any other compliant IdP needs equivalent configuration by hand |
 | An existing stack that already has its first Runner | First-Runner provisioning is not implemented here; a *further* one is [scaling out](#scaling-runners-out) |
 
 ## Deploy an existing stack
@@ -92,11 +86,15 @@ cp .env.example .env && $EDITOR .env   # STACK_DOMAIN, OIDC_ISSUER_BASE_URL, OID
 npm run login                          # browser sign-in: AWS, GitHub, Auth0
 npm run bootstrap -- --stage dev       # IAM role, GitHub Environment, secrets
 
-# Optional, and NOT idempotent — Auth0 has no upsert, so this duplicates apps:
+# Optional, and NOT idempotent — this creates the Auth0 SPA and API identities:
 npm run bootstrap -- --stage dev --provision-auth0
 
 gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false  # preview
 gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=true   # deploy
+
+# After the dashboard deploy publishes /auth0/*, preview and apply Free-plan branding:
+npm run auth0:universal-login -- preview --stage dev
+npm run auth0:universal-login -- apply --stage dev
 ```
 
 `npm run bootstrap` is safe to re-run. It prompts once per stage for the
@@ -108,8 +106,124 @@ Cloudflare provider. On that Environment it also sets the `AWS_ACCOUNT_ID` and
 credentials. `--force` re-prompts for an already-seeded Cloudflare credential. Its
 full flag list is in the script's header comment.
 
+Universal Login assets ship in the dashboard/API deployment under `/auth0/`.
+Their exact sources, content-hashed filenames, license, headers, and update
+procedure are recorded in
+[`auth0/branding/ASSETS.md`](../auth0/branding/ASSETS.md). Deploy the dashboard
+first. The dedicated command resolves URLs from its reviewed stage target and
+fails before its first Auth0 write unless the live stack identity matches and
+every asset is reachable, has the expected media type, and permits the public
+Universal Login origin.
+It applies the Auth0 theme and custom prompt text only. Widget geometry remains
+Auth0-managed because custom Universal Login page templates require a paid plan.
+
 A deploy takes 10–15 minutes and prints the service URLs. On a transient
 registry error, just rerun — SST resumes from the failed step.
+
+## Auth0 email-first login policy
+
+Run this only for a dedicated BoxLite Auth0 tenant. Identifier First is a
+tenant-wide setting. The selected database connection gets this behavior:
+
+```text
+new account       email -> 6-digit email OTP -> create password -> token
+returning account email -> password -> token
+password reset    email -> email OTP -> create password
+```
+
+Existing unverified database users receive a hosted Auth0 verification Form on
+their next browser login. Social and enterprise connections, other Auth0
+applications, and non-`auth0` subjects are outside this policy.
+
+This policy uses Auth0's email OTP verification for signup and password reset;
+it does not add email OTP as a passwordless login method. Password remains the
+returning-user authentication method. If the connection already has a separate
+email OTP login method, the reconciler leaves that operator-owned setting
+unchanged.
+
+For an existing database connection, first open Auth0 Dashboard > Authentication
+> Database > the selected connection > Attributes, select **Activate**, confirm
+the development-environment impact acknowledgement, and save the default email
+attribute. Auth0 requires this one-time New Attributes Configuration activation
+before the Management API can configure email verification OTP. Preview fails
+before any writes when the activation is absent.
+
+For production, use the stack's verified SES identity described in
+[Outbound mail](#outbound-mail). The Api's stored `SMTP_PASSWORD` is
+SigV4-derived and cannot be used as the raw AWS secret required by Auth0's SES
+provider. Create a separate send-only IAM access key for Auth0, scoped to that
+identity, then run the two reconcilers from this directory. Preview is the
+default and performs no writes:
+
+```bash
+# Request the Management API scopes used by preview, apply, and rollback.
+npm run auth0:login-policy-login
+
+# Preview the tenant-wide SES provider and checked-in code templates.
+npm run auth0:configure-email -- \
+  --tenant <tenant.auth0.com> \
+  --from <verified-sender@example.com> \
+  --region <ses-aws-region>
+
+# Apply prompts for the SES access key ID and secret access key without echoing
+# either value. For non-interactive use, set AUTH0_EMAIL_SES_ACCESS_KEY_ID and
+# AUTH0_EMAIL_SES_SECRET_ACCESS_KEY only for this process.
+npm run auth0:configure-email -- \
+  --tenant <tenant.auth0.com> \
+  --from <verified-sender@example.com> \
+  --region <ses-aws-region> \
+  --apply
+
+npm run auth0:configure-login -- \
+  --tenant <tenant.auth0.com> \
+  --client-id <boxlite-spa-client-id> \
+  --connection <database-connection-name>
+
+# Inspect the exact tenant/client/connection/resource plan, then apply it:
+npm run auth0:configure-login -- \
+  --tenant <tenant.auth0.com> \
+  --client-id <boxlite-spa-client-id> \
+  --connection <database-connection-name> \
+  --apply
+```
+
+The email reconciler creates the SES provider only when none exists and creates
+the `verify_email_by_code` and `reset_email_by_code` templates only when they
+are absent. It refuses to replace a different provider or customized template.
+Its mode-`0600` receipt under `.sst/auth0-backups/` contains the SES region and
+sender but never the access key. Rollback disables templates created by the run
+and deletes the provider only when the run created it and its non-secret
+fingerprint is unchanged.
+
+For a non-production canary tenant only, skip `auth0:configure-email` and add
+`--allow-test-email-provider` to both `auth0:configure-login` commands. This
+uses Auth0's built-in sender and default templates; they do not appear as
+Management API provider/template resources. The built-in service sends from
+`no-reply@auth0user.net`, is limited to 10 messages per minute, and is not for
+production.
+
+Login-policy apply writes a mode-`0600` rollback journal under
+`.sst/auth0-backups/` without client secrets. If apply stops partway, use the
+exact rollback command printed in the error. The reconciler preserves unrelated
+connection options and post-login Actions; it unbinds the superseded
+`boxlite-custom-claims` Action. Retain successful journals: their created-resource
+receipts are the proof required to reuse the otherwise opaque Auth0 Vault connection.
+If a same-named Form or Flow differs from the checked-in graph, apply fails before
+writing instead of backing up arbitrary remote payloads.
+
+Before deploying the BoxLite API JWT guard, run all five live canaries against
+the Auth0 tenant:
+
+1. New database signup: email OTP, then password creation.
+2. Returning database login with password.
+3. Password reset with email OTP.
+4. Existing unverified database login: Form, invalid-code error, resend, then success.
+5. Social login remains unchanged.
+
+The deployment order is intentional: Auth0 apply -> live canaries -> BoxLite
+API deploy. The API then rejects old unverified `auth0|...` access tokens across
+HTTP, Socket.IO, and the WebSocket proxy. It does not revoke refresh tokens or
+retroactively gate independently validating Commerce/Analytics services.
 
 **Adding a stage:** run `npm run bootstrap -- --stage <name>`, then add `<name>`
 to the `options` of whichever Environment-selecting inputs should reach it —
@@ -119,6 +233,48 @@ both `stage` and `source_stage` in `build-apps-api-image.yml` (a stage absent fr
 typo cannot target a protected Environment, and they are deliberately
 independent: see [.github/workflows/README.md](../../.github/workflows/README.md)
 for which path currently reaches which stage.
+
+## Outbound mail
+
+The stack verifies one Amazon SES domain identity (`MAIL_DOMAIN`, default
+`mail.boxlite.ai`) and publishes its DKIM and DMARC records through the same
+Cloudflare adapter the rest of the stack uses. The Api reaches SES over the SMTP
+interface on port 465, so `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASSWORD`
+stay a vendor-neutral contract — only `stack/mail.ts` knows the backend is SES.
+Two senders use that one identity: the Api's organization invitation, and Auth0's
+verification and reset codes.
+
+```text
+bootstrap --stage <s> --provision-ses   IAM user boxlite-<s>-smtp, send-only on this identity
+  └─ access key                → SMTP_USER + SMTP_PASSWORD (SigV4-derived) in the secret store
+       └─ deploy               stack/mail.ts → SES identity + DKIM/DMARC → Api SMTP_* env
+```
+
+- **The credential is bootstrap's, not the deploy's.** The deploy role holds IAM
+  on roles only, so it cannot create the user or its access key; `--provision-ses`
+  does that with the operator's credentials. Rerunning rotates the key and revokes
+  the previous one.
+- **The sandbox exit rides along, once the domain is verified.** A new SES account
+  sends 200 messages/day to verified recipients only, and `--provision-ses` asks
+  AWS to lift that — but only when `sesv2 get-email-identity` reports the sender
+  domain verified. On a first bootstrap it is not (the deploy creates the
+  identity), so the request is deferred with a message saying to deploy and rerun.
+  A request made with no identity behind it is the shape AWS denies, and there is
+  only one submission to spend: it reads `sesv2 get-account` and does nothing once
+  access is granted, nothing while a review is open, and reports the case id when a
+  review has closed DENIED or FAILED rather than resubmitting — AWS answers a
+  second submission with ConflictException, so a denial is worked through that
+  support case. Account-and-region wide, so the first stage bootstrapped in a
+  region covers the rest, and a failure here never fails the bootstrap.
+- **No credential, no mail.** `SMTP_HOST` resolves to empty unless both
+  `SMTP_USER` and `SMTP_PASSWORD` are set — nodemailer authenticates only with
+  both, so half a credential would send unauthenticated and be refused on every
+  message. The Api reports the empty host once at boot as email disabled;
+  invitations are still created, just not delivered.
+- **One stage per domain.** An SES identity is unique per account and region.
+  A second stage needs its own subdomain, or adopts the existing identity with
+  `sst.aws.Email.get`.
+- Sending costs $0.10 per 1,000 messages, which is why it has no line in [Cost](#cost).
 
 ## Symmetric artifact deployment
 
@@ -249,6 +405,7 @@ each stage you run.
 | What | Stored in | Set by |
 | --- | --- | --- |
 | App secrets (`OIDC_CLIENT_ID`, Auth0 Management API, Svix, PostHog, `USAGE_EXPORT_TOKEN`) | SST secret store | `npm run bootstrap`; others via `npm run sst -- secret set <NAME> --stage <stage>` reading stdin |
+| SES SMTP credential (`SMTP_USER`, `SMTP_PASSWORD`) | SST secret store | `npm run bootstrap -- --stage <stage> --provision-ses`, which mints the send-only IAM user the deploy role cannot create and derives the SMTP password from its key. Rerunning rotates it |
 | Cloudflare creds (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`) | AWS SSM SecureString for local use; GitHub Environment secrets for CI (which win) | `npm run bootstrap` |
 | Stage config (`STACK_DOMAIN`, `OIDC_*`, toggles) | SST secret store | `npm run bootstrap`, from your local `.env` |
 
@@ -441,9 +598,16 @@ the dashboard's.
 **`No end session endpoint` on logout** — the API's IdP discovery probe failed
 at startup. Fix connectivity; the next `/api/config` self-heals.
 
-**"Organization is suspended: Please verify your email address"** — the access
-token lacks `email_verified`. Deploy the post-login Action
-(`npm run bootstrap -- --provision-auth0`).
+**`Email verification required`** — an Auth0 database token lacks a strict
+`email_verified: true` claim. The API answers `403` with
+`code: email_verification_required`; the token itself is valid, so signing in
+again cannot clear it and the dashboard shows a "Verify your email address"
+screen rather than bouncing through login. For dashboard/desktop use browser
+login to finish the hosted verification Form. On SSH, finish verification
+through the dashboard in another browser, then retry device login. Verify the
+`boxlite-login-policy` Action is deployed and bound using the login-policy
+preview command above — without it an existing unverified account has no way to
+reach the Form, and the 403 never clears.
 
 **Runner never reaches `READY`** — its `BOXLITE_RUNNER_TOKEN` must equal the DB
 row's `apiKey`. Check `journalctl -u boxlite-runner` via `aws ssm start-session`.
@@ -463,13 +627,13 @@ ap-southeast-1 on-demand, approximate:
 | Resource | Monthly |
 | --- | --- |
 | EC2 c8i.2xlarge (Runner) | ~$325 |
-| Load balancers (6 ALB + 2 NLB) | ~$135 |
-| 8x Fargate 0.25 vCPU / 0.5 GB | ~$74 |
+| Load balancers (2 ALB + 1 NLB) | ~$51 |
+| 3x Fargate 0.25 vCPU / 0.5 GB | ~$28 |
 | CloudFront + S3 + CloudWatch Logs | ~$20 |
 | 2x NAT EC2 (`t4g.nano`) + public IPv4 | ~$16 |
 | RDS `t4g.micro` Postgres | ~$15 |
 | ElastiCache Redis | ~$15 |
-| **Total** | **~$600** |
+| **Total** | **~$470** |
 
 Only the `prod` stage retains S3 buckets and RDS snapshots on removal
 (`removal: 'retain'`); every other stage is disposable. Whole-stack teardown

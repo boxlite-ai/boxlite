@@ -471,7 +471,7 @@ impl BoxliteRuntime {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let runtime = BoxliteRuntime::with_defaults()?;
     /// let volumes = runtime.volumes()?;
-    /// let info = volumes.create().await?;
+    /// let info = volumes.create(Some("my-data")).await?;
     /// println!("created volume {}", info.id);
     /// # Ok(())
     /// # }
@@ -574,9 +574,12 @@ mod tests {
             .await
             .err()
             .expect("detached remove-on-stop must be rejected at create");
+        // POL-356: caller-input validation errors map to InvalidArgument
+        // (→ HTTP 400 over boxlite serve), not Config (→ 500) — this is the
+        // caller's mistake, not a server/environment fault.
         assert!(
-            matches!(err, BoxliteError::Config(_)),
-            "expected a Config error, got: {err:?}"
+            matches!(err, BoxliteError::InvalidArgument(_)),
+            "expected an InvalidArgument error, got: {err:?}"
         );
         assert!(
             err.to_string().contains("remove-on-stop is incompatible"),

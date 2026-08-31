@@ -6,6 +6,7 @@ mod defaults;
 mod formatter;
 pub mod terminal;
 pub mod util;
+mod volumespec;
 
 use std::path::{Path, PathBuf};
 use std::process;

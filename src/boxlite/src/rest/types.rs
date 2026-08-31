@@ -188,7 +188,10 @@ impl CreateBoxRequest {
             disk_size_gb: options.disk_size_gb,
             working_dir: options.working_dir.clone(),
             env,
-            network: Some(CreateBoxNetworkSpec::from(&options.network)),
+            network: Some(CreateBoxNetworkSpec::from_options(
+                &options.network,
+                &options.inbound_network,
+            )),
             entrypoint: options.entrypoint.clone(),
             cmd: options.cmd.clone(),
             user: options.user.clone(),
@@ -196,9 +199,13 @@ impl CreateBoxRequest {
             volumes,
             detach: Some(options.detach),
             tty: options.tty.then_some(true),
-            advanced: (!options.advanced.capabilities.is_empty()).then(|| {
+            // `Some`, not "non-empty", decides whether this reaches the wire:
+            // an explicitly empty policy is still explicit, and collapsing it
+            // into the same shape as "never touched" would leave the server
+            // unable to tell the two apart.
+            advanced: options.advanced.capabilities().map(|capabilities| {
                 CreateBoxAdvancedOptions {
-                    capabilities: options.advanced.capabilities.clone(),
+                    capabilities: capabilities.clone(),
                 }
             }),
             // The deprecated remove-on-stop flag was never applied by the cloud
@@ -216,9 +223,12 @@ pub(crate) struct CreateBoxAdvancedOptions {
     pub capabilities: ContainerCapabilities,
 }
 
+/// A mount on the wire. Only managed volumes exist here — a REST server has no
+/// host filesystem to bind from, so `BoxOptions::sanitize_remote` refuses a host
+/// bind at create and this type has no field for one.
 #[derive(Debug, Serialize)]
 pub(crate) struct CreateBoxVolumeSpec {
-    pub source: String,
+    pub managed_volume: String,
     pub guest_path: String,
     pub read_only: bool,
 }
@@ -226,38 +236,93 @@ pub(crate) struct CreateBoxVolumeSpec {
 impl From<&crate::runtime::options::VolumeSpec> for CreateBoxVolumeSpec {
     fn from(volume: &crate::runtime::options::VolumeSpec) -> Self {
         Self {
-            source: managed_volume_source(&volume.host_path),
+            // `BoxOptions::sanitize_remote` runs first and refuses any mount whose
+            // `managed_volume` is unset, so the default is unreachable rather
+            // than a fallback: an empty string would be a selector the server
+            // can never resolve. `From` cannot report that, which is why the
+            // check lives at create instead of here.
+            managed_volume: volume.managed_volume.clone().unwrap_or_default(),
             guest_path: volume.guest_path.clone(),
             read_only: volume.read_only,
         }
     }
 }
 
-fn managed_volume_source(source: &str) -> String {
-    if source.starts_with("volume://") {
-        source.to_string()
-    } else {
-        format!("volume://{source}")
-    }
+/// Wire shape sent to the server when creating a box.
+///
+/// `Legacy` is the pre-split flat shape `{"mode","allow_net"}`, accepted by
+/// all server versions. `Nested` carries explicit inbound/outbound directions
+/// and requires a server with #1199+ support.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub(crate) enum CreateBoxNetworkSpec {
+    /// Pre-split shape — sent when inbound is at its default so servers that
+    /// predate the inbound/outbound split (#1199) keep working.
+    Legacy(CreateBoxLegacyNetworkSpec),
+    /// Inbound/outbound shape — sent when inbound is explicitly configured.
+    Nested(CreateBoxNestedNetworkSpec),
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct CreateBoxNetworkSpec {
+pub(crate) struct CreateBoxLegacyNetworkSpec {
     pub mode: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub allow_net: Vec<String>,
 }
 
-impl From<&crate::runtime::options::NetworkSpec> for CreateBoxNetworkSpec {
-    fn from(spec: &crate::runtime::options::NetworkSpec) -> Self {
-        let config = crate::runtime::options::OutboundNetworkConfig::from(spec);
-        let mode = match config.mode {
-            crate::runtime::options::NetworkMode::Enabled => "enabled",
-            crate::runtime::options::NetworkMode::Disabled => "disabled",
-        };
-        Self {
-            mode: mode.to_string(),
-            allow_net: config.allow_net,
+#[derive(Debug, Serialize)]
+pub(crate) struct CreateBoxNestedNetworkSpec {
+    pub outbound: CreateBoxOutboundNetworkSpec,
+    pub inbound: CreateBoxInboundNetworkSpec,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CreateBoxOutboundNetworkSpec {
+    pub mode: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub allow_net: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CreateBoxInboundNetworkSpec {
+    pub mode: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub allow_net: Vec<String>,
+}
+
+fn mode_str(mode: crate::runtime::options::NetworkMode) -> String {
+    match mode {
+        crate::runtime::options::NetworkMode::Enabled => "enabled".to_string(),
+        crate::runtime::options::NetworkMode::Disabled => "disabled".to_string(),
+    }
+}
+
+impl CreateBoxNetworkSpec {
+    fn from_options(
+        outbound: &crate::runtime::options::NetworkSpec,
+        inbound: &crate::runtime::options::NetworkSpec,
+    ) -> Self {
+        let config = crate::runtime::options::NetworkConfig::from_specs(outbound, inbound);
+        // Use the legacy flat shape when inbound is at its default (Enabled,
+        // empty allowlist). Any explicit inbound configuration requires the
+        // nested shape and a server that understands it (#1199+).
+        match inbound {
+            crate::runtime::options::NetworkSpec::Enabled { allow_net } if allow_net.is_empty() => {
+                Self::Legacy(CreateBoxLegacyNetworkSpec {
+                    mode: mode_str(config.outbound.mode),
+                    allow_net: config.outbound.allow_net,
+                })
+            }
+            _ => Self::Nested(CreateBoxNestedNetworkSpec {
+                outbound: CreateBoxOutboundNetworkSpec {
+                    mode: mode_str(config.outbound.mode),
+                    allow_net: config.outbound.allow_net,
+                },
+                inbound: CreateBoxInboundNetworkSpec {
+                    mode: mode_str(config.inbound.mode),
+                    allow_net: config.inbound.allow_net,
+                },
+            }),
         }
     }
 }
@@ -381,15 +446,23 @@ pub(crate) struct ListBoxesResponse {
 // Named volumes (`/v1/volumes`)
 // ============================================================================
 
-/// Body for `POST /v1/volumes`. Volume creation takes no parameters — the
-/// server assigns the id — so the body is empty.
+/// Body for `POST /v1/volumes`.
+///
+/// `name` is omitted from the wire when unset, so an unnamed create still sends
+/// `{}` and the server falls back to the assigned id.
 #[derive(Debug, Serialize)]
-pub(crate) struct CreateVolumeRequest {}
+pub(crate) struct CreateVolumeRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
 
 /// A single volume as returned by the REST API.
 #[derive(Debug, Deserialize)]
 pub(crate) struct VolumeResponse {
     pub id: String,
+    /// Required by the spec, but defaulted so a pre-name server still parses.
+    #[serde(default)]
+    pub name: String,
     pub created_at: String,
     #[serde(default)]
     pub size_bytes: Option<u64>,
@@ -403,6 +476,13 @@ impl VolumeResponse {
 
         crate::volumes::VolumeInfo {
             id: self.id.clone(),
+            // A server that predates the name field leaves it blank; fall back
+            // to the id, which is what an unnamed volume is called anyway.
+            name: if self.name.is_empty() {
+                self.id.clone()
+            } else {
+                self.name.clone()
+            },
             created_at,
             size_bytes: self.size_bytes,
         }
@@ -622,43 +702,38 @@ mod tests {
 
     #[test]
     fn test_create_box_request_serialization() {
-        let req = CreateBoxRequest {
-            name: Some("mybox".into()),
-            image: Some("python:3.11".into()),
-            rootfs_path: None,
+        use crate::runtime::options::{BoxOptions, NetworkSpec, RootfsSpec};
+
+        // inbound at default → legacy flat shape, accepted by all server versions.
+        let opts = BoxOptions {
+            rootfs: RootfsSpec::Image("python:3.11".into()),
             cpus: Some(2),
             memory_mib: Some(512),
-            disk_size_gb: None,
-            working_dir: None,
-            env: None,
-            network: Some(CreateBoxNetworkSpec {
-                mode: "enabled".into(),
+            network: NetworkSpec::Enabled {
                 allow_net: vec!["api.openai.com".into()],
-            }),
-            entrypoint: None,
-            cmd: None,
-            user: None,
-            tty: None,
-            secrets: Some(vec![CreateBoxSecret {
-                name: "openai".into(),
-                value: "sk-test".into(),
-                hosts: vec!["api.openai.com".into()],
-                placeholder: "<BOXLITE_SECRET:openai>".into(),
-            }]),
-            volumes: None,
-            detach: None,
-            advanced: None,
-            auto_stop: Some(900),
-            auto_delete: Some(604800),
-            auto_resume: None,
+            },
+            // inbound_network left at default: Enabled { allow_net: [] }
+            ..Default::default()
         };
+        let mut req = CreateBoxRequest::from_options(&opts, Some("mybox".into()));
+        req.secrets = Some(vec![CreateBoxSecret {
+            name: "openai".into(),
+            value: "sk-test".into(),
+            hosts: vec!["api.openai.com".into()],
+            placeholder: "<BOXLITE_SECRET:openai>".into(),
+        }]);
+        req.auto_stop = Some(900);
+        req.auto_delete = Some(604800);
+
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"name\":\"mybox\""));
         assert!(json.contains("\"image\":\"python:3.11\""));
         assert!(json.contains("\"cpus\":2"));
-        assert!(
-            json.contains("\"network\":{\"mode\":\"enabled\",\"allow_net\":[\"api.openai.com\"]}")
-        );
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        // Legacy flat shape: top-level mode/allow_net, no outbound/inbound nesting.
+        assert_eq!(value["network"]["mode"], "enabled");
+        assert_eq!(value["network"]["allow_net"][0], "api.openai.com");
+        assert!(value["network"]["outbound"].is_null());
         assert!(json.contains("\"secrets\""));
         // None fields should be skipped
         assert!(!json.contains("rootfs_path"));
@@ -676,17 +751,14 @@ mod tests {
             network: NetworkSpec::Enabled {
                 allow_net: vec!["api.openai.com".into()],
             },
+            inbound_network: NetworkSpec::Disabled,
             secrets: vec![Secret {
                 name: "openai".into(),
                 value: "sk-test".into(),
                 hosts: vec!["api.openai.com".into()],
                 placeholder: "<BOXLITE_SECRET:openai>".into(),
             }],
-            volumes: vec![VolumeSpec {
-                host_path: "volume-123".into(),
-                guest_path: "/data".into(),
-                read_only: false,
-            }],
+            volumes: vec![VolumeSpec::managed_volume("volume-123", "/data")],
             auto_stop: Some(1800),
             auto_delete: Some(604800),
             ..Default::default()
@@ -697,24 +769,25 @@ mod tests {
         assert!(req.rootfs_path.is_none());
         assert_eq!(req.cpus, Some(4));
         assert_eq!(req.memory_mib, Some(1024));
+        // inbound is Disabled (non-default) → nested shape required.
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["network"]["outbound"]["mode"], "enabled");
         assert_eq!(
-            req.network.as_ref().map(|n| n.mode.as_str()),
-            Some("enabled")
+            json["network"]["outbound"]["allow_net"][0],
+            "api.openai.com"
         );
-        assert_eq!(
-            req.network.as_ref().map(|n| n.allow_net.clone()),
-            Some(vec!["api.openai.com".into()])
-        );
+        assert_eq!(json["network"]["inbound"]["mode"], "disabled");
+        assert!(json["network"]["mode"].is_null());
         assert_eq!(req.secrets.as_ref().map(Vec::len), Some(1));
         let volume = &req.volumes.as_ref().unwrap()[0];
-        assert_eq!(volume.source, "volume://volume-123");
+        assert_eq!(volume.managed_volume, "volume-123");
         assert_eq!(volume.guest_path, "/data");
         assert!(!volume.read_only);
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(
             json["volumes"],
             serde_json::json!([{
-                "source": "volume://volume-123",
+                "managed_volume": "volume-123",
                 "guest_path": "/data",
                 "read_only": false
             }])
@@ -729,14 +802,15 @@ mod tests {
 
     #[test]
     fn test_create_box_request_carries_container_capabilities() {
+        let mut advanced = crate::AdvancedBoxOptions::default();
+        advanced
+            .set_capabilities(Some(ContainerCapabilities {
+                add: vec!["SYS_ADMIN".into()],
+                drop: vec!["CAP_NET_RAW".into()],
+            }))
+            .unwrap();
         let opts = BoxOptions {
-            advanced: crate::AdvancedBoxOptions {
-                capabilities: ContainerCapabilities {
-                    add: vec!["SYS_ADMIN".into()],
-                    drop: vec!["CAP_NET_RAW".into()],
-                },
-                ..Default::default()
-            },
+            advanced,
             ..Default::default()
         };
 
@@ -756,22 +830,88 @@ mod tests {
         assert!(defaults_json.get("advanced").is_none());
     }
 
+    /// An explicit, empty policy is still explicit — it must reach the wire,
+    /// not collapse into the same "advanced omitted" shape an untouched
+    /// field produces, or the server can no longer tell the two apart.
     #[test]
-    fn test_create_box_request_preserves_scheme_volume_source() {
-        use crate::runtime::options::{BoxOptions, VolumeSpec};
-
+    fn test_create_box_request_carries_an_explicitly_empty_capability_policy() {
+        let mut advanced = crate::AdvancedBoxOptions::default();
+        advanced
+            .set_capabilities(Some(ContainerCapabilities::default()))
+            .unwrap();
         let opts = BoxOptions {
-            volumes: vec![VolumeSpec {
-                host_path: "volume://volume-123".into(),
-                guest_path: "/data".into(),
-                read_only: false,
-            }],
+            advanced,
             ..Default::default()
         };
 
         let req = CreateBoxRequest::from_options(&opts, None);
-        let volume = &req.volumes.as_ref().unwrap()[0];
-        assert_eq!(volume.source, "volume://volume-123");
+        assert!(
+            req.advanced.is_some(),
+            "an explicit empty policy must still be serialized"
+        );
+
+        let json = serde_json::to_value(&req).expect("serialize create request");
+        assert!(json.get("advanced").is_some());
+    }
+
+    /// An unnamed create must not put `"name": null` on the wire — the spec
+    /// marks the body optional and its schema `additionalProperties: false`.
+    #[test]
+    fn unnamed_volume_create_omits_the_name_key() {
+        let json = serde_json::to_value(CreateVolumeRequest { name: None }).unwrap();
+        assert_eq!(json, serde_json::json!({}));
+
+        let named = serde_json::to_value(CreateVolumeRequest {
+            name: Some("my-data".into()),
+        })
+        .unwrap();
+        assert_eq!(named, serde_json::json!({"name": "my-data"}));
+    }
+
+    /// A server that predates the name field sends no `name`. Falling back to
+    /// the id keeps `VolumeInfo.name` mountable rather than empty — an unnamed
+    /// volume is called by its id server-side anyway.
+    #[test]
+    fn volume_response_without_a_name_falls_back_to_the_id() {
+        let response: VolumeResponse =
+            serde_json::from_str(r#"{"id":"vol_01K2EXAMPLE","created_at":"2026-08-26T00:00:00Z"}"#)
+                .expect("a pre-name server response must still parse");
+        assert_eq!(response.to_volume_info().name, "vol_01K2EXAMPLE");
+
+        let named: VolumeResponse = serde_json::from_str(
+            r#"{"id":"vol_01K2EXAMPLE","name":"my-data","created_at":"2026-08-26T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(named.to_volume_info().name, "my-data");
+    }
+
+    /// The reference reaches the wire byte-for-byte as the caller wrote it,
+    /// whether it is a server-assigned id or a name. The server resolves both,
+    /// so the client neither narrows nor decorates it — there is no scheme to
+    /// add, and nothing here may rewrite the value.
+    #[test]
+    fn managed_volume_reaches_wire_verbatim_by_id_or_by_name() {
+        use crate::runtime::options::{BoxOptions, VolumeSpec};
+
+        for reference in ["vol_01K2EXAMPLE", "my-data"] {
+            let opts = BoxOptions {
+                volumes: vec![VolumeSpec::managed_volume(reference, "/data")],
+                ..Default::default()
+            };
+
+            let req = CreateBoxRequest::from_options(&opts, None);
+            let volume = &req.volumes.as_ref().unwrap()[0];
+            assert_eq!(volume.managed_volume, reference);
+            assert_eq!(volume.guest_path, "/data");
+
+            let json = serde_json::to_value(&req).unwrap();
+            assert_eq!(json["volumes"][0]["managed_volume"], reference);
+            assert!(
+                json["volumes"][0].get("source").is_none(),
+                "the wire has no `source` field any more: {}",
+                json["volumes"][0]
+            );
+        }
     }
 
     #[test]
@@ -810,11 +950,12 @@ mod tests {
         };
 
         let req = CreateBoxRequest::from_options(&opts, None);
-        assert_eq!(
-            req.network.as_ref().map(|n| n.mode.as_str()),
-            Some("disabled")
-        );
-        assert!(req.network.as_ref().unwrap().allow_net.is_empty());
+        // inbound at default → legacy flat shape.
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["network"]["mode"], "disabled");
+        // NetworkSpec::Disabled only overrides outbound; inbound keeps its
+        // default (Enabled/public) — not present in the legacy flat shape.
+        assert!(json["network"]["outbound"].is_null());
     }
 
     /// REST is intentionally a "the server picks the security policy"
@@ -832,12 +973,11 @@ mod tests {
         use crate::runtime::advanced_options::AdvancedBoxOptions;
         use crate::runtime::options::{BoxOptions, RootfsSpec};
 
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.security = SecurityOptions::enabled();
         let opts = BoxOptions {
             rootfs: RootfsSpec::Image("alpine:latest".into()),
-            advanced: AdvancedBoxOptions {
-                security: SecurityOptions::enabled(),
-                ..Default::default()
-            },
+            advanced,
             ..Default::default()
         };
         let req = CreateBoxRequest::from_options(&opts, None);

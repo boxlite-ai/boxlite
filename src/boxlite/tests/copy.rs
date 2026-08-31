@@ -1,6 +1,6 @@
 //! Integration tests for LiteBox::copy_into / copy_out.
 //!
-//! All tests share a single VM to avoid 18 separate VM boot cycles.
+//! All tests share a single VM to avoid one boot cycle per case.
 //! Run with:
 //!
 //! ```sh
@@ -85,6 +85,11 @@ async fn copy_integration() {
     copy_in_creates_intermediate_dirs(&bx, tmp.path()).await;
     copy_out_nonexistent_errors(&bx, tmp.path()).await;
     concurrent_copy_roundtrip(&bx, tmp.path()).await;
+    copy_in_to_tmpfs_is_refused(&bx, tmp.path()).await;
+    copy_out_from_tmpfs_is_refused(&bx, tmp.path()).await;
+    copy_in_beside_a_file_mount_is_allowed(&bx, tmp.path()).await;
+    copy_in_landing_on_a_file_mount_is_refused(&bx, tmp.path()).await;
+    copy_out_of_a_dir_containing_a_mount_is_refused(&bx, tmp.path()).await;
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
@@ -521,4 +526,169 @@ async fn concurrent_copy_roundtrip(bx: &LiteBox, tmp: &Path) {
         .collect();
 
     futures::future::join_all(futs).await;
+}
+
+// ============================================================================
+// MOUNT SHADOWING (POL-305)
+//
+// `/tmp` is a tmpfs declared in the container's OCI spec and mounted inside
+// the container's own mount namespace. A copy that resolves the destination
+// against the guest-side rootfs writes *under* that tmpfs, where no process in
+// the box can ever see it — and reads back its own shadow rather than what the
+// workload actually wrote.
+// ============================================================================
+
+async fn copy_in_to_tmpfs_is_refused(bx: &LiteBox, tmp: &Path) {
+    eprintln!("  [copy] copy_in_to_tmpfs_is_refused");
+    let src = tmp.join("tmpfs-in.txt");
+    std::fs::write(&src, "PAYLOAD-IN-1234\n").unwrap();
+
+    // Pre-fix this "succeeds" and the bytes land on the rootfs layer beneath
+    // the tmpfs, where nothing in the box can ever see them.
+    let err = bx
+        .copy_into(&src, "/tmp/tmpfs-in.txt", CopyOptions::default())
+        .await
+        .expect_err("copy_into a tmpfs path must be refused, not silently shadowed");
+
+    // The exact fragment, not a bare "/tmp": examples/python/02_features/
+    // copy_files.py and examples/node/cp_tmpfs_workaround.js both fail closed on
+    // it, and the runtime's own staging tar path would satisfy a looser match.
+    let msg = err.to_string();
+    assert!(
+        msg.contains("'/tmp' mount"),
+        "refusal should name the mount that blocks it, got: {msg}"
+    );
+
+    // And nothing must have been written to the shadow on the way to failing.
+    let code = exec_exit_code(
+        bx,
+        BoxCommand::new("test").args(["-e", "/tmp/tmpfs-in.txt"]),
+    )
+    .await;
+    assert_eq!(code, 1, "refused copy must leave no file behind");
+}
+
+async fn copy_out_from_tmpfs_is_refused(bx: &LiteBox, tmp: &Path) {
+    eprintln!("  [copy] copy_out_from_tmpfs_is_refused");
+
+    // The workload writes into its own tmpfs.
+    let written = exec_stdout(
+        bx,
+        BoxCommand::new("sh").args([
+            "-c",
+            "printf 'PAYLOAD-OUT-5678\\n' > /tmp/tmpfs-out.txt && cat /tmp/tmpfs-out.txt",
+        ]),
+    )
+    .await;
+    assert_eq!(written, "PAYLOAD-OUT-5678\n", "workload sees its own write");
+
+    // Pre-fix this reports "source path does not exist" for a file that plainly
+    // does exist — or worse, hands back a stale rootfs artifact.
+    let dst = tmp.join("tmpfs-out.txt");
+    let err = bx
+        .copy_out("/tmp/tmpfs-out.txt", &dst, CopyOptions::default())
+        .await
+        .expect_err("copy_out of a tmpfs path must be refused, not answered from the shadow");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("'/tmp' mount"),
+        "refusal should name the mount that blocks it, got: {msg}"
+    );
+    assert!(!dst.exists(), "refused copy_out must not write a host file");
+}
+
+/// `/etc` is not itself a mount — only `/etc/{hostname,hosts,resolv.conf}` are
+/// binds under it. Writing *into* `/etc` is therefore fine as long as no entry
+/// lands on one of those binds.
+///
+/// Both destination shapes are exercised on purpose. The directory form is the
+/// one that goes through the per-entry check: a refusal written as "the
+/// destination's subtree contains a mount" would pass the file case and still
+/// break the shipped `copy_in(motd, "/etc")` example.
+async fn copy_in_beside_a_file_mount_is_allowed(bx: &LiteBox, tmp: &Path) {
+    eprintln!("  [copy] copy_in_beside_a_file_mount_is_allowed");
+
+    // File destination.
+    let src = tmp.join("motd.txt");
+    std::fs::write(&src, "Welcome to BoxLite!\n").unwrap();
+    bx.copy_into(&src, "/etc/motd.txt", CopyOptions::default())
+        .await
+        .expect("copy_in to a file beside a mount must be allowed");
+    let out = exec_stdout(bx, BoxCommand::new("cat").args(["/etc/motd.txt"])).await;
+    assert_eq!(out, "Welcome to BoxLite!\n");
+
+    // Directory destination — `/etc` holds three binds, but nothing in this
+    // payload lands on one, so the copy must go through.
+    let dir = tmp.join("etcdrop");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("issue.net"), "boxlite\n").unwrap();
+    bx.copy_into(&dir, "/etc/", CopyOptions::default())
+        .await
+        .expect("copy_in into a dir that merely contains mounts must be allowed");
+    let out = exec_stdout(bx, BoxCommand::new("cat").args(["/etc/etcdrop/issue.net"])).await;
+    assert_eq!(out, "boxlite\n");
+}
+
+/// The same directory destination, but now the payload lands *on* a bind. The
+/// root is reachable; the entry is not — so the per-entry check must catch it.
+async fn copy_in_landing_on_a_file_mount_is_refused(bx: &LiteBox, tmp: &Path) {
+    eprintln!("  [copy] copy_in_landing_on_a_file_mount_is_refused");
+    let dir = tmp.join("etcclash");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("hosts"), "127.0.0.1 evil\n").unwrap();
+    std::fs::write(dir.join("harmless.txt"), "ok\n").unwrap();
+
+    // include_parent=false flattens the contents into /etc, so `hosts` lands
+    // squarely on the bind — the whole point of the case.
+    let err = bx
+        .copy_into(&dir, "/etc/", CopyOptions::default().include_parent(false))
+        .await
+        .expect_err("an entry landing on a bind mount must be refused");
+
+    // Same fragment the tmpfs cases pin: a caller taught to match `'<mount>'
+    // mount` meets this wording too, and `/etc/hosts` alone would still match a
+    // message that had stopped naming the mount as a mount.
+    let msg = err.to_string();
+    assert!(
+        msg.contains("'/etc/hosts' mount"),
+        "refusal should name the mount the entry would land on, got: {msg}"
+    );
+
+    // The refusal must be total — the harmless sibling must not have landed
+    // either, or a partially applied copy is left behind.
+    let code = exec_exit_code(
+        bx,
+        BoxCommand::new("test").args(["-e", "/etc/harmless.txt"]),
+    )
+    .await;
+    assert_eq!(code, 1, "refused copy must leave nothing behind");
+}
+
+/// Reading a directory that *contains* a mount walks the rootfs layer, so the
+/// archive would carry the image's `/etc/hosts` rather than the bind the box
+/// actually has — the same shadow, one level down.
+async fn copy_out_of_a_dir_containing_a_mount_is_refused(bx: &LiteBox, tmp: &Path) {
+    eprintln!("  [copy] copy_out_of_a_dir_containing_a_mount_is_refused");
+    let dst = tmp.join("etc-copy");
+    let err = bx
+        .copy_out("/etc", &dst, CopyOptions::default())
+        .await
+        .expect_err("copy_out of a directory containing a mount must be refused");
+
+    // Which of the three `/etc` binds is named depends on their order in the
+    // OCI spec, so accept any — but insist on the quoted `'<mount>' mount`
+    // fragment. A bare `/etc/` also appears in the remedy text, so it would
+    // hold even if the message stopped naming a mount at all.
+    let msg = err.to_string();
+    assert!(
+        [
+            "'/etc/hosts' mount",
+            "'/etc/hostname' mount",
+            "'/etc/resolv.conf' mount"
+        ]
+        .iter()
+        .any(|fragment| msg.contains(fragment)),
+        "refusal should name the mount inside it, got: {msg}"
+    );
 }

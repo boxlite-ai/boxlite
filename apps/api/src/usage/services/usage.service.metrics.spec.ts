@@ -30,7 +30,6 @@ describe('UsageService drift repair telemetry', () => {
 
     expect(getMeter).not.toHaveBeenCalled()
     expect(createCounter).not.toHaveBeenCalled()
-
     ;(firstService as any).recordDrift('missing', 'box-1')
     ;(secondService as any).recordDrift('orphan', 'box-2')
 

@@ -38,10 +38,16 @@ pub(crate) const PUBLISHED_PORTS_ARCHIVE_VERSION: u32 = 5;
 pub(crate) const MAX_SUPPORTED_VERSION: u32 = PUBLISHED_PORTS_ARCHIVE_VERSION;
 
 /// Pick the archive format an exported box needs.
+///
+/// Any explicit policy — including an explicitly empty one — is stamped v4:
+/// `capabilities()` returning `Some` means the caller configured something,
+/// which a pre-capability importer has no way to represent and must refuse
+/// rather than silently drop. Only `None` (the caller never touched the
+/// field) is indistinguishable from what a v3 importer already does.
 pub(crate) fn archive_version_for_options(options: &crate::runtime::options::BoxOptions) -> u32 {
     if !options.ports.is_empty() {
         PUBLISHED_PORTS_ARCHIVE_VERSION
-    } else if options.advanced.capabilities.is_empty() {
+    } else if options.advanced.capabilities().is_none() {
         ARCHIVE_VERSION
     } else {
         CAPABILITY_POLICY_ARCHIVE_VERSION
@@ -167,27 +173,73 @@ pub(crate) fn extract_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteRe
     })?;
 
     if magic == ZSTD_MAGIC {
-        extract_zstd_tar(file, dest_dir)
+        let decoder = zstd::Decoder::new(file)
+            .map_err(|e| BoxliteError::Storage(format!("Failed to create zstd decoder: {}", e)))?;
+        unpack_file_members(decoder, dest_dir)
     } else {
-        extract_plain_tar(file, dest_dir)
+        unpack_file_members(file, dest_dir)
     }
 }
 
-fn extract_zstd_tar(file: std::fs::File, dest_dir: &Path) -> BoxliteResult<()> {
-    let decoder = zstd::Decoder::new(file)
-        .map_err(|e| BoxliteError::Storage(format!("Failed to create zstd decoder: {}", e)))?;
-    let mut archive = tar::Archive::new(decoder);
-    archive
-        .unpack(dest_dir)
-        .map_err(|e| BoxliteError::Storage(format!("Failed to extract zstd tar: {}", e)))?;
-    Ok(())
+/// Member types that carry their own contents rather than a reference to
+/// something else.
+///
+/// `Regular` is the common case. `Continuous` is its rarely used contiguous
+/// variant. `GNUSparse` is what `tar::Builder` emits for a file with holes —
+/// which on Linux is every exported qcow2 disk, since the builder reads sparse
+/// information from disk by default. All three unpack as ordinary files.
+///
+/// The OCI layer extractor pairs the same two types for the same reason — see
+/// the `EntryType::Regular | EntryType::GNUSparse` arm in
+/// `images/archive/extractor.rs`.
+fn carries_file_contents(entry_type: tar::EntryType) -> bool {
+    matches!(
+        entry_type,
+        tar::EntryType::Regular | tar::EntryType::Continuous | tar::EntryType::GNUSparse
+    )
 }
 
-fn extract_plain_tar(file: std::fs::File, dest_dir: &Path) -> BoxliteResult<()> {
-    let mut archive = tar::Archive::new(file);
-    archive
-        .unpack(dest_dir)
-        .map_err(|e| BoxliteError::Storage(format!("Failed to extract archive: {}", e)))?;
+/// Unpack an archive, accepting only members that carry their own contents.
+///
+/// tar checks where a member is *written* but copies a link's target verbatim,
+/// so a link member lands in `dest_dir` pointing anywhere on the host and every
+/// later step — exists, checksum, the backing-file scan, the rename that makes
+/// it a box's disk — follows it there. Deciding on the member's own type is the
+/// only point where the archive itself, rather than whatever it resolves to, is
+/// what gets judged.
+///
+/// This costs no compatibility: `tar::Builder` dereferences symlinks by default
+/// and boxlite has never turned that off, so no export has ever produced a link
+/// member. Member *names* are deliberately not filtered — archives written
+/// before the guest rootfs became a shared base image carry a third member that
+/// the importer ignores, and rejecting it would strand them.
+fn unpack_file_members<R: std::io::Read>(reader: R, dest_dir: &Path) -> BoxliteResult<()> {
+    let mut archive = tar::Archive::new(reader);
+    let entries = archive
+        .entries()
+        .map_err(|e| BoxliteError::Storage(format!("Failed to read archive: {}", e)))?;
+
+    for entry in entries {
+        let mut entry = entry
+            .map_err(|e| BoxliteError::Storage(format!("Failed to read archive member: {}", e)))?;
+
+        let entry_type = entry.header().entry_type();
+        if !carries_file_contents(entry_type) {
+            let name = entry
+                .path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|_| "<unreadable>".to_string());
+            return Err(BoxliteError::Storage(format!(
+                "Invalid archive: member '{}' is {:?}, only files are allowed",
+                name, entry_type
+            )));
+        }
+
+        entry
+            .unpack_in(dest_dir)
+            .map_err(|e| BoxliteError::Storage(format!("Failed to extract archive: {}", e)))?;
+    }
+
     Ok(())
 }
 
@@ -279,18 +331,40 @@ mod tests {
         let ordinary = crate::runtime::options::BoxOptions::default();
         assert_eq!(archive_version_for_options(&ordinary), ARCHIVE_VERSION);
 
-        let custom = crate::runtime::options::BoxOptions {
-            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
-                capabilities: crate::runtime::advanced_options::ContainerCapabilities {
+        let mut custom_advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        custom_advanced
+            .set_capabilities(Some(
+                crate::runtime::advanced_options::ContainerCapabilities {
                     drop: vec!["NET_RAW".into()],
                     ..Default::default()
                 },
-                ..Default::default()
-            },
+            ))
+            .unwrap();
+        let custom = crate::runtime::options::BoxOptions {
+            advanced: custom_advanced,
             ..Default::default()
         };
         assert_eq!(
             archive_version_for_options(&custom),
+            CAPABILITY_POLICY_ARCHIVE_VERSION
+        );
+
+        // An explicit, empty capability policy is still an explicit policy,
+        // not the same as never touching the field — a pre-capability
+        // importer must not decide that distinction was safe to drop.
+        let mut explicit_empty_advanced =
+            crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        explicit_empty_advanced
+            .set_capabilities(Some(
+                crate::runtime::advanced_options::ContainerCapabilities::default(),
+            ))
+            .unwrap();
+        let explicit_empty = crate::runtime::options::BoxOptions {
+            advanced: explicit_empty_advanced,
+            ..Default::default()
+        };
+        assert_eq!(
+            archive_version_for_options(&explicit_empty),
             CAPABILITY_POLICY_ARCHIVE_VERSION
         );
 
@@ -469,5 +543,200 @@ mod tests {
             !extract_dir.join(disk_filenames::GUEST_ROOTFS_DISK).exists(),
             "the archive must not contain a guest rootfs member"
         );
+    }
+
+    /// A `.boxlite` archive is untrusted input, and tar validates only where an
+    /// entry is *written* — a symlink's target is copied verbatim. Without an
+    /// entry-type check an archive can plant `disk.qcow2` as a link to any host
+    /// path, and every later step (exists, checksum, backing-file scan, rename)
+    /// follows it. The link must never reach the filesystem at all.
+    #[test]
+    fn extract_archive_rejects_symlink_entry() {
+        let dir = tempdir().unwrap();
+        let archive_path = dir.path().join("evil.boxlite");
+        let extract_dir = dir.path().join("extracted");
+        std::fs::create_dir_all(&extract_dir).unwrap();
+
+        let victim = dir.path().join("victim-disk.qcow2");
+        std::fs::write(&victim, b"victim bytes").unwrap();
+
+        {
+            let file = std::fs::File::create(&archive_path).unwrap();
+            let mut builder = tar::Builder::new(file);
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_size(0);
+            header.set_mode(0o777);
+            builder
+                .append_link(&mut header, disk_filenames::CONTAINER_DISK, &victim)
+                .unwrap();
+            builder.finish().unwrap();
+        }
+
+        let error = extract_archive(&archive_path, &extract_dir)
+            .expect_err("a symlink archive member must be rejected");
+        assert!(
+            error.to_string().contains(disk_filenames::CONTAINER_DISK),
+            "the error must name the offending member, got: {error}"
+        );
+        assert!(
+            extract_dir
+                .join(disk_filenames::CONTAINER_DISK)
+                .symlink_metadata()
+                .is_err(),
+            "the link must never reach the filesystem"
+        );
+    }
+
+    /// The same rule covers hard links. `symlink_metadata` reports a hard link
+    /// as a regular file, so a check written against that would let this
+    /// through; only the archive member's own type tells the truth.
+    #[test]
+    fn extract_archive_rejects_hardlink_entry() {
+        let dir = tempdir().unwrap();
+        let archive_path = dir.path().join("evil.boxlite");
+        let extract_dir = dir.path().join("extracted");
+        std::fs::create_dir_all(&extract_dir).unwrap();
+
+        let manifest = dir.path().join(MANIFEST_FILENAME);
+        std::fs::write(&manifest, br#"{"version":3}"#).unwrap();
+
+        {
+            let file = std::fs::File::create(&archive_path).unwrap();
+            let mut builder = tar::Builder::new(file);
+            builder
+                .append_path_with_name(&manifest, MANIFEST_FILENAME)
+                .unwrap();
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Link);
+            header.set_size(0);
+            header.set_mode(0o644);
+            builder
+                .append_link(
+                    &mut header,
+                    disk_filenames::CONTAINER_DISK,
+                    MANIFEST_FILENAME,
+                )
+                .unwrap();
+            builder.finish().unwrap();
+        }
+
+        let error = extract_archive(&archive_path, &extract_dir)
+            .expect_err("a hard link archive member must be rejected");
+        assert!(
+            error.to_string().contains(disk_filenames::CONTAINER_DISK),
+            "the error must name the offending member, got: {error}"
+        );
+        assert!(
+            extract_dir
+                .join(disk_filenames::CONTAINER_DISK)
+                .symlink_metadata()
+                .is_err(),
+            "the link must never reach the filesystem"
+        );
+    }
+
+    /// Archives written before the guest rootfs became a shared base image
+    /// carry a third member. The importer ignores it, but extraction must
+    /// still accept it — rejecting unknown *names* would strand every archive
+    /// exported by a released build.
+    #[test]
+    fn extract_archive_accepts_legacy_guest_rootfs_member() {
+        let dir = tempdir().unwrap();
+        let archive_path = dir.path().join("legacy.boxlite");
+        let extract_dir = dir.path().join("extracted");
+        std::fs::create_dir_all(&extract_dir).unwrap();
+
+        let manifest = dir.path().join(MANIFEST_FILENAME);
+        let container = dir.path().join("container-src");
+        let guest = dir.path().join("guest-src");
+        std::fs::write(&manifest, br#"{"version":2}"#).unwrap();
+        std::fs::write(&container, b"container-disk").unwrap();
+        std::fs::write(&guest, b"guest-rootfs-disk").unwrap();
+
+        {
+            let file = std::fs::File::create(&archive_path).unwrap();
+            let mut builder = tar::Builder::new(file);
+            builder
+                .append_path_with_name(&manifest, MANIFEST_FILENAME)
+                .unwrap();
+            builder
+                .append_path_with_name(&container, disk_filenames::CONTAINER_DISK)
+                .unwrap();
+            builder
+                .append_path_with_name(&guest, disk_filenames::GUEST_ROOTFS_DISK)
+                .unwrap();
+            builder.finish().unwrap();
+        }
+
+        extract_archive(&archive_path, &extract_dir)
+            .expect("a legacy 3-member archive must import");
+        assert_eq!(
+            std::fs::read_to_string(extract_dir.join(disk_filenames::CONTAINER_DISK)).unwrap(),
+            "container-disk"
+        );
+        assert_eq!(
+            std::fs::read_to_string(extract_dir.join(disk_filenames::GUEST_ROOTFS_DISK)).unwrap(),
+            "guest-rootfs-disk"
+        );
+    }
+    /// Every exported disk is a sparse qcow2, and on Linux `tar::Builder`
+    /// encodes a file with holes as a `GNUSparse` member rather than a plain
+    /// regular one. A member-type check written against `Regular` alone reads
+    /// as correct against small dense fixtures and rejects every real export,
+    /// so the fixture here has to have a hole in it.
+    #[test]
+    fn extract_archive_accepts_sparse_disk_member() {
+        use std::io::{Seek, SeekFrom, Write};
+
+        const HOLE_END: u64 = 8 * 1024 * 1024;
+
+        let dir = tempdir().unwrap();
+        let archive_path = dir.path().join("sparse.boxlite");
+        let extract_dir = dir.path().join("extracted");
+        std::fs::create_dir_all(&extract_dir).unwrap();
+
+        let manifest = dir.path().join(MANIFEST_FILENAME);
+        std::fs::write(&manifest, br#"{"version":3}"#).unwrap();
+
+        let disk = dir.path().join("sparse-disk");
+        {
+            let mut file = std::fs::File::create(&disk).unwrap();
+            file.write_all(b"head").unwrap();
+            file.seek(SeekFrom::Start(HOLE_END)).unwrap();
+            file.write_all(b"tail").unwrap();
+            file.sync_all().unwrap();
+        }
+
+        build_zstd_tar_archive(&archive_path, &manifest, &disk, 3).unwrap();
+
+        // Where the builder reads hole information, assert the fixture really
+        // did reproduce a real export's encoding — otherwise this test would
+        // quietly stop covering the case it exists for.
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
+        {
+            let file = std::fs::File::open(&archive_path).unwrap();
+            let decoder = zstd::Decoder::new(file).unwrap();
+            let mut probe = tar::Archive::new(decoder);
+            let mut disk_member_type = None;
+            for entry in probe.entries().unwrap() {
+                let entry = entry.unwrap();
+                if entry.path().unwrap().to_string_lossy() == disk_filenames::CONTAINER_DISK {
+                    disk_member_type = Some(entry.header().entry_type());
+                }
+            }
+            assert_eq!(
+                disk_member_type,
+                Some(tar::EntryType::GNUSparse),
+                "the fixture must be encoded the way a real exported disk is"
+            );
+        }
+
+        extract_archive(&archive_path, &extract_dir).expect("a sparse disk member must extract");
+
+        let extracted = std::fs::read(extract_dir.join(disk_filenames::CONTAINER_DISK)).unwrap();
+        assert_eq!(extracted.len() as u64, HOLE_END + 4);
+        assert_eq!(&extracted[..4], b"head");
+        assert_eq!(&extracted[HOLE_END as usize..], b"tail");
     }
 }

@@ -9,7 +9,6 @@ plausibly diverge between local FFI and the REST→Runner→VM chain:
   - exit code propagation for all interesting values (0, 1, 2, 126, 127, 128+signal)
   - multi-line / binary-safe stdout
   - concurrent execs on the same box produce isolated output
-  - user override (exec as non-root)
   - env var isolation between consecutive execs
   - empty command output (no phantom bytes)
   - long-running command with streamed output
@@ -17,7 +16,6 @@ plausibly diverge between local FFI and the REST→Runner→VM chain:
 from __future__ import annotations
 
 import asyncio
-import hashlib
 
 import boxlite
 import pytest
@@ -161,14 +159,6 @@ async def test_empty_command_output(box):
 # ── user override ──────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_exec_as_root_by_default(box):
-    """Default exec user should be root (uid 0)."""
-    ex = await box.exec("id", ["-u"])
-    out, _ = await drain(ex)
-    rc = await asyncio.wait_for(ex.wait(), timeout=30)
-    assert rc.exit_code == 0
-    assert out.strip() == "0", f"default user should be root (uid 0), got {out!r}"
 
 
 @pytest.mark.asyncio
