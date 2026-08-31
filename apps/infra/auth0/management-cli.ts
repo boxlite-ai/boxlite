@@ -73,6 +73,15 @@ export class Auth0ManagementCli implements Auth0BrandingGateway {
     }
   }
 
+  // tenants/settings always exists, so an absent response is a real fault.
+  async getTenantSettings(target: BrandingTarget, signal?: AbortSignal) {
+    return asObject(await this.request(target, ['api', 'get', 'tenants/settings'], signal), 'tenant settings')
+  }
+
+  async updateTenantSettings(target: BrandingTarget, settings: JsonObject, signal?: AbortSignal) {
+    await this.request(target, ['api', 'patch', 'tenants/settings', '--data', JSON.stringify(settings)], signal)
+  }
+
   async createTheme(target: BrandingTarget, theme: JsonObject, signal?: AbortSignal) {
     await this.request(target, ['api', 'post', 'branding/themes', '--data', JSON.stringify(theme)], signal)
   }
