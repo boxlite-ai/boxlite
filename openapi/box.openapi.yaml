@@ -201,8 +201,10 @@ paths:
         A grant is bounded by the caller. A key may pass on only the
         permissions it already holds, so a credential issued for one resource
         cannot mint itself access to another; requesting more answers `403`
-        and names the permissions that were refused. Interactive sessions are
-        bounded by organization membership instead.
+        and names the permissions that were refused. An expiring key bounds
+        its children in time the same way: an `expires_at` later than its own
+        answers `403`, and omitting it inherits the caller's expiry.
+        Interactive sessions are bounded by organization membership instead.
 
         `value` is returned once, here, and never again — the server keeps
         only a hash.

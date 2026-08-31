@@ -6,6 +6,7 @@
 
 import { Controller, Post, Get, Delete, Param, Body, UseGuards, ForbiddenException, HttpCode } from '@nestjs/common'
 import { ApiKeyService } from './api-key.service'
+import { expiryBoundOf } from './api-key-grant'
 import { CreateApiKeyDto } from './dto/create-api-key.dto'
 import { ApiHeader, ApiOAuth2, ApiOperation, ApiResponse, ApiTags, ApiBearerAuth } from '@nestjs/swagger'
 import { ApiKeyResponseDto } from './dto/api-key-response.dto'
@@ -62,12 +63,21 @@ export class ApiKeyController {
   ): Promise<ApiKeyResponseDto> {
     this.validateRequestedApiKeyPermissions(authContext, createApiKeyDto.permissions)
 
+    // Same time bound as the REST surface: a key may not mint a child that
+    // outlives it. Interactive sessions carry no apiKey and are unaffected.
+    const expiryBound = expiryBoundOf(authContext)
+    if (expiryBound && createApiKeyDto.expiresAt && createApiKeyDto.expiresAt > expiryBound) {
+      throw new ForbiddenException(
+        `Requested expiry exceeds the calling key's own expiry (${expiryBound.toISOString()})`,
+      )
+    }
+
     const { apiKey, value } = await this.apiKeyService.createApiKey(
       authContext.organizationId,
       authContext.userId,
       createApiKeyDto.name,
       createApiKeyDto.permissions,
-      createApiKeyDto.expiresAt,
+      createApiKeyDto.expiresAt ?? expiryBound,
     )
 
     return ApiKeyResponseDto.fromApiKey(apiKey, value)

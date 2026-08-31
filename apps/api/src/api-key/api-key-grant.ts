@@ -46,6 +46,18 @@ export function effectivePermissions(authContext: OrganizationAuthContext): Orga
   return authContext.organizationUser.assignedRoles.flatMap((role) => role.permissions)
 }
 
+/**
+ * The latest expiry a key minted by this caller may carry, or undefined for
+ * an unbounded caller (an interactive session, or a key that does not expire).
+ *
+ * A child that outlives its expiring parent would let the credential escape
+ * its own revocation-by-expiry, so callers refuse a requested expiry past
+ * this bound and fall back to it when no expiry was requested.
+ */
+export function expiryBoundOf(authContext: OrganizationAuthContext): Date | undefined {
+  return authContext.apiKey?.expiresAt
+}
+
 /** The requested permissions the caller may not grant, in request order. */
 export function ungrantablePermissions(
   authContext: OrganizationAuthContext,

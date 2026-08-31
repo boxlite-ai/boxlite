@@ -34,7 +34,7 @@ describe('BoxliteApiKeyController', () => {
   let apiKeyService: { createApiKey: jest.Mock; getApiKeys: jest.Mock; deleteApiKey: jest.Mock }
 
   /** Boot the controller behind the real guard stack, authenticated as `callerPermissions`. */
-  async function start(callerPermissions: OrganizationResourcePermission[]) {
+  async function start(callerPermissions: OrganizationResourcePermission[], callerExpiresAt?: Date) {
     apiKeyService = {
       createApiKey: jest.fn(async (_orgId, _userId, name, permissions, expiresAt) => ({
         apiKey: { name, permissions, createdAt: new Date('2026-08-24T00:00:00.000Z'), expiresAt } as ApiKey,
@@ -64,7 +64,7 @@ describe('BoxliteApiKeyController', () => {
             role: SystemRole.USER,
             organizationId: 'org-1',
             organization: { id: 'org-1' },
-            apiKey: { permissions: callerPermissions } as ApiKey,
+            apiKey: { permissions: callerPermissions, expiresAt: callerExpiresAt } as ApiKey,
             organizationUser: { role: OrganizationMemberRole.OWNER, assignedRoles: [] },
           }
           return true
@@ -173,6 +173,56 @@ describe('BoxliteApiKeyController', () => {
 
     expect(response.status).toBe(400)
     expect(apiKeyService.createApiKey).not.toHaveBeenCalled()
+  })
+
+  it('caps a non-expiring child to an expiring caller key', async () => {
+    const callerExpiry = new Date('2026-10-01T00:00:00.000Z')
+    await start(VOLUME_LIFECYCLE, callerExpiry)
+
+    const response = await post('/api/v1/api-keys', {
+      name: 'outlives-parent',
+      permissions: [OrganizationResourcePermission.READ_VOLUMES],
+    })
+
+    expect(response.status).toBe(201)
+    expect(apiKeyService.createApiKey).toHaveBeenCalledWith(
+      'org-1',
+      'user-1',
+      'outlives-parent',
+      [OrganizationResourcePermission.READ_VOLUMES],
+      callerExpiry,
+    )
+  })
+
+  it('refuses a child expiry later than the caller key expiry', async () => {
+    await start(VOLUME_LIFECYCLE, new Date('2026-10-01T00:00:00.000Z'))
+
+    const response = await post('/api/v1/api-keys', {
+      name: 'later',
+      permissions: [OrganizationResourcePermission.READ_VOLUMES],
+      expires_at: '2027-01-01T00:00:00.000Z',
+    })
+
+    expect(response.status).toBe(403)
+    expect(apiKeyService.createApiKey).not.toHaveBeenCalled()
+  })
+
+  it('preserves a child expiry earlier than the caller key expiry', async () => {
+    await start(VOLUME_LIFECYCLE, new Date('2026-10-01T00:00:00.000Z'))
+
+    await post('/api/v1/api-keys', {
+      name: 'earlier',
+      permissions: [OrganizationResourcePermission.READ_VOLUMES],
+      expires_at: '2026-09-01T00:00:00.000Z',
+    })
+
+    expect(apiKeyService.createApiKey).toHaveBeenCalledWith(
+      'org-1',
+      'user-1',
+      'earlier',
+      [OrganizationResourcePermission.READ_VOLUMES],
+      new Date('2026-09-01T00:00:00.000Z'),
+    )
   })
 
   it('passes an expiry through to the service as a Date', async () => {

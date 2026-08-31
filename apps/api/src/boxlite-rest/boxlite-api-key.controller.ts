@@ -7,7 +7,7 @@
 import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Post, UseGuards } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { ApiKey } from '../api-key/api-key.entity'
-import { ungrantablePermissions } from '../api-key/api-key-grant'
+import { expiryBoundOf, ungrantablePermissions } from '../api-key/api-key-grant'
 import { ApiKeyService } from '../api-key/api-key.service'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
@@ -74,12 +74,20 @@ export class BoxliteApiKeyController {
       throw new ForbiddenException(`Insufficient permissions for assigning: ${refused.join(', ')}`)
     }
 
+    // A key bounds what it passes on in time as well as in permissions.
+    const expiryBound = expiryBoundOf(authContext)
+    if (expiryBound && dto.expires_at && dto.expires_at > expiryBound) {
+      throw new ForbiddenException(
+        `Requested expiry exceeds the calling key's own expiry (${expiryBound.toISOString()})`,
+      )
+    }
+
     const { apiKey, value } = await this.apiKeyService.createApiKey(
       authContext.organizationId,
       authContext.userId,
       dto.name,
       dto.permissions,
-      dto.expires_at,
+      dto.expires_at ?? expiryBound,
     )
 
     return { ...this.toSummary(apiKey), value }
