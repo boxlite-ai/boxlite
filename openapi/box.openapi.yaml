@@ -2067,18 +2067,42 @@ components:
           nullable: true
           description: Expiry, or `null` for a key that does not expire
 
+    # Not composed from ApiKey via allOf: that schema closes itself with
+    # additionalProperties: false, and in JSON Schema every allOf branch
+    # validates the whole object — `value` would fail the ApiKey branch.
+    # The shared fields are restated instead; keep the two in step.
     CreatedApiKey:
-      allOf:
-        - $ref: "#/components/schemas/ApiKey"
-        - type: object
-          required: [value]
-          properties:
-            value:
-              type: string
-              description: |
-                The secret. Returned only in this response — the server stores
-                a hash, so a lost value cannot be recovered, only replaced.
-              example: blk_live_01HZK4TNRPQSXYZ8WM6NCVT9R5
+      type: object
+      description: The issued key, value included. Returned only by create.
+      additionalProperties: false
+      required: [name, permissions, created_at, expires_at, value]
+      properties:
+        name:
+          type: string
+          description: The name the key was issued under
+        permissions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResourcePermission"
+        created_at:
+          type: string
+          format: date-time
+          description: Issuance timestamp (UTC)
+        last_used_at:
+          type: string
+          format: date-time
+          description: Last time the key authenticated a request, if ever
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Expiry, or `null` for a key that does not expire
+        value:
+          type: string
+          description: |
+            The secret. Returned only in this response — the server stores
+            a hash, so a lost value cannot be recovered, only replaced.
+          example: blk_live_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     ListApiKeysResponse:
       type: object
