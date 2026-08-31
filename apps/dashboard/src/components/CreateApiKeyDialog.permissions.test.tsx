@@ -39,7 +39,7 @@ async function typeNameAndSubmit(name: string) {
   await act(async () => {
     document.querySelector<HTMLFormElement>('form#create-api-key-form')?.requestSubmit()
   })
-  await flushReactWork()
+  await settleSubmitFlow()
 }
 
 /** React tracks the input's value setter, so a plain assignment would not fire onChange. */
@@ -53,10 +53,14 @@ function typeIntoNameField(value: string) {
   field.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-async function flushReactWork() {
+/**
+ * Settle the submit flow. Everything it awaits — the mocked mutation and the
+ * state updates behind it — resolves on the microtask queue, so draining it
+ * inside act() is deterministic; no scheduler timing is involved.
+ */
+async function settleSubmitFlow() {
   await act(async () => {
-    await Promise.resolve()
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await createApiKeyMock.mock.results.at(-1)?.value
   })
 }
 
@@ -101,7 +105,7 @@ describe('CreateApiKeyDialog permissions', () => {
     await act(async () => {
       container.querySelector<HTMLButtonElement>('button[title="Create Key"]')?.click()
     })
-    await flushReactWork()
+    await settleSubmitFlow()
   })
 
   afterEach(async () => {
