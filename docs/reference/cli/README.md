@@ -252,6 +252,9 @@ takes the command's exit code; `boxlite ps` shows it stopped and
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--rootfs PATH` | — | Use a prepared rootfs path instead of pulling/resolving an image |
+| `--secret NAME=VALUE` | — | Outbound HTTP(S) secret substitution rule (repeatable). The real value never enters the VM: the guest sees only the `<BOXLITE_SECRET:NAME>` placeholder (also injected as `BOXLITE_SECRET_<NAME>`), and the network proxy swaps it for the value on the configured hosts. The value is visible on argv — scripts and CI should use `--secret-from-env` instead |
+| `--secret-from-env NAME=ENV_VAR` | — | Same as `--secret`, but read the value from the host environment variable `ENV_VAR` so it never appears on argv, shell history, or CI command logs (repeatable) |
+| `--secret-host NAME=HOST` | — | Host where a secret applies (repeatable): exact host or `*.example.com` wildcard (matches one subdomain level). Every secret needs at least one host rule |
 
 **Exit behavior:**
 
@@ -269,6 +272,8 @@ boxlite run -v $(pwd):/work -w /work alpine:latest ls -la
 boxlite run --cpus 4 --memory 4096 python:slim python -c "print(2+2)"
 boxlite run --cap-add SYS_ADMIN --cap-drop NET_RAW alpine:latest sh
 boxlite run --rootfs /path/to/rootfs /bin/sh
+boxlite run --secret openai=sk-... --secret-host openai=api.openai.com alpine:latest my-app
+OPENAI_KEY=sk-... boxlite run --secret-from-env openai=OPENAI_KEY --secret-host openai=api.openai.com alpine:latest my-app
 ```
 
 ---
@@ -320,6 +325,9 @@ implicitly, because starting it runs that command. Start it deliberately with
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--rootfs PATH` | — | Use a prepared rootfs path instead of pulling/resolving an image |
+| `--secret NAME=VALUE` | — | Outbound HTTP(S) secret substitution rule (repeatable). The real value never enters the VM: the guest sees only the `<BOXLITE_SECRET:NAME>` placeholder (also injected as `BOXLITE_SECRET_<NAME>`), and the network proxy swaps it for the value on the configured hosts. The value is visible on argv — scripts and CI should use `--secret-from-env` instead |
+| `--secret-from-env NAME=ENV_VAR` | — | Same as `--secret`, but read the value from the host environment variable `ENV_VAR` so it never appears on argv, shell history, or CI command logs (repeatable) |
+| `--secret-host NAME=HOST` | — | Host where a secret applies (repeatable): exact host or `*.example.com` wildcard (matches one subdomain level). Every secret needs at least one host rule |
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
 | `--workdir PATH` | `-w` | Working directory inside the box |
 
@@ -334,6 +342,7 @@ boxlite create --name mybox alpine:latest
 boxlite create -p 8080:80 -v /data:/app/data --name web nginx:alpine
 boxlite create --cap-drop ALL --cap-add NET_BIND_SERVICE --name web nginx:alpine
 boxlite create --rootfs /path/to/rootfs --name local-rootfs
+boxlite create --secret openai=sk-... --secret-host openai=api.openai.com --name job alpine:latest my-app
 ```
 
 ---

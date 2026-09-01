@@ -1,6 +1,6 @@
 use crate::cli::{
     CapabilityFlags, GlobalFlags, KernelFlags, ManagementFlags, NetworkFlags, ProcessFlags,
-    PublishFlags, ResourceFlags, VolumeFlags,
+    PublishFlags, ResourceFlags, SecretFlags, VolumeFlags,
 };
 use crate::terminal::StreamManager;
 use crate::util::to_shell_exit_code;
@@ -30,6 +30,9 @@ pub struct RunArgs {
 
     #[command(flatten)]
     pub management: ManagementFlags,
+
+    #[command(flatten)]
+    pub secret: SecretFlags,
 
     /// Path to an already prepared rootfs
     #[arg(long = "rootfs", value_name = "PATH")]
@@ -138,6 +141,7 @@ impl BoxRunner {
             .volume
             .apply_to(&mut options, self.home.as_deref())?;
         self.args.network.apply_to(&mut options)?;
+        self.args.secret.apply_to(&mut options)?;
         self.args.process.apply_to(&mut options)?;
 
         // Detached boxes keep manual lifecycle control: detach silently
@@ -293,5 +297,36 @@ mod tests {
             .expect_err("missing source must be rejected");
 
         assert!(err.to_string().contains("IMAGE or --rootfs"));
+    }
+
+    #[test]
+    fn run_secret_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "--secret",
+            "openai=sk-123",
+            "--secret-from-env",
+            "anthropic=ANTHROPIC_KEY",
+            "--secret-host",
+            "openai=api.openai.com",
+            "--secret-host",
+            "anthropic=api.anthropic.com",
+            "--rootfs",
+            "/tmp/rootfs",
+            "echo",
+            "hi",
+        ])
+        .expect("run --secret should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+
+        assert_eq!(args.secret.secrets, vec!["openai=sk-123"]);
+        assert_eq!(args.secret.secret_env, vec!["anthropic=ANTHROPIC_KEY"]);
+        assert_eq!(
+            args.secret.hosts,
+            vec!["openai=api.openai.com", "anthropic=api.anthropic.com"]
+        );
     }
 }

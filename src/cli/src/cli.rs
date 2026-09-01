@@ -11,10 +11,11 @@ use boxlite::runtime::options::{
 };
 use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime,
-    ContainerCapabilities, ImageRegistry, NetworkSpec,
+    ContainerCapabilities, ImageRegistry, NetworkSpec, Secret,
 };
 use clap::{Args, Command, Parser, Subcommand, ValueEnum};
 use clap_complete::shells::{Bash, Fish, Zsh};
+use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
@@ -682,6 +683,133 @@ impl NetworkFlags {
 }
 
 // ============================================================================
+// SECRET FLAGS (MITM substitution)
+// ============================================================================
+
+/// Secrets for outbound HTTP(S) MITM substitution. The real value never
+/// enters the guest VM: the guest sees only the `<BOXLITE_SECRET:{name}>`
+/// placeholder (injected as `BOXLITE_SECRET_<NAME>`), and gvproxy swaps it
+/// for the real value at the network boundary.
+#[derive(Args, Debug, Clone, Default)]
+pub struct SecretFlags {
+    /// Secret for MITM substitution: NAME=VALUE (repeatable). Injects the
+    /// env var BOXLITE_SECRET_<NAME> into the guest holding the placeholder
+    /// <BOXLITE_SECRET:<NAME>>; the network proxy swaps that placeholder for
+    /// VALUE on the hosts given by --secret-host, so the real value never
+    /// enters the VM. The value is visible on argv — scripts and CI should
+    /// use `--secret-from-env` instead.
+    #[arg(long = "secret", value_name = "NAME=VALUE")]
+    pub secrets: Vec<String>,
+
+    /// Same as --secret (same guest env var BOXLITE_SECRET_<NAME> and
+    /// placeholder <BOXLITE_SECRET:<NAME>>), but the value is read from the
+    /// host environment variable ENV_VAR, so it never appears on argv, shell
+    /// history, or CI command logs. Repeatable.
+    #[arg(long = "secret-from-env", value_name = "NAME=ENV_VAR")]
+    pub secret_env: Vec<String>,
+
+    /// Host where a secret applies: NAME=HOST (repeatable). Patterns: exact
+    /// host or "*.example.com" (matches one subdomain level). A secret with no
+    /// host rule is rejected.
+    #[arg(long = "secret-host", value_name = "NAME=HOST")]
+    pub hosts: Vec<String>,
+}
+
+impl SecretFlags {
+    /// Apply secret flags to `opts.secrets`.
+    pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
+        self.apply_to_with_lookup(opts, |k| std::env::var(k).ok())
+    }
+
+    /// Dependency-injected env lookup for tests (mirrors [`ProcessFlags`]).
+    fn apply_to_with_lookup<F>(&self, opts: &mut BoxOptions, lookup: F) -> anyhow::Result<()>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        if self.secrets.is_empty() && self.secret_env.is_empty() && self.hosts.is_empty() {
+            return Ok(());
+        }
+
+        // Pair --secret-host NAME=HOST rules to secrets by name.
+        let mut hosts_by_name: HashMap<&str, Vec<String>> = HashMap::new();
+        for rule in &self.hosts {
+            let (name, host) = parse_name_value(rule, "--secret-host")?;
+            hosts_by_name
+                .entry(name)
+                .or_default()
+                .push(host.to_string());
+        }
+
+        // Collect (name, value) from both sources. Duplicate names are rejected.
+        let mut value_by_name: Vec<(&str, String)> = Vec::new();
+        for rule in &self.secrets {
+            let (name, value) = parse_name_value(rule, "--secret")?;
+            push_unique_secret(&mut value_by_name, name, value.to_string())?;
+        }
+        for rule in &self.secret_env {
+            let (name, env_var) = parse_name_value(rule, "--secret-from-env")?;
+            let value = lookup(env_var).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--secret-from-env {name}: environment variable {env_var:?} is not set"
+                )
+            })?;
+            push_unique_secret(&mut value_by_name, name, value)?;
+        }
+
+        for (name, value) in value_by_name {
+            let hosts = hosts_by_name.remove(name).unwrap_or_default();
+            if hosts.is_empty() {
+                anyhow::bail!(
+                    "--secret {name} has no --secret-host rule; add --secret-host {name}=HOST \
+                     so the MITM proxy knows which host to intercept"
+                );
+            }
+            opts.secrets.push(Secret {
+                name: name.to_string(),
+                value,
+                hosts,
+                placeholder: format!("<BOXLITE_SECRET:{name}>"),
+            });
+        }
+
+        if let Some(name) = hosts_by_name.keys().next() {
+            anyhow::bail!(
+                "--secret-host {name} has no matching --secret or --secret-from-env entry"
+            );
+        }
+
+        Ok(())
+    }
+}
+
+/// Parse a NAME=VALUE flag argument, rejecting malformed or empty parts.
+fn parse_name_value<'a>(arg: &'a str, flag: &str) -> anyhow::Result<(&'a str, &'a str)> {
+    let Some((name, value)) = arg.split_once('=') else {
+        anyhow::bail!("{flag} expects NAME=VALUE, got {arg:?}");
+    };
+    if name.is_empty() {
+        anyhow::bail!("{flag}: NAME must not be empty");
+    }
+    if value.is_empty() {
+        anyhow::bail!("{flag} {name}: VALUE must not be empty");
+    }
+    Ok((name, value))
+}
+
+/// Append `(name, value)` to `entries`, or error when the name is a duplicate.
+fn push_unique_secret<'a>(
+    entries: &mut Vec<(&'a str, String)>,
+    name: &'a str,
+    value: String,
+) -> anyhow::Result<()> {
+    if entries.iter().any(|(n, _)| *n == name) {
+        anyhow::bail!("duplicate secret name {name:?}; each secret needs a unique name");
+    }
+    entries.push((name, value));
+    Ok(())
+}
+
+// ============================================================================
 // PUBLISH (PORT) FLAGS
 // ============================================================================
 
@@ -1196,6 +1324,128 @@ mod tests {
 
         let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
         flags.require_enabled(&enabled).unwrap();
+    }
+
+    fn secret_flags(secrets: &[&str], env: &[&str], hosts: &[&str]) -> SecretFlags {
+        SecretFlags {
+            secrets: secrets.iter().map(|s| s.to_string()).collect(),
+            secret_env: env.iter().map(|s| s.to_string()).collect(),
+            hosts: hosts.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn test_secret_flags_direct_value_defaults_placeholder_and_hosts() {
+        let mut opts = BoxOptions::default();
+        secret_flags(&["openai=sk-123"], &[], &["openai=api.openai.com"])
+            .apply_to(&mut opts)
+            .expect("valid secret flags");
+
+        assert_eq!(opts.secrets.len(), 1);
+        let s = &opts.secrets[0];
+        assert_eq!(s.name, "openai");
+        assert_eq!(s.value, "sk-123");
+        assert_eq!(s.hosts, vec!["api.openai.com"]);
+        // The placeholder is derived from the name so the local runtime (which
+        // does not synthesize a default) still substitutes.
+        assert_eq!(s.placeholder, "<BOXLITE_SECRET:openai>");
+    }
+
+    #[test]
+    fn test_secret_flags_are_repeatable_and_accumulate_hosts() {
+        let mut opts = BoxOptions::default();
+        secret_flags(&["a=1", "b=2"], &[], &["a=h1", "a=h2", "b=*.example.com"])
+            .apply_to(&mut opts)
+            .expect("repeatable flags");
+
+        assert_eq!(opts.secrets.len(), 2);
+        assert_eq!(opts.secrets[0].name, "a");
+        assert_eq!(opts.secrets[0].hosts, vec!["h1", "h2"]);
+        assert_eq!(opts.secrets[1].name, "b");
+        assert_eq!(opts.secrets[1].hosts, vec!["*.example.com"]);
+    }
+
+    #[test]
+    fn test_secret_flags_read_value_from_env() {
+        let mut opts = BoxOptions::default();
+        secret_flags(&[], &["openai=OPENAI_KEY"], &["openai=api.openai.com"])
+            .apply_to_with_lookup(&mut opts, |k| {
+                (k == "OPENAI_KEY").then(|| "sk-env".to_string())
+            })
+            .expect("env source");
+
+        assert_eq!(opts.secrets[0].value, "sk-env");
+        assert_eq!(opts.secrets[0].placeholder, "<BOXLITE_SECRET:openai>");
+    }
+
+    #[test]
+    fn test_secret_flags_missing_env_variable_is_rejected() {
+        let mut opts = BoxOptions::default();
+        let err = secret_flags(&[], &["openai=NOT_SET"], &["openai=h"])
+            .apply_to_with_lookup(&mut opts, |_| None)
+            .expect_err("unset env var must error");
+
+        assert!(err.to_string().contains("NOT_SET"), "{err}");
+    }
+
+    #[test]
+    fn test_secret_flags_malformed_args_are_rejected() {
+        for (secrets, env, hosts) in [
+            (vec!["openai"], vec![], vec!["openai=h"]), // no '='
+            (vec!["=v"], vec![], vec!["openai=h"]),     // empty name
+            (vec!["n="], vec![], vec!["n=h"]),          // empty value
+            (vec!["openai=sk"], vec![], vec!["=h"]),    // empty host name
+        ] {
+            let mut opts = BoxOptions::default();
+            let err = secret_flags(&secrets, &env, &hosts)
+                .apply_to(&mut opts)
+                .expect_err("malformed args must error");
+            assert!(
+                err.to_string().contains("NAME=VALUE")
+                    || err.to_string().contains("must not be empty"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_secret_flags_require_a_host_rule() {
+        let mut opts = BoxOptions::default();
+        let err = secret_flags(&["openai=sk"], &[], &[])
+            .apply_to(&mut opts)
+            .expect_err("host-less secret must error");
+
+        assert!(err.to_string().contains("--secret-host"), "{err}");
+    }
+
+    #[test]
+    fn test_secret_flags_orphan_host_rule_is_rejected() {
+        let mut opts = BoxOptions::default();
+        let err = secret_flags(&[], &[], &["openai=h"])
+            .apply_to(&mut opts)
+            .expect_err("orphan host rule must error");
+
+        assert!(err.to_string().contains("no matching"), "{err}");
+    }
+
+    #[test]
+    fn test_secret_flags_duplicate_name_is_rejected() {
+        let mut opts = BoxOptions::default();
+        let err = secret_flags(&["openai=a", "openai=b"], &[], &["openai=h"])
+            .apply_to(&mut opts)
+            .expect_err("duplicate name must error");
+
+        assert!(err.to_string().contains("duplicate secret name"), "{err}");
+    }
+
+    #[test]
+    fn test_secret_flags_default_left_untouched() {
+        let mut opts = BoxOptions::default();
+        secret_flags(&[], &[], &[])
+            .apply_to(&mut opts)
+            .expect("no-op apply");
+
+        assert!(opts.secrets.is_empty());
     }
 
     #[test]

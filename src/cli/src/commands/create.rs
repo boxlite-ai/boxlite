@@ -1,6 +1,6 @@
 use crate::cli::{
     CapabilityFlags, GlobalFlags, KernelFlags, NetworkFlags, PublishFlags, ResourceFlags,
-    VolumeFlags,
+    SecretFlags, VolumeFlags,
 };
 use boxlite::{BoxOptions, RootfsSpec};
 use clap::Args;
@@ -47,6 +47,9 @@ pub struct CreateArgs {
     #[command(flatten)]
     pub network: NetworkFlags,
 
+    #[command(flatten)]
+    pub secret: SecretFlags,
+
     /// Command to run as the container's init (replaces the image CMD;
     /// the image ENTRYPOINT is preserved), mirroring `docker create`.
     #[arg(index = 2, trailing_var_arg = true)]
@@ -79,6 +82,7 @@ impl CreateArgs {
         self.publish.apply_to(&mut options)?;
         self.volume.apply_to(&mut options, global.home.as_deref())?;
         self.network.apply_to(&mut options)?;
+        self.secret.apply_to(&mut options)?;
 
         // A `create`d box is a background box: `create` then `start`/`exec` runs
         // its main command detached (docker's create → start), so the launching
@@ -189,5 +193,32 @@ mod tests {
         let capabilities = opts.advanced.capabilities().expect("capabilities set");
         assert_eq!(capabilities.add, vec!["SYS_ADMIN"]);
         assert_eq!(capabilities.drop, vec!["CAP_NET_RAW"]);
+    }
+
+    #[test]
+    fn create_secret_flags_reach_box_options() {
+        let cli = Cli::try_parse_from([
+            "boxlite",
+            "create",
+            "--secret",
+            "openai=sk-123",
+            "--secret-host",
+            "openai=api.openai.com",
+            "--rootfs",
+            "/tmp/rootfs",
+        ])
+        .expect("create --secret should parse");
+        let Commands::Create(args) = cli.command else {
+            panic!("expected create command");
+        };
+
+        let opts = args
+            .to_box_options(&cli.global)
+            .expect("options should build");
+        assert_eq!(opts.secrets.len(), 1);
+        assert_eq!(opts.secrets[0].name, "openai");
+        assert_eq!(opts.secrets[0].value, "sk-123");
+        assert_eq!(opts.secrets[0].hosts, vec!["api.openai.com"]);
+        assert_eq!(opts.secrets[0].placeholder, "<BOXLITE_SECRET:openai>");
     }
 }
