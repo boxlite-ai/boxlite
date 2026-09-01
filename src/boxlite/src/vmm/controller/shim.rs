@@ -103,6 +103,19 @@ impl ShimHandler {
         }
     }
 
+    /// Whether the process this handler was built for is still running.
+    ///
+    /// Not the same question as bare liveness, and teardown must ask this one: a
+    /// pid recycled since construction is alive, yet answering "yes" for it lets
+    /// a wait loop run its full course and then escalate onto a stranger. A
+    /// recycled pid has to read as gone.
+    ///
+    /// Collapses to plain liveness for a handler with no fingerprint, which is
+    /// the most that can be said about one.
+    fn recorded_process_is_running(&self) -> bool {
+        crate::util::is_process_alive(self.pid) && self.pid_identity_holds()
+    }
+
     /// Graceful shutdown of the recorded process: SIGTERM, wait, then SIGKILL.
     ///
     /// Signals only `self.pid` (the outer launcher). The full process-tree
@@ -181,19 +194,35 @@ impl ShimHandler {
                     return Ok(());
                 }
                 if result < 0 {
-                    // Error - process may not be our child (common in attached mode)
-                    // Fall back to checking if process still exists
-                    let exists = crate::util::is_process_alive(self.pid);
-                    if !exists {
-                        return Ok(()); // Already dead
+                    // Error - process may not be our child (common in attached
+                    // mode). Fall back to asking whether *our* process is still
+                    // there. Liveness alone would not do: the pid can be
+                    // recycled while we poll, and a bare "it exists" keeps the
+                    // loop running until the timeout below fires on a stranger.
+                    if !self.recorded_process_is_running() {
+                        return Ok(()); // Already dead, or no longer ours
                     }
                 }
                 // result == 0 means still running
 
                 if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
-                    // Timeout - force kill
-                    unsafe {
-                        libc::kill(self.pid as i32, libc::SIGKILL);
+                    // Timeout - force kill, but only while the pid is still the
+                    // process we set out to stop. Up to a full poll interval has
+                    // passed since the check above, and the entry guard is by now
+                    // seconds stale; re-reading here narrows the window in which
+                    // a recycled pid can take this SIGKILL down to a syscall,
+                    // matching what `jailer::signal_live` does per descendant.
+                    if self.recorded_process_is_running() {
+                        unsafe {
+                            libc::kill(self.pid as i32, libc::SIGKILL);
+                        }
+                    } else {
+                        tracing::warn!(
+                            box_id = %self.box_id,
+                            pid = self.pid,
+                            "Shim pid stopped matching its recorded start-time during \
+                             shutdown; not force-killing it"
+                        );
                     }
                     return Ok(());
                 }
@@ -736,5 +765,197 @@ mod tests {
              log through `emit_redacted_box_config_trace` instead.\n  {}",
             offenders.join("\n  ")
         );
+    }
+
+    /// Set on the re-exec that runs the pid-reuse scenario inside a rootless
+    /// user+pid namespace. Absent means this is the outer invocation, whose
+    /// only job is to build that namespace and report what happened inside.
+    #[cfg(target_os = "linux")]
+    const PID_REUSE_NS_MARKER: &str = "BOXLITE_TEST_PID_REUSE_IN_NS";
+
+    /// The attached branch checks the pid's identity once, before the SIGTERM,
+    /// then polls for up to `GRACEFUL_SHUTDOWN_TIMEOUT_MS` before force-killing.
+    /// A pid recycled inside that window gets the timeout `SIGKILL` under the
+    /// *previous* occupant's warrant — the guard at the top of the branch has
+    /// long since passed, and the poll's `is_process_alive` cannot tell the two
+    /// occupants apart.
+    ///
+    /// Staging that needs a pid reused on demand, which the host cannot do:
+    /// `pid_max` is in the millions so no fork storm returns to a given number,
+    /// and `/proc/sys/kernel/ns_last_pid` is not writable. Both constraints lift
+    /// inside a rootless user+pid namespace, so this re-execs itself into one
+    /// and drives the reuse directly.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attached_timeout_kill_skips_a_pid_recycled_during_the_grace_window() {
+        if std::env::var_os(PID_REUSE_NS_MARKER).is_some() {
+            assert_recycled_pid_survives_the_timeout_kill();
+            return;
+        }
+
+        let exe = std::env::current_exe().expect("test binary path");
+        let output = match std::process::Command::new("unshare")
+            .args(["-Ur", "--pid", "--fork", "--mount-proc"])
+            .arg(&exe)
+            // Substring filter: this name matches exactly one test, which
+            // avoids having to reconstruct the harness' module path.
+            .arg("attached_timeout_kill_skips_a_pid_recycled_during_the_grace_window")
+            .args(["--nocapture", "--test-threads=1"])
+            .env(PID_REUSE_NS_MARKER, "1")
+            .output()
+        {
+            Ok(output) => output,
+            Err(e) => {
+                eprintln!("skipping: cannot run `unshare`: {e}");
+                return;
+            }
+        };
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // A host that forbids unprivileged user namespaces cannot stage pid
+            // reuse at all; that is a missing capability, not a regression.
+            if stderr.contains("unshare failed") || stderr.contains("Operation not permitted") {
+                eprintln!("skipping: rootless user+pid namespaces unavailable: {stderr}");
+                return;
+            }
+            panic!(
+                "pid-reuse scenario failed inside the namespace\n--- stdout ---\n{}\n--- stderr ---\n{stderr}",
+                String::from_utf8_lossy(&output.stdout),
+            );
+        }
+    }
+
+    /// Whether `pid` currently has SIGTERM set to `SIG_IGN`, read from the
+    /// `SigIgn` mask in `/proc/<pid>/status` (bit `SIGTERM - 1`).
+    #[cfg(target_os = "linux")]
+    fn ignores_sigterm(pid: u32) -> bool {
+        let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
+            return false;
+        };
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix("SigIgn:"))
+            .and_then(|hex| u64::from_str_radix(hex.trim(), 16).ok())
+            .is_some_and(|mask| mask & (1 << (libc::SIGTERM - 1)) != 0)
+    }
+
+    /// Body of the test above, running as pid 1 of a fresh pid namespace.
+    #[cfg(target_os = "linux")]
+    fn assert_recycled_pid_survives_the_timeout_kill() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        // The poll runs every 50ms, so there is a gap between the victim being
+        // reaped and the bystander taking its number in which the loop can see
+        // the pid empty and return before ever reaching the timeout kill. That
+        // is a staging miss, not a pass — `elapsed` below detects it, and this
+        // is how many times we retry.
+        const ATTEMPTS: usize = 6;
+
+        for attempt in 1..=ATTEMPTS {
+            // The victim must not be *our* child: the attached branch only
+            // reaches its timeout while `waitpid` keeps failing, and a child
+            // would be reaped by the poll itself, returning early. A helper
+            // shell owns it and reaps it on demand. The victim ignores SIGTERM
+            // so the timeline belongs to this test rather than to the signal.
+            let mut helper = Command::new("sh")
+                .arg("-c")
+                .arg("sh -c 'trap \"\" TERM; sleep 3600' & echo $!; wait; exec sleep 3600")
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("spawn the victim's owner");
+            let victim: u32 = {
+                let mut line = String::new();
+                BufReader::new(helper.stdout.take().expect("helper stdout"))
+                    .read_line(&mut line)
+                    .expect("read the victim's pid");
+                line.trim().parse().expect("victim pid is a number")
+            };
+            // `$!` is reported at fork time, before the shell has run its
+            // `trap`. Signalling into that gap kills the victim outright and the
+            // poll returns long before the timeout, so wait for the disposition
+            // to actually be installed.
+            while !ignores_sigterm(victim) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+
+            // Frees the victim's number mid-grace and puts a bystander on it.
+            let recycler = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(600));
+                unsafe { libc::kill(victim as i32, libc::SIGKILL) };
+                // Spin rather than sleep: every millisecond the number stays
+                // empty is a millisecond the poll can notice it.
+                let deadline = Instant::now() + Duration::from_millis(500);
+                while std::path::Path::new(&format!("/proc/{victim}")).exists() {
+                    if Instant::now() >= deadline {
+                        return None;
+                    }
+                    std::hint::spin_loop();
+                }
+                std::fs::write("/proc/sys/kernel/ns_last_pid", (victim - 1).to_string()).ok()?;
+                Command::new("sleep").arg("3600").spawn().ok()
+            });
+
+            let mut handler =
+                ShimHandler::from_pid(victim, BoxID::parse("pidreusetest").expect("valid id"));
+            assert!(
+                handler.pid_identity_holds(),
+                "the handler must start out owning its pid, or the branch under \
+                 test returns at its entry guard instead of reaching the timeout"
+            );
+
+            let started = Instant::now();
+            let _ = handler.graceful_stop();
+            let elapsed = started.elapsed();
+
+            let bystander = recycler.join().expect("recycler thread");
+            let staged = bystander.as_ref().is_some_and(|b| b.id() == victim)
+                // GRACEFUL_SHUTDOWN_TIMEOUT_MS is 2000; anything materially
+                // shorter means the poll saw the pid empty and returned.
+                && elapsed >= Duration::from_millis(1500);
+
+            // Read the bystander's own exit status rather than sampling
+            // `/proc` the instant `graceful_stop` returns: a SIGKILL sent
+            // microseconds earlier has not necessarily landed yet, and that
+            // sampling races into reporting a killed bystander as alive.
+            let killed_by = bystander.and_then(|mut bystander| {
+                let settle = Instant::now() + Duration::from_millis(500);
+                loop {
+                    match bystander.try_wait() {
+                        Ok(Some(status)) => return status.signal(),
+                        Ok(None) if Instant::now() >= settle => {
+                            let _ = bystander.kill();
+                            let _ = bystander.wait();
+                            return None;
+                        }
+                        Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                        Err(_) => return None,
+                    }
+                }
+            });
+
+            let _ = helper.kill();
+            let _ = helper.wait();
+
+            if !staged {
+                eprintln!(
+                    "attempt {attempt}: pid reuse did not land (elapsed {elapsed:?}); retrying"
+                );
+                continue;
+            }
+
+            assert_eq!(
+                killed_by, None,
+                "graceful_stop's timeout SIGKILL landed on pid {victim} after it had \
+                 been recycled: the entry guard passed for the process that used to \
+                 own that number, and nothing re-checked before the kill"
+            );
+            return;
+        }
+
+        panic!("could not stage pid reuse in {ATTEMPTS} attempts");
     }
 }
