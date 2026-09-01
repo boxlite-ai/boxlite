@@ -3,12 +3,18 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable } from '@nestjs/common'
+import { InjectRedis } from '@nestjs-modules/ioredis'
+import { Injectable, Logger } from '@nestjs/common'
 import axios from 'axios'
+import { Redis } from 'ioredis'
 import { TypedConfigService } from '../config/typed-config.service'
 import { BoxCreationAdmissionUnavailableError } from '../box/errors/box-creation-limit.error'
 
 const COMMERCE_REQUEST_TIMEOUT_MS = 2_000
+const COMMERCE_BOX_LIMIT_CACHE_KEY_PREFIX = 'commerce:box-limit:v1:'
+const COMMERCE_BOX_LIMIT_CACHE_TTL_SECONDS = 30
+const UNLIMITED_CACHE_VALUE = 'unlimited'
+const LIMIT_CACHE_VALUE_PREFIX = 'limit:'
 
 type PublicPlan = {
   id: string
@@ -20,13 +26,21 @@ type OrganizationPlan = {
   entitlements?: 'active' | 'suspended'
 }
 
+type CachedBoxLimit = { hit: true; maxCreatedBoxes: number | undefined } | { hit: false }
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 @Injectable()
 export class CommerceBoxLimitService {
-  constructor(private readonly configService: TypedConfigService) {}
+  private readonly logger = new Logger(CommerceBoxLimitService.name)
+  private readonly inFlightResolutions = new Map<string, Promise<number | undefined>>()
+
+  constructor(
+    private readonly configService: TypedConfigService,
+    @InjectRedis() private readonly redis: Redis,
+  ) {}
 
   async resolveMaxCreatedBoxes(organizationId: string): Promise<number | undefined> {
     const rawBaseUrl = this.configService.get('billingApiUrl')?.trim()
@@ -40,6 +54,80 @@ export class CommerceBoxLimitService {
     }
 
     const baseUrl = this.normalizeBaseUrl(rawBaseUrl)
+    const cacheKey = `${COMMERCE_BOX_LIMIT_CACHE_KEY_PREFIX}${encodeURIComponent(organizationId)}`
+    const inFlightResolution = this.inFlightResolutions.get(cacheKey)
+    if (inFlightResolution) {
+      return inFlightResolution
+    }
+
+    const resolution = this.resolveFromCacheOrCommerce(organizationId, cacheKey, baseUrl, token).finally(() => {
+      this.inFlightResolutions.delete(cacheKey)
+    })
+    this.inFlightResolutions.set(cacheKey, resolution)
+
+    return resolution
+  }
+
+  private async resolveFromCacheOrCommerce(
+    organizationId: string,
+    cacheKey: string,
+    baseUrl: string,
+    token: string,
+  ): Promise<number | undefined> {
+    const cachedLimit = await this.getCachedLimit(cacheKey)
+    if (cachedLimit.hit) {
+      return cachedLimit.maxCreatedBoxes
+    }
+
+    const maxCreatedBoxes = await this.fetchMaxCreatedBoxes(organizationId, baseUrl, token)
+    await this.cacheResolvedLimit(cacheKey, maxCreatedBoxes)
+    return maxCreatedBoxes
+  }
+
+  private async getCachedLimit(cacheKey: string): Promise<CachedBoxLimit> {
+    let cached: string | null
+    try {
+      cached = await this.redis.get(cacheKey)
+    } catch {
+      this.logger.warn(`Failed to read Commerce box limit cache for ${cacheKey}; falling back to Commerce`)
+      return { hit: false }
+    }
+
+    if (cached === null) {
+      return { hit: false }
+    }
+    if (cached === UNLIMITED_CACHE_VALUE) {
+      return { hit: true, maxCreatedBoxes: undefined }
+    }
+
+    if (cached.startsWith(LIMIT_CACHE_VALUE_PREFIX)) {
+      const rawLimit = cached.slice(LIMIT_CACHE_VALUE_PREFIX.length)
+      const limit = Number(rawLimit)
+      if (/^(0|[1-9]\d*)$/.test(rawLimit) && Number.isSafeInteger(limit)) {
+        return { hit: true, maxCreatedBoxes: limit }
+      }
+    }
+
+    this.logger.warn(`Ignoring invalid Commerce box limit cache value for ${cacheKey}`)
+    return { hit: false }
+  }
+
+  private async cacheResolvedLimit(cacheKey: string, maxCreatedBoxes: number | undefined): Promise<void> {
+    const cachedValue =
+      maxCreatedBoxes === undefined ? UNLIMITED_CACHE_VALUE : `${LIMIT_CACHE_VALUE_PREFIX}${maxCreatedBoxes}`
+
+    try {
+      await this.redis.set(cacheKey, cachedValue, 'EX', COMMERCE_BOX_LIMIT_CACHE_TTL_SECONDS)
+    } catch {
+      this.logger.warn(`Failed to write Commerce box limit cache for ${cacheKey}`)
+    }
+  }
+
+  private async fetchMaxCreatedBoxes(
+    organizationId: string,
+    baseUrl: string,
+    token: string,
+  ): Promise<number | undefined> {
     const requestConfig = {
       timeout: COMMERCE_REQUEST_TIMEOUT_MS,
       headers: { authorization: `Bearer ${token}` },
