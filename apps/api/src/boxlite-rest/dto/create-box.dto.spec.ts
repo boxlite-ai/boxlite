@@ -377,7 +377,9 @@ describe('CreateBoxDto secrets', () => {
   it('accepts a secret with name+value and optional hosts/placeholder', async () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
-        secrets: [{ name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' }],
+        secrets: [
+          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+        ],
       }),
     )
 

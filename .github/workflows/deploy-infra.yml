@@ -451,6 +451,33 @@ jobs:
           [ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")
           npm run deploy -- "${args[@]}"
 
+      # Evidence publication is deliberately a second OIDC session. The deployment role is broad
+      # enough to reconcile the stack; the publisher role can only send to one Backoffice queue.
+      # If Backoffice has not been provisioned or is unavailable, the successful deployment remains
+      # successful and the warning in this step is the visible evidence gap.
+      - name: Configure deployment evidence publisher
+        id: deployment-evidence-credentials
+        if: ${{ inputs.apply }}
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-backoffice-${{ inputs.stage }}-deployment-publisher
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deployment-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          unset-current-credentials: true
+
+      - name: Publish deployment evidence
+        if: ${{ inputs.apply && steps.deployment-evidence-credentials.outcome == 'success' }}
+        continue-on-error: true
+        working-directory: apps/infra
+        env:
+          BACKOFFICE_DEPLOYMENT_QUEUE_URL: https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ vars.AWS_ACCOUNT_ID }}/boxlite-backoffice-${{ inputs.stage }}-deployments
+          DEPLOYMENT_EVIDENCE_COMPONENTS: ${{ inputs.components == 'api+runner' && 'api,runner' || inputs.components }}
+          DEPLOYMENT_EVIDENCE_VERSION: ${{ env.VERSION }}
+          DEPLOYMENT_EVIDENCE_COMMIT_SHA: ${{ needs.resolve-ref.outputs.sha }}
+          DEPLOYMENT_EVIDENCE_WORKFLOW: deploy-infra
+        run: npx tsx deployment/deployment-evidence.ts
+
   # E2E cloud has no automatic trigger of its own; a deploy is the one
   # event that makes running it meaningful, because only here are the
   # deployed stack and the SDKs under test the same commit.
