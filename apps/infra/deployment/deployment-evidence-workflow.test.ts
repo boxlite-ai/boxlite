@@ -29,6 +29,15 @@ test('deploy-infra emits only the selected API and Runner components using the r
   assert.match(infra, /DEPLOYMENT_EVIDENCE_WORKFLOW: deploy-infra/)
 })
 
+// DEPLOY_EXCLUDE only ever removes Api or Runner, so every deploy-infra run reconciles
+// stack/edge.ts's Proxy and stack/observability.ts's OtelCollector from the selected
+// commit. Omitting them leaves their recorded identity stale until the next release.
+test('deploy-infra reports the components no narrowing can exclude', () => {
+  const components = infra.match(/DEPLOYMENT_EVIDENCE_COMPONENTS: (.*)/)?.[1] ?? ''
+  assert.match(components, /proxy/)
+  assert.match(components, /otel-collector/)
+})
+
 test('deploy-release separates published artifact identity from checkout-built proxy identity', () => {
   assert.match(release, /git rev-list -n 1 "v\$VERSION"/)
   assert.match(release, /DEPLOYMENT_EVIDENCE_COMPONENTS: api,runner/)

@@ -115,6 +115,14 @@ test('pins every Service load balancer type at the provider boundary', () => {
   ]
 
   for (const service of services) {
+    // The section markers cannot all carry the resource name — Api's spans a line break —
+    // so the name is asserted here instead. Renaming an sst.aws.Service replaces the
+    // resource rather than updating it, and nothing else in this file would notice.
+    assert.match(
+      service.section,
+      new RegExp(`new sst\\.aws\\.Service\\(\\s*'${service.name}'`),
+      `${service.name} must keep its resource name, because a rename replaces the service`,
+    )
     assert.match(
       service.section,
       new RegExp(`loadBalancerType\\s*=\\s*'${service.type}'`),

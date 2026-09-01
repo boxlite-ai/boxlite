@@ -5,6 +5,7 @@ import {
   Get,
   NotFoundException,
   Param,
+  ParseUUIDPipe,
   Query,
   Res,
   UseGuards,
@@ -108,11 +109,22 @@ export class AdminProviderController {
   @Get('boxes/:id')
   @ApiOperation({ summary: 'Get box placement, health, and jobs', operationId: 'adminGetBoxOverview' })
   @ApiParam({ name: 'id', description: 'Box ID' })
+  @ApiQuery({ name: 'jobCursor', required: false, description: 'Opaque job page cursor' })
+  @ApiQuery({ name: 'sectionLimit', required: false, type: Number, minimum: 1, maximum: 200, example: 50 })
   @ApiOkResponse({ type: AdminBoxDetailDto })
+  @ApiBadRequestResponse({ description: 'Invalid cursor or section limit' })
   @ApiNotFoundResponse({ description: 'Box not found' })
-  async box(@Param('id') id: string, @Res({ passthrough: true }) response: Response): Promise<AdminBoxDetailDto> {
+  async box(
+    @Param('id') id: string,
+    @Query('jobCursor') jobCursor: string | undefined,
+    @Query('sectionLimit') sectionLimit: string | undefined,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<AdminBoxDetailDto> {
     response.setHeader('Cache-Control', 'private, no-store')
-    const box = await this.platform.box(id)
+    const box = await this.platform.box(id, {
+      ...(jobCursor ? { jobCursor } : {}),
+      jobLimit: bounded(sectionLimit, 50),
+    })
     if (!box) throw new NotFoundException('Box not found')
     return box
   }
@@ -135,7 +147,10 @@ export class AdminProviderController {
   @ApiParam({ name: 'id', description: 'Job ID' })
   @ApiOkResponse({ type: AdminJobOverviewDto })
   @ApiNotFoundResponse({ description: 'Job not found' })
-  async job(@Param('id') id: string, @Res({ passthrough: true }) response: Response): Promise<AdminJobOverviewDto> {
+  async job(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<AdminJobOverviewDto> {
     response.setHeader('Cache-Control', 'private, no-store')
     const job = await this.platform.job(id)
     if (!job) throw new NotFoundException('Job not found')
@@ -182,7 +197,7 @@ export class AdminProviderController {
   @ApiBadRequestResponse({ description: 'Invalid cursor or section limit' })
   @ApiNotFoundResponse({ description: 'Organization not found' })
   async organization(
-    @Param('organizationId') organizationId: string,
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
     @Query('memberCursor') memberCursor: string | undefined,
     @Query('boxCursor') boxCursor: string | undefined,
     @Query('sectionLimit') sectionLimit: string | undefined,

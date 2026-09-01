@@ -52,4 +52,38 @@ describe('AdminProviderController', () => {
       await app.close()
     }
   })
+
+  // organization.id and job.id are uuid columns, so an unvalidated path parameter reaches
+  // Postgres and comes back as `invalid input syntax for type uuid` — a 500 for what is a
+  // malformed request. region.id and box.id are character varying and take no such pipe.
+  it.each(['organizations', 'jobs'])(
+    'rejects a malformed uuid in /%s/:id before it reaches the database',
+    async (route) => {
+      const service = jest.fn().mockResolvedValue(null)
+      const module = await Test.createTestingModule({
+        controllers: [AdminProviderController],
+        providers: [
+          { provide: AdminOrganizationOverviewService, useValue: { detail: service } },
+          { provide: AdminPlatformOverviewService, useValue: { job: service } },
+        ],
+      })
+        .overrideGuard(CombinedAuthGuard)
+        .useValue({ canActivate: () => true })
+        .overrideGuard(SystemActionGuard)
+        .useValue({ canActivate: () => true })
+        .compile()
+      const app: INestApplication = module.createNestApplication()
+      app.setGlobalPrefix('api')
+      await app.listen(0)
+      try {
+        const address = app.getHttpServer().address() as AddressInfo
+        const malformed = await fetch(`http://127.0.0.1:${address.port}/api/admin/${route}/not-a-uuid`)
+
+        expect(malformed.status).toBe(400)
+        expect(service).not.toHaveBeenCalled()
+      } finally {
+        await app.close()
+      }
+    },
+  )
 })

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
-import { spawnSync } from 'node:child_process'
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
@@ -113,7 +113,20 @@ const required = (name: string): string => {
   return value
 }
 
+/**
+ * Why the send failed, in one line. The publish step is `continue-on-error`, so this is the
+ * only trace a lost event leaves in the run: a bare attempt count cannot separate a denied
+ * queue from an aws binary that never ran.
+ */
+const failureDetail = (result: SpawnSyncReturns<string>): string => {
+  if (result.error) return `aws sqs send-message could not run: ${result.error.message}`
+  const outcome = result.signal ? `killed by ${result.signal}` : `exited ${result.status}`
+  const reason = result.stderr?.trim().replace(/\s+/g, ' ').slice(0, 300)
+  return reason ? `aws sqs send-message ${outcome}: ${reason}` : `aws sqs send-message ${outcome}`
+}
+
 const publish = (queueUrl: string, event: DeploymentObservedV1): void => {
+  let lastFailure = ''
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const result = spawnSync(
       'aws',
@@ -121,8 +134,12 @@ const publish = (queueUrl: string, event: DeploymentObservedV1): void => {
       { encoding: 'utf8', maxBuffer: 1024 * 1024 },
     )
     if (result.status === 0) return
+    lastFailure = failureDetail(result)
   }
-  throw new Error(`deployment evidence send failed after 3 attempts for component ${event.deployment.componentKey}`)
+  throw new Error(
+    `deployment evidence send failed for component ${event.deployment.componentKey} ` +
+      `(event ${event.eventId}) after 3 attempts: ${lastFailure}`,
+  )
 }
 
 export const publishFromEnvironment = (): void => {

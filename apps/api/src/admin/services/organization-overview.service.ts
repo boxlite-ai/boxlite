@@ -10,32 +10,36 @@ import { BoxUsagePeriodArchive } from '../../usage/entities/box-usage-period-arc
 import { BoxUsagePeriod } from '../../usage/entities/box-usage-period.entity'
 import { User } from '../../user/user.entity'
 import { cursorFor, cursorValue, uuidCursorValue } from '../utils/pagination'
+import { GIB, INACTIVE_BOX_STATES, latestDate } from '../utils/projection'
 
 type ListQuery = { query?: string; cursor?: string; limit: number }
 type DetailQuery = { memberCursor?: string; boxCursor?: string; memberLimit: number; boxLimit: number }
 type ImpactState = 'impacted' | 'not_impacted'
 type UsagePeriod = Pick<BoxUsagePeriod, 'startAt' | 'endAt' | 'cpu' | 'disk'>
 type Fraction = { numerator: bigint; denominator: bigint }
+// One row per (organization, state, desiredState) rather than one row per box.
+type BoxGroupRow = { organizationId: string; state: BoxState; desiredState: string; boxCount: string; observedAt: Date }
+type MemberCountRow = { organizationId: string; memberCount: string }
+type OrganizationStats = {
+  memberCount: number
+  boxCount: number
+  impactedBoxCount: number
+  observedAt: Date | null
+}
 
-const GIB = 1024 * 1024 * 1024
-const inactiveBoxStates = [BoxState.DESTROYED, BoxState.ARCHIVED]
 const escapedLike = (value: string): string => `%${value.replace(/[\\%_]/g, '\\$&')}%`
 const timestamp = (value: Date): string => value.toISOString()
 const impactState = (impacted: boolean): ImpactState => (impacted ? 'impacted' : 'not_impacted')
-const isActiveBox = (box: Pick<Box, 'state'>): boolean => !inactiveBoxStates.includes(box.state)
-const isImpactedBox = (box: Pick<Box, 'state' | 'desiredState'>): boolean =>
+// state and desiredState are separate enums, so the comparison goes through their text form.
+const isImpactedBox = (box: { state: BoxState; desiredState: string }): boolean =>
   box.state === BoxState.ERROR || String(box.state) !== String(box.desiredState)
-const latestDate = (dates: Date[]): Date => dates.reduce((latest, value) => (latest >= value ? latest : value))
-const groupBy = <T>(items: T[], keyFor: (item: T) => string): Map<string, T[]> => {
-  const grouped = new Map<string, T[]>()
-  for (const item of items) {
-    const key = keyFor(item)
-    const group = grouped.get(key)
-    if (group) group.push(item)
-    else grouped.set(key, [item])
-  }
-  return grouped
-}
+const count = (value: string | number | null | undefined): number => Number(value ?? 0) || 0
+const emptyStats = (): OrganizationStats => ({
+  memberCount: 0,
+  boxCount: 0,
+  impactedBoxCount: 0,
+  observedAt: null,
+})
 const decimalFraction = (value: number): Fraction => {
   const [coefficient, exponentText] = value.toString().toLowerCase().split('e')
   const exponent = Number(exponentText ?? 0)
@@ -81,8 +85,6 @@ export class AdminOrganizationOverviewService {
     @InjectRepository(Box) private readonly boxRepository: Repository<Box>,
     @InjectRepository(BoxUsagePeriod)
     private readonly usagePeriodRepository: Repository<BoxUsagePeriod>,
-    @InjectRepository(BoxUsagePeriodArchive)
-    private readonly usagePeriodArchiveRepository: Repository<BoxUsagePeriodArchive>,
   ) {}
 
   async list(input: ListQuery) {
@@ -102,55 +104,89 @@ export class AdminOrganizationOverviewService {
       take: input.limit + 1,
     })
     const page = organizations.slice(0, input.limit)
-    const organizationIds = page.map((organization) => organization.id)
-    const [memberships, boxes] = organizationIds.length
-      ? await Promise.all([
-          this.organizationUserRepository.find({
-            where: { organizationId: In(organizationIds) },
-            select: { organizationId: true, userId: true },
-          }),
-          this.boxRepository.find({
-            where: { organizationId: In(organizationIds) },
-            select: { organizationId: true, state: true, desiredState: true, updatedAt: true },
-          }),
-        ])
-      : [[], []]
     const nextOrganization = organizations.length > input.limit ? page.at(-1) : undefined
-    const membershipsByOrganization = groupBy(memberships, (membership) => membership.organizationId)
-    const boxesByOrganization = groupBy(boxes, (box) => box.organizationId)
+    const stats = await this.organizationStats(page.map((organization) => organization.id))
     const summaries = page.map((organization) => {
-      const organizationBoxes = boxesByOrganization.get(organization.id) ?? []
-      const activeBoxes = organizationBoxes.filter(isActiveBox)
-      const observedAt = latestDate([organization.updatedAt, ...organizationBoxes.map((box) => box.updatedAt)])
+      const organizationStats = stats.get(organization.id) ?? emptyStats()
       return {
         organizationId: organization.id,
         name: organization.name,
-        memberCount: membershipsByOrganization.get(organization.id)?.length ?? 0,
-        boxCount: activeBoxes.length,
-        impactState: impactState(activeBoxes.some(isImpactedBox)),
-        observedAt: timestamp(observedAt),
+        memberCount: organizationStats.memberCount,
+        boxCount: organizationStats.boxCount,
+        impactState: impactState(organizationStats.impactedBoxCount > 0),
+        observedAt: timestamp(
+          latestDate([organization.updatedAt, organizationStats.observedAt]) ?? organization.updatedAt,
+        ),
       }
     })
     return {
       items: summaries,
       nextCursor: nextOrganization ? cursorFor(nextOrganization.id) : null,
       limit: input.limit,
-      observedAt: summaries.length
-        ? latestDate(summaries.map((summary) => new Date(summary.observedAt))).toISOString()
-        : null,
+      observedAt: latestDate(summaries.map((summary) => new Date(summary.observedAt)))?.toISOString() ?? null,
     }
   }
 
+  /**
+   * Counts each organization's members and boxes in the database. The page above is
+   * bounded, so the work behind it must be too: grouping by the box state enums keeps the
+   * result set sized by the enum cross-product rather than by how many boxes exist.
+   */
+  private async organizationStats(organizationIds: string[]): Promise<Map<string, OrganizationStats>> {
+    const stats = new Map<string, OrganizationStats>()
+    if (organizationIds.length === 0) return stats
+
+    const [memberCounts, boxGroups] = await Promise.all([
+      this.organizationUserRepository
+        .createQueryBuilder('member')
+        .select('member."organizationId"', 'organizationId')
+        .addSelect('COUNT(*)', 'memberCount')
+        .where('member."organizationId" IN (:...organizationIds)', { organizationIds })
+        .groupBy('member."organizationId"')
+        .getRawMany<MemberCountRow>(),
+      this.boxRepository
+        .createQueryBuilder('box')
+        .select('box."organizationId"', 'organizationId')
+        .addSelect('box.state', 'state')
+        .addSelect('box."desiredState"', 'desiredState')
+        .addSelect('COUNT(*)', 'boxCount')
+        .addSelect('MAX(box."updatedAt")', 'observedAt')
+        .where('box."organizationId" IN (:...organizationIds)', { organizationIds })
+        .groupBy('box."organizationId"')
+        .addGroupBy('box.state')
+        .addGroupBy('box."desiredState"')
+        .getRawMany<BoxGroupRow>(),
+    ])
+
+    const statsFor = (organizationId: string): OrganizationStats => {
+      const existing = stats.get(organizationId)
+      if (existing) return existing
+      const created = emptyStats()
+      stats.set(organizationId, created)
+      return created
+    }
+    for (const group of memberCounts) statsFor(group.organizationId).memberCount = count(group.memberCount)
+    for (const group of boxGroups) {
+      const organization = statsFor(group.organizationId)
+      organization.observedAt = latestDate([organization.observedAt, group.observedAt])
+      if (INACTIVE_BOX_STATES.includes(group.state)) continue
+      const boxes = count(group.boxCount)
+      organization.boxCount += boxes
+      if (isImpactedBox(group)) organization.impactedBoxCount += boxes
+    }
+    return stats
+  }
+
   async detail(organizationId: string, input: DetailQuery) {
+    const memberAfter = cursorValue(input.memberCursor)
+    const boxAfter = cursorValue(input.boxCursor)
     const organization = await this.organizationRepository.findOne({
       where: { id: organizationId },
       select: { id: true, name: true, updatedAt: true },
     })
     if (!organization) return null
 
-    const memberAfter = cursorValue(input.memberCursor)
-    const boxAfter = cursorValue(input.boxCursor)
-    const [memberships, organizationBoxes, usage] = await Promise.all([
+    const [memberships, organizationBoxes, usage, impactedBoxes] = await Promise.all([
       this.organizationUserRepository.find({
         where: { organizationId, ...(memberAfter ? { userId: MoreThan(memberAfter) } : {}) },
         select: { userId: true, role: true, createdAt: true },
@@ -158,7 +194,11 @@ export class AdminOrganizationOverviewService {
         take: input.memberLimit + 1,
       }),
       this.boxRepository.find({
-        where: { organizationId, state: Not(In(inactiveBoxStates)) },
+        where: {
+          organizationId,
+          state: Not(In(INACTIVE_BOX_STATES)),
+          ...(boxAfter ? { id: MoreThan(boxAfter) } : {}),
+        },
         select: {
           id: true,
           organizationId: true,
@@ -170,8 +210,24 @@ export class AdminOrganizationOverviewService {
           updatedAt: true,
         },
         order: { id: 'ASC' },
+        take: input.boxLimit + 1,
       }),
       this.currentMonthUsage(organizationId),
+      // Impact is a property of the whole organization, not of the requested page, so it
+      // gets its own bounded query instead of a scan the page happens to have loaded.
+      // The row count is bounded by `take`, and the row width by this projection: an
+      // unprojected getMany() would also read `secrets`, `env`, and `authToken`, none of
+      // which the evidence below renders.
+      // state and desiredState are separate Postgres enum types; ::text makes them comparable.
+      this.boxRepository
+        .createQueryBuilder('box')
+        .select(['box.id', 'box.name', 'box.state', 'box.desiredState', 'box.updatedAt'])
+        .where('box."organizationId" = :organizationId', { organizationId })
+        .andWhere('box.state NOT IN (:...inactive)', { inactive: INACTIVE_BOX_STATES })
+        .andWhere('(box.state = :error OR box.state::text <> box."desiredState"::text)', { error: BoxState.ERROR })
+        .orderBy('box.id', 'ASC')
+        .take(input.boxLimit)
+        .getMany(),
     ])
     const users = memberships.length
       ? await this.userRepository.find({
@@ -181,11 +237,9 @@ export class AdminOrganizationOverviewService {
       : []
     const usersById = new Map(users.map((user) => [user.id, user]))
     const memberPage = memberships.slice(0, input.memberLimit)
-    const eligibleBoxes = organizationBoxes.filter((box) => !boxAfter || box.id > boxAfter)
-    const boxPage = eligibleBoxes.slice(0, input.boxLimit)
-    const impactedBoxes = organizationBoxes.filter(isImpactedBox).slice(0, input.boxLimit)
+    const boxPage = organizationBoxes.slice(0, input.boxLimit)
     const nextMember = memberships.length > input.memberLimit ? memberPage.at(-1) : undefined
-    const nextBox = eligibleBoxes.length > input.boxLimit ? boxPage.at(-1) : undefined
+    const nextBox = organizationBoxes.length > input.boxLimit ? boxPage.at(-1) : undefined
 
     return {
       organizationId,
@@ -237,20 +291,30 @@ export class AdminOrganizationOverviewService {
   private async currentMonthUsage(organizationId: string) {
     const periodEnd = new Date()
     const periodStart = new Date(Date.UTC(periodEnd.getUTCFullYear(), periodEnd.getUTCMonth(), 1))
-    const [currentPeriods, archivedPeriods] = await Promise.all([
-      this.usagePeriodRepository.find({
-        where: [
-          { organizationId, startAt: LessThan(periodEnd), endAt: IsNull() },
-          { organizationId, startAt: LessThan(periodEnd), endAt: MoreThan(periodStart) },
-        ],
-        select: { startAt: true, endAt: true, cpu: true, disk: true },
-      }),
-      this.usagePeriodArchiveRepository.find({
-        where: { organizationId, startAt: LessThan(periodEnd), endAt: MoreThan(periodStart) },
-        select: { startAt: true, endAt: true, cpu: true, disk: true },
-      }),
-    ])
-    const totals = [...currentPeriods, ...archivedPeriods].reduce(
+    // Rollover deletes the live row and inserts a fresh-id archive copy in one transaction
+    // (usage.service.ts). Two reads on two pool connections straddle that commit and count
+    // the period twice or lose it, and the archive row's new id rules out de-duplication.
+    // One repeatable-read snapshot puts both reads on the same side of the rollover.
+    const periods = await this.usagePeriodRepository.manager.transaction(
+      'REPEATABLE READ',
+      async (snapshot): Promise<UsagePeriod[]> => {
+        const [currentPeriods, archivedPeriods] = await Promise.all([
+          snapshot.find(BoxUsagePeriod, {
+            where: [
+              { organizationId, startAt: LessThan(periodEnd), endAt: IsNull() },
+              { organizationId, startAt: LessThan(periodEnd), endAt: MoreThan(periodStart) },
+            ],
+            select: { startAt: true, endAt: true, cpu: true, disk: true },
+          }),
+          snapshot.find(BoxUsagePeriodArchive, {
+            where: { organizationId, startAt: LessThan(periodEnd), endAt: MoreThan(periodStart) },
+            select: { startAt: true, endAt: true, cpu: true, disk: true },
+          }),
+        ])
+        return [...currentPeriods, ...archivedPeriods]
+      },
+    )
+    const totals = periods.reduce(
       (sum, period: UsagePeriod) => {
         const overlapStart = Math.max(period.startAt.getTime(), periodStart.getTime())
         const overlapEnd = Math.min((period.endAt ?? periodEnd).getTime(), periodEnd.getTime())

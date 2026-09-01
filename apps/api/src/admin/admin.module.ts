@@ -38,6 +38,11 @@ import { BoxUsagePeriodArchive } from '../usage/entities/box-usage-period-archiv
       OrganizationUser,
       User,
       BoxUsagePeriod,
+      // No service here injects its repository — the organization overview reads it through
+      // the snapshot transaction's entity manager, which needs the entity's metadata in the
+      // DataSource rather than a provider in this injector. UsageModule already puts it
+      // there under `autoLoadEntities` (app.module.ts); listing it again is what keeps this
+      // module's own read from depending on another module's registration list.
       BoxUsagePeriodArchive,
     ]),
   ],

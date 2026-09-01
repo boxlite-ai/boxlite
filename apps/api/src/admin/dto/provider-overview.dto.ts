@@ -106,10 +106,16 @@ export class AdminBoxJobReferenceDto {
   type: string
 }
 
+@ApiSchema({ name: 'AdminBoxJobReferencePage' })
+export class AdminBoxJobReferencePageDto extends AdminCursorPageDto {
+  @ApiProperty({ type: [AdminBoxJobReferenceDto] })
+  items: AdminBoxJobReferenceDto[]
+}
+
 @ApiSchema({ name: 'AdminBoxDetail' })
 export class AdminBoxDetailDto extends AdminBoxOverviewDto {
-  @ApiProperty({ type: [AdminBoxJobReferenceDto] })
-  jobs: AdminBoxJobReferenceDto[]
+  @ApiProperty({ type: AdminBoxJobReferencePageDto })
+  jobs: AdminBoxJobReferencePageDto
 }
 
 @ApiSchema({ name: 'AdminJobOverview' })
