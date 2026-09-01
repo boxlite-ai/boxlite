@@ -327,18 +327,26 @@ pub struct PublishedPort {
     pub protocol: PortProtocol,
 }
 
-/// Mode and allowlist for one traffic direction, mirroring the shape of
-/// [`crate::runtime::options::NetworkSpec`] /
-/// [`crate::runtime::options::InboundNetworkPolicy`] on the output side.
+/// Network configuration for outbound (guest → internet) traffic.
+///
+/// Records whether the guest can reach external hosts and which hosts are
+/// allowed when [`mode`][Self::mode] is [`NetworkMode::Enabled`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NetworkDirectionInfo {
-    /// Whether this direction is enabled.
+pub struct OutboundNetworkInfo {
     pub mode: NetworkMode,
+    /// Empty means unrestricted outbound access.
+    #[serde(default)]
+    pub allow_net: Vec<String>,
+}
 
-    /// Configured allowlist. Empty means unrestricted when [`Self::mode`] is
-    /// [`NetworkMode::Enabled`]. For `inbound` this is always empty today —
-    /// a non-empty inbound allowlist is rejected at configuration time
-    /// because no layer enforces it yet.
+/// Network configuration for inbound (internet → guest) traffic.
+///
+/// Records whether the guest's exposed ports/preview are publicly reachable.
+/// `allow_net` is always empty today — an inbound allowlist is not yet
+/// enforced by any layer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboundNetworkInfo {
+    pub mode: NetworkMode,
     #[serde(default)]
     pub allow_net: Vec<String>,
 }
@@ -352,12 +360,12 @@ pub struct NetworkDirectionInfo {
 #[serde(from = "NetworkInfoWire")]
 pub struct NetworkInfo {
     /// Guest egress: whether the box can reach out, and to where.
-    pub outbound: NetworkDirectionInfo,
+    pub outbound: OutboundNetworkInfo,
 
     /// External reachability: whether the box's exposed ports/preview are
     /// public. Its `allow_net` is always empty today (see
-    /// [`NetworkDirectionInfo::allow_net`]).
-    pub inbound: NetworkDirectionInfo,
+    /// [`InboundNetworkInfo::allow_net`]).
+    pub inbound: InboundNetworkInfo,
 
     /// Concrete publications for the current runtime lifecycle.
     ///
@@ -383,8 +391,8 @@ impl NetworkInfo {
     /// Build metadata for both directions, filling the deprecated flat
     /// mirrors from `outbound`.
     pub fn new(
-        outbound: NetworkDirectionInfo,
-        inbound: NetworkDirectionInfo,
+        outbound: OutboundNetworkInfo,
+        inbound: InboundNetworkInfo,
         published_ports: Option<Vec<PublishedPort>>,
     ) -> Self {
         Self {
@@ -404,9 +412,9 @@ impl NetworkInfo {
 #[derive(Deserialize)]
 struct NetworkInfoWire {
     #[serde(default)]
-    outbound: Option<NetworkDirectionInfo>,
+    outbound: Option<OutboundNetworkInfo>,
     #[serde(default)]
-    inbound: Option<NetworkDirectionInfo>,
+    inbound: Option<InboundNetworkInfo>,
     #[serde(default)]
     published_ports: Option<Vec<PublishedPort>>,
     #[serde(default)]
@@ -417,7 +425,7 @@ struct NetworkInfoWire {
 
 impl From<NetworkInfoWire> for NetworkInfo {
     fn from(wire: NetworkInfoWire) -> Self {
-        let outbound = wire.outbound.unwrap_or_else(|| NetworkDirectionInfo {
+        let outbound = wire.outbound.unwrap_or_else(|| OutboundNetworkInfo {
             mode: wire.mode.unwrap_or_default(),
             allow_net: wire.allow_net.unwrap_or_default(),
         });
@@ -532,11 +540,11 @@ impl BoxInfo {
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
             advanced: Some(AdvancedBoxInfo::from(&config.options.advanced)),
             network: Some(NetworkInfo::new(
-                NetworkDirectionInfo {
+                OutboundNetworkInfo {
                     mode: network_config.outbound.mode,
                     allow_net: network_config.outbound.allow_net,
                 },
-                NetworkDirectionInfo {
+                InboundNetworkInfo {
                     mode: network_config.inbound.mode,
                     allow_net: network_config.inbound.allow_net,
                 },
@@ -686,7 +694,7 @@ mod tests {
             vec!["api.example.com".to_string()]
         );
         // The direction the pre-split shape could not express takes its default.
-        assert_eq!(network.inbound, NetworkDirectionInfo::default());
+        assert_eq!(network.inbound, InboundNetworkInfo::default());
         // And the deprecated mirrors follow outbound.
         assert_eq!(network.mode, NetworkMode::Disabled);
         assert_eq!(network.allow_net, vec!["api.example.com".to_string()]);
@@ -697,11 +705,11 @@ mod tests {
     #[test]
     fn network_info_serializes_both_shapes() {
         let network = NetworkInfo::new(
-            NetworkDirectionInfo {
+            OutboundNetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: vec!["api.example.com".to_string()],
             },
-            NetworkDirectionInfo {
+            InboundNetworkInfo {
                 mode: NetworkMode::Disabled,
                 allow_net: Vec::new(),
             },

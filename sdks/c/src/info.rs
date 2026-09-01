@@ -48,10 +48,21 @@ pub struct CPublishedPortList {
     pub count: c_int,
 }
 
-/// Mode and allowlist for one traffic direction. `allow_net` points to
-/// `allow_net_count` owned strings, owned by the enclosing [`CNetworkInfo`].
+/// Outbound (guest → internet) network mode and allowlist.
+/// `allow_net` points to `allow_net_count` owned strings, owned by the
+/// enclosing [`CNetworkInfo`].
 #[repr(C)]
-pub struct CNetworkDirectionInfo {
+pub struct COutboundNetworkInfo {
+    pub mode: BoxliteNetworkMode,
+    pub allow_net: *mut *mut c_char,
+    pub allow_net_count: c_int,
+}
+
+/// Inbound (internet → guest) network mode and allowlist.
+/// `allow_net` points to `allow_net_count` owned strings, owned by the
+/// enclosing [`CNetworkInfo`].
+#[repr(C)]
+pub struct CInboundNetworkInfo {
     pub mode: BoxliteNetworkMode,
     pub allow_net: *mut *mut c_char,
     pub allow_net_count: c_int,
@@ -77,8 +88,8 @@ pub struct CNetworkInfo {
     /// Deprecated: read `outbound.allow_net_count`.
     pub allow_net_count: c_int,
     pub published_ports: *mut CPublishedPortList,
-    pub outbound: CNetworkDirectionInfo,
-    pub inbound: CNetworkDirectionInfo,
+    pub outbound: COutboundNetworkInfo,
+    pub inbound: CInboundNetworkInfo,
 }
 
 #[repr(C)]
@@ -167,15 +178,27 @@ impl CPublishedPortList {
     }
 }
 
-impl CNetworkDirectionInfo {
-    fn from_direction_info(direction: &boxlite::runtime::types::NetworkDirectionInfo) -> Self {
-        let (allow_net, allow_net_count) = into_raw_slice(
-            direction
-                .allow_net
-                .iter()
-                .map(|host| to_c_str(host))
-                .collect(),
-        );
+impl COutboundNetworkInfo {
+    /// Converts [`OutboundNetworkInfo`] to the C FFI representation.
+    fn from_outbound(direction: &boxlite::OutboundNetworkInfo) -> Self {
+        let (allow_net, allow_net_count) =
+            into_raw_slice(direction.allow_net.iter().map(|h| to_c_str(h)).collect());
+        Self {
+            mode: match direction.mode {
+                NetworkMode::Enabled => BoxliteNetworkMode::BoxliteNetworkModeEnabled,
+                NetworkMode::Disabled => BoxliteNetworkMode::BoxliteNetworkModeDisabled,
+            },
+            allow_net,
+            allow_net_count,
+        }
+    }
+}
+
+impl CInboundNetworkInfo {
+    /// Converts [`InboundNetworkInfo`] to the C FFI representation.
+    fn from_inbound(direction: &boxlite::InboundNetworkInfo) -> Self {
+        let (allow_net, allow_net_count) =
+            into_raw_slice(direction.allow_net.iter().map(|h| to_c_str(h)).collect());
         Self {
             mode: match direction.mode {
                 NetworkMode::Enabled => BoxliteNetworkMode::BoxliteNetworkModeEnabled,
@@ -197,7 +220,7 @@ impl CNetworkInfo {
             .map(Box::into_raw)
             .unwrap_or(ptr::null_mut());
 
-        let outbound = CNetworkDirectionInfo::from_direction_info(&network.outbound);
+        let outbound = COutboundNetworkInfo::from_outbound(&network.outbound);
         Self {
             // Aliases of `outbound`, kept for pre-split callers. Ownership
             // stays with `outbound`.
@@ -206,7 +229,7 @@ impl CNetworkInfo {
             allow_net_count: outbound.allow_net_count,
             published_ports,
             outbound,
-            inbound: CNetworkDirectionInfo::from_direction_info(&network.inbound),
+            inbound: CInboundNetworkInfo::from_inbound(&network.inbound),
         }
     }
 }
@@ -235,14 +258,14 @@ unsafe fn free_published_port_list(list: *mut CPublishedPortList) {
     }
 }
 
-unsafe fn free_network_direction_info(direction: &CNetworkDirectionInfo) {
+unsafe fn free_allow_net(allow_net: *mut *mut c_char, allow_net_count: c_int) {
     unsafe {
-        if !direction.allow_net.is_null() && direction.allow_net_count >= 0 {
-            for index in 0..direction.allow_net_count as usize {
-                free_str(*direction.allow_net.add(index));
+        if !allow_net.is_null() && allow_net_count >= 0 {
+            for index in 0..allow_net_count as usize {
+                free_str(*allow_net.add(index));
             }
         }
-        free_raw_slice(direction.allow_net, direction.allow_net_count);
+        free_raw_slice(allow_net, allow_net_count);
     }
 }
 
@@ -252,8 +275,8 @@ pub(crate) unsafe fn free_network_info(network: *mut CNetworkInfo) {
     }
     unsafe {
         let network = Box::from_raw(network);
-        free_network_direction_info(&network.outbound);
-        free_network_direction_info(&network.inbound);
+        free_allow_net(network.outbound.allow_net, network.outbound.allow_net_count);
+        free_allow_net(network.inbound.allow_net, network.inbound.allow_net_count);
         free_published_port_list(network.published_ports);
     }
 }
@@ -541,7 +564,7 @@ mod tests {
     use std::ptr::NonNull;
 
     use boxlite::runtime::options::PortProtocol;
-    use boxlite::runtime::types::NetworkDirectionInfo;
+    use boxlite::runtime::types::{InboundNetworkInfo, OutboundNetworkInfo};
     use boxlite::{NetworkInfo, NetworkMode, PublishedPort};
 
     use crate::options::BoxlitePortProtocol;
@@ -583,11 +606,11 @@ mod tests {
         let _guard = FREE_STR_LOCK.lock().unwrap();
 
         let network = NonNull::new(network_to_c_ptr(&Some(NetworkInfo::new(
-            NetworkDirectionInfo {
+            OutboundNetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: vec!["api.example.com".to_string()],
             },
-            NetworkDirectionInfo {
+            InboundNetworkInfo {
                 mode: NetworkMode::Disabled,
                 allow_net: Vec::new(),
             },
@@ -625,11 +648,11 @@ mod tests {
         assert!(network_to_c_ptr(&None).is_null());
 
         let unresolved = NonNull::new(network_to_c_ptr(&Some(NetworkInfo::new(
-            NetworkDirectionInfo {
+            OutboundNetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: vec!["api.example.com".to_string()],
             },
-            NetworkDirectionInfo {
+            InboundNetworkInfo {
                 mode: NetworkMode::Disabled,
                 allow_net: Vec::new(),
             },
@@ -657,11 +680,11 @@ mod tests {
         unsafe { free_network_info(unresolved.as_ptr()) };
 
         let resolved_empty = NonNull::new(network_to_c_ptr(&Some(NetworkInfo::new(
-            NetworkDirectionInfo {
+            OutboundNetworkInfo {
                 mode: NetworkMode::Disabled,
                 allow_net: Vec::new(),
             },
-            NetworkDirectionInfo {
+            InboundNetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: Vec::new(),
             },
@@ -680,11 +703,11 @@ mod tests {
         unsafe { free_network_info(resolved_empty.as_ptr()) };
 
         let resolved = NonNull::new(network_to_c_ptr(&Some(NetworkInfo::new(
-            NetworkDirectionInfo {
+            OutboundNetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: Vec::new(),
             },
-            NetworkDirectionInfo {
+            InboundNetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: Vec::new(),
             },

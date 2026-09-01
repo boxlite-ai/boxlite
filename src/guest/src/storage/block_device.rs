@@ -94,9 +94,6 @@ impl BlockDeviceMount {
             Self::resize_filesystem(device, filesystem)?;
         }
 
-        // Fix ownership if needed (fallback in case debugfs didn't run on host)
-        super::perms::OwnershipFixer::fix_if_needed(mount_point)?;
-
         tracing::info!(
             "Mounted block device: {} → {}",
             device.display(),

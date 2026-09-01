@@ -6,17 +6,17 @@ use std::path::PathBuf;
 
 #[derive(Args, Debug)]
 pub struct CpArgs {
-    /// Copy symlinks by following their targets
+    /// Copy symlinks by following their targets (local runtime only)
     #[arg(long, default_value_t = false)]
     pub follow_symlinks: bool,
 
-    /// Do not overwrite existing files
+    /// Do not overwrite existing files (local runtime only)
     #[arg(long, default_value_t = false)]
     pub no_overwrite: bool,
 
-    /// Include parent directory when copying from box (docker cp semantics)
-    #[arg(long, default_value_t = true)]
-    pub include_parent: bool,
+    /// Copy directory contents without their parent directory (local runtime only)
+    #[arg(long)]
+    pub no_include_parent: bool,
 
     /// Source path (host path or BOX:PATH)
     #[arg(index = 1)]
@@ -31,11 +31,12 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
     let rt = global.create_runtime()?;
 
     let direction = parse_direction(&args.src, &args.dst)?;
+    args.require_supported_backend(global.targets_rest()?)?;
 
     let opts = CopyOptions {
         follow_symlinks: args.follow_symlinks,
         overwrite: !args.no_overwrite,
-        include_parent: args.include_parent,
+        include_parent: !args.no_include_parent,
         ..Default::default()
     };
 
@@ -93,6 +94,19 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
             stopped?;
             Ok(())
         }
+    }
+}
+
+impl CpArgs {
+    fn require_supported_backend(&self, targets_rest: bool) -> Result<()> {
+        if targets_rest && (self.follow_symlinks || self.no_overwrite || self.no_include_parent) {
+            anyhow::bail!(
+                "--follow-symlinks, --no-overwrite, and --no-include-parent are supported only \
+                 by the embedded local runtime; the REST copy protocol does not carry these \
+                 options"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -161,6 +175,33 @@ async fn require_box(rt: &boxlite::BoxliteRuntime, name: &str) -> Result<LiteBox
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn args() -> CpArgs {
+        CpArgs {
+            follow_symlinks: false,
+            no_overwrite: false,
+            no_include_parent: false,
+            src: "box:/src".to_string(),
+            dst: "/dst".to_string(),
+        }
+    }
+
+    #[test]
+    fn rest_copy_rejects_every_option_the_protocol_would_discard() {
+        assert!(args().require_supported_backend(true).is_ok());
+
+        let mut follow = args();
+        follow.follow_symlinks = true;
+        assert!(follow.require_supported_backend(true).is_err());
+
+        let mut overwrite = args();
+        overwrite.no_overwrite = true;
+        assert!(overwrite.require_supported_backend(true).is_err());
+
+        let mut parent = args();
+        parent.no_include_parent = true;
+        assert!(parent.require_supported_backend(true).is_err());
+    }
 
     #[test]
     fn parse_host_to_box() {

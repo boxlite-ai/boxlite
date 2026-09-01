@@ -69,8 +69,14 @@ test('deploys domain builders in dependency order without ComponentResource pare
     'buildRunners(',
   ].map((call) => deploySource.indexOf(call))
 
-  assert.ok(calls.every((index) => index >= 0), 'a stack domain builder is missing')
-  assert.deepEqual([...calls].sort((left, right) => left - right), calls)
+  assert.ok(
+    calls.every((index) => index >= 0),
+    'a stack domain builder is missing',
+  )
+  assert.deepEqual(
+    [...calls].sort((left, right) => left - right),
+    calls,
+  )
   assert.doesNotMatch(stackSource, /ComponentResource/)
 })
 
@@ -91,12 +97,15 @@ test('pins every Service load balancer type at the provider boundary', () => {
     {
       name: 'OtelCollector',
       type: 'application',
-      section: configSection("const otelCollector = new sst.aws.Service('OtelCollector'", 'const otelCollectorOtlpHttpUrl'),
+      section: configSection(
+        "const otelCollector = new sst.aws.Service('OtelCollector'",
+        'const otelCollectorOtlpHttpUrl',
+      ),
     },
     {
       name: 'Api',
       type: 'application',
-      section: configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role'),
+      section: configSection('const api = new sst.aws.Service(', '// Assumed by the Api task role'),
     },
     {
       name: 'Proxy',
@@ -106,6 +115,14 @@ test('pins every Service load balancer type at the provider boundary', () => {
   ]
 
   for (const service of services) {
+    // The section markers cannot all carry the resource name — Api's spans a line break —
+    // so the name is asserted here instead. Renaming an sst.aws.Service replaces the
+    // resource rather than updating it, and nothing else in this file would notice.
+    assert.match(
+      service.section,
+      new RegExp(`new sst\\.aws\\.Service\\(\\s*'${service.name}'`),
+      `${service.name} must keep its resource name, because a rename replaces the service`,
+    )
     assert.match(
       service.section,
       new RegExp(`loadBalancerType\\s*=\\s*'${service.type}'`),
@@ -127,7 +144,10 @@ test('applies the deployment permissions boundary to every SST-created IAM role'
 })
 
 test('keeps every ClickHouse IAM resource inside the deploy-role namespace and provider name limits', () => {
-  const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
+  const clickHouse = configSection(
+    'export async function buildClickHouseStorage',
+    'export function buildClickHouseWriterReady',
+  )
 
   for (const [resource, nextResource, suffix] of [
     ['ClickHouseRole', 'ClickHouseSsmPolicy', 'instance'],
@@ -139,7 +159,11 @@ test('keeps every ClickHouse IAM resource inside the deploy-role namespace and p
       new RegExp(`name:\\s*\`\\$\\{\\$app\\.name\\}-\\$\\{\\$app\\.stage\\}-clickhouse-${suffix}\``),
       `${resource} must use its bounded deterministic ClickHouse name`,
     )
-    assert.doesNotMatch(resourceSection, /namePrefix:/, `${resource} must not inherit the provider's 38-character prefix limit`)
+    assert.doesNotMatch(
+      resourceSection,
+      /namePrefix:/,
+      `${resource} must not inherit the provider's 38-character prefix limit`,
+    )
   }
 
   const longestStage = 'x'.repeat(32)
@@ -150,18 +174,18 @@ test('keeps every ClickHouse IAM resource inside the deploy-role namespace and p
 })
 
 test('uses the shared AWS region resolver and waits for the critical API service', () => {
-  assert.match(
-    liveConfig,
-    /await import\('\.\.\/deployment\/environment\.js'\)/,
-  )
+  assert.match(liveConfig, /await import\('\.\.\/deployment\/environment\.js'\)/)
   assert.match(liveConfig, /const REGION = resolveAwsRegion\(\)/)
 
-  const apiService = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+  const apiService = configSection('const api = new sst.aws.Service(', '// Assumed by the Api task role')
   assert.match(apiService, /wait: true,/)
 })
 
 test('waits for the active ClickHouse collector rollout before probing the writer', () => {
-  const collector = configSection("const otelCollector = new sst.aws.Service('OtelCollector'", 'const otelCollectorOtlpHttpUrl')
+  const collector = configSection(
+    "const otelCollector = new sst.aws.Service('OtelCollector'",
+    'const otelCollectorOtlpHttpUrl',
+  )
   const writerReadiness = configSection('export function buildClickHouseWriterReady')
 
   assert.match(collector, /wait: input\.clickHouseResources\.active,/)
@@ -172,8 +196,11 @@ test('waits for the active ClickHouse collector rollout before probing the write
 })
 
 test('injects only ClickHouse passwords through ECS secrets', () => {
-  const collector = configSection("const otelCollector = new sst.aws.Service('OtelCollector'", 'const otelCollectorOtlpHttpUrl')
-  const api = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+  const collector = configSection(
+    "const otelCollector = new sst.aws.Service('OtelCollector'",
+    'const otelCollectorOtlpHttpUrl',
+  )
+  const api = configSection('const api = new sst.aws.Service(', '// Assumed by the Api task role')
 
   assert.match(collector, /CLICKHOUSE_PASSWORD: input\.clickHouseResources\.writerSecretArn/)
   assert.match(api, /CLICKHOUSE_PASSWORD: clickHouseResources\.readerSecretArn/)
@@ -182,9 +209,15 @@ test('injects only ClickHouse passwords through ECS secrets', () => {
 })
 
 test('rolls each ECS client when its ClickHouse password version changes', () => {
-  const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
-  const collector = configSection("const otelCollector = new sst.aws.Service('OtelCollector'", 'const otelCollectorOtlpHttpUrl')
-  const api = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+  const clickHouse = configSection(
+    'export async function buildClickHouseStorage',
+    'export function buildClickHouseWriterReady',
+  )
+  const collector = configSection(
+    "const otelCollector = new sst.aws.Service('OtelCollector'",
+    'const otelCollectorOtlpHttpUrl',
+  )
+  const api = configSection('const api = new sst.aws.Service(', '// Assumed by the Api task role')
   const writerReadiness = configSection('export function buildClickHouseWriterReady')
 
   assert.match(liveConfig, /getSecretVersionsOutput\(\{ secretId, region \}\)/)
@@ -200,7 +233,10 @@ test('rolls each ECS client when its ClickHouse password version changes', () =>
 
 test('the ClickHouse facade owns its self-hosted secrets', () => {
   const deploy = liveText('scriptEmittingShell', readFileSync(new URL('./deploy.ts', import.meta.url), 'utf8'))
-  const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
+  const clickHouse = configSection(
+    'export async function buildClickHouseStorage',
+    'export function buildClickHouseWriterReady',
+  )
 
   assert.doesNotMatch(deploy, /ClickHouse(?:Admin|Writer|Reader)Secret/)
   assert.doesNotMatch(deploy, /resolveClickHouseConfig/)
@@ -211,7 +247,10 @@ test('the ClickHouse facade owns its self-hosted secrets', () => {
 })
 
 test('validates managed secret ARNs against the runtime boundary before wiring ECS', () => {
-  const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
+  const clickHouse = configSection(
+    'export async function buildClickHouseStorage',
+    'export function buildClickHouseWriterReady',
+  )
 
   assert.match(clickHouse, /requireClickHouseSecretArn\(\s*'CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN'/)
   assert.match(clickHouse, /requireClickHouseSecretArn\(\s*'CLICKHOUSE_READER_PASSWORD_SECRET_ARN'/)
@@ -220,7 +259,7 @@ test('validates managed secret ARNs against the runtime boundary before wiring E
 
 test('orders the API after ClickHouse writer readiness', () => {
   const deploy = configSection('export async function deployStack()')
-  const api = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+  const api = configSection('const api = new sst.aws.Service(', '// Assumed by the Api task role')
 
   assert.match(deploy, /collectorExporters = clickHouseResources\.active/)
   assert.match(liveConfig, /if \(resources\.mode === 'managed'\) return otelCollector/)
@@ -229,7 +268,10 @@ test('orders the API after ClickHouse writer readiness', () => {
 })
 
 test('encodes ClickHouse user data before EC2 launch', () => {
-  const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
+  const clickHouse = configSection(
+    'export async function buildClickHouseStorage',
+    'export function buildClickHouseWriterReady',
+  )
   const instance = extractSection(clickHouse, 'const userData =', 'const instance =')
 
   assert.match(clickHouse, /encodeClickHouseUserData/)
@@ -238,7 +280,10 @@ test('encodes ClickHouse user data before EC2 launch', () => {
 })
 
 test('replaces bootstrap compute while retaining data without blocking a mode switch', () => {
-  const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
+  const clickHouse = configSection(
+    'export async function buildClickHouseStorage',
+    'export function buildClickHouseWriterReady',
+  )
   const instance = extractSection(clickHouse, 'const instance = new aws.ec2.Instance(', 'const attachment =')
   const volume = extractSection(clickHouse, "'ClickHouseData',", 'const ami =')
 
@@ -290,7 +335,10 @@ test('tags Runner instances with their exact control-plane identity', () => {
     runnerResources,
     /makeRunner\([\s\S]*defaultRunnerConfig\.resourceName,[\s\S]*defaultRunnerConfig\.nameTag,[\s\S]*defaultRunnerConfig\.controlPlaneRunnerName,[\s\S]*runnerUserData/,
   )
-  assert.match(runnerResources, /runnerInventory\.slice\(1\)\.map\([\s\S]*runner\.nameTag,[\s\S]*runnerUserDataFor\(apiKey\.result\)/)
+  assert.match(
+    runnerResources,
+    /runnerInventory\.slice\(1\)\.map\([\s\S]*runner\.nameTag,[\s\S]*runnerUserDataFor\(apiKey\.result\)/,
+  )
 })
 
 test('keeps every Runner instance protected from replacement during full-stack deploys', () => {
@@ -371,7 +419,10 @@ test('data-protection guards key off the stage that actually exists: prod', () =
   // from main would have computed isProd === false and reset them. One
   // constant, both call sites, so the two guards cannot drift apart again.
   assert.match(liveConfig, /const PRODUCTION_STAGE = 'prod'/)
-  assert.match(liveConfig, /removal: input\?\.stage === PRODUCTION_STAGE \? \('retain' as const\) : \('remove' as const\)/)
+  assert.match(
+    liveConfig,
+    /removal: input\?\.stage === PRODUCTION_STAGE \? \('retain' as const\) : \('remove' as const\)/,
+  )
   assert.match(liveConfig, /const isProd = \$app\.stage === PRODUCTION_STAGE/)
 })
 
@@ -469,7 +520,7 @@ test('deploys no internal admin UI, so no stage can expose one', () => {
 })
 
 test('passes explicit management API endpoints into the API service', () => {
-  const apiService = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+  const apiService = configSection('const api = new sst.aws.Service(', '// Assumed by the Api task role')
 
   assert.match(apiService, /OIDC_MANAGEMENT_API_BASE_URL: process\.env\.OIDC_MANAGEMENT_API_BASE_URL/)
   assert.match(apiService, /OIDC_MANAGEMENT_API_TOKEN_URL: process\.env\.OIDC_MANAGEMENT_API_TOKEN_URL/)
@@ -480,7 +531,7 @@ test('reports the canonical workspace release unless VERSION overrides it', () =
   assert.match(liveConfig, /resolvePublicDeploymentConfig\(process\.env, workspaceVersion\)/)
   assert.match(liveConfig, /proxyTemplateUrl, releaseVersion \} = deploymentConfig/)
 
-  const apiService = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+  const apiService = configSection('const api = new sst.aws.Service(', '// Assumed by the Api task role')
   assert.match(apiService, /VERSION: releaseVersion,/)
 })
 
@@ -523,10 +574,7 @@ test('the Api deploys either a published image or a build of the deployed checko
 })
 
 test('the Runner can read only staged build artifacts from the bootstrapped bucket', () => {
-  const runner = liveText(
-    'scriptEmittingShell',
-    readFileSync(new URL('./runners.ts', import.meta.url), 'utf8'),
-  )
+  const runner = liveText('scriptEmittingShell', readFileSync(new URL('./runners.ts', import.meta.url), 'utf8'))
   const artifactPolicy = extractSection(
     runner,
     "new aws.iam.RolePolicy('RunnerArtifactS3Policy'",
@@ -663,10 +711,7 @@ test('a billing URL is advertised only where a billing service answers', () => {
   // The per-surface paths that used to be gated are now redirects into that page. A redirect
   // issues no request of its own, so it is safe ungated — but it must not render a page, and
   // must stay out of the force-redirect list that would send it to /boxes instead.
-  const app = liveText(
-    'script',
-    readFileSync(new URL('../../dashboard/src/App.tsx', import.meta.url), 'utf8'),
-  )
+  const app = liveText('script', readFileSync(new URL('../../dashboard/src/App.tsx', import.meta.url), 'utf8'))
   const redirectedRoutes = ['BILLING_SPENDING', 'BILLING_WALLET', 'LIMITS', 'PRICING']
   for (const route of redirectedRoutes) {
     // extractSection excludes its end marker, so the closer is matched by the marker itself.
@@ -703,7 +748,7 @@ test('usage is exported to the ingest origin, never to the dashboard billing URL
   )
   assert.match(
     liveConfig,
-    /USAGE_ALLOCATION_SNAPSHOT_ENABLED: usageExportToken\.value\.apply\(\(token(?:: string)?\) =>\s*\(token\.trim\(\) \? 'true' : 'false'\),?\s*\)/,
+    /USAGE_ALLOCATION_SNAPSHOT_ENABLED: usageExportToken\.value\.apply\(\(token(?:: string)?\) =>\s*\(?\s*token\.trim\(\) \? 'true' : 'false',?\s*\)?\s*\)/,
   )
   assert.match(liveConfig, /const usageExportToken = new sst\.Secret\('USAGE_EXPORT_TOKEN', ''\)/)
 
@@ -783,7 +828,10 @@ test('status sync arms on its secret and keys alerts by stage', () => {
     liveConfig,
     /STATUS_SYNC_ENABLED: incidentIoToken\.value\.apply\(\(token(?:: string)?\) => \(token\.trim\(\) \? 'true' : 'false'\)\)/,
   )
-  assert.match(liveConfig, /STATUS_SYNC_DEDUP_PREFIX: envOr\('STATUS_SYNC_DEDUP_PREFIX', `boxlite-\$\{\$app\.stage\}`\)/)
+  assert.match(
+    liveConfig,
+    /STATUS_SYNC_DEDUP_PREFIX: envOr\('STATUS_SYNC_DEDUP_PREFIX', `boxlite-\$\{\$app\.stage\}`\)/,
+  )
 
   // The operator-facing note is the only place the token's scope and set-procedure live; the id
   // must stay documented and the secret's value must never gain a literal line in the example.

@@ -9,8 +9,10 @@ import {
   OrganizationPlan,
   OrganizationWallet,
   PaginatedPaymentMethods,
+  PaginatedWalletTransactions,
   PaymentMethod,
   UsagePrices,
+  WalletTransaction,
 } from '@/billing-api'
 import { Invoice, PaginatedInvoices } from '@/billing-api/types/Invoice'
 import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
@@ -75,6 +77,48 @@ export const handlers = [
   http.get(`${API_URL}/box/:boxIdOrName`, ({ params }) => {
     const box = MOCK_BOXES.find((b) => b.id === params.boxIdOrName) ?? MOCK_BOXES[0]
     return box ? HttpResponse.json(box) : new HttpResponse(null, { status: 404 })
+  }),
+  // Network / preview surface. `public` is mutated in place so the detail page
+  // reflects the toggle after its query is invalidated, the way it does against
+  // a real API.
+  http.post(`${API_URL}/box/:boxIdOrName/public/:isPublic`, ({ params }) => {
+    const box = MOCK_BOXES.find((b) => b.id === params.boxIdOrName)
+    if (!box) return new HttpResponse(null, { status: 404 })
+    box.public = params.isPublic === 'true'
+    return HttpResponse.json(box)
+  }),
+  http.get(`${API_URL}/box/:boxIdOrName/ports/:port/preview-url`, ({ params }) => {
+    const boxId = String(params.boxIdOrName)
+    // Mirrors the real hex-encoded direct-preview host shape. Hand-rolled
+    // rather than via Buffer, which does not exist in the browser.
+    const encodedBoxId = [...boxId].map((char) => char.charCodeAt(0).toString(16).padStart(2, '0')).join('')
+    return HttpResponse.json({
+      boxId,
+      url: `https://${params.port}-d-${encodedBoxId}.proxy.mock.boxlite.ai`,
+      token: 'mock0boxauthtoken0000000000000000',
+    })
+  }),
+  http.get(`${API_URL}/box/:boxIdOrName/ports/:port/signed-preview-url`, ({ params, request }) => {
+    // The real service only signs the terminal port today; keeping that
+    // restriction in mock is what surfaces the fallback message in the UI.
+    const port = Number(params.port)
+    if (port !== 22222) {
+      return HttpResponse.json(
+        { statusCode: 400, message: 'Signed port preview is only supported for terminal port 22222' },
+        { status: 400 },
+      )
+    }
+    const expiresIn = new URL(request.url).searchParams.get('expiresInSeconds') ?? '60'
+    const token = `mock${Math.random().toString(36).slice(2, 14)}`
+    return HttpResponse.json({
+      boxId: String(params.boxIdOrName),
+      port,
+      token,
+      url: `https://${port}-${token}.proxy.mock.boxlite.ai?ttl=${expiresIn}`,
+    })
+  }),
+  http.post(`${API_URL}/box/:boxIdOrName/ports/:port/signed-preview-url/:token/expire`, () => {
+    return new HttpResponse(null, { status: 201 })
   }),
   // Volumes. Deletion mirrors the real service (volume.service.ts:74-113):
   // a volume still mounted by a live box is refused with 409, and a successful
@@ -350,6 +394,177 @@ export const handlers = [
       items: paginatedItems,
       totalItems,
       totalPages,
+    })
+  }),
+  http.get(`${BILLING_API_URL}/organization/:organizationId/wallet/transactions`, async ({ request }) => {
+    const url = new URL(request.url)
+    const page = parseInt(url.searchParams.get('page') || '1', 10)
+    const perPage = parseInt(url.searchParams.get('perPage') || '10', 10)
+    const settledAt = '2026-08-30T10:00:00.000Z'
+    const transactions: WalletTransaction[] = [
+      {
+        id: 'txn-top-up',
+        direction: 'inbound',
+        kind: 'purchased',
+        status: 'settled',
+        source: 'manual',
+        amountCents: 10_000,
+        name: null,
+        subscriptionCreditKind: null,
+        createdAt: '2026-08-30T10:00:00.000Z',
+        settledAt,
+      },
+      {
+        id: 'txn-auto-top-up',
+        direction: 'inbound',
+        kind: 'purchased',
+        status: 'pending',
+        source: 'threshold',
+        amountCents: 5_000,
+        name: null,
+        subscriptionCreditKind: null,
+        createdAt: '2026-08-29T10:00:00.000Z',
+        settledAt: null,
+      },
+      {
+        id: 'txn-usage',
+        direction: 'outbound',
+        kind: 'invoiced',
+        status: 'settled',
+        source: 'interval',
+        amountCents: 2_437,
+        name: 'Usage settlement INV-2026-001',
+        subscriptionCreditKind: null,
+        createdAt: '2026-08-28T10:00:00.000Z',
+        settledAt,
+      },
+      {
+        id: 'txn-subscription',
+        direction: 'inbound',
+        kind: 'granted',
+        status: 'settled',
+        source: 'interval',
+        amountCents: 25_000,
+        name: 'Pro monthly quota',
+        subscriptionCreditKind: 'cycle',
+        createdAt: '2026-08-27T10:00:00.000Z',
+        settledAt,
+      },
+      {
+        id: 'txn-coupon',
+        direction: 'inbound',
+        kind: 'granted',
+        status: 'settled',
+        source: 'manual',
+        amountCents: 1_000,
+        name: 'Coupon SAVE10',
+        subscriptionCreditKind: null,
+        createdAt: '2026-08-26T10:00:00.000Z',
+        settledAt,
+      },
+      {
+        id: 'txn-upgrade',
+        direction: 'inbound',
+        kind: 'granted',
+        status: 'settled',
+        source: 'manual',
+        amountCents: 15_000,
+        name: 'Pro upgrade quota',
+        subscriptionCreditKind: 'upgrade',
+        createdAt: '2026-08-25T18:00:00.000Z',
+        settledAt,
+      },
+      {
+        id: 'txn-signup',
+        direction: 'inbound',
+        kind: 'granted',
+        status: 'settled',
+        source: 'manual',
+        amountCents: 2_500,
+        name: 'Signup credit',
+        subscriptionCreditKind: null,
+        createdAt: '2026-08-25T16:00:00.000Z',
+        settledAt,
+      },
+      {
+        id: 'txn-goodwill',
+        direction: 'inbound',
+        kind: 'granted',
+        status: 'settled',
+        source: 'manual',
+        amountCents: 1_500,
+        name: 'Goodwill adjustment',
+        subscriptionCreditKind: null,
+        createdAt: '2026-08-25T14:00:00.000Z',
+        settledAt,
+      },
+      {
+        id: 'txn-promotion',
+        direction: 'inbound',
+        kind: 'granted',
+        status: 'settled',
+        source: 'manual',
+        amountCents: 2_000,
+        name: 'Launch promotion',
+        subscriptionCreditKind: null,
+        createdAt: '2026-08-25T12:00:00.000Z',
+        settledAt,
+      },
+      {
+        id: 'txn-restore',
+        direction: 'inbound',
+        kind: 'granted',
+        status: 'settled',
+        source: 'manual',
+        amountCents: 650,
+        name: 'Restored subscription credit for BOX-2026-0002',
+        subscriptionCreditKind: 'void_restore',
+        createdAt: '2026-08-25T10:00:00.000Z',
+        settledAt,
+      },
+      {
+        id: 'txn-restored-funds',
+        direction: 'inbound',
+        kind: 'granted',
+        status: 'settled',
+        source: 'manual',
+        amountCents: 850,
+        name: 'Voided BOX-2026-0002',
+        subscriptionCreditKind: null,
+        createdAt: '2026-08-25T08:00:00.000Z',
+        settledAt,
+      },
+      {
+        id: 'txn-expired',
+        direction: 'outbound',
+        kind: 'expired',
+        status: 'settled',
+        source: 'interval',
+        amountCents: 3_200,
+        name: 'Unused monthly quota',
+        subscriptionCreditKind: null,
+        createdAt: '2026-08-24T10:00:00.000Z',
+        settledAt,
+      },
+      {
+        id: 'txn-failed-top-up',
+        direction: 'inbound',
+        kind: 'purchased',
+        status: 'failed',
+        source: 'manual',
+        amountCents: 10_000,
+        name: null,
+        subscriptionCreditKind: null,
+        createdAt: '2026-08-23T10:00:00.000Z',
+        settledAt: null,
+      },
+    ]
+    const start = (page - 1) * perPage
+
+    return HttpResponse.json<PaginatedWalletTransactions>({
+      items: transactions.slice(start, start + perPage),
+      totalItems: transactions.length,
+      totalPages: Math.ceil(transactions.length / perPage),
     })
   }),
   http.post(`${BILLING_API_URL}/organization/:organizationId/wallet/top-up`, async () => {

@@ -205,3 +205,32 @@ describe('PR 829 real-data parity: settlement invoices', () => {
     expect(api).not.toHaveProperty('voidInvoice')
   })
 })
+
+describe('PR 829 real-data parity: wallet transactions', () => {
+  it('requests a paginated ledger with every transaction axis intact', async () => {
+    const response = {
+      items: [
+        {
+          id: 'transaction-1',
+          direction: 'inbound',
+          kind: 'granted',
+          status: 'settled',
+          source: 'interval',
+          amountCents: 25_000,
+          name: 'Pro monthly quota',
+          subscriptionCreditKind: 'cycle',
+          createdAt: '2026-08-30T00:00:00.000Z',
+          settledAt: '2026-08-30T00:00:00.000Z',
+        },
+      ],
+      totalItems: 1,
+      totalPages: 1,
+    }
+    const api = serve(response)
+
+    await expect(api.listWalletTransactions('org-1', 2, 25)).resolves.toEqual(response)
+    expect(requestedUrl).toBe(
+      'http://billing.test/api/billing/organization/org-1/wallet/transactions?page=2&perPage=25',
+    )
+  })
+})

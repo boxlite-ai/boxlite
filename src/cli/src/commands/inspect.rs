@@ -10,7 +10,12 @@ use serde::Serialize;
 #[derive(Args, Debug)]
 pub struct InspectArgs {
     /// Box ID(s) or name(s). At least one box or --latest is required.
-    #[arg(value_name = "BOX", required = false, num_args = 0..)]
+    #[arg(
+        value_name = "BOX",
+        required_unless_present = "latest",
+        num_args = 1..,
+        conflicts_with = "latest"
+    )]
     pub boxes: Vec<String>,
 
     /// Inspect the most recently created box (cannot be used with BOX)

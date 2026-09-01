@@ -1006,7 +1006,7 @@ if (boxlite_list_info(runtime, on_box_list, &list_request, &error) == Ok) {
 
 `info->network` is an owned `CNetworkInfo*` freed with the rest of `CBoxInfo`.
 It is `NULL` when network information is unavailable. Otherwise it contains a
-`CNetworkDirectionInfo` per direction (`outbound`, `inbound`), each with a
+`COutboundNetworkInfo`/`CInboundNetworkInfo` per direction (`outbound`, `inbound`), each with a
 typed `mode` plus an `allow_net` string array and count, and a nullable
 `CPublishedPortList*`. The deprecated top-level `mode`, `allow_net` and
 `allow_net_count` fields keep their pre-split offsets and alias `outbound`. A `NULL` `published_ports` pointer means the current

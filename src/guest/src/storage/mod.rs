@@ -9,7 +9,6 @@ pub mod block_device;
 mod copy;
 pub mod fsfreeze;
 pub mod idmap;
-mod perms;
 mod virtiofs;
 mod volume;
 

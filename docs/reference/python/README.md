@@ -275,8 +275,8 @@ bool`, and `nested_virtualization: bool`. When present, the capability
 `advanced is None` means the runtime did not report enough metadata to
 describe the box's reuse-relevant policy.
 
-`NetworkInfo` has `outbound: NetworkDirectionInfo`, `inbound:
-NetworkDirectionInfo`, and `published_ports: List[PublishedPort] | None`; each
+`NetworkInfo` has `outbound: OutboundNetworkInfo`, `inbound:
+InboundNetworkInfo`, and `published_ports: List[PublishedPort] | None`; each
 direction has `mode: str` and `allow_net: List[str]`. The pre-split
 `mode: str` / `allow_net: List[str]` attributes remain readable on
 `NetworkInfo` as views onto `outbound`. Each `PublishedPort` has named

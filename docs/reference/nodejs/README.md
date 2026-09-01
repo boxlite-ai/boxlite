@@ -246,14 +246,15 @@ Metadata about a box.
 | `network` | `JsNetworkInfo \| null` | Current network configuration and resolved local publications |
 
 ```typescript
-interface JsNetworkDirectionInfo {
+interface JsOutboundNetworkInfo {
+// (JsInboundNetworkInfo has the same shape)
   mode: string;
   allowNet: string[];
 }
 
 interface JsNetworkInfo {
-  outbound: JsNetworkDirectionInfo;
-  inbound: JsNetworkDirectionInfo;
+  outbound: JsOutboundNetworkInfo;
+  inbound: JsInboundNetworkInfo;
   publishedPorts: JsPublishedPort[] | null;
   /** @deprecated Mirrors outbound.mode. */
   mode: string;

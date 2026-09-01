@@ -30,6 +30,20 @@ const (
 	activityUpdateTimeout    = 10 * time.Second
 	directPreviewBoxIDLength = 12
 	directPreviewBoxIDPrefix = "d-"
+
+	// Only rejections are cached. A cached acceptance is what a revoked credential
+	// rides on: nothing evicts these entries, and with config.Redis unset the cache
+	// is in-process and out of the API's reach entirely, so any TTL at all is a
+	// window in which a deleted key still reaches the box. The API absorbs the
+	// revalidation traffic in Redis (preview:token, preview:access), so the cost is
+	// a round trip per request, not a database lookup per request.
+	//
+	// A rejection is not what a revoked credential rides on, so shortening it
+	// alongside the acceptance would only send repeated bad credentials back to the
+	// API more often. It keeps the TTL both verdicts shared before. The ceiling is
+	// the other direction: a caller who has just been granted access waits this
+	// long behind the cached refusal.
+	authInvalidCacheTTL = 2 * time.Minute
 )
 
 func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, error) {
@@ -330,8 +344,11 @@ func (p *Proxy) validateAndCache(
 		return nil, validationErr
 	}
 
-	if err := p.boxAuthKeyValidCache.Set(ctx, cacheKey, isValid, 2*time.Minute); err != nil {
-		slog.ErrorContext(ctx, "Failed to set box auth key valid in cache", "error", err)
+	// Acceptances are deliberately not cached -- see authInvalidCacheTTL.
+	if !isValid {
+		if err := p.boxAuthKeyValidCache.Set(ctx, cacheKey, isValid, authInvalidCacheTTL); err != nil {
+			slog.ErrorContext(ctx, "Failed to set box auth key valid in cache", "error", err)
+		}
 	}
 
 	return &isValid, nil

@@ -40,6 +40,7 @@ export const useKeepPlanMutation = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.organization.plan(organizationId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.organization.usage.overview(organizationId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.billing.transactions(organizationId) }),
       ])
     },
   })

@@ -8,6 +8,7 @@ import { BoxService } from './box.service'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
+import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BoxEvents } from '../constants/box-events.constants'
 
 // ensureStartedForProxy only touches boxRepository + eventEmitter +
@@ -38,7 +39,6 @@ function makeService() {
     eventEmitter, // eventEmitter
     organizationService, // organizationService
     noop, // runnerAdapterFactory
-    noop, // redisLockProvider
     noop, // redis
     noop, // regionService
     noop, // boxLookupCacheInvalidationService
@@ -80,7 +80,6 @@ function makePreviewUrlService() {
     noop, // eventEmitter
     noop, // organizationService
     noop, // runnerAdapterFactory
-    noop, // redisLockProvider
     redis, // redis
     regionService, // regionService
     noop, // boxLookupCacheInvalidationService
@@ -231,7 +230,6 @@ function makeNetworkTunnelService() {
     noop,
     noop,
     noop,
-    noop,
     regionService,
     noop,
     noop,
@@ -262,13 +260,6 @@ describe('BoxService public defaults', () => {
     const runner = { id: 'runner-1', draining: false, state: RunnerState.READY }
     const runnerService = {
       getRandomAvailableRunner: jest.fn().mockResolvedValue(runner),
-      findOneUncachedOrFail: jest.fn().mockResolvedValue(runner),
-    }
-    const redisLockProvider = {
-      acquireLease: jest.fn().mockResolvedValue({
-        signal: new AbortController().signal,
-        release: jest.fn().mockResolvedValue(undefined),
-      }),
     }
     const service = Object.create(BoxService.prototype) as BoxService
     Object.assign(service as any, {
@@ -276,14 +267,14 @@ describe('BoxService public defaults', () => {
       getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
       organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
       redis: { exists: jest.fn().mockResolvedValue(1) },
+      logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
       warmPoolService,
       runnerService,
-      redisLockProvider,
       boxRepository,
       eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
       toBoxDto: jest.fn((box) => box),
     })
-    return { service, boxRepository, runnerService, redisLockProvider, warmPoolService }
+    return { service, boxRepository, runnerService, warmPoolService }
   }
 
   it.each([
@@ -342,36 +333,6 @@ describe('BoxService public defaults', () => {
     expect(boxRepository.insert).toHaveBeenCalled()
   })
 
-  it('rechecks runner eligibility under the assignment fence before inserting', async () => {
-    const { service, boxRepository, runnerService, redisLockProvider } = makeCreateService()
-    runnerService.findOneUncachedOrFail
-      .mockResolvedValueOnce({ id: 'runner-1', draining: true, state: RunnerState.READY })
-      .mockResolvedValueOnce({ id: 'runner-1', draining: false, state: RunnerState.READY })
-
-    await service.create({ name: 'fenced-box' } as any, { id: 'org-1' } as any)
-
-    expect(redisLockProvider.acquireLease).toHaveBeenCalledWith('runner:runner-1:box-assignment', 30)
-    expect(runnerService.findOneUncachedOrFail).toHaveBeenCalledTimes(2)
-    expect(boxRepository.insert).toHaveBeenCalledTimes(1)
-  })
-
-  it('returns a committed box when the assignment lease aborts immediately after insert', async () => {
-    const { service, boxRepository, redisLockProvider } = makeCreateService()
-    const controller = new AbortController()
-    redisLockProvider.acquireLease.mockResolvedValue({
-      signal: controller.signal,
-      release: jest.fn().mockResolvedValue(undefined),
-    })
-    boxRepository.insert.mockImplementation(async (box: any) => {
-      controller.abort(new Error('lease lost after commit'))
-      return box
-    })
-
-    await expect(service.create({ name: 'committed-box' } as any, { id: 'org-1' } as any)).resolves.toEqual(
-      expect.objectContaining({ name: 'committed-box' }),
-    )
-  })
-
   it.each([
     [undefined, false],
     [true, true],
@@ -396,5 +357,59 @@ describe('BoxService public defaults', () => {
       'warm-box',
       expect.objectContaining({ updateData: expect.objectContaining({ public: expectedPublic }) }),
     )
+  })
+})
+
+// Assignment is what turns a chosen runner into a committed box row. The only
+// seams it crosses are the candidate query and the insert — no transaction of
+// its own, and no lock on the runner row.
+describe('BoxService runner assignment', () => {
+  function makeAssignment() {
+    const runner = { id: 'runner-1', draining: false, state: RunnerState.READY }
+    const boxRepository = { insert: jest.fn(async (box: any) => box) } as any
+    const runnerService = { getRandomAvailableRunner: jest.fn().mockResolvedValue(runner) }
+    // Wired even though assignment no longer reaches for it: a fixture that
+    // omits a collaborator the code under test could use cannot tell an
+    // unlocked assignment from a mis-assembled one.
+    const dataSource = { transaction: jest.fn() }
+    const service = Object.create(BoxService.prototype) as BoxService
+    Object.assign(service as any, {
+      logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+      runnerService,
+      dataSource,
+      boxRepository,
+    })
+
+    // Drives the private assignment directly rather than through create(),
+    // whose quota / region / warm-pool preamble only obscures it.
+    const assign = (name = 'box-1') => {
+      const box = { id: name, runnerId: undefined as string | undefined }
+      return (service as any).persistOnAvailableRunner(box, { regions: ['us'] }, () => boxRepository.insert(box))
+    }
+    return { assign, boxRepository, runnerService, dataSource }
+  }
+
+  it('commits the box on the chosen runner without locking its row', async () => {
+    const { assign, boxRepository, dataSource } = makeAssignment()
+
+    const box = await assign()
+
+    expect(box.runnerId).toBe('runner-1')
+    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ runnerId: 'runner-1' }))
+    // No transaction of its own means no row lock on the runner: a drain never
+    // waits for this insert, and this insert never waits for a drain — so it can
+    // land on a runner that goes draining in between, which is the accepted
+    // trade.
+    expect(dataSource.transaction).not.toHaveBeenCalled()
+  })
+
+  it('leaves an empty candidate set as the 400 it already is', async () => {
+    const { assign, boxRepository, runnerService } = makeAssignment()
+    runnerService.getRandomAvailableRunner.mockRejectedValue(new BadRequestError('No available runners'))
+
+    // Nothing in that region and class can take this box. With no contention
+    // left to mistake it for, there is no retryable reading of this failure.
+    await expect(assign()).rejects.toMatchObject({ status: 400, message: 'No available runners' })
+    expect(boxRepository.insert).not.toHaveBeenCalled()
   })
 })

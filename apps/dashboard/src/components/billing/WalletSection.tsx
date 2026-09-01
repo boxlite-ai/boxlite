@@ -7,7 +7,7 @@
 import { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
 import { AsciiButton, AsciiChip, BRAND, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
 import { BalanceThresholdBanner } from '@/components/billing/BalanceLowBanner'
-import { InvoicesTable } from '@/components/Invoices'
+import { WalletTransactionsTable } from '@/components/WalletTransactions'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
@@ -18,9 +18,9 @@ import {
   useFetchOwnerCheckoutUrlQuery,
   useIsOwnerCheckoutUrlFetching,
   useOwnerBillingPortalUrlQuery,
-  useOwnerInvoicesQuery,
   useOwnerPaymentMethodsQuery,
   useOwnerPlanQuery,
+  useOwnerWalletTransactionsQuery,
   useOwnerWalletQuery,
 } from '@/hooks/queries/billingQueries'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
@@ -32,7 +32,7 @@ import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
 import { PaymentMethodsPanel } from './PaymentMethodsPanel'
 
-const DEFAULT_PAGE_SIZE = 10
+const TRANSACTION_HISTORY_LIMIT = 100
 
 /** Commerce rejects anything smaller, so the form says so before the round trip. */
 export const MIN_TOP_UP_DOLLARS = 10
@@ -54,6 +54,48 @@ export function topUpGate(amountDollars: number | undefined): { enabled: boolean
   return { enabled: true, reason: null }
 }
 
+/** Own the server page so the PR #829 grid can stay a presentation-only component. */
+function WalletTransactionsSection() {
+  const [page, setPage] = useState(1)
+  const transactionsQuery = useOwnerWalletTransactionsQuery(page, TRANSACTION_HISTORY_LIMIT)
+  const totalPages = transactionsQuery.data?.totalPages ?? 0
+
+  useEffect(() => {
+    if (totalPages > 0 && page > totalPages) {
+      setPage(totalPages)
+    }
+  }, [page, totalPages])
+
+  return (
+    <section>
+      <SectionTitle
+        title="Transactions"
+        count={transactionsQuery.data ? `${transactionsQuery.data.totalItems} records` : undefined}
+      />
+      <WalletTransactionsTable
+        data={transactionsQuery.data?.items ?? []}
+        loading={Boolean(transactionsQuery.isLoading || transactionsQuery.isFetching)}
+      />
+      {totalPages > 1 && (
+        <div className="flex items-center justify-end gap-3 border-b border-border/40 py-3 font-mono text-[11px] text-muted-foreground">
+          <span>
+            Page {page} of {totalPages}
+          </span>
+          <AsciiButton onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>
+            ← Previous
+          </AsciiButton>
+          <AsciiButton
+            onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+            disabled={page >= totalPages}
+          >
+            Next →
+          </AsciiButton>
+        </div>
+      )}
+    </section>
+  )
+}
+
 export function WalletSection() {
   const { selectedOrganization } = useSelectedOrganization()
   const { user } = useAuth()
@@ -67,13 +109,8 @@ export function WalletSection() {
   // one-shot action. Neither earns six rows of the panel on every visit.
   const [autoReloadOpen, setAutoReloadOpen] = useState(false)
   const [couponOpen, setCouponOpen] = useState(false)
-  const [invoicesPagination, setInvoicesPagination] = useState({
-    pageIndex: 0,
-    pageSize: DEFAULT_PAGE_SIZE,
-  })
   const walletQuery = useOwnerWalletQuery({ refetchOnMount: 'always' })
   const billingPortalUrlQuery = useOwnerBillingPortalUrlQuery()
-  const invoicesQuery = useOwnerInvoicesQuery(invoicesPagination.pageIndex + 1, invoicesPagination.pageSize)
   const paymentMethodsQuery = useOwnerPaymentMethodsQuery()
   const planQuery = useOwnerPlanQuery()
 
@@ -516,21 +553,7 @@ export function WalletSection() {
             </Panel>
           </section>
 
-          <section>
-            <SectionTitle
-              title="Usage Settlements"
-              count={invoicesQuery.data?.totalItems ? `${invoicesQuery.data.totalItems} records` : undefined}
-            />
-            <InvoicesTable
-              data={invoicesQuery.data?.items ?? []}
-              pagination={invoicesPagination}
-              pageCount={invoicesQuery.data?.totalPages ?? 0}
-              totalItems={invoicesQuery.data?.totalItems ?? 0}
-              onPaginationChange={setInvoicesPagination}
-              loading={invoicesQuery.isLoading}
-            />
-            <PanelNote>Settled usage cost, split by the plan quota and wallet funds that paid it</PanelNote>
-          </section>
+          <WalletTransactionsSection key={selectedOrganization?.id ?? 'no-organization'} />
         </div>
       )}
     </div>

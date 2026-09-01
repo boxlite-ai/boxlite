@@ -78,6 +78,39 @@ function requiredHttpUrl(value: string, name: string): string {
   return value.replace(/\/+$/, '')
 }
 
+function validateOidcManagementHttpsUrl(value: string, name: string): void {
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error(`${name} must be an absolute https URL`)
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`${name} must use https`)
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`${name} must not carry credentials`)
+  }
+}
+
+function requiredOidcManagementBaseUrl(value: string, name: string): string {
+  validateOidcManagementHttpsUrl(value, name)
+  // Management resource paths are appended to this prefix.
+  if (value.includes('?') || value.includes('#')) {
+    throw new Error(`${name} must not carry a query or fragment`)
+  }
+  return value.replace(/\/+$/, '')
+}
+
+function requiredOidcManagementTokenUrl(value: string, name: string): string {
+  validateOidcManagementHttpsUrl(value, name)
+  // OAuth token endpoints are exact URLs, so retain their query and trailing slash.
+  if (value.includes('#')) {
+    throw new Error(`${name} must not carry a fragment`)
+  }
+  return value
+}
+
 /**
  * Export of finalized usage periods, and snapshots of still-open ones, to the
  * Commerce service. Kept separate from billingApiUrl on purpose, for the same
@@ -205,6 +238,51 @@ export function incidentIoConfig(env: NodeJS.ProcessEnv = process.env) {
   return { ...settings, apiUrl }
 }
 
+function oidcManagementApiConfig(env: NodeJS.ProcessEnv = process.env) {
+  const enabled = env.OIDC_MANAGEMENT_API_ENABLED === 'true'
+  const rawBaseUrl = env.OIDC_MANAGEMENT_API_BASE_URL?.trim()
+  const rawTokenUrl = env.OIDC_MANAGEMENT_API_TOKEN_URL?.trim()
+  const settings = {
+    enabled,
+    clientId: env.OIDC_MANAGEMENT_API_CLIENT_ID,
+    clientSecret: env.OIDC_MANAGEMENT_API_CLIENT_SECRET,
+    audience: env.OIDC_MANAGEMENT_API_AUDIENCE,
+    baseUrl: rawBaseUrl,
+    tokenUrl: rawTokenUrl,
+  }
+
+  if (!enabled) {
+    return settings
+  }
+
+  const issuer = env.OIDC_ISSUER_BASE_URL || env.OID_ISSUER_BASE_URL
+  if (!issuer) {
+    throw new Error('OIDC_ISSUER_BASE_URL is required when OIDC_MANAGEMENT_API_ENABLED is true')
+  }
+
+  const normalizedIssuer = requiredHttpUrl(issuer, 'OIDC_ISSUER_BASE_URL')
+  const issuerUrl = new URL(normalizedIssuer)
+  const hasIssuerPath = issuerUrl.pathname !== '/'
+  if (hasIssuerPath && !rawBaseUrl) {
+    throw new Error(
+      'OIDC_MANAGEMENT_API_BASE_URL is required when OIDC_MANAGEMENT_API_ENABLED is true with a path-based issuer',
+    )
+  }
+  if (hasIssuerPath && !rawTokenUrl) {
+    throw new Error(
+      'OIDC_MANAGEMENT_API_TOKEN_URL is required when OIDC_MANAGEMENT_API_ENABLED is true with a path-based issuer',
+    )
+  }
+
+  const baseUrl = rawBaseUrl || `${issuerUrl.origin}/api/v2`
+  const tokenUrl = rawTokenUrl || `${issuerUrl.origin}/oauth/token`
+  return {
+    ...settings,
+    baseUrl: requiredOidcManagementBaseUrl(baseUrl, 'OIDC_MANAGEMENT_API_BASE_URL'),
+    tokenUrl: requiredOidcManagementTokenUrl(tokenUrl, 'OIDC_MANAGEMENT_API_TOKEN_URL'),
+  }
+}
+
 // The object-store key namespace migration archives land in by default, inside
 // whichever bucket each runner is configured with.
 const DEFAULT_MIGRATION_ARCHIVE_PREFIX = 'box-migrations/'
@@ -301,12 +379,7 @@ const configuration = {
     audience: process.env.OIDC_AUDIENCE || process.env.OID_AUDIENCE,
     endSessionEndpoint: process.env.OIDC_END_SESSION_ENDPOINT,
     postLogoutRedirectAllowlist: process.env.OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST,
-    managementApi: {
-      enabled: process.env.OIDC_MANAGEMENT_API_ENABLED === 'true',
-      clientId: process.env.OIDC_MANAGEMENT_API_CLIENT_ID,
-      clientSecret: process.env.OIDC_MANAGEMENT_API_CLIENT_SECRET,
-      audience: process.env.OIDC_MANAGEMENT_API_AUDIENCE,
-    },
+    managementApi: oidcManagementApiConfig(),
   },
   smtp: {
     host: process.env.SMTP_HOST,

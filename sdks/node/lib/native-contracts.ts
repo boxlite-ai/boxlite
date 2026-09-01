@@ -278,14 +278,19 @@ export interface JsPublishedPort {
   protocol: "tcp" | "udp";
 }
 
-export interface JsNetworkDirectionInfo {
+export interface JsOutboundNetworkInfo {
+  mode: "enabled" | "disabled";
+  allowNet: string[];
+}
+
+export interface JsInboundNetworkInfo {
   mode: "enabled" | "disabled";
   allowNet: string[];
 }
 
 export interface JsNetworkInfo {
-  outbound: JsNetworkDirectionInfo;
-  inbound: JsNetworkDirectionInfo;
+  outbound: JsOutboundNetworkInfo;
+  inbound: JsInboundNetworkInfo;
   /** @deprecated Use `outbound.mode`. Mirrors it for legacy readers. */
   mode: "enabled" | "disabled";
   /** @deprecated Use `outbound.allowNet`. Mirrors it for legacy readers. */

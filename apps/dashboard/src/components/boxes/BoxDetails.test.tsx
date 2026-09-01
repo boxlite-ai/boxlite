@@ -41,6 +41,12 @@ vi.mock('@/components/OnboardingGuideDialog', () => ({
   OnboardingGuideDialog: () => null,
 }))
 
+// Owns its own mutations and needs an ApiProvider; these tests cover the detail
+// shell, and the network panel has its own stories.
+vi.mock('./BoxNetworkSection', () => ({
+  BoxNetworkSection: () => null,
+}))
+
 vi.mock('@/hooks/useConfig', () => ({
   useConfig: () => ({}),
 }))

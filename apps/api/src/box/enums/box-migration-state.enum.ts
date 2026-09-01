@@ -13,6 +13,10 @@
  *     (no row) ─▶ PENDING_EXPORT ─▶ PENDING_IMPORT ─▶ PENDING_DISCARD_EXPORTED ─▶ COMPLETED
  *                       └──────────────┴──▶ PENDING_ROLLBACK ─▶ (row deleted)
  *
+ * PENDING_EXPORT has a second way out: an EXPORT_BOX that failed deletes the row
+ * outright, since a migration that has not exported yet owns no artifact. The
+ * box becomes unclaimed again and the marker decides afresh whether to move it.
+ *
  * The state records what the migration is waiting for, never what it has
  * produced: `box_migration.arcPath` says an archive is on the object store and
  * `box_migration.runnerId` says a box exists on another runner. Nor does the

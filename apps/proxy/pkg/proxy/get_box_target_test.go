@@ -67,8 +67,10 @@ func TestCacheErrorsDoNotLogPreviewCredentials(t *testing.T) {
 	if _, err := proxy.getBoxPublic(context.Background(), signedToken); err != nil {
 		t.Fatalf("getBoxPublic() error = %v", err)
 	}
+	// A rejection, because only rejections are cached -- an acceptance never reaches
+	// the failing Set and so would never produce the log line asserted below.
 	if _, err := proxy.validateAndCache(context.Background(), signedToken, authKey, func() (bool, error) {
-		return true, nil
+		return false, nil
 	}); err != nil {
 		t.Fatalf("validateAndCache() error = %v", err)
 	}
@@ -313,5 +315,128 @@ func TestActivityPollControllerStopIsIdempotent(t *testing.T) {
 	case <-controller.done:
 	default:
 		t.Fatal("activity poll was not stopped")
+	}
+}
+
+type recordedCacheWrite struct {
+	key string
+	ttl time.Duration
+}
+
+type recordingCache[T any] struct {
+	writes []recordedCacheWrite
+}
+
+func (*recordingCache[T]) Get(context.Context, string) (*T, error) {
+	return nil, errors.New("cache miss")
+}
+
+func (c *recordingCache[T]) Set(_ context.Context, key string, _ T, ttl time.Duration) error {
+	c.writes = append(c.writes, recordedCacheWrite{key: key, ttl: ttl})
+	return nil
+}
+
+func (*recordingCache[T]) Delete(context.Context, string) error {
+	return nil
+}
+
+func (*recordingCache[T]) Has(context.Context, string) (bool, error) {
+	return false, nil
+}
+
+func cacheAuthResult(t *testing.T, isValid bool) []recordedCacheWrite {
+	t.Helper()
+
+	cache := &recordingCache[bool]{}
+	proxy := &Proxy{boxAuthKeyValidCache: cache}
+
+	if _, err := proxy.validateAndCache(context.Background(), "AbCdEf123456", "blk_live_secret", func() (bool, error) {
+		return isValid, nil
+	}); err != nil {
+		t.Fatalf("validateAndCache() error = %v", err)
+	}
+
+	return cache.writes
+}
+
+// A cached acceptance is what a revoked credential rides on: nothing evicts the
+// entry, and in production config.Redis is nil so the cache is in-process and the
+// API cannot reach it either. Any TTL at all reopens the window the API closes on
+// delete, so the acceptance is not cached at any TTL.
+func TestValidAuthResultIsNotCached(t *testing.T) {
+	writes := cacheAuthResult(t, true)
+
+	for _, write := range writes {
+		t.Errorf("valid auth result cached under %q for %v, want no cache write", write.key, write.ttl)
+	}
+}
+
+func TestInvalidAuthResultIsCached(t *testing.T) {
+	// Revocation latency no longer rides on this cache at all, so shortening the
+	// rejection TTL buys nothing and only sends repeated bad credentials back to the
+	// API more often. It stays at the two minutes both verdicts shared before.
+	const wantTTL = 2 * time.Minute
+
+	writes := cacheAuthResult(t, false)
+
+	if len(writes) != 1 {
+		t.Fatalf("invalid auth result made %d cache writes, want 1", len(writes))
+	}
+	if writes[0].ttl != wantTTL {
+		t.Errorf("invalid auth result cached for %v, want %v", writes[0].ttl, wantTTL)
+	}
+}
+
+// The acceptance is re-derived from the API on every request -- that, not a TTL, is
+// what bounds how long a deleted credential keeps reaching the box.
+func TestValidAuthResultIsRevalidatedOnEveryRequest(t *testing.T) {
+	ctx := context.Background()
+	proxy := &Proxy{boxAuthKeyValidCache: common_cache.NewMapCache[bool](ctx)}
+
+	validations := 0
+	validate := func() (bool, error) {
+		validations++
+		return true, nil
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		isValid, err := proxy.validateAndCache(ctx, "AbCdEf123456", "blk_live_secret", validate)
+		if err != nil {
+			t.Fatalf("validateAndCache() attempt %d error = %v", attempt, err)
+		}
+		if !*isValid {
+			t.Fatalf("validateAndCache() attempt %d = false, want true", attempt)
+		}
+		if validations != attempt {
+			t.Fatalf("validateAndCache() reached the API %d times after %d calls, want %d", validations, attempt, attempt)
+		}
+	}
+}
+
+// The rejection is still cached, so a credential the API has already refused does
+// not get to spend an API round trip on every retry.
+func TestCachedInvalidAuthResultIsServedWithoutRevalidating(t *testing.T) {
+	ctx := context.Background()
+	proxy := &Proxy{boxAuthKeyValidCache: common_cache.NewMapCache[bool](ctx)}
+
+	validations := 0
+	validate := func() (bool, error) {
+		validations++
+		return false, nil
+	}
+	if _, err := proxy.validateAndCache(ctx, "AbCdEf123456", "blk_live_secret", validate); err != nil {
+		t.Fatalf("validateAndCache() error = %v", err)
+	}
+
+	isValid, err := proxy.validateAndCache(ctx, "AbCdEf123456", "blk_live_secret", validate)
+	if err != nil {
+		t.Fatalf("validateAndCache() error = %v", err)
+	}
+
+	if validations != 1 {
+		t.Errorf("validateAndCache() reached the API %d times, want 1 -- the second call should be cached", validations)
+	}
+	if *isValid {
+		t.Error("validateAndCache() = true, want the cached rejection")
 	}
 }

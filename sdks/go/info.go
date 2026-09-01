@@ -37,16 +37,24 @@ type PublishedPort struct {
 	Protocol  PortProtocol
 }
 
-// NetworkInfo describes the box network and its resolved local publications.
-// NetworkDirectionInfo is the mode and allowlist for one traffic direction.
-type NetworkDirectionInfo struct {
+// OutboundNetworkInfo is the network configuration for outbound
+// (guest → internet) traffic.
+type OutboundNetworkInfo struct {
 	Mode     NetworkMode
 	AllowNet []string
 }
 
+// InboundNetworkInfo is the network configuration for inbound
+// (internet → guest) traffic.
+type InboundNetworkInfo struct {
+	Mode     NetworkMode
+	AllowNet []string
+}
+
+// NetworkInfo describes the box network and its resolved local publications.
 type NetworkInfo struct {
-	Outbound NetworkDirectionInfo
-	Inbound  NetworkDirectionInfo
+	Outbound OutboundNetworkInfo
+	Inbound  InboundNetworkInfo
 
 	// Mode mirrors Outbound.Mode for pre-split readers.
 	//
@@ -216,14 +224,29 @@ func portProtocolFromCValue(protocol uint32) PortProtocol {
 	}
 }
 
-func cNetworkDirectionInfoToGo(direction C.CNetworkDirectionInfo) NetworkDirectionInfo {
+// cOutboundNetworkInfoToGo converts a C outbound network struct to Go.
+func cOutboundNetworkInfoToGo(direction C.COutboundNetworkInfo) OutboundNetworkInfo {
 	allowNet := make([]string, 0, int(direction.allow_net_count))
 	if direction.allow_net != nil && direction.allow_net_count > 0 {
 		for _, host := range unsafe.Slice(direction.allow_net, int(direction.allow_net_count)) {
 			allowNet = append(allowNet, cString(host))
 		}
 	}
-	return NetworkDirectionInfo{
+	return OutboundNetworkInfo{
+		Mode:     networkModeFromCValue(direction.mode),
+		AllowNet: allowNet,
+	}
+}
+
+// cInboundNetworkInfoToGo converts a C inbound network struct to Go.
+func cInboundNetworkInfoToGo(direction C.CInboundNetworkInfo) InboundNetworkInfo {
+	allowNet := make([]string, 0, int(direction.allow_net_count))
+	if direction.allow_net != nil && direction.allow_net_count > 0 {
+		for _, host := range unsafe.Slice(direction.allow_net, int(direction.allow_net_count)) {
+			allowNet = append(allowNet, cString(host))
+		}
+	}
+	return InboundNetworkInfo{
 		Mode:     networkModeFromCValue(direction.mode),
 		AllowNet: allowNet,
 	}
@@ -250,10 +273,10 @@ func cNetworkInfoToGo(network *C.CNetworkInfo) *NetworkInfo {
 		}
 	}
 
-	outbound := cNetworkDirectionInfoToGo(network.outbound)
+	outbound := cOutboundNetworkInfoToGo(network.outbound)
 	return &NetworkInfo{
 		Outbound:       outbound,
-		Inbound:        cNetworkDirectionInfoToGo(network.inbound),
+		Inbound:        cInboundNetworkInfoToGo(network.inbound),
 		Mode:           outbound.Mode,
 		AllowNet:       outbound.AllowNet,
 		PublishedPorts: publishedPorts,

@@ -48,6 +48,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useAuth } from 'react-oidc-context'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { BoxNetworkSection } from './BoxNetworkSection'
 import { BoxTerminalTab } from './BoxTerminalTab'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
@@ -470,10 +471,6 @@ export default function BoxDetails() {
               </SpecRow>
               <SpecRow label="region">{(getRegionName(box.target) ?? box.target ?? '—').toUpperCase()}</SpecRow>
 
-              <SectionHeader
-                title="resources"
-                right={<span className="text-[10px] tracking-[1px] text-muted-foreground">quota</span>}
-              />
               <SpecRow label="cpu">{box.cpu} vcpu</SpecRow>
               <SpecRow label="memory">{box.memory} gib</SpecRow>
               <SpecRow label="disk">{box.disk} gib</SpecRow>
@@ -502,7 +499,12 @@ export default function BoxDetails() {
                 </>
               )}
 
-              <SectionHeader title="timestamps" />
+              <BoxNetworkSection box={box} canManage={writePermitted} />
+
+              {/* `activity` names the subject, not the value type — and it is
+                  the platform's own term for it (POST /:boxId/last-activity),
+                  which is also what auto-stop is measured against. */}
+              <SectionHeader title="activity" />
               <SpecRow label="created">{getRelativeTimeString(box.createdAt).relativeTimeString}</SpecRow>
               <SpecRow label="last event">{getRelativeTimeString(box.updatedAt).relativeTimeString}</SpecRow>
 

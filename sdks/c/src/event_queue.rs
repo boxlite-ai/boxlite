@@ -1232,7 +1232,7 @@ mod owned_ffi_ptr_nested_leak_tests {
     use crate::images::{CImageInfoList, CImagePullResult};
     use crate::info::{CBoxInfo, CBoxInfoList};
     use boxlite::runtime::options::PortProtocol;
-    use boxlite::runtime::types::NetworkDirectionInfo;
+    use boxlite::runtime::types::{InboundNetworkInfo, OutboundNetworkInfo};
     use boxlite::{NetworkInfo, NetworkMode, PublishedPort};
     use std::ffi::CString;
     use std::sync::atomic::Ordering as AtomicOrdering;
@@ -1284,11 +1284,11 @@ mod owned_ffi_ptr_nested_leak_tests {
             auto_resume: 1,
             created_at: 0,
             network: crate::info::network_to_c_ptr(&Some(NetworkInfo::new(
-                NetworkDirectionInfo {
+                OutboundNetworkInfo {
                     mode: NetworkMode::Enabled,
                     allow_net: vec!["api.example.com".to_string()],
                 },
-                NetworkDirectionInfo {
+                InboundNetworkInfo {
                     mode: NetworkMode::Enabled,
                     allow_net: Vec::new(),
                 },

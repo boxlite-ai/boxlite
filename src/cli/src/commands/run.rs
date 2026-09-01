@@ -31,6 +31,20 @@ pub struct RunArgs {
     #[command(flatten)]
     pub management: ManagementFlags,
 
+    /// Run the box in the background (detach)
+    #[arg(short = 'd', long)]
+    pub detach: bool,
+
+    /// Automatically remove the box when it exits. Conflicts with lifecycle
+    /// deadlines; ignored with `--detach` so the box outlives this CLI.
+    #[arg(long, conflicts_with_all = ["auto_delete", "auto_stop"])]
+    pub rm: bool,
+
+    /// Override the image entrypoint with a single executable. Any trailing
+    /// COMMAND replaces the image CMD and is appended to the entrypoint.
+    #[arg(long = "entrypoint", value_name = "EXEC")]
+    pub entrypoint: Option<String>,
+
     /// Path to an already prepared rootfs
     #[arg(long = "rootfs", value_name = "PATH")]
     pub rootfs: Option<String>,
@@ -55,6 +69,7 @@ pub async fn execute(args: RunArgs, global: &GlobalFlags) -> anyhow::Result<i32>
     args.boot.require_enabled(global.experimental_features())?;
     args.management
         .require_enabled(global.experimental_features())?;
+    args.management.require_sweeper(global.targets_rest()?)?;
     let (rootfs, command_args) = args.rootfs_and_command()?;
     let command_args = command_args.to_vec();
     let mut runner = BoxRunner::new(args, global)?;
@@ -65,6 +80,54 @@ struct BoxRunner {
     args: RunArgs,
     rt: BoxliteRuntime,
     home: Option<std::path::PathBuf>,
+}
+
+/// Resolve the flags into box options.
+///
+/// A free function rather than a `BoxRunner` method so the flag-resolution
+/// rules can be tested without a runtime: `BoxRunner` owns one, and
+/// `create_box` ends in `rt.create`, which needs a VM.
+fn build_options(
+    args: &RunArgs,
+    home: Option<&std::path::Path>,
+    rootfs: RootfsSpec,
+    command_args: &[String],
+) -> anyhow::Result<BoxOptions> {
+    let mut options = BoxOptions::default();
+    args.resource.apply_to(&mut options);
+    args.capability.apply_to(&mut options);
+    args.boot.apply_to(&mut options);
+    args.management.apply_to(&mut options)?;
+    args.publish.apply_to(&mut options)?;
+    args.volume.apply_to(&mut options, home)?;
+    args.network.apply_to(&mut options)?;
+    args.process.apply_to(&mut options)?;
+
+    options.detach = args.detach;
+    if args.rm {
+        options.auto_delete = Some(1);
+    }
+    if let Some(ref exec) = args.entrypoint {
+        options.entrypoint = Some(vec![exec.clone()]);
+    }
+
+    // Detached boxes keep manual lifecycle control: detach silently overrides
+    // `--rm` (historical CLI behaviour). An explicit `--auto-delete` is a
+    // deferred deadline, not remove-on-stop, so it survives detaching — that
+    // pairing is the point of the flag.
+    if args.detach && args.management.auto_delete.is_none() {
+        options.auto_delete = Some(0);
+    }
+
+    // Docker semantics: the user COMMAND replaces the image CMD (the image
+    // ENTRYPOINT is preserved and prepended) and the result runs as the
+    // container's init. No COMMAND → the image default runs.
+    if !command_args.is_empty() {
+        options.cmd = Some(command_args.to_vec());
+    }
+
+    options.rootfs = rootfs;
+    Ok(options)
 }
 
 impl BoxRunner {
@@ -86,7 +149,7 @@ impl BoxRunner {
 
         // Detach mode: start it and get out of the way. Nobody is reading the
         // output, so there is nothing to be attached for.
-        if self.args.management.detach {
+        if self.args.detach {
             litebox.start().await?;
             println!("{}", litebox.id());
             return Ok(0);
@@ -128,32 +191,7 @@ impl BoxRunner {
         rootfs: RootfsSpec,
         command_args: &[String],
     ) -> anyhow::Result<LiteBox> {
-        let mut options = BoxOptions::default();
-        self.args.resource.apply_to(&mut options);
-        self.args.capability.apply_to(&mut options);
-        self.args.boot.apply_to(&mut options);
-        self.args.management.apply_to(&mut options)?;
-        self.args.publish.apply_to(&mut options)?;
-        self.args
-            .volume
-            .apply_to(&mut options, self.home.as_deref())?;
-        self.args.network.apply_to(&mut options)?;
-        self.args.process.apply_to(&mut options)?;
-
-        // Detached boxes keep manual lifecycle control: detach silently
-        // overrides --rm (historical CLI behavior).
-        if self.args.management.detach {
-            options.auto_delete = Some(0);
-        }
-
-        // Docker semantics: the user COMMAND replaces the image CMD (the image
-        // ENTRYPOINT is preserved and prepended) and the result runs as the
-        // container's init. No COMMAND → the image default runs.
-        if !command_args.is_empty() {
-            options.cmd = Some(command_args.to_vec());
-        }
-
-        options.rootfs = rootfs;
+        let options = build_options(&self.args, self.home.as_deref(), rootfs, command_args)?;
 
         let litebox = self
             .rt
@@ -199,6 +237,52 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Commands};
     use clap::Parser;
+
+    /// The second consuming boundary. `run -d` clears the `--rm` encoding
+    /// after `apply_to` has run, so it can clobber an explicit deadline exactly
+    /// as `create` could — and this pairing is what the CLI reference promises:
+    /// "an explicit `--auto-delete` survives detaching".
+    #[test]
+    fn an_explicit_delete_deadline_survives_run_detach() {
+        let cli = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "-d",
+            "--auto-delete",
+            "1h",
+            "alpine:latest",
+        ])
+        .expect("run -d --auto-delete should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+        let (rootfs, command_args) = args.rootfs_and_command().expect("rootfs resolves");
+        let command_args = command_args.to_vec();
+
+        let opts = build_options(&args, None, rootfs, &command_args).expect("options build");
+
+        assert_eq!(opts.auto_delete, Some(3_600));
+        assert!(opts.detach);
+    }
+
+    #[test]
+    fn run_detach_without_a_deadline_clears_the_rm_encoding() {
+        let cli = Cli::try_parse_from(["boxlite", "run", "-d", "--rm", "alpine:latest"])
+            .expect("run -d --rm should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+        let (rootfs, command_args) = args.rootfs_and_command().expect("rootfs resolves");
+        let command_args = command_args.to_vec();
+
+        let opts = build_options(&args, None, rootfs, &command_args).expect("options build");
+
+        assert_eq!(
+            opts.auto_delete,
+            Some(0),
+            "a detached box keeps manual lifecycle control, so --rm is dropped"
+        );
+    }
 
     #[test]
     fn run_capability_flags_are_repeatable() {

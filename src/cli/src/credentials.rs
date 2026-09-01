@@ -130,6 +130,111 @@ struct CredentialsFile {
 /// the string.
 pub const DEFAULT_PROFILE: &str = "default";
 
+/// Credential file access rooted at the effective BoxLite home directory.
+///
+/// Keeping the path and all reads/writes together prevents `--home` from
+/// selecting one runtime directory while authentication silently reads a
+/// different credential file.
+#[derive(Debug, Clone, Default)]
+pub struct CredentialStore {
+    home: Option<PathBuf>,
+}
+
+impl CredentialStore {
+    pub fn new(home: Option<PathBuf>) -> Self {
+        Self { home }
+    }
+
+    pub fn path(&self) -> Result<PathBuf> {
+        if let Some(home) = &self.home {
+            return Ok(home.join("credentials.toml"));
+        }
+        if let Some(env_home) = std::env::var_os("BOXLITE_HOME") {
+            let env_home = PathBuf::from(env_home);
+            if env_home.is_absolute() {
+                return Ok(env_home.join("credentials.toml"));
+            }
+        }
+        let home = dirs::home_dir()
+            .ok_or_else(|| anyhow!("could not determine home directory for $HOME"))?;
+        Ok(home.join(".boxlite").join("credentials.toml"))
+    }
+
+    pub fn load_named(&self, name: &str) -> Result<Option<Profile>> {
+        let file_path = self.path()?;
+        if !file_path.exists() {
+            return Ok(None);
+        }
+        let raw = fs::read_to_string(&file_path)
+            .with_context(|| format!("reading credentials file {}", file_path.display()))?;
+        let parsed: CredentialsFile = toml::from_str(&raw)
+            .with_context(|| format!("parsing credentials file {}", file_path.display()))?;
+        Ok(parsed.profiles.get(name).cloned())
+    }
+
+    pub fn save_named(&self, name: &str, profile: &Profile) -> Result<()> {
+        let file_path = self.path()?;
+        let parent = file_path
+            .parent()
+            .ok_or_else(|| anyhow!("credentials path has no parent: {}", file_path.display()))?;
+        create_secure_dir(parent)?;
+
+        let mut existing: CredentialsFile = if file_path.exists() {
+            let raw = fs::read_to_string(&file_path)
+                .with_context(|| format!("reading credentials file {}", file_path.display()))?;
+            toml::from_str(&raw)
+                .with_context(|| format!("parsing credentials file {}", file_path.display()))?
+        } else {
+            CredentialsFile::default()
+        };
+        existing.profiles.insert(name.to_string(), profile.clone());
+
+        let serialized =
+            toml::to_string_pretty(&existing).context("serializing credentials to TOML")?;
+        write_secure(&file_path, serialized.as_bytes())?;
+        Ok(())
+    }
+
+    pub fn delete_named(&self, name: &str) -> Result<bool> {
+        let file_path = self.path()?;
+        if !file_path.exists() {
+            return Ok(false);
+        }
+        let raw = fs::read_to_string(&file_path)
+            .with_context(|| format!("reading credentials file {}", file_path.display()))?;
+        let mut parsed: CredentialsFile = toml::from_str(&raw)
+            .with_context(|| format!("parsing credentials file {}", file_path.display()))?;
+        if parsed.profiles.remove(name).is_none() {
+            return Ok(false);
+        }
+        if parsed.profiles.is_empty() {
+            fs::remove_file(&file_path).with_context(|| {
+                format!("removing empty credentials file {}", file_path.display())
+            })?;
+            return Ok(true);
+        }
+        let serialized =
+            toml::to_string_pretty(&parsed).context("serializing credentials to TOML")?;
+        write_secure(&file_path, serialized.as_bytes())?;
+        Ok(true)
+    }
+
+    pub async fn load_active(
+        &self,
+        name: &str,
+        http: &reqwest::Client,
+    ) -> Result<Option<BoxliteRestOptions>> {
+        let Some(mut profile) = self.load_named(name)? else {
+            return Ok(None);
+        };
+        if crate::commands::auth::oidc::refresh::refresh_needed(&profile) {
+            crate::commands::auth::oidc::refresh::refresh(&mut profile, http).await?;
+            self.save_named(name, &profile)?;
+        }
+        Ok(Some(into_rest_options(profile)))
+    }
+}
+
 /// Absolute path to the credentials file.
 ///
 /// Resolution order: `$BOXLITE_HOME/credentials.toml` →
@@ -137,61 +242,27 @@ pub const DEFAULT_PROFILE: &str = "default";
 /// convention of consolidating per-tool state under a single dotdir, and
 /// keeps the credentials co-located with the rest of `$BOXLITE_HOME`
 /// (images, runtime state) so `--home PATH` users have one place to look.
+#[cfg(test)]
 pub fn path() -> Result<PathBuf> {
-    if let Some(env_home) = std::env::var_os("BOXLITE_HOME") {
-        let env_home = PathBuf::from(env_home);
-        if env_home.is_absolute() {
-            return Ok(env_home.join("credentials.toml"));
-        }
-    }
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow!("could not determine home directory for $HOME"))?;
-    Ok(home.join(".boxlite").join("credentials.toml"))
+    CredentialStore::default().path()
 }
 
 /// Load the named profile from the credentials file. `Ok(None)` when either
 /// the file is absent or the requested profile is not in it; parse errors
 /// propagate so a corrupted file surfaces instead of being silently treated
 /// as "no credentials".
+#[cfg(test)]
 pub fn load_named(name: &str) -> Result<Option<Profile>> {
-    let file_path = path()?;
-    if !file_path.exists() {
-        return Ok(None);
-    }
-    let raw = fs::read_to_string(&file_path)
-        .with_context(|| format!("reading credentials file {}", file_path.display()))?;
-    let parsed: CredentialsFile = toml::from_str(&raw)
-        .with_context(|| format!("parsing credentials file {}", file_path.display()))?;
-    Ok(parsed.profiles.get(name).cloned())
+    CredentialStore::default().load_named(name)
 }
 
 /// Save `profile` under `name`, replacing any existing profile with that
 /// name and preserving every other profile in the file. On Unix, the file
 /// is created with mode `0o600` and the parent dir with `0o700`. On
 /// non-Unix platforms the file is local-only — no perms set.
+#[cfg(test)]
 pub fn save_named(name: &str, profile: &Profile) -> Result<()> {
-    let file_path = path()?;
-    let parent = file_path
-        .parent()
-        .ok_or_else(|| anyhow!("credentials path has no parent: {}", file_path.display()))?;
-    create_secure_dir(parent)?;
-
-    let mut existing: CredentialsFile = if file_path.exists() {
-        let raw = fs::read_to_string(&file_path)
-            .with_context(|| format!("reading credentials file {}", file_path.display()))?;
-        // Tolerate an empty file but not malformed TOML — corrupt state
-        // should surface, not be silently overwritten.
-        toml::from_str(&raw)
-            .with_context(|| format!("parsing credentials file {}", file_path.display()))?
-    } else {
-        CredentialsFile::default()
-    };
-    existing.profiles.insert(name.to_string(), profile.clone());
-
-    let serialized =
-        toml::to_string_pretty(&existing).context("serializing credentials to TOML")?;
-    write_secure(&file_path, serialized.as_bytes())?;
-    Ok(())
+    CredentialStore::default().save_named(name, profile)
 }
 
 /// Remove the named profile from the credentials file, leaving the rest
@@ -199,50 +270,9 @@ pub fn save_named(name: &str, profile: &Profile) -> Result<()> {
 /// `Ok(false)` if either the file or the profile was absent. If removing
 /// the last profile leaves the file empty, the file itself is deleted so
 /// `auth status` reports "Not logged in" instead of finding an empty stub.
+#[cfg(test)]
 pub fn delete_named(name: &str) -> Result<bool> {
-    let file_path = path()?;
-    if !file_path.exists() {
-        return Ok(false);
-    }
-    let raw = fs::read_to_string(&file_path)
-        .with_context(|| format!("reading credentials file {}", file_path.display()))?;
-    let mut parsed: CredentialsFile = toml::from_str(&raw)
-        .with_context(|| format!("parsing credentials file {}", file_path.display()))?;
-    if parsed.profiles.remove(name).is_none() {
-        return Ok(false);
-    }
-    if parsed.profiles.is_empty() {
-        // No profiles left — collapse the file so the absence is visible to
-        // `path().exists()` and to humans `ls`-ing the dotdir.
-        fs::remove_file(&file_path)
-            .with_context(|| format!("removing empty credentials file {}", file_path.display()))?;
-        return Ok(true);
-    }
-    let serialized = toml::to_string_pretty(&parsed).context("serializing credentials to TOML")?;
-    write_secure(&file_path, serialized.as_bytes())?;
-    Ok(true)
-}
-
-/// Load `name`, refresh its OIDC tokens if they're within five minutes of
-/// expiry, persist any refreshed material, and return the
-/// `BoxliteRestOptions` to use for an authenticated REST call.
-///
-/// This is the chokepoint every authenticated command flows through —
-/// keep the network round-trip + on-disk update in one place so callers
-/// never see a fresh-from-disk Profile that is already stale.
-///
-/// `Ok(None)` means "no profile by that name" (use the unauthenticated
-/// runtime / env vars instead). `Err` is reserved for actual problems
-/// (corrupt file, broken IdP) that should surface to the user.
-pub async fn load_active(name: &str, http: &reqwest::Client) -> Result<Option<BoxliteRestOptions>> {
-    let Some(mut profile) = load_named(name)? else {
-        return Ok(None);
-    };
-    if crate::commands::auth::oidc::refresh::refresh_needed(&profile) {
-        crate::commands::auth::oidc::refresh::refresh(&mut profile, http).await?;
-        save_named(name, &profile)?;
-    }
-    Ok(Some(into_rest_options(profile)))
+    CredentialStore::default().delete_named(name)
 }
 
 /// Convert a stored `Profile` into `BoxliteRestOptions`.
@@ -384,6 +414,22 @@ mod tests {
             api_key: None,
             path_prefix: Some("acme".to_string()),
         }
+    }
+
+    #[test]
+    fn explicit_home_scopes_every_credential_operation() {
+        let temp = TempDir::new().expect("temp home");
+        let store = CredentialStore::new(Some(temp.path().to_path_buf()));
+        let profile = sample_api_key_profile();
+
+        assert_eq!(store.path().unwrap(), temp.path().join("credentials.toml"));
+        store.save_named("cloud", &profile).expect("save");
+        let loaded = store
+            .load_named("cloud")
+            .expect("load")
+            .expect("profile exists");
+        assert_profiles_equal(&loaded, &profile);
+        assert!(store.delete_named("cloud").expect("delete"));
     }
 
     /// `SecretString` intentionally does not implement `PartialEq` (to keep

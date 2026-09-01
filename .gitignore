@@ -230,3 +230,7 @@ regions-*.png
 runners-*.png
 term-*.png
 test-*.png
+.venv-infra.partial.*
+.venv-infra/
+.venv-infra.partial.*/
+target/

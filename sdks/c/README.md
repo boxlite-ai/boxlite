@@ -568,7 +568,7 @@ BoxliteErrorCode boxlite_box_metrics(
 ```
 
 `CBoxInfo.network` is an owned `CNetworkInfo*` and is `NULL` when network
-metadata is unavailable. `CNetworkInfo` exposes a `CNetworkDirectionInfo` per
+metadata is unavailable. `CNetworkInfo` exposes a `COutboundNetworkInfo`/`CInboundNetworkInfo` per
 direction (`outbound`, `inbound`) — each with `mode`, the `allow_net` string
 array and count — plus a nullable `CPublishedPortList*`. The deprecated
 top-level `mode`, `allow_net` and `allow_net_count` fields remain at their

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { Runner } from '../entities/runner.entity'
 import { RunnerState } from '../enums/runner-state.enum'
 import { RunnerService } from './runner.service'
 
@@ -18,17 +19,12 @@ describe('RunnerService decommission verification', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     }
     const boxRepository = { count: jest.fn().mockResolvedValue(boxCount) }
+    // Only the singleton cron guards still take a Redis lock; the two runner
+    // state writers serialise against each other with a FOR UPDATE row lock
+    // inside `dataSource.transaction`.
     const redisLockProvider = {
       lock: jest.fn().mockResolvedValue(true),
       unlock: jest.fn().mockResolvedValue(undefined),
-      acquireLease: jest.fn().mockResolvedValue({
-        signal: new AbortController().signal,
-        release: jest.fn().mockResolvedValue(undefined),
-      }),
-      waitForLease: jest.fn().mockResolvedValue({
-        signal: new AbortController().signal,
-        release: jest.fn().mockResolvedValue(undefined),
-      }),
     }
     const configService = { getOrThrow: jest.fn().mockReturnValue(1) }
     const redis = {
@@ -36,7 +32,19 @@ describe('RunnerService decommission verification', () => {
       set: jest.fn().mockResolvedValue('OK'),
       del: jest.fn().mockResolvedValue(1),
     }
-    const dataSource = { queryResultCache: undefined }
+    // Stands in for the locked read + write the two writers do; `count` here is
+    // the transactional re-count, distinct from boxRepository.count outside it.
+    const entityManager = {
+      findOne: jest.fn().mockResolvedValue(runner),
+      count: jest.fn().mockResolvedValue(boxCount),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      save: jest.fn(async (_entity: unknown, value: unknown) => value),
+      query: jest.fn().mockResolvedValue(undefined),
+    }
+    const dataSource = {
+      queryResultCache: undefined,
+      transaction: jest.fn(async (cb: (em: typeof entityManager) => Promise<unknown>) => cb(entityManager)),
+    }
     const eventEmitter = { emit: jest.fn() }
     const service = new RunnerService(
       runnerRepository as any,
@@ -50,7 +58,16 @@ describe('RunnerService decommission verification', () => {
       redis as any,
     )
 
-    return { service, runnerRepository, boxRepository, redisLockProvider, redis, eventEmitter }
+    return {
+      service,
+      runnerRepository,
+      boxRepository,
+      redisLockProvider,
+      redis,
+      eventEmitter,
+      entityManager,
+      dataSource,
+    }
   }
 
   it('resets verification while any box is still assigned to the draining runner', async () => {
@@ -64,11 +81,11 @@ describe('RunnerService decommission verification', () => {
   })
 
   it('decommissions only after three checks with no remaining runner assignments', async () => {
-    const { service, runnerRepository, redis } = createService(0, '2')
+    const { service, redis, entityManager } = createService(0, '2')
 
     await (service as any).handleCheckDecommissionRunners()
 
-    expect(runnerRepository.update).toHaveBeenCalledWith('runner-1', { state: RunnerState.DECOMMISSIONED })
+    expect(entityManager.update).toHaveBeenCalledWith(Runner, 'runner-1', { state: RunnerState.DECOMMISSIONED })
     expect(redis.del).toHaveBeenCalledWith('runner:draining-check:runner-1')
   })
 
@@ -90,37 +107,41 @@ describe('RunnerService decommission verification', () => {
     expect(redis.del).toHaveBeenCalledWith('runner:draining-check:runner-1')
   })
 
-  it('does not publish decommission when an assignment appears after taking the assignment fence', async () => {
-    const { service, runnerRepository, boxRepository, redis, redisLockProvider } = createService(0, '2')
-    boxRepository.count.mockResolvedValueOnce(0).mockResolvedValueOnce(1)
+  it('does not publish decommission when the transactional re-count still finds a box', async () => {
+    const { service, redis, entityManager } = createService(0, '2')
+    entityManager.count.mockResolvedValue(1)
 
     await (service as any).handleCheckDecommissionRunners()
 
-    expect(runnerRepository.update).not.toHaveBeenCalled()
+    expect(entityManager.update).not.toHaveBeenCalled()
     expect(redis.set).toHaveBeenCalledWith('runner:draining-check:runner-1', '0', 'EX', 600)
-    expect(redisLockProvider.acquireLease).toHaveBeenCalledWith('runner:runner-1:box-assignment', 30)
+    // The re-count has to happen under the same exclusive lock as the write.
+    expect(entityManager.findOne).toHaveBeenCalledWith(
+      Runner,
+      expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+    )
   })
 
   it('does not decommission when draining is cleared before final verification', async () => {
-    const { service, runnerRepository, boxRepository } = createService(0, '2')
-    runnerRepository.findOne.mockResolvedValue({ id: 'runner-1', draining: false, state: RunnerState.READY })
+    const { service, entityManager } = createService(0, '2')
+    entityManager.findOne.mockResolvedValue({ id: 'runner-1', draining: false, state: RunnerState.READY })
 
     await (service as any).handleCheckDecommissionRunners()
 
-    expect(boxRepository.count).toHaveBeenCalledTimes(1)
-    expect(runnerRepository.update).not.toHaveBeenCalled()
+    expect(entityManager.count).not.toHaveBeenCalled()
+    expect(entityManager.update).not.toHaveBeenCalled()
   })
 
-  it('updates draining while holding the runner assignment lease', async () => {
-    const { service, redisLockProvider } = createService(0)
+  it('updates draining under an exclusive lock on the runner row', async () => {
+    const { service, entityManager } = createService(0)
 
     await service.updateDrainingStatus('runner-1', false)
 
-    expect(redisLockProvider.waitForLease).toHaveBeenCalledWith(
-      'runner:runner-1:box-assignment',
-      30,
-      expect.any(AbortSignal),
+    expect(entityManager.findOne).toHaveBeenCalledWith(
+      Runner,
+      expect.objectContaining({ where: { id: 'runner-1' }, lock: { mode: 'pessimistic_write' } }),
     )
+    expect(entityManager.save).toHaveBeenCalledWith(Runner, expect.objectContaining({ draining: false }))
   })
 
   it('keeps a runner decommissioned when an in-flight health write completes later', async () => {
@@ -145,6 +166,18 @@ describe('RunnerService decommission verification', () => {
     await service.updateRunnerHealth('runner-1')
 
     expect(eventEmitter.emit).not.toHaveBeenCalled()
+  })
+
+  it('waits out the row lock rather than capping it', async () => {
+    const { service, entityManager } = createService(0, '2')
+
+    await (service as any).handleCheckDecommissionRunners()
+    await service.updateDrainingStatus('runner-1', true)
+
+    // No `SET LOCAL lock_timeout`: the only holder either can wait on is the
+    // other one, for a single read-modify-write. Assignments take no lock on
+    // the runner row, so no create is queued behind this either way.
+    expect(entityManager.query).not.toHaveBeenCalled()
   })
 
   it('translates a missing uncached runner into NotFoundException', async () => {
