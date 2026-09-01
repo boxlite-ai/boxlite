@@ -169,9 +169,10 @@ async fn validate(profile: &Profile) -> Result<Option<Principal>> {
 /// Turn a client error into a focused, non-secret message.
 ///
 /// Three buckets: an auth rejection from the server (`Config("auth: …")`
-/// — produced by `map_http_error` for 401/403), a transport-level
-/// failure that never reached the server (`Network(_)` — including the
-/// "bare 5xx → proxy" path in `map_http_status`), and everything else.
+/// — produced by the 401/403 arms of the status table in `rest::error`), a
+/// network-class failure (`Network(_)` — a transport error, a bare 5xx from
+/// an intermediary, or a `network_unavailable` the server named itself),
+/// and everything else.
 /// We never persist credentials in any of the failure cases.
 fn classify(profile: &Profile, err: BoxliteError) -> anyhow::Error {
     match err {

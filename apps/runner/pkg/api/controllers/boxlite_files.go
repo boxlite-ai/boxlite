@@ -261,9 +261,11 @@ func respondCopyError(ctx *gin.Context, err error) {
 // these routes: `{error: {message, type, code}}`.
 //
 // A bare `{"error": "<text>"}` names no class, so the client
-// (src/boxlite/src/rest/error.rs) falls back to reading the status alone — and
-// that fallback has no 400 arm, so every refusal these routes state plainly
-// still reached the caller as a server fault.
+// (src/boxlite/src/rest/error.rs) reads the status alone. That baseline is
+// coarser than what these routes state — `already_exists` and `invalid_state`
+// both collapse into the 409 baseline — and the 410 and 422 they use have no
+// baseline arm at all, so such a refusal still reaches the caller as a server
+// fault.
 func respondError(ctx *gin.Context, status int, message, errorType, code string) {
 	ctx.JSON(status, gin.H{"error": gin.H{
 		"message": message,

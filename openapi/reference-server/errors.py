@@ -55,11 +55,10 @@ def classify_error(message: str) -> tuple[int, str, str]:
 def error_envelope(message: str, error_type: str, code: str) -> dict:
     """The error body `box.openapi.yaml` declares: `{error: {message, type, code}}`.
 
-    `code` is the stable snake_case identifier, which is the only field clients
-    dispatch on (`map_http_error`, src/boxlite/src/rest/error.rs). The HTTP
-    status belongs in the status line and repeating it here left the body
-    undecodable — the client then reads the status alone, and that fallback has
-    no 400 arm, so a refusal this server states plainly arrived as a server
-    fault.
+    `code` is the stable snake_case identifier that refines the variant the
+    client derives from the HTTP status (src/boxlite/src/rest/error.rs). The
+    status belongs in the status line: repeating it here puts a value in `code`
+    that no arm matches, so the refusal loses the specific variant this server
+    named and arrives as the status baseline instead.
     """
     return {"error": {"message": message, "type": error_type, "code": code}}

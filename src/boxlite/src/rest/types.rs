@@ -29,11 +29,16 @@ pub(crate) struct FlatErrorResponse {
 }
 
 impl FlatErrorResponse {
+    /// A body with no `code` decodes to the empty string, not to a
+    /// synthesized one. Inventing `"internal"` here made every codeless
+    /// refusal — which is every cloud exception that does not set the field —
+    /// arrive as a server fault, and hid the HTTP status from the mapper for
+    /// good: the status-driven fallback was unreachable behind it.
     pub(crate) fn into_error_model(self) -> ErrorModel {
         ErrorModel {
             message: self.message,
             error_type: "HttpError".to_string(),
-            code: self.code.unwrap_or_else(|| "internal".to_string()),
+            code: self.code.unwrap_or_default(),
             request_id: None,
         }
     }
@@ -45,18 +50,25 @@ impl FlatErrorResponse {
 /// - `error_type` — stable PascalCase identifier (K8s `Status.reason`
 ///   style). Mirrors `BoxliteError::http().1` server-side.
 /// - `code` — stable snake_case machine identifier (Stripe `code` style).
-///   The mapper in [`super::error::map_http_error`] dispatches on this
-///   field; `error_type` is kept for diagnostics / logging.
+///   Refines the status-derived baseline in [`super::error`]; an empty
+///   string means the server named no code and that baseline stands.
+///   `error_type` is kept for diagnostics / logging.
 /// - `request_id` — propagated from server's `X-Request-Id` middleware
 ///   when present; absent on older servers (forward-compat).
 #[derive(Debug, Deserialize)]
 pub(crate) struct ErrorModel {
     pub message: String,
-    /// Preserved for diagnostics / log enrichment; dispatch happens on
-    /// `code` (the snake string).
-    #[serde(rename = "type")]
+    /// Preserved for diagnostics / log enrichment; the variant is chosen
+    /// from the status and `code`, never from this field.
+    #[serde(rename = "type", default)]
     #[allow(dead_code)]
     pub error_type: String,
+    /// Absent on any server that does not name a code. Defaulting to the
+    /// empty string keeps such a body a decodable envelope, so the mapper
+    /// classifies it by status and reports the server's own sentence; as a
+    /// required field it made the whole body unparseable and the caller was
+    /// handed the raw JSON instead.
+    #[serde(default)]
     pub code: String,
     #[serde(default)]
     #[allow(dead_code)]

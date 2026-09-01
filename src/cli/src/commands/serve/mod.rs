@@ -1344,7 +1344,7 @@ fn error_from_boxlite(err: &boxlite::BoxliteError) -> Response {
 /// Panic handler for [`CatchPanicLayer`]. Turns a handler panic into a
 /// `500 InternalError internal` response with our wire envelope —
 /// otherwise axum's default returns an empty `500 Internal Server Error`
-/// with no body, breaking the client's `map_http_status` 500-vs-Network
+/// with no body, breaking the client's status-table 500-vs-Network
 /// distinction.
 fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> Response {
     let detail = err

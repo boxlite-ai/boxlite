@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::credential::{AccessToken, Credential};
-use super::error::{map_http_body, map_http_status};
+use super::error::{map_http_body, map_plain_reply};
 use super::options::BoxliteRestOptions;
 use super::types::ServerConfig;
 use crate::runtime::auth::Principal;
@@ -21,6 +21,37 @@ const REFRESH_LEEWAY: Duration = Duration::from_secs(60);
 /// File transfers cannot outlive the runner's 24-hour box lifetime cap.
 const FILE_REQUEST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const TUNNEL_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The proxy states a refused tunnel in one short line (Go's `http.Error`).
+/// The limit is enforced while reading, not after: a peer that answers a
+/// handshake with megabytes is not stating a reason, and buffering it first
+/// would be trusting it for length. Past the limit the status speaks alone.
+const CONNECT_REFUSAL_MAX_BYTES: usize = 512;
+
+/// Reading the sentence off an already-arrived refusal is instant against
+/// `apps/proxy` (`http.Error` flushes the body with the headers); this bound
+/// only covers a peer that stalls mid-body, and a refusal should fail fast.
+const CONNECT_REFUSAL_READ_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Read the sentence a peer sent with its non-2xx CONNECT reply.
+async fn read_connect_refusal(response: hyper::Response<hyper::body::Incoming>) -> String {
+    use http_body_util::{BodyExt, Limited};
+
+    const FALLBACK: &str = "CONNECT proxy rejected tunnel";
+    let body = Limited::new(response.into_body(), CONNECT_REFUSAL_MAX_BYTES);
+    let Ok(Ok(collected)) =
+        tokio::time::timeout(CONNECT_REFUSAL_READ_TIMEOUT, body.collect()).await
+    else {
+        return FALLBACK.to_string();
+    };
+    let bytes = collected.to_bytes();
+    let text = String::from_utf8_lossy(&bytes);
+    let text = text.trim();
+    if text.is_empty() {
+        return FALLBACK.to_string();
+    }
+    text.to_string()
+}
 
 type TunnelConnector =
     hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
@@ -390,7 +421,12 @@ impl ApiClient {
             .map_err(|e| BoxliteError::Network(format!("CONNECT request failed: {e}")))?;
         let status = response.status();
         if !status.is_success() {
-            return Err(map_http_status(status, "CONNECT proxy rejected tunnel"));
+            // Our own proxy answers this handshake with a verdict of its own,
+            // in plain text rather than our envelope. Carry its sentence and
+            // read the class off the status; a refusal it wrote is never an
+            // intermediary's fault.
+            let detail = read_connect_refusal(response).await;
+            return Err(map_plain_reply(status, &detail));
         }
         let upgraded = hyper::upgrade::on(response)
             .await
@@ -564,19 +600,31 @@ pub(super) fn transport_error(err: reqwest::Error) -> BoxliteError {
     BoxliteError::Network(detail)
 }
 
-/// Map a tungstenite connect error to a typed `BoxliteError`. The WS
-/// upgrade returns HTTP status codes for rejections (404 for a missing
-/// session, 409 for an already-attached one, 410 once an exec has been
-/// reaped). Symmetric with the REST mapper in [`super::error`].
+/// Map a tungstenite connect error to a typed `BoxliteError`.
+///
+/// The explicit arms below are the WS attach contract, not a copy of the
+/// REST baseline: on this handshake 404 means the session is gone, 409 that
+/// the single attach slot is taken, 410 that the reaper got there first —
+/// and the reattach loop in `litebox` branches on exactly those classes
+/// (`AlreadyExists` to back off, `NotFound`/`SessionReaped` to stop), with
+/// its tests pinning them. The backends also do not agree on a body shape
+/// here (`serve` rejects with the wire envelope, the runner with gin's
+/// `{"error": text}`), so the classes stay keyed on the status; the envelope,
+/// when present, contributes its sentence rather than raw JSON. Statuses
+/// with no meaning of their own on this handshake are read like any other
+/// REST reply.
 fn map_ws_error(err: tokio_tungstenite::tungstenite::Error) -> BoxliteError {
     use tokio_tungstenite::tungstenite::Error as TgErr;
     if let TgErr::Http(resp) = &err {
         let status = resp.status();
-        let body = resp
+        let raw = resp
             .body()
             .as_ref()
             .map(|b| String::from_utf8_lossy(b).into_owned())
             .unwrap_or_default();
+        // `serve` rejects the upgrade with the same envelope every REST
+        // route answers with; carry its sentence, never the JSON itself.
+        let body = super::error::envelope_message(&raw).unwrap_or_else(|| raw.clone());
         return match status.as_u16() {
             404 => BoxliteError::NotFound(if body.is_empty() {
                 "session not found".to_string()
@@ -594,12 +642,12 @@ fn map_ws_error(err: tokio_tungstenite::tungstenite::Error) -> BoxliteError {
                 body
             }),
             401 | 403 => BoxliteError::Config(format!("WS auth rejected ({}): {}", status, body)),
-            502..=504 => BoxliteError::Network(format!(
-                "WS upstream returned HTTP {} (proxy or load balancer): {}",
-                status,
-                if body.is_empty() { "<empty>" } else { &body }
-            )),
-            _ => BoxliteError::Internal(format!("WS upgrade failed (HTTP {}): {}", status, body)),
+            // No WS-specific meaning — 5xx included: read it like any other
+            // REST reply, envelope, flat body, or bare status alike. A
+            // refusal the server names (`invalid_argument` on a 400,
+            // `engine_unavailable` on a 503) keeps its class instead of
+            // arriving as a server fault or an intermediary's.
+            _ => map_http_body(status, &raw),
         };
     }
     BoxliteError::Network(format!("WS connect failed: {}", err))
@@ -624,8 +672,7 @@ mod tests {
     use super::ensure_capability;
     use super::*;
     use crate::rest::credential::{AccessToken, Credential};
-    use crate::rest::error::map_http_error;
-    use crate::rest::types::FlatErrorResponse;
+    use crate::rest::error::map_http_body;
     use async_trait::async_trait;
     use boxlite_shared::errors::BoxliteError;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -805,6 +852,199 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// Our proxy answers this handshake with a verdict of its own and states
+    /// it in plain text. Each refusal must keep the class its status names and
+    /// the sentence the proxy wrote: a bad target is the caller's error, a
+    /// private box is an auth failure the CLI keys on, and a runner the proxy
+    /// could not reach is an upstream failure — never an intermediary's, since
+    /// the proxy plainly answered.
+    #[tokio::test]
+    #[allow(clippy::result_large_err)]
+    async fn connect_box_network_tunnel_keeps_the_proxys_own_verdict() {
+        /// One tunnel-refusal case: `(status_line, proxy_sentence,
+        /// variant_predicate)`. Aliased so clippy doesn't flag the tuple.
+        type RefusalCase = (&'static str, &'static str, fn(&BoxliteError) -> bool);
+        let cases: &[RefusalCase] = &[
+            ("400 Bad Request", "bad tunnel target", |e| {
+                matches!(e, BoxliteError::InvalidArgument(_))
+            }),
+            (
+                "403 Forbidden",
+                "box is not public",
+                |e| matches!(e, BoxliteError::Config(msg) if msg.starts_with("auth:")),
+            ),
+            ("502 Bad Gateway", "runner unavailable", |e| {
+                matches!(e, BoxliteError::Network(_))
+            }),
+        ];
+
+        for (status_line, body, is_expected) in cases {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let reply = format!(
+                "HTTP/1.1 {status_line}\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    headers.push(socket.read_u8().await.unwrap());
+                }
+                socket.write_all(reply.as_bytes()).await.unwrap();
+            });
+
+            let client =
+                ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+            let err = client
+                .connect_box_network_tunnel(&format!("http://127.0.0.1:{port}"))
+                .await
+                .expect_err("a non-2xx CONNECT reply is a refusal");
+
+            assert!(
+                is_expected(&err),
+                "{status_line} lost the class its status names: {err:?}"
+            );
+            let rendered = err.to_string();
+            assert!(
+                rendered.contains(body),
+                "the proxy's own sentence must survive {status_line}: {rendered}"
+            );
+            assert!(
+                !rendered.contains("no error envelope"),
+                "the proxy answered, so {status_line} is not an intermediary's \
+                 fault: {rendered}"
+            );
+
+            server.await.unwrap();
+        }
+    }
+
+    /// A peer answering a handshake with more than a sentence is not stating a
+    /// reason, and buffering whatever it sends would trust it for length. Past
+    /// the read limit the status is reported on its own.
+    #[tokio::test]
+    #[allow(clippy::result_large_err)]
+    async fn connect_box_network_tunnel_caps_an_oversized_refusal() {
+        let flood = "x".repeat(CONNECT_REFUSAL_MAX_BYTES * 4);
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let reply = format!(
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\n\r\n{flood}",
+            flood.len()
+        );
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                headers.push(socket.read_u8().await.unwrap());
+            }
+            let _ = socket.write_all(reply.as_bytes()).await;
+        });
+
+        let client =
+            ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let err = client
+            .connect_box_network_tunnel(&format!("http://127.0.0.1:{port}"))
+            .await
+            .expect_err("a 403 CONNECT reply is a refusal");
+
+        let rendered = err.to_string();
+        assert!(
+            rendered.len() < CONNECT_REFUSAL_MAX_BYTES * 2,
+            "an oversized refusal must not reach the message: {} bytes",
+            rendered.len()
+        );
+        assert!(
+            !rendered.contains(&"x".repeat(CONNECT_REFUSAL_MAX_BYTES)),
+            "the flood must not be buffered into the error"
+        );
+        assert!(
+            matches!(err, BoxliteError::Config(ref msg) if msg.starts_with("auth:")),
+            "the status still names the class: {err:?}"
+        );
+
+        let _ = server.await;
+    }
+
+    /// A WS-upgrade rejection from `serve` carries the wire envelope. The
+    /// explicit arms keep the attach contract's classes, but the text they
+    /// surface must be the server's sentence, never the JSON itself — and a
+    /// status with no attach meaning takes the envelope's own class instead
+    /// of arriving as a server fault.
+    #[test]
+    fn ws_upgrade_rejections_read_the_envelope() {
+        use tokio_tungstenite::tungstenite::Error as TgErr;
+
+        let http_reject = |status: u16, body: &str| {
+            TgErr::Http(
+                tokio_tungstenite::tungstenite::http::Response::builder()
+                    .status(status)
+                    .body(Some(body.as_bytes().to_vec()))
+                    .unwrap(),
+            )
+        };
+
+        // 409 keeps the attach contract's AlreadyExists, with the sentence.
+        let err = map_ws_error(http_reject(
+            409,
+            r#"{"error":{"message":"execution e1 already has an attached client","type":"InvalidStateError","code":"invalid_state"}}"#,
+        ));
+        match err {
+            BoxliteError::AlreadyExists(msg) => {
+                assert!(msg.contains("already has an attached client"), "{msg}");
+                assert!(!msg.contains('{'), "raw JSON must not leak: {msg}");
+            }
+            other => panic!("attach 409 keeps its contract class, got {other:?}"),
+        }
+
+        // 400 has no attach meaning of its own: the envelope's code decides.
+        let err = map_ws_error(http_reject(
+            400,
+            r#"{"error":{"message":"box name contains a slash","type":"InvalidArgumentError","code":"invalid_argument"}}"#,
+        ));
+        assert!(
+            matches!(err, BoxliteError::InvalidArgument(_)),
+            "a named caller error must not arrive as a server fault: {err:?}"
+        );
+
+        // Neither has a 5xx: a 503 the server answered with a named code is
+        // the class that code names, never an intermediary's fault.
+        let err = map_ws_error(http_reject(
+            503,
+            r#"{"error":{"message":"engine is down","type":"EngineError","code":"engine_unavailable"}}"#,
+        ));
+        match err {
+            BoxliteError::Engine(msg) => {
+                assert!(msg.contains("engine is down"), "{msg}");
+            }
+            other => panic!("a named 503 must keep its class, got {other:?}"),
+        }
+        let rendered = map_ws_error(http_reject(
+            503,
+            r#"{"error":{"message":"engine is down","type":"EngineError","code":"engine_unavailable"}}"#,
+        ))
+        .to_string();
+        assert!(
+            !rendered.contains("proxy or load balancer"),
+            "an answered 503 must not be attributed to an intermediary: {rendered}"
+        );
+
+        // The runner rejects with gin's `{"error": "<text>"}` — its only
+        // attach rejection shape, and the API's WS proxy passes it through
+        // verbatim. The 404 arm keeps its class; the sentence, not the JSON,
+        // is what the user reads.
+        let err = map_ws_error(http_reject(404, r#"{"error":"execution e1 not found"}"#));
+        match err {
+            BoxliteError::NotFound(msg) => {
+                assert!(msg.contains("execution e1 not found"), "{msg}");
+                assert!(!msg.contains('{'), "raw JSON must not leak: {msg}");
+            }
+            other => panic!("a runner 404 keeps its class, got {other:?}"),
+        }
+    }
+
     /// `prepare_box_tunnel` sends its descriptor request through the shared
     /// control-request path, so this pins the wire contract that path owes it:
     /// POST to the prefixed tunnel URL, JSON accepted, descriptor parsed back.
@@ -927,12 +1167,10 @@ mod tests {
 
     #[test]
     fn flat_nest_error_response_maps_by_code() {
-        let parsed: FlatErrorResponse = serde_json::from_str(
+        let err = map_http_body(
+            StatusCode::BAD_GATEWAY,
             r#"{"statusCode":502,"error":"Bad Gateway","message":"Runner API returned a non-JSON error response","code":"runner_non_json_error"}"#,
-        )
-        .expect("flat error response");
-
-        let err = map_http_error(StatusCode::BAD_GATEWAY, &parsed.into_error_model());
+        );
 
         match err {
             BoxliteError::Network(message) => {
