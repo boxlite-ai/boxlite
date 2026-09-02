@@ -32,6 +32,7 @@ pub struct JailerBuilder {
     preserved_fds: Vec<(RawFd, i32)>,
     detach: bool,
     additional_path_access: Vec<PathAccess>,
+    network_backend_enabled: bool,
 }
 
 impl Default for JailerBuilder {
@@ -51,6 +52,7 @@ impl JailerBuilder {
             preserved_fds: Vec::new(),
             detach: false,
             additional_path_access: Vec::new(),
+            network_backend_enabled: false,
         }
     }
 
@@ -291,6 +293,12 @@ impl JailerBuilder {
         self
     }
 
+    /// Grant the confined shim the AF_UNIX endpoints used by its network backend.
+    pub(crate) fn with_network_backend_enabled(mut self, enabled: bool) -> Self {
+        self.network_backend_enabled = enabled;
+        self
+    }
+
     /// Build with the platform-default sandbox.
     ///
     /// On Linux: [`BwrapSandbox`](super::sandbox::BwrapSandbox)
@@ -338,6 +346,7 @@ impl JailerBuilder {
             preserved_fds: self.preserved_fds,
             detach: self.detach,
             additional_path_access: self.additional_path_access,
+            network_backend_enabled: self.network_backend_enabled,
         })
     }
 }

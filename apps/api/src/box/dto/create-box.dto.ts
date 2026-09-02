@@ -7,7 +7,7 @@
 import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, IsInt, Min } from 'class-validator'
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
-import { BoxVolume } from './box.dto'
+import { BoxSecret, BoxVolume } from './box.dto'
 
 @ApiSchema({ name: 'CreateBox' })
 export class CreateBoxDto {
@@ -208,4 +208,13 @@ export class CreateBoxDto {
   @IsOptional()
   @IsArray()
   volumes?: BoxVolume[]
+
+  @ApiPropertyOptional({
+    description: 'Secret placeholder rules for outbound HTTP(S) requests',
+    type: [BoxSecret],
+    required: false,
+  })
+  @IsOptional()
+  @IsArray()
+  secrets?: BoxSecret[]
 }

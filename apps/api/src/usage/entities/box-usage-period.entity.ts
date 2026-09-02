@@ -47,18 +47,4 @@ export class BoxUsagePeriod {
 
   @Column()
   region: string
-
-  public static fromUsagePeriod(usagePeriod: BoxUsagePeriod) {
-    const usagePeriodEntity = new BoxUsagePeriod()
-    usagePeriodEntity.boxId = usagePeriod.boxId
-    usagePeriodEntity.organizationId = usagePeriod.organizationId
-    usagePeriodEntity.startAt = usagePeriod.startAt
-    usagePeriodEntity.endAt = usagePeriod.endAt
-    usagePeriodEntity.cpu = usagePeriod.cpu
-    usagePeriodEntity.gpu = usagePeriod.gpu
-    usagePeriodEntity.mem = usagePeriod.mem
-    usagePeriodEntity.disk = usagePeriod.disk
-    usagePeriodEntity.region = usagePeriod.region
-    return usagePeriodEntity
-  }
 }

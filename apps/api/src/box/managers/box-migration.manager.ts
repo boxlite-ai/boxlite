@@ -209,9 +209,10 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
    * the migration keeps until the export's receiver records an archive. Every 10s
    * tick in between calls this again, and what happens then is the job lock's
    * doing — a held lock means the runner is still working on the job this already
-   * submitted, while a submission that threw is retried by the tick after it. A
-   * failed ValidCheck is the one outcome not retried: it turns the migration
-   * around instead of exporting.
+   * submitted, while a submission that threw is retried by the tick after it.
+   * Two outcomes end the migration instead of retrying it: a failed ValidCheck
+   * turns it around, and an EXPORT_BOX the runner reports as failed drops the
+   * row, leaving the box for the Marker to claim again.
    *
    * The job goes to the runner still holding the box, which is the draining one:
    * the archive can only be made where the box is.

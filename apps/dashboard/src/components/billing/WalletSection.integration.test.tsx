@@ -7,6 +7,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
 import { WalletSection } from './WalletSection'
 
 const mocks = vi.hoisted(() => ({
@@ -21,7 +22,9 @@ const mocks = vi.hoisted(() => ({
   redeemCoupon: vi.fn(),
   setAutomaticTopUp: vi.fn(),
   topUpWallet: vi.fn(),
+  walletTransactionsQuery: vi.fn(),
   wallet: {
+    automaticTopUp: undefined as AutomaticTopUp | undefined,
     balanceCents: 0,
     ongoingBalanceCents: 0,
     name: 'Wallet',
@@ -41,8 +44,32 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
   useFetchOwnerCheckoutUrlQuery: () => mocks.fetchCheckoutUrl,
   useIsOwnerCheckoutUrlFetching: () => false,
   useOwnerBillingPortalUrlQuery: () => ({ data: undefined, isLoading: false }),
-  useOwnerInvoicesQuery: () => ({ data: { items: [], totalItems: 0, totalPages: 0 }, isLoading: false }),
+  useOwnerWalletTransactionsQuery: (page = 1, perPage?: number) => {
+    mocks.walletTransactionsQuery(page, perPage)
+    return {
+      data: {
+        items: [
+          {
+            id: `transaction-${page}`,
+            direction: 'outbound',
+            kind: 'invoiced',
+            status: 'settled',
+            source: 'usage',
+            amountCents: page === 1 ? 420 : 810,
+            name: null,
+            subscriptionCreditKind: null,
+            createdAt: page === 1 ? '2026-07-18T00:00:00.000Z' : '2026-07-15T00:00:00.000Z',
+            settledAt: page === 1 ? '2026-07-18T00:00:00.000Z' : '2026-07-15T00:00:00.000Z',
+          },
+        ],
+        totalItems: 101,
+        totalPages: 2,
+      },
+      isLoading: false,
+    }
+  },
   useOwnerPaymentMethodsQuery: () => ({ data: mocks.paymentMethods, isLoading: false, isError: false }),
+  useOwnerPlanQuery: () => ({ data: { quotaRemainingCents: 0 } }),
   useOwnerWalletQuery: () => ({ data: mocks.wallet, isLoading: false }),
 }))
 
@@ -58,8 +85,13 @@ vi.mock('@/hooks/mutations/useTopUpWalletMutation', () => ({
   useTopUpWalletMutation: () => ({ mutateAsync: mocks.topUpWallet, isPending: false }),
 }))
 
-vi.mock('@/components/Invoices', () => ({ InvoicesTable: () => null }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
+
+function typeInto(element: HTMLInputElement, value: string) {
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
+  descriptor?.set?.call(element, value)
+  element.dispatchEvent(new Event('input', { bubbles: true }))
+}
 
 async function flush() {
   await act(async () => {
@@ -74,7 +106,11 @@ describe('WalletSection top-up checkout', () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     mocks.paymentMethods = []
+    mocks.wallet.automaticTopUp = undefined
+    mocks.wallet.ongoingBalanceCents = 0
     mocks.wallet.creditCardConnected = false
+    mocks.topUpWallet.mockClear()
+    mocks.walletTransactionsQuery.mockClear()
     mocks.topUpWallet.mockResolvedValue({ url: 'https://checkout.stripe.com/pay/cs_top_up' })
   })
 
@@ -97,6 +133,9 @@ describe('WalletSection top-up checkout', () => {
     })
     await flush()
 
+    expect(document.body.textContent).toContain('Transactions')
+    expect(document.body.textContent).not.toContain('Usage Settlements')
+
     const topUpButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
       (button) => button.textContent?.trim() === 'Top up →',
     )
@@ -113,6 +152,63 @@ describe('WalletSection top-up checkout', () => {
     expect(open).toHaveBeenCalledWith('', '_blank')
     expect(mocks.topUpWallet).toHaveBeenCalledWith({ organizationId: 'org-without-card', amountCents: 10_000 })
     expect(checkoutWindow.location.href).toBe('https://checkout.stripe.com/pay/cs_top_up')
+  })
+
+  it('loads older transactions when history exceeds the first page', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection />)
+    })
+    await flush()
+
+    expect(mocks.walletTransactionsQuery).toHaveBeenCalledWith(1, 100)
+    expect(document.body.textContent).toContain('2026-07-18')
+
+    const nextPage = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'Next →',
+    )
+    expect(nextPage).toBeDefined()
+
+    await act(async () => nextPage?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flush()
+
+    expect(mocks.walletTransactionsQuery).toHaveBeenLastCalledWith(2, 100)
+    expect(document.body.textContent).toContain('2026-07-15')
+  })
+
+  it('rounds a custom two-decimal dollar amount to integer cents', async () => {
+    const checkoutWindow = { location: { href: '' }, close: vi.fn() }
+    vi.spyOn(window, 'open').mockReturnValue(checkoutWindow as unknown as Window)
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection />)
+    })
+    await flush()
+
+    const customAmount = document.querySelector<HTMLInputElement>('#customTopUpAmount')
+    expect(customAmount).not.toBeNull()
+
+    await act(async () => {
+      customAmount?.focus()
+      if (customAmount) typeInto(customAmount, '10.13')
+    })
+    await flush()
+
+    const topUpButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'Top up →',
+    )
+    expect(topUpButton?.disabled).toBe(false)
+
+    await act(async () => topUpButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flush()
+
+    expect(mocks.topUpWallet).toHaveBeenCalledWith({ organizationId: 'org-without-card', amountCents: 1013 })
   })
 
   it('renders every stored method and marks only the API default as chargeable', async () => {
@@ -170,5 +266,30 @@ describe('WalletSection top-up checkout', () => {
     // divider reach the panel's right edge instead of stopping at an action rail.
     expect(rows[0].contains(updateButtons[0])).toBe(true)
     expect(document.body.textContent).not.toContain('pm_default')
+  })
+
+  it('fits the threshold warning below Auto-reload inside Wallet Balance', async () => {
+    mocks.wallet.ongoingBalanceCents = 1_999
+    mocks.wallet.automaticTopUp = { thresholdAmount: 20, targetAmount: 100 }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection />)
+    })
+    await flush()
+
+    const autoReload = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+      button.textContent?.includes('Auto-reload'),
+    )
+    const banner = document.querySelector<HTMLElement>('[data-balance-warning-level="below-threshold"]')
+
+    expect(autoReload).toBeDefined()
+    expect(banner).not.toBeNull()
+    expect(banner?.parentElement).toBe(autoReload?.parentElement)
+    expect(autoReload?.compareDocumentPosition(banner as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(banner?.classList.contains('w-full')).toBe(true)
+    expect(banner?.classList.contains('min-w-0')).toBe(true)
   })
 })

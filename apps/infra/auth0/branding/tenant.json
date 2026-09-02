@@ -1,0 +1,12 @@
+{
+  "_comment": [
+    "Auth0 tenant-wide branding, applied with the Universal Login command.",
+    "picture_url is the logo Auth0 shows outside the login widget — consent,",
+    "MFA, and the email templates — all light-background surfaces, so it is",
+    "the black wordmark rather than the widget's light one.",
+    "Keys beginning with _ are stripped before the Management API call.",
+    "The path is resolved only from the selected target's stackOrigin."
+  ],
+
+  "picture_url": "/auth0/boxlite-black-12c2c991.png"
+}

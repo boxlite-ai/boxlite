@@ -18,14 +18,24 @@ func cNetworkInfoTraversalTestFixtures() [4]*NetworkInfo {
 	defer C.free(unsafe.Pointer(allowHost))
 	allowNet := []*C.char{allowHost}
 	unresolved := C.CNetworkInfo{
-		mode:            C.BoxliteNetworkModeEnabled,
-		allow_net:       (**C.char)(unsafe.Pointer(&allowNet[0])),
-		allow_net_count: 1,
+		outbound: C.COutboundNetworkInfo{
+			mode:            C.BoxliteNetworkModeEnabled,
+			allow_net:       (**C.char)(unsafe.Pointer(&allowNet[0])),
+			allow_net_count: 1,
+		},
+		inbound: C.CInboundNetworkInfo{
+			mode: C.BoxliteNetworkModeDisabled,
+		},
 	}
 
 	resolvedPorts := C.CPublishedPortList{}
 	resolvedEmpty := C.CNetworkInfo{
-		mode:            C.BoxliteNetworkModeDisabled,
+		outbound: C.COutboundNetworkInfo{
+			mode: C.BoxliteNetworkModeDisabled,
+		},
+		inbound: C.CInboundNetworkInfo{
+			mode: C.BoxliteNetworkModeEnabled,
+		},
 		published_ports: &resolvedPorts,
 	}
 
@@ -52,9 +62,14 @@ func cNetworkInfoTraversalTestFixtures() [4]*NetworkInfo {
 		count: C.int(len(portItems)),
 	}
 	populated := C.CNetworkInfo{
-		mode:            C.BoxliteNetworkModeEnabled,
-		allow_net:       (**C.char)(unsafe.Pointer(&allowNet[0])),
-		allow_net_count: 1,
+		outbound: C.COutboundNetworkInfo{
+			mode:            C.BoxliteNetworkModeEnabled,
+			allow_net:       (**C.char)(unsafe.Pointer(&allowNet[0])),
+			allow_net_count: 1,
+		},
+		inbound: C.CInboundNetworkInfo{
+			mode: C.BoxliteNetworkModeEnabled,
+		},
 		published_ports: &populatedPorts,
 	}
 

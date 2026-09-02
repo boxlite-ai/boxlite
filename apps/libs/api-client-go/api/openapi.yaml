@@ -3317,6 +3317,364 @@ paths:
       summary: Recover box from error state as an admin
       tags:
       - admin
+  /admin/regions:
+    get:
+      operationId: adminListRegions
+      parameters:
+      - description: Opaque cursor returned by the previous page
+        explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          example: 50
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminRegionOverviewPage"
+          description: ""
+        "400":
+          description: Invalid cursor or limit
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List regions with capacity and health
+      tags:
+      - admin
+  /admin/regions/{id}:
+    get:
+      operationId: adminGetRegion
+      parameters:
+      - description: Region ID
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminRegionOverview"
+          description: ""
+        "404":
+          description: Region not found
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get region capacity and health
+      tags:
+      - admin
+  /admin/boxes:
+    get:
+      operationId: adminListBoxesOverview
+      parameters:
+      - description: Opaque cursor returned by the previous page
+        explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          example: 50
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminBoxOverviewPage"
+          description: ""
+        "400":
+          description: Invalid cursor or limit
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List boxes with placement and health
+      tags:
+      - admin
+  /admin/boxes/{id}:
+    get:
+      operationId: adminGetBoxOverview
+      parameters:
+      - description: Box ID
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Opaque job page cursor
+        explode: true
+        in: query
+        name: jobCursor
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: sectionLimit
+        required: false
+        schema:
+          example: 50
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminBoxDetail"
+          description: ""
+        "400":
+          description: Invalid cursor or section limit
+        "404":
+          description: Box not found
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: "Get box placement, health, and jobs"
+      tags:
+      - admin
+  /admin/jobs:
+    get:
+      operationId: adminListJobsOverview
+      parameters:
+      - description: Opaque cursor returned by the previous page
+        explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          example: 50
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminJobOverviewPage"
+          description: ""
+        "400":
+          description: Invalid cursor or limit
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List jobs with sanitized failure categories
+      tags:
+      - admin
+  /admin/jobs/{id}:
+    get:
+      operationId: adminGetJobOverview
+      parameters:
+      - description: Job ID
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminJobOverview"
+          description: ""
+        "404":
+          description: Job not found
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get a job with sanitized failure category
+      tags:
+      - admin
+  /admin/component-identities:
+    get:
+      operationId: adminGetComponentIdentities
+      parameters: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminComponentIdentities"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get API and runner version identities
+      tags:
+      - admin
+  /admin/organizations:
+    get:
+      operationId: adminListOrganizationsOverview
+      parameters:
+      - description: Organization ID or name
+        explode: true
+        in: query
+        name: q
+        required: false
+        schema:
+          maxLength: 200
+          minLength: 2
+          type: string
+        style: form
+      - description: Opaque cursor returned by the previous page
+        explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          example: 50
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOrganizationOverviewPage"
+          description: ""
+        "400":
+          description: Invalid cursor or limit
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List organization operational summaries
+      tags:
+      - admin
+  /admin/organizations/{organizationId}:
+    get:
+      operationId: adminGetOrganizationOverview
+      parameters:
+      - description: Organization ID
+        explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Opaque member page cursor
+        explode: true
+        in: query
+        name: memberCursor
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Opaque box page cursor
+        explode: true
+        in: query
+        name: boxCursor
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: sectionLimit
+        required: false
+        schema:
+          example: 50
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOrganizationDetail"
+          description: ""
+        "400":
+          description: Invalid cursor or section limit
+        "404":
+          description: Organization not found
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get organization operational detail
+      tags:
+      - admin
   /webhooks/organizations/{organizationId}/app-portal-access:
     post:
       operationId: WebhookController_getAppPortalAccess
@@ -6691,6 +7049,818 @@ components:
       - updatedAt
       - version
       type: object
+    AdminRegionOverview:
+      example:
+        id: id
+        name: name
+        type: type
+        state: critical
+        runnerCount: 6.027456183070403
+        boxCount: 1.4658129805029452
+        queueDepth: 5.962133916683182
+        cpuCapacityMillis: 5.637376656633329
+        memoryCapacityBytes: memoryCapacityBytes
+        observedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        state:
+          enum:
+          - critical
+          - degraded
+          - healthy
+          - unknown
+          type: string
+        runnerCount:
+          type: number
+        boxCount:
+          type: number
+        queueDepth:
+          type: number
+        cpuCapacityMillis:
+          nullable: true
+          type: number
+        memoryCapacityBytes:
+          description: Integer encoded as a decimal string
+          nullable: true
+          type: string
+        observedAt:
+          format: date-time
+          nullable: true
+          type: string
+      required:
+      - boxCount
+      - id
+      - name
+      - queueDepth
+      - runnerCount
+      - state
+      - type
+      type: object
+    AdminRegionOverviewPage:
+      example:
+        nextCursor: nextCursor
+        limit: 16.93648099017413
+        items:
+        - id: id
+          name: name
+          type: type
+          state: critical
+          runnerCount: 6.027456183070403
+          boxCount: 1.4658129805029452
+          queueDepth: 5.962133916683182
+          cpuCapacityMillis: 5.637376656633329
+          memoryCapacityBytes: memoryCapacityBytes
+          observedAt: 2000-01-23T04:56:07.000+00:00
+        - id: id
+          name: name
+          type: type
+          state: critical
+          runnerCount: 6.027456183070403
+          boxCount: 1.4658129805029452
+          queueDepth: 5.962133916683182
+          cpuCapacityMillis: 5.637376656633329
+          memoryCapacityBytes: memoryCapacityBytes
+          observedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        nextCursor:
+          description: Opaque cursor for the next page
+          nullable: true
+          type: string
+        limit:
+          maximum: 200
+          minimum: 1
+          type: number
+        items:
+          items:
+            $ref: "#/components/schemas/AdminRegionOverview"
+          type: array
+      required:
+      - items
+      - limit
+      type: object
+    AdminBoxOverview:
+      example:
+        id: id
+        name: name
+        organizationId: organizationId
+        runnerId: runnerId
+        regionId: regionId
+        desiredState: desiredState
+        observedState: observedState
+        health: critical
+        cpuMillis: 6.027456183070403
+        memoryBytes: memoryBytes
+        storageBytes: storageBytes
+        activeJobCount: 1.4658129805029452
+        observedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        organizationId:
+          type: string
+        runnerId:
+          nullable: true
+          type: string
+        regionId:
+          type: string
+        desiredState:
+          type: string
+        observedState:
+          type: string
+        health:
+          enum:
+          - critical
+          - degraded
+          - healthy
+          - unknown
+          type: string
+        cpuMillis:
+          nullable: true
+          type: number
+        memoryBytes:
+          description: Integer encoded as a decimal string
+          nullable: true
+          type: string
+        storageBytes:
+          description: Integer encoded as a decimal string
+          nullable: true
+          type: string
+        activeJobCount:
+          type: number
+        observedAt:
+          format: date-time
+          nullable: true
+          type: string
+      required:
+      - activeJobCount
+      - desiredState
+      - health
+      - id
+      - name
+      - observedState
+      - organizationId
+      - regionId
+      type: object
+    AdminBoxOverviewPage:
+      example:
+        nextCursor: nextCursor
+        limit: 16.93648099017413
+        items:
+        - id: id
+          name: name
+          organizationId: organizationId
+          runnerId: runnerId
+          regionId: regionId
+          desiredState: desiredState
+          observedState: observedState
+          health: critical
+          cpuMillis: 6.027456183070403
+          memoryBytes: memoryBytes
+          storageBytes: storageBytes
+          activeJobCount: 1.4658129805029452
+          observedAt: 2000-01-23T04:56:07.000+00:00
+        - id: id
+          name: name
+          organizationId: organizationId
+          runnerId: runnerId
+          regionId: regionId
+          desiredState: desiredState
+          observedState: observedState
+          health: critical
+          cpuMillis: 6.027456183070403
+          memoryBytes: memoryBytes
+          storageBytes: storageBytes
+          activeJobCount: 1.4658129805029452
+          observedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        nextCursor:
+          description: Opaque cursor for the next page
+          nullable: true
+          type: string
+        limit:
+          maximum: 200
+          minimum: 1
+          type: number
+        items:
+          items:
+            $ref: "#/components/schemas/AdminBoxOverview"
+          type: array
+      required:
+      - items
+      - limit
+      type: object
+    AdminBoxJobReference:
+      example:
+        id: id
+        type: type
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+      required:
+      - id
+      - type
+      type: object
+    AdminBoxJobReferencePage:
+      example:
+        nextCursor: nextCursor
+        limit: 30.16967831200861
+        items:
+        - id: id
+          type: type
+        - id: id
+          type: type
+      properties:
+        nextCursor:
+          description: Opaque cursor for the next page
+          nullable: true
+          type: string
+        limit:
+          maximum: 200
+          minimum: 1
+          type: number
+        items:
+          items:
+            $ref: "#/components/schemas/AdminBoxJobReference"
+          type: array
+      required:
+      - items
+      - limit
+      type: object
+    AdminBoxDetail:
+      example:
+        id: id
+        name: name
+        organizationId: organizationId
+        runnerId: runnerId
+        regionId: regionId
+        desiredState: desiredState
+        observedState: observedState
+        health: critical
+        cpuMillis: 0.8008281904610115
+        memoryBytes: memoryBytes
+        storageBytes: storageBytes
+        activeJobCount: 6.027456183070403
+        observedAt: 2000-01-23T04:56:07.000+00:00
+        jobs:
+          nextCursor: nextCursor
+          limit: 30.16967831200861
+          items:
+          - id: id
+            type: type
+          - id: id
+            type: type
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        organizationId:
+          type: string
+        runnerId:
+          nullable: true
+          type: string
+        regionId:
+          type: string
+        desiredState:
+          type: string
+        observedState:
+          type: string
+        health:
+          enum:
+          - critical
+          - degraded
+          - healthy
+          - unknown
+          type: string
+        cpuMillis:
+          nullable: true
+          type: number
+        memoryBytes:
+          description: Integer encoded as a decimal string
+          nullable: true
+          type: string
+        storageBytes:
+          description: Integer encoded as a decimal string
+          nullable: true
+          type: string
+        activeJobCount:
+          type: number
+        observedAt:
+          format: date-time
+          nullable: true
+          type: string
+        jobs:
+          $ref: "#/components/schemas/AdminBoxJobReferencePage"
+      required:
+      - activeJobCount
+      - desiredState
+      - health
+      - id
+      - jobs
+      - name
+      - observedState
+      - organizationId
+      - regionId
+      type: object
+    AdminJobOverview:
+      example:
+        id: id
+        type: type
+        status: status
+        runnerId: runnerId
+        resourceType: resourceType
+        resourceId: resourceId
+        createdAt: 2000-01-23T04:56:07.000+00:00
+        startedAt: 2000-01-23T04:56:07.000+00:00
+        finishedAt: 2000-01-23T04:56:07.000+00:00
+        durationMs: 6.027456183070403
+        errorCategory: capacity
+        observedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        status:
+          type: string
+        runnerId:
+          nullable: true
+          type: string
+        resourceType:
+          type: string
+        resourceId:
+          type: string
+        createdAt:
+          format: date-time
+          nullable: true
+          type: string
+        startedAt:
+          format: date-time
+          nullable: true
+          type: string
+        finishedAt:
+          format: date-time
+          nullable: true
+          type: string
+        durationMs:
+          nullable: true
+          type: number
+        errorCategory:
+          enum:
+          - capacity
+          - network
+          - image
+          - storage
+          - timeout
+          - unknown
+          nullable: true
+          type: string
+        observedAt:
+          format: date-time
+          nullable: true
+          type: string
+      required:
+      - id
+      - resourceId
+      - resourceType
+      - status
+      - type
+      type: object
+    AdminJobOverviewPage:
+      example:
+        nextCursor: nextCursor
+        limit: 16.93648099017413
+        items:
+        - id: id
+          type: type
+          status: status
+          runnerId: runnerId
+          resourceType: resourceType
+          resourceId: resourceId
+          createdAt: 2000-01-23T04:56:07.000+00:00
+          startedAt: 2000-01-23T04:56:07.000+00:00
+          finishedAt: 2000-01-23T04:56:07.000+00:00
+          durationMs: 6.027456183070403
+          errorCategory: capacity
+          observedAt: 2000-01-23T04:56:07.000+00:00
+        - id: id
+          type: type
+          status: status
+          runnerId: runnerId
+          resourceType: resourceType
+          resourceId: resourceId
+          createdAt: 2000-01-23T04:56:07.000+00:00
+          startedAt: 2000-01-23T04:56:07.000+00:00
+          finishedAt: 2000-01-23T04:56:07.000+00:00
+          durationMs: 6.027456183070403
+          errorCategory: capacity
+          observedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        nextCursor:
+          description: Opaque cursor for the next page
+          nullable: true
+          type: string
+        limit:
+          maximum: 200
+          minimum: 1
+          type: number
+        items:
+          items:
+            $ref: "#/components/schemas/AdminJobOverview"
+          type: array
+      required:
+      - items
+      - limit
+      type: object
+    AdminComponentVersionCount:
+      example:
+        version: version
+        count: 0.8008281904610115
+      properties:
+        version:
+          nullable: true
+          type: string
+        count:
+          type: number
+      required:
+      - count
+      type: object
+    AdminComponentIdentities:
+      example:
+        api:
+          version: version
+        runners:
+        - version: version
+          count: 0.8008281904610115
+        - version: version
+          count: 0.8008281904610115
+        observedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        api:
+          $ref: "#/components/schemas/AdminComponentIdentities_api"
+        runners:
+          items:
+            $ref: "#/components/schemas/AdminComponentVersionCount"
+          type: array
+        observedAt:
+          format: date-time
+          type: string
+      required:
+      - api
+      - observedAt
+      - runners
+      type: object
+    AdminOrganizationOverview:
+      example:
+        organizationId: organizationId
+        name: name
+        memberCount: 6.027456183070403
+        boxCount: 1.4658129805029452
+        impactState: impacted
+        observedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        organizationId:
+          type: string
+        name:
+          type: string
+        memberCount:
+          type: number
+        boxCount:
+          type: number
+        impactState:
+          enum:
+          - impacted
+          - not_impacted
+          type: string
+        observedAt:
+          format: date-time
+          type: string
+      required:
+      - boxCount
+      - impactState
+      - memberCount
+      - name
+      - observedAt
+      - organizationId
+      type: object
+    AdminOrganizationOverviewPage:
+      example:
+        nextCursor: nextCursor
+        limit: 16.93648099017413
+        items:
+        - organizationId: organizationId
+          name: name
+          memberCount: 6.027456183070403
+          boxCount: 1.4658129805029452
+          impactState: impacted
+          observedAt: 2000-01-23T04:56:07.000+00:00
+        - organizationId: organizationId
+          name: name
+          memberCount: 6.027456183070403
+          boxCount: 1.4658129805029452
+          impactState: impacted
+          observedAt: 2000-01-23T04:56:07.000+00:00
+        observedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        nextCursor:
+          description: Opaque cursor for the next page
+          nullable: true
+          type: string
+        limit:
+          maximum: 200
+          minimum: 1
+          type: number
+        items:
+          items:
+            $ref: "#/components/schemas/AdminOrganizationOverview"
+          type: array
+        observedAt:
+          format: date-time
+          nullable: true
+          type: string
+      required:
+      - items
+      - limit
+      type: object
+    AdminOrganizationMember:
+      example:
+        userId: userId
+        email: email
+        displayName: displayName
+        organizationRole: organizationRole
+        joinedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        userId:
+          type: string
+        email:
+          type: string
+        displayName:
+          type: string
+        organizationRole:
+          type: string
+        joinedAt:
+          format: date-time
+          type: string
+      required:
+      - displayName
+      - email
+      - joinedAt
+      - organizationRole
+      - userId
+      type: object
+    AdminOrganizationMemberPage:
+      example:
+        nextCursor: nextCursor
+        limit: 16.93648099017413
+        items:
+        - userId: userId
+          email: email
+          displayName: displayName
+          organizationRole: organizationRole
+          joinedAt: 2000-01-23T04:56:07.000+00:00
+        - userId: userId
+          email: email
+          displayName: displayName
+          organizationRole: organizationRole
+          joinedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        nextCursor:
+          description: Opaque cursor for the next page
+          nullable: true
+          type: string
+        limit:
+          maximum: 200
+          minimum: 1
+          type: number
+        items:
+          items:
+            $ref: "#/components/schemas/AdminOrganizationMember"
+          type: array
+      required:
+      - items
+      - limit
+      type: object
+    AdminOrganizationBox:
+      example:
+        id: id
+        name: name
+        observedState: observedState
+        desiredState: desiredState
+        runnerId: runnerId
+        region: region
+        observedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        observedState:
+          type: string
+        desiredState:
+          type: string
+        runnerId:
+          nullable: true
+          type: string
+        region:
+          type: string
+        observedAt:
+          format: date-time
+          type: string
+      required:
+      - desiredState
+      - id
+      - name
+      - observedAt
+      - observedState
+      - region
+      type: object
+    AdminOrganizationBoxPage:
+      example:
+        nextCursor: nextCursor
+        limit: 120.94637804310102
+        items:
+        - id: id
+          name: name
+          observedState: observedState
+          desiredState: desiredState
+          runnerId: runnerId
+          region: region
+          observedAt: 2000-01-23T04:56:07.000+00:00
+        - id: id
+          name: name
+          observedState: observedState
+          desiredState: desiredState
+          runnerId: runnerId
+          region: region
+          observedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        nextCursor:
+          description: Opaque cursor for the next page
+          nullable: true
+          type: string
+        limit:
+          maximum: 200
+          minimum: 1
+          type: number
+        items:
+          items:
+            $ref: "#/components/schemas/AdminOrganizationBox"
+          type: array
+      required:
+      - items
+      - limit
+      type: object
+    AdminOrganizationImpactEvidence:
+      example:
+        boxId: boxId
+        observedAt: 2000-01-23T04:56:07.000+00:00
+        summary: summary
+      properties:
+        boxId:
+          type: string
+        observedAt:
+          format: date-time
+          type: string
+        summary:
+          type: string
+      required:
+      - boxId
+      - observedAt
+      - summary
+      type: object
+    AdminOrganizationImpact:
+      example:
+        state: impacted
+        evidence:
+        - boxId: boxId
+          observedAt: 2000-01-23T04:56:07.000+00:00
+          summary: summary
+        - boxId: boxId
+          observedAt: 2000-01-23T04:56:07.000+00:00
+          summary: summary
+      properties:
+        state:
+          enum:
+          - impacted
+          - not_impacted
+          type: string
+        evidence:
+          items:
+            $ref: "#/components/schemas/AdminOrganizationImpactEvidence"
+          type: array
+      required:
+      - evidence
+      - state
+      type: object
+    AdminOrganizationUsage:
+      example:
+        periodStart: 2000-01-23T04:56:07.000+00:00
+        periodEnd: 2000-01-23T04:56:07.000+00:00
+        computeSeconds: computeSeconds
+        storageByteSeconds: storageByteSeconds
+      properties:
+        periodStart:
+          format: date-time
+          type: string
+        periodEnd:
+          format: date-time
+          type: string
+        computeSeconds:
+          description: Integer encoded as a decimal string
+          type: string
+        storageByteSeconds:
+          description: Integer encoded as a decimal string
+          type: string
+      required:
+      - computeSeconds
+      - periodEnd
+      - periodStart
+      - storageByteSeconds
+      type: object
+    AdminOrganizationDetail:
+      example:
+        organizationId: organizationId
+        name: name
+        members:
+          nextCursor: nextCursor
+          limit: 16.93648099017413
+          items:
+          - userId: userId
+            email: email
+            displayName: displayName
+            organizationRole: organizationRole
+            joinedAt: 2000-01-23T04:56:07.000+00:00
+          - userId: userId
+            email: email
+            displayName: displayName
+            organizationRole: organizationRole
+            joinedAt: 2000-01-23T04:56:07.000+00:00
+        boxes:
+          nextCursor: nextCursor
+          limit: 120.94637804310102
+          items:
+          - id: id
+            name: name
+            observedState: observedState
+            desiredState: desiredState
+            runnerId: runnerId
+            region: region
+            observedAt: 2000-01-23T04:56:07.000+00:00
+          - id: id
+            name: name
+            observedState: observedState
+            desiredState: desiredState
+            runnerId: runnerId
+            region: region
+            observedAt: 2000-01-23T04:56:07.000+00:00
+        impact:
+          state: impacted
+          evidence:
+          - boxId: boxId
+            observedAt: 2000-01-23T04:56:07.000+00:00
+            summary: summary
+          - boxId: boxId
+            observedAt: 2000-01-23T04:56:07.000+00:00
+            summary: summary
+        usage:
+          periodStart: 2000-01-23T04:56:07.000+00:00
+          periodEnd: 2000-01-23T04:56:07.000+00:00
+          computeSeconds: computeSeconds
+          storageByteSeconds: storageByteSeconds
+        observedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        organizationId:
+          type: string
+        name:
+          type: string
+        members:
+          $ref: "#/components/schemas/AdminOrganizationMemberPage"
+        boxes:
+          $ref: "#/components/schemas/AdminOrganizationBoxPage"
+        impact:
+          $ref: "#/components/schemas/AdminOrganizationImpact"
+        usage:
+          $ref: "#/components/schemas/AdminOrganizationUsage"
+        observedAt:
+          format: date-time
+          type: string
+      required:
+      - boxes
+      - impact
+      - members
+      - name
+      - observedAt
+      - organizationId
+      type: object
     WebhookAppPortalAccess:
       example:
         token: appsk_...
@@ -7292,6 +8462,14 @@ components:
             database:
               status: up
           type: object
+      type: object
+    AdminComponentIdentities_api:
+      example:
+        version: version
+      properties:
+        version:
+          nullable: true
+          type: string
       type: object
   securitySchemes:
     bearer:

@@ -37,6 +37,8 @@ const THEME = {
   widget: { logo_url: 'https://dev.example.com/auth0/logo.png' },
 } satisfies JsonObject
 
+const TENANT = { picture_url: 'https://dev.example.com/auth0/tenant-logo.png' } satisfies JsonObject
+
 const PROMPTS: PromptText[] = [
   { prompt: 'login', language: 'en', text: { login: { title: 'Welcome back' } } },
   { prompt: 'signup', language: 'en', text: { signup: { title: 'Welcome to BoxLite' } } },
@@ -46,8 +48,9 @@ function loaded(sourceDigest = 'source-1'): LoadedBranding {
   return {
     target: TARGET,
     theme: THEME,
+    tenant: TENANT,
     prompts: PROMPTS,
-    assetUrls: [THEME.widget.logo_url, THEME.fonts.font_url],
+    assetUrls: [THEME.widget.logo_url, THEME.fonts.font_url, TENANT.picture_url],
     sourceDigest,
   }
 }
@@ -68,6 +71,10 @@ class MemoryGateway implements Auth0BrandingGateway {
     fonts: THEME.fonts,
     widget: THEME.widget,
   }
+  tenantSettings: JsonObject = {
+    picture_url: 'https://dev.example.com/auth0/previous-tenant-logo.png',
+    flags: { enable_public_signup_user_exists_error: false },
+  }
   prompts = new Map(PROMPTS.map(({ prompt, language }) => [`${prompt}/${language}`, {}]))
   events: string[] = []
   failPrompt: string | undefined
@@ -76,6 +83,16 @@ class MemoryGateway implements Auth0BrandingGateway {
   async getDefaultTheme() {
     this.events.push('read:theme')
     return structuredClone(this.theme)
+  }
+
+  async getTenantSettings() {
+    this.events.push('read:tenant')
+    return structuredClone(this.tenantSettings)
+  }
+
+  async updateTenantSettings(_target: BrandingTarget, settings: JsonObject) {
+    this.events.push('write:tenant')
+    this.tenantSettings = { ...this.tenantSettings, ...structuredClone(settings) }
   }
 
   async createTheme(_target: BrandingTarget, theme: JsonObject) {
@@ -124,10 +141,10 @@ test('preview validates the target and returns deterministic typed changes witho
 
   assert.deepEqual(
     prepared.changes.map((change) => change.resource),
-    ['theme', 'prompt:login/en', 'prompt:signup/en'],
+    ['theme', 'tenant', 'prompt:login/en', 'prompt:signup/en'],
   )
-  assert.deepEqual(gateway.events, ['read:theme', 'read:login/en', 'read:signup/en'])
-  assert.deepEqual(verified, ['dev', THEME.widget.logo_url, THEME.fonts.font_url])
+  assert.deepEqual(gateway.events, ['read:theme', 'read:tenant', 'read:login/en', 'read:signup/en'])
+  assert.deepEqual(verified, ['dev', THEME.widget.logo_url, THEME.fonts.font_url, TENANT.picture_url])
 })
 
 test('apply refuses changed local input before its first write', async () => {
@@ -163,10 +180,12 @@ test('apply writes in deterministic order and reads every resource back', async 
 
   const report = await branding.apply(prepared)
 
-  assert.deepEqual(report.applied, ['theme', 'prompt:login/en', 'prompt:signup/en'])
-  assert.deepEqual(gateway.events.slice(-6), [
+  assert.deepEqual(report.applied, ['theme', 'tenant', 'prompt:login/en', 'prompt:signup/en'])
+  assert.deepEqual(gateway.events.slice(-8), [
     'write:theme:thm_1',
     'read:theme',
+    'write:tenant',
+    'read:tenant',
     'write:login/en',
     'read:login/en',
     'write:signup/en',
@@ -196,7 +215,7 @@ test('a failed write reports applied, unknown, and pending resources', async () 
     () => branding.apply(prepared),
     (error: unknown) => {
       assert.ok(error instanceof PartialApplyError)
-      assert.deepEqual(error.applied, ['theme'])
+      assert.deepEqual(error.applied, ['theme', 'tenant'])
       assert.deepEqual(error.unknown, [])
       assert.deepEqual(error.pending, ['prompt:login/en', 'prompt:signup/en'])
       return true
@@ -214,7 +233,7 @@ test('a failed write with partially changed readback reports the resource as unk
     () => branding.apply(prepared),
     (error: unknown) => {
       assert.ok(error instanceof PartialApplyError)
-      assert.deepEqual(error.applied, ['theme'])
+      assert.deepEqual(error.applied, ['theme', 'tenant'])
       assert.deepEqual(error.unknown, ['prompt:login/en'])
       assert.deepEqual(error.pending, ['prompt:signup/en'])
       return true
@@ -239,7 +258,7 @@ test('an interrupt stops before the next write and reports the completed readbac
       assert.ok(error instanceof PartialApplyError)
       assert.deepEqual(error.applied, ['theme'])
       assert.deepEqual(error.unknown, [])
-      assert.deepEqual(error.pending, ['prompt:login/en', 'prompt:signup/en'])
+      assert.deepEqual(error.pending, ['tenant', 'prompt:login/en', 'prompt:signup/en'])
       return true
     },
   )
@@ -263,13 +282,19 @@ test('the file source discovers one complete prompt document per language and pr
       join(root, 'branding', 'theme.json'),
       JSON.stringify({ ...THEME, fonts: { font_url: '/auth0/font.woff2' }, widget: { logo_url: '/auth0/logo.png' } }),
     )
+    writeFileSync(join(root, 'branding', 'tenant.json'), JSON.stringify({ picture_url: '/auth0/tenant-logo.png' }))
     writeFileSync(join(root, 'branding', 'prompts', 'en', 'login.json'), JSON.stringify(PROMPTS[0].text))
     writeFileSync(join(root, 'branding', 'prompts', 'en', 'signup.json'), JSON.stringify(PROMPTS[1].text))
 
     const source = new FileBrandingSource(root)
     const result = await source.load('dev')
     assert.deepEqual(result.prompts, PROMPTS)
-    assert.deepEqual(result.assetUrls, [THEME.widget.logo_url, THEME.fonts.font_url])
+    assert.deepEqual(result.tenant, TENANT)
+    assert.deepEqual(result.assetUrls, [THEME.widget.logo_url, THEME.fonts.font_url, TENANT.picture_url])
+
+    writeFileSync(join(root, 'branding', 'tenant.json'), JSON.stringify({ picture_url: '/auth0/x.png', flags: {} }))
+    await assert.rejects(() => source.load('dev'), /manages only picture_url; remove flags/)
+    writeFileSync(join(root, 'branding', 'tenant.json'), JSON.stringify({ picture_url: '/auth0/tenant-logo.png' }))
 
     const firstDigest = result.sourceDigest
     writeFileSync(
@@ -299,7 +324,9 @@ test('the checked-in source binds dev to the reviewed stack, issuer, tenant, and
     source.prompts[1].text.signup && (source.prompts[1].text.signup as JsonObject).title,
     'Welcome to BoxLite',
   )
+  assert.equal(source.tenant.picture_url, 'https://dev.boxlite.ai/auth0/boxlite-black-12c2c991.png')
   assert.equal('_comment' in source.theme, false)
+  assert.equal('_comment' in source.tenant, false)
   assert.equal('_comment' in source.prompts[0].text, false)
 })
 
@@ -307,6 +334,7 @@ test('the dashboard ships only the documented content-addressed Auth0 assets', (
   const root = join(import.meta.dirname, '..', '..', 'dashboard', 'public', 'auth0')
   const expectedHashes = {
     'IBM-Plex-OFL-d741e57d.txt': 'd741e57d5f865e294df801f96b7b5161a88b211df65887e4358d271c9fc5fb4f',
+    'boxlite-black-12c2c991.png': '12c2c991a30c82b4c8cc5b1a2ca4f808add8e2645f82c309693385ef1b687c05',
     'boxlite-light-ec0b1243.png': 'ec0b124340e956a6619e866809e2dad8e5f75e83e10a301c766ecdd81710f8e0',
     'ibm-plex-mono-400-ba204497.woff2': 'ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350',
   }
@@ -429,11 +457,24 @@ test('the Auth0 adapter pins every call to the catalog tenant without interactiv
   })
 
   await cli.getDefaultTheme(TARGET)
+  await cli.getTenantSettings(TARGET)
   await cli.getPromptText(TARGET, 'login', 'en')
   await cli.updateTheme(TARGET, 'thm_1', THEME)
+  await cli.updateTenantSettings(TARGET, TENANT)
   await cli.putPromptText(TARGET, 'login', 'en', PROMPTS[0].text)
 
-  assert.equal(calls.length, 4)
+  assert.deepEqual(
+    calls.map((args) => args.slice(0, 3).join(' ')),
+    [
+      'api get branding/themes/default',
+      'api get tenants/settings',
+      'api get prompts/login/custom-text/en',
+      'api patch branding/themes/thm_1',
+      'api patch tenants/settings',
+      'api put prompts/login/custom-text/en',
+    ],
+  )
+  assert.equal(calls.length, 6)
   for (const args of calls) {
     assert.deepEqual(args.slice(-4), ['--tenant', TARGET.auth0TenantDomain, '--no-input', '--no-color'])
   }

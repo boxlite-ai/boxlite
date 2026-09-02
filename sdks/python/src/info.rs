@@ -1,7 +1,7 @@
 use boxlite::runtime::options::PortProtocol;
 use boxlite::{
     BoxInfo, BoxStateInfo, BoxStatus, HealthState as CoreHealthState, NetworkInfo, NetworkMode,
-    PublishedPort,
+    OutboundNetworkInfo, PublishedPort,
 };
 use pyo3::prelude::*;
 
@@ -67,13 +67,81 @@ impl PyPublishedPort {
     }
 }
 
-#[pyclass(name = "NetworkInfo")]
+#[pyclass(name = "OutboundNetworkInfo")]
 #[derive(Clone, Debug)]
-pub(crate) struct PyNetworkInfo {
+pub(crate) struct PyOutboundNetworkInfo {
     #[pyo3(get)]
     pub(crate) mode: String,
     #[pyo3(get)]
     pub(crate) allow_net: Vec<String>,
+}
+
+impl From<OutboundNetworkInfo> for PyOutboundNetworkInfo {
+    fn from(direction: OutboundNetworkInfo) -> Self {
+        Self {
+            mode: network_mode_to_string(direction.mode),
+            allow_net: direction.allow_net,
+        }
+    }
+}
+
+impl PyOutboundNetworkInfo {
+    fn json_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "mode": self.mode,
+            "allow_net": self.allow_net,
+        })
+    }
+}
+
+#[pymethods]
+impl PyOutboundNetworkInfo {
+    fn __repr__(&self) -> String {
+        serde_json::to_string_pretty(&self.json_value()).unwrap_or_default()
+    }
+}
+
+#[pyclass(name = "InboundNetworkInfo")]
+#[derive(Clone, Debug)]
+pub(crate) struct PyInboundNetworkInfo {
+    #[pyo3(get)]
+    pub(crate) mode: String,
+    #[pyo3(get)]
+    pub(crate) allow_net: Vec<String>,
+}
+
+impl From<boxlite::InboundNetworkInfo> for PyInboundNetworkInfo {
+    fn from(direction: boxlite::InboundNetworkInfo) -> Self {
+        Self {
+            mode: network_mode_to_string(direction.mode),
+            allow_net: direction.allow_net,
+        }
+    }
+}
+
+impl PyInboundNetworkInfo {
+    fn json_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "mode": self.mode,
+            "allow_net": self.allow_net,
+        })
+    }
+}
+
+#[pymethods]
+impl PyInboundNetworkInfo {
+    fn __repr__(&self) -> String {
+        serde_json::to_string_pretty(&self.json_value()).unwrap_or_default()
+    }
+}
+
+#[pyclass(name = "NetworkInfo")]
+#[derive(Clone, Debug)]
+pub(crate) struct PyNetworkInfo {
+    #[pyo3(get)]
+    pub(crate) outbound: PyOutboundNetworkInfo,
+    #[pyo3(get)]
+    pub(crate) inbound: PyInboundNetworkInfo,
     /// `None` means this handle does not know the bindings; an empty list means
     /// there are no active publications.
     #[pyo3(get)]
@@ -83,8 +151,8 @@ pub(crate) struct PyNetworkInfo {
 impl From<NetworkInfo> for PyNetworkInfo {
     fn from(network: NetworkInfo) -> Self {
         Self {
-            mode: network_mode_to_string(network.mode),
-            allow_net: network.allow_net,
+            outbound: PyOutboundNetworkInfo::from(network.outbound),
+            inbound: PyInboundNetworkInfo::from(network.inbound),
             published_ports: network
                 .published_ports
                 .map(|ports| ports.into_iter().map(PyPublishedPort::from).collect()),
@@ -101,8 +169,8 @@ impl PyNetworkInfo {
                 .collect::<Vec<_>>()
         });
         serde_json::json!({
-            "mode": self.mode,
-            "allow_net": self.allow_net,
+            "outbound": self.outbound.json_value(),
+            "inbound": self.inbound.json_value(),
             "published_ports": published_ports,
         })
     }
@@ -110,6 +178,22 @@ impl PyNetworkInfo {
 
 #[pymethods]
 impl PyNetworkInfo {
+    /// Legacy view of the outbound mode.
+    ///
+    /// Deprecated: read `network.outbound.mode`.
+    #[getter]
+    fn mode(&self) -> String {
+        self.outbound.mode.clone()
+    }
+
+    /// Legacy view of the outbound allowlist.
+    ///
+    /// Deprecated: read `network.outbound.allow_net`.
+    #[getter]
+    fn allow_net(&self) -> Vec<String> {
+        self.outbound.allow_net.clone()
+    }
+
     fn __repr__(&self) -> String {
         serde_json::to_string_pretty(&self.json_value()).unwrap_or_default()
     }
@@ -369,7 +453,8 @@ mod tests {
 
     use boxlite::runtime::options::PortProtocol;
     use boxlite::{
-        BoxID, BoxInfo, BoxStatus, HealthStatus, NetworkInfo, NetworkMode, PublishedPort,
+        BoxID, BoxInfo, BoxStatus, HealthStatus, InboundNetworkInfo, NetworkInfo, NetworkMode,
+        OutboundNetworkInfo, PublishedPort,
     };
 
     use super::PyBoxInfo;
@@ -398,20 +483,27 @@ mod tests {
 
     #[test]
     fn box_info_conversion_preserves_network_and_publication_state() {
-        let resolved = PyBoxInfo::from(core_info(Some(NetworkInfo {
-            mode: NetworkMode::Enabled,
-            allow_net: vec!["api.example.com".to_string()],
-            published_ports: Some(vec![PublishedPort {
+        let resolved = PyBoxInfo::from(core_info(Some(NetworkInfo::new(
+            OutboundNetworkInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: vec!["api.example.com".to_string()],
+            },
+            InboundNetworkInfo {
+                mode: NetworkMode::Disabled,
+                allow_net: Vec::new(),
+            },
+            Some(vec![PublishedPort {
                 guest_port: 3000,
                 host_ip: "127.0.0.1".to_string(),
                 host_port: 49152,
                 protocol: PortProtocol::Tcp,
             }]),
-        })));
+        ))));
 
         let network = resolved.network.expect("network metadata");
-        assert_eq!(network.mode, "enabled");
-        assert_eq!(network.allow_net, vec!["api.example.com"]);
+        assert_eq!(network.outbound.mode, "enabled");
+        assert_eq!(network.outbound.allow_net, vec!["api.example.com"]);
+        assert_eq!(network.inbound.mode, "disabled");
         let ports = network.published_ports.expect("resolved publications");
         assert_eq!(ports.len(), 1);
         assert_eq!(ports[0].guest_port, 3000);
@@ -419,11 +511,17 @@ mod tests {
         assert_eq!(ports[0].host_port, 49152);
         assert_eq!(ports[0].protocol, "tcp");
 
-        let resolved_empty = PyBoxInfo::from(core_info(Some(NetworkInfo {
-            mode: NetworkMode::Disabled,
-            allow_net: Vec::new(),
-            published_ports: Some(Vec::new()),
-        })));
+        let resolved_empty = PyBoxInfo::from(core_info(Some(NetworkInfo::new(
+            OutboundNetworkInfo {
+                mode: NetworkMode::Disabled,
+                allow_net: Vec::new(),
+            },
+            InboundNetworkInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: Vec::new(),
+            },
+            Some(Vec::new()),
+        ))));
         assert!(
             resolved_empty
                 .network
@@ -433,11 +531,17 @@ mod tests {
                 .is_empty()
         );
 
-        let unresolved = PyBoxInfo::from(core_info(Some(NetworkInfo {
-            mode: NetworkMode::Enabled,
-            allow_net: Vec::new(),
-            published_ports: None,
-        })));
+        let unresolved = PyBoxInfo::from(core_info(Some(NetworkInfo::new(
+            OutboundNetworkInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: Vec::new(),
+            },
+            InboundNetworkInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: Vec::new(),
+            },
+            None,
+        ))));
         assert!(
             unresolved
                 .network

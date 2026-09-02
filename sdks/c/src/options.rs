@@ -160,6 +160,21 @@ pub unsafe extern "C" fn boxlite_options_add_network_allow(
     options_add_network_allow(opts, host)
 }
 
+/// Marks services the box exposes as publicly reachable (the default).
+/// Mirrors `boxlite_options_set_network_enabled` for the inbound direction.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_network_inbound_enabled(opts: *mut CBoxliteOptions) {
+    options_set_network_inbound_enabled(opts)
+}
+
+/// Marks services the box exposes as private — unreachable from outside the
+/// box. Mirrors `boxlite_options_set_network_disabled` for the inbound
+/// direction.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_network_inbound_disabled(opts: *mut CBoxliteOptions) {
+    options_set_network_inbound_disabled(opts)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_add_secret(
     opts: *mut CBoxliteOptions,
@@ -178,6 +193,10 @@ pub unsafe extern "C" fn boxlite_options_set_auto_remove(opts: *mut CBoxliteOpti
     options_set_auto_remove(opts, val)
 }
 
+/// Set how long an idle box may remain paused before the runtime pauses it.
+///
+/// The value is expressed in seconds. `0` preserves the runtime/control-plane
+/// default. A null options pointer is treated as a no-op.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_auto_stop_interval(
     opts: *mut CBoxliteOptions,
@@ -186,6 +205,10 @@ pub unsafe extern "C" fn boxlite_options_set_auto_stop_interval(
     options_set_auto_stop_interval(opts, seconds)
 }
 
+/// Set how long a stopped box may remain before the runtime deletes it.
+///
+/// The value is expressed in seconds. `0` disables automatic deletion for
+/// persistent boxes. A null options pointer is treated as a no-op.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_auto_delete_interval(
     opts: *mut CBoxliteOptions,
@@ -194,6 +217,10 @@ pub unsafe extern "C" fn boxlite_options_set_auto_delete_interval(
     options_set_auto_delete_interval(opts, seconds)
 }
 
+/// Configure whether stopped boxes may automatically resume on demand.
+///
+/// Any non-zero `val` enables auto-resume; `0` disables it. A null options
+/// pointer is treated as a no-op.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_auto_resume_enabled(
     opts: *mut CBoxliteOptions,
@@ -486,6 +513,24 @@ pub unsafe fn options_add_network_allow(handle: *mut OptionsHandle, host: *const
             && let NetworkSpec::Enabled { allow_net } = &mut (*handle).options.network
         {
             allow_net.push(h);
+        }
+    }
+}
+
+pub unsafe fn options_set_network_inbound_enabled(handle: *mut OptionsHandle) {
+    unsafe {
+        if !handle.is_null() {
+            (*handle).options.inbound_network = NetworkSpec::Enabled {
+                allow_net: Vec::new(),
+            };
+        }
+    }
+}
+
+pub unsafe fn options_set_network_inbound_disabled(handle: *mut OptionsHandle) {
+    unsafe {
+        if !handle.is_null() {
+            (*handle).options.inbound_network = NetworkSpec::Disabled;
         }
     }
 }

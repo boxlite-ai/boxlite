@@ -1,7 +1,9 @@
 use boxlite::NetworkMode;
 use boxlite::litebox::HealthState as CoreHealthState;
 use boxlite::runtime::options::PortProtocol;
-use boxlite::runtime::types::{BoxInfo, BoxStateInfo, BoxStatus, NetworkInfo, PublishedPort};
+use boxlite::runtime::types::{
+    BoxInfo, BoxStateInfo, BoxStatus, NetworkInfo, OutboundNetworkInfo, PublishedPort,
+};
 use napi::bindgen_prelude::{Either, Null};
 use napi_derive::napi;
 
@@ -48,10 +50,52 @@ impl From<PublishedPort> for JsPublishedPort {
     }
 }
 
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsOutboundNetworkInfo {
+    pub mode: String,
+    #[napi(js_name = "allowNet")]
+    pub allow_net: Vec<String>,
+}
+
+impl From<OutboundNetworkInfo> for JsOutboundNetworkInfo {
+    fn from(direction: OutboundNetworkInfo) -> Self {
+        Self {
+            mode: network_mode_to_string(direction.mode),
+            allow_net: direction.allow_net,
+        }
+    }
+}
+
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsInboundNetworkInfo {
+    pub mode: String,
+    #[napi(js_name = "allowNet")]
+    pub allow_net: Vec<String>,
+}
+
+impl From<boxlite::InboundNetworkInfo> for JsInboundNetworkInfo {
+    fn from(direction: boxlite::InboundNetworkInfo) -> Self {
+        Self {
+            mode: network_mode_to_string(direction.mode),
+            allow_net: direction.allow_net,
+        }
+    }
+}
+
 #[napi(object, use_nullable = true)]
 #[derive(Clone, Debug)]
 pub struct JsNetworkInfo {
+    pub outbound: JsOutboundNetworkInfo,
+    pub inbound: JsInboundNetworkInfo,
+    /// Mirrors `outbound.mode` so pre-split readers keep working.
+    ///
+    /// @deprecated Read `outbound.mode`.
     pub mode: String,
+    /// Mirrors `outbound.allowNet` so pre-split readers keep working.
+    ///
+    /// @deprecated Read `outbound.allowNet`.
     #[napi(js_name = "allowNet")]
     pub allow_net: Vec<String>,
     /// `None` becomes `null` when this handle does not know the bindings; an
@@ -62,9 +106,12 @@ pub struct JsNetworkInfo {
 
 impl From<NetworkInfo> for JsNetworkInfo {
     fn from(network: NetworkInfo) -> Self {
+        let outbound = JsOutboundNetworkInfo::from(network.outbound);
         Self {
-            mode: network_mode_to_string(network.mode),
-            allow_net: network.allow_net,
+            mode: outbound.mode.clone(),
+            allow_net: outbound.allow_net.clone(),
+            outbound,
+            inbound: JsInboundNetworkInfo::from(network.inbound),
             published_ports: network
                 .published_ports
                 .map(|ports| ports.into_iter().map(JsPublishedPort::from).collect()),
@@ -252,7 +299,8 @@ mod tests {
 
     use boxlite::runtime::options::PortProtocol;
     use boxlite::{
-        BoxID, BoxInfo, BoxStatus, HealthStatus, NetworkInfo, NetworkMode, PublishedPort,
+        BoxID, BoxInfo, BoxStatus, HealthStatus, InboundNetworkInfo, NetworkInfo, NetworkMode,
+        OutboundNetworkInfo, PublishedPort,
     };
 
     use napi::bindgen_prelude::Either;
@@ -283,23 +331,30 @@ mod tests {
 
     #[test]
     fn box_info_conversion_preserves_network_and_publication_state() {
-        let resolved = JsBoxInfo::from(core_info(Some(NetworkInfo {
-            mode: NetworkMode::Enabled,
-            allow_net: vec!["api.example.com".to_string()],
-            published_ports: Some(vec![PublishedPort {
+        let resolved = JsBoxInfo::from(core_info(Some(NetworkInfo::new(
+            OutboundNetworkInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: vec!["api.example.com".to_string()],
+            },
+            InboundNetworkInfo {
+                mode: NetworkMode::Disabled,
+                allow_net: Vec::new(),
+            },
+            Some(vec![PublishedPort {
                 guest_port: 3000,
                 host_ip: "127.0.0.1".to_string(),
                 host_port: 49152,
                 protocol: PortProtocol::Tcp,
             }]),
-        })));
+        ))));
 
         let network = match resolved.network {
             Either::A(network) => network,
             Either::B(_) => panic!("network metadata missing"),
         };
-        assert_eq!(network.mode, "enabled");
-        assert_eq!(network.allow_net, vec!["api.example.com"]);
+        assert_eq!(network.outbound.mode, "enabled");
+        assert_eq!(network.outbound.allow_net, vec!["api.example.com"]);
+        assert_eq!(network.inbound.mode, "disabled");
         let ports = network.published_ports.expect("resolved publications");
         assert_eq!(ports.len(), 1);
         assert_eq!(ports[0].guest_port, 3000);
@@ -307,11 +362,17 @@ mod tests {
         assert_eq!(ports[0].host_port, 49152);
         assert_eq!(ports[0].protocol, "tcp");
 
-        let resolved_empty = JsBoxInfo::from(core_info(Some(NetworkInfo {
-            mode: NetworkMode::Disabled,
-            allow_net: Vec::new(),
-            published_ports: Some(Vec::new()),
-        })));
+        let resolved_empty = JsBoxInfo::from(core_info(Some(NetworkInfo::new(
+            OutboundNetworkInfo {
+                mode: NetworkMode::Disabled,
+                allow_net: Vec::new(),
+            },
+            InboundNetworkInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: Vec::new(),
+            },
+            Some(Vec::new()),
+        ))));
         let network = match resolved_empty.network {
             Either::A(network) => network,
             Either::B(_) => panic!("network metadata missing"),
@@ -323,11 +384,17 @@ mod tests {
                 .is_empty()
         );
 
-        let unresolved = JsBoxInfo::from(core_info(Some(NetworkInfo {
-            mode: NetworkMode::Enabled,
-            allow_net: Vec::new(),
-            published_ports: None,
-        })));
+        let unresolved = JsBoxInfo::from(core_info(Some(NetworkInfo::new(
+            OutboundNetworkInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: Vec::new(),
+            },
+            InboundNetworkInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: Vec::new(),
+            },
+            None,
+        ))));
         let network = match unresolved.network {
             Either::A(network) => network,
             Either::B(_) => panic!("network metadata missing"),

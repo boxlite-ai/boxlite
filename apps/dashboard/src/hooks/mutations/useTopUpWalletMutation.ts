@@ -20,8 +20,11 @@ export const useTopUpWalletMutation = () => {
 
   return useMutation<PaymentUrl, unknown, TopUpWalletVariables>({
     mutationFn: ({ organizationId, amountCents }) => billingApi.topUpWallet(organizationId, amountCents),
-    onSuccess: (_data, { organizationId }) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.organization.wallet(organizationId) })
+    onSuccess: async (_data, { organizationId }) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.organization.wallet(organizationId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.billing.transactions(organizationId) }),
+      ])
     },
   })
 }

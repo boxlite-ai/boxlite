@@ -398,10 +398,14 @@ class SimpleBox:
 
         Note:
             copy_in extracts files into the container rootfs layer. Destinations
-            that are tmpfs mounts inside the guest (e.g. /tmp, /dev/shm) will
-            silently fail — files land behind the mount and are invisible to
-            running processes. This is the same limitation as ``docker cp``
-            (see https://github.com/moby/moby/issues/22020).
+            under a mount inside the guest (e.g. /tmp, /dev/shm, volumes) are
+            **refused** with an error naming the mount, because files written
+            there would land behind it and be invisible to running processes.
+            ``docker cp`` has the same blind spot but answers from the shadowed
+            layer silently (see https://github.com/moby/moby/issues/22020).
+
+            Files land owned by the box's exec user, so the workload can read
+            them without any chmod/chown of its own.
 
             Workaround: use the low-level exec API to pipe a tar archive
             into the container (like ``docker exec -i CONTAINER tar xf -``)::
@@ -455,6 +459,16 @@ class SimpleBox:
             overwrite: If True, overwrite existing files (default: True)
             follow_symlinks: If True, follow symlinks when copying (default: False)
             include_parent: If True, include parent directory in archive (default: True)
+
+        Note:
+            copy_out reads the container rootfs layer. A source at or under a
+            mount inside the guest (e.g. /tmp, /dev/shm, volumes), or a
+            directory containing one, is **refused** with an error naming the
+            mount, because the archive would carry the files underneath it
+            rather than the ones running processes see.
+
+            Workaround: use the low-level exec API to pipe a tar archive out
+            of the container (``tar cf - -C /tmp .``).
 
         Examples:
             Copy a single file::

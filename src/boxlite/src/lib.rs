@@ -63,7 +63,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use runtime::id::{BaseDiskID, BaseDiskIDMint, BoxID, BoxIDMint};
 pub use runtime::types::ContainerID;
 pub use runtime::types::{
-    BoxInfo, BoxLifecyclePolicy, BoxState, BoxStateInfo, BoxStatus, NetworkInfo, PublishedPort,
+    BoxInfo, BoxLifecyclePolicy, BoxState, BoxStateInfo, BoxStatus, InboundNetworkInfo,
+    NetworkInfo, OutboundNetworkInfo, PublishedPort,
 };
 
 #[cfg(feature = "rest")]

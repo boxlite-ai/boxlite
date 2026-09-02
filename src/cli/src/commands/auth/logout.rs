@@ -5,7 +5,7 @@ use std::io::Write;
 use anyhow::{Context, Result};
 use clap::Args;
 
-use crate::credentials;
+use crate::credentials::CredentialStore;
 
 #[derive(Args, Debug, Clone)]
 pub struct LogoutArgs {
@@ -14,11 +14,11 @@ pub struct LogoutArgs {
     pub yes: bool,
 }
 
-pub async fn run(args: LogoutArgs, profile_name: &str) -> Result<()> {
-    let path = credentials::path().context("resolving credentials path")?;
-    let exists = credentials::load_named(profile_name)
-        .ok()
-        .flatten()
+pub async fn run(args: LogoutArgs, profile_name: &str, store: &CredentialStore) -> Result<()> {
+    let path = store.path().context("resolving credentials path")?;
+    let exists = store
+        .load_named(profile_name)
+        .context("loading stored credentials")?
         .is_some();
     if !exists {
         println!("Not logged in (profile `{}`).", profile_name);
@@ -43,7 +43,7 @@ pub async fn run(args: LogoutArgs, profile_name: &str) -> Result<()> {
         }
     }
 
-    let removed = credentials::delete_named(profile_name)?;
+    let removed = store.delete_named(profile_name)?;
     if removed {
         println!("Logged out (profile `{}`)", profile_name);
     } else {

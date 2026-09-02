@@ -2,7 +2,7 @@
 
 The BoxLite cloud REST runtime can automatically stop a box after it becomes idle, and restart it on the next user operation. This reuses the existing `Stop` / `Start` lifecycle, does not create memory snapshots, and does not introduce a new `Paused` state.
 
-> This guide describes the cloud REST runtime. The embedded local runtime does not run a lifecycle sweeper; explicitly configuring these policies returns `Unsupported`.
+> This guide describes the REST runtimes — the cloud, and `boxlite serve`, which sweeps on its own 30s tick. The embedded local runtime runs no sweeper; explicitly configuring these policies returns `Unsupported`, and the CLI refuses the two deadline flags before the request is made.
 
 ## Configuration
 

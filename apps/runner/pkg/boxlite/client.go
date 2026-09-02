@@ -104,6 +104,24 @@ func boxRuntimeEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]stri
 	return env
 }
 
+// secretSpecs maps control-plane SecretDTOs onto the boxlite SDK's Secret
+// values. Extracted as a pure function so the mapping is unit-testable without
+// a live runtime (see secret_options_test.go). The SDK applies the
+// `<BOXLITE_SECRET:{name}>` placeholder default when Placeholder is empty, so an
+// omitted placeholder is passed through as-is rather than synthesized here.
+func secretSpecs(secrets []dto.SecretDTO) []boxlite.Secret {
+	specs := make([]boxlite.Secret, 0, len(secrets))
+	for _, secret := range secrets {
+		specs = append(specs, boxlite.Secret{
+			Name:        secret.Name,
+			Value:       secret.Value,
+			Hosts:       secret.Hosts,
+			Placeholder: secret.Placeholder,
+		})
+	}
+	return specs
+}
+
 // buildImageRegistries assembles the runtime-scoped OCI registry list handed to boxlite-core:
 // the existing insecure (HTTP, no-auth) registries, plus — when ghcr credentials are provided —
 // a single authenticated ghcr.io HTTPS entry so core can pull private images
@@ -242,6 +260,9 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 	for k, v := range boxRuntimeEnv(ctx, boxDto) {
 		opts = append(opts, boxlite.WithEnv(k, v))
+	}
+	for _, secret := range secretSpecs(boxDto.Secrets) {
+		opts = append(opts, boxlite.WithSecret(secret))
 	}
 
 	if len(boxDto.Entrypoint) > 0 {

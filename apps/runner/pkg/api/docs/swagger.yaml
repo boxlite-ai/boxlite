@@ -58,6 +58,10 @@ definitions:
         $ref: '#/definitions/RegistryDTO'
       runAsUser:
         type: string
+      secrets:
+        items:
+          $ref: '#/definitions/dto.SecretDTO'
+        type: array
       skipStart:
         type: boolean
       storageQuota:
@@ -138,6 +142,10 @@ definitions:
         type: boolean
       osUser:
         type: string
+      secrets:
+        items:
+          $ref: '#/definitions/dto.SecretDTO'
+        type: array
       storageQuota:
         minimum: 1
         type: integer
@@ -231,6 +239,22 @@ definitions:
         type: string
       volumeId:
         type: string
+    type: object
+  dto.SecretDTO:
+    properties:
+      hosts:
+        items:
+          type: string
+        type: array
+      name:
+        type: string
+      placeholder:
+        type: string
+      value:
+        type: string
+    required:
+      - name
+      - value
     type: object
   enums.BoxState:
     enum:

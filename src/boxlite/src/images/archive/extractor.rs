@@ -29,6 +29,15 @@ use walkdir::WalkDir;
 /// tar contains crafted symlinks aiming at the host filesystem.
 /// Lifecycle: `new(dest)` → one or more `extract_*` calls → `finalize()`.
 ///
+/// Decompressed-size budget: every `Regular`/`GNUSparse` data stream written
+/// is counted against a budget seeded from `BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE`
+/// (default [`DEFAULT_MAX_LAYER_DECOMPRESSED_SIZE`]) and shared across all
+/// `extract_*` calls on this extractor. Exceeding it aborts extraction with
+/// [`BoxliteError::ResourceExhausted`]; a single extractor used for a whole
+/// image (see `rootfs::builder`) therefore enforces a per-image cap, while a
+/// per-layer extractor (cached layer dirs) enforces a per-layer cap. Hardlinks,
+/// symlinks, and whiteouts carry no data stream and consume nothing.
+///
 /// Directory mode metadata is deferred across all `extract_*` calls and
 /// applied once on `finalize`, deepest-first. This lets a multi-layer
 /// flat-merge avoid chmod-narrowing a parent directory between layers
@@ -40,6 +49,13 @@ use walkdir::WalkDir;
 pub struct LayerExtractor<'a> {
     dest: &'a Path,
     deferred_dirs: DeferredDirs,
+    /// Decompressed-byte budget remaining across all `extract_*` calls on
+    /// this extractor (GHSA-gcpm-8w8q-gp9v). Decremented by every
+    /// `Regular`/`GNUSparse` data stream written; `finalize` does not
+    /// touch it.
+    remaining: u64,
+    /// The initial budget, kept for error reporting.
+    limit: u64,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -51,10 +67,30 @@ enum WhiteoutMode {
 impl<'a> LayerExtractor<'a> {
     /// Construct an extractor targeting `dest`. The directory is opened lazily
     /// per extraction call so the same extractor can apply multiple layers.
+    ///
+    /// The decompressed-size budget is seeded from
+    /// `BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE` (default
+    /// [`DEFAULT_MAX_LAYER_DECOMPRESSED_SIZE`]) and is shared across all
+    /// `extract_*` calls on this extractor.
     pub fn new(dest: &'a Path) -> Self {
+        let limit = max_layer_decompressed_size();
         Self {
             dest,
             deferred_dirs: DeferredDirs::new(),
+            remaining: limit,
+            limit,
+        }
+    }
+
+    /// Test-only constructor with an explicit budget so individual tests don't
+    /// race the process-global env-var cache.
+    #[cfg(test)]
+    pub(crate) fn with_budget(dest: &'a Path, bytes: u64) -> Self {
+        Self {
+            dest,
+            deferred_dirs: DeferredDirs::new(),
+            remaining: bytes,
+            limit: bytes,
         }
     }
 
@@ -83,6 +119,9 @@ impl<'a> LayerExtractor<'a> {
     ///
     /// The caller MUST call [`Self::finalize`] after all layers have been
     /// extracted, or directory permissions will not be applied.
+    ///
+    /// The decompressed-size budget applies across all `extract_*` calls on
+    /// this extractor; see the struct documentation.
     pub fn extract_reader<R: Read>(&mut self, reader: R) -> BoxliteResult<u64> {
         self.extract_reader_with_whiteout_mode(reader, WhiteoutMode::Apply)
     }
@@ -174,6 +213,23 @@ impl<'a> LayerExtractor<'a> {
                 continue;
             }
 
+            // Fail before this entry mutates anything once its logical size
+            // exceeds the remaining budget: no parent dirs created, no
+            // overwrite cleanup, nothing truncated by this entry. entry.size()
+            // is the exact number of bytes tar-rs will yield — fields.size,
+            // PAX-overridden for `size` extensions and sparse-expanded for
+            // GNUSparse, the same value tar-rs caps reads with (take(size) in
+            // archive.rs) — so this check bounds every byte the copy arm can
+            // write. A size-0 entry writes nothing and passes even with an
+            // exhausted budget. Whiteouts apply regardless (they run before
+            // this check and consume no budget), and a layer may still carry
+            // dirs/symlinks/hardlinks after the data budget is exhausted.
+            if matches!(entry_type, EntryType::Regular | EntryType::GNUSparse)
+                && entry.size() > self.remaining
+            {
+                return Err(decompressed_size_error(self.limit, &normalized));
+            }
+
             // containerd pattern: resolve parent, join leaf.
             // Parent is resolved (symlinks re-anchored). Leaf doesn't need
             // to exist yet — it's the entry being created.
@@ -236,13 +292,18 @@ impl<'a> LayerExtractor<'a> {
                                 e
                             ))
                         })?;
-                    io::copy(&mut entry, &mut file).map_err(|e| {
+                    let copied = io::copy(&mut entry, &mut file).map_err(|e| {
                         BoxliteError::Storage(format!(
                             "Failed to copy file data to {}: {}",
                             normalized.display(),
                             e
                         ))
                     })?;
+                    // The pre-check guarantees entry.size() <= remaining, and
+                    // tar-rs yields at most entry.size() bytes, so `copied`
+                    // never exceeds the budget; subtract the real count so the
+                    // budget tracks bytes written, not declared header sizes.
+                    self.remaining -= copied;
                 }
                 EntryType::Link => {
                     let target = link_name.clone().ok_or_else(|| {
@@ -649,6 +710,39 @@ fn max_deferred_dirs() -> usize {
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_MAX_DEFERRED_DIRS)
     })
+}
+
+/// Default cap on total decompressed bytes written across all `extract_*`
+/// calls on one [`LayerExtractor`] (GHSA-gcpm-8w8q-gp9v). The manifest's
+/// `expected_size` + SHA256 checks bound only the compressed blob, so a
+/// crafted gzip layer could otherwise amplify arbitrarily (PoC: 65 KiB ->
+/// 64 MiB). Realistic images sit far below this (alpine ~5 MiB, python:alpine
+/// ~300 MiB decompressed); the cap is an anti-amplification bound, not a
+/// sizing bound. Override via `BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE`.
+const DEFAULT_MAX_LAYER_DECOMPRESSED_SIZE: u64 = 20 * 1024 * 1024 * 1024; // 20 GiB
+
+fn max_layer_decompressed_size() -> u64 {
+    static MAX: OnceLock<u64> = OnceLock::new();
+    *MAX.get_or_init(|| {
+        std::env::var("BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_MAX_LAYER_DECOMPRESSED_SIZE)
+    })
+}
+
+/// Budget-breach error, mirroring the `DeferredDirs` cap wording with the
+/// entry path added (keybase pattern: filename in the decompression-bomb
+/// error). `ResourceExhausted` maps to HTTP 429 — the cap is a deliberate
+/// limit against untrusted input, not a server-side failure.
+fn decompressed_size_error(limit: u64, path: &Path) -> BoxliteError {
+    BoxliteError::ResourceExhausted(format!(
+        "Layer extraction exceeds BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE ({} bytes) \
+         while writing {}; the layer archive decompresses beyond the configured \
+         limit. If this image is legitimate, raise BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE.",
+        limit,
+        path.display()
+    ))
 }
 
 /// Cross-layer accumulator for deferred directory metadata.
@@ -2203,5 +2297,279 @@ mod tests {
 
         // Replacing an existing key is not growth; should still succeed.
         dirs.record(mk("/a")).unwrap();
+    }
+
+    /// GHSA-gcpm-8w8q-gp9v reproducer: a tiny gzip layer expanding past the
+    /// budget must abort extraction and leave no partial file behind.
+    #[test]
+    fn decompressed_size_budget_rejects_gzip_bomb_layer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tar_path = tmp.path().join("bomb.tar.gz");
+        let big = vec![0u8; 4096];
+        std::fs::write(
+            &tar_path,
+            create_gzipped_tar(&create_raw_tar(&[raw_file("big.bin", &big)])),
+        )
+        .unwrap();
+
+        let dest = tmp.path().join("extract");
+        let mut extractor = LayerExtractor::with_budget(&dest, 1024);
+        let err = extractor.extract_tarball(&tar_path).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE"),
+            "budget error should mention the env-var override: {}",
+            msg
+        );
+        assert!(
+            msg.contains("big.bin"),
+            "budget error should name the entry path: {}",
+            msg
+        );
+        assert!(
+            !dest.join("big.bin").exists(),
+            "partial file must not remain after a budget breach"
+        );
+    }
+
+    #[test]
+    fn decompressed_size_budget_exact_limit_passes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+        let mut extractor = LayerExtractor::with_budget(&dest, 5);
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&[raw_file(
+                "f", b"hello",
+            )])))
+            .unwrap();
+        extractor.finalize().unwrap();
+        assert_eq!(std::fs::read(dest.join("f")).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn decompressed_size_budget_limit_plus_one_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+        let mut extractor = LayerExtractor::with_budget(&dest, 5);
+        let err = extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&[raw_file(
+                "f", b"hellox",
+            )])))
+            .unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE"),
+            "budget error should mention the env-var override: {}",
+            msg
+        );
+        assert!(
+            !dest.join("f").exists(),
+            "partial file must not remain after a budget breach"
+        );
+    }
+
+    /// The budget is shared across `extract_*` calls on one extractor —
+    /// the builder path (`rootfs::builder`) uses one extractor for the whole
+    /// image, so this pins the per-image cumulative semantics.
+    #[test]
+    fn decompressed_size_budget_is_cumulative_across_layers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+        let mut extractor = LayerExtractor::with_budget(&dest, 10);
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&[raw_file(
+                "a", b"aaaaa",
+            )])))
+            .unwrap();
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&[raw_file(
+                "b", b"bbbbb",
+            )])))
+            .unwrap();
+
+        let err = extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&[raw_file("c", b"c")])))
+            .unwrap_err();
+        assert!(format!("{}", err).contains("BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE"));
+        assert!(!dest.join("c").exists());
+        assert!(dest.join("a").exists(), "layers within budget must survive");
+        assert!(dest.join("b").exists(), "layers within budget must survive");
+    }
+
+    /// Legitimate highly-compressible content must pass: the budget counts
+    /// decompressed bytes, so a 1 MiB zero-filled layer (a few KiB on disk)
+    /// fits a 2 MiB budget. This test passes with or without the fix — it
+    /// guards against an over-tight default, not the bug itself.
+    #[test]
+    fn decompressed_size_budget_allows_large_compressible_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tar_path = tmp.path().join("zeros.tar.gz");
+        let zeros = vec![0u8; 1024 * 1024];
+        std::fs::write(
+            &tar_path,
+            create_gzipped_tar(&create_raw_tar(&[raw_file("zeros.bin", &zeros)])),
+        )
+        .unwrap();
+        assert!(
+            std::fs::metadata(&tar_path).unwrap().len() < 64 * 1024,
+            "precondition: gzip must compress the zero-filled layer well"
+        );
+
+        let dest = tmp.path().join("extract");
+        let mut extractor = LayerExtractor::with_budget(&dest, 2 * 1024 * 1024);
+        extractor.extract_tarball(&tar_path).unwrap();
+        extractor.finalize().unwrap();
+        assert_eq!(
+            std::fs::metadata(dest.join("zeros.bin")).unwrap().len(),
+            1024 * 1024
+        );
+    }
+
+    /// Dirs, symlinks, hardlinks, and whiteouts carry no data stream and
+    /// consume no budget. Once the budget is spent, a further file entry must
+    /// fail BEFORE creating its parent directory.
+    #[test]
+    fn decompressed_size_budget_counts_only_file_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+        let mut extractor = LayerExtractor::with_budget(&dest, 5);
+
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&[
+                raw_dir("d"),
+                raw_symlink("d/link", "/target.txt"),
+                raw_hardlink("d/hard", "target.txt"),
+                raw_file("target.txt", b"hello"),
+                raw_file(".wh.ghost", b""),
+            ])))
+            .unwrap();
+        assert_eq!(std::fs::read(dest.join("target.txt")).unwrap(), b"hello");
+        assert!(dest.join("d/link").is_symlink());
+        assert_same_inode(&dest.join("target.txt"), &dest.join("d/hard"));
+
+        // Budget exactly spent: the next file entry fails before mutation.
+        let err = extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&[raw_file(
+                "newdir/f", b"x",
+            )])))
+            .unwrap_err();
+        assert!(format!("{}", err).contains("BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE"));
+        assert!(
+            !dest.join("newdir").exists(),
+            "a budget-exhausted entry must not create parent directories"
+        );
+
+        extractor.finalize().unwrap();
+    }
+
+    /// A size-0 entry writes no bytes, so it must pass even with the budget
+    /// exactly exhausted — the early check keys off declared size, not just
+    /// `remaining == 0`.
+    #[test]
+    fn decompressed_size_budget_allows_empty_file_after_exhaustion() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+        let mut extractor = LayerExtractor::with_budget(&dest, 5);
+
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&[raw_file(
+                "f", b"hello",
+            )])))
+            .unwrap();
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&[raw_file(
+                "empty", b"",
+            )])))
+            .unwrap();
+        extractor.finalize().unwrap();
+
+        assert_eq!(std::fs::metadata(dest.join("empty")).unwrap().len(), 0);
+    }
+
+    /// An entry whose declared size exceeds a *non-zero* remaining budget
+    /// must fail before any filesystem mutation: the parent dir is never
+    /// created. The previous `remaining == 0`-only check let the copy arm
+    /// run first, creating parents before tripping the budget.
+    #[test]
+    fn decompressed_size_budget_oversized_entry_fails_before_parent_creation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+        let mut extractor = LayerExtractor::with_budget(&dest, 5);
+
+        let err = extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&[raw_file(
+                "newdir/f", b"hellox",
+            )])))
+            .unwrap_err();
+        assert!(format!("{}", err).contains("BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE"));
+        assert!(
+            !dest.join("newdir").exists(),
+            "an oversized entry must fail before creating parent directories"
+        );
+    }
+
+    /// Hand-rolled tar where a PAX `size` extension overrides the octal
+    /// header size: the file record declares size 0 but carries 6 data bytes,
+    /// and the preceding PAX record sets size=6. tar-rs consumes the PAX
+    /// record internally and caps what the entry yields by the PAX value,
+    /// while header().size() keeps reporting the octal 0.
+    fn create_pax_size_override_tar() -> Vec<u8> {
+        let mut data = Vec::new();
+
+        let mut pax = tar::Header::new_gnu();
+        pax.set_path("PaxHeaders.0/newdir/pax-bomb").unwrap();
+        pax.set_entry_type(tar::EntryType::XHeader);
+        let payload = b"9 size=6\n";
+        pax.set_size(payload.len() as u64);
+        pax.set_cksum();
+        data.extend_from_slice(pax.as_bytes());
+        data.extend_from_slice(payload);
+        data.resize(data.len() + (512 - payload.len()), 0u8);
+
+        let mut file_h = tar::Header::new_gnu();
+        file_h.set_path("newdir/pax-bomb").unwrap();
+        file_h.set_mode(0o644);
+        file_h.set_entry_type(tar::EntryType::Regular);
+        file_h.set_size(0); // lies: 6 bytes of data follow
+        file_h.set_cksum();
+        data.extend_from_slice(file_h.as_bytes());
+        data.extend_from_slice(b"hellox");
+        data.resize(data.len() + (512 - 6), 0u8);
+
+        data.resize(data.len() + 1024, 0u8); // end-of-archive
+        data
+    }
+
+    /// A PAX `size` extension makes tar-rs yield more bytes than the octal
+    /// header size reports; the pre-check reads entry.size() (PAX-aware) and
+    /// must fail before any filesystem mutation.
+    #[test]
+    fn decompressed_size_budget_catches_pax_size_override() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+        let mut extractor = LayerExtractor::with_budget(&dest, 5);
+
+        let err = extractor
+            .extract_reader(std::io::Cursor::new(create_pax_size_override_tar()))
+            .unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE"),
+            "budget error should mention the env-var override: {}",
+            msg
+        );
+        assert!(
+            msg.contains("pax-bomb"),
+            "budget error should name the entry path: {}",
+            msg
+        );
+        assert!(
+            !dest.join("newdir/pax-bomb").exists(),
+            "partial file must not remain after a budget breach"
+        );
+        assert!(
+            !dest.join("newdir").exists(),
+            "a pax-oversized entry must fail before creating parent directories"
+        );
     }
 }

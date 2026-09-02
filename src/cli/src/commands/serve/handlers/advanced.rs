@@ -11,9 +11,7 @@ use axum::response::{IntoResponse, Response};
 use boxlite::{BoxArchive, CloneOptions, ExportOptions};
 
 use super::super::types::{CloneRequest, ImportQuery};
-use super::super::{
-    AppState, box_info_to_response, error_from_boxlite, error_response, get_or_fetch_box,
-};
+use super::super::{AppState, error_from_boxlite, error_response, get_or_fetch_box};
 
 pub(in crate::commands::serve) async fn clone_box(
     State(state): State<Arc<AppState>>,
@@ -32,7 +30,7 @@ pub(in crate::commands::serve) async fn clone_box(
                 Err(e) => return error_from_boxlite(&e),
             };
             let cloned_id = info.id.to_string();
-            let resp = box_info_to_response(&info);
+            let resp = state.box_response(&info).await;
             state
                 .boxes
                 .write()
@@ -127,7 +125,7 @@ pub(in crate::commands::serve) async fn import_box(
                 Err(e) => return error_from_boxlite(&e),
             };
             let box_id = info.id.to_string();
-            let resp = box_info_to_response(&info);
+            let resp = state.box_response(&info).await;
             state.boxes.write().await.insert(box_id, Arc::new(litebox));
             (StatusCode::CREATED, Json(resp)).into_response()
         }

@@ -15,21 +15,25 @@
 
 use std::io::IsTerminal;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, ValueEnum};
 use dialoguer::{Select, theme::ColorfulTheme};
 
 use super::api_key;
 use super::oidc::{self, DiscoveryOverrides, OidcConfig, OidcTokens, discovery};
-use crate::credentials::{self, Profile};
+use crate::credentials::{self, CredentialStore, Profile};
 use crate::defaults::LOCAL_SERVE_URL;
 
 const URL_ENV: &str = "BOXLITE_REST_URL";
 
 #[derive(Args, Debug, Clone)]
 pub struct LoginArgs {
-    /// Server URL. Defaults to `LOCAL_SERVE_URL` (matching `boxlite serve`).
-    #[arg(long)]
+    /// Server URL. Defaults to `BOXLITE_REST_URL`, the selected profile's URL,
+    /// then `LOCAL_SERVE_URL` (matching `boxlite serve`).
+    #[arg(
+        long,
+        value_parser = clap::builder::NonEmptyStringValueParser::new()
+    )]
     pub url: Option<String>,
 
     /// Read a long-lived API key from stdin (one line). The flag takes no
@@ -66,7 +70,7 @@ pub struct LoginArgs {
     /// Must match an entry in the IdP's allow-list **byte-for-byte** — a
     /// different port produces the same "callback URL mismatch" failure
     /// as no entry at all. Defaults to 5555.
-    #[arg(long)]
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
     pub callback_port: Option<u16>,
 }
 
@@ -81,19 +85,25 @@ pub enum Method {
     Device,
 }
 
-pub async fn run(args: LoginArgs, profile_name: &str) -> Result<()> {
+pub async fn run(args: LoginArgs, profile_name: &str, store: &CredentialStore) -> Result<()> {
     let method = resolve_method(&args)?;
-    let url = resolve_target(&args)?;
+    let stored_url = store.load_named(profile_name)?.map(|profile| profile.url);
+    let url = resolve_target(&args, stored_url.as_deref())?;
 
     match method {
-        Method::ApiKey => api_key::run(Some(&url), args.api_key_stdin, profile_name).await,
-        Method::Browser => run_browser(&args, &url, profile_name).await,
-        Method::Device => run_device(&args, &url, profile_name).await,
+        Method::ApiKey => api_key::run(Some(&url), args.api_key_stdin, profile_name, store).await,
+        Method::Browser => run_browser(&args, &url, profile_name, store).await,
+        Method::Device => run_device(&args, &url, profile_name, store).await,
     }
 }
 
 /// Browser-based OIDC login.
-async fn run_browser(args: &LoginArgs, url: &str, profile_name: &str) -> Result<()> {
+async fn run_browser(
+    args: &LoginArgs,
+    url: &str,
+    profile_name: &str,
+    store: &CredentialStore,
+) -> Result<()> {
     let http = discovery::http_client()?;
     let overrides = overrides_from_args(args);
     let cfg = discovery::resolve_config(url, &overrides, &http).await?;
@@ -101,16 +111,21 @@ async fn run_browser(args: &LoginArgs, url: &str, profile_name: &str) -> Result<
         .callback_port
         .unwrap_or(oidc::auth_code::DEFAULT_CALLBACK_PORT);
     let tokens = oidc::auth_code::run(&cfg, &http, port).await?;
-    persist_oidc(url, profile_name, &cfg, tokens).await
+    persist_oidc(url, profile_name, &cfg, tokens, store).await
 }
 
 /// Device-code OIDC login.
-async fn run_device(args: &LoginArgs, url: &str, profile_name: &str) -> Result<()> {
+async fn run_device(
+    args: &LoginArgs,
+    url: &str,
+    profile_name: &str,
+    store: &CredentialStore,
+) -> Result<()> {
     let http = discovery::http_client()?;
     let overrides = overrides_from_args(args);
     let cfg = discovery::resolve_config(url, &overrides, &http).await?;
     let tokens = oidc::device_code::run(&cfg, &http).await?;
-    persist_oidc(url, profile_name, &cfg, tokens).await
+    persist_oidc(url, profile_name, &cfg, tokens, store).await
 }
 
 /// Common tail: write tokens into a Profile, save under `profile_name`,
@@ -121,6 +136,7 @@ async fn persist_oidc(
     profile_name: &str,
     cfg: &OidcConfig,
     tokens: OidcTokens,
+    store: &CredentialStore,
 ) -> Result<()> {
     // Confirm against `/v1/me` BEFORE saving — same contract as the API-key
     // flow. A working access token that the server rejects is the kind of
@@ -137,15 +153,14 @@ async fn persist_oidc(
     // `None` means the deployment doesn't use a routing slot;
     // URL builder skips the segment (`/v1/boxes/...`).
     profile.path_prefix = principal.path_prefix.clone();
-    credentials::save_named(profile_name, &profile).context("saving credentials")?;
+    store
+        .save_named(profile_name, &profile)
+        .context("saving credentials")?;
 
     let who = principal.email.as_deref().unwrap_or(principal.sub.as_str());
     match principal.path_prefix.as_deref() {
         Some(path_prefix) => println!("Logged in as {} (path prefix: {})", who, path_prefix),
-        None => println!(
-            "Logged in as {} (no path prefix; use --path-prefix or BOXLITE_REST_PATH_PREFIX for multi-tenant servers)",
-            who
-        ),
+        None => println!("Logged in as {} (the server returned no path prefix)", who),
     }
     Ok(())
 }
@@ -179,26 +194,49 @@ fn overrides_from_args(args: &LoginArgs) -> DiscoveryOverrides {
 /// we read the environment: a non-TTY stdin → `api-key` (CI), `--no-browser`
 /// → `device`, otherwise prompt the user with a `dialoguer::Select`.
 fn resolve_method(args: &LoginArgs) -> Result<Method> {
-    if args.api_key_stdin {
-        return Ok(Method::ApiKey);
-    }
-    if let Some(m) = args.method {
+    let method = if args.api_key_stdin {
+        Method::ApiKey
+    } else if let Some(m) = args.method {
         // Honor the explicit choice even on a TTY.
-        return Ok(if args.no_browser && m == Method::Browser {
-            Method::Device
-        } else {
-            m
-        });
-    }
-    if args.no_browser {
-        return Ok(Method::Device);
-    }
-    if !std::io::stdin().is_terminal() {
+        m
+    } else if args.no_browser {
+        Method::Device
+    } else if !std::io::stdin().is_terminal() {
         // Piped stdin: keep `echo $KEY | boxlite auth login --api-key-stdin`
         // working when callers forget the flag — never block on a prompt.
-        return Ok(Method::ApiKey);
+        Method::ApiKey
+    } else {
+        prompt_method()?
+    };
+    validate_method_options(args, method)?;
+    Ok(method)
+}
+
+fn validate_method_options(args: &LoginArgs, method: Method) -> Result<()> {
+    if args.api_key_stdin && args.method.is_some_and(|method| method != Method::ApiKey) {
+        bail!("--api-key-stdin cannot be combined with a non-api-key --method");
     }
-    prompt_method()
+    if args.no_browser && args.method == Some(Method::Browser) {
+        bail!("--no-browser cannot be combined with --method browser");
+    }
+    if method == Method::ApiKey {
+        if args.no_browser {
+            bail!("--no-browser cannot be used with --method api-key");
+        }
+        for (flag, is_set) in [
+            ("--issuer", args.issuer.is_some()),
+            ("--client-id", args.client_id.is_some()),
+            ("--audience", args.audience.is_some()),
+        ] {
+            if is_set {
+                bail!("{flag} applies only to browser or device login");
+            }
+        }
+    }
+    if method != Method::Browser && args.callback_port.is_some() {
+        bail!("--callback-port applies only to browser login");
+    }
+    Ok(())
 }
 
 /// Interactive picker for the three flows. Lives behind a TTY check so
@@ -254,14 +292,19 @@ fn prompt_method() -> Result<Method> {
 //     `--url http://localhost:8100` because the URL clearly belongs to a
 //     different profile.
 // =============================================================================
-fn resolve_target(args: &LoginArgs) -> Result<String> {
+fn resolve_target(args: &LoginArgs, stored_url: Option<&str>) -> Result<String> {
     if let Some(url) = args.url.as_deref() {
         return Ok(url.to_string());
     }
-    if let Ok(env_url) = std::env::var(URL_ENV)
-        && !env_url.is_empty()
-    {
-        return Ok(env_url);
+    match std::env::var(URL_ENV) {
+        Ok(env_url) if !env_url.is_empty() => return Ok(env_url),
+        Ok(_) | Err(std::env::VarError::NotPresent) => {}
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("{URL_ENV} must contain valid UTF-8")
+        }
+    }
+    if let Some(stored_url) = stored_url.filter(|url| !url.is_empty()) {
+        return Ok(stored_url.to_string());
     }
     Ok(LOCAL_SERVE_URL.to_string())
 }
@@ -296,15 +339,14 @@ fn should_use_device_flow() -> bool {
 mod tests {
     use super::*;
 
-    /// `--api-key-stdin` forces api-key even if the user also passed
-    /// `--method browser` (which the rest of the surface would otherwise
-    /// accept). Stops a careless CI script from silently switching flows.
+    /// `--api-key-stdin` selects the API-key flow when no redundant method is
+    /// supplied. Contradictory explicit methods are rejected separately.
     #[test]
-    fn api_key_stdin_forces_api_key_method() {
+    fn api_key_stdin_selects_api_key_method() {
         let args = LoginArgs {
             url: None,
             api_key_stdin: true,
-            method: Some(Method::Browser),
+            method: None,
             no_browser: false,
             issuer: None,
             client_id: None,
@@ -314,11 +356,10 @@ mod tests {
         assert_eq!(resolve_method(&args).unwrap(), Method::ApiKey);
     }
 
-    /// `--no-browser` + `--method browser` → device. The flag combination
-    /// is contradictory; this is the only one we silently resolve rather
-    /// than reject — `--no-browser` is the more specific intent.
+    /// An explicit browser method contradicts `--no-browser`; neither flag is
+    /// silently allowed to override the other.
     #[test]
-    fn no_browser_overrides_browser_method() {
+    fn no_browser_rejects_browser_method() {
         let args = LoginArgs {
             url: None,
             api_key_stdin: false,
@@ -329,7 +370,67 @@ mod tests {
             audience: None,
             callback_port: None,
         };
-        assert_eq!(resolve_method(&args).unwrap(), Method::Device);
+        assert!(resolve_method(&args).is_err());
+    }
+
+    #[test]
+    fn login_rejects_options_the_selected_method_cannot_use() {
+        let cases = [
+            LoginArgs {
+                url: None,
+                api_key_stdin: false,
+                method: Some(Method::ApiKey),
+                no_browser: true,
+                issuer: None,
+                client_id: None,
+                audience: None,
+                callback_port: None,
+            },
+            LoginArgs {
+                url: None,
+                api_key_stdin: false,
+                method: Some(Method::ApiKey),
+                no_browser: false,
+                issuer: Some("https://issuer.example.test".to_string()),
+                client_id: None,
+                audience: None,
+                callback_port: None,
+            },
+            LoginArgs {
+                url: None,
+                api_key_stdin: false,
+                method: Some(Method::Device),
+                no_browser: false,
+                issuer: None,
+                client_id: None,
+                audience: None,
+                callback_port: Some(5555),
+            },
+            LoginArgs {
+                url: None,
+                api_key_stdin: true,
+                method: Some(Method::Device),
+                no_browser: false,
+                issuer: None,
+                client_id: None,
+                audience: None,
+                callback_port: None,
+            },
+            LoginArgs {
+                url: None,
+                api_key_stdin: true,
+                method: Some(Method::Browser),
+                no_browser: false,
+                issuer: None,
+                client_id: None,
+                audience: None,
+                callback_port: None,
+            },
+        ];
+
+        for args in cases {
+            assert!(resolve_method(&args).is_err(), "accepted {args:?}");
+        }
     }
 
     /// Today's `resolve_target` falls back to the local serve URL — locks
@@ -354,6 +455,25 @@ mod tests {
             audience: None,
             callback_port: None,
         };
-        assert_eq!(resolve_target(&args).unwrap(), LOCAL_SERVE_URL);
+        assert_eq!(resolve_target(&args, None).unwrap(), LOCAL_SERVE_URL);
+    }
+
+    #[test]
+    fn resolve_target_reuses_the_selected_profiles_url() {
+        let args = LoginArgs {
+            url: None,
+            api_key_stdin: true,
+            method: None,
+            no_browser: false,
+            issuer: None,
+            client_id: None,
+            audience: None,
+            callback_port: None,
+        };
+
+        assert_eq!(
+            resolve_target(&args, Some("https://cloud.example.test")).unwrap(),
+            "https://cloud.example.test"
+        );
     }
 }

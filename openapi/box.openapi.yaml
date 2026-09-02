@@ -926,6 +926,12 @@ paths:
       description: |
         Uploads a tar archive and extracts it at the specified path
         inside the container. The box must be running.
+
+        Transfer operates on the container's root filesystem. A destination
+        at or under a mount inside the container, or an archive entry that
+        would land on one, is rejected with `400` — such a write would not be
+        visible to processes in the box. Extracted files are owned by the
+        container's configured user.
       tags: [Files]
       parameters:
         - name: path
@@ -952,6 +958,8 @@ paths:
       responses:
         "204":
           description: Upload successful
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
@@ -963,6 +971,11 @@ paths:
       description: |
         Downloads files from the specified path inside the container
         as a tar archive. The box must be running.
+
+        Transfer operates on the container's root filesystem. A source at or
+        under a mount inside the container, or a directory containing one, is
+        rejected with `400` — the archive would carry the underlying files
+        rather than the ones processes in the box see.
       tags: [Files]
       parameters:
         - name: path
@@ -986,6 +999,8 @@ paths:
               schema:
                 type: string
                 format: binary
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
@@ -1609,7 +1624,7 @@ components:
             - UnsupportedError
             - AuthError
             - NotFoundError
-            - SessionReaped
+            - SessionReapedError
             - AlreadyExistsError
             - InvalidStateError
             - StoppedError

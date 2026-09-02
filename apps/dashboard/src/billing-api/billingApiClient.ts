@@ -13,6 +13,7 @@ import {
   OrganizationWallet,
   PaginatedInvoices,
   PaginatedPaymentMethods,
+  PaginatedWalletTransactions,
   PaymentMethod,
   PaymentUrl,
   Plan,
@@ -182,6 +183,24 @@ export class BillingApiClient {
     }
     const queryString = params.toString()
     const url = `/organization/${organizationId}/invoices${queryString ? `?${queryString}` : ''}`
+    const response = await this.axiosInstance.get(url)
+    return response.data
+  }
+
+  public async listWalletTransactions(
+    organizationId: string,
+    page?: number,
+    perPage?: number,
+  ): Promise<PaginatedWalletTransactions> {
+    const params = new URLSearchParams()
+    if (page !== undefined) {
+      params.append('page', page.toString())
+    }
+    if (perPage !== undefined) {
+      params.append('perPage', perPage.toString())
+    }
+    const queryString = params.toString()
+    const url = `/organization/${organizationId}/wallet/transactions${queryString ? `?${queryString}` : ''}`
     const response = await this.axiosInstance.get(url)
     return response.data
   }

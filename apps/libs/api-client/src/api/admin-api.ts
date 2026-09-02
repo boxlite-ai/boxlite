@@ -22,7 +22,25 @@ import { DUMMY_BASE_URL, assertParamExists, setBearerAuthToObject, setSearchPara
 // @ts-ignore
 import { BASE_PATH, type RequestArgs, BaseAPI, operationServerMap } from '../base';
 // @ts-ignore
+import type { AdminBoxDetail } from '../models';
+// @ts-ignore
+import type { AdminBoxOverviewPage } from '../models';
+// @ts-ignore
+import type { AdminComponentIdentities } from '../models';
+// @ts-ignore
 import type { AdminCreateRunner } from '../models';
+// @ts-ignore
+import type { AdminJobOverview } from '../models';
+// @ts-ignore
+import type { AdminJobOverviewPage } from '../models';
+// @ts-ignore
+import type { AdminOrganizationDetail } from '../models';
+// @ts-ignore
+import type { AdminOrganizationOverviewPage } from '../models';
+// @ts-ignore
+import type { AdminRegionOverview } from '../models';
+// @ts-ignore
+import type { AdminRegionOverviewPage } from '../models';
 // @ts-ignore
 import type { AdminRunner } from '../models';
 // @ts-ignore
@@ -116,6 +134,227 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
+         * @summary Get box placement, health, and jobs
+         * @param {string} id Box ID
+         * @param {string} [jobCursor] Opaque job page cursor
+         * @param {number} [sectionLimit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetBoxOverview: async (id: string, jobCursor?: string, sectionLimit?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'id' is not null or undefined
+            assertParamExists('adminGetBoxOverview', 'id', id)
+            const localVarPath = `/admin/boxes/{id}`
+                .replace('{id}', encodeURIComponent(String(id)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (jobCursor !== undefined) {
+                localVarQueryParameter['jobCursor'] = jobCursor;
+            }
+
+            if (sectionLimit !== undefined) {
+                localVarQueryParameter['sectionLimit'] = sectionLimit;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Get API and runner version identities
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetComponentIdentities: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/component-identities`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Get a job with sanitized failure category
+         * @param {string} id Job ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetJobOverview: async (id: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'id' is not null or undefined
+            assertParamExists('adminGetJobOverview', 'id', id)
+            const localVarPath = `/admin/jobs/{id}`
+                .replace('{id}', encodeURIComponent(String(id)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Get organization operational detail
+         * @param {string} organizationId Organization ID
+         * @param {string} [memberCursor] Opaque member page cursor
+         * @param {string} [boxCursor] Opaque box page cursor
+         * @param {number} [sectionLimit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetOrganizationOverview: async (organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('adminGetOrganizationOverview', 'organizationId', organizationId)
+            const localVarPath = `/admin/organizations/{organizationId}`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (memberCursor !== undefined) {
+                localVarQueryParameter['memberCursor'] = memberCursor;
+            }
+
+            if (boxCursor !== undefined) {
+                localVarQueryParameter['boxCursor'] = boxCursor;
+            }
+
+            if (sectionLimit !== undefined) {
+                localVarQueryParameter['sectionLimit'] = sectionLimit;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Get region capacity and health
+         * @param {string} id Region ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetRegion: async (id: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'id' is not null or undefined
+            assertParamExists('adminGetRegion', 'id', id)
+            const localVarPath = `/admin/regions/{id}`
+                .replace('{id}', encodeURIComponent(String(id)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -142,6 +381,195 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary List boxes with placement and health
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListBoxesOverview: async (cursor?: string, limit?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/boxes`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (cursor !== undefined) {
+                localVarQueryParameter['cursor'] = cursor;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary List jobs with sanitized failure categories
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListJobsOverview: async (cursor?: string, limit?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/jobs`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (cursor !== undefined) {
+                localVarQueryParameter['cursor'] = cursor;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary List organization operational summaries
+         * @param {string} [q] Organization ID or name
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListOrganizationsOverview: async (q?: string, cursor?: string, limit?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/organizations`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (q !== undefined) {
+                localVarQueryParameter['q'] = q;
+            }
+
+            if (cursor !== undefined) {
+                localVarQueryParameter['cursor'] = cursor;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary List regions with capacity and health
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListRegions: async (cursor?: string, limit?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/regions`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (cursor !== undefined) {
+                localVarQueryParameter['cursor'] = cursor;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
@@ -311,6 +739,75 @@ export const AdminApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Get box placement, health, and jobs
+         * @param {string} id Box ID
+         * @param {string} [jobCursor] Opaque job page cursor
+         * @param {number} [sectionLimit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetBoxOverview(id: string, jobCursor?: string, sectionLimit?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminBoxDetail>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetBoxOverview(id, jobCursor, sectionLimit, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetBoxOverview']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Get API and runner version identities
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetComponentIdentities(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminComponentIdentities>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetComponentIdentities(options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetComponentIdentities']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Get a job with sanitized failure category
+         * @param {string} id Job ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetJobOverview(id: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminJobOverview>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetJobOverview(id, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetJobOverview']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Get organization operational detail
+         * @param {string} organizationId Organization ID
+         * @param {string} [memberCursor] Opaque member page cursor
+         * @param {string} [boxCursor] Opaque box page cursor
+         * @param {number} [sectionLimit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationDetail>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetOrganizationOverview']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Get region capacity and health
+         * @param {string} id Region ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetRegion(id: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminRegionOverview>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetRegion(id, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetRegion']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -320,6 +817,63 @@ export const AdminApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetRunnerById(id, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetRunnerById']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary List boxes with placement and health
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminListBoxesOverview(cursor?: string, limit?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminBoxOverviewPage>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListBoxesOverview(cursor, limit, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListBoxesOverview']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary List jobs with sanitized failure categories
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminListJobsOverview(cursor?: string, limit?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminJobOverviewPage>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListJobsOverview(cursor, limit, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListJobsOverview']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary List organization operational summaries
+         * @param {string} [q] Organization ID or name
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationOverviewPage>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListOrganizationsOverview(q, cursor, limit, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListOrganizationsOverview']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary List regions with capacity and health
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminListRegions(cursor?: string, limit?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminRegionOverviewPage>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListRegions(cursor, limit, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListRegions']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -392,6 +946,60 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
         },
         /**
          * 
+         * @summary Get box placement, health, and jobs
+         * @param {string} id Box ID
+         * @param {string} [jobCursor] Opaque job page cursor
+         * @param {number} [sectionLimit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetBoxOverview(id: string, jobCursor?: string, sectionLimit?: number, options?: RawAxiosRequestConfig): AxiosPromise<AdminBoxDetail> {
+            return localVarFp.adminGetBoxOverview(id, jobCursor, sectionLimit, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Get API and runner version identities
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetComponentIdentities(options?: RawAxiosRequestConfig): AxiosPromise<AdminComponentIdentities> {
+            return localVarFp.adminGetComponentIdentities(options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Get a job with sanitized failure category
+         * @param {string} id Job ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetJobOverview(id: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminJobOverview> {
+            return localVarFp.adminGetJobOverview(id, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Get organization operational detail
+         * @param {string} organizationId Organization ID
+         * @param {string} [memberCursor] Opaque member page cursor
+         * @param {string} [boxCursor] Opaque box page cursor
+         * @param {number} [sectionLimit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationDetail> {
+            return localVarFp.adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Get region capacity and health
+         * @param {string} id Region ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetRegion(id: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminRegionOverview> {
+            return localVarFp.adminGetRegion(id, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -399,6 +1007,51 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          */
         adminGetRunnerById(id: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminRunner> {
             return localVarFp.adminGetRunnerById(id, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary List boxes with placement and health
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListBoxesOverview(cursor?: string, limit?: number, options?: RawAxiosRequestConfig): AxiosPromise<AdminBoxOverviewPage> {
+            return localVarFp.adminListBoxesOverview(cursor, limit, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary List jobs with sanitized failure categories
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListJobsOverview(cursor?: string, limit?: number, options?: RawAxiosRequestConfig): AxiosPromise<AdminJobOverviewPage> {
+            return localVarFp.adminListJobsOverview(cursor, limit, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary List organization operational summaries
+         * @param {string} [q] Organization ID or name
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationOverviewPage> {
+            return localVarFp.adminListOrganizationsOverview(q, cursor, limit, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary List regions with capacity and health
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {number} [limit] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListRegions(cursor?: string, limit?: number, options?: RawAxiosRequestConfig): AxiosPromise<AdminRegionOverviewPage> {
+            return localVarFp.adminListRegions(cursor, limit, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -461,6 +1114,65 @@ export class AdminApi extends BaseAPI {
 
     /**
      * 
+     * @summary Get box placement, health, and jobs
+     * @param {string} id Box ID
+     * @param {string} [jobCursor] Opaque job page cursor
+     * @param {number} [sectionLimit] 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetBoxOverview(id: string, jobCursor?: string, sectionLimit?: number, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetBoxOverview(id, jobCursor, sectionLimit, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Get API and runner version identities
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetComponentIdentities(options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetComponentIdentities(options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Get a job with sanitized failure category
+     * @param {string} id Job ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetJobOverview(id: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetJobOverview(id, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Get organization operational detail
+     * @param {string} organizationId Organization ID
+     * @param {string} [memberCursor] Opaque member page cursor
+     * @param {string} [boxCursor] Opaque box page cursor
+     * @param {number} [sectionLimit] 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Get region capacity and health
+     * @param {string} id Region ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetRegion(id: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetRegion(id, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Get runner by ID
      * @param {string} id Runner ID
      * @param {*} [options] Override http request option.
@@ -468,6 +1180,55 @@ export class AdminApi extends BaseAPI {
      */
     public adminGetRunnerById(id: string, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminGetRunnerById(id, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary List boxes with placement and health
+     * @param {string} [cursor] Opaque cursor returned by the previous page
+     * @param {number} [limit] 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminListBoxesOverview(cursor?: string, limit?: number, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListBoxesOverview(cursor, limit, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary List jobs with sanitized failure categories
+     * @param {string} [cursor] Opaque cursor returned by the previous page
+     * @param {number} [limit] 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminListJobsOverview(cursor?: string, limit?: number, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListJobsOverview(cursor, limit, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary List organization operational summaries
+     * @param {string} [q] Organization ID or name
+     * @param {string} [cursor] Opaque cursor returned by the previous page
+     * @param {number} [limit] 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListOrganizationsOverview(q, cursor, limit, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary List regions with capacity and health
+     * @param {string} [cursor] Opaque cursor returned by the previous page
+     * @param {number} [limit] 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminListRegions(cursor?: string, limit?: number, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListRegions(cursor, limit, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

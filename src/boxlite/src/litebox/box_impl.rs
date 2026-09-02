@@ -825,13 +825,19 @@ impl BoxImpl {
     // FILE COPY
     // ========================================================================
 
-    // NOTE(copy_in): copy_in cannot write to tmpfs-mounted destinations (e.g. /tmp, /dev/shm).
+    // NOTE(copy_in): destinations under a container mount (e.g. /tmp, /dev/shm,
+    // volumes) are refused, not transferred.
     //
-    // Extraction happens on the rootfs layer, but tmpfs mounts inside the container
-    // hide those files. This is the same limitation as `docker cp`.
-    // See: https://github.com/moby/moby/issues/22020
+    // Transfer works on the rootfs layer from outside the container's mount
+    // namespace, so a path under one of those mounts resolves to a different
+    // inode than the one the workload sees: writes would be invisible forever
+    // and reads would return the shadowed layer. `docker cp` has the same
+    // blind spot and answers from the shadow silently
+    // (https://github.com/moby/moby/issues/22020 — note that issue is the
+    // read direction); we refuse instead.
     //
-    // Workaround: use exec() to pipe tar into the container:
+    // Workaround: use exec() to pipe tar into the container, which runs inside
+    // the namespace and therefore sees the real mount:
     //   exec(["tar", "xf", "-", "-C", "/tmp"]) + stream tar bytes via stdin
     pub(crate) async fn copy_into(
         &self,
@@ -862,15 +868,20 @@ impl BoxImpl {
             ));
         }
 
-        let temp_tar = self.runtime.layout.temp_dir().join(format!(
-            "cp-in-{}-{}.tar",
-            self.config.id.as_str(),
-            uuid::Uuid::new_v4()
-        ));
+        // `TempPath` owns the deletion. Refusing an unreachable destination is
+        // a routine outcome now, and every refusal returns through the `?` on
+        // `upload_tar` — which used to leave the staged tar in the temp dir for
+        // good.
+        let temp_tar = tempfile::Builder::new()
+            .prefix(&format!("cp-in-{}-", self.config.id.as_str()))
+            .suffix(".tar")
+            .tempfile_in(self.runtime.layout.temp_dir())
+            .map_err(|e| BoxliteError::Storage(format!("failed to stage copy archive: {e}")))?
+            .into_temp_path();
 
         boxlite_shared::tar::pack(
             host_src.to_path_buf(),
-            temp_tar.clone(),
+            temp_tar.to_path_buf(),
             boxlite_shared::tar::PackContext {
                 follow_symlinks: opts.follow_symlinks,
                 include_parent: opts.include_parent,
@@ -888,8 +899,6 @@ impl BoxImpl {
                 opts.overwrite,
             )
             .await?;
-
-        let _ = tokio::fs::remove_file(&temp_tar).await;
 
         for listener in &self.event_listeners {
             listener.on_file_copied_in(
@@ -932,11 +941,15 @@ impl BoxImpl {
             return Err(BoxliteError::Config("source path cannot be empty".into()));
         }
 
-        let temp_tar = self.runtime.layout.temp_dir().join(format!(
-            "cp-out-{}-{}.tar",
-            self.config.id.as_str(),
-            uuid::Uuid::new_v4()
-        ));
+        // Same as `copy_into`: a refused source and a failed extraction both
+        // return through a `?`, so the deletion belongs to the value, not to
+        // the one path that reaches the end.
+        let temp_tar = tempfile::Builder::new()
+            .prefix(&format!("cp-out-{}-", self.config.id.as_str()))
+            .suffix(".tar")
+            .tempfile_in(self.runtime.layout.temp_dir())
+            .map_err(|e| BoxliteError::Storage(format!("failed to stage copy archive: {e}")))?
+            .into_temp_path();
 
         let mut files_iface = live.guest_session.files().await?;
         files_iface
@@ -950,7 +963,7 @@ impl BoxImpl {
             .await?;
 
         boxlite_shared::tar::unpack(
-            temp_tar.clone(),
+            temp_tar.to_path_buf(),
             host_dst.to_path_buf(),
             boxlite_shared::tar::UnpackContext {
                 overwrite: opts.overwrite,
@@ -959,7 +972,6 @@ impl BoxImpl {
             },
         )
         .await?;
-        let _ = tokio::fs::remove_file(&temp_tar).await;
 
         for listener in &self.event_listeners {
             listener.on_file_copied_out(

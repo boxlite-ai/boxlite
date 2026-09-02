@@ -67,10 +67,6 @@ def test_node_sdk_tunnel_proxies_http_from_rest_box(node_tunnel_env):
     _assert_node_tunnel_passes(_run_node_tunnel(node_tunnel_env))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="stopped boxes may remain reachable through existing tunnel routing",
-)
 def test_node_sdk_tunnel_rejects_stopped_box(node_tunnel_env):
     env = {**node_tunnel_env}
     env.pop("BOXLITE_E2E_SKIP_STOPPED_BOX")

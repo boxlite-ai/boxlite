@@ -31,6 +31,9 @@ tracing-appender = "0.2"
 # HTTP server (serve subcommand)
 async-stream = "0.3"
 axum = { version = "0.8", features = ["macros", "ws"] }
+# Decoding the box spelling out of a raw request path. Already resolved for this
+# crate through axum and reqwest, so this adds an edge, not a new crate.
+percent-encoding = "2"
 base64 = "0.22"
 tar = "0.4"
 tempfile = "3"
@@ -79,12 +82,14 @@ gtmpl_value = "0.5"
 boxlite = { workspace = true, features = ["rest", "test-support"] }
 boxlite-test-utils = { path = "../test-utils" }
 assert_cmd = "2.1.1"
-futures-util = "0.3"
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect"] }
 predicates = "3.1.3"
 rstest = "0.21"
 socket2 = "0.6"
 tempfile = "3.24.0"
+# A WebSocket client, to drive `run_attach_session` over a real socket. Already
+# resolved and compiled for this crate — axum pulls the same 0.29 for the server
+# half — so this line adds a test-only path to it, not a new dependency.
+tokio-tungstenite = "0.29"
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/boxlite-cli-v{ version }-{ target }.tar.gz"

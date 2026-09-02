@@ -61,8 +61,10 @@ func TestIntegrationAllowNet(t *testing.T) {
 		rt,
 		"alpine:latest",
 		WithNetwork(NetworkSpec{
-			Mode:     NetworkModeEnabled,
-			AllowNet: []string{"example.com"},
+			Outbound: OutboundNetworkSpec{
+				Mode:     NetworkModeEnabled,
+				AllowNet: []string{"example.com"},
+			},
 		}),
 		WithAutoRemove(false),
 	)
@@ -94,8 +96,10 @@ func TestIntegrationSecretSubstitution(t *testing.T) {
 		rt,
 		"python:slim",
 		WithNetwork(NetworkSpec{
-			Mode:     NetworkModeEnabled,
-			AllowNet: []string{"httpbingo.org"},
+			Outbound: OutboundNetworkSpec{
+				Mode:     NetworkModeEnabled,
+				AllowNet: []string{"httpbingo.org"},
+			},
 		}),
 		WithSecret(Secret{
 			Name:  "testkey",

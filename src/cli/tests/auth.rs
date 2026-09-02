@@ -102,6 +102,14 @@ fn creds_path(home: &TempDir) -> std::path::PathBuf {
     home.path().join("credentials.toml")
 }
 
+fn write_api_key_profile(home: &TempDir, url: &str) {
+    std::fs::write(
+        creds_path(home),
+        format!("[profiles.default]\nurl = {url:?}\napi_key = \"k_test\"\n"),
+    )
+    .unwrap();
+}
+
 #[test]
 fn login_success_prints_identity_and_saves() {
     let stub = Stub::start(|_m, path| match path {
@@ -218,6 +226,63 @@ fn status_is_offline_and_reports_source() {
         .stdout(predicate::str::contains("Not logged in"));
 }
 
+#[test]
+fn status_applies_an_explicit_url_to_a_stored_profile() {
+    let home = TempDir::new().unwrap();
+    write_api_key_profile(&home, "https://stored.example.test");
+
+    auth_cmd(&home)
+        .args(["auth", "status", "--url", "https://override.example.test"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Logged in to:    https://override.example.test",
+        ));
+}
+
+#[test]
+fn whoami_applies_an_explicit_url_to_a_stored_profile() {
+    let stub = Stub::start(|_m, path| match path {
+        "/v1/me" => (200, PRINCIPAL_JSON.to_string()),
+        _ => (404, NOT_FOUND_JSON.to_string()),
+    });
+    let home = TempDir::new().unwrap();
+    write_api_key_profile(&home, "http://127.0.0.1:1");
+
+    auth_cmd(&home)
+        .args(["auth", "whoami", "--url", &stub.url()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Server:          {}",
+            stub.url()
+        )));
+}
+
+#[test]
+fn malformed_credentials_never_fall_back_to_the_local_runtime() {
+    let home = TempDir::new().unwrap();
+    std::fs::write(creds_path(&home), "[profiles.default\n").unwrap();
+
+    auth_cmd(&home)
+        .args(["list"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("parsing credentials file"));
+}
+
+#[test]
+fn logout_reports_a_malformed_credential_store() {
+    let home = TempDir::new().unwrap();
+    std::fs::write(creds_path(&home), "[profiles.default\n").unwrap();
+
+    auth_cmd(&home)
+        .args(["auth", "logout", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("parsing credentials file"));
+}
+
 /// Regression: `BOXLITE_API_KEY=""` (an empty-but-set env var, easy to
 /// produce from `export BOXLITE_API_KEY=$VAR_THAT_IS_UNSET`) used to make
 /// `auth status` report "Logged in (env)" while every actual authenticated
@@ -235,4 +300,36 @@ fn status_treats_empty_env_api_key_as_not_logged_in() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Not logged in"));
+}
+
+#[test]
+fn status_treats_an_empty_url_environment_value_as_unset() {
+    let home = TempDir::new().unwrap();
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("boxlite"));
+    cmd.env("BOXLITE_HOME", home.path())
+        .env("BOXLITE_API_KEY", "k_test")
+        .env("BOXLITE_REST_URL", "")
+        .timeout(Duration::from_secs(30));
+    cmd.args(["auth", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Logged in to:    http://localhost:8100",
+        ));
+}
+
+#[test]
+fn relative_home_environment_value_is_rejected_for_auth_too() {
+    let working = TempDir::new().unwrap();
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("boxlite"));
+    cmd.current_dir(working.path())
+        .env("BOXLITE_HOME", "relative-home")
+        .env_remove("BOXLITE_API_KEY")
+        .env_remove("BOXLITE_REST_URL")
+        .timeout(Duration::from_secs(30));
+    cmd.args(["auth", "status"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("must be an absolute path"));
 }

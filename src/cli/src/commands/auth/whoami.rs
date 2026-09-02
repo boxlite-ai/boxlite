@@ -9,15 +9,16 @@ use anyhow::{Context, Result, anyhow};
 use boxlite::{BoxliteError, BoxliteRestOptions, BoxliteRuntime};
 use secrecy::SecretString;
 
+use crate::cli::GlobalFlags;
 use crate::commands::auth::oidc::discovery;
-use crate::credentials::{self, Profile};
+use crate::credentials::{CredentialStore, Profile};
 use crate::defaults::LOCAL_SERVE_URL;
 
 const API_KEY_ENV: &str = "BOXLITE_API_KEY";
-const URL_ENV: &str = "BOXLITE_REST_URL";
 
-pub async fn run(profile_name: &str) -> Result<()> {
-    let Some(opts) = resolve_options(profile_name).await? else {
+pub async fn run(global: &GlobalFlags, store: &CredentialStore) -> Result<()> {
+    let profile_name = global.resolved_profile();
+    let Some(opts) = resolve_options(global, store).await? else {
         println!("Not logged in (profile `{}`).", profile_name);
         return Ok(());
     };
@@ -67,26 +68,40 @@ pub async fn run(profile_name: &str) -> Result<()> {
 
 /// Active credential, ready to attach to a REST runtime.
 ///
-/// `$BOXLITE_API_KEY` (+ `$BOXLITE_REST_URL`) wins over the stored profile,
-/// matching the runtime precedence used elsewhere
-/// (`GlobalFlags::create_runtime`, `auth status`). The env path returns a
-/// fresh `BoxliteRestOptions` directly; the file path goes through
-/// [`credentials::load_active`], which is also where OIDC tokens get
+/// `$BOXLITE_API_KEY` (+ `$BOXLITE_REST_URL`) wins over the stored profile.
+/// An API key without a URL targets the zero-config local `serve` endpoint
+/// for this auth probe; ordinary box commands still default to the embedded
+/// runtime. The env path returns fresh `BoxliteRestOptions`; the file path goes through
+/// [`CredentialStore::load_active`], which is also where OIDC tokens get
 /// refreshed when they are about to expire.
-async fn resolve_options(profile_name: &str) -> Result<Option<BoxliteRestOptions>> {
+async fn resolve_options(
+    global: &GlobalFlags,
+    store: &CredentialStore,
+) -> Result<Option<BoxliteRestOptions>> {
+    let profile_name = global.resolved_profile();
     if let Ok(api_key) = std::env::var(API_KEY_ENV)
         && !api_key.is_empty()
     {
-        let url = std::env::var(URL_ENV).unwrap_or_else(|_| LOCAL_SERVE_URL.to_string());
+        let stored = store.load_named(&profile_name)?;
+        if let Some(options) = global.resolve_rest_options(stored, Some(api_key.clone())) {
+            return Ok(Some(options));
+        }
         let profile = Profile {
-            url,
+            url: LOCAL_SERVE_URL.to_string(),
             api_key: Some(SecretString::from(api_key)),
             ..Profile::default()
         };
-        return Ok(Some(credentials::into_rest_options(profile)));
+        return Ok(Some(crate::credentials::into_rest_options(profile)));
     }
     let http = discovery::http_client()?;
-    credentials::load_active(profile_name, &http)
+    let mut options = store
+        .load_active(&profile_name, &http)
         .await
-        .context("loading stored credentials")
+        .context("loading stored credentials")?;
+    if let Some(options) = options.as_mut()
+        && let Some(url) = global.url.as_ref().filter(|url| !url.is_empty())
+    {
+        options.url = url.clone();
+    }
+    Ok(options)
 }

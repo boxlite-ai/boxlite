@@ -1778,6 +1778,58 @@ test('API publishing builds once and promotes that exact image without rebuildin
   assertShellLine(promoteRun, /if \[ "\$promoted" != "\$SOURCE_DIGEST" \]; then/)
 })
 
+test('promotion reads the source stage in the source stage\'s own region', () => {
+  // The defect this guards, observed promoting 0.10.0 from dev to prod: an ECR registry is one
+  // account in ONE region, and `vars` resolves against the single Environment a job binds to —
+  // the target's. So every source lookup ran in the target's region. With dev in ap-southeast-1
+  // and prod in us-west-2 that read boxlite-app-dev-api out of us-west-2, where it does not
+  // exist, and the guard reported the image as never published while it sat in the other region.
+  // The IAM side already spans regions (ecr:* on Resource '*'), so region is the whole of it.
+  const workflow = load(readFileSync(API_IMAGE_BUILD_WORKFLOW, 'utf8')) as any
+  const job = workflow.jobs.publish
+  const stepRun = (name: string) => job.steps.find((step: any) => step.name === name)?.run ?? ''
+
+  // Dispatch-only, like every other promote knob. The existing workflow_call assertion above
+  // pins that side by enumerating its inputs, so adding this one there fails there.
+  assert.equal(workflow.on.workflow_dispatch.inputs.source_region.required, false)
+  assert.equal(workflow.on.workflow_dispatch.inputs.source_region.default, '')
+
+  // Unset falls back to the target's region, which is what a same-region promote wants and what
+  // the workflow did unconditionally before. The order matters: the input has to win.
+  assert.equal(job.env.SOURCE_REGION, "${{ inputs.source_region || vars.AWS_REGION || 'ap-southeast-1' }}")
+  assert.equal(job.env.AWS_REGION, "${{ vars.AWS_REGION || 'ap-southeast-1' }}")
+
+  // A docker credential is per registry host, so the copy needs its own login when the source is
+  // elsewhere — the AWS-side grant does not carry docker.
+  const loginRun = stepRun('Log in to ECR')
+  assertShellLine(loginRun, /source_registry="\$\{account\}\.dkr\.ecr\.\$\{SOURCE_REGION\}\.amazonaws\.com"/)
+  assertShellLine(loginRun, /target_registry="\$\{account\}\.dkr\.ecr\.\$\{AWS_REGION\}\.amazonaws\.com"/)
+  assertShellLine(loginRun, /if \[ "\$source_registry" != "\$target_registry" \]; then/)
+  assertShellLine(loginRun, /get-login-password --region "\$SOURCE_REGION"/)
+  // $SOURCE is what the copy addresses; built from the target's registry it points at the wrong
+  // region however correct the digest is.
+  assertShellLine(loginRun, /echo "source=\$\{source_registry\}\/boxlite-app-\$\{SOURCE_STAGE\}-api"/)
+
+  const verifyRun = stepRun('Verify bootstrap repositories and target tag')
+  // The source read moves; the two target reads must not.
+  assertShellLine(verifyRun, /describe-images --region "\$SOURCE_REGION" --repository-name "\$source_name"/)
+  assertShellLine(verifyRun, /describe-repositories --region "\$AWS_REGION" --repository-names "\$target_name"/)
+  assertShellLine(verifyRun, /describe-images --region "\$AWS_REGION" --repository-name "\$target_name"/)
+  assert.doesNotMatch(
+    liveShell(verifyRun),
+    /describe-images --region "\$AWS_REGION" --repository-name "\$source_name"/,
+    'the source repository must never be read in the target region',
+  )
+  // Region in both refusals: "has not been published" with no location is what sent the operator
+  // looking for an unbuilt image instead of a misaddressed one.
+  assertShellLine(verifyRun, /was not found in \$SOURCE_REGION/)
+  assertShellLine(verifyRun, /has not been published in \$SOURCE_REGION/)
+  // `--query` on a present repository with an absent tag prints None and exits zero, so the `||`
+  // branch cannot catch it and the digest reaches the copy as "$SOURCE@None". Same hole as
+  // artifacts/api.ts:104, which is why the deploy side already guards it.
+  assertShellLine(verifyRun, /if \[ -z "\$source_digest" \] \|\| \[ "\$source_digest" = None \]; then/)
+})
+
 test('infrastructure tests cannot persist or write with the workflow token', () => {
   const source = readFileSync(LINT_WORKFLOW, 'utf8')
   const infraJobStart = source.indexOf('\n  infra:\n')

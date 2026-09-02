@@ -11,9 +11,9 @@ use tokio::sync::RwLock;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::credential::{AccessToken, Credential};
-use super::error::{map_http_error, map_http_status};
+use super::error::{map_http_body, map_http_status};
 use super::options::BoxliteRestOptions;
-use super::types::{ErrorResponse, FlatErrorResponse, ServerConfig};
+use super::types::ServerConfig;
 use crate::runtime::auth::Principal;
 
 /// Re-request a token once it is within this leeway of `expires_at`.
@@ -211,13 +211,7 @@ impl ApiClient {
         resp: reqwest::Response,
     ) -> BoxliteResult<T> {
         let text = resp.text().await.unwrap_or_default();
-        if let Ok(err_resp) = serde_json::from_str::<ErrorResponse>(&text) {
-            Err(map_http_error(status, &err_resp.error))
-        } else if let Ok(err_resp) = serde_json::from_str::<FlatErrorResponse>(&text) {
-            Err(map_http_error(status, &err_resp.into_error_model()))
-        } else {
-            Err(map_http_status(status, &text))
-        }
+        Err(map_http_body(status, &text))
     }
 
     // ========================================================================
@@ -630,6 +624,8 @@ mod tests {
     use super::ensure_capability;
     use super::*;
     use crate::rest::credential::{AccessToken, Credential};
+    use crate::rest::error::map_http_error;
+    use crate::rest::types::FlatErrorResponse;
     use async_trait::async_trait;
     use boxlite_shared::errors::BoxliteError;
     use std::sync::atomic::{AtomicUsize, Ordering};

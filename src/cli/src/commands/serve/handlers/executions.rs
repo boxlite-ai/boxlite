@@ -14,7 +14,7 @@ use futures::StreamExt;
 use super::super::types::{ExecRequest, ExecResponse, ResizeRequest, SignalRequest};
 use super::super::{
     ActiveExecution, AppState, MAIN_SESSION_ID_HEADER, SessionKind, build_box_command,
-    error_from_boxlite, error_response, get_or_attach_main_session, get_or_fetch_box,
+    error_from_boxlite, error_response, get_or_attach_main_session, get_or_resume_box,
 };
 
 pub(in crate::commands::serve) async fn start_execution(
@@ -22,7 +22,7 @@ pub(in crate::commands::serve) async fn start_execution(
     Path(box_id): Path<String>,
     Json(req): Json<ExecRequest>,
 ) -> Response {
-    let litebox = match get_or_fetch_box(&state, &box_id).await {
+    let litebox = match get_or_resume_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };
@@ -316,7 +316,7 @@ pub(in crate::commands::serve) async fn attach_execution(
         );
     }
 
-    upgrade_to_attach_session(ws, active, stdin_policy)
+    upgrade_to_attach_session(ws, active, state, stdin_policy)
 }
 
 /// Attach to the box's **main command session** — the container's init.
@@ -379,7 +379,7 @@ pub(in crate::commands::serve) async fn attach_box(
         }
     };
 
-    let mut response = upgrade_to_attach_session(ws, active, stdin_policy);
+    let mut response = upgrade_to_attach_session(ws, active, state, stdin_policy);
     response
         .headers_mut()
         .insert(MAIN_SESSION_ID_HEADER, header_value);
@@ -395,7 +395,8 @@ pub(in crate::commands::serve) async fn attach_box(
 fn upgrade_to_attach_session(
     ws: WebSocketUpgrade,
     active: Arc<ActiveExecution>,
-    stdin: StdinPolicy,
+    state: Arc<AppState>,
+    stdin_policy: StdinPolicy,
 ) -> Response {
     let failed_active = Arc::clone(&active);
     ws.on_failed_upgrade(move |_err| {
@@ -404,11 +405,27 @@ fn upgrade_to_attach_session(
         });
     })
     .on_upgrade(move |socket| async move {
-        run_attach_session(socket, active, stdin).await;
+        run_attach_session(socket, active, state, stdin_policy).await;
     })
 }
 
-async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, stdin: StdinPolicy) {
+/// Whether a client frame counts as the box being used.
+///
+/// Only real input does. An empty frame carries none — a keepalive or a flush
+/// must not hold a box open past its AutoStop window, which is the same reason
+/// `/metrics` and a bare status read are excluded from the request clock.
+/// `docs/architecture/auto-stop-resume-design.md` states the rule as "a
+/// non-empty client data frame".
+fn frame_is_activity(bytes: &[u8]) -> bool {
+    !bytes.is_empty()
+}
+
+async fn run_attach_session(
+    socket: WebSocket,
+    active: Arc<ActiveExecution>,
+    state: Arc<AppState>,
+    stdin_policy: StdinPolicy,
+) {
     let mut stdout_rx = active.stdout_bus().subscribe();
     let mut stderr_rx = active.stderr_bus().subscribe();
     let mut done_rx = active.done_rx();
@@ -419,6 +436,7 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, std
     let (ctrl_tx, mut ctrl_rx) = tokio::sync::mpsc::unbounded_channel::<CtrlOut>();
 
     let reader_active = Arc::clone(&active);
+    let reader_state = Arc::clone(&state);
     let mut reader = tokio::spawn(async move {
         // One rejection per kind: the reader keeps draining so the writer can
         // flush and close, and a peer that never reads must not be able to
@@ -431,13 +449,26 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, std
         while let Some(msg) = stream.next().await {
             match msg {
                 Ok(Message::Binary(bytes)) => {
-                    if stdin == StdinPolicy::Refuse {
+                    // Refused before counted: a rejected frame never reaches the
+                    // workload, so stamping activity here would let a read-only
+                    // peer hold a box open past AutoStop.
+                    if stdin_policy == StdinPolicy::Refuse {
                         if !refused_stdin {
                             refused_stdin = true;
                             let _ = ctrl_tx
                                 .send(CtrlOut::ClosePolicyViolation(read_only_rejection("stdin")));
                         }
                         continue;
+                    }
+                    // A client data frame is the box being used. The upgrade
+                    // alone is stamped once by the request middleware and never
+                    // again, and a Main session is excluded from the sweep's
+                    // busy set — so without this an interactive terminal is
+                    // AutoStopped under a typing user.
+                    if frame_is_activity(&bytes) {
+                        reader_state
+                            .record_box_activity(reader_active.box_id())
+                            .await;
                     }
                     let mut guard = reader_active.stdin().lock().await;
                     if let Some(ref mut stdin) = *guard
@@ -468,7 +499,7 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, std
                     };
                     match v.get("type").and_then(|t| t.as_str()) {
                         Some("resize") => {
-                            if stdin == StdinPolicy::Refuse {
+                            if stdin_policy == StdinPolicy::Refuse {
                                 if !refused_resize {
                                     refused_resize = true;
                                     let _ =
@@ -515,7 +546,7 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, std
                             }
                         }
                         Some("signal") => {
-                            if stdin == StdinPolicy::Refuse {
+                            if stdin_policy == StdinPolicy::Refuse {
                                 if !refused_signal {
                                     refused_signal = true;
                                     let _ =
@@ -559,7 +590,7 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, std
                             }
                         }
                         Some("stdin_eof") => {
-                            if stdin == StdinPolicy::Refuse {
+                            if stdin_policy == StdinPolicy::Refuse {
                                 if !refused_eof {
                                     refused_eof = true;
                                     let _ = ctrl_tx
@@ -732,4 +763,120 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, std
     };
     let _ = aborted.await;
     active.mark_disconnected().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use super::StdinPolicy;
+
+    use axum::extract::ws::WebSocketUpgrade;
+    use axum::routing::get;
+    use boxlite::BoxliteRuntime;
+    use futures::SinkExt;
+    use tokio::sync::RwLock;
+
+    use super::super::super::{ActiveExecution, AppState, SessionKind};
+    use super::{frame_is_activity, run_attach_session};
+
+    /// An interactive attach is the one path the request clock cannot see: the
+    /// upgrade is stamped once and a Main session is excluded from the sweep's
+    /// busy set, so these frames are the only thing keeping a typing user's box
+    /// alive. A keepalive must not do the same, or an idle terminal holds the
+    /// box open forever.
+    #[test]
+    fn only_a_non_empty_client_frame_counts_as_use() {
+        assert!(frame_is_activity(b"ls\n"));
+        assert!(frame_is_activity(&[0x03]), "a lone control byte is input");
+        assert!(!frame_is_activity(b""), "an empty frame carries no input");
+    }
+
+    /// ...and the attach session must actually call it.
+    ///
+    /// `frame_is_activity` being right proves nothing about whether anything
+    /// consults it. This is the one activity signal the request middleware
+    /// structurally cannot see — the upgrade is stamped once and never again,
+    /// and `busy_box_ids` deliberately excludes the Main session — so if this
+    /// write is dropped, a typing user's box is AutoStopped underneath them and
+    /// no other test notices.
+    ///
+    /// The session is driven directly over a real socket rather than through
+    /// `/v1/boxes/{id}/attach`, because the route resolves a box first and a
+    /// live VM is not what is under test here.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_client_frame_on_an_attach_stamps_the_idle_clock() {
+        use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+        let state = Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+                "http://127.0.0.1:1".to_string(),
+            ))
+            .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        });
+
+        // The stub's channels must stay alive for the length of the test.
+        // Dropping them closes the execution's result channel, which resolves
+        // `done_rx` immediately — the writer task then finishes and aborts the
+        // reader, and the frame below races a session that is already closing.
+        let (exec, _stdout_tx, _stderr_tx, _stdin_rx, _result_tx) =
+            boxlite::Execution::stub("container-1");
+        let active = ActiveExecution::new("typing-box".to_string(), SessionKind::Main, exec, None);
+
+        let app = {
+            let state = Arc::clone(&state);
+            axum::Router::new().route(
+                "/attach",
+                get(move |ws: WebSocketUpgrade| async move {
+                    ws.on_upgrade(move |socket| {
+                        run_attach_session(socket, active, state, StdinPolicy::Allow)
+                    })
+                }),
+            )
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let (mut socket, _) =
+            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/attach"))
+                .await
+                .expect("the attach session must accept a websocket client");
+
+        assert!(
+            !state.last_activity.read().await.contains_key("typing-box"),
+            "the upgrade alone is not use; only a client frame is"
+        );
+
+        socket
+            .send(ClientMessage::Binary(b"ls\n".to_vec().into()))
+            .await
+            .expect("send a keystroke");
+
+        // The stamp happens in the session's reader task, so poll rather than
+        // assume it has landed by the time `send` returns.
+        let stamped = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if state.last_activity.read().await.contains_key("typing-box") {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(
+            stamped.is_ok(),
+            "a client keystroke must reset the box's AutoStop window"
+        );
+
+        server.abort();
+    }
 }

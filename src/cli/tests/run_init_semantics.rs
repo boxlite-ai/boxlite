@@ -61,6 +61,46 @@ fn wait_for_stopped(ctx: &common::TestContext, name: &str, deadline: Duration) -
     last
 }
 
+/// After a detached `run`/`start`, the box has either won the start handoff
+/// (the stored command ran and the box stopped) or lost it — status `running`,
+/// but the creating CLI process exited before its background Container.Start
+/// was delivered, so the container was never started. A zombie is revived by
+/// exec: the guest re-issues the start itself when an exec lands on a
+/// not-yet-started container, the stored command runs once, and the box stops.
+/// Poll briefly; if the box is still running, fire one exec and ignore its
+/// result — either branch leaves the box stopped, which is what every caller
+/// asserts next.
+///
+/// Returns true when a revive exec was fired (the zombie branch).
+fn revive_if_zombie(ctx: &common::TestContext, name: &str, poll: Duration) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < poll {
+        let out = ctx
+            .new_cmd()
+            .args(["inspect", "-f", "{{.State.Status}}", name])
+            .output()
+            .expect("inspect runs");
+        assert!(
+            out.status.success(),
+            "inspect must succeed while polling {name}; stderr: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !status.is_empty() && status != "running" {
+            return false; // handoff won — already stopped
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    // Zombie: the exec triggers the guest-side revival; the exec itself may win
+    // or lose the race with the stop, so its result is deliberately not asserted.
+    let _ = ctx
+        .new_cmd()
+        .args(["exec", name, "--", "echo", "revive"])
+        .output()
+        .expect("exec runs");
+    true
+}
+
 /// S-PID1: the user command IS the container init (docker semantics).
 ///
 /// alpine's image config is ENTRYPOINT=[], CMD=["/bin/sh"]. Pre-fix, init is
@@ -137,6 +177,8 @@ fn test_init_semantics_detached_exit_updates_status() {
     ]);
     run.assert().success();
 
+    revive_if_zombie(&ctx, "init-sem-status", Duration::from_secs(8));
+
     let status = wait_for_stopped(&ctx, "init-sem-status", Duration::from_secs(30));
     assert!(
         status.contains("stopped") || status.contains("exited"),
@@ -203,6 +245,8 @@ fn test_init_semantics_create_stores_the_command_as_init() {
         .assert()
         .success();
 
+    revive_if_zombie(&ctx, "init-sem-create", Duration::from_secs(8));
+
     let stopped = wait_for_stopped(&ctx, "init-sem-create", Duration::from_secs(30));
     assert!(
         stopped.contains("stopped") || stopped.contains("exited"),
@@ -247,6 +291,8 @@ fn test_init_semantics_cp_from_a_finished_job_does_not_rerun_it() {
         ])
         .assert()
         .success();
+
+    revive_if_zombie(&ctx, "init-sem-cp", Duration::from_secs(8));
 
     let stopped = wait_for_stopped(&ctx, "init-sem-cp", Duration::from_secs(30));
     assert!(
@@ -368,6 +414,8 @@ fn test_init_semantics_exec_after_exit_refused_without_restarting() {
         .assert()
         .success();
 
+    revive_if_zombie(&ctx, "init-sem-exec", Duration::from_secs(8));
+
     let stopped = wait_for_stopped(&ctx, "init-sem-exec", Duration::from_secs(30));
     assert!(
         stopped.contains("stopped") || stopped.contains("exited"),
@@ -427,6 +475,8 @@ fn test_init_semantics_restart_reruns_init_and_rerecords_exit() {
         .assert()
         .success();
 
+    revive_if_zombie(&ctx, "init-sem-restart", Duration::from_secs(8));
+
     let stopped = wait_for_stopped(&ctx, "init-sem-restart", Duration::from_secs(30));
     assert!(
         stopped.contains("stopped") || stopped.contains("exited"),
@@ -444,6 +494,7 @@ fn test_init_semantics_restart_reruns_init_and_rerecords_exit() {
         .args(["start", "init-sem-restart"])
         .assert()
         .success();
+    revive_if_zombie(&ctx, "init-sem-restart", Duration::from_secs(8));
     let stopped = wait_for_stopped(&ctx, "init-sem-restart", Duration::from_secs(30));
     assert!(
         stopped.contains("stopped") || stopped.contains("exited"),

@@ -134,6 +134,27 @@ fn test_exec_env_override() {
 }
 
 #[test]
+fn test_exec_warns_when_inherited_host_env_is_missing() {
+    const MISSING: &str = "BOXLITE_TEST_MISSING_EXEC_ENV_33A6";
+    let mut ctx = common::boxlite();
+
+    ctx.cmd.args(["run", "-d", "alpine:latest", "sleep", "300"]);
+    let output = ctx.cmd.assert().success().get_output().clone();
+    let box_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    ctx.new_cmd()
+        .env_remove(MISSING)
+        .args(["exec", "-e", MISSING, &box_id, "--", "true"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(format!(
+            "Environment variable '{MISSING}' not found on host, skipping"
+        )));
+
+    cleanup(&ctx, &box_id);
+}
+
+#[test]
 fn test_exec_inherits_box_workdir() {
     let mut ctx = common::boxlite();
 

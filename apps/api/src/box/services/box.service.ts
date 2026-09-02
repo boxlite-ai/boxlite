@@ -12,7 +12,6 @@ import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
-import { RunnerState } from '../enums/runner-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { GetRunnerParams, RunnerService } from './runner.service'
 import { BoxError } from '../../exceptions/box-error.exception'
@@ -50,12 +49,10 @@ import {
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
-import { RedisLockProvider, withRedisLockLease } from '../common/redis-lock.provider'
 import { customAlphabet as customNanoid, nanoid, urlAlphabet } from 'nanoid'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { validateMountPaths, validateSubpaths } from '../utils/volume-mount-path-validation.util'
 import { BoxRepository } from '../repositories/box.repository'
-import { getRunnerAssignmentLockKey } from '../utils/lock-key.util'
 import { Job } from '../entities/job.entity'
 import { JobService } from './job.service'
 import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
@@ -109,7 +106,6 @@ export class BoxService {
     private readonly eventEmitter: EventEmitter2,
     private readonly organizationService: OrganizationService,
     private readonly runnerAdapterFactory: RunnerAdapterFactory,
-    private readonly redisLockProvider: RedisLockProvider,
     @InjectRedis() private readonly redis: Redis,
     private readonly regionService: RegionService,
     private readonly boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
@@ -123,49 +119,36 @@ export class BoxService {
     return `box:${id}:state-change`
   }
 
-  private async persistWithRunnerAssignmentFence(
+  /**
+   * Assigns `box` to a schedulable runner, then persists it.
+   *
+   * Nothing locks the runner row across the gap between the candidate query —
+   * which already filters out draining, unschedulable and non-READY runners —
+   * and the insert. A drain landing inside that gap therefore wins the row but
+   * not the box: the runner ends up marked draining with this box assigned to
+   * it. That is the deliberate trade, and it is how schedulers usually settle
+   * it: Nomad re-checks node eligibility only when the plan is applied
+   * (`evaluateNodePlan`, nomad/plan_apply.go:837-861, over a read-only memdb
+   * snapshot), and Kubernetes lets the kubelet reject a pod the scheduler
+   * already bound (`predicateAdmitHandler.Admit`,
+   * pkg/kubelet/lifecycle/predicate.go:118-207). A lock here buys a fence over
+   * milliseconds and charges every create for it — waiting behind runner
+   * lifecycle writers, and unable to tell "busy" from "unusable" when it loses.
+   *
+   * Draining is not a hard exclusion, it is "no new work, wait out the boxes
+   * already here". A box that slips in is one more box to wait out:
+   * `handleCheckDecommissionRunners` counts assignments before each transition
+   * and resets its counter while any remain, so the runner keeps draining and
+   * the box keeps running.
+   */
+  private async persistOnAvailableRunner(
     box: Box,
     runnerParams: GetRunnerParams,
     persist: () => Promise<Box>,
   ): Promise<Box> {
-    const excludedRunnerIds = [...(runnerParams.excludedRunnerIds ?? [])]
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const runner = await this.runnerService.getRandomAvailableRunner({ ...runnerParams, excludedRunnerIds })
-      const lockKey = getRunnerAssignmentLockKey(runner.id)
-      const lease = await this.redisLockProvider.acquireLease(lockKey, 30)
-      if (!lease) {
-        excludedRunnerIds.push(runner.id)
-        continue
-      }
-
-      let committed: Box | null = null
-      try {
-        const inserted = await withRedisLockLease(lease, async (signal) => {
-          const currentRunner = await this.runnerService.findOneUncachedOrFail(runner.id)
-          if (currentRunner.draining || currentRunner.state !== RunnerState.READY) {
-            excludedRunnerIds.push(runner.id)
-            return null
-          }
-
-          signal.throwIfAborted()
-          box.runnerId = currentRunner.id
-          committed = await persist()
-          return committed
-        })
-        if (inserted) {
-          return inserted
-        }
-      } catch (error) {
-        // Once insert committed, returning the entity keeps CREATED event handling
-        // consistent even if the lease is lost while releasing.
-        if (committed) {
-          return committed
-        }
-        throw error
-      }
-    }
-
-    throw new BadRequestError('No runner remained available while assigning the box')
+    const runner = await this.runnerService.getRandomAvailableRunner(runnerParams)
+    box.runnerId = runner.id
+    return persist()
   }
 
   private assertBoxNotErrored(box: Box): void {
@@ -192,7 +175,7 @@ export class BoxService {
 
     box.pending = true
 
-    return this.persistWithRunnerAssignmentFence(box, { regions: [box.region], boxClass: box.class }, () =>
+    return this.persistOnAvailableRunner(box, { regions: [box.region], boxClass: box.class }, () =>
       this.boxRepository.insert(box),
     )
   }
@@ -279,6 +262,7 @@ export class BoxService {
       box.entrypoint = createBoxDto.entrypoint
       box.cmd = createBoxDto.cmd
       box.env = createBoxDto.env || {}
+      box.secrets = createBoxDto.secrets || []
       box.labels = createBoxDto.labels || {}
 
       box.image = image
@@ -287,7 +271,10 @@ export class BoxService {
       box.mem = mem
       box.disk = disk
 
-      box.public = createBoxDto.public ?? true
+      // POL-205: default private. A caller who never mentions visibility gets
+      // a box that is not reachable from the public internet, rather than
+      // silently anonymously public.
+      box.public = createBoxDto.public ?? false
 
       if (createBoxDto.networkBlockAll !== undefined) {
         box.networkBlockAll = createBoxDto.networkBlockAll
@@ -316,8 +303,9 @@ export class BoxService {
 
       // No caller-provided name -> assign a fun default (e.g. "cozy-otter"),
       // falling back to "cozy-otter-{boxId}" if it collides with the per-org
-      // @Unique(['organizationId', 'name']) constraint.
-      const insertedBox = await this.persistWithRunnerAssignmentFence(box, { regions: [region.id], boxClass }, () =>
+      // @Unique(['organizationId', 'name']) constraint. Only the insert retries:
+      // the chosen runner is still fine, it was the name that collided.
+      const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, () =>
         createBoxDto.name
           ? this.boxRepository.insert(box)
           : persistWithGeneratedBoxName(box.id, (name) => {
@@ -351,7 +339,8 @@ export class BoxService {
   ): Promise<BoxDto> {
     const now = new Date()
     const updateData: Partial<Box> = {
-      public: createBoxDto.public ?? true,
+      // POL-205: same default as the fresh-box path — see the comment there.
+      public: createBoxDto.public ?? false,
       labels: createBoxDto.labels || {},
       organizationId: organization.id,
       createdAt: now,

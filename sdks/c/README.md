@@ -218,6 +218,7 @@ int main() {
         return 1;
     }
     boxlite_options_set_network_enabled(opts);
+    boxlite_options_set_network_inbound_disabled(opts);
 
     CAdvancedBoxOptions* advanced = NULL;
     if (boxlite_advanced_options_new(&advanced, &error) != Ok) {
@@ -567,8 +568,12 @@ BoxliteErrorCode boxlite_box_metrics(
 ```
 
 `CBoxInfo.network` is an owned `CNetworkInfo*` and is `NULL` when network
-metadata is unavailable. `CNetworkInfo` exposes `mode`, the `allow_net` string
-array and count, and a nullable `CPublishedPortList*`. A `NULL`
+metadata is unavailable. `CNetworkInfo` exposes a `COutboundNetworkInfo`/`CInboundNetworkInfo` per
+direction (`outbound`, `inbound`) — each with `mode`, the `allow_net` string
+array and count — plus a nullable `CPublishedPortList*`. The deprecated
+top-level `mode`, `allow_net` and `allow_net_count` fields remain at their
+pre-split offsets and alias `outbound`, so callers built against the old header
+keep working; they are borrowed views and must not be freed separately. A `NULL`
 `published_ports` pointer means the current handle does not know the bindings,
 a non-`NULL` list with `count == 0` means there are no active publications, and
 a populated list contains typed `CPublishedPort` entries with `guest_port`,

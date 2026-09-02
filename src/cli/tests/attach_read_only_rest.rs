@@ -8,7 +8,7 @@
 mod common;
 
 use common::serve::ServeChild;
-use futures_util::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -67,7 +67,7 @@ async fn attach_and_write(
         .await
         .expect("attach upgrade");
 
-    ws.send(Message::Binary(b"hello\n".to_vec()))
+    ws.send(Message::Binary(b"hello\n".to_vec().into()))
         .await
         .expect("send stdin frame");
 
@@ -140,7 +140,7 @@ async fn attach_and_send_controls(port: u16, box_id: &str) -> Vec<String> {
         r#"{"type":"resize","rows":20,"cols":80}"#,
         r#"{"type":"stdin_eof"}"#,
     ] {
-        ws.send(Message::Text(frame.to_string()))
+        ws.send(Message::Text(frame.into()))
             .await
             .expect("send control frame");
     }

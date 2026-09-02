@@ -103,6 +103,25 @@ export interface Secret {
  * Structured network configuration for a box.
  */
 export interface NetworkSpec {
+  /** Outbound guest network policy. */
+  outbound?: OutboundNetworkSpec;
+
+  /** Inbound service access policy. */
+  inbound?: InboundNetworkSpec;
+
+  /**
+   * @deprecated Use `outbound.mode`. Accepted as a legacy alias; supplying it
+   * together with `outbound` is rejected.
+   */
+  mode?: "enabled" | "disabled";
+
+  /**
+   * @deprecated Use `outbound.allowNet`. Accepted as a legacy alias.
+   */
+  allowNet?: string[];
+}
+
+export interface OutboundNetworkSpec {
   /** Network mode. */
   mode: "enabled" | "disabled";
 
@@ -110,7 +129,74 @@ export interface NetworkSpec {
   allowNet?: string[];
 }
 
+export interface InboundNetworkSpec {
+  /** Inbound mode: "enabled" (publicly reachable) or "disabled" (private). */
+  mode: "enabled" | "disabled";
+  /**
+   * Not supported yet: a non-empty value is rejected. Exists for shape
+   * symmetry with the outbound spec; inbound access follows `mode` alone.
+   */
+  allowNet?: string[];
+}
+
 const MAX_SAFE_U64_NUMBER = Number.MAX_SAFE_INTEGER;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function assertNetworkSpecShape(value: unknown): void {
+  if (value === undefined || value === null) {
+    return;
+  }
+  if (!isRecord(value)) {
+    throw new TypeError(
+      "SimpleBoxOptions.network must be an object. Use network: { outbound, inbound }.",
+    );
+  }
+  // The pre-split shape was `{ mode, allowNet }`, which configured the
+  // outbound direction. Still accepted; mixing it with `outbound` is not,
+  // because there would be no single answer for what outbound should be.
+  const hasLegacyFields = "mode" in value || "allowNet" in value;
+  if (hasLegacyFields && "outbound" in value) {
+    throw new TypeError(
+      "SimpleBoxOptions.network cannot mix outbound with the deprecated mode/allowNet. Use network: { outbound: { mode, allowNet }, inbound }.",
+    );
+  }
+  if (!hasLegacyFields && !("outbound" in value) && !("inbound" in value)) {
+    throw new TypeError(
+      "SimpleBoxOptions.network must include outbound or inbound.",
+    );
+  }
+  if ("mode" in value && typeof value.mode !== "string") {
+    throw new TypeError(
+      'SimpleBoxOptions.network.mode must be "enabled" or "disabled".',
+    );
+  }
+  if ("allowNet" in value && !Array.isArray(value.allowNet)) {
+    throw new TypeError("SimpleBoxOptions.network.allowNet must be an array.");
+  }
+  // `mode` is required on each supplied direction. Without this check an
+  // empty `{}` passes here and only fails later, inside lazy native
+  // creation, with a napi deserialization error that does not name the
+  // field the caller got wrong.
+  for (const direction of ["outbound", "inbound"] as const) {
+    if (!(direction in value)) {
+      continue;
+    }
+    const policy = value[direction];
+    if (!isRecord(policy)) {
+      throw new TypeError(
+        `SimpleBoxOptions.network.${direction} must be an object.`,
+      );
+    }
+    if (typeof policy.mode !== "string") {
+      throw new TypeError(
+        `SimpleBoxOptions.network.${direction}.mode is required and must be "enabled" or "disabled".`,
+      );
+    }
+  }
+}
 
 function normalizeU64Limit(
   value: number | undefined,
@@ -407,15 +493,11 @@ export class SimpleBox {
 
     if (legacyOptions.allowNet !== undefined) {
       throw new TypeError(
-        "SimpleBoxOptions.allowNet was removed. Use network: { mode, allowNet }.",
+        "SimpleBoxOptions.allowNet was removed. Use network: { outbound: { mode, allowNet } }.",
       );
     }
 
-    if (typeof legacyOptions.network === "string") {
-      throw new TypeError(
-        "SimpleBoxOptions.network must be an object. Use network: { mode, allowNet }.",
-      );
-    }
+    assertNetworkSpecShape(legacyOptions.network);
 
     // Use provided runtime or get global default
     if (options.runtime) {
@@ -725,9 +807,13 @@ export class SimpleBox {
   /**
    * Copy a file or directory from the host into the container.
    *
-   * **Note:** Destinations under tmpfs mounts (e.g. `/tmp`, `/dev/shm`) will
-   * silently fail — files land behind the mount and are invisible to the
-   * container. Use a non-tmpfs path like `/root/` instead.
+   * **Note:** Destinations under a container mount (e.g. `/tmp`, `/dev/shm`,
+   * volumes) are refused with an error naming the mount — files written there
+   * would land behind it and be invisible to the container. Use a path outside
+   * the mount, like `/root/`, or pipe a tar through `exec`.
+   *
+   * Files land owned by the box's exec user, so the workload can read them
+   * without any chmod/chown of its own.
    *
    * @param hostPath - Absolute path on the host
    * @param containerDest - Absolute path inside the container
@@ -744,6 +830,12 @@ export class SimpleBox {
 
   /**
    * Copy a file or directory from the container to the host.
+   *
+   * **Note:** a source at or under a container mount (e.g. `/tmp`,
+   * `/dev/shm`, volumes), or a directory containing one, is refused with an
+   * error naming the mount — the archive would carry the files underneath it
+   * rather than the ones the container sees. Copy a path outside the mount,
+   * or pipe a tar through `exec`.
    *
    * @param containerSrc - Absolute path inside the container
    * @param hostDest - Absolute path on the host

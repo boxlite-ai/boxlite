@@ -10,10 +10,6 @@ export function getStateChangeLockKey(id: string): string {
   return `box:${id}:state-change`
 }
 
-export function getRunnerAssignmentLockKey(id: string): string {
-  return `runner:${id}:box-assignment`
-}
-
 /**
  * The lock that marks one migration job as in flight for a box.
  *

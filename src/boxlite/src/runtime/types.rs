@@ -326,16 +326,45 @@ pub struct PublishedPort {
     pub protocol: PortProtocol,
 }
 
-/// Public network metadata for a box.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NetworkInfo {
-    /// Whether the guest network interface is enabled.
+/// Network configuration for outbound (guest → internet) traffic.
+///
+/// Records whether the guest can reach external hosts and which hosts are
+/// allowed when [`mode`][Self::mode] is [`NetworkMode::Enabled`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutboundNetworkInfo {
     pub mode: NetworkMode,
-
-    /// Configured outbound network allowlist. Empty means unrestricted when
-    /// [`Self::mode`] is [`NetworkMode::Enabled`].
+    /// Empty means unrestricted outbound access.
     #[serde(default)]
     pub allow_net: Vec<String>,
+}
+
+/// Network configuration for inbound (internet → guest) traffic.
+///
+/// Records whether the guest's exposed ports/preview are publicly reachable.
+/// `allow_net` is always empty today — an inbound allowlist is not yet
+/// enforced by any layer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboundNetworkInfo {
+    pub mode: NetworkMode,
+    #[serde(default)]
+    pub allow_net: Vec<String>,
+}
+
+/// Public network metadata for a box.
+///
+/// Deserialization accepts the pre-split flat shape (`{"mode", "allow_net"}`)
+/// and folds it into `outbound`, so JSON produced before the outbound/inbound
+/// split still loads. Serialization emits both shapes for the same reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "NetworkInfoWire")]
+pub struct NetworkInfo {
+    /// Guest egress: whether the box can reach out, and to where.
+    pub outbound: OutboundNetworkInfo,
+
+    /// External reachability: whether the box's exposed ports/preview are
+    /// public. Its `allow_net` is always empty today (see
+    /// [`InboundNetworkInfo::allow_net`]).
+    pub inbound: InboundNetworkInfo,
 
     /// Concrete publications for the current runtime lifecycle.
     ///
@@ -343,6 +372,68 @@ pub struct NetworkInfo {
     /// means there are no active publications.
     #[serde(default)]
     pub published_ports: Option<Vec<PublishedPort>>,
+
+    /// Mirror of `outbound.mode`, kept so pre-split readers keep compiling.
+    ///
+    /// Deprecated: read `outbound.mode`. Derived — set it through
+    /// [`NetworkInfo::new`] rather than by hand, so the two cannot disagree.
+    pub mode: NetworkMode,
+
+    /// Mirror of `outbound.allow_net`, kept so pre-split readers keep
+    /// compiling.
+    ///
+    /// Deprecated: read `outbound.allow_net`.
+    pub allow_net: Vec<String>,
+}
+
+impl NetworkInfo {
+    /// Build metadata for both directions, filling the deprecated flat
+    /// mirrors from `outbound`.
+    pub fn new(
+        outbound: OutboundNetworkInfo,
+        inbound: InboundNetworkInfo,
+        published_ports: Option<Vec<PublishedPort>>,
+    ) -> Self {
+        Self {
+            mode: outbound.mode.clone(),
+            allow_net: outbound.allow_net.clone(),
+            outbound,
+            inbound,
+            published_ports,
+        }
+    }
+}
+
+/// Deserialization shape for [`NetworkInfo`], accepting both the nested
+/// directions and the pre-split flat fields. A payload carrying only
+/// `mode`/`allow_net` predates the split and described egress, so it folds
+/// into `outbound`.
+#[derive(Deserialize)]
+struct NetworkInfoWire {
+    #[serde(default)]
+    outbound: Option<OutboundNetworkInfo>,
+    #[serde(default)]
+    inbound: Option<InboundNetworkInfo>,
+    #[serde(default)]
+    published_ports: Option<Vec<PublishedPort>>,
+    #[serde(default)]
+    mode: Option<NetworkMode>,
+    #[serde(default)]
+    allow_net: Option<Vec<String>>,
+}
+
+impl From<NetworkInfoWire> for NetworkInfo {
+    fn from(wire: NetworkInfoWire) -> Self {
+        let outbound = wire.outbound.unwrap_or_else(|| OutboundNetworkInfo {
+            mode: wire.mode.unwrap_or_default(),
+            allow_net: wire.allow_net.unwrap_or_default(),
+        });
+        Self::new(
+            outbound,
+            wire.inbound.unwrap_or_default(),
+            wire.published_ports,
+        )
+    }
 }
 
 /// Public metadata about a box (returned by list operations).
@@ -438,11 +529,17 @@ impl BoxInfo {
             },
             cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
-            network: Some(NetworkInfo {
-                mode: network_config.outbound.mode,
-                allow_net: network_config.outbound.allow_net,
-                published_ports: crate::litebox::ports::resolved_from_state(config, state),
-            }),
+            network: Some(NetworkInfo::new(
+                OutboundNetworkInfo {
+                    mode: network_config.outbound.mode,
+                    allow_net: network_config.outbound.allow_net,
+                },
+                InboundNetworkInfo {
+                    mode: network_config.inbound.mode,
+                    allow_net: network_config.inbound.allow_net,
+                },
+                crate::litebox::ports::resolved_from_state(config, state),
+            )),
             labels: HashMap::new(),
             // Local runtimes do not sweep lifecycle deadlines, but metadata keeps
             // the configured values so callers can inspect the effective policy.
@@ -571,6 +668,68 @@ mod tests {
             .and_then(|network| network.published_ports.as_deref())
     }
 
+    /// JSON written before the outbound/inbound split carried a flat
+    /// `mode`/`allow_net` pair describing egress. It must still load.
+    #[test]
+    fn network_info_deserializes_the_pre_split_flat_shape() {
+        let network: NetworkInfo = serde_json::from_str(
+            r#"{"mode":"disabled","allow_net":["api.example.com"],"published_ports":null}"#,
+        )
+        .expect("pre-split network metadata must still deserialize");
+
+        assert_eq!(network.outbound.mode, NetworkMode::Disabled);
+        assert_eq!(
+            network.outbound.allow_net,
+            vec!["api.example.com".to_string()]
+        );
+        // The direction the pre-split shape could not express takes its default.
+        assert_eq!(network.inbound, InboundNetworkInfo::default());
+        // And the deprecated mirrors follow outbound.
+        assert_eq!(network.mode, NetworkMode::Disabled);
+        assert_eq!(network.allow_net, vec!["api.example.com".to_string()]);
+    }
+
+    /// Readers that predate the split look for top-level `mode`/`allow_net`,
+    /// so serialization has to keep emitting them alongside the directions.
+    #[test]
+    fn network_info_serializes_both_shapes() {
+        let network = NetworkInfo::new(
+            OutboundNetworkInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: vec!["api.example.com".to_string()],
+            },
+            InboundNetworkInfo {
+                mode: NetworkMode::Disabled,
+                allow_net: Vec::new(),
+            },
+            None,
+        );
+
+        let value = serde_json::to_value(&network).unwrap();
+
+        assert_eq!(value["outbound"]["mode"], "enabled");
+        assert_eq!(value["inbound"]["mode"], "disabled");
+        assert_eq!(value["mode"], "enabled");
+        assert_eq!(value["allow_net"][0], "api.example.com");
+    }
+
+    /// A payload carrying both shapes must not lose the nested one.
+    #[test]
+    fn network_info_prefers_the_nested_shape_over_the_flat_mirrors() {
+        let network: NetworkInfo = serde_json::from_str(
+            r#"{"outbound":{"mode":"disabled","allow_net":[]},
+                "inbound":{"mode":"enabled","allow_net":[]},
+                "mode":"enabled","allow_net":["stale.example.com"]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(network.outbound.mode, NetworkMode::Disabled);
+        assert_eq!(network.inbound.mode, NetworkMode::Enabled);
+        // Mirrors are re-derived from outbound, never trusted from the payload.
+        assert_eq!(network.mode, NetworkMode::Disabled);
+        assert!(network.allow_net.is_empty());
+    }
+
     #[test]
     fn lifecycle_policy_enforces_public_sentinels_and_ordering() {
         assert!(
@@ -672,12 +831,23 @@ mod tests {
         let info = BoxInfo::new(&config, &BoxState::new());
         let network = info.network.as_ref().expect("local network metadata");
 
-        assert_eq!(network.mode, crate::runtime::options::NetworkMode::Enabled);
-        assert_eq!(network.allow_net, vec!["api.example.com".to_string()]);
+        assert_eq!(
+            network.outbound.mode,
+            crate::runtime::options::NetworkMode::Enabled
+        );
+        assert_eq!(
+            network.outbound.allow_net,
+            vec!["api.example.com".to_string()]
+        );
+        assert_eq!(
+            network.inbound.mode,
+            crate::runtime::options::NetworkMode::Enabled
+        );
         assert_eq!(network.published_ports, Some(Vec::new()));
 
         let serialized = serde_json::to_value(&info).unwrap();
-        assert_eq!(serialized["network"]["mode"], "enabled");
+        assert_eq!(serialized["network"]["outbound"]["mode"], "enabled");
+        assert_eq!(serialized["network"]["inbound"]["mode"], "enabled");
         assert_eq!(
             serialized["network"]["published_ports"],
             serde_json::json!([])

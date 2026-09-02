@@ -78,6 +78,39 @@ function requiredHttpUrl(value: string, name: string): string {
   return value.replace(/\/+$/, '')
 }
 
+function validateOidcManagementHttpsUrl(value: string, name: string): void {
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error(`${name} must be an absolute https URL`)
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`${name} must use https`)
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`${name} must not carry credentials`)
+  }
+}
+
+function requiredOidcManagementBaseUrl(value: string, name: string): string {
+  validateOidcManagementHttpsUrl(value, name)
+  // Management resource paths are appended to this prefix.
+  if (value.includes('?') || value.includes('#')) {
+    throw new Error(`${name} must not carry a query or fragment`)
+  }
+  return value.replace(/\/+$/, '')
+}
+
+function requiredOidcManagementTokenUrl(value: string, name: string): string {
+  validateOidcManagementHttpsUrl(value, name)
+  // OAuth token endpoints are exact URLs, so retain their query and trailing slash.
+  if (value.includes('#')) {
+    throw new Error(`${name} must not carry a fragment`)
+  }
+  return value
+}
+
 /**
  * Export of finalized usage periods, and snapshots of still-open ones, to the
  * Commerce service. Kept separate from billingApiUrl on purpose, for the same
@@ -145,6 +178,109 @@ export function usageExportConfig(env: NodeJS.ProcessEnv = process.env) {
   }
 
   return { ...settings, url: requiredHttpUrl(rawUrl, 'USAGE_EXPORT_URL') }
+}
+
+/**
+ * Status sync: pushes component health to incident.io as alert events plus a
+ * heartbeat ping (see status-sync/). Off by default; a stage arms it by
+ * setting the token, and infra derives STATUS_SYNC_ENABLED from that secret so
+ * a stage holding a source id but no token boots dark instead of crash-looping.
+ *
+ * Exported so its rules can be tested directly rather than through an import
+ * whose side effect is reading the process environment.
+ */
+export function incidentIoConfig(env: NodeJS.ProcessEnv = process.env) {
+  const enabled = env.STATUS_SYNC_ENABLED === 'true'
+  const token = env.INCIDENT_IO_TOKEN?.trim()
+  const alertSourceConfigId = env.INCIDENT_IO_ALERT_SOURCE_CONFIG_ID?.trim()
+  const heartbeatId = env.INCIDENT_IO_HEARTBEAT_ID?.trim()
+  const rawApiUrl = env.INCIDENT_IO_API_URL?.trim() || 'https://api.incident.io'
+  const dedupPrefix = env.STATUS_SYNC_DEDUP_PREFIX?.trim() || `boxlite-${env.ENVIRONMENT?.trim() || 'dev'}`
+
+  // Counts are checked whether or not sync is on — same rationale as
+  // usageExportConfig: a malformed number is wrong in every state.
+  const settings = {
+    enabled,
+    token,
+    alertSourceConfigId,
+    heartbeatId,
+    dedupPrefix,
+    apiUrl: rawApiUrl,
+    timeoutMs: requiredCount(env.INCIDENT_IO_TIMEOUT_MS, 10_000, 'INCIDENT_IO_TIMEOUT_MS'),
+    probeTimeoutMs: requiredCount(env.STATUS_SYNC_PROBE_TIMEOUT_MS, 5_000, 'STATUS_SYNC_PROBE_TIMEOUT_MS'),
+  }
+
+  if (!enabled) {
+    return settings
+  }
+
+  // Enabled without credentials would push every tick into a 401 and page
+  // nobody; refusing at boot is the only point where that is still visible.
+  if (!token) {
+    throw new Error('INCIDENT_IO_TOKEN is required when STATUS_SYNC_ENABLED is true')
+  }
+  if (!alertSourceConfigId) {
+    throw new Error('INCIDENT_IO_ALERT_SOURCE_CONFIG_ID is required when STATUS_SYNC_ENABLED is true')
+  }
+  // The prefix leads every deduplication key; a stray space or capital would
+  // fork new alert identities on the incident.io side instead of updating the
+  // existing ones.
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(dedupPrefix)) {
+    throw new Error(`STATUS_SYNC_DEDUP_PREFIX must be a lowercase slug, got "${dedupPrefix}"`)
+  }
+
+  const apiUrl = requiredHttpUrl(rawApiUrl, 'INCIDENT_IO_API_URL')
+  // The client presents INCIDENT_IO_TOKEN as a bearer header on this URL;
+  // plaintext transport would hand the credential to the network (CWE-319).
+  if (new URL(apiUrl).protocol !== 'https:') {
+    throw new Error('INCIDENT_IO_API_URL must use https')
+  }
+  return { ...settings, apiUrl }
+}
+
+function oidcManagementApiConfig(env: NodeJS.ProcessEnv = process.env) {
+  const enabled = env.OIDC_MANAGEMENT_API_ENABLED === 'true'
+  const rawBaseUrl = env.OIDC_MANAGEMENT_API_BASE_URL?.trim()
+  const rawTokenUrl = env.OIDC_MANAGEMENT_API_TOKEN_URL?.trim()
+  const settings = {
+    enabled,
+    clientId: env.OIDC_MANAGEMENT_API_CLIENT_ID,
+    clientSecret: env.OIDC_MANAGEMENT_API_CLIENT_SECRET,
+    audience: env.OIDC_MANAGEMENT_API_AUDIENCE,
+    baseUrl: rawBaseUrl,
+    tokenUrl: rawTokenUrl,
+  }
+
+  if (!enabled) {
+    return settings
+  }
+
+  const issuer = env.OIDC_ISSUER_BASE_URL || env.OID_ISSUER_BASE_URL
+  if (!issuer) {
+    throw new Error('OIDC_ISSUER_BASE_URL is required when OIDC_MANAGEMENT_API_ENABLED is true')
+  }
+
+  const normalizedIssuer = requiredHttpUrl(issuer, 'OIDC_ISSUER_BASE_URL')
+  const issuerUrl = new URL(normalizedIssuer)
+  const hasIssuerPath = issuerUrl.pathname !== '/'
+  if (hasIssuerPath && !rawBaseUrl) {
+    throw new Error(
+      'OIDC_MANAGEMENT_API_BASE_URL is required when OIDC_MANAGEMENT_API_ENABLED is true with a path-based issuer',
+    )
+  }
+  if (hasIssuerPath && !rawTokenUrl) {
+    throw new Error(
+      'OIDC_MANAGEMENT_API_TOKEN_URL is required when OIDC_MANAGEMENT_API_ENABLED is true with a path-based issuer',
+    )
+  }
+
+  const baseUrl = rawBaseUrl || `${issuerUrl.origin}/api/v2`
+  const tokenUrl = rawTokenUrl || `${issuerUrl.origin}/oauth/token`
+  return {
+    ...settings,
+    baseUrl: requiredOidcManagementBaseUrl(baseUrl, 'OIDC_MANAGEMENT_API_BASE_URL'),
+    tokenUrl: requiredOidcManagementTokenUrl(tokenUrl, 'OIDC_MANAGEMENT_API_TOKEN_URL'),
+  }
 }
 
 // The object-store key namespace migration archives land in by default, inside
@@ -243,12 +379,7 @@ const configuration = {
     audience: process.env.OIDC_AUDIENCE || process.env.OID_AUDIENCE,
     endSessionEndpoint: process.env.OIDC_END_SESSION_ENDPOINT,
     postLogoutRedirectAllowlist: process.env.OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST,
-    managementApi: {
-      enabled: process.env.OIDC_MANAGEMENT_API_ENABLED === 'true',
-      clientId: process.env.OIDC_MANAGEMENT_API_CLIENT_ID,
-      clientSecret: process.env.OIDC_MANAGEMENT_API_CLIENT_SECRET,
-      audience: process.env.OIDC_MANAGEMENT_API_AUDIENCE,
-    },
+    managementApi: oidcManagementApiConfig(),
   },
   smtp: {
     host: process.env.SMTP_HOST,
@@ -353,6 +484,7 @@ const configuration = {
   billingApiUrl: process.env.BILLING_API_URL,
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
   usageExport: usageExportConfig(),
+  incidentIo: incidentIoConfig(),
   defaultRunner: {
     domain: process.env.DEFAULT_RUNNER_DOMAIN,
     apiKey: process.env.DEFAULT_RUNNER_API_KEY,

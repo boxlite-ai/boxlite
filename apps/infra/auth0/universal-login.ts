@@ -32,6 +32,7 @@ export interface PromptText {
 export interface LoadedBranding {
   target: BrandingTarget
   theme: JsonObject
+  tenant: JsonObject
   prompts: PromptText[]
   assetUrls: string[]
   sourceDigest: string
@@ -46,6 +47,13 @@ interface ThemeChange {
   after: JsonObject
 }
 
+interface TenantChange {
+  kind: 'tenant'
+  resource: 'tenant'
+  before: JsonObject
+  after: JsonObject
+}
+
 interface PromptChange {
   kind: 'prompt'
   resource: `prompt:${string}/${string}`
@@ -55,7 +63,7 @@ interface PromptChange {
   after: JsonObject
 }
 
-export type BrandingChange = ThemeChange | PromptChange
+export type BrandingChange = ThemeChange | TenantChange | PromptChange
 
 export interface PreparedBranding {
   target: BrandingTarget
@@ -79,6 +87,8 @@ export interface BrandingVerifier {
 
 export interface Auth0BrandingGateway {
   getDefaultTheme(target: BrandingTarget, signal?: AbortSignal): Promise<JsonObject | null>
+  getTenantSettings(target: BrandingTarget, signal?: AbortSignal): Promise<JsonObject>
+  updateTenantSettings(target: BrandingTarget, settings: JsonObject, signal?: AbortSignal): Promise<void>
   createTheme(target: BrandingTarget, theme: JsonObject, signal?: AbortSignal): Promise<void>
   updateTheme(target: BrandingTarget, themeId: string, theme: JsonObject, signal?: AbortSignal): Promise<void>
   getPromptText(target: BrandingTarget, prompt: string, language: string, signal?: AbortSignal): Promise<JsonObject>
@@ -100,6 +110,7 @@ interface UniversalLoginBrandingDependencies {
 
 interface RemoteBranding {
   theme: JsonObject | null
+  tenant: JsonObject
   prompts: Map<string, JsonObject>
 }
 
@@ -254,6 +265,19 @@ function prepareTheme(raw: JsonObject, target: BrandingTarget) {
   return theme
 }
 
+/*
+ * Only picture_url. The rest of tenants/settings belongs to bootstrap's
+ * one-shot provisioning payload, and a PATCH from here must not fight it.
+ */
+function prepareTenant(raw: JsonObject, target: BrandingTarget) {
+  const tenant = withoutComments(raw) as JsonObject
+  const unknownKeys = Object.keys(tenant).filter((key) => key !== 'picture_url')
+  if (unknownKeys.length > 0) {
+    throw new Error(`branding/tenant.json manages only picture_url; remove ${unknownKeys.join(', ')}`)
+  }
+  return { picture_url: requireRelativeAsset('picture_url', tenant.picture_url, target.stackOrigin) }
+}
+
 function validatePromptText(prompt: string, text: JsonObject) {
   if (Object.keys(text).length === 0) throw new Error(`the ${prompt} prompt document is empty`)
   for (const [screen, screenText] of Object.entries(text)) {
@@ -274,12 +298,19 @@ export class FileBrandingSource implements BrandingSource {
   async load(stage: string): Promise<LoadedBranding> {
     const targetsPath = join(this.root, 'targets.json')
     const themePath = join(this.root, 'branding', 'theme.json')
+    const tenantPath = join(this.root, 'branding', 'tenant.json')
     const promptsRoot = join(this.root, 'branding', 'prompts')
     const targetsContents = await readFile(targetsPath, 'utf8')
     const themeContents = await readFile(themePath, 'utf8')
+    const tenantContents = await readFile(tenantPath, 'utf8')
     const target = parseTarget(parseJsonObject(targetsContents, targetsPath), stage)
     const theme = prepareTheme(parseJsonObject(themeContents, themePath), target)
-    const sourceParts = [`targets.json:${targetsContents}`, `branding/theme.json:${themeContents}`]
+    const tenant = prepareTenant(parseJsonObject(tenantContents, tenantPath), target)
+    const sourceParts = [
+      `targets.json:${targetsContents}`,
+      `branding/theme.json:${themeContents}`,
+      `branding/tenant.json:${tenantContents}`,
+    ]
     const prompts: PromptText[] = []
 
     const languageEntries = (await readdir(promptsRoot, { withFileTypes: true }))
@@ -307,10 +338,10 @@ export class FileBrandingSource implements BrandingSource {
 
     const resolvedWidget = theme.widget as JsonObject
     const resolvedFonts = theme.fonts as JsonObject
-    const assetUrls = [resolvedWidget.logo_url, resolvedFonts.font_url].filter(
+    const assetUrls = [resolvedWidget.logo_url, resolvedFonts.font_url, tenant.picture_url].filter(
       (value): value is string => typeof value === 'string',
     )
-    return { target, theme, prompts, assetUrls: [...new Set(assetUrls)], sourceDigest: digest(sourceParts) }
+    return { target, theme, tenant, prompts, assetUrls: [...new Set(assetUrls)], sourceDigest: digest(sourceParts) }
   }
 }
 
@@ -453,8 +484,7 @@ export class HttpBrandingVerifier implements BrandingVerifier {
   }
 }
 
-function projectManaged(remote: JsonObject | null, desired: JsonObject): JsonObject | null {
-  if (remote === null) return null
+function projectManaged(remote: JsonObject, desired: JsonObject): JsonObject {
   return Object.fromEntries(
     Object.entries(desired).map(([key, desiredValue]) => {
       const remoteValue = remote[key]
@@ -462,6 +492,10 @@ function projectManaged(remote: JsonObject | null, desired: JsonObject): JsonObj
       return [key, remoteValue]
     }),
   )
+}
+
+function projectManagedTheme(remote: JsonObject | null, desired: JsonObject) {
+  return remote === null ? null : projectManaged(remote, desired)
 }
 
 function promptKey(prompt: string, language: string) {
@@ -482,6 +516,7 @@ function themeId(theme: JsonObject | null) {
 async function readRemote(gateway: Auth0BrandingGateway, desired: LoadedBranding, signal?: AbortSignal) {
   const theme = await gateway.getDefaultTheme(desired.target, signal)
   themeId(theme)
+  const tenant = await gateway.getTenantSettings(desired.target, signal)
   const prompts = new Map<string, JsonObject>()
   for (const prompt of desired.prompts) {
     prompts.set(
@@ -489,7 +524,7 @@ async function readRemote(gateway: Auth0BrandingGateway, desired: LoadedBranding
       await gateway.getPromptText(desired.target, prompt.prompt, prompt.language, signal),
     )
   }
-  return { theme, prompts }
+  return { theme, tenant, prompts }
 }
 
 function remoteDigest(remote: RemoteBranding, desired: LoadedBranding) {
@@ -500,14 +535,18 @@ function remoteDigest(remote: RemoteBranding, desired: LoadedBranding) {
     ]),
   ) as JsonObject
   return digest([
-    canonicalJson({ themeId: themeId(remote.theme) ?? null, managed: projectManaged(remote.theme, desired.theme) }),
+    canonicalJson({
+      themeId: themeId(remote.theme) ?? null,
+      managed: projectManagedTheme(remote.theme, desired.theme),
+    }),
+    canonicalJson(projectManaged(remote.tenant, desired.tenant)),
     canonicalJson(promptState),
   ])
 }
 
 function changesFor(remote: RemoteBranding, desired: LoadedBranding): BrandingChange[] {
   const changes: BrandingChange[] = []
-  const managedTheme = projectManaged(remote.theme, desired.theme)
+  const managedTheme = projectManagedTheme(remote.theme, desired.theme)
   if (remote.theme === null || !isDeepStrictEqual(managedTheme, desired.theme)) {
     const id = themeId(remote.theme)
     changes.push({
@@ -518,6 +557,10 @@ function changesFor(remote: RemoteBranding, desired: LoadedBranding): BrandingCh
       before: managedTheme,
       after: desired.theme,
     })
+  }
+  const managedTenant = projectManaged(remote.tenant, desired.tenant)
+  if (!isDeepStrictEqual(managedTenant, desired.tenant)) {
+    changes.push({ kind: 'tenant', resource: 'tenant', before: managedTenant, after: desired.tenant })
   }
   for (const prompt of desired.prompts) {
     const before = remote.prompts.get(promptKey(prompt.prompt, prompt.language)) ?? {}
@@ -628,6 +671,10 @@ export class UniversalLoginBranding {
       await this.gateway.putPromptText(target, change.prompt, change.language, change.after, signal)
       return
     }
+    if (change.kind === 'tenant') {
+      await this.gateway.updateTenantSettings(target, change.after, signal)
+      return
+    }
     if (change.action === 'create') {
       await this.gateway.createTheme(target, change.after, signal)
       return
@@ -637,15 +684,17 @@ export class UniversalLoginBranding {
   }
 
   private async readChange(target: BrandingTarget, change: BrandingChange, signal?: AbortSignal) {
-    return change.kind === 'theme'
-      ? this.gateway.getDefaultTheme(target, signal)
-      : this.gateway.getPromptText(target, change.prompt, change.language, signal)
+    if (change.kind === 'theme') return this.gateway.getDefaultTheme(target, signal)
+    if (change.kind === 'tenant') return this.gateway.getTenantSettings(target, signal)
+    return this.gateway.getPromptText(target, change.prompt, change.language, signal)
   }
 
+  // Theme and tenant readbacks carry unmanaged Auth0 fields; compare only the
+  // subset this reconciler declares. Prompt documents are replaced wholesale.
   private matches(change: BrandingChange, readback: JsonObject | null) {
-    if (change.kind === 'theme')
-      return readback !== null && isDeepStrictEqual(projectManaged(readback, change.after), change.after)
-    return readback !== null && isDeepStrictEqual(readback, change.after)
+    if (readback === null) return false
+    if (change.kind === 'prompt') return isDeepStrictEqual(readback, change.after)
+    return isDeepStrictEqual(projectManaged(readback, change.after), change.after)
   }
 
   private matchesBefore(change: BrandingChange, readback: JsonObject | null) {
@@ -657,7 +706,9 @@ export class UniversalLoginBranding {
           isDeepStrictEqual(projectManaged(readback, change.after), change.before))
       )
     }
-    return readback !== null && isDeepStrictEqual(readback, change.before)
+    if (readback === null) return false
+    if (change.kind === 'tenant') return isDeepStrictEqual(projectManaged(readback, change.after), change.before)
+    return isDeepStrictEqual(readback, change.before)
   }
 
   private async classifyAfterFailedWrite(target: BrandingTarget, change: BrandingChange) {

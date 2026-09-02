@@ -13,7 +13,9 @@ fn test_inspect_no_args() {
         .args(["inspect"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("no names or ids specified"));
+        .stderr(predicate::str::contains(
+            "required arguments were not provided",
+        ));
 }
 
 #[test]
@@ -509,8 +511,8 @@ fn test_inspect_latest_and_ref_fail() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("cannot be used together"),
-        "stderr should say --latest and arguments cannot be used together; got: {}",
+        stderr.contains("--latest") && stderr.contains("cannot be used with"),
+        "stderr should say --latest cannot be used with box arguments; got: {}",
         stderr
     );
 }

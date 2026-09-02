@@ -21,7 +21,8 @@ use crate::box_handle::PyBox;
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
 use crate::images::{PyImageHandle, PyImageInfo, PyImagePullResult};
 use crate::info::{
-    PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus, PyNetworkInfo, PyPublishedPort,
+    PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus, PyInboundNetworkInfo, PyNetworkInfo,
+    PyOutboundNetworkInfo, PyPublishedPort,
 };
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
 use crate::network::{
@@ -29,7 +30,8 @@ use crate::network::{
 };
 use crate::options::{
     PyAccessToken, PyApiKeyCredential, PyBoxOptions, PyBoxliteRestOptions, PyCopyOptions,
-    PyImageRegistry, PyNetworkSpec, PyOptions, PySecret,
+    PyImageRegistry, PyInboundNetworkSpec, PyNetworkSpec, PyOptions, PyOutboundNetworkSpec,
+    PySecret,
 };
 use crate::runtime::PyBoxlite;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions, PySnapshotOptions};
@@ -43,6 +45,8 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyImageRegistry>()?;
     m.add_class::<PyBoxOptions>()?;
     m.add_class::<PyNetworkSpec>()?;
+    m.add_class::<PyOutboundNetworkSpec>()?;
+    m.add_class::<PyInboundNetworkSpec>()?;
     m.add_class::<PySecurityOptions>()?;
     m.add_class::<PyHealthCheckOptions>()?;
     m.add_class::<PyAdvancedBoxOptions>()?;
@@ -61,6 +65,8 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBoxInfo>()?;
     m.add_class::<PyBoxStateInfo>()?;
     m.add_class::<PyNetworkInfo>()?;
+    m.add_class::<PyOutboundNetworkInfo>()?;
+    m.add_class::<PyInboundNetworkInfo>()?;
     m.add_class::<PyPublishedPort>()?;
     m.add_class::<PyHealthState>()?;
     m.add_class::<PyHealthStatus>()?;

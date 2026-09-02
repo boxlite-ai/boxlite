@@ -372,3 +372,47 @@ describe('CreateBoxDto detach policy', () => {
     expect(errors).toHaveLength(0)
   })
 })
+
+describe('CreateBoxDto secrets', () => {
+  it('accepts a secret with name+value and optional hosts/placeholder', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        secrets: [
+          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+        ],
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('accepts a secret with only name+value', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: 'sk-test' }] }))
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('rejects a secret missing its name', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ value: 'sk-test' }] }))
+
+    expect(errors).not.toHaveLength(0)
+    // @ValidateNested({ each: true }) reports one child per array slot, and the
+    // slot's children hold the per-property errors, so constraints sit two
+    // levels below the top-level secrets error.
+    expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isNotEmpty')
+  })
+
+  it('rejects a secret missing its value', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai' }] }))
+
+    expect(errors).not.toHaveLength(0)
+    expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isString')
+  })
+
+  it('rejects a secret with an empty value', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: '' }] }))
+
+    expect(errors).not.toHaveLength(0)
+    expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isNotEmpty')
+  })
+})

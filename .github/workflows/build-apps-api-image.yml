@@ -4,7 +4,8 @@ name: Build apps/api image
 #
 #   commit  — called by deploy-infra.yml for the commit being deployed, tagged v<version>-<ref>
 #   build   — dispatched for a release, tagged <version>, into dev
-#   promote — copies a released tag from one stage's repository to another
+#   promote — copies a released tag from one stage's repository to another, in either the same
+#             region or another one (source_region)
 #
 # Named per service because it is one of three the stack builds from source — apps/proxy and
 # apps/otel-collector are the others (sst.config.ts) and have no published-image path yet, so a
@@ -63,6 +64,11 @@ on:
         options:
           - dev
           - prod
+      source_region:
+        description: 'Region holding source_stage, when it differs from the target (promote only).'
+        required: false
+        default: ''
+        type: string
       version:
         description: 'Stable X.Y.Z, matching the release tag being published.'
         required: true
@@ -85,6 +91,14 @@ jobs:
     timeout-minutes: 60
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+      # Where the image being promoted already lives, which `vars` cannot answer: a job binds to
+      # one Environment and that one is the target's, so `vars.AWS_REGION` is always the region
+      # receiving the image. Stages are not required to share a region — dev is ap-southeast-1
+      # while prod is us-west-2 — and a registry is one account in one region, so a promote that
+      # assumes they match looks for the source repository in the target's region and reports the
+      # repository as missing rather than as elsewhere. Empty means "the same region as the
+      # target", which is every same-region promote and what this workflow assumed before.
+      SOURCE_REGION: ${{ inputs.source_region || vars.AWS_REGION || 'ap-southeast-1' }}
       # `ref` is the workflow_call-only input, so its presence is what selects commit mode.
       OPERATION: ${{ inputs.ref && 'commit' || inputs.operation }}
       TARGET_STAGE: ${{ inputs.stage || 'dev' }}
@@ -192,10 +206,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com"
-          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry"
-          echo "target=${registry}/boxlite-app-${TARGET_STAGE}-api" >> "$GITHUB_OUTPUT"
-          echo "source=${registry}/boxlite-app-${SOURCE_STAGE}-api" >> "$GITHUB_OUTPUT"
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          target_registry="${account}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          source_registry="${account}.dkr.ecr.${SOURCE_REGION}.amazonaws.com"
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$target_registry"
+          # A second login when the source stage is in another region. The role already reaches it
+          # — github-deploy-role.yaml grants ecr:* on Resource '*', which no region scopes — but a
+          # docker credential is per registry host, and the copy below reads the source through
+          # docker rather than through the AWS CLI.
+          if [ "$source_registry" != "$target_registry" ]; then
+            aws ecr get-login-password --region "$SOURCE_REGION" | docker login --username AWS --password-stdin "$source_registry"
+          fi
+          echo "target=${target_registry}/boxlite-app-${TARGET_STAGE}-api" >> "$GITHUB_OUTPUT"
+          echo "source=${source_registry}/boxlite-app-${SOURCE_STAGE}-api" >> "$GITHUB_OUTPUT"
 
       - name: Verify bootstrap repositories and target tag
         id: target
@@ -213,11 +236,22 @@ jobs:
           source_digest=""
           if [ "$OPERATION" = promote ]; then
             source_name="boxlite-app-${SOURCE_STAGE}-api"
-            source_digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$source_name" \
+            # SOURCE_REGION, not AWS_REGION: the source stage need not share the target's region,
+            # and reading it in the wrong one returns RepositoryNotFoundException — which reads as
+            # "never published" when the image is published, just elsewhere. Both messages below
+            # name the region for that reason.
+            source_digest=$(aws ecr describe-images --region "$SOURCE_REGION" --repository-name "$source_name" \
               --image-ids "imageTag=$TAG" --query 'imageDetails[0].imageDigest' --output text) || {
-                echo "$source_name:$TAG has not been published" >&2
+                echo "$source_name:$TAG was not found in $SOURCE_REGION; pass source_region if that stage is in another region" >&2
                 exit 1
               }
+            # `--query` on a missing tag in an existing repository prints the literal None and
+            # exits zero, so the guard above cannot see it. Left unchecked it reaches the copy as
+            # "$SOURCE@None" — the same hole artifacts/api.ts:104 closes on the deploy side.
+            if [ -z "$source_digest" ] || [ "$source_digest" = None ]; then
+              echo "$source_name:$TAG has not been published in $SOURCE_REGION" >&2
+              exit 1
+            fi
           fi
           target_digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$target_name" \
             --image-ids "imageTag=$TAG" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)

@@ -9,8 +9,7 @@ use axum::response::{IntoResponse, Response};
 
 use super::super::types::{CreateBoxRequest, ListBoxesResponse, RemoveQuery};
 use super::super::{
-    AppState, box_info_to_response, build_box_options, error_from_boxlite, error_response,
-    get_or_fetch_box,
+    AppState, build_box_options, error_from_boxlite, error_response, get_or_fetch_box,
 };
 
 pub(in crate::commands::serve) async fn create_box(
@@ -18,6 +17,25 @@ pub(in crate::commands::serve) async fn create_box(
     Json(req): Json<CreateBoxRequest>,
 ) -> Response {
     let name = req.name.clone();
+    // The wire body is untrusted input, and `build_box_options` no longer hands
+    // these fields to the engine — so the engine's own rejection of an invalid
+    // pair no longer stands behind them. Validate here, at the boundary, or
+    // serve would accept and enforce `auto_delete <= auto_stop`, which the
+    // contract forbids and the cloud refuses.
+    let requested = boxlite::BoxLifecyclePolicy {
+        auto_stop: req.auto_stop.unwrap_or(0),
+        auto_delete: req.auto_delete.unwrap_or(0),
+        auto_resume: req.auto_resume.unwrap_or(true),
+    };
+    if let Err(e) = requested.validate() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            e.to_string(),
+            "InvalidArgumentError",
+            "invalid_argument",
+        );
+    }
+
     let options = match build_box_options(&req) {
         Ok(options) => options,
         Err(e) => {
@@ -40,7 +58,19 @@ pub(in crate::commands::serve) async fn create_box(
         Err(e) => return error_from_boxlite(&e),
     };
     let box_id = info.id.to_string();
-    let resp = box_info_to_response(&info);
+    // `build_box_options` deliberately withholds both deadlines from the
+    // runtime, so this is the only record of them. Stored before the response is
+    // built, so `box_response` reads back the policy the caller asked for.
+    state
+        .set_lifecycle(
+            &box_id,
+            crate::commands::serve::LifecyclePolicy {
+                auto_stop: requested.auto_stop,
+                auto_delete: requested.auto_delete,
+            },
+        )
+        .await;
+    let resp = state.box_response(&info).await;
 
     state.boxes.write().await.insert(box_id, Arc::new(litebox));
 
@@ -50,7 +80,10 @@ pub(in crate::commands::serve) async fn create_box(
 pub(in crate::commands::serve) async fn list_boxes(State(state): State<Arc<AppState>>) -> Response {
     match state.runtime.list_info().await {
         Ok(infos) => {
-            let boxes = infos.iter().map(box_info_to_response).collect();
+            let mut boxes = Vec::with_capacity(infos.len());
+            for info in &infos {
+                boxes.push(state.box_response(info).await);
+            }
             Json(ListBoxesResponse { boxes }).into_response()
         }
         Err(e) => error_from_boxlite(&e),
@@ -62,7 +95,7 @@ pub(in crate::commands::serve) async fn get_box(
     Path(box_id): Path<String>,
 ) -> Response {
     match state.runtime.get_info(&box_id).await {
-        Ok(Some(info)) => Json(box_info_to_response(&info)).into_response(),
+        Ok(Some(info)) => Json(state.box_response(&info).await).into_response(),
         Ok(None) => error_response(
             StatusCode::NOT_FOUND,
             format!("box not found: {box_id}"),
@@ -124,7 +157,7 @@ pub(in crate::commands::serve) async fn start_box(
         Ok(info) => info,
         Err(e) => return error_from_boxlite(&e),
     };
-    Json(box_info_to_response(&info)).into_response()
+    Json(state.box_response(&info).await).into_response()
 }
 
 pub(in crate::commands::serve) async fn stop_box(
@@ -149,7 +182,7 @@ pub(in crate::commands::serve) async fn stop_box(
         Ok(info) => info,
         Err(e) => return error_from_boxlite(&e),
     };
-    Json(box_info_to_response(&info)).into_response()
+    Json(state.box_response(&info).await).into_response()
 }
 
 pub(in crate::commands::serve) async fn remove_box(
@@ -160,8 +193,36 @@ pub(in crate::commands::serve) async fn remove_box(
     state.boxes.write().await.remove(&box_id);
     let force = query.force.unwrap_or(true);
 
+    // Resolved before the box is gone, because the deadline is filed under the
+    // box's own id while the request may name it by a user-defined name. A
+    // remove-by-name that forgot only the spelling it was given would leak the
+    // id-keyed deadline for the life of the process — `retain_known_boxes`
+    // prunes the idle clock but deliberately never touches this map.
+    // A failure here is not fatal to the delete, but it is not free either: the
+    // fallback is exactly the leak this resolution exists to prevent.
+    let canonical = match state.runtime.get_info(&box_id).await {
+        Ok(info) => info.map(|info| info.id.to_string()),
+        Err(error) => {
+            tracing::warn!(
+                box_id = %box_id,
+                %error,
+                "could not resolve box id before removal; a deadline filed under \
+                 another spelling will be left behind"
+            );
+            None
+        }
+    };
+
     match state.runtime.remove(&box_id, force).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            // Drop the deadline and idle clock with the box, or both maps keep
+            // an entry per deleted box for the lifetime of the process.
+            state.forget_box(&box_id).await;
+            if let Some(canonical) = canonical.filter(|id| id != &box_id) {
+                state.forget_box(&canonical).await;
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => error_from_boxlite(&e),
     }
 }

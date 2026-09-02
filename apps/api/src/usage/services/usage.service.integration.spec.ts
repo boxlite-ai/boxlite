@@ -19,6 +19,7 @@ import { AddBoxUsagePeriods1785250000000 } from '../../migrations/pre-deploy/178
 import { AddBoxUsageExportOutbox1786100000000 } from '../../migrations/pre-deploy/1786100000000-add-box-usage-export-outbox-migration'
 import { AddUsageConcurrencyIndexes1786340000000 } from '../../migrations/pre-deploy/1786340000000-add-usage-concurrency-indexes-migration'
 import { AddBoxContainerProcessOptions1786400000000 } from '../../migrations/pre-deploy/1786400000000-add-box-container-process-options-migration'
+import { AddBoxSecrets1787000000000 } from '../../migrations/pre-deploy/1787000000000-add-box-secrets-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
@@ -170,6 +171,34 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       { find: async () => [] } as any,
     )
 
+  const serviceForPersistedBox = (exportEnabled = false) =>
+    new UsageService(
+      periods,
+      new RedisLockProvider(redis),
+      dataSource.getRepository(Box) as any,
+      outboxService(exportEnabled),
+      { find: async () => [] } as any,
+    )
+
+  const isBlockedBy = async (blockerPid: number): Promise<boolean> => {
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline) {
+      const [{ blocked }] = await dataSource.query(
+        `SELECT EXISTS (
+           SELECT 1
+           FROM pg_stat_activity
+           WHERE $1 = ANY(pg_blocking_pids(pid))
+         ) AS blocked`,
+        [blockerPid],
+      )
+      if (blocked) {
+        return true
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 25))
+    }
+    return false
+  }
+
   const quoted = TABLES.map((table) => `"${table}"`).join(', ')
   // CASCADE because box_last_activity references box.
   const truncateTables = () => dataSource.query(`TRUNCATE ${quoted} CASCADE`)
@@ -225,6 +254,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       // or the reconcile pass queries a column this database does not have and
       // silently finds no boxes.
       await new AddBoxContainerProcessOptions1786400000000().up(queryRunner)
+      await new AddBoxSecrets1787000000000().up(queryRunner)
       ownsTables = true
     } finally {
       await queryRunner.release()
@@ -342,9 +372,10 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   })
 
   it('rolls a day-old period over, carrying the resources of a running box', async () => {
+    await insertBox({ state: BoxState.STARTED })
     await openPeriod({ startAt: new Date(Date.now() - DAY_MS - 60_000) })
 
-    await serviceForBoxState(BoxState.STARTED).closeAndReopenUsagePeriods()
+    await serviceForPersistedBox().closeAndReopenUsagePeriods()
 
     const [closed, reopened] = await periods.find({ order: { startAt: 'ASC' } })
     expect(closed.endAt).toBeInstanceOf(Date)
@@ -354,9 +385,10 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   it('stops charging compute when it rolls over a period whose box is already stopped', async () => {
     // a box that reached STOPPED without passing through STOPPING keeps a
     // full-resource period open; the roll-over must not re-bill its cpu forever
+    await insertBox({ state: BoxState.STOPPED })
     await openPeriod({ startAt: new Date(Date.now() - DAY_MS - 60_000) })
 
-    await serviceForBoxState(BoxState.STOPPED).closeAndReopenUsagePeriods()
+    await serviceForPersistedBox().closeAndReopenUsagePeriods()
 
     const [, reopened] = await periods.find({ order: { startAt: 'ASC' } })
     expect(reopened).toEqual(expect.objectContaining({ endAt: null, cpu: 0, gpu: 0, mem: 0, disk: 10 }))
@@ -382,9 +414,10 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   })
 
   it('starts the reopened period exactly where the closed one ended, with the same attribution', async () => {
+    await insertBox({ state: BoxState.STOPPING })
     await openPeriod({ startAt: new Date(Date.now() - DAY_MS - 60_000) })
 
-    await serviceForBoxState(BoxState.STOPPING).closeAndReopenUsagePeriods()
+    await serviceForPersistedBox().closeAndReopenUsagePeriods()
 
     const [closed, reopened] = await periods.find({ order: { startAt: 'ASC' } })
     // no gap and no overlap: an inherited startAt would bill the elapsed day twice
@@ -394,17 +427,96 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     )
   })
 
+  it('rollover keeps historical attribution and opens from the current Box attribution', async () => {
+    const previousOrganizationId = '7f33c512-a431-4a21-9efc-ff6924f9724c'
+    const currentOrganizationId = '8746db21-0d5b-4f0d-b26d-5a385ba6ecf2'
+    const currentShape = { region: 'eu', cpu: 6, gpu: 2, mem: 12, disk: 80 }
+    await insertBox({
+      state: BoxState.STARTED,
+      organizationId: currentOrganizationId,
+      ...currentShape,
+    })
+    const historical = await openPeriod({
+      organizationId: previousOrganizationId,
+      region: 'us',
+      cpu: 1,
+      gpu: 0,
+      mem: 2,
+      disk: 5,
+      startAt: new Date(Date.now() - DAY_MS - 60_000),
+    })
+
+    await serviceForPersistedBox().closeAndReopenUsagePeriods()
+
+    const closed = await periods.findOneByOrFail({ id: historical.id })
+    const reopened = await periods.findOneByOrFail({ boxId: box.id, endAt: IsNull() })
+    expect(closed).toEqual(
+      expect.objectContaining({ organizationId: previousOrganizationId, region: 'us', cpu: 1, disk: 5 }),
+    )
+    expect(reopened).toEqual(
+      expect.objectContaining({ organizationId: currentOrganizationId, ...currentShape, endAt: null }),
+    )
+    expect(reopened.startAt).toEqual(closed.endAt)
+  })
+
+  it('rollover waits for a concurrent Box update and uses the committed attribution', async () => {
+    const previousOrganizationId = '7f33c512-a431-4a21-9efc-ff6924f9724c'
+    const currentOrganizationId = '8746db21-0d5b-4f0d-b26d-5a385ba6ecf2'
+    const currentShape = { region: 'eu', cpu: 6, gpu: 2, mem: 12, disk: 80 }
+    await insertBox({ state: BoxState.STARTED, organizationId: previousOrganizationId })
+    await openPeriod({
+      organizationId: previousOrganizationId,
+      startAt: new Date(Date.now() - DAY_MS - 60_000),
+    })
+
+    const writer = dataSource.createQueryRunner()
+    await writer.connect()
+    await writer.startTransaction()
+    let rollover: Promise<void> | undefined
+    try {
+      const [{ pid }] = await writer.query(`SELECT pg_backend_pid()::int AS pid`)
+      await writer.manager.update(Box, { id: box.id }, { organizationId: currentOrganizationId, ...currentShape })
+
+      rollover = serviceForPersistedBox().closeAndReopenUsagePeriods()
+      expect(await isBlockedBy(pid)).toBe(true)
+
+      await writer.commitTransaction()
+      await rollover
+    } finally {
+      if (writer.isTransactionActive) {
+        await writer.rollbackTransaction()
+      }
+      if (rollover) {
+        await Promise.allSettled([rollover])
+      }
+      await writer.release()
+    }
+
+    expect(await periods.findOneByOrFail({ boxId: box.id, endAt: IsNull() })).toEqual(
+      expect.objectContaining({ organizationId: currentOrganizationId, ...currentShape }),
+    )
+  }, 10_000)
+
+  it('rollover keeps the old period open when creating the replacement fails', async () => {
+    await insertBox({ state: BoxState.STARTED })
+    const historical = await openPeriod({ startAt: new Date(Date.now() - DAY_MS - 60_000) })
+    const service = serviceForPersistedBox()
+    const creationError = new Error('injected usage-period creation failure')
+    const createUsagePeriod = jest.spyOn(service as any, 'createUsagePeriod').mockRejectedValueOnce(creationError)
+
+    try {
+      await service.closeAndReopenUsagePeriods()
+    } finally {
+      createUsagePeriod.mockRestore()
+    }
+
+    expect(await periods.find()).toEqual([expect.objectContaining({ id: historical.id, endAt: null })])
+  })
+
   it('closes without reopening when the box row no longer exists', async () => {
     await openPeriod({ startAt: new Date(Date.now() - DAY_MS - 60_000) })
-    const serviceWithoutBox = new UsageService(
-      periods,
-      new RedisLockProvider(redis),
-      { findOne: async () => null } as any,
-      outboxService(),
-      { find: async () => [] } as any,
-    )
 
-    await serviceWithoutBox.closeAndReopenUsagePeriods()
+    await serviceForPersistedBox().closeAndReopenUsagePeriods()
 
     // a missing box must not throw inside the transaction — that would roll the
     // close back and leave the period accruing forever
@@ -414,9 +526,10 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   })
 
   it('does not reopen a period for a box that is already gone', async () => {
+    await insertBox({ state: BoxState.DESTROYED })
     await openPeriod({ startAt: new Date(Date.now() - DAY_MS - 60_000) })
 
-    await serviceForBoxState(BoxState.DESTROYED).closeAndReopenUsagePeriods()
+    await serviceForPersistedBox().closeAndReopenUsagePeriods()
 
     const remaining = await periods.find()
     expect(remaining).toHaveLength(1)
@@ -572,8 +685,10 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   // it would paper over a roll-over that carried the wrong figures forward, and
   // the ledger would still churn out a wrong period every single day.
   describe('the daily roll-over on its own', () => {
-    const rollOver = (state: BoxState, boxOverrides: Partial<typeof box> = {}) =>
-      serviceForBoxState(state, false, boxOverrides).closeAndReopenUsagePeriods()
+    const rollOver = async (state: BoxState, boxOverrides: Partial<typeof box> = {}) => {
+      await insertBox({ state, ...boxOverrides })
+      await serviceForPersistedBox().closeAndReopenUsagePeriods()
+    }
 
     it('carries the resources the box has now, not the ones the closing period held', async () => {
       await openPeriod({ cpu: 0, gpu: 0, mem: 0, startAt: new Date(Date.now() - DAY_MS - 60_000) })

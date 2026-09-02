@@ -32,11 +32,16 @@ _UNSET = object()
 
 
 def enabled_network(*allow_net: str):
-    return boxlite.NetworkSpec(mode="enabled", allow_net=list(allow_net))
+    return boxlite.NetworkSpec(
+        outbound=boxlite.OutboundNetworkSpec(
+            mode="enabled",
+            allow_net=list(allow_net),
+        )
+    )
 
 
 def disabled_network():
-    return boxlite.NetworkSpec(mode="disabled")
+    return boxlite.NetworkSpec(outbound=boxlite.OutboundNetworkSpec(mode="disabled"))
 
 
 @dataclass(frozen=True)
