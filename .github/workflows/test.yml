@@ -422,11 +422,19 @@ jobs:
         with: # Native workspace dependencies are submodules.
           submodules: "recursive"
           persist-credentials: ${{ false }}
+      # Fork and Dependabot pull_request runs cannot read repository secrets.
+      # The merge_group run still enforces this contract before merge.
       - name: Checkout Commerce contract provider
+        id: commerce_checkout
+        if: >-
+          github.event_name != 'pull_request' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+          github.actor != 'dependabot[bot]')
         uses: actions/checkout@v5
         with:
           repository: boxlite-ai/boxlite-commerce
           path: .contract/boxlite-commerce
+          token: ${{ secrets.GH_PAT }}
           persist-credentials: ${{ false }}
       - name: Enable Corepack
         run: "corepack enable"
@@ -438,11 +446,12 @@ jobs:
       - name: Install app dependencies
         run: "yarn install --immutable"
       - name: Install Commerce contract dependencies
+        if: steps.commerce_checkout.outcome == 'success'
         working-directory: .contract/boxlite-commerce
         run: "npm ci --ignore-scripts --no-audit --no-fund"
       - name: Run API unit tests
         env:
-          BOXLITE_COMMERCE_REPOSITORY: ${{ github.workspace }}/.contract/boxlite-commerce
+          BOXLITE_COMMERCE_REPOSITORY: ${{ steps.commerce_checkout.outcome == 'success' && format('{0}/.contract/boxlite-commerce', github.workspace) || '' }}
         run: "yarn nx run api:test"
 
   # End API test job.
