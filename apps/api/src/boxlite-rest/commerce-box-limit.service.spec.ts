@@ -175,8 +175,12 @@ describe('CommerceBoxLimitService', () => {
 
   it('does not limit a subscribed plan that is absent from the public catalog', async () => {
     get.mockResolvedValueOnce({ data: catalog }).mockResolvedValueOnce({ data: { plan: { planId: 'custom' } } })
+    const { service, redis } = makeService()
+    const warn = jest.spyOn((service as unknown as { logger: { warn: (message: string) => void } }).logger, 'warn')
 
-    await expect(makeService().service.resolveMaxCreatedBoxes('org-1')).resolves.toBeUndefined()
+    await expect(service.resolveMaxCreatedBoxes('org-1')).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/org-1.*custom.*public catalog/))
+    expect(redis.set).toHaveBeenCalledWith('commerce:box-limit:v1:org-1', 'unlimited', 'EX', 30)
   })
 
   it('rejects a configured Commerce API without the shared token before making a request', async () => {
@@ -188,8 +192,20 @@ describe('CommerceBoxLimitService', () => {
   })
 
   it.each([
-    ['timeout', Object.assign(new Error('timeout'), { code: 'ECONNABORTED' }), { data: {} }],
-    ['Commerce 5xx', Object.assign(new Error('unavailable'), { response: { status: 503 } }), { data: {} }],
+    ['timeout', Object.assign(new Error('timeout'), { code: 'ECONNABORTED' })],
+    ['Commerce 5xx', Object.assign(new Error('unavailable'), { response: { status: 502 } })],
+  ])('temporarily allows creation without caching when Commerce is unavailable due to %s', async (_label, failure) => {
+    get.mockRejectedValueOnce(failure).mockResolvedValueOnce({ data: {} })
+    const { service, redis } = makeService()
+    const warn = jest.spyOn((service as unknown as { logger: { warn: (message: string) => void } }).logger, 'warn')
+
+    await expect(service.resolveMaxCreatedBoxes('org-1')).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/org-1.*temporarily allowing/))
+    expect(redis.set).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['Commerce 4xx', Object.assign(new Error('unauthorized'), { response: { status: 401 } }), { data: {} }],
     ['empty catalog', { data: [] }, { data: {} }],
     ['invalid catalog', { data: [{ id: 'starter', concurrencyLimit: -1 }] }, { data: {} }],
     ['invalid organization response', { data: catalog }, { data: { plan: null } }],

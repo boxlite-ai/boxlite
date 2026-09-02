@@ -22,10 +22,7 @@ import { BoxDesiredStateUpdatedEvent } from '../events/box-desired-state-updated
 import { BoxPublicStatusUpdatedEvent } from '../events/box-public-status-updated.event'
 import { BoxOrganizationUpdatedEvent } from '../events/box-organization-updated.event'
 import { BoxLookupCacheInvalidationService } from '../services/box-lookup-cache-invalidation.service'
-import {
-  BoxCreationAdmissionUnavailableError,
-  BoxCreationLimitExceededError,
-} from '../errors/box-creation-limit.error'
+import { BoxCreationAdmissionUnavailableError, BoxCreationLimitExceededError } from '../errors/box-creation-limit.error'
 
 // SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
 // acquire a lock.
@@ -49,9 +46,13 @@ const CREATION_ADMISSION_MAX_ATTEMPTS = 5
 const CREATION_ADMISSION_BASE_BACKOFF_MS = 5
 const CREATION_ADMISSION_MAX_BACKOFF_MS = 40
 const CREATION_ADMISSION_JITTER_MS = 5
+const CREATION_ADMISSION_RETRY_AFTER_SECONDS = 5
 
 const BOX_CREATION_LIMIT_EXCLUDED_STATES = [
   BoxState.ERROR,
+  // UNKNOWN is treated like ERROR for admission: it is not a usable Box the
+  // organization should have to destroy before creating a replacement.
+  BoxState.UNKNOWN,
   BoxState.DESTROYING,
   BoxState.DESTROYED,
   BoxState.ARCHIVING,
@@ -194,14 +195,20 @@ export class BoxRepository extends BaseRepository<Box> {
           throw error
         }
         if (attempt === CREATION_ADMISSION_MAX_ATTEMPTS - 1) {
-          throw new BoxCreationAdmissionUnavailableError('Box creation admission remained contended; retry the request')
+          throw new BoxCreationAdmissionUnavailableError(
+            'Box creation admission remained contended; retry the request',
+            CREATION_ADMISSION_RETRY_AFTER_SECONDS,
+          )
         }
 
         await this.waitBeforeAdmissionRetry(attempt)
       }
     }
 
-    throw new BoxCreationAdmissionUnavailableError()
+    throw new BoxCreationAdmissionUnavailableError(
+      'Box creation admission remained contended; retry the request',
+      CREATION_ADMISSION_RETRY_AFTER_SECONDS,
+    )
   }
 
   private isSerializationFailure(error: unknown): boolean {

@@ -667,8 +667,13 @@ The Billing API, Box admission, and Usage export rows are the same Commerce
 service reached three ways, on URLs that normally differ by path rather than
 host. The browser API and Box admission reads live under `/api/billing`, which
 `BILLING_API_URL` already includes; admission authenticates with the shared
-service token. The internal usage routes are served off the bare origin. The API
-itself requires `USAGE_EXPORT_URL` whenever export is on and never derives it
+service token. The API validates that URL and token presence at startup. A
+request-time transport or 5xx failure is logged and temporarily leaves creation
+unlimited without caching the fallback; rejected credentials and malformed
+successful responses still return 503. Successful per-organization resolutions
+are cached in Redis for 30 seconds. The internal usage routes are served off the
+bare origin. The API itself requires `USAGE_EXPORT_URL` whenever export is on
+and never derives it
 ([`configuration.ts`](./api/src/config/configuration.ts)); it is the SST stack
 that supplies a default of `BILLING_API_URL`'s origin
 ([`api.ts`](./infra/stack/api.ts)), so a deployment outside that stack must set
@@ -682,8 +687,13 @@ plane using the caller's own token. The `billing` API role and `BILLING_API_KEY`
 that widen [organization suspend/unsuspend](#control-plane-api) exist for
 Commerce, which does not currently call them.
 
-Because the billing client is hand-written rather than generated, neither side
-detects divergence. Five of its 20 routes — the billing-email group — have no
+Admission applies the plan value to the organization's non-finalized Box total:
+`STOPPED` Boxes count, while `ERROR`, `UNKNOWN`, `DESTROYING`, `DESTROYED`,
+`ARCHIVING`, and `ARCHIVED` do not. The two admission reads have a
+cross-repository contract test that runs the current Commerce controllers and
+passes their responses through the BoxLite consumer. The remaining billing
+client is hand-written rather than generated, so neither side detects its
+divergence. Five of its 20 routes — the billing-email group — have no
 implementation in Commerce, of which only `email/verify` has a live caller here
 ([`EmailVerify.tsx`](./dashboard/src/pages/EmailVerify.tsx)); Commerce in turn
 serves card default/delete, `plan/pay-open-charge`, and a credit admission API

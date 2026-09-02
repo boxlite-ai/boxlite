@@ -80,6 +80,7 @@ describe('BoxRepository creation admission', () => {
     expect(excludedStates.type).toBe('in')
     expect(excludedStates.value).toEqual([
       BoxState.ERROR,
+      BoxState.UNKNOWN,
       BoxState.DESTROYING,
       BoxState.DESTROYED,
       BoxState.ARCHIVING,
@@ -156,6 +157,7 @@ describe('BoxRepository creation admission', () => {
     expect(error).toBeInstanceOf(BoxCreationAdmissionUnavailableError)
     expect(responseCode(error)).toBe(BOX_CREATION_ADMISSION_UNAVAILABLE_CODE)
     expect(error.getStatus()).toBe(503)
+    expect((error as unknown as { retryAfterSeconds?: number }).retryAfterSeconds).toBe(5)
     expect(transaction).toHaveBeenCalledTimes(5)
   })
 

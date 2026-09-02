@@ -28,6 +28,11 @@ type OrganizationPlan = {
 
 type CachedBoxLimit = { hit: true; maxCreatedBoxes: number | undefined } | { hit: false }
 
+type CommerceBoxLimitResolution = {
+  maxCreatedBoxes: number | undefined
+  isCacheable: boolean
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -79,9 +84,11 @@ export class CommerceBoxLimitService {
       return cachedLimit.maxCreatedBoxes
     }
 
-    const maxCreatedBoxes = await this.fetchMaxCreatedBoxes(organizationId, baseUrl, token)
-    await this.cacheResolvedLimit(cacheKey, maxCreatedBoxes)
-    return maxCreatedBoxes
+    const resolution = await this.fetchMaxCreatedBoxes(organizationId, baseUrl, token)
+    if (resolution.isCacheable) {
+      await this.cacheResolvedLimit(cacheKey, resolution.maxCreatedBoxes)
+    }
+    return resolution.maxCreatedBoxes
   }
 
   private async getCachedLimit(cacheKey: string): Promise<CachedBoxLimit> {
@@ -127,7 +134,7 @@ export class CommerceBoxLimitService {
     organizationId: string,
     baseUrl: string,
     token: string,
-  ): Promise<number | undefined> {
+  ): Promise<CommerceBoxLimitResolution> {
     const requestConfig = {
       timeout: COMMERCE_REQUEST_TIMEOUT_MS,
       headers: { authorization: `Bearer ${token}` },
@@ -139,7 +146,13 @@ export class CommerceBoxLimitService {
         axios.get<unknown>(`${baseUrl}/plan`, requestConfig),
         axios.get<unknown>(`${baseUrl}/organization/${encodeURIComponent(organizationId)}/plan`, requestConfig),
       ])
-    } catch {
+    } catch (error) {
+      if (this.isTemporarilyUnavailable(error)) {
+        this.logger.warn(
+          `Commerce box limit lookup for organization ${organizationId} is unavailable (${this.unavailabilityReason(error)}); temporarily allowing Box creation`,
+        )
+        return { maxCreatedBoxes: undefined, isCacheable: false }
+      }
       throw new BoxCreationAdmissionUnavailableError('Commerce plan service is unavailable')
     }
 
@@ -153,7 +166,36 @@ export class CommerceBoxLimitService {
 
     // A plan absent from the public catalog may be a negotiated subscription;
     // leave it unlimited until Commerce exposes its effective limit.
-    return selectedPlan?.concurrencyLimit ?? undefined
+    if (organizationPlan && organizationPlan.entitlements !== 'suspended' && !selectedPlan) {
+      this.logger.warn(
+        `Organization ${organizationId} uses Commerce plan ${organizationPlan.planId}, which is absent from the public catalog; leaving Box creation unlimited`,
+      )
+    }
+    return { maxCreatedBoxes: selectedPlan?.concurrencyLimit ?? undefined, isCacheable: true }
+  }
+
+  private isTemporarilyUnavailable(error: unknown): boolean {
+    if (!isRecord(error)) {
+      return false
+    }
+
+    const response = error.response
+    if (response === undefined) {
+      return true
+    }
+    return isRecord(response) && typeof response.status === 'number' && response.status >= 500 && response.status <= 599
+  }
+
+  private unavailabilityReason(error: unknown): string {
+    if (!isRecord(error)) {
+      return 'request failed'
+    }
+
+    const response = error.response
+    if (isRecord(response) && typeof response.status === 'number') {
+      return `HTTP ${response.status}`
+    }
+    return typeof error.code === 'string' ? error.code : 'transport failure'
   }
 
   private normalizeBaseUrl(rawBaseUrl: string): string {

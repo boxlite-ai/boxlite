@@ -22,7 +22,10 @@ export class BoxCreationLimitExceededError extends HttpException {
 }
 
 export class BoxCreationAdmissionUnavailableError extends HttpException {
-  constructor(message = 'Box creation admission is temporarily unavailable') {
+  constructor(
+    message = 'Box creation admission is temporarily unavailable',
+    readonly retryAfterSeconds?: number,
+  ) {
     super({ message, code: BOX_CREATION_ADMISSION_UNAVAILABLE_CODE }, HttpStatus.SERVICE_UNAVAILABLE)
     this.name = 'BoxCreationAdmissionUnavailableError'
   }

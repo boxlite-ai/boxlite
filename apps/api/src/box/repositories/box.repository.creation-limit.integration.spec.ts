@@ -19,6 +19,7 @@ const organizationId = '00000000-0000-4000-8000-0000000000aa'
 
 const excludedStates = new Set([
   BoxState.ERROR,
+  BoxState.UNKNOWN,
   BoxState.DESTROYING,
   BoxState.DESTROYED,
   BoxState.ARCHIVING,

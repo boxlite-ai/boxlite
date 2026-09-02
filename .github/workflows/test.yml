@@ -422,6 +422,12 @@ jobs:
         with: # Native workspace dependencies are submodules.
           submodules: "recursive"
           persist-credentials: ${{ false }}
+      - name: Checkout Commerce contract provider
+        uses: actions/checkout@v5
+        with:
+          repository: boxlite-ai/boxlite-commerce
+          path: .contract/boxlite-commerce
+          persist-credentials: ${{ false }}
       - name: Enable Corepack
         run: "corepack enable"
       - uses: actions/setup-node@v4
@@ -431,7 +437,12 @@ jobs:
           cache-dependency-path: "apps/yarn.lock"
       - name: Install app dependencies
         run: "yarn install --immutable"
+      - name: Install Commerce contract dependencies
+        working-directory: .contract/boxlite-commerce
+        run: "npm ci --ignore-scripts --no-audit --no-fund"
       - name: Run API unit tests
+        env:
+          BOXLITE_COMMERCE_REPOSITORY: ${{ github.workspace }}/.contract/boxlite-commerce
         run: "yarn nx run api:test"
 
   # End API test job.

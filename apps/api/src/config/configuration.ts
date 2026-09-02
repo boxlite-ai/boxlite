@@ -78,6 +78,30 @@ function requiredHttpUrl(value: string, name: string): string {
   return value.replace(/\/+$/, '')
 }
 
+/**
+ * Validate the authenticated Commerce read surface when it is enabled.
+ *
+ * Unlike usage export, the presence of BILLING_API_URL itself enables these
+ * reads. A bad URL or missing shared token must therefore fail at startup,
+ * before the first hosted CREATE request discovers the deployment error.
+ */
+function billingApiUrlConfig(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const rawUrl = env.BILLING_API_URL?.trim()
+  if (!rawUrl) {
+    return undefined
+  }
+  if (!env.USAGE_EXPORT_TOKEN?.trim()) {
+    throw new Error('USAGE_EXPORT_TOKEN is required when BILLING_API_URL is set')
+  }
+
+  const url = requiredHttpUrl(rawUrl, 'BILLING_API_URL')
+  const parsed = new URL(url)
+  if (parsed.username || parsed.password) {
+    throw new Error('BILLING_API_URL must not carry credentials')
+  }
+  return url
+}
+
 function validateOidcManagementHttpsUrl(value: string, name: string): void {
   let parsed: URL
   try {
@@ -481,7 +505,7 @@ const configuration = {
   },
   organizationBoxDefaultLimitedNetworkEgress: process.env.ORGANIZATION_BOX_DEFAULT_LIMITED_NETWORK_EGRESS === 'true',
   pylonAppId: process.env.PYLON_APP_ID,
-  billingApiUrl: process.env.BILLING_API_URL,
+  billingApiUrl: billingApiUrlConfig(),
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
   usageExport: usageExportConfig(),
   incidentIo: incidentIoConfig(),

@@ -1328,7 +1328,7 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
 
     ResourceExhaustedError:
-      description: The organization has reached its active Box creation limit
+      description: The organization has reached its plan's non-finalized Box limit
       content:
         application/json:
           schema:
@@ -1343,6 +1343,13 @@ components:
 
     ServiceUnavailableError:
       description: A required backend service is not configured or available
+      headers:
+        Retry-After:
+          description: Seconds to wait when Box creation admission is temporarily contended
+          schema:
+            type: integer
+            minimum: 1
+            example: 5
       content:
         application/json:
           schema:
