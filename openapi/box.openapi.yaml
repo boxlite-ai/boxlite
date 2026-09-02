@@ -1334,11 +1334,12 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
           example:
-            error:
-              message: "Organization box creation limit reached: 2 of 2 boxes are already counted"
-              type: ResourceExhaustedError
-              code: resource_exhausted
-              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
+            path: /api/v1/org/boxes
+            timestamp: "2026-09-02T06:55:28.000Z"
+            statusCode: 429
+            error: Too Many Requests
+            message: "Organization box creation limit reached: 2 of 2 boxes are already counted"
+            code: resource_exhausted
 
     ServiceUnavailableError:
       description: A required backend service is not configured or available

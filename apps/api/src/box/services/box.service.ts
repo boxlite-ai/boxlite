@@ -315,10 +315,10 @@ export class BoxService {
       // the chosen runner is still fine, it was the name that collided.
       const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, () =>
         createBoxDto.name
-          ? this.insertWithCreationAdmission(box, options.maxCreatedBoxes)
+          ? this.boxRepository.insert(box, options.maxCreatedBoxes)
           : persistWithGeneratedBoxName(box.id, (name) => {
               box.name = name
-              return this.insertWithCreationAdmission(box, options.maxCreatedBoxes)
+              return this.boxRepository.insert(box, options.maxCreatedBoxes)
             }),
       )
 
@@ -340,12 +340,6 @@ export class BoxService {
     }
   }
 
-  private insertWithCreationAdmission(box: Box, maxCreatedBoxes?: number): Promise<Box> {
-    return maxCreatedBoxes === undefined
-      ? this.boxRepository.insert(box)
-      : this.boxRepository.insert(box, maxCreatedBoxes)
-  }
-
   private async assignWarmPoolBox(
     warmPoolBox: Box,
     createBoxDto: CreateBoxDto,
@@ -353,7 +347,6 @@ export class BoxService {
     maxCreatedBoxes?: number,
   ): Promise<BoxDto> {
     const now = new Date()
-    const creationAdmission = maxCreatedBoxes === undefined ? {} : { maxCreatedBoxes }
     const updateData: Partial<Box> = {
       // POL-205: same default as the fresh-box path — see the comment there.
       public: createBoxDto.public ?? false,
@@ -392,12 +385,12 @@ export class BoxService {
       ? await this.boxRepository.update(warmPoolBox.id, {
           updateData: { ...updateData, name: createBoxDto.name },
           entity: warmPoolBox,
-          ...creationAdmission,
+          maxCreatedBoxes,
         })
       : await persistWithGeneratedBoxName(warmPoolBox.id, (name) =>
           this.boxRepository.update(warmPoolBox.id, {
             updateData: { ...updateData, name },
-            ...creationAdmission,
+            maxCreatedBoxes,
           }),
         )
 
