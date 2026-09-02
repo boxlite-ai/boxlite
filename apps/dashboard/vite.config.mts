@@ -78,6 +78,15 @@ export default defineConfig((mode) => ({
   // worker: {
   //  plugins: [ nxViteTsPaths() ],
   // },
+  // Vitest picks up the pure-logic specs under src/. Without this block the
+  // @nx/vite plugin infers no `test` target for the project, so spec files sit
+  // in the tree unexecuted.
+  test: {
+    name: 'dashboard',
+    environment: 'node',
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    watch: false,
+  },
   optimizeDeps: {
     exclude: ['tar'],
   },

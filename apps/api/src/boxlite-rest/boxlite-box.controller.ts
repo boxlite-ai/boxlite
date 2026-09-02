@@ -37,7 +37,7 @@ import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.map
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
-
+import { RestApiScope } from './api-scope'
 // Spec-first surface: the contract is openapi/box.openapi.yaml, not the
 // generated product spec (which `:prefix` routes would render invalid).
 @ApiExcludeController()
@@ -107,6 +107,7 @@ export class BoxliteBoxController {
       }),
     },
   })
+  @RestApiScope('box:write')
   async createBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Body() dto: CreateBoxDto,
@@ -127,6 +128,7 @@ export class BoxliteBoxController {
     description: 'List boxes',
     type: ListBoxesResponseDto,
   })
+  @RestApiScope('box:read')
   async listBoxes(
     @AuthContext() authContext: OrganizationAuthContext,
     @Query('pageSize') pageSize?: string,
@@ -144,6 +146,7 @@ export class BoxliteBoxController {
     description: 'Box details',
     type: BoxResponseDto,
   })
+  @RestApiScope('box:read')
   async getBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -154,6 +157,7 @@ export class BoxliteBoxController {
   }
 
   @Head(':boxId')
+  @RestApiScope('box:read')
   async headBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -174,6 +178,7 @@ export class BoxliteBoxController {
     targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxId,
   })
+  @RestApiScope('box:delete')
   async removeBox(@AuthContext() authContext: OrganizationAuthContext, @Param('boxId') boxId: string) {
     await this.boxService.destroy(boxId, authContext.organizationId)
   }
@@ -190,6 +195,7 @@ export class BoxliteBoxController {
     targetIdFromRequest: (req) => req.params.boxId,
     targetIdFromResult: (result: BoxResponseDto) => result?.box_id,
   })
+  @RestApiScope('box:write')
   async startBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -221,6 +227,7 @@ export class BoxliteBoxController {
     targetIdFromRequest: (req) => req.params.boxId,
     targetIdFromResult: (result: BoxResponseDto) => result?.box_id,
   })
+  @RestApiScope('box:write')
   async stopBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
