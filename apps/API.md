@@ -688,12 +688,13 @@ plane using the caller's own token. The `billing` API role and `BILLING_API_KEY`
 that widen [organization suspend/unsuspend](#control-plane-api) exist for
 Commerce, which does not currently call them.
 
-Admission applies the plan value to the organization's non-finalized Box total:
-`STOPPED` Boxes count, while `ERROR`, `UNKNOWN`, `DESTROYING`, `DESTROYED`,
-`ARCHIVING`, and `ARCHIVED` do not. The two admission reads have a
-cross-repository contract test that runs the current Commerce controllers and
-passes their responses through the BoxLite consumer. The remaining billing
-client is hand-written rather than generated, so neither side detects its
+Admission applies the plan value to the organization's non-finalized Box total.
+`STOPPED` Boxes and `UNKNOWN` Boxes with `pending=true` count, while `ERROR`,
+settled `UNKNOWN`, `DESTROYING`, `DESTROYED`, `ARCHIVING`, and `ARCHIVED` do
+not. The two admission reads have a cross-repository contract test that runs
+the current Commerce controllers and passes their responses through the
+BoxLite consumer. The remaining billing client is hand-written rather than
+generated, so neither side detects its
 divergence. Five of its 20 routes — the billing-email group — have no
 implementation in Commerce, of which only `email/verify` has a live caller here
 ([`EmailVerify.tsx`](./dashboard/src/pages/EmailVerify.tsx)); Commerce in turn
