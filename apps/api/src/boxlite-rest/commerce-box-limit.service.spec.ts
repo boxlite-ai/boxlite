@@ -173,14 +173,31 @@ describe('CommerceBoxLimitService', () => {
     await expect(makeService().service.resolveMaxCreatedBoxes('org-1')).resolves.toBeUndefined()
   })
 
-  it('does not limit a subscribed plan that is absent from the public catalog', async () => {
-    get.mockResolvedValueOnce({ data: catalog }).mockResolvedValueOnce({ data: { plan: { planId: 'custom' } } })
-    const { service, redis } = makeService()
+  it('does not cache an unmatched subscribed plan and rechecks Commerce on the next request', async () => {
+    get
+      .mockResolvedValueOnce({ data: catalog })
+      .mockResolvedValueOnce({ data: { plan: { planId: 'custom' } } })
+      .mockResolvedValueOnce({ data: catalog })
+      .mockResolvedValueOnce({ data: { plan: { planId: 'pro' } } })
+    let cachedLimit: string | null = null
+    const { service, redis } = makeService(
+      {},
+      {
+        get: jest.fn().mockImplementation(async () => cachedLimit),
+        set: jest.fn().mockImplementation(async (_key: string, value: string) => {
+          cachedLimit = value
+          return 'OK'
+        }),
+      },
+    )
     const warn = jest.spyOn((service as unknown as { logger: { warn: (message: string) => void } }).logger, 'warn')
 
     await expect(service.resolveMaxCreatedBoxes('org-1')).resolves.toBeUndefined()
+    await expect(service.resolveMaxCreatedBoxes('org-1')).resolves.toBe(8)
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/org-1.*custom.*public catalog/))
-    expect(redis.set).toHaveBeenCalledWith('commerce:box-limit:v1:org-1', 'unlimited', 'EX', 30)
+    expect(get).toHaveBeenCalledTimes(4)
+    expect(redis.set).toHaveBeenCalledTimes(1)
+    expect(redis.set).toHaveBeenCalledWith('commerce:box-limit:v1:org-1', 'limit:8', 'EX', 30)
   })
 
   it('rejects a configured Commerce API without the shared token before making a request', async () => {

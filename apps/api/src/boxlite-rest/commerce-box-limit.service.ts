@@ -40,6 +40,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 @Injectable()
 export class CommerceBoxLimitService {
   private readonly logger = new Logger(CommerceBoxLimitService.name)
+  // Coalesces concurrent misses only within this Node process. Redis shares
+  // completed resolutions, but does not provide cross-instance singleflight.
   private readonly inFlightResolutions = new Map<string, Promise<number | undefined>>()
 
   constructor(
@@ -170,6 +172,7 @@ export class CommerceBoxLimitService {
       this.logger.warn(
         `Organization ${organizationId} uses Commerce plan ${organizationPlan.planId}, which is absent from the public catalog; leaving Box creation unlimited`,
       )
+      return { maxCreatedBoxes: undefined, isCacheable: false }
     }
     return { maxCreatedBoxes: selectedPlan?.concurrencyLimit ?? undefined, isCacheable: true }
   }
