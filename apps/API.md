@@ -667,12 +667,13 @@ The Billing API, Box admission, and Usage export rows are the same Commerce
 service reached three ways, on URLs that normally differ by path rather than
 host. The browser API and Box admission reads live under `/api/billing`, which
 `BILLING_API_URL` already includes; admission authenticates with the shared
-service token. The API validates that URL and token presence at startup. A
-request-time transport or 5xx failure is logged and temporarily leaves creation
-unlimited without caching the fallback; rejected credentials and malformed
-successful responses still return 503. Successful per-organization resolutions
-are cached in Redis for 30 seconds. The internal usage routes are served off the
-bare origin. The API itself requires `USAGE_EXPORT_URL` whenever export is on
+service token. When `BILLING_API_URL` is configured, the API validates that URL
+and the shared token at startup. A request-time transport or 5xx failure is
+logged and temporarily leaves creation unlimited without caching the fallback;
+rejected credentials and malformed successful responses still return 503.
+Successful per-organization resolutions are cached in Redis for 30 seconds. The
+internal usage routes are served off the bare origin. The API itself requires
+`USAGE_EXPORT_URL` whenever export is on
 and never derives it
 ([`configuration.ts`](./api/src/config/configuration.ts)); it is the SST stack
 that supplies a default of `BILLING_API_URL`'s origin
