@@ -81,14 +81,14 @@ typedef enum BoxliteRegistryTransport {
   BoxliteRegistryTransportHttp = 1,
 } BoxliteRegistryTransport;
 
-// Streaming-copy source shape. For copy-in, `Unknown` means the caller
-// cannot tell and the guest peeks at the archive. For copy-out, `Unknown`
-// means the peer omitted the hint. The C-ABI mirror of the core
+// Streaming-copy source shape. For copy-in, `BoxliteCopySourceKindUnknown`
+// means the caller cannot tell and the guest peeks at the archive. For
+// copy-out, it means the peer omitted the hint. The C-ABI mirror of the core
 // `CopySourceKind`.
 typedef enum BoxliteCopySourceKind {
-  Unknown = 0,
-  File = 1,
-  Dir = 2,
+  BoxliteCopySourceKindUnknown = 0,
+  BoxliteCopySourceKindFile = 1,
+  BoxliteCopySourceKindDir = 2,
 } BoxliteCopySourceKind;
 
 // Opaque handle wrapping an `AdvancedBoxOptions`. Allocated via
@@ -646,7 +646,8 @@ enum BoxliteErrorCode boxlite_copy_out(CBoxHandle *handle,
 // This call blocks until the stream and its optional source-shape hint are
 // ready. On success the returned handle must be released with
 // [`boxlite_copy_out_free`]. A non-null `out_source_kind` is initialized to
-// `Unknown` and updated to `File` or `Dir` when the peer supplies the hint.
+// `BoxliteCopySourceKindUnknown` and updated to the `...File` or `...Dir`
+// variant when the peer supplies the hint.
 struct CBoxCopyOutStream *boxlite_copy_out_start(CBoxHandle *handle,
                                                  const char *guest_src,
                                                  int32_t *out_source_kind,
@@ -673,8 +674,9 @@ void boxlite_copy_out_free(struct CBoxCopyOutStream *stream);
 // Begin a streaming copy-in, returning an opaque transfer handle.
 //
 // `source_kind` describes the archive shape: `BoxliteCopySourceKind`'s
-// discriminant (`Unknown`=0, `File`=1, `Dir`=2), or 0 when the caller
-// cannot tell (older clients) — the guest then peeks the archive to decide.
+// discriminant (`...Unknown`=0, `...File`=1, `...Dir`=2), or 0 when the
+// caller cannot tell (older clients) — the guest then peeks the archive to
+// decide.
 // Taken as an integer because C callers can pass any value, and
 // out-of-range discriminants must behave as Unknown rather than as an
 // invalid Rust enum.
