@@ -54,6 +54,22 @@ describe("SimpleBoxOptions", () => {
     ]);
   });
 
+  test("forwards disk io limits to the native options", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const box = new SimpleBox({
+      diskIo: { writeBps: 20 * 1024 * 1024, readIops: 2000 },
+    });
+    const nativeOptions = (box as any)._boxOpts;
+
+    // The native layer reads `diskIo`; a box built without it must leave the
+    // field unset so the runtime keeps the box unlimited.
+    expect(nativeOptions.diskIo).toEqual({
+      writeBps: 20 * 1024 * 1024,
+      readIops: 2000,
+    });
+    expect((new SimpleBox() as any)._boxOpts.diskIo).toBeUndefined();
+  });
+
   test("accepts cmd array", () => {
     const opts: SimpleBoxOptions = {
       image: "docker:dind",

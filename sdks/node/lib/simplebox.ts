@@ -15,6 +15,7 @@ import type {
   JsBox,
   JsBoxInfo,
   JsBoxOptions,
+  JsDiskIoLimits,
   JsVolumeSpec,
   NativeBoxConnection,
   NativeBoxTunnel,
@@ -281,6 +282,13 @@ export interface SimpleBoxOptions {
   /** Disk size in GB for container rootfs (sparse, grows as needed) */
   diskSizeGb?: number;
 
+  /**
+   * Disk I/O rate limits: read/write bytes per second and read/write IOPS,
+   * each optional. Linux cgroup v2 `io.max`; where the host cannot enforce
+   * them the box starts with a warning and no throttle.
+   */
+  diskIo?: JsDiskIoLimits;
+
   /** Optional runtime instance (uses global default if not provided) */
   runtime?: BoxRuntime;
 
@@ -513,6 +521,7 @@ export class SimpleBox {
       cpus: options.cpus,
       memoryMib: options.memoryMib,
       diskSizeGb: options.diskSizeGb,
+      diskIo: options.diskIo,
       autoRemove: options.autoRemove ?? true,
       detach: options.detach ?? false,
       workingDir: options.workingDir,
