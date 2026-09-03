@@ -104,6 +104,7 @@ impl Sandbox for SeatbeltSandbox {
             id = %ctx.id,
             "Pre-spawn isolation: no-op on macOS (no cgroups)"
         );
+        super::warn_disk_io_not_enforced(ctx, "disk io limits need Linux cgroup v2");
         Ok(())
     }
 

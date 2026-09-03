@@ -126,6 +126,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       gpuQuota: box.gpu,
       memoryQuota: box.mem,
       storageQuota: box.disk,
+      diskIo: box.diskIo,
       env: box.env,
       runAsUser: box.runAsUser,
       workingDir: box.workingDir,

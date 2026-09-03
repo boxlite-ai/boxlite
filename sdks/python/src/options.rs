@@ -5,9 +5,9 @@ use boxlite::litebox::copy::CopyOptions;
 use boxlite::runtime::advanced_options::{HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, InboundNetworkConfig,
-    NetworkMode, NetworkSpec, OutboundNetworkConfig, PortProtocol, PortSpec, RegistryTransport,
-    RootfsSpec, VolumeSpec,
+    BoxOptions, BoxliteOptions, DiskIoLimits, ImageRegistry, ImageRegistryAuth,
+    InboundNetworkConfig, NetworkMode, NetworkSpec, OutboundNetworkConfig, PortProtocol, PortSpec,
+    RegistryTransport, RootfsSpec, VolumeSpec,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -528,6 +528,64 @@ impl PySecret {
 }
 
 // ============================================================================
+// Disk I/O Limits
+// ============================================================================
+
+/// Disk I/O rate limits: bandwidth (bytes/s) and IOPS, each per direction.
+///
+/// ``None`` leaves a dimension unlimited; values must be > 0. Enforced on
+/// Linux via the box's cgroup (``io.max``); elsewhere logged and ignored.
+#[pyclass(name = "DiskIoLimits")]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PyDiskIoLimits {
+    #[pyo3(get, set)]
+    pub(crate) read_bps: Option<u64>,
+    #[pyo3(get, set)]
+    pub(crate) write_bps: Option<u64>,
+    #[pyo3(get, set)]
+    pub(crate) read_iops: Option<u64>,
+    #[pyo3(get, set)]
+    pub(crate) write_iops: Option<u64>,
+}
+
+#[pymethods]
+impl PyDiskIoLimits {
+    #[new]
+    #[pyo3(signature = (read_bps=None, write_bps=None, read_iops=None, write_iops=None))]
+    fn new(
+        read_bps: Option<u64>,
+        write_bps: Option<u64>,
+        read_iops: Option<u64>,
+        write_iops: Option<u64>,
+    ) -> Self {
+        Self {
+            read_bps,
+            write_bps,
+            read_iops,
+            write_iops,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "DiskIoLimits(read_bps={:?}, write_bps={:?}, read_iops={:?}, write_iops={:?})",
+            self.read_bps, self.write_bps, self.read_iops, self.write_iops
+        )
+    }
+}
+
+impl From<PyDiskIoLimits> for DiskIoLimits {
+    fn from(py: PyDiskIoLimits) -> Self {
+        Self {
+            read_bps: py.read_bps,
+            write_bps: py.write_bps,
+            read_iops: py.read_iops,
+            write_iops: py.write_iops,
+        }
+    }
+}
+
+// ============================================================================
 // Box Options
 // ============================================================================
 
@@ -544,6 +602,8 @@ pub(crate) struct PyBoxOptions {
     pub(crate) memory_mib: Option<u32>,
     #[pyo3(get, set)]
     pub(crate) disk_size_gb: Option<u64>,
+    #[pyo3(get, set)]
+    pub(crate) disk_io: Option<PyDiskIoLimits>,
     #[pyo3(get, set)]
     pub(crate) working_dir: Option<String>,
     #[pyo3(get, set)]
@@ -618,6 +678,7 @@ impl PyBoxOptions {
         tty=None,
         advanced=None,
         secrets=vec![],
+        disk_io=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -642,6 +703,7 @@ impl PyBoxOptions {
         tty: Option<bool>,
         advanced: Option<PyAdvancedBoxOptions>,
         secrets: Vec<PySecret>,
+        disk_io: Option<PyDiskIoLimits>,
     ) -> Self {
         Self {
             image,
@@ -649,6 +711,7 @@ impl PyBoxOptions {
             cpus,
             memory_mib,
             disk_size_gb,
+            disk_io,
             working_dir,
             env,
             volumes,
@@ -712,6 +775,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
             cpus: py_opts.cpus,
             memory_mib: py_opts.memory_mib,
             disk_size_gb: py_opts.disk_size_gb,
+            disk_io: py_opts.disk_io.map(DiskIoLimits::from),
             working_dir: py_opts.working_dir,
             env: py_opts.env,
             rootfs,
@@ -1196,6 +1260,7 @@ mod tests {
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,
+            disk_io: None,
             working_dir: None,
             env: vec![],
             volumes: vec![],
@@ -1224,6 +1289,7 @@ mod tests {
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,
+            disk_io: None,
             working_dir: None,
             env: vec![],
             volumes: vec![],

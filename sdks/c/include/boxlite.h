@@ -825,6 +825,16 @@ void boxlite_options_set_memory(CBoxliteOptions *opts, int memory_mib);
 
 void boxlite_options_set_disk_size_gb(CBoxliteOptions *opts, int disk_size_gb);
 
+// Set disk I/O rate limits: bandwidth in bytes/s and operations/s, per
+// direction. Pass 0 for a dimension to leave it unlimited; all four 0 clears
+// the limits. Enforced on Linux via cgroup v2 `io.max`; elsewhere logged and
+// ignored.
+void boxlite_options_set_disk_io_limits(CBoxliteOptions *opts,
+                                        uint64_t read_bps,
+                                        uint64_t write_bps,
+                                        uint64_t read_iops,
+                                        uint64_t write_iops);
+
 void boxlite_options_set_workdir(CBoxliteOptions *opts, const char *workdir);
 
 void boxlite_options_set_user(CBoxliteOptions *opts, const char *user);

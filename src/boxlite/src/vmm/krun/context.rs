@@ -11,13 +11,13 @@ use std::{ffi::CString, ptr};
 use crate::vmm::krun::check_status;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libkrun_sys::{
-    krun_add_disk2, krun_add_net_unixgram, krun_add_net_unixstream, krun_add_virtiofs3,
-    krun_add_vsock, krun_add_vsock_port2, krun_check_nested_virt, krun_create_ctx,
-    krun_disable_implicit_vsock, krun_free_ctx, krun_init_log, krun_set_console_output,
-    krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel, krun_set_nested_virt,
-    krun_set_port_map, krun_set_rlimits, krun_set_root, krun_set_root_disk_remount,
-    krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid, krun_split_irqchip,
-    krun_start_enter,
+    krun_add_disk2, krun_add_disk3, krun_add_net_unixgram, krun_add_net_unixstream,
+    krun_add_virtiofs3, krun_add_vsock, krun_add_vsock_port2, krun_check_nested_virt,
+    krun_create_ctx, krun_disable_implicit_vsock, krun_free_ctx, krun_init_log,
+    krun_set_console_output, krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel,
+    krun_set_nested_virt, krun_set_port_map, krun_set_rlimits, krun_set_root,
+    krun_set_root_disk_remount, krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid,
+    krun_split_irqchip, krun_start_enter,
 };
 
 /// Thin wrapper that owns a libkrun context.
@@ -536,12 +536,14 @@ impl KrunContext {
         disk_path: &str,
         read_only: bool,
         format: &str,
+        direct_io: bool,
     ) -> BoxliteResult<()> {
         tracing::debug!(
             block_id,
             disk_path,
             read_only,
             format,
+            direct_io,
             "Adding disk images with format"
         );
 
@@ -562,15 +564,35 @@ impl KrunContext {
             }
         };
 
-        check_status("krun_add_disk2", unsafe {
-            krun_add_disk2(
-                self.ctx_id,
-                block_id_c.as_ptr(),
-                disk_path_c.as_ptr(),
-                disk_format,
-                read_only,
-            )
-        })
+        // `krun_add_disk3` is `krun_add_disk2` plus the O_DIRECT switch; the
+        // sync mode passed is the one `krun_add_disk2` hardcodes on Linux, so
+        // the only behavioural difference is bypassing the host page cache.
+        // O_DIRECT is what makes host-side I/O accounting (cgroup `io.max`)
+        // attribute the box's disk traffic to the box: buffered writes are
+        // charged to whichever cgroup first dirtied the image file's inode.
+        if direct_io {
+            check_status("krun_add_disk3", unsafe {
+                krun_add_disk3(
+                    self.ctx_id,
+                    block_id_c.as_ptr(),
+                    disk_path_c.as_ptr(),
+                    disk_format,
+                    read_only,
+                    true,
+                    libkrun_sys::KRUN_SYNC_FULL,
+                )
+            })
+        } else {
+            check_status("krun_add_disk2", unsafe {
+                krun_add_disk2(
+                    self.ctx_id,
+                    block_id_c.as_ptr(),
+                    disk_path_c.as_ptr(),
+                    disk_format,
+                    read_only,
+                )
+            })
+        }
     }
 
     /// Set the uid for the microVM process.

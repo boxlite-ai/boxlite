@@ -217,11 +217,23 @@ type Secret struct {
 	Placeholder string
 }
 
+// DiskIoLimits caps a box's disk I/O: bandwidth in bytes per second and
+// operations per second, each per direction. Zero leaves a dimension
+// unlimited. Enforced on Linux through the box's cgroup v2 io.max; where that
+// controller is unavailable the runtime logs a warning and runs unthrottled.
+type DiskIoLimits struct {
+	ReadBps   uint64
+	WriteBps  uint64
+	ReadIops  uint64
+	WriteIops uint64
+}
+
 type boxConfig struct {
 	name       string
 	cpus       int
 	memoryMiB  int
 	diskSizeGB int
+	diskIo     *DiskIoLimits
 	rootfsPath string
 	env        [][2]string
 	volumes    []volumeEntry
@@ -272,6 +284,13 @@ func WithMemory(mib int) BoxOption {
 // on first boot.
 func WithDiskSize(gb int) BoxOption {
 	return func(c *boxConfig) { c.diskSizeGB = gb }
+}
+
+// WithDiskIoLimits caps the box's disk bandwidth and IOPS. Zero fields stay
+// unlimited; a limits value with every field zero is the same as not calling
+// this at all.
+func WithDiskIoLimits(limits DiskIoLimits) BoxOption {
+	return func(c *boxConfig) { c.diskIo = &limits }
 }
 
 // WithRootfsPath prefers a local OCI image layout directory over pulling from a registry.
@@ -493,6 +512,11 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 	}
 	if cfg.diskSizeGB > 0 {
 		C.boxlite_options_set_disk_size_gb(cOpts, C.int(cfg.diskSizeGB))
+	}
+	if cfg.diskIo != nil {
+		C.boxlite_options_set_disk_io_limits(cOpts,
+			C.uint64_t(cfg.diskIo.ReadBps), C.uint64_t(cfg.diskIo.WriteBps),
+			C.uint64_t(cfg.diskIo.ReadIops), C.uint64_t(cfg.diskIo.WriteIops))
 	}
 	if cfg.workDir != "" {
 		cDir := toCString(cfg.workDir)

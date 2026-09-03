@@ -15,6 +15,9 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
+import type { DiskIoLimitsDTO } from './disk-io-limits-dto';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { DtoSecretDTO } from './dto-secret-dto';
 // May contain unused imports in some cases
 // @ts-ignore
@@ -27,6 +30,7 @@ export interface CreateBoxDTO {
     'authToken'?: string;
     'cmd'?: Array<string>;
     'cpuQuota'?: number;
+    'diskIo'?: DiskIoLimitsDTO;
     'entrypoint'?: Array<string>;
     'env'?: { [key: string]: string; };
     'fromVolumeId'?: string;

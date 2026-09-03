@@ -270,6 +270,7 @@ export class BoxService {
       box.gpu = gpu
       box.mem = mem
       box.disk = disk
+      box.diskIo = createBoxDto.diskIo
 
       // POL-205: default private. A caller who never mentions visibility gets
       // a box that is not reachable from the public internet, rather than

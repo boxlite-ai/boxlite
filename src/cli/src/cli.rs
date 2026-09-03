@@ -8,7 +8,8 @@ use boxlite::experimental::{
     EXPERIMENTAL_FEATURES_ENV, ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder,
 };
 use boxlite::runtime::options::{
-    InboundNetworkConfig, NetworkMode, OutboundNetworkConfig, PortProtocol, PortSpec, VolumeSpec,
+    DiskIoLimits, InboundNetworkConfig, NetworkMode, OutboundNetworkConfig, PortProtocol, PortSpec,
+    VolumeSpec,
 };
 use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime,
@@ -1033,6 +1034,24 @@ pub struct ResourceFlags {
     /// install`, build caches, etc.).
     #[arg(long = "disk-size", value_name = "GB")]
     pub disk_size_gb: Option<u64>,
+
+    /// Disk read bandwidth limit in bytes per second (Linux, cgroup v2 io.max).
+    /// Any --disk-* limit makes the box open its private writable disk with
+    /// O_DIRECT so its writes are charged to it. Unset = unlimited.
+    #[arg(long = "disk-read-bps", value_name = "BYTES")]
+    pub disk_read_bps: Option<u64>,
+
+    /// Disk write bandwidth limit in bytes per second (Linux, cgroup v2 io.max).
+    #[arg(long = "disk-write-bps", value_name = "BYTES")]
+    pub disk_write_bps: Option<u64>,
+
+    /// Disk read operations per second limit (Linux, cgroup v2 io.max).
+    #[arg(long = "disk-read-iops", value_name = "IOPS")]
+    pub disk_read_iops: Option<u64>,
+
+    /// Disk write operations per second limit (Linux, cgroup v2 io.max).
+    #[arg(long = "disk-write-iops", value_name = "IOPS")]
+    pub disk_write_iops: Option<u64>,
 }
 
 impl ResourceFlags {
@@ -1048,6 +1067,15 @@ impl ResourceFlags {
         }
         if let Some(gb) = self.disk_size_gb {
             opts.disk_size_gb = Some(gb);
+        }
+        let disk_io = DiskIoLimits {
+            read_bps: self.disk_read_bps,
+            write_bps: self.disk_write_bps,
+            read_iops: self.disk_read_iops,
+            write_iops: self.disk_write_iops,
+        };
+        if !disk_io.is_empty() {
+            opts.disk_io = Some(disk_io);
         }
     }
 }
@@ -2041,6 +2069,10 @@ mod tests {
             cpus: Some(1000),
             memory: None,
             disk_size_gb: None,
+            disk_read_bps: None,
+            disk_write_bps: None,
+            disk_read_iops: None,
+            disk_write_iops: None,
         };
 
         let mut opts = BoxOptions::default();
@@ -2060,6 +2092,10 @@ mod tests {
             cpus: None,
             memory: None,
             disk_size_gb: Some(10),
+            disk_read_bps: None,
+            disk_write_bps: None,
+            disk_read_iops: None,
+            disk_write_iops: None,
         };
 
         let mut opts = BoxOptions::default();
@@ -2079,12 +2115,47 @@ mod tests {
             cpus: None,
             memory: None,
             disk_size_gb: None,
+            disk_read_bps: None,
+            disk_write_bps: None,
+            disk_read_iops: None,
+            disk_write_iops: None,
         };
 
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts);
 
         assert_eq!(opts.disk_size_gb, None);
+        // No --disk-*-bps/iops flag at all leaves disk_io unset, not Some(empty):
+        // the runtime treats those two as one state and the archive stays v3.
+        assert_eq!(opts.disk_io, None);
+    }
+
+    #[test]
+    fn test_resource_flags_disk_io_plumbed() {
+        // Each --disk-* rate flag maps onto its own DiskIoLimits dimension;
+        // unset flags stay None so io.max writes `max` for them.
+        let flags = ResourceFlags {
+            cpus: None,
+            memory: None,
+            disk_size_gb: None,
+            disk_read_bps: Some(50 * 1024 * 1024),
+            disk_write_bps: None,
+            disk_read_iops: None,
+            disk_write_iops: Some(1000),
+        };
+
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+
+        assert_eq!(
+            opts.disk_io,
+            Some(DiskIoLimits {
+                read_bps: Some(50 * 1024 * 1024),
+                write_bps: None,
+                read_iops: None,
+                write_iops: Some(1000),
+            })
+        );
     }
 
     #[test]

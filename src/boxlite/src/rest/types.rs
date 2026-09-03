@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::litebox::BoxStatus;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::runtime::advanced_options::ContainerCapabilities;
-use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
+use crate::runtime::options::{CloneOptions, DiskIoLimits, ExportOptions, SnapshotOptions};
 
 // ============================================================================
 // Error Model
@@ -103,6 +103,8 @@ pub(crate) struct CreateBoxRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disk_size_gb: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub disk_io: Option<DiskIoLimits>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub working_dir: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<HashMap<String, String>>,
@@ -186,6 +188,7 @@ impl CreateBoxRequest {
             cpus: options.cpus,
             memory_mib: options.memory_mib,
             disk_size_gb: options.disk_size_gb,
+            disk_io: options.disk_io.clone(),
             working_dir: options.working_dir.clone(),
             env,
             network: Some(CreateBoxNetworkSpec::from_options(
@@ -738,6 +741,35 @@ mod tests {
         // None fields should be skipped
         assert!(!json.contains("rootfs_path"));
         assert!(!json.contains("disk_size_gb"));
+        assert!(!json.contains("disk_io"));
+    }
+
+    /// Disk I/O limits cross the wire as the same four-field object the local
+    /// runtime uses, and only when set — an older server rejects unknown
+    /// fields, so an unlimited box must not mention them at all.
+    #[test]
+    fn test_create_box_request_carries_disk_io() {
+        use crate::runtime::options::{BoxOptions, DiskIoLimits, RootfsSpec};
+
+        let opts = BoxOptions {
+            rootfs: RootfsSpec::Image("alpine:latest".into()),
+            disk_io: Some(DiskIoLimits {
+                read_bps: Some(50 * 1024 * 1024),
+                write_bps: None,
+                read_iops: None,
+                write_iops: Some(1000),
+            }),
+            ..Default::default()
+        };
+        let req = CreateBoxRequest::from_options(&opts, None);
+        assert_eq!(req.disk_io, opts.disk_io);
+
+        let value: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(value["disk_io"]["read_bps"], 52_428_800);
+        assert_eq!(value["disk_io"]["write_iops"], 1000);
+        // Unset dimensions are omitted: `None` is "unlimited", not `null`.
+        assert!(value["disk_io"].get("write_bps").is_none());
+        assert!(value["disk_io"].get("read_iops").is_none());
     }
 
     #[test]

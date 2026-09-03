@@ -171,6 +171,7 @@ pub trait Jail: Send + Sync {
 
 use crate::disk::read_backing_chain;
 use crate::runtime::layout::BoxFilesystemLayout;
+use crate::runtime::options::DiskIoLimits;
 use crate::volumes::{VolumeShare, classify_volume_share};
 use std::path::PathBuf;
 
@@ -210,6 +211,35 @@ use std::path::PathBuf;
 /// User volumes:
 /// {host_path}                     [per VolumeSpec.read_only]
 /// ```
+/// The box's COW disk images that exist on disk. Today that is `disk.qcow2`;
+/// the guest-rootfs overlay only survives on boxes created before the guest
+/// rootfs became a directly attached read-only image (#1322).
+fn cow_disk_paths(layout: &BoxFilesystemLayout) -> impl Iterator<Item = PathBuf> {
+    [layout.disk_path(), layout.guest_rootfs_disk_path()]
+        .into_iter()
+        .filter(|p| p.exists())
+}
+
+/// Every backing file behind the box's COW disks, across the whole chain.
+///
+/// Cloned boxes have multi-level backing chains (clone → source → base image),
+/// so the full chain is walked rather than just the immediate parent.
+fn backing_image_paths(layout: &BoxFilesystemLayout) -> Vec<PathBuf> {
+    cow_disk_paths(layout)
+        .flat_map(|qcow2| read_backing_chain(&qcow2))
+        .collect()
+}
+
+/// Every disk image file the VMM opens for this box: the COW layers plus
+/// their backing chain. This is the set whose host block devices disk I/O
+/// limits are applied to — a limit that skipped the shared base images would
+/// leave most of a fresh box's reads unthrottled.
+fn disk_image_paths(layout: &BoxFilesystemLayout) -> Vec<PathBuf> {
+    cow_disk_paths(layout)
+        .chain(backing_image_paths(layout))
+        .collect()
+}
+
 fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Vec<PathAccess> {
     let mut paths = Vec::new();
 
@@ -254,25 +284,17 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
     // ~/.boxlite/images/disk-images/*.ext4). Under deny-default seatbelt, those
     // backing files must be explicitly granted as read-only or libkrun fails
     // virtio-blk setup with EINVAL.
-    //
-    // Cloned boxes have multi-level backing chains (clone → source → base image),
-    // so we traverse the full chain to grant access to every backing file.
-    for qcow2 in [layout.disk_path(), layout.guest_rootfs_disk_path()] {
-        if !qcow2.exists() {
-            continue;
-        }
-        for backing_path in read_backing_chain(&qcow2) {
-            if let Some(parent) = backing_path.parent().filter(|p| p.exists()) {
-                paths.push(PathAccess {
-                    path: parent.to_path_buf(),
-                    writable: false,
-                });
-            }
+    for backing_path in backing_image_paths(layout) {
+        if let Some(parent) = backing_path.parent().filter(|p| p.exists()) {
             paths.push(PathAccess {
-                path: backing_path,
+                path: parent.to_path_buf(),
                 writable: false,
             });
         }
+        paths.push(PathAccess {
+            path: backing_path,
+            writable: false,
+        });
     }
 
     // Read-only directories (copied shim/libraries and staged boot assets).
@@ -407,11 +429,23 @@ pub struct Jailer<S: Sandbox> {
     pub(crate) additional_path_access: Vec<PathAccess>,
     /// Whether the shim runs a network backend and needs its AF_UNIX endpoints.
     pub(crate) network_backend_enabled: bool,
+    /// Disk I/O rate limits for the box; applied through the sandbox's cgroup.
+    pub(crate) disk_io: Option<DiskIoLimits>,
+    /// Disk images the VM attaches that the layout alone does not imply
+    /// (the shared guest rootfs image); unioned with the layout's own.
+    pub(crate) disk_images: Vec<PathBuf>,
 }
 
 impl<S: Sandbox> Jail for Jailer<S> {
     fn prepare(&self) -> BoxliteResult<()> {
         if !self.security.jailer_enabled {
+            if self.disk_io.is_some() {
+                tracing::warn!(
+                    id = %self.box_id,
+                    "Disk io limits requested but not enforced: the jailer is disabled \
+                     (advanced.security.jailer_enabled=false), so the box has no cgroup"
+                );
+            }
             return Ok(());
         }
 
@@ -612,6 +646,16 @@ impl<S: Sandbox> Jailer<S> {
             network_enabled: self.security.network_enabled,
             sandbox_profile: self.security.sandbox_profile.as_deref(),
             detached: self.detach,
+            disk_io: self.disk_io.as_ref(),
+            disk_images: {
+                let mut images = disk_image_paths(&self.layout);
+                for path in &self.disk_images {
+                    if path.exists() && !images.contains(path) {
+                        images.push(path.clone());
+                    }
+                }
+                images
+            },
         }
     }
 

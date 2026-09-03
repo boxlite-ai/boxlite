@@ -254,6 +254,14 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if boxDto.StorageQuota > 0 {
 		opts = append(opts, boxlite.WithDiskSize(int(boxDto.StorageQuota)))
 	}
+	if boxDto.DiskIo != nil {
+		opts = append(opts, boxlite.WithDiskIoLimits(boxlite.DiskIoLimits{
+			ReadBps:   boxDto.DiskIo.ReadBps,
+			WriteBps:  boxDto.DiskIo.WriteBps,
+			ReadIops:  boxDto.DiskIo.ReadIops,
+			WriteIops: boxDto.DiskIo.WriteIops,
+		}))
+	}
 
 	for k, v := range boxDto.Env {
 		opts = append(opts, boxlite.WithEnv(k, v))

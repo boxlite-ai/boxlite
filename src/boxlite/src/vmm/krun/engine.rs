@@ -445,11 +445,20 @@ impl Vmm for Krun {
                         }
                     );
 
+                    // Only the box's writable images (its private COW layer) go
+                    // O_DIRECT: that is where every write lands, and buffered
+                    // writes would be charged to the image's creator, not the
+                    // box. Read-only images are shared (guest rootfs, and the
+                    // qcow2 backing chain imago opens buffered on its own):
+                    // reads are charged to the issuing task either way, so they
+                    // keep the host page cache.
+                    let direct_io = config.disk_direct_io && !disk.read_only;
                     ctx.add_disk_with_format(
                         &disk.block_id,
                         path_str,
                         disk.read_only,
                         disk.format.as_str(),
+                        direct_io,
                     )?;
                 }
             }

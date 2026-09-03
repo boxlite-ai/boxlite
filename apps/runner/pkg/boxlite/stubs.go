@@ -35,6 +35,7 @@ func recoverCreateDto(boxId string, recoverDto dto.RecoverBoxDTO) dto.CreateBoxD
 		GpuQuota:         recoverDto.GpuQuota,
 		MemoryQuota:      recoverDto.MemoryQuota,
 		StorageQuota:     recoverDto.StorageQuota,
+		DiskIo:           recoverDto.DiskIo,
 		Env:              recoverDto.Env,
 		Volumes:          recoverDto.Volumes,
 		Secrets:          recoverDto.Secrets,

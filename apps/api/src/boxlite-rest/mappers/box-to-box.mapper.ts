@@ -51,6 +51,14 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   createDto.cpu = dto.cpus
   createDto.memory = dto.memory_mib ? Math.ceil(dto.memory_mib / 1024) : undefined
   createDto.disk = dto.disk_size_gb
+  createDto.diskIo = dto.disk_io
+    ? {
+        readBps: dto.disk_io.read_bps,
+        writeBps: dto.disk_io.write_bps,
+        readIops: dto.disk_io.read_iops,
+        writeIops: dto.disk_io.write_iops,
+      }
+    : undefined
   createDto.target = target
   createDto.autoStop = dto.auto_stop
   createDto.autoDelete = dto.auto_delete

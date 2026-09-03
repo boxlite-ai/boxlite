@@ -96,6 +96,7 @@ export class BoxliteBoxController {
         cpus: req.body?.cpus,
         memory_mib: req.body?.memory_mib,
         disk_size_gb: req.body?.disk_size_gb,
+        disk_io: req.body?.disk_io,
         working_dir: req.body?.working_dir,
         entrypoint: req.body?.entrypoint,
         cmd: req.body?.cmd,

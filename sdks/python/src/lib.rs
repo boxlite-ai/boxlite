@@ -30,8 +30,8 @@ use crate::network::{
 };
 use crate::options::{
     PyAccessToken, PyApiKeyCredential, PyBoxOptions, PyBoxliteRestOptions, PyCopyOptions,
-    PyImageRegistry, PyInboundNetworkSpec, PyNetworkSpec, PyOptions, PyOutboundNetworkSpec,
-    PySecret,
+    PyDiskIoLimits, PyImageRegistry, PyInboundNetworkSpec, PyNetworkSpec, PyOptions,
+    PyOutboundNetworkSpec, PySecret,
 };
 use crate::runtime::PyBoxlite;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions, PySnapshotOptions};
@@ -44,6 +44,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyOptions>()?;
     m.add_class::<PyImageRegistry>()?;
     m.add_class::<PyBoxOptions>()?;
+    m.add_class::<PyDiskIoLimits>()?;
     m.add_class::<PyNetworkSpec>()?;
     m.add_class::<PyOutboundNetworkSpec>()?;
     m.add_class::<PyInboundNetworkSpec>()?;

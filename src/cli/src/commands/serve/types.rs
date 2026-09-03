@@ -23,6 +23,9 @@ pub(super) struct CreateBoxRequest {
     pub memory_mib: Option<u32>,
     #[serde(default)]
     pub disk_size_gb: Option<u64>,
+    /// Disk I/O rate limits; same shape as `BoxOptions::disk_io`.
+    #[serde(default)]
+    pub disk_io: Option<DiskIoLimitsRequest>,
     #[serde(default)]
     pub working_dir: Option<String>,
     #[serde(default)]
@@ -71,6 +74,32 @@ pub(super) struct CreateBoxRequest {
     // serde_json::from_str — there is no quiet fall-through. See
     // `build_box_options_rejects_client_supplied_security_*` tests
     // below for the wire-shape pin.
+}
+
+/// Wire shape of `DiskIoLimits` (openapi `additionalProperties: false`).
+///
+/// A separate request type rather than the runtime struct so unknown keys are
+/// a 400 like every other nested request object here: a typo such as
+/// `write_bsp` would otherwise deserialize to an empty limits object, which
+/// `sanitize()` folds to "unlimited" — a 201 for a box that ignored the limit.
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct DiskIoLimitsRequest {
+    pub read_bps: Option<u64>,
+    pub write_bps: Option<u64>,
+    pub read_iops: Option<u64>,
+    pub write_iops: Option<u64>,
+}
+
+impl From<&DiskIoLimitsRequest> for boxlite::runtime::options::DiskIoLimits {
+    fn from(req: &DiskIoLimitsRequest) -> Self {
+        Self {
+            read_bps: req.read_bps,
+            write_bps: req.write_bps,
+            read_iops: req.read_iops,
+            write_iops: req.write_iops,
+        }
+    }
 }
 
 #[derive(Deserialize)]

@@ -43,6 +43,12 @@ describe('requiresFreshBox', () => {
     expect(requiresFreshBox({ secrets: [{ name: 'openai', value: 'sk-test' }] }, NO_ORG_EGRESS_LIMIT)).toBe(true)
   })
 
+  // Disk I/O limits are written to the box's cgroup when the runner creates it;
+  // a warm box was created unthrottled and the pool key does not cover them.
+  it('forces a fresh box when disk I/O limits are requested', () => {
+    expect(requiresFreshBox({ diskIo: { writeBps: 4194304 } }, NO_ORG_EGRESS_LIMIT)).toBe(true)
+  })
+
   // `false` is a value the caller supplied, not an absence — it still pins the
   // box to a network policy the pool was not provisioned for.
   it('treats an explicit networkBlockAll: false as a policy override', () => {

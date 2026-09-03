@@ -99,6 +99,29 @@ describe('BoxLite lifecycle policy mapper', () => {
   })
 })
 
+// Disk I/O ceilings cross from the REST snake_case object to the internal
+// camelCase shape the entity persists and the runner reads; a field dropped
+// here would leave that dimension unthrottled with no error anywhere.
+describe('BoxLite disk_io mapper', () => {
+  it('maps every disk_io ceiling into the control-plane diskIo', () => {
+    const mapped = createBoxToCreateBox({
+      disk_io: { read_bps: 52428800, write_bps: 20971520, read_iops: 2000, write_iops: 1000 },
+    })
+
+    expect(mapped.diskIo).toEqual({ readBps: 52428800, writeBps: 20971520, readIops: 2000, writeIops: 1000 })
+  })
+
+  it('leaves unset dimensions undefined and omits diskIo entirely when not asked for', () => {
+    expect(createBoxToCreateBox({ disk_io: { write_bps: 4194304 } }).diskIo).toEqual({
+      readBps: undefined,
+      writeBps: 4194304,
+      readIops: undefined,
+      writeIops: undefined,
+    })
+    expect(createBoxToCreateBox({}).diskIo).toBeUndefined()
+  })
+})
+
 // These four validated, were audit-logged, and were then dropped on the floor
 // here: the mapper simply never read them, so a caller got a 201 and a box that
 // ignored the working directory, entrypoint, command and user they asked for.

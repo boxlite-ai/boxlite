@@ -648,6 +648,9 @@ const docTemplate = `{
                     "type": "integer",
                     "minimum": 1
                 },
+                "diskIo": {
+                    "$ref": "#/definitions/DiskIoLimitsDTO"
+                },
                 "entrypoint": {
                     "type": "array",
                     "items": {
@@ -732,6 +735,23 @@ const docTemplate = `{
                 }
             }
         },
+        "DiskIoLimitsDTO": {
+            "type": "object",
+            "properties": {
+                "readBps": {
+                    "type": "integer"
+                },
+                "readIops": {
+                    "type": "integer"
+                },
+                "writeBps": {
+                    "type": "integer"
+                },
+                "writeIops": {
+                    "type": "integer"
+                }
+            }
+        },
         "ErrorResponse": {
             "description": "Error response",
             "type": "object",
@@ -797,6 +817,9 @@ const docTemplate = `{
                 "cpuQuota": {
                     "type": "integer",
                     "minimum": 1
+                },
+                "diskIo": {
+                    "$ref": "#/definitions/DiskIoLimitsDTO"
                 },
                 "env": {
                     "type": "object",
@@ -959,20 +982,6 @@ const docTemplate = `{
                 }
             }
         },
-        "dto.VolumeDTO": {
-            "type": "object",
-            "properties": {
-                "mountPath": {
-                    "type": "string"
-                },
-                "subpath": {
-                    "type": "string"
-                },
-                "volumeId": {
-                    "type": "string"
-                }
-            }
-        },
         "dto.SecretDTO": {
             "type": "object",
             "required": [
@@ -993,6 +1002,20 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.VolumeDTO": {
+            "type": "object",
+            "properties": {
+                "mountPath": {
+                    "type": "string"
+                },
+                "subpath": {
+                    "type": "string"
+                },
+                "volumeId": {
                     "type": "string"
                 }
             }

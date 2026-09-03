@@ -236,6 +236,15 @@ pub struct InstanceSpec {
     /// This ensures NetworkSpec::Disabled leaves the guest with no network interface at all.
     #[serde(default)]
     pub disable_network: bool,
+    /// Open the box's writable block devices with O_DIRECT.
+    ///
+    /// Set when the box carries disk I/O limits: cgroup `io.max` charges
+    /// buffered writes to whichever cgroup first dirtied the image file's
+    /// inode (the host runtime, not the box), so only direct I/O on the
+    /// private COW layer makes the box's writes what gets throttled. Read-only
+    /// (shared) images stay buffered — reads are charged to the issuer anyway.
+    #[serde(default)]
+    pub disk_direct_io: bool,
     /// Home directory for boxlite runtime (~/.boxlite or BOXLITE_HOME)
     pub home_dir: PathBuf,
     /// Optional file path to redirect console output (kernel/init messages)

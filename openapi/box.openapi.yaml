@@ -1745,6 +1745,8 @@ components:
           type: integer
           minimum: 1
           description: Disk size in GB (sparse, grows as needed)
+        disk_io:
+          $ref: "#/components/schemas/DiskIoLimits"
         working_dir:
           type: string
           description: Default working directory inside the container
@@ -1810,6 +1812,46 @@ components:
           type: boolean
           default: true
           description: Whether the box automatically resumes when accessed after AutoStop
+
+    DiskIoLimits:
+      type: object
+      description: |
+        Disk I/O rate limits for the box. Bandwidth (bytes per second) and
+        operations per second are independent ceilings, each split by
+        direction, mirroring cgroup v2 `io.max`. Omit a field for unlimited.
+
+        Enforced on Linux hosts through the box's cgroup. A box with limits
+        opens its private writable disk image with O_DIRECT so its writes are
+        accounted to the box; shared read-only images stay in the host page
+        cache, where cache hits are free and cache misses are throttled. Where
+        the host cannot enforce them (no cgroup `io` controller, macOS) the
+        limits are accepted, logged, and not applied.
+      additionalProperties: false
+      properties:
+        read_bps:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Read bandwidth ceiling in bytes per second
+          example: 52428800
+        write_bps:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Write bandwidth ceiling in bytes per second
+          example: 20971520
+        read_iops:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Read operations per second ceiling
+          example: 2000
+        write_iops:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Write operations per second ceiling
+          example: 1000
 
     CreateBoxAdvancedOptions:
       type: object

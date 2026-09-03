@@ -128,6 +128,7 @@ Configuration options for creating a box.
 | `cpus` | `int` | `1` | Number of CPU cores (1 to host CPU count) |
 | `memory_mib` | `int` | `512` | Memory limit in MiB (128-65536) |
 | `disk_size_gb` | `int \| None` | `None` | Persistent disk size in GB (None = ephemeral) |
+| `disk_io` | `DiskIoLimits \| None` | `None` | Disk I/O ceilings (`read_bps`, `write_bps`, `read_iops`, `write_iops`); Linux cgroup v2, ignored with a warning elsewhere |
 | `working_dir` | `str` | `"/root"` | Working directory inside container |
 | `env` | `List[Tuple[str, str]]` | `[]` | Environment variables as (key, value) pairs |
 | `volumes` | `List[Tuple \| Dict]` | `[]` | Volume mounts; tuple = host bind, dict = `managed_volume` or `host_path` |

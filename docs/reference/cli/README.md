@@ -785,6 +785,17 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 | `--cpus N` | u32 | Number of CPUs (capped at 255; values above 255 log a warning) |
 | `--memory MiB` | u32 | Memory limit in mebibytes |
 | `--disk-size GB` | u64 | Sparse root filesystem disk size in gigabytes |
+| `--disk-read-bps BYTES` | u64 | Disk read bandwidth ceiling in bytes per second (Linux, cgroup v2 `io.max`) |
+| `--disk-write-bps BYTES` | u64 | Disk write bandwidth ceiling in bytes per second |
+| `--disk-read-iops IOPS` | u64 | Disk read operations per second ceiling |
+| `--disk-write-iops IOPS` | u64 | Disk write operations per second ceiling |
+
+The four `--disk-*` rate flags populate `BoxOptions::disk_io`; each is independent and an
+omitted flag leaves that dimension unlimited. A box with any of them opens its private writable
+disk image with O_DIRECT so its writes are accounted to the box's cgroup; shared read-only
+images stay in the host page cache (hits free, misses throttled). Rootless hosts need
+the `io` controller delegated to the user session (`Delegate=cpu cpuset io memory pids` on
+`user@<uid>.service`); where it is unavailable the box starts with a warning and no throttle.
 
 ### `PublishFlags`
 

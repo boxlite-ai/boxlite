@@ -6,6 +6,7 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **cpuQuota** | **number** |  | [optional] [default to undefined]
+**diskIo** | [**DiskIoLimitsDTO**](DiskIoLimitsDTO.md) |  | [optional] [default to undefined]
 **env** | **{ [key: string]: string; }** |  | [optional] [default to undefined]
 **errorReason** | **string** |  | [default to undefined]
 **fromVolumeId** | **string** |  | [optional] [default to undefined]
@@ -24,6 +25,7 @@ import { RecoverBoxDTO } from './api';
 
 const instance: RecoverBoxDTO = {
     cpuQuota,
+    diskIo,
     env,
     errorReason,
     fromVolumeId,

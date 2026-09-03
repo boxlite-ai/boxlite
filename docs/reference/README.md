@@ -310,6 +310,40 @@ disk_size_gb=100    # 100 GB persistent disk
 - Copy-on-write (thin provisioned)
 - Deleted when box is removed
 
+#### `disk_io: DiskIoLimits | None`
+
+Cap the box's disk I/O. Bandwidth (bytes per second) and operations per
+second are independent ceilings, each split by direction; omit a field for
+unlimited. Values must be greater than zero.
+
+**Default:** `None` (unlimited)
+
+**Example:**
+```python
+disk_io=boxlite.DiskIoLimits(
+    write_bps=20 * 1024 * 1024,  # 20 MiB/s of writes
+    read_iops=2000,              # 2000 read operations per second
+)
+```
+
+**Notes:**
+- Enforced on Linux through the box's cgroup v2 `io.max`, on the host block
+  device(s) holding the box's disk images. Where the `io` controller is not
+  available (rootless without delegation, macOS, jailer disabled) the box
+  starts with a warning and no throttle.
+- A box with limits opens its private, writable disk image (`disk.qcow2`)
+  with O_DIRECT, so its writes are accounted to the box and throttled;
+  buffered writes would be charged to the host process that created the file.
+  The shared read-only images (OCI base ext4, guest rootfs) stay in the host
+  page cache: hits are free, misses are throttled as the box's reads. The
+  guest's own page cache is unaffected.
+- Rootless Linux needs the `io` controller delegated to the user session:
+  `systemctl edit user@<uid>.service` → `[Service] Delegate=cpu cpuset io memory pids`.
+- The boxlite home must live on a filesystem backed by a block device (a disk,
+  partition, or dm/LVM volume). btrfs, overlayfs, and tmpfs report an anonymous
+  device the io controller cannot key on; there the box starts with a warning
+  and no throttle.
+
 #### `working_dir: str`
 
 Working directory for command execution inside the box.

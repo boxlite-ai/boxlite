@@ -313,6 +313,63 @@ mod registry_options_tests {
     }
 }
 
+/// Disk I/O rate limits for a box.
+///
+/// Bandwidth and operation counts are independent limits, each split by
+/// direction, mirroring cgroup v2 `io.max` (`rbps`/`wbps`/`riops`/`wiops`).
+/// `None` leaves that dimension unlimited. Values must be greater than zero.
+///
+/// Enforced on Linux by writing `io.max` on the box's cgroup. A box with
+/// limits opens its private, writable disk image with O_DIRECT so its writes
+/// reach the host block layer under the box's cgroup — buffered writes would
+/// be charged to whichever cgroup first dirtied the image file (the host
+/// runtime), leaving them unthrottled. Shared read-only images (the OCI base
+/// and the guest rootfs) stay buffered: reads are charged to the issuing box
+/// either way, so host page-cache hits remain free and shared. Where the
+/// cgroup `io` controller is unavailable (rootless without delegation,
+/// macOS, jailer disabled) the limits are logged and not enforced.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct DiskIoLimits {
+    /// Read bandwidth ceiling in bytes per second.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_bps: Option<u64>,
+    /// Write bandwidth ceiling in bytes per second.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub write_bps: Option<u64>,
+    /// Read operations per second ceiling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_iops: Option<u64>,
+    /// Write operations per second ceiling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub write_iops: Option<u64>,
+}
+
+impl DiskIoLimits {
+    /// True when no dimension is limited.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Reject zero values: `io.max` has no "block all I/O" setting and a zero
+    /// here is always a caller mistake (they meant "unlimited" → `None`).
+    pub(crate) fn validate(&self) -> BoxliteResult<()> {
+        for (name, value) in [
+            ("read_bps", self.read_bps),
+            ("write_bps", self.write_bps),
+            ("read_iops", self.read_iops),
+            ("write_iops", self.write_iops),
+        ] {
+            if value == Some(0) {
+                return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                    format!("disk_io.{name} must be greater than 0 (omit it for unlimited)"),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Options used when constructing a box.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -325,6 +382,13 @@ pub struct BoxOptions {
     /// If set, the COW overlay will have this virtual size, allowing
     /// the container to write more data than the base image size.
     pub disk_size_gb: Option<u64>,
+    /// Disk I/O rate limits (bandwidth and IOPS, per direction).
+    ///
+    /// `skip_serializing_if` keeps an unlimited box's exported manifest
+    /// byte-identical to what pre-`disk_io` importers accept; see
+    /// `archive_version_for_options`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_io: Option<DiskIoLimits>,
 
     pub working_dir: Option<String>,
     pub env: Vec<(String, String)>,
@@ -529,6 +593,7 @@ impl Default for BoxOptions {
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,
+            disk_io: None,
             working_dir: None,
             env: Vec::new(),
             rootfs: RootfsSpec::default(),
@@ -642,6 +707,10 @@ impl BoxOptions {
             volume.validate()?;
         }
 
+        if let Some(disk_io) = &self.disk_io {
+            disk_io.validate()?;
+        }
+
         Ok(())
     }
 
@@ -657,6 +726,13 @@ impl BoxOptions {
 
     pub fn sanitize(&mut self) -> BoxliteResult<()> {
         self.sanitize_common()?;
+
+        // An explicitly empty `disk_io {}` means the same as none at all;
+        // fold it so downstream (cgroup setup, archive versioning) sees one
+        // representation of "unlimited".
+        if self.disk_io.as_ref().is_some_and(DiskIoLimits::is_empty) {
+            self.disk_io = None;
+        }
 
         if let Some(kernel) = &self.advanced.kernel {
             kernel.sanitize()?;
@@ -1132,6 +1208,97 @@ mod tests {
         ContainerCapabilities, SecurityOptions, SecurityOptionsBuilder,
     };
     use crate::runtime::types::Bytes;
+
+    /// A zero limit is never what a caller means (`io.max` cannot block all
+    /// I/O, and "unlimited" is spelled `None`), so it is rejected at the
+    /// boundary, naming the offending dimension.
+    #[test]
+    fn disk_io_zero_limit_is_rejected() {
+        for (name, disk_io) in [
+            (
+                "read_bps",
+                DiskIoLimits {
+                    read_bps: Some(0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "write_iops",
+                DiskIoLimits {
+                    read_bps: Some(1),
+                    write_iops: Some(0),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let opts = BoxOptions {
+                disk_io: Some(disk_io),
+                ..Default::default()
+            };
+            let err = opts
+                .sanitize_common()
+                .expect_err("zero must be rejected")
+                .to_string();
+            assert!(err.contains(&format!("disk_io.{name}")), "got: {err}");
+        }
+
+        let valid = BoxOptions {
+            disk_io: Some(DiskIoLimits {
+                write_bps: Some(4 * 1024 * 1024),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        valid.sanitize_common().expect("positive limits are valid");
+    }
+
+    /// `disk_io: {}` and no `disk_io` at all are one state: sanitize folds the
+    /// former into the latter so the cgroup path and the archive stamp only
+    /// ever see limits that actually limit something.
+    #[test]
+    fn sanitize_folds_empty_disk_io_into_none() {
+        let mut opts = BoxOptions {
+            disk_io: Some(DiskIoLimits::default()),
+            ..Default::default()
+        };
+        opts.sanitize().expect("empty limits are valid");
+        assert_eq!(opts.disk_io, None);
+
+        let mut kept = BoxOptions {
+            disk_io: Some(DiskIoLimits {
+                read_iops: Some(100),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        kept.sanitize().expect("valid");
+        assert!(kept.disk_io.is_some(), "real limits must survive sanitize");
+    }
+
+    /// The field is omitted from serialized options when unset, so a box
+    /// without limits round-trips byte-for-byte through pre-`disk_io`
+    /// manifests and servers; when set, every dimension is by name.
+    #[test]
+    fn disk_io_serializes_only_when_set() {
+        let unlimited = serde_json::to_value(BoxOptions::default()).unwrap();
+        assert!(unlimited.get("disk_io").is_none());
+
+        let limited = serde_json::to_value(BoxOptions {
+            disk_io: Some(DiskIoLimits {
+                read_bps: Some(1024),
+                write_iops: Some(10),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(limited["disk_io"]["read_bps"], 1024);
+        assert_eq!(limited["disk_io"]["write_iops"], 10);
+
+        // A pre-`disk_io` manifest (no key) deserializes to None.
+        let legacy: BoxOptions = serde_json::from_str(r#"{"cpus": 1}"#).unwrap();
+        assert_eq!(legacy.disk_io, None);
+    }
 
     #[test]
     fn legacy_ports_keep_old_same_port_and_last_write_wins_semantics() {

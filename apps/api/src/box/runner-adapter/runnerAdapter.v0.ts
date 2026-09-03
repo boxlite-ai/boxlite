@@ -258,6 +258,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       gpuQuota: box.gpu,
       memoryQuota: box.mem,
       storageQuota: box.disk,
+      diskIo: box.diskIo,
       env: box.env,
       runAsUser: box.runAsUser,
       workingDir: box.workingDir,
@@ -332,6 +333,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       gpuQuota: box.gpu,
       memoryQuota: box.mem,
       storageQuota: box.disk,
+      diskIo: box.diskIo,
       env: box.env,
       secrets: box.secrets?.map((secret) => ({
         name: secret.name,

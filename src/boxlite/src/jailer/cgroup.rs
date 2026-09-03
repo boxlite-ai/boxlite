@@ -27,6 +27,7 @@
 //!         ├── memory.max        # Memory limit
 //!         ├── memory.high       # Memory throttle threshold
 //!         ├── pids.max          # Max processes
+//!         ├── io.max            # Disk I/O rate limits, one line per host block device
 //!         └── cgroup.procs      # Add process here
 //! ```
 
@@ -34,6 +35,8 @@ use super::common;
 use super::error::JailerError;
 use crate::runtime::advanced_options::ResourceLimits;
 use crate::runtime::id::BoxID;
+use crate::runtime::options::DiskIoLimits;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -115,6 +118,160 @@ pub struct CgroupConfig {
 
     /// Maximum number of processes (pids.max).
     pub pids_max: Option<u64>,
+}
+
+/// One `io.max` line: a host block device and the limits applied to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IoMax {
+    pub major: u32,
+    pub minor: u32,
+    pub limits: DiskIoLimits,
+}
+
+impl IoMax {
+    /// Render the `io.max` line. Unset dimensions are written as `max`
+    /// explicitly so a rewrite clears any earlier value for that device.
+    pub fn to_line(&self) -> String {
+        fn field(value: Option<u64>) -> String {
+            value.map_or_else(|| "max".to_string(), |v| v.to_string())
+        }
+        format!(
+            "{}:{} rbps={} wbps={} riops={} wiops={}",
+            self.major,
+            self.minor,
+            field(self.limits.read_bps),
+            field(self.limits.write_bps),
+            field(self.limits.read_iops),
+            field(self.limits.write_iops),
+        )
+    }
+}
+
+/// Resolve the host block device (major, minor) backing `path`.
+///
+/// `io.max` is keyed by device number, and a file's `st_dev` is the device of
+/// the filesystem it lives on. Filesystems that report an anonymous device
+/// (major 0: btrfs, overlayfs, tmpfs) cannot be throttled this way, so that is
+/// an error rather than a silent no-op. A partition's number is mapped to its
+/// whole disk: the io controller only accepts whole-disk devices (partitions
+/// fail with ENODEV), and throttling is per request queue, which a disk and its
+/// partitions share.
+#[cfg(target_os = "linux")]
+fn block_device_of(path: &Path) -> Result<(u32, u32), JailerError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let dev = fs::metadata(path)
+        .map_err(|e| {
+            JailerError::Cgroup(format!(
+                "Failed to stat disk image {} for io.max: {}",
+                path.display(),
+                e
+            ))
+        })?
+        .dev();
+    let (major, minor) = (libc::major(dev), libc::minor(dev));
+    if major == 0 {
+        return Err(JailerError::Cgroup(format!(
+            "Disk image {} is on a filesystem without a host block device (anonymous \
+             device 0:{}), so disk io limits cannot be applied. Keep the boxlite home \
+             on a filesystem backed by a block device (ext4/xfs on a disk, partition, \
+             or dm volume).",
+            path.display(),
+            minor
+        )));
+    }
+    Ok(whole_disk_of(Path::new("/sys"), (major, minor)))
+}
+
+/// Map a partition's device number to its whole disk via sysfs; anything that
+/// is not a partition (whole disks, dm/loop volumes, unknown devices) is
+/// returned unchanged.
+///
+/// `/sys/dev/block/MAJ:MIN` is a symlink into the disk's tree
+/// (`.../sda/sda1`); a partition carries a `partition` file, and the disk's
+/// own number is in the parent directory's `dev`.
+fn whole_disk_of(sysfs: &Path, (major, minor): (u32, u32)) -> (u32, u32) {
+    let entry = sysfs.join("dev/block").join(format!("{major}:{minor}"));
+    if !entry.join("partition").exists() {
+        return (major, minor);
+    }
+    let parent_dev = match fs::read_to_string(entry.join("../dev")) {
+        Ok(s) => s,
+        Err(_) => return (major, minor),
+    };
+    let mut parts = parent_dev.trim().splitn(2, ':');
+    match (
+        parts.next().and_then(|s| s.parse().ok()),
+        parts.next().and_then(|s| s.parse().ok()),
+    ) {
+        (Some(parent_major), Some(parent_minor)) => (parent_major, parent_minor),
+        _ => (major, minor),
+    }
+}
+
+/// Build the `io.max` entries for `limits` covering every device the given
+/// disk images live on. Images sharing a device collapse to one entry; each
+/// device gets the full limit.
+#[cfg(target_os = "linux")]
+pub fn io_max_entries(
+    limits: &DiskIoLimits,
+    disk_images: &[PathBuf],
+) -> Result<Vec<IoMax>, JailerError> {
+    let mut devices = BTreeSet::new();
+    for image in disk_images {
+        devices.insert(block_device_of(image)?);
+    }
+    Ok(devices
+        .into_iter()
+        .map(|(major, minor)| IoMax {
+            major,
+            minor,
+            limits: limits.clone(),
+        })
+        .collect())
+}
+
+/// Whether the `io` controller can be enabled for box cgroups.
+///
+/// Reads `cgroup.controllers` at the base this process may create cgroups
+/// under. Root sees every controller; a rootless user only sees what systemd
+/// delegated to `user@<uid>.service`, which by default is `cpu memory pids`
+/// without `io`.
+pub fn io_controller_available() -> bool {
+    fs::read_to_string(get_cgroup_base().join("cgroup.controllers"))
+        .map(|s| controllers_include_io(&s))
+        .unwrap_or(false)
+}
+
+/// Parse a `cgroup.controllers` listing for the `io` controller.
+fn controllers_include_io(controllers: &str) -> bool {
+    controllers.split_whitespace().any(|c| c == "io")
+}
+
+/// Operator instructions for making the `io` controller available where it
+/// is not delegated. Rootless: delegate it to the user's systemd service.
+pub fn io_delegation_hint() -> String {
+    if is_root() {
+        return "the io controller is missing from /sys/fs/cgroup/cgroup.controllers; \
+                check the kernel's cgroup v2 configuration"
+            .to_string();
+    }
+    let uid = current_uid();
+    format!(
+        "delegate the io controller to your user session (as root):\n  \
+         systemctl edit user@{uid}.service   # add under [Service]: Delegate=cpu cpuset io memory pids\n  \
+         systemctl daemon-reload && loginctl terminate-user {uid}   # then log in again"
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn current_uid() -> u32 {
+    unsafe { libc::getuid() }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn current_uid() -> u32 {
+    0
 }
 
 /// Check if cgroup v2 is available and unified hierarchy is used.
@@ -273,6 +430,31 @@ fn apply_limits(cgroup_path: &Path, config: &CgroupConfig) -> Result<(), JailerE
         write_file(&cgroup_path.join("pids.max"), &pids_max.to_string())?;
     }
 
+    Ok(())
+}
+
+/// Apply disk I/O limits to a box cgroup created by [`setup_cgroup`].
+///
+/// Kept separate from the other limits so a failure here (no `io` controller,
+/// a device the kernel refuses) leaves memory/cpu/pids in place and surfaces
+/// as a disk-io-specific warning instead of "continuing without cgroup limits".
+///
+/// Enables `io` down the chain on demand: at the base (systemd enables only
+/// the controllers it delegates; a rootless user owns that file once `io` is
+/// delegated) and on the boxlite parent, which may predate io limits. Enabling
+/// an already-enabled controller is a no-op.
+pub fn apply_io_max(box_id: &str, entries: &[IoMax]) -> Result<(), JailerError> {
+    let cgroup_base = get_cgroup_base();
+    let boxlite_cgroup = cgroup_base.join(BOXLITE_CGROUP);
+    let box_cgroup = boxlite_cgroup.join(box_id);
+
+    write_file(&cgroup_base.join("cgroup.subtree_control"), "+io")?;
+    write_file(&boxlite_cgroup.join("cgroup.subtree_control"), "+io")?;
+
+    // One line per device; the kernel keeps lines keyed by device.
+    for entry in entries {
+        write_file(&box_cgroup.join("io.max"), &entry.to_line())?;
+    }
     Ok(())
 }
 
@@ -488,5 +670,134 @@ mod tests {
         assert_eq!(config.memory_max, Some(1024 * 1024 * 1024));
         assert_eq!(config.pids_max, Some(100));
         assert!(config.cpu_max.is_some());
+    }
+
+    #[test]
+    fn io_max_line_writes_every_dimension_with_max_for_unset() {
+        let entry = IoMax {
+            major: 8,
+            minor: 48,
+            limits: DiskIoLimits {
+                read_bps: Some(50 * 1024 * 1024),
+                write_bps: Some(20 * 1024 * 1024),
+                read_iops: Some(2000),
+                write_iops: Some(1000),
+            },
+        };
+        assert_eq!(
+            entry.to_line(),
+            "8:48 rbps=52428800 wbps=20971520 riops=2000 wiops=1000"
+        );
+
+        let write_only = IoMax {
+            major: 8,
+            minor: 48,
+            limits: DiskIoLimits {
+                write_bps: Some(4 * 1024 * 1024),
+                ..Default::default()
+            },
+        };
+        assert_eq!(
+            write_only.to_line(),
+            "8:48 rbps=max wbps=4194304 riops=max wiops=max"
+        );
+    }
+
+    #[test]
+    fn controllers_listing_detects_io() {
+        // What systemd delegates to a user session by default.
+        assert!(!controllers_include_io("cpu memory pids"));
+        // What root sees on a stock cgroup v2 host.
+        assert!(controllers_include_io(
+            "cpuset cpu io memory hugetlb pids rdma"
+        ));
+        // Whole-word: `iommu`-style prefixes must not match.
+        assert!(!controllers_include_io("cpu iox memory"));
+        assert!(!controllers_include_io(""));
+    }
+
+    #[test]
+    fn io_max_entries_dedupe_images_on_one_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("disk.qcow2");
+        let b = dir.path().join("guest-rootfs.qcow2");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+
+        let limits = DiskIoLimits {
+            read_iops: Some(500),
+            ..Default::default()
+        };
+        match io_max_entries(&limits, &[a.clone(), b]) {
+            Ok(entries) => {
+                assert_eq!(entries.len(), 1, "two images on one device → one line");
+                assert_eq!(entries[0].limits, limits);
+                let (major, minor) = block_device_of(&a).unwrap();
+                assert_eq!((entries[0].major, entries[0].minor), (major, minor));
+                assert_ne!(major, 0);
+            }
+            Err(JailerError::Cgroup(msg)) => {
+                // tmpdir on tmpfs/overlay: the anonymous-device refusal must name
+                // the file and the cause instead of throttling nothing.
+                assert!(msg.contains("anonymous"), "unexpected error: {msg}");
+                assert!(msg.contains("disk.qcow2"), "unexpected error: {msg}");
+            }
+            Err(other) => panic!("unexpected error: {other}"),
+        }
+    }
+
+    /// The io controller rejects partition numbers (ENODEV), so a partition
+    /// must resolve to its disk; whole disks and unknown devices pass through.
+    #[test]
+    fn whole_disk_of_maps_a_partition_to_its_disk() {
+        let sysfs = tempfile::tempdir().unwrap();
+        let root = sysfs.path();
+        // /sys/block/sda/{dev}, /sys/block/sda/sda1/{dev,partition}
+        std::fs::create_dir_all(root.join("block/sda/sda1")).unwrap();
+        std::fs::write(root.join("block/sda/dev"), "8:0\n").unwrap();
+        std::fs::write(root.join("block/sda/sda1/dev"), "8:1\n").unwrap();
+        std::fs::write(root.join("block/sda/sda1/partition"), "1\n").unwrap();
+        // /sys/block/dm-0/dev (a whole device, no partition file)
+        std::fs::create_dir_all(root.join("block/dm-0")).unwrap();
+        std::fs::write(root.join("block/dm-0/dev"), "253:0\n").unwrap();
+        // /sys/dev/block/MAJ:MIN -> ../../block/...
+        std::fs::create_dir_all(root.join("dev/block")).unwrap();
+        std::os::unix::fs::symlink("../../block/sda/sda1", root.join("dev/block/8:1")).unwrap();
+        std::os::unix::fs::symlink("../../block/sda", root.join("dev/block/8:0")).unwrap();
+        std::os::unix::fs::symlink("../../block/dm-0", root.join("dev/block/253:0")).unwrap();
+
+        assert_eq!(whole_disk_of(root, (8, 1)), (8, 0), "partition → its disk");
+        assert_eq!(whole_disk_of(root, (8, 0)), (8, 0), "whole disk unchanged");
+        assert_eq!(
+            whole_disk_of(root, (253, 0)),
+            (253, 0),
+            "dm volume unchanged"
+        );
+        assert_eq!(
+            whole_disk_of(root, (7, 9)),
+            (7, 9),
+            "unknown device unchanged"
+        );
+    }
+
+    #[test]
+    fn io_max_entries_reject_missing_image() {
+        let limits = DiskIoLimits {
+            read_bps: Some(1),
+            ..Default::default()
+        };
+        let err = io_max_entries(&limits, &[PathBuf::from("/nonexistent/disk.qcow2")]).unwrap_err();
+        assert!(err.to_string().contains("/nonexistent/disk.qcow2"));
+    }
+
+    #[test]
+    fn io_delegation_hint_names_the_fix() {
+        let hint = io_delegation_hint();
+        if is_root() {
+            assert!(hint.contains("cgroup.controllers"));
+        } else {
+            assert!(hint.contains("Delegate="));
+            assert!(hint.contains(&format!("user@{}.service", current_uid())));
+        }
     }
 }

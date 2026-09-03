@@ -575,6 +575,13 @@ pub struct BoxOptions {
     /// Disk size in GB for rootfs (sparse, grows as needed)
     pub disk_size_gb: Option<u64>,
 
+    /// Disk I/O rate limits (Linux, cgroup v2 io.max): read/write bytes per
+    /// second and read/write IOPS, each optional. A box with limits opens its
+    /// private writable disk with O_DIRECT so its writes are accounted to it;
+    /// shared read-only images stay cached. Logged and ignored where the io
+    /// controller is unavailable.
+    pub disk_io: Option<DiskIoLimits>,
+
     /// Working directory inside box
     pub working_dir: Option<String>,
 

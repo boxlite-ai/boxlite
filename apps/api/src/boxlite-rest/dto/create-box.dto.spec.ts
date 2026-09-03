@@ -41,6 +41,39 @@ describe('CreateBoxDto resource minimums', () => {
   })
 })
 
+// Disk I/O ceilings are nested, so the @ValidateNested/@Type pair has to stay
+// wired or a zero (which io.max cannot express and the runtime rejects) would
+// pass validation and fail later on the runner instead of as a 400 here.
+describe('CreateBoxDto disk_io', () => {
+  it.each([
+    ['read_bps', { disk_io: { read_bps: 0 } }],
+    ['write_bps', { disk_io: { write_bps: 0 } }],
+    ['read_iops', { disk_io: { read_iops: 0 } }],
+    ['write_iops', { disk_io: { write_iops: 0 } }],
+  ])('rejects a zero %s ceiling with a min constraint', async (field, body) => {
+    const errors = await validate(plainToInstance(CreateBoxDto, body))
+
+    const nested = errors.find((e) => e.property === 'disk_io')?.children?.find((c) => c.property === field)
+    expect(nested?.constraints).toHaveProperty('min')
+  })
+
+  it('rejects a fractional ceiling', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { disk_io: { read_iops: 1.5 } }))
+
+    const nested = errors.find((e) => e.property === 'disk_io')?.children?.find((c) => c.property === 'read_iops')
+    expect(nested?.constraints).toHaveProperty('isInt')
+  })
+
+  it('accepts partial ceilings and leaves the rest unlimited', async () => {
+    const dto = plainToInstance(CreateBoxDto, { disk_io: { write_bps: 4194304, read_iops: 500 } })
+    const errors = await validate(dto)
+
+    expect(errors).toHaveLength(0)
+    expect(dto.disk_io?.write_bps).toBe(4194304)
+    expect(dto.disk_io?.read_bps).toBeUndefined()
+  })
+})
+
 describe('CreateBoxDto lifecycle policy', () => {
   it('accepts second-based lifecycle fields', async () => {
     const errors = await validate(plainToInstance(CreateBoxDto, { auto_stop: 900, auto_delete: 604800 }))

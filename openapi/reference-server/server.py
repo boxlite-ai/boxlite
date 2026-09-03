@@ -157,6 +157,17 @@ class CreateBoxAdvancedOptions(BaseModel):
     capabilities: ContainerCapabilities = Field(default_factory=ContainerCapabilities)
 
 
+class DiskIoLimits(BaseModel):
+    """Disk I/O ceilings (bytes/s and IOPS, per direction); omit for unlimited."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    read_bps: Optional[int] = Field(default=None, ge=1)
+    write_bps: Optional[int] = Field(default=None, ge=1)
+    read_iops: Optional[int] = Field(default=None, ge=1)
+    write_iops: Optional[int] = Field(default=None, ge=1)
+
+
 class CreateBoxRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -166,6 +177,7 @@ class CreateBoxRequest(BaseModel):
     cpus: Optional[int] = None
     memory_mib: Optional[int] = None
     disk_size_gb: Optional[int] = None
+    disk_io: Optional["DiskIoLimits"] = None
     working_dir: Optional[str] = None
     env: Optional[dict[str, str]] = None
     entrypoint: Optional[list[str]] = None
@@ -362,6 +374,13 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
         kwargs["memory_mib"] = req.memory_mib
     if req.disk_size_gb is not None:
         kwargs["disk_size_gb"] = req.disk_size_gb
+    if req.disk_io is not None:
+        kwargs["disk_io"] = boxlite.DiskIoLimits(
+            read_bps=req.disk_io.read_bps,
+            write_bps=req.disk_io.write_bps,
+            read_iops=req.disk_io.read_iops,
+            write_iops=req.disk_io.write_iops,
+        )
     if req.working_dir is not None:
         kwargs["working_dir"] = req.working_dir
     if req.env:

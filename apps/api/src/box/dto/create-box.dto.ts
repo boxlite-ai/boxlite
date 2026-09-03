@@ -8,6 +8,7 @@ import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, I
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxSecret, BoxVolume } from './box.dto'
+import { DiskIoLimits } from './disk-io-limits'
 
 @ApiSchema({ name: 'CreateBox' })
 export class CreateBoxDto {
@@ -171,6 +172,17 @@ export class CreateBoxDto {
   @IsOptional()
   @IsNumber()
   disk?: number
+
+  @ApiPropertyOptional({
+    description:
+      'Disk I/O rate limits (bytes/s and IOPS, per direction); undefined fields are unlimited. ' +
+      'Validated at the REST boundary (boxlite-rest CreateBoxDto).',
+    type: 'object',
+    additionalProperties: true,
+  })
+  @IsOptional()
+  @IsObject()
+  diskIo?: DiskIoLimits
 
   @ApiPropertyOptional({
     description: 'Auto-stop interval in seconds (0 means disabled)',

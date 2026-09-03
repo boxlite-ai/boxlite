@@ -17,6 +17,8 @@ definitions:
       cpuQuota:
         minimum: 1
         type: integer
+      diskIo:
+        $ref: '#/definitions/DiskIoLimitsDTO'
       entrypoint:
         items:
           type: string
@@ -78,6 +80,17 @@ definitions:
       - image
       - osUser
     type: object
+  DiskIoLimitsDTO:
+    properties:
+      readBps:
+        type: integer
+      readIops:
+        type: integer
+      writeBps:
+        type: integer
+      writeIops:
+        type: integer
+    type: object
   ErrorResponse:
     description: Error response
     properties:
@@ -122,6 +135,8 @@ definitions:
       cpuQuota:
         minimum: 1
         type: integer
+      diskIo:
+        $ref: '#/definitions/DiskIoLimitsDTO'
       env:
         additionalProperties:
           type: string
@@ -231,15 +246,6 @@ definitions:
       networkLimitEgress:
         type: boolean
     type: object
-  dto.VolumeDTO:
-    properties:
-      mountPath:
-        type: string
-      subpath:
-        type: string
-      volumeId:
-        type: string
-    type: object
   dto.SecretDTO:
     properties:
       hosts:
@@ -255,6 +261,15 @@ definitions:
     required:
       - name
       - value
+    type: object
+  dto.VolumeDTO:
+    properties:
+      mountPath:
+        type: string
+      subpath:
+        type: string
+      volumeId:
+        type: string
     type: object
   enums.BoxState:
     enum:
