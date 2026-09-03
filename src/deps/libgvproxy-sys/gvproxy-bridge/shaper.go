@@ -4,11 +4,15 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
+	"math/bits"
 	"net"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 // Per-box bandwidth shaping for the guest link.
@@ -39,7 +43,7 @@ import (
 // (pkg/tap/switch.go:234), and bufio hands a read straight to the underlying
 // conn when the request is at least its own buffer size and that buffer is
 // empty, so a large frame body does arrive as a single Read.
-const maxFrameBytes = 65550
+const maxFrameBytes = 65549
 
 // ---------------------------------------------------------------------------
 // configuration
@@ -80,6 +84,12 @@ func (t *TokenBucketConfig) validate(dir string) error {
 	}
 	if t.RefillTimeMs <= 0 {
 		return fmt.Errorf("rate_limit.%s.refill_time_ms must be positive (got %d)", dir, t.RefillTimeMs)
+	}
+	// refillNs() multiplies by 1e6 and runs before any of the guards in
+	// refillLocked, so the bound has to live here. An hour is far beyond any
+	// useful averaging window; the Rust core pins this to 100ms.
+	if t.RefillTimeMs > 3_600_000 {
+		return fmt.Errorf("rate_limit.%s.refill_time_ms must be at most 3600000 (got %d)", dir, t.RefillTimeMs)
 	}
 	// Guards bytesPerSec and the refill arithmetic below.
 	if t.Size > (1<<62)/1000 {
@@ -130,6 +140,26 @@ type tokenBucket struct {
 	now       func() time.Time
 }
 
+// mulDiv returns a*b/d computed in 128 bits, and whether the result fits in
+// int64. All three inputs are non-negative here.
+//
+// The naive form overflows for buckets past a few tens of gigabytes per refill
+// period, and a wrapped intermediate is worse than an error: it silently turns
+// the limit off instead of failing. Sizes that large are accepted by Validate
+// and can come from a hand-written bridge config, so the arithmetic is made
+// exact rather than assumed to be in range.
+func mulDiv(a, b, d int64) (int64, bool) {
+	hi, lo := bits.Mul64(uint64(a), uint64(b))
+	if hi >= uint64(d) { // quotient would not fit in 64 bits
+		return 0, false
+	}
+	q, _ := bits.Div64(hi, lo, uint64(d))
+	if q > uint64(math.MaxInt64) {
+		return 0, false
+	}
+	return int64(q), true
+}
+
 func newTokenBucket(cfg *TokenBucketConfig, now func() time.Time) *tokenBucket {
 	if now == nil {
 		now = time.Now
@@ -176,9 +206,13 @@ func (b *tokenBucket) reserve(n int64) time.Duration {
 	if b.tokens >= 0 {
 		return 0
 	}
-	// The deficit is bounded by one frame (RX) or one Read (TX), so this
-	// product cannot overflow for any size Validate accepts.
-	return time.Duration(-b.tokens * b.refillNs / b.rateBytes)
+	// Guarded like refillLocked: the deficit is normally one frame, but the
+	// product is checked rather than assumed.
+	wait, ok := mulDiv(-b.tokens, b.refillNs, b.rateBytes)
+	if !ok {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(wait)
 }
 
 // waitNonNegative reports the wait left on an existing deficit without charging
@@ -186,19 +220,33 @@ func (b *tokenBucket) reserve(n int64) time.Duration {
 // before the next read.
 func (b *tokenBucket) waitNonNegative() time.Duration { return b.reserve(0) }
 
+// refillLocked converts elapsed time into tokens.
+//
+// Every product here is guarded before it is evaluated rather than bounded by
+// what Validate happens to accept. refillNs*capacity overflows int64 once the
+// bucket passes ~92 GB per refill period, and a wrapped negative threshold makes
+// the "has a full period passed" test always true — which refills the bucket on
+// every call and silently stops the limit from applying at all.
+//
+// These guards cover the arithmetic in this function. refillNs() itself is a
+// separate multiplication that happens earlier, so its input is bounded in
+// Validate instead.
 func (b *tokenBucket) refillLocked() {
 	now := b.now()
 	elapsed := now.Sub(b.last)
 	if elapsed <= 0 {
 		return
 	}
-	// Long idles are clamped first so the multiplication below stays bounded.
-	if elapsed.Nanoseconds() >= b.refillNs*b.capacity/b.rateBytes {
+	elapsedNs := elapsed.Nanoseconds()
+
+	gained, ok := mulDiv(elapsedNs, b.rateBytes, b.refillNs)
+	if !ok || gained >= b.capacity {
+		// More than a bucket's worth of time has passed (or so much that the
+		// conversion does not fit); either way the bucket is full.
 		b.tokens = b.capacity
 		b.last = now
 		return
 	}
-	gained := elapsed.Nanoseconds() * b.rateBytes / b.refillNs
 	if gained <= 0 {
 		// Not a whole token yet. Leave `last` alone so repeated sub-token calls
 		// do not discard the remainder.
@@ -210,7 +258,12 @@ func (b *tokenBucket) refillLocked() {
 	}
 	// Advance `last` by exactly the time those tokens represent, keeping the
 	// sub-token remainder for next time.
-	b.last = b.last.Add(time.Duration(gained * b.refillNs / b.rateBytes))
+	usedNs, ok := mulDiv(gained, b.refillNs, b.rateBytes)
+	if !ok {
+		b.last = now
+		return
+	}
+	b.last = b.last.Add(time.Duration(usedNs))
 }
 
 // ---------------------------------------------------------------------------
@@ -307,8 +360,6 @@ type shaperStats struct {
 	rxDroppedFrames   atomic.Int64
 	rxDroppedBytes    atomic.Int64
 	rxDeliveredBytes  atomic.Int64
-	queueFrames       atomic.Int64
-	queueBytes        atomic.Int64
 }
 
 type shaperSnapshot struct {
@@ -319,8 +370,6 @@ type shaperSnapshot struct {
 	RxDroppedFrames   int64
 	RxDroppedBytes    int64
 	RxDeliveredBytes  int64
-	QueueFrames       int64
-	QueueBytes        int64
 }
 
 func (s *shaperStats) snapshot() shaperSnapshot {
@@ -332,8 +381,6 @@ func (s *shaperStats) snapshot() shaperSnapshot {
 		RxDroppedFrames:   s.rxDroppedFrames.Load(),
 		RxDroppedBytes:    s.rxDroppedBytes.Load(),
 		RxDeliveredBytes:  s.rxDeliveredBytes.Load(),
-		QueueFrames:       s.queueFrames.Load(),
-		QueueBytes:        s.queueBytes.Load(),
 	}
 }
 
@@ -393,11 +440,17 @@ func newShapedConn(conn net.Conn, hdrLen int, cfg *RateLimitConfig, now func() t
 // queueBounds sizes the RX queue from the configured rate: one hundred
 // milliseconds of buffering, the same time constant the bucket refill uses.
 //
-// The floor is deliberately small. Eight maximum frames would be 512 KiB, which
-// at 1 Mbit/s is over four seconds of standing queue — the box gets its
-// bandwidth but its latency becomes unusable and TCP never sees a congestion
-// signal. At low rates, dropping early is the correct behaviour. Real active
-// queue management (CoDel) would be the principled fix and is out of scope.
+// The floor is two maximum frames, and that is a capacity requirement, not a
+// latency target: a queue that cannot hold one maximum-size frame would drop it
+// unconditionally, so the floor is what makes a full-size frame deliverable at
+// any rate.
+//
+// It does cost latency at low rates — 2*maxFrameBytes is ~1s of standing queue
+// at 1 Mbit/s and ~16s at 64 kbit/s, so a slow box trades round-trip time for
+// the ability to carry large frames at all. A larger floor would be worse (eight
+// frames is ~4s at 1 Mbit/s) but no floor is not an option. Active queue
+// management (CoDel) is the principled fix for the latency half and is out of
+// scope here.
 func queueBounds(cfg *TokenBucketConfig) (queueBytes int64, queueFrames int) {
 	queueBytes = cfg.bytesPerSec() / 10
 	if min := int64(2 * maxFrameBytes); queueBytes < min {
@@ -439,8 +492,9 @@ func (c *shapedConn) sleep(d time.Duration) bool {
 // how many bytes the read will return: the balance simply goes negative and the
 // next call sleeps off the overshoot. That overshoot is bounded by one Read,
 // the same bound the capacity floor already assumes, so TX cannot starve at any
-// bucket size. RX is charged up front and therefore can, which is why the pacer
-// has an explicit oversized-frame path.
+// bucket size. RX is charged up front, so it could starve on a frame larger than
+// the bucket — that is what the maxFrameBytes capacity floor in newTokenBucket
+// prevents, and it is the only guard against that deadlock class.
 //
 // Not reading is itself the backpressure: the AF_UNIX receive buffer fills, and
 // on Linux libkrun's unixstream backend then sees EAGAIN, defers the frame and
@@ -501,8 +555,7 @@ func (c *shapedConn) Write(p []byte) (int, error) {
 
 	select {
 	case c.queue <- frame:
-		c.stats.queueFrames.Add(1)
-		c.stats.queueBytes.Store(c.queueBytes.Add(size))
+		c.queueBytes.Add(size)
 	default:
 		c.dropped(size)
 	}
@@ -515,8 +568,7 @@ func (c *shapedConn) dropped(size int64) {
 }
 
 func (c *shapedConn) dequeue(frame []byte) {
-	c.stats.queueFrames.Add(-1)
-	c.stats.queueBytes.Store(c.queueBytes.Add(-int64(len(frame))))
+	c.queueBytes.Add(-int64(len(frame)))
 }
 
 // pace drains the RX queue at the configured rate.
@@ -603,6 +655,22 @@ func (c *shapedConn) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.stop)
 		err = c.Conn.Close()
+
+		// The only reader of these counters. There is no path from here to the
+		// control socket's /stats (it serves vn.ServicesMux directly, with no
+		// bridge-owned mux to inject into), so without this line an RX queue
+		// overflow would leave no trace anywhere.
+		s := c.stats.snapshot()
+		logrus.WithFields(logrus.Fields{
+			"tx_throttled_events": s.TxThrottledEvents,
+			"tx_throttled_ms":     s.TxThrottledNs / int64(time.Millisecond),
+			"rx_throttled_events": s.RxThrottledEvents,
+			"rx_throttled_ms":     s.RxThrottledNs / int64(time.Millisecond),
+			"rx_delivered_bytes":  s.RxDeliveredBytes,
+			"rx_dropped_frames":   s.RxDroppedFrames,
+			"rx_dropped_bytes":    s.RxDroppedBytes,
+			"rx_queue_bytes":      c.queueBytes.Load(),
+		}).Debug("shaped conn closed")
 	})
 	return err
 }

@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"io"
+	"math/bits"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -201,6 +203,9 @@ func TestRateLimitConfigValidateRejectsBadInput(t *testing.T) {
 		"negative refill": {TX: &TokenBucketConfig{Size: 1000, RefillTimeMs: -1}},
 		"negative burst":  {RX: &TokenBucketConfig{Size: 1000, RefillTimeMs: 100, OneTimeBurst: -1}},
 		"size overflow":   {RX: &TokenBucketConfig{Size: 1 << 62, RefillTimeMs: 100}},
+		// refillNs() multiplies by 1e6 before any guard in refillLocked runs,
+		// so an unbounded period wraps there instead.
+		"refill overflow": {TX: &TokenBucketConfig{Size: 1000, RefillTimeMs: 1 << 40}},
 	} {
 		if err := cfg.Validate(); err == nil {
 			t.Errorf("%s: Validate() = nil, want an error", name)
@@ -521,10 +526,15 @@ func TestTxShapingTakesAtLeastTheConfiguredTime(t *testing.T) {
 	}
 }
 
-func TestQueueBoundsFloorAvoidsSecondsOfStandingQueue(t *testing.T) {
-	// 1 Mbit/s. An eight-frame floor would be 512KiB here, over four seconds of
-	// buffering; the small floor keeps latency usable and drops instead.
+func TestQueueBoundsFloorFitsAMaximumFrame(t *testing.T) {
+	// 1 Mbit/s. The floor is a capacity requirement — the queue must hold a
+	// maximum-size frame or such a frame could never be enqueued — and at this
+	// rate it is roughly a second of standing queue, which is the cost of that
+	// guarantee rather than something the floor avoids.
 	queueBytes, queueFrames := queueBounds(bucketCfg(125_000, 1000))
+	if queueBytes < maxFrameBytes {
+		t.Fatalf("queueBytes = %d, must hold at least one %d-byte frame", queueBytes, maxFrameBytes)
+	}
 	if queueBytes != 2*maxFrameBytes {
 		t.Fatalf("queueBytes = %d, want the %d floor", queueBytes, 2*maxFrameBytes)
 	}
@@ -570,5 +580,94 @@ func TestShapedConnDoesNotBreakForwarding(t *testing.T) {
 	}
 	if got := string(buf[:n]); got != string(payload) {
 		t.Fatalf("payload = %q, want %q", got, payload)
+	}
+}
+
+// A bucket large enough that refillNs*capacity overflows int64 must still meter.
+// Before the guards in refillLocked the wrapped product made the "a full period
+// has passed" test always true, so every call refilled the bucket completely and
+// the cap stopped applying — silently, with no error anywhere.
+func TestBucketDoesNotOverflowOnHugeCapacity(t *testing.T) {
+	clk := newFakeClock()
+	// 1e12 bytes per 100ms: refillNs(1e8) * capacity(1e12) is ~1e20, well past
+	// int64. Validate accepts sizes far larger still.
+	const size = 1_000_000_000_000
+	b := newTokenBucket(bucketCfg(size, 100), clk.now)
+
+	// Confirm the premise precisely: the true product does not fit in int64, so
+	// the old threshold was computed from a wrapped value. (1e20 wraps to a
+	// positive number here, which is exactly why a sign check would miss it.)
+	if hi, _ := bits.Mul64(uint64(b.refillNs), uint64(b.capacity)); hi == 0 {
+		t.Fatalf("test no longer exercises the overflow: refillNs*capacity fits in 64 bits")
+	}
+
+	// Drain, then let a fraction of a period pass. A correct bucket is still in
+	// deficit; an overflowing one has silently refilled to full.
+	b.reserve(b.capacity)
+	clk.advance(10 * time.Millisecond) // a tenth of the refill period
+	b.reserve(0)
+
+	if b.tokens == b.capacity {
+		t.Fatal("bucket refilled to capacity after a tenth of a period; the limit is not being applied")
+	}
+	if want := int64(size / 10); b.tokens != want {
+		t.Fatalf("tokens = %d, want %d (one tenth of a period's accrual)", b.tokens, want)
+	}
+}
+
+// The deficit-to-wait conversion carries the same product and the same risk.
+func TestBucketReserveDoesNotOverflowOnHugeDeficit(t *testing.T) {
+	clk := newFakeClock()
+	b := newTokenBucket(bucketCfg(1_000_000_000_000, 100), clk.now)
+
+	b.reserve(b.capacity)
+	if d := b.reserve(b.capacity); d <= 0 {
+		t.Fatalf("wait = %v, want a positive duration; a wrapped product reads as no wait at all", d)
+	}
+}
+
+// The Rust core serializes this config; a rename on either side would silently
+// disable shaping rather than fail, so the contract is pinned from both ends.
+// The Rust half lives in net/gvproxy/config.rs
+// (rate_limit_serializes_with_the_keys_the_bridge_reads) and asserts the same
+// literal shape this test unmarshals.
+func TestRateLimitConfigUnmarshalsTheJSONTheCoreEmits(t *testing.T) {
+	// Byte-for-byte what GvproxyRateLimit produces for
+	// NetBandwidth { tx_kbps: 10_000, rx_kbps: 20_000 }.
+	const payload = `{"rate_limit":{"rx":{"size":250000,"refill_time_ms":100},` +
+		`"tx":{"size":125000,"refill_time_ms":100}}}`
+
+	var cfg GvproxyConfig
+	if err := json.Unmarshal([]byte(payload), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if cfg.RateLimit == nil {
+		t.Fatal("rate_limit did not bind; the key the core emits is not the key this struct reads")
+	}
+	if err := cfg.RateLimit.Validate(); err != nil {
+		t.Fatalf("the core's own output must validate: %v", err)
+	}
+
+	rx, tx := cfg.RateLimit.RX, cfg.RateLimit.TX
+	if rx == nil || tx == nil {
+		t.Fatalf("rx/tx did not bind: rx=%v tx=%v", rx, tx)
+	}
+	// Both directions must come back out at the rate the core meant: kbps*125
+	// bytes/sec, i.e. size*1000/refill_time_ms.
+	if got, want := rx.bytesPerSec(), int64(20_000*125); got != want {
+		t.Errorf("rx rate = %d B/s, want %d", got, want)
+	}
+	if got, want := tx.bytesPerSec(), int64(10_000*125); got != want {
+		t.Errorf("tx rate = %d B/s, want %d", got, want)
+	}
+
+	// And an omitted rate_limit must stay nil rather than bind an empty struct,
+	// which is what makes wrapConn a no-op for an uncapped box.
+	var bare GvproxyConfig
+	if err := json.Unmarshal([]byte(`{"socket_path":"/tmp/x.sock"}`), &bare); err != nil {
+		t.Fatalf("unmarshal bare: %v", err)
+	}
+	if !bare.RateLimit.unlimited() {
+		t.Error("a config without rate_limit must read as unlimited")
 	}
 }
