@@ -25,7 +25,7 @@ use crate::event_listener::EventListener;
 #[cfg(target_os = "linux")]
 use crate::fs::BindMountHandle;
 use crate::litebox::BoxTunnel;
-use crate::litebox::copy::CopyOptions;
+use crate::litebox::copy::{CopyOptions, CopySourceKind};
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::net::NetworkBackend;
@@ -991,16 +991,16 @@ impl BoxImpl {
         Ok(())
     }
 
-    /// Stream a tar byte stream into the guest at `container_dst`.
+    /// Stream opaque transfer bytes into the guest at `container_dst`.
     ///
-    /// `source_is_dir` is the archive shape; `None` when the caller cannot
-    /// tell — the guest then peeks the archive to decide. This is the
-    /// streaming counterpart to [`Self::copy_into`] — no temp tar file.
-    pub(crate) async fn copy_in_tar_stream<S>(
+    /// `source` is the archive shape; [`CopySourceKind::Unknown`] when the
+    /// caller cannot tell — the guest then peeks the archive to decide. This is
+    /// the streaming counterpart to [`Self::copy_into`] — no temp archive file.
+    pub(crate) async fn copy_in_stream<S>(
         self: std::sync::Arc<Self>,
-        tar: S,
+        stream: S,
         container_dst: String,
-        source_is_dir: Option<bool>,
+        source: CopySourceKind,
         opts: CopyOptions,
     ) -> BoxliteResult<()>
     where
@@ -1019,7 +1019,7 @@ impl BoxImpl {
         }
         // Match the path-based copy_into contract: a directory tree with
         // recursive=false is rejected before anything is streamed.
-        if source_is_dir == Some(true) {
+        if source.is_dir() {
             opts.validate_for_dir()?;
         }
         // Materialise borrowed strings before the first await so the future
@@ -1029,25 +1029,24 @@ impl BoxImpl {
         let live = self.live_state().await?;
         let mut files_iface = live.guest_session.files().await?;
         files_iface
-            .upload_tar_stream(
-                tar,
+            .upload_stream(
+                stream,
                 &container_dst,
                 Some(&cid),
                 true,
                 opts.overwrite,
-                source_is_dir,
+                source,
             )
             .await
     }
 
-    /// Download `container_src` as a tar byte stream plus the archive-shape
-    /// hint. This is the streaming counterpart to [`Self::copy_out`] — no temp
-    /// tar file.
-    pub(crate) async fn copy_out_tar(
+    /// Download `container_src` as a byte stream plus its source shape. This is
+    /// the streaming counterpart to [`Self::copy_out`] — no temp archive file.
+    pub(crate) async fn copy_out_stream(
         self: std::sync::Arc<Self>,
         container_src: String,
         opts: CopyOptions,
-    ) -> BoxliteResult<(boxlite_shared::BoxTarStream, Option<bool>)> {
+    ) -> BoxliteResult<(boxlite_shared::BoxByteStream, CopySourceKind)> {
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
                 "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
@@ -1061,7 +1060,7 @@ impl BoxImpl {
         let live = self.live_state().await?;
         let mut files_iface = live.guest_session.files().await?;
         files_iface
-            .download_tar_stream(
+            .download_stream(
                 &container_src,
                 Some(&cid),
                 opts.include_parent,

@@ -14,7 +14,7 @@
 mod common;
 
 use boxlite::runtime::options::{BoxOptions, RootfsSpec};
-use boxlite::{BoxCommand, CopyOptions};
+use boxlite::{BoxCommand, CopyOptions, CopySourceKind};
 use tempfile::TempDir;
 use tokio_stream::StreamExt;
 
@@ -199,10 +199,10 @@ async fn streaming_copy_in_hands_files_to_the_box_user() {
     .expect("pack_stream");
     assert!(!source_is_dir);
 
-    bx.copy_in_tar_stream(
+    bx.copy_in_stream(
         tar,
         "/srv/probe/stream-payload.txt",
-        Some(source_is_dir),
+        CopySourceKind::from_wire(Some(source_is_dir)),
         CopyOptions::default(),
     )
     .await

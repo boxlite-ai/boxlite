@@ -11,7 +11,7 @@ mod common;
 
 use boxlite::BoxliteRuntime;
 use boxlite::runtime::options::BoxliteOptions;
-use boxlite::{BoxCommand, CopyOptions, LiteBox};
+use boxlite::{BoxCommand, CopyOptions, CopySourceKind, LiteBox};
 use std::path::Path;
 use tempfile::TempDir;
 use tokio_stream::StreamExt;
@@ -67,9 +67,14 @@ async fn streaming_single_file_into_existing_dir(bx: &LiteBox, tmp: &Path) {
     assert!(!source_is_dir);
 
     // `/root` already exists as a directory; the file must go inside it.
-    bx.copy_in_tar_stream(tar, "/root", Some(source_is_dir), CopyOptions::default())
-        .await
-        .expect("copy_in_tar_stream into existing directory");
+    bx.copy_in_stream(
+        tar,
+        "/root",
+        CopySourceKind::from_wire(Some(source_is_dir)),
+        CopyOptions::default(),
+    )
+    .await
+    .expect("copy_in_stream into existing directory");
 
     let out = exec_stdout(
         bx,
@@ -79,8 +84,8 @@ async fn streaming_single_file_into_existing_dir(bx: &LiteBox, tmp: &Path) {
     assert_eq!(out, "landed inside\n");
 }
 
-/// Exercise the streaming entry points (`copy_in_tar_stream` / `copy_out_tar`)
-/// end-to-end: pack a host file into a tar stream, stream it into the guest,
+/// Exercise the streaming entry points (`copy_in_stream` / `copy_out_stream`)
+/// end-to-end: pack a host file into a byte stream, stream it into the guest,
 /// then stream it back out and unpack it — with no temp-file staging.
 async fn streaming_roundtrip(bx: &LiteBox, tmp: &Path) {
     let host_src = tmp.join("stream-src.txt");
@@ -100,23 +105,27 @@ async fn streaming_roundtrip(bx: &LiteBox, tmp: &Path) {
         "single file must report source_is_dir=false"
     );
 
-    bx.copy_in_tar_stream(
+    bx.copy_in_stream(
         tar,
         "/root/stream-src.txt",
-        Some(source_is_dir),
+        CopySourceKind::from_wire(Some(source_is_dir)),
         CopyOptions::default(),
     )
     .await
-    .expect("copy_in_tar_stream");
+    .expect("copy_in_stream");
 
     let out = exec_stdout(bx, BoxCommand::new("cat").args(["/root/stream-src.txt"])).await;
     assert_eq!(out, "streaming hello");
 
     let (tar, hint) = bx
-        .copy_out_tar("/root/stream-src.txt", CopyOptions::default())
+        .copy_out_stream("/root/stream-src.txt", CopyOptions::default())
         .await
-        .expect("copy_out_tar");
-    assert_eq!(hint, Some(false), "guest must report source_is_dir=false");
+        .expect("copy_out_stream");
+    assert_eq!(
+        hint,
+        CopySourceKind::File,
+        "guest must report a single-file source"
+    );
 
     let dest = tmp.join("stream-dest.txt");
     let report = boxlite_shared::tar::unpack_stream(
@@ -155,16 +164,21 @@ async fn streaming_hintless_single_file(bx: &LiteBox, tmp: &Path) {
     .await
     .expect("pack_stream");
 
-    bx.copy_in_tar_stream(tar, "/root/hintless-file.txt", None, CopyOptions::default())
-        .await
-        .expect("hintless copy_in_tar_stream");
+    bx.copy_in_stream(
+        tar,
+        "/root/hintless-file.txt",
+        CopySourceKind::Unknown,
+        CopyOptions::default(),
+    )
+    .await
+    .expect("hintless copy_in_stream");
 
     let out = exec_stdout(bx, BoxCommand::new("cat").args(["/root/hintless-file.txt"])).await;
     assert_eq!(out, "hintless single\n");
 }
 
 /// A directory tree streamed WITHOUT a hint must unpack as a tree. A
-/// regression that treated `None` as `Some(false)` would force file mode and
+/// regression that treated `Unknown` as `File` would force file mode and
 /// fail to unpack the directory — the behavior this test pins.
 async fn streaming_hintless_directory(bx: &LiteBox, tmp: &Path) {
     let host_dir = tmp.join("hintless-src-dir");
@@ -183,9 +197,14 @@ async fn streaming_hintless_directory(bx: &LiteBox, tmp: &Path) {
     .expect("pack_stream");
 
     // Fresh dest, no trailing slash — only the guest's peek can decide.
-    bx.copy_in_tar_stream(tar, "/root/hintless-dir", None, CopyOptions::default())
-        .await
-        .expect("hintless directory copy_in_tar_stream");
+    bx.copy_in_stream(
+        tar,
+        "/root/hintless-dir",
+        CopySourceKind::Unknown,
+        CopyOptions::default(),
+    )
+    .await
+    .expect("hintless directory copy_in_stream");
 
     let out = exec_stdout(
         bx,
@@ -218,13 +237,13 @@ async fn streaming_stream_error_after_data_fails(bx: &LiteBox, tmp: &Path) {
         items.push(item);
     }
     items.push(Err(std::io::Error::other("injected stream failure")));
-    let poisoned: boxlite_shared::BoxTarStream = Box::pin(tokio_stream::iter(items));
+    let poisoned: boxlite_shared::BoxByteStream = Box::pin(tokio_stream::iter(items));
 
     let result = bx
-        .copy_in_tar_stream(
+        .copy_in_stream(
             poisoned,
             "/root/stream-err.txt",
-            Some(source_is_dir),
+            CopySourceKind::from_wire(Some(source_is_dir)),
             CopyOptions::default(),
         )
         .await;
@@ -253,10 +272,10 @@ async fn streaming_dir_rejects_non_recursive(bx: &LiteBox, tmp: &Path) {
     assert!(source_is_dir);
 
     let result = bx
-        .copy_in_tar_stream(
+        .copy_in_stream(
             tar,
             "/root/nonrec",
-            Some(source_is_dir),
+            CopySourceKind::from_wire(Some(source_is_dir)),
             CopyOptions::default().non_recursive(),
         )
         .await;
@@ -272,11 +291,16 @@ async fn streaming_dir_rejects_non_recursive(bx: &LiteBox, tmp: &Path) {
 /// crate's `TempUploadGuard` unit tests — the container cannot see the
 /// agent's own /tmp.)
 async fn streaming_hintless_corrupt_archive_fails(bx: &LiteBox, _tmp: &Path) {
-    let tar: boxlite_shared::BoxTarStream =
+    let tar: boxlite_shared::BoxByteStream =
         Box::pin(tokio_stream::iter(vec![Ok(b"not a tar archive".to_vec())]));
 
     let result = bx
-        .copy_in_tar_stream(tar, "/root/hintless-fail.txt", None, CopyOptions::default())
+        .copy_in_stream(
+            tar,
+            "/root/hintless-fail.txt",
+            CopySourceKind::Unknown,
+            CopyOptions::default(),
+        )
         .await;
     assert!(result.is_err(), "corrupt archive must fail the copy");
 }
@@ -305,10 +329,10 @@ async fn streaming_payload_under_mount_is_refused(bx: &LiteBox, tmp: &Path) {
             .unwrap();
         builder.finish().unwrap();
     }
-    let poisoned: boxlite_shared::BoxTarStream = Box::pin(tokio_stream::iter(vec![Ok(tar_bytes)]));
+    let poisoned: boxlite_shared::BoxByteStream = Box::pin(tokio_stream::iter(vec![Ok(tar_bytes)]));
 
     let err = bx
-        .copy_in_tar_stream(poisoned, "/", Some(true), CopyOptions::default())
+        .copy_in_stream(poisoned, "/", CopySourceKind::Dir, CopyOptions::default())
         .await
         .expect_err("a payload under a mount must be refused, not silently shadowed");
 

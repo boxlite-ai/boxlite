@@ -20,6 +20,13 @@
 /// declines it.
 pub const GIT_COMMIT: Option<&str> = option_env!("BOXLITE_GIT_COMMIT");
 
+/// A stream of byte chunks carrying a terminal `Err` item on producer failure.
+///
+/// The transfer wire format (today: tar) is deliberately absent from the name —
+/// callers move opaque bytes and never inspect them.
+pub type BoxByteStream =
+    std::pin::Pin<Box<dyn futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static>>;
+
 pub mod constants;
 pub mod errors;
 pub mod layout;
@@ -33,7 +40,6 @@ pub mod generated {
 }
 
 pub use errors::{BoxliteError, BoxliteResult};
-pub use tar::BoxTarStream;
 pub use transport::BoxTransport;
 
 // Container service

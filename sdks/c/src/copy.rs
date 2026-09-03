@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use boxlite::litebox::copy::CopyOptions;
-use boxlite::{BoxTarStream, BoxliteError};
+use boxlite::{BoxByteStream, BoxliteError, CopySourceKind};
 use futures::StreamExt;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::sync::mpsc;
@@ -158,9 +158,8 @@ unsafe fn box_copy_out(
 
 /// Streaming-copy source shape. For copy-in, `Unknown` means the caller
 /// cannot tell and the guest peeks at the archive. For copy-out, `Unknown`
-/// means the peer omitted the hint. Mirrors the guest protocol's
-/// `optional bool source_is_dir`: `File` = Some(false), `Dir` = Some(true),
-/// `Unknown` = None.
+/// means the peer omitted the hint. The C-ABI mirror of the core
+/// `CopySourceKind`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoxliteCopySourceKind {
@@ -169,26 +168,39 @@ pub enum BoxliteCopySourceKind {
     Dir = 2,
 }
 
-fn source_hint_to_kind(source_is_dir: Option<bool>) -> i32 {
-    match source_is_dir {
-        None => BoxliteCopySourceKind::Unknown as i32,
-        Some(false) => BoxliteCopySourceKind::File as i32,
-        Some(true) => BoxliteCopySourceKind::Dir as i32,
+fn source_kind_to_c(source: CopySourceKind) -> i32 {
+    match source {
+        CopySourceKind::Unknown => BoxliteCopySourceKind::Unknown as i32,
+        CopySourceKind::File => BoxliteCopySourceKind::File as i32,
+        CopySourceKind::Dir => BoxliteCopySourceKind::Dir as i32,
     }
 }
 
-/// Maps the C tri-state to the guest protocol's optional bool. Takes the raw
-/// integer because C callers can pass any value, and unrecognized values
-/// must behave as Unknown rather than guess.
-fn source_kind_to_hint(kind: i32) -> Option<bool> {
+/// Maps the C tri-state to [`CopySourceKind`]. Takes the raw integer because C
+/// callers can pass any value, and unrecognized values must behave as Unknown
+/// rather than guess.
+fn source_kind_from_c(kind: i32) -> CopySourceKind {
     match kind {
-        1 => Some(false),
-        2 => Some(true),
-        _ => None,
+        1 => CopySourceKind::File,
+        2 => CopySourceKind::Dir,
+        _ => CopySourceKind::Unknown,
     }
 }
 
-/// Opaque handle for a streaming copy-in (push raw tar bytes into the guest).
+/// Opaque handle for a streaming copy-in (push archive bytes into the guest).
+///
+/// The lifecycle is fixed, and the third step is not optional:
+///
+///     boxlite_copy_in_start
+///       boxlite_copy_in_write   (repeat)
+///       boxlite_copy_in_close   on success
+///       boxlite_copy_in_abort   when the source read failed
+///     boxlite_copy_in_free
+///
+/// Going straight from write to free is what makes a truncated upload
+/// dangerous: freeing the handle drops the channel, which the guest reads
+/// as a clean EOF and commits. Only boxlite_copy_in_abort turns a
+/// mid-transfer source failure into a terminal error the guest can refuse.
 pub struct CBoxCopyInStream {
     tx: Option<mpsc::Sender<io::Result<Vec<u8>>>>,
     tokio_rt: Arc<TokioRuntime>,
@@ -201,9 +213,9 @@ enum CopyOutStreamState {
     Failed,
 }
 
-/// Opaque handle for a streaming copy-out (pull raw tar bytes from the guest).
+/// Opaque handle for a streaming copy-out (pull archive bytes from the guest).
 pub struct CBoxCopyOutStream {
-    tar: BoxTarStream,
+    bytes: BoxByteStream,
     tokio_rt: Arc<TokioRuntime>,
     pending: Vec<u8>,
     pending_offset: usize,
@@ -211,9 +223,9 @@ pub struct CBoxCopyOutStream {
 }
 
 impl CBoxCopyOutStream {
-    fn new(tar: BoxTarStream, tokio_rt: Arc<TokioRuntime>) -> Self {
+    fn new(bytes: BoxByteStream, tokio_rt: Arc<TokioRuntime>) -> Self {
         Self {
-            tar,
+            bytes,
             tokio_rt,
             pending: Vec::new(),
             pending_offset: 0,
@@ -259,7 +271,7 @@ impl CBoxCopyOutStream {
             }
 
             let tokio_rt = Arc::clone(&self.tokio_rt);
-            match tokio_rt.block_on(self.tar.next()) {
+            match tokio_rt.block_on(self.bytes.next()) {
                 Some(Ok(bytes)) if bytes.is_empty() => continue,
                 Some(Ok(bytes)) => {
                     self.pending = bytes;
@@ -280,7 +292,7 @@ impl CBoxCopyOutStream {
     }
 }
 
-/// Begin downloading `guest_src` as a pull-based raw tar stream.
+/// Begin downloading `guest_src` as a pull-based raw archive stream.
 ///
 /// This call blocks until the stream and its optional source-shape hint are
 /// ready. On success the returned handle must be released with
@@ -317,14 +329,14 @@ pub unsafe extern "C" fn boxlite_copy_out_start(
         let lite = handle_ref.handle.clone();
         match handle_ref
             .tokio_rt
-            .block_on(lite.copy_out_tar(src.as_str(), default_copy_options()))
+            .block_on(lite.copy_out_stream(src.as_str(), default_copy_options()))
         {
-            Ok((tar, source_is_dir)) => {
+            Ok((bytes, source)) => {
                 if !out_source_kind.is_null() {
-                    *out_source_kind = source_hint_to_kind(source_is_dir);
+                    *out_source_kind = source_kind_to_c(source);
                 }
                 Box::into_raw(Box::new(CBoxCopyOutStream::new(
-                    tar,
+                    bytes,
                     handle_ref.tokio_rt.clone(),
                 )))
             }
@@ -336,7 +348,7 @@ pub unsafe extern "C" fn boxlite_copy_out_start(
     }
 }
 
-/// Read the next raw tar bytes from a copy-out stream.
+/// Read the next raw archive bytes from a copy-out stream.
 ///
 /// This call blocks while the upstream stream is pending. `Ok` with a
 /// positive `out_read` returns data; `Ok` with zero length is sticky EOF. A
@@ -434,7 +446,7 @@ pub unsafe extern "C" fn boxlite_copy_in_start(
             return std::ptr::null_mut();
         };
 
-        let source_is_dir = source_kind_to_hint(source_kind);
+        let source = source_kind_from_c(source_kind);
 
         let handle_ref = &*handle;
         let lite = handle_ref.handle.clone();
@@ -442,13 +454,13 @@ pub unsafe extern "C" fn boxlite_copy_in_start(
         let user_data_addr = user_data as usize;
 
         let (tx, rx) = mpsc::channel::<io::Result<Vec<u8>>>(4);
-        let tar = futures::stream::unfold(rx, |mut rx| async move {
+        let bytes = futures::stream::unfold(rx, |mut rx| async move {
             rx.recv().await.map(|item| (item, rx))
         });
 
         handle_ref.tokio_rt.spawn(async move {
             let result = lite
-                .copy_in_tar_stream(tar, dst.as_str(), source_is_dir, default_copy_options())
+                .copy_in_stream(bytes, dst.as_str(), source, default_copy_options())
                 .await;
             push_event(
                 &queue,
@@ -468,8 +480,8 @@ pub unsafe extern "C" fn boxlite_copy_in_start(
     }
 }
 
-/// Push a chunk of raw tar bytes into the guest. Blocks when the guest is slow
-/// (bounded-channel backpressure).
+/// Push a chunk of archive bytes into the guest. Blocks when the guest is
+/// slow (bounded-channel backpressure).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_copy_in_write(
     stream: *mut CBoxCopyInStream,
@@ -525,7 +537,7 @@ pub unsafe extern "C" fn boxlite_copy_in_close(
             return BoxliteErrorCode::InvalidArgument;
         }
         let stream_ref = &mut *stream;
-        // Dropping the sender closes the channel, which ends the tar stream and
+        // Dropping the sender closes the channel, which ends the byte stream and
         // signals EOF to the guest unpacker.
         stream_ref.tx.take();
         BoxliteErrorCode::Ok
@@ -573,6 +585,12 @@ pub unsafe extern "C" fn boxlite_copy_in_abort(
 }
 
 /// Reclaim a copy-in stream handle.
+///
+/// Freeing a stream that was never closed or aborted still drops the
+/// channel, so it signals EOF exactly as boxlite_copy_in_close would — the
+/// guest commits whatever it received. Call boxlite_copy_in_abort first
+/// whenever the transfer did not complete; see CBoxCopyInStream for the
+/// full sequence.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_copy_in_free(stream: *mut CBoxCopyInStream) {
     unsafe {
@@ -589,8 +607,8 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     fn copy_out_stream(items: Vec<io::Result<Vec<u8>>>) -> CBoxCopyOutStream {
-        let tar: BoxTarStream = Box::pin(futures::stream::iter(items));
-        CBoxCopyOutStream::new(tar, Arc::new(tokio::runtime::Runtime::new().unwrap()))
+        let bytes: BoxByteStream = Box::pin(futures::stream::iter(items));
+        CBoxCopyOutStream::new(bytes, Arc::new(tokio::runtime::Runtime::new().unwrap()))
     }
 
     fn assert_error_contains(
@@ -669,31 +687,15 @@ mod tests {
     }
 
     #[test]
-    fn source_kind_maps_to_guest_hint() {
-        assert_eq!(
-            source_kind_to_hint(BoxliteCopySourceKind::Unknown as i32),
-            None
-        );
-        assert_eq!(
-            source_kind_to_hint(BoxliteCopySourceKind::File as i32),
-            Some(false)
-        );
-        assert_eq!(
-            source_kind_to_hint(BoxliteCopySourceKind::Dir as i32),
-            Some(true)
-        );
-        assert_eq!(
-            source_hint_to_kind(None),
-            BoxliteCopySourceKind::Unknown as i32
-        );
-        assert_eq!(
-            source_hint_to_kind(Some(false)),
-            BoxliteCopySourceKind::File as i32
-        );
-        assert_eq!(
-            source_hint_to_kind(Some(true)),
-            BoxliteCopySourceKind::Dir as i32
-        );
+    fn source_kind_round_trips_across_the_c_abi() {
+        for (c_kind, core) in [
+            (BoxliteCopySourceKind::Unknown, CopySourceKind::Unknown),
+            (BoxliteCopySourceKind::File, CopySourceKind::File),
+            (BoxliteCopySourceKind::Dir, CopySourceKind::Dir),
+        ] {
+            assert_eq!(source_kind_from_c(c_kind as i32), core);
+            assert_eq!(source_kind_to_c(core), c_kind as i32);
+        }
     }
 
     #[test]
@@ -735,7 +737,7 @@ mod tests {
     fn copy_out_polls_upstream_only_when_read_needs_data() {
         let polls = Arc::new(AtomicUsize::new(0));
         let stream_polls = Arc::clone(&polls);
-        let tar: BoxTarStream = Box::pin(futures::stream::unfold(0_u8, move |step| {
+        let bytes: BoxByteStream = Box::pin(futures::stream::unfold(0_u8, move |step| {
             let stream_polls = Arc::clone(&stream_polls);
             async move {
                 stream_polls.fetch_add(1, Ordering::SeqCst);
@@ -746,7 +748,7 @@ mod tests {
             }
         }));
         let mut stream =
-            CBoxCopyOutStream::new(tar, Arc::new(tokio::runtime::Runtime::new().unwrap()));
+            CBoxCopyOutStream::new(bytes, Arc::new(tokio::runtime::Runtime::new().unwrap()));
         let mut dst = [0_u8; 1];
 
         assert_eq!(polls.load(Ordering::SeqCst), 0);
@@ -839,15 +841,15 @@ mod tests {
     }
 
     #[test]
-    fn copy_out_free_drops_active_tar_stream() {
+    fn copy_out_free_drops_active_byte_stream() {
         let dropped = Arc::new(AtomicBool::new(false));
         let probe = DropProbe(Arc::clone(&dropped));
-        let tar: BoxTarStream = Box::pin(futures::stream::poll_fn(move |_cx| {
+        let bytes: BoxByteStream = Box::pin(futures::stream::poll_fn(move |_cx| {
             let _keep_alive = &probe;
             std::task::Poll::<Option<io::Result<Vec<u8>>>>::Pending
         }));
         let stream = Box::into_raw(Box::new(CBoxCopyOutStream::new(
-            tar,
+            bytes,
             Arc::new(tokio::runtime::Runtime::new().unwrap()),
         )));
 
@@ -890,11 +892,42 @@ mod tests {
         assert_eq!(code, BoxliteErrorCode::InvalidState);
     }
 
+    /// Pins the hazard the copy-in lifecycle doc warns about: freeing a live
+    /// handle instead of aborting it drops the sender, so the consumer sees a
+    /// bare EOF and cannot tell the upload was cut short. If `free` ever grows
+    /// an implicit abort, this test is the one that must be revisited.
+    #[test]
+    fn copy_in_free_without_abort_signals_a_bare_eof() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+        let stream = Box::into_raw(Box::new(CBoxCopyInStream {
+            tx: Some(tx),
+            tokio_rt: Arc::new(rt),
+        }));
+
+        let data = [7u8; 3];
+        let mut err = CBoxliteError::default();
+        let code = unsafe { boxlite_copy_in_write(stream, data.as_ptr(), data.len(), &mut err) };
+        assert_eq!(code, BoxliteErrorCode::Ok);
+
+        let drain_rt = tokio::runtime::Runtime::new().unwrap();
+        unsafe { boxlite_copy_in_free(stream) };
+
+        assert_eq!(
+            drain_rt.block_on(rx.recv()).expect("chunk").unwrap(),
+            data.to_vec()
+        );
+        assert!(
+            drain_rt.block_on(rx.recv()).is_none(),
+            "free must close the channel"
+        );
+    }
+
     #[test]
     fn unrecognized_kind_behaves_as_unknown() {
         // C callers can cast any integer to the enum; out-of-range values
         // must not be guessed into a shape.
-        assert_eq!(source_kind_to_hint(7), None);
-        assert_eq!(source_kind_to_hint(-1), None);
+        assert_eq!(source_kind_from_c(7), CopySourceKind::Unknown);
+        assert_eq!(source_kind_from_c(-1), CopySourceKind::Unknown);
     }
 }

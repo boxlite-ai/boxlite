@@ -21,7 +21,7 @@ mod state;
 mod watcher;
 
 pub use attach::AttachOptions;
-pub use copy::CopyOptions;
+pub use copy::{CopyOptions, CopySourceKind};
 pub(crate) use crash_report::CrashReport;
 pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
 pub(crate) use manager::BoxManager;
@@ -165,20 +165,20 @@ impl LiteBox {
             .await
     }
 
-    /// Stream a tar byte stream into the container at `container_dst`.
+    /// Stream opaque transfer bytes into the container at `container_dst`.
     ///
-    /// `source_is_dir` is the archive shape (directory tree vs single file);
-    /// `None` when the caller cannot tell — the guest then peeks the archive
-    /// to decide. Only the local backend supports this.
+    /// `source` is the archive shape (directory tree vs single file);
+    /// [`CopySourceKind::Unknown`] when the caller cannot tell — the guest then
+    /// peeks the archive to decide. Only the local backend supports this.
     ///
     /// Returns a `BoxFuture` (rather than being an `async fn`) so the future
     /// owns the downcast backend and never borrows `&self` across an await —
     /// which avoids an HRTB `Send` bound on `&LiteBox`.
-    pub fn copy_in_tar_stream<S>(
+    pub fn copy_in_stream<S>(
         &self,
-        tar: S,
+        stream: S,
         container_dst: &str,
-        source_is_dir: Option<bool>,
+        source: copy::CopySourceKind,
         opts: copy::CopyOptions,
     ) -> futures::future::BoxFuture<'static, BoxliteResult<()>>
     where
@@ -194,21 +194,19 @@ impl LiteBox {
             let backend = backend.map_err(|_| {
                 BoxliteError::Unsupported("streaming copy-in requires the local backend".into())
             })?;
-            backend
-                .copy_in_tar_stream(tar, dst, source_is_dir, opts)
-                .await
+            backend.copy_in_stream(stream, dst, source, opts).await
         })
     }
 
-    /// Download `container_src` as a tar byte stream plus the archive-shape
-    /// hint. Only the local backend supports this.
-    pub fn copy_out_tar(
+    /// Download `container_src` as a byte stream plus its source shape. Only
+    /// the local backend supports this.
+    pub fn copy_out_stream(
         &self,
         container_src: &str,
         opts: copy::CopyOptions,
     ) -> futures::future::BoxFuture<
         'static,
-        BoxliteResult<(boxlite_shared::BoxTarStream, Option<bool>)>,
+        BoxliteResult<(boxlite_shared::BoxByteStream, copy::CopySourceKind)>,
     > {
         let backend = self
             .box_backend
@@ -220,7 +218,7 @@ impl LiteBox {
             let backend = backend.map_err(|_| {
                 BoxliteError::Unsupported("streaming copy-out requires the local backend".into())
             })?;
-            backend.copy_out_tar(src, opts).await
+            backend.copy_out_stream(src, opts).await
         })
     }
 

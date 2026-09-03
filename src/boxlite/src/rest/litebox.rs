@@ -419,7 +419,7 @@ impl BoxBackend for RestBox {
         // slot when we read it back — we must not depend on Arc drop timing.
         let transport_fault: Arc<Mutex<Option<BoxliteError>>> = Arc::new(Mutex::new(None));
         let fault_slot = Arc::clone(&transport_fault);
-        let stream: boxlite_shared::BoxTarStream = Box::pin(resp.bytes_stream().map(move |r| {
+        let stream: boxlite_shared::BoxByteStream = Box::pin(resp.bytes_stream().map(move |r| {
             r.map(|b| b.to_vec()).map_err(|e| {
                 let classified = transport_error(e);
                 let message = classified.to_string();

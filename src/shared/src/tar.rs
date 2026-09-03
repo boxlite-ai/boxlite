@@ -3,18 +3,14 @@
 //! Both host (boxlite) and guest agent share this module to avoid
 //! duplicating tar building/extraction logic.
 
-use crate::constants::files::{PIPE_CHUNKS, PIPE_CHUNK_SIZE};
-use crate::{BoxliteError, BoxliteResult};
-use futures::{Stream, StreamExt};
+use crate::constants::files::{COPY_CHUNKS_IN_FLIGHT, COPY_CHUNK_SIZE};
+use crate::{BoxByteStream, BoxliteError, BoxliteResult};
+use futures::StreamExt;
 use std::collections::HashSet;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-
-/// A stream of raw tar bytes carrying a terminal `Err` item on pack failure.
-pub type BoxTarStream = Pin<Box<dyn Stream<Item = io::Result<Vec<u8>>> + Send + 'static>>;
 
 // ── Pack ──────────────────────────────────────────────────────────
 
@@ -109,7 +105,7 @@ fn pack_blocking<W: Write>(src: &Path, writer: W, opts: &PackContext) -> Boxlite
 // ── Stream pack ──────────────────────────────────────────────────
 
 /// Blocking `Write` adapter feeding a bounded channel. Coalesces small writes
-/// into full `PIPE_CHUNK_SIZE` messages; `blocking_send` provides backpressure
+/// into full `COPY_CHUNK_SIZE` messages; `blocking_send` provides backpressure
 /// (a slow consumer throttles the pack thread) and surfaces `BrokenPipe` when
 /// the consumer drops the stream.
 struct PipeWriter {
@@ -139,12 +135,12 @@ impl Write for PipeWriter {
             return Ok(0);
         }
 
-        let write_len = (PIPE_CHUNK_SIZE - self.pending.len()).min(buf.len());
+        let write_len = (COPY_CHUNK_SIZE - self.pending.len()).min(buf.len());
         self.pending.extend_from_slice(&buf[..write_len]);
-        if self.pending.len() == PIPE_CHUNK_SIZE {
+        if self.pending.len() == COPY_CHUNK_SIZE {
             let chunk = std::mem::take(&mut self.pending);
             self.send_chunk(chunk)?;
-            self.pending = Vec::with_capacity(PIPE_CHUNK_SIZE);
+            self.pending = Vec::with_capacity(COPY_CHUNK_SIZE);
         }
         Ok(write_len)
     }
@@ -165,7 +161,7 @@ impl Drop for PipeWriter {
 /// Returns the source shape (`source_is_dir = src.is_dir()`) alongside the
 /// stream. The pack runs on a `spawn_blocking` thread; a pack failure surfaces
 /// as a terminal `Err` item on the stream.
-pub async fn pack_stream(src: PathBuf, opts: PackContext) -> BoxliteResult<(bool, BoxTarStream)> {
+pub async fn pack_stream(src: PathBuf, opts: PackContext) -> BoxliteResult<(bool, BoxByteStream)> {
     let source_is_dir = src.is_dir();
     if !src.exists() {
         return Err(BoxliteError::NotFound(format!(
@@ -173,10 +169,10 @@ pub async fn pack_stream(src: PathBuf, opts: PackContext) -> BoxliteResult<(bool
             src.display()
         )));
     }
-    let (tx, rx) = mpsc::channel::<io::Result<Vec<u8>>>(PIPE_CHUNKS);
+    let (tx, rx) = mpsc::channel::<io::Result<Vec<u8>>>(COPY_CHUNKS_IN_FLIGHT);
     let writer = PipeWriter {
         tx: tx.clone(),
-        pending: Vec::with_capacity(PIPE_CHUNK_SIZE),
+        pending: Vec::with_capacity(COPY_CHUNK_SIZE),
     };
     let task_tx = tx;
     tokio::task::spawn_blocking(move || {
@@ -564,11 +560,11 @@ impl Read for PipeReader {
 /// the caller can hand only newly created paths to the box user and refuse
 /// entries the mounts shadow.
 pub async fn unpack_stream(
-    mut stream: BoxTarStream,
+    mut stream: BoxByteStream,
     dest: PathBuf,
     opts: UnpackContext,
 ) -> BoxliteResult<UnpackReport> {
-    let (tx, rx) = mpsc::channel::<io::Result<Vec<u8>>>(PIPE_CHUNKS);
+    let (tx, rx) = mpsc::channel::<io::Result<Vec<u8>>>(COPY_CHUNKS_IN_FLIGHT);
     let forward = tokio::spawn(async move {
         while let Some(item) = stream.next().await {
             if tx.send(item).await.is_err() {
@@ -1635,7 +1631,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(4);
         let mut writer = PipeWriter {
             tx,
-            pending: Vec::with_capacity(PIPE_CHUNK_SIZE),
+            pending: Vec::with_capacity(COPY_CHUNK_SIZE),
         };
         writer.write_all(b"tail bytes").unwrap();
         writer.flush().unwrap();
@@ -1663,7 +1659,7 @@ mod tests {
         drop(rx); // consumer gone before any send
         let mut writer = PipeWriter {
             tx,
-            pending: Vec::with_capacity(PIPE_CHUNK_SIZE),
+            pending: Vec::with_capacity(COPY_CHUNK_SIZE),
         };
         writer.write_all(b"lost bytes").unwrap(); // buffered, no send yet
         let err = writer.flush().unwrap_err();

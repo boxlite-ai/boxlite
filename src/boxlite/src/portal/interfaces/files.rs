@@ -2,8 +2,9 @@
 //!
 //! Provides tar-based upload/download to the guest container rootfs.
 
+use crate::litebox::CopySourceKind;
 use boxlite_shared::{
-    BoxTarStream, BoxliteError, BoxliteResult, DownloadRequest, FilesClient, UploadChunk,
+    BoxByteStream, BoxliteError, BoxliteResult, DownloadRequest, FilesClient, UploadChunk,
 };
 use futures::StreamExt;
 use tokio::fs::File;
@@ -137,19 +138,20 @@ impl FilesInterface {
         Ok(())
     }
 
-    /// Upload a tar byte stream to the guest and extract at `dest_path`.
+    /// Upload a byte stream to the guest and extract at `dest_path`.
     ///
-    /// `source_is_dir` is the archive shape (dir tree vs single file); `None`
-    /// when the caller cannot tell — the guest then peeks the tar to decide
-    /// extraction mode. It is attached to the first chunk only.
-    pub async fn upload_tar_stream<S>(
+    /// `source` is the archive shape (dir tree vs single file);
+    /// [`CopySourceKind::Unknown`] when the caller cannot tell — the guest then
+    /// peeks the archive to decide extraction mode. It is attached to the first
+    /// chunk only.
+    pub async fn upload_stream<S>(
         &mut self,
-        tar: S,
+        stream: S,
         dest_path: &str,
         container_id: Option<&str>,
         mkdir_parents: bool,
         overwrite: bool,
-        source_is_dir: Option<bool>,
+        source: CopySourceKind,
     ) -> BoxliteResult<()>
     where
         S: futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static,
@@ -166,10 +168,11 @@ impl FilesInterface {
         let stream_err: std::sync::Arc<tokio::sync::Mutex<Option<std::io::Error>>> =
             std::sync::Arc::new(tokio::sync::Mutex::new(None));
         let stream_err_slot = stream_err.clone();
-        let stream = async_stream::stream! {
-            futures::pin_mut!(tar);
+        let source_is_dir = source.to_wire();
+        let chunks = async_stream::stream! {
+            futures::pin_mut!(stream);
             let mut first = true;
-            while let Some(item) = tar.next().await {
+            while let Some(item) = stream.next().await {
                 match item {
                     Ok(data) => {
                         yield UploadChunk {
@@ -192,7 +195,7 @@ impl FilesInterface {
 
         let response = self
             .client
-            .upload(stream)
+            .upload(chunks)
             .await
             .map_err(map_tonic_err)?
             .into_inner();
@@ -202,7 +205,7 @@ impl FilesInterface {
         // successful copy of a truncated archive.
         if let Some(e) = stream_err.lock().await.take() {
             return Err(BoxliteError::Internal(format!(
-                "tar stream failed during upload: {e}"
+                "source stream failed during upload: {e}"
             )));
         }
 
@@ -215,17 +218,18 @@ impl FilesInterface {
         }
     }
 
-    /// Download a path from the guest as a tar byte stream.
+    /// Download a path from the guest as a byte stream.
     ///
-    /// Returns the stream plus the archive-shape hint read from the guest's
-    /// first chunk. `None` means the guest predates the hint (older peer).
-    pub async fn download_tar_stream(
+    /// Returns the stream plus the source shape read from the guest's first
+    /// chunk. [`CopySourceKind::Unknown`] means the guest predates the hint
+    /// (older peer).
+    pub async fn download_stream(
         &mut self,
         container_src: &str,
         container_id: Option<&str>,
         include_parent: bool,
         follow_symlinks: bool,
-    ) -> BoxliteResult<(BoxTarStream, Option<bool>)> {
+    ) -> BoxliteResult<(BoxByteStream, CopySourceKind)> {
         let request = DownloadRequest {
             src_path: container_src.to_string(),
             container_id: container_id.unwrap_or_default().to_string(),
@@ -241,7 +245,7 @@ impl FilesInterface {
             .into_inner();
 
         let first = stream.message().await.map_err(map_tonic_err)?;
-        let source_is_dir = first.as_ref().and_then(|c| c.source_is_dir);
+        let source = CopySourceKind::from_wire(first.as_ref().and_then(|c| c.source_is_dir));
         let mut first_data = first.map(|c| c.data);
 
         let out = async_stream::stream! {
@@ -264,7 +268,7 @@ impl FilesInterface {
             }
         };
 
-        Ok((Box::pin(out), source_is_dir))
+        Ok((Box::pin(out), source))
     }
 }
 

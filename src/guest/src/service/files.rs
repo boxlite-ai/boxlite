@@ -6,7 +6,7 @@
 
 use crate::service::server::GuestServer;
 use boxlite_shared::{
-    files_server::Files, BoxTarStream, DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
+    files_server::Files, BoxByteStream, DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
 };
 use futures::StreamExt;
 use nix::fcntl::OFlag;
@@ -485,7 +485,7 @@ impl Files for GuestServer {
             Some(source_is_dir) => {
                 let force_directory =
                     source_is_dir || dest_path.ends_with('/') || dest_root.is_dir();
-                let tar_stream: BoxTarStream = Box::pin(async_stream::stream! {
+                let tar_stream: BoxByteStream = Box::pin(async_stream::stream! {
                     if !first_data.is_empty() {
                         yield Ok(first_data);
                     }

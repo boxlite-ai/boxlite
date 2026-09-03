@@ -64,11 +64,11 @@ pub mod files {
     /// `MAX_UPLOAD_BYTES`.
     pub const FALLBACK_CAP_BYTES: u64 = 512 * 1024 * 1024;
 
-    /// In-flight chunk count for the bounded channel that bridges blocking tar
-    /// I/O with the async stream (backpressure window ≈ `PIPE_CHUNK_SIZE` ×
-    /// this).
-    pub const PIPE_CHUNKS: usize = 4;
+    /// In-flight chunk count for the bounded channel that bridges blocking
+    /// archive I/O with the async stream (backpressure window ≈
+    /// `COPY_CHUNK_SIZE` × this).
+    pub const COPY_CHUNKS_IN_FLIGHT: usize = 4;
 
     /// Chunk size emitted by the stream pack side (1 MiB).
-    pub const PIPE_CHUNK_SIZE: usize = 1 << 20;
+    pub const COPY_CHUNK_SIZE: usize = 1 << 20;
 }
