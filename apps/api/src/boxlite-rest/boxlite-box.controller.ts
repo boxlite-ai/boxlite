@@ -119,7 +119,20 @@ export class BoxliteBoxController {
 
     let box = await this.boxService.create(createBoxDto, organization, { maxCreatedBoxes })
     if (box.state !== BoxState.STARTED) {
-      box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
+      try {
+        box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
+      } catch (error) {
+        // Box failed to start. Destroy the orphan record so it does not
+        // accumulate in the user's box list — the caller already gets a 400
+        // (or timeout) for this request and has no way to clean it up.
+        // Best-effort: if destroy also fails (rare race), log and move on.
+        await this.boxService.destroy(box.id, organization.id).catch((destroyError: unknown) => {
+          this.logger.warn(
+            `Failed to destroy orphan box ${box.id} after creation failure: ${(destroyError as Error)?.message}`,
+          )
+        })
+        throw error
+      }
     }
     return boxToBoxResponse(box)
   }
