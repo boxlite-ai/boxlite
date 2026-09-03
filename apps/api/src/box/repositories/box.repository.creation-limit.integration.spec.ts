@@ -164,7 +164,7 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
   it.each(Object.values(BoxState))('applies the creation-count policy to state %s', async (state) => {
     const existing = newBox(`existing-${state}`)
     existing.state = state
-    await repository.insert(existing)
+    await boxes.insert(existing)
 
     const creating = repository.insert(newBox(`candidate-${state}`), 1)
     if (excludedStates.has(state)) {
