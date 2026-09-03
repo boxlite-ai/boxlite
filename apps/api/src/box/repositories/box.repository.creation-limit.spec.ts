@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { FindOperator, FindOptionsWhere } from 'typeorm'
+import { FindOperator } from 'typeorm'
 import { BoxRepository } from './box.repository'
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
@@ -66,28 +66,20 @@ describe('BoxRepository creation admission', () => {
     await expect(boxRepository.insert(entity, 2)).resolves.toBe(entity)
 
     expect(transaction).toHaveBeenCalledWith('SERIALIZABLE', expect.any(Function))
-    expect(entityManager.count).toHaveBeenCalledWith(Box, expect.objectContaining({ where: expect.any(Array) }))
+    expect(entityManager.count).toHaveBeenCalledWith(
+      Box,
+      expect.objectContaining({ where: expect.objectContaining({ organizationId: entity.organizationId }) }),
+    )
     expect(entityManager.insert).toHaveBeenCalledWith(Box, entity)
     expect(entityManager.upsert).toHaveBeenCalledTimes(1)
     expect(cacheInvalidation.invalidateOrgId).toHaveBeenCalledTimes(1)
 
-    const where = entityManager.count.mock.calls[0][1].where as FindOptionsWhere<Box>[]
-    expect(where).toEqual([
-      expect.objectContaining({ organizationId: entity.organizationId }),
-      {
-        organizationId: entity.organizationId,
-        state: BoxState.UNKNOWN,
-        pending: true,
-      },
-    ])
-
-    const stateFilter = where[0].state as FindOperator<BoxState>
+    const stateFilter = entityManager.count.mock.calls[0][1].where.state as FindOperator<BoxState>
     expect(stateFilter.type).toBe('not')
     const excludedStates = stateFilter.child as FindOperator<BoxState>
     expect(excludedStates.type).toBe('in')
     expect(excludedStates.value).toEqual([
       BoxState.ERROR,
-      BoxState.UNKNOWN,
       BoxState.DESTROYING,
       BoxState.DESTROYED,
       BoxState.ARCHIVING,
@@ -126,7 +118,7 @@ describe('BoxRepository creation admission', () => {
     expect(transaction).toHaveBeenCalledWith('SERIALIZABLE', expect.any(Function))
     expect(entityManager.count).toHaveBeenCalledWith(
       Box,
-      expect.objectContaining({ where: expect.arrayContaining([expect.objectContaining({ organizationId })]) }),
+      expect.objectContaining({ where: expect.objectContaining({ organizationId }) }),
     )
     expect(entityManager.update).toHaveBeenCalledTimes(1)
     expect(entityManager.upsert).toHaveBeenCalledTimes(1)

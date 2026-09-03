@@ -19,7 +19,6 @@ const organizationId = '00000000-0000-4000-8000-0000000000aa'
 
 const excludedStates = new Set([
   BoxState.ERROR,
-  BoxState.UNKNOWN,
   BoxState.DESTROYING,
   BoxState.DESTROYED,
   BoxState.ARCHIVING,
@@ -165,8 +164,7 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
   it.each(Object.values(BoxState))('applies the creation-count policy to state %s', async (state) => {
     const existing = newBox(`existing-${state}`)
     existing.state = state
-    existing.pending = false
-    await boxes.insert(existing)
+    await repository.insert(existing)
 
     const creating = repository.insert(newBox(`candidate-${state}`), 1)
     if (excludedStates.has(state)) {

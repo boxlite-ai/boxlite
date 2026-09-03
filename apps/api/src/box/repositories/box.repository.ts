@@ -50,9 +50,6 @@ const CREATION_ADMISSION_RETRY_AFTER_SECONDS = 5
 
 const BOX_CREATION_LIMIT_EXCLUDED_STATES = [
   BoxState.ERROR,
-  // A settled UNKNOWN Box is treated like ERROR for admission: it is not
-  // usable, while a pending UNKNOWN Box still reserves its creation slot.
-  BoxState.UNKNOWN,
   BoxState.DESTROYING,
   BoxState.DESTROYED,
   BoxState.ARCHIVING,
@@ -179,17 +176,10 @@ export class BoxRepository extends BaseRepository<Box> {
       try {
         return await this.dataSource.transaction('SERIALIZABLE', async (entityManager) => {
           const currentCount = await entityManager.count(Box, {
-            where: [
-              {
-                organizationId,
-                state: Not(In(BOX_CREATION_LIMIT_EXCLUDED_STATES)),
-              },
-              {
-                organizationId,
-                state: BoxState.UNKNOWN,
-                pending: true,
-              },
-            ],
+            where: {
+              organizationId,
+              state: Not(In(BOX_CREATION_LIMIT_EXCLUDED_STATES)),
+            },
           })
           if (currentCount >= maxCreatedBoxes) {
             throw new BoxCreationLimitExceededError(currentCount, maxCreatedBoxes)
