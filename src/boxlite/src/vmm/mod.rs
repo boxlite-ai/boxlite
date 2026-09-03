@@ -238,11 +238,14 @@ pub struct InstanceSpec {
     pub disable_network: bool,
     /// Open the box's writable block devices with O_DIRECT.
     ///
-    /// Set when the box carries disk I/O limits: cgroup `io.max` charges
-    /// buffered writes to whichever cgroup first dirtied the image file's
-    /// inode (the host runtime, not the box), so only direct I/O on the
-    /// private COW layer makes the box's writes what gets throttled. Read-only
-    /// (shared) images stay buffered — reads are charged to the issuer anyway.
+    /// Set when the box carries disk I/O limits *and* the host will enforce
+    /// them: cgroup `io.max` charges buffered writes to whichever cgroup first
+    /// dirtied the image file's inode (the host runtime, not the box), so only
+    /// direct I/O on the private COW layer makes the box's writes what gets
+    /// throttled. Read-only (shared) images stay buffered — reads are charged
+    /// to the issuer anyway. Unenforced limits leave this false: direct I/O
+    /// would cost the host page cache, and off Linux also raise the disk's
+    /// sync mode, for a box that nothing throttles.
     #[serde(default)]
     pub disk_direct_io: bool,
     /// Home directory for boxlite runtime (~/.boxlite or BOXLITE_HOME)

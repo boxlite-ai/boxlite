@@ -62,9 +62,9 @@ fn io_controller_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Time a 32 MiB direct, flushed write inside the guest. A box with limits
-/// opens its disks with O_DIRECT, so each guest write reaches the host block
-/// layer as it happens; `conv=fsync` keeps the measurement honest for the
+/// Time a 32 MiB direct, flushed write inside the guest. A box whose limits
+/// are enforced opens its writable disk with O_DIRECT, so each guest write
+/// reaches the host block layer as it happens; `conv=fsync` keeps the measurement honest for the
 /// unthrottled baseline, whose disks are buffered.
 async fn timed_flushed_write(t: &BoxTestBase) -> Duration {
     let started = Instant::now();

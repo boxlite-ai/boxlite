@@ -564,9 +564,14 @@ impl KrunContext {
             }
         };
 
-        // `krun_add_disk3` is `krun_add_disk2` plus the O_DIRECT switch; the
-        // sync mode passed is the one `krun_add_disk2` hardcodes on Linux, so
-        // the only behavioural difference is bypassing the host page cache.
+        // `krun_add_disk3` is `krun_add_disk2` plus the O_DIRECT switch, but it
+        // also takes the sync mode explicitly. `KRUN_SYNC_FULL` is what
+        // `krun_add_disk2` hardcodes on Linux, so there the only behavioural
+        // difference is bypassing the host page cache; on other platforms
+        // `krun_add_disk2` may pick a laxer mode, so passing it here would
+        // change durability too. That is why callers only ask for `direct_io`
+        // where cgroup `io.max` throttling is real — see
+        // `jailer::disk_io_throttling_available`.
         // O_DIRECT is what makes host-side I/O accounting (cgroup `io.max`)
         // attribute the box's disk traffic to the box: buffered writes are
         // charged to whichever cgroup first dirtied the image file's inode.

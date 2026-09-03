@@ -7,6 +7,7 @@ use super::guest_entrypoint::GuestEntrypointBuilder;
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::DiskFormat;
 use crate::images::ContainerImageConfig;
+use crate::jailer;
 use crate::litebox::init::types::{InitPipelineContext, resolve_user_volumes};
 use crate::net::{NetworkBackend, NetworkBackendConfig};
 use crate::pipeline::PipelineTask;
@@ -254,7 +255,7 @@ async fn build_config(
         network_backend_spec,
         network_backend_endpoint: None,
         disable_network: matches!(options.network, NetworkSpec::Disabled),
-        disk_direct_io: options.disk_io.is_some(),
+        disk_direct_io: use_direct_disk_io(options),
         home_dir: runtime.layout.home_dir().to_path_buf(),
         // Diagnostic files in box_dir (preserved on crash)
         console_output: Some(layout.console_output_path()),
@@ -419,11 +420,46 @@ async fn spawn_vm(
     controller.start(config).await
 }
 
+/// Whether to open the box's writable disk image with O_DIRECT.
+///
+/// O_DIRECT exists so cgroup `io.max` accounting attributes the box's writes
+/// to the box, so it is worth its cost only where the host actually throttles
+/// them: requested limits alone are not enough. Off Linux the engine also has
+/// to raise the disk's sync mode to pass the flag, which would change the
+/// durability of a box whose limits are documented as merely warned about.
+fn use_direct_disk_io(options: &BoxOptions) -> bool {
+    options.disk_io.is_some()
+        && jailer::disk_io_throttling_available(options.advanced.security.jailer_enabled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::images::ContainerImageConfig;
-    use crate::runtime::options::{PortProtocol, PortSpec};
+    use crate::runtime::options::{DiskIoLimits, PortProtocol, PortSpec};
+
+    /// Requested limits alone must not turn on O_DIRECT: with the jailer off
+    /// the box has no cgroup, so nothing throttles it and the flag would only
+    /// cost the host page cache — and off Linux also raise the disk's sync
+    /// mode for a box the docs promise is merely unthrottled there.
+    #[test]
+    fn direct_disk_io_needs_enforcement_not_just_requested_limits() {
+        let unlimited = BoxOptions::default();
+        assert!(!use_direct_disk_io(&unlimited));
+
+        let mut limited_without_cgroup = BoxOptions {
+            disk_io: Some(DiskIoLimits {
+                write_bps: Some(1024),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        limited_without_cgroup.advanced.security.jailer_enabled = false;
+        assert!(
+            !use_direct_disk_io(&limited_without_cgroup),
+            "no jailer means no box cgroup, so the limits are only warned about"
+        );
+    }
 
     #[test]
     fn reports_only_exposed_tcp_ports_without_explicit_publication() {

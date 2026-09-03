@@ -1036,8 +1036,8 @@ pub struct ResourceFlags {
     pub disk_size_gb: Option<u64>,
 
     /// Disk read bandwidth limit in bytes per second (Linux, cgroup v2 io.max).
-    /// Any --disk-* limit makes the box open its private writable disk with
-    /// O_DIRECT so its writes are charged to it. Unset = unlimited.
+    /// Where the host can enforce them, the box opens its private writable
+    /// disk with O_DIRECT so its writes are charged to it. Unset = unlimited.
     #[arg(long = "disk-read-bps", value_name = "BYTES")]
     pub disk_read_bps: Option<u64>,
 

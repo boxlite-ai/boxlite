@@ -319,9 +319,10 @@ mod registry_options_tests {
 /// direction, mirroring cgroup v2 `io.max` (`rbps`/`wbps`/`riops`/`wiops`).
 /// `None` leaves that dimension unlimited. Values must be greater than zero.
 ///
-/// Enforced on Linux by writing `io.max` on the box's cgroup. A box with
-/// limits opens its private, writable disk image with O_DIRECT so its writes
-/// reach the host block layer under the box's cgroup — buffered writes would
+/// Enforced on Linux by writing `io.max` on the box's cgroup. Where the host
+/// can enforce them, the box opens its private, writable disk image with
+/// O_DIRECT so
+/// its writes reach the host block layer under the box's cgroup — buffered writes would
 /// be charged to whichever cgroup first dirtied the image file (the host
 /// runtime), leaving them unthrottled. Shared read-only images (the OCI base
 /// and the guest rootfs) stay buffered: reads are charged to the issuing box

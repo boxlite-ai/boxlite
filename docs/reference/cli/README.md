@@ -791,9 +791,9 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 | `--disk-write-iops IOPS` | u64 | Disk write operations per second ceiling |
 
 The four `--disk-*` rate flags populate `BoxOptions::disk_io`; each is independent and an
-omitted flag leaves that dimension unlimited. A box with any of them opens its private writable
-disk image with O_DIRECT so its writes are accounted to the box's cgroup; shared read-only
-images stay in the host page cache (hits free, misses throttled). Rootless hosts need
+omitted flag leaves that dimension unlimited. Where the host can enforce them, the box opens its
+private writable disk image with O_DIRECT so its writes are accounted to the box's cgroup; shared
+read-only images stay in the host page cache (hits free, misses throttled). Rootless hosts need
 the `io` controller delegated to the user session (`Delegate=cpu cpuset io memory pids` on
 `user@<uid>.service`); where it is unavailable the box starts with a warning and no throttle.
 

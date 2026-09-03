@@ -1820,9 +1820,9 @@ components:
         operations per second are independent ceilings, each split by
         direction, mirroring cgroup v2 `io.max`. Omit a field for unlimited.
 
-        Enforced on Linux hosts through the box's cgroup. A box with limits
-        opens its private writable disk image with O_DIRECT so its writes are
-        accounted to the box; shared read-only images stay in the host page
+        Enforced on Linux hosts through the box's cgroup. Where the host can
+        enforce them, the box opens its private writable disk image with O_DIRECT
+        so its writes are accounted to the box; shared read-only images stay in the host page
         cache, where cache hits are free and cache misses are throttled. Where
         the host cannot enforce them (no cgroup `io` controller, macOS) the
         limits are accepted, logged, and not applied.

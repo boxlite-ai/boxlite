@@ -331,12 +331,14 @@ disk_io=boxlite.DiskIoLimits(
   device(s) holding the box's disk images. Where the `io` controller is not
   available (rootless without delegation, macOS, jailer disabled) the box
   starts with a warning and no throttle.
-- A box with limits opens its private, writable disk image (`disk.qcow2`)
-  with O_DIRECT, so its writes are accounted to the box and throttled;
-  buffered writes would be charged to the host process that created the file.
-  The shared read-only images (OCI base ext4, guest rootfs) stay in the host
-  page cache: hits are free, misses are throttled as the box's reads. The
-  guest's own page cache is unaffected.
+- Where the host can enforce them, the box opens its private, writable disk
+  image (`disk.qcow2`) with O_DIRECT, so its writes are accounted to the box
+  and throttled; buffered writes would be charged to the host process that
+  created the file. An unenforced box keeps the ordinary buffered disk, so a
+  warned-about limit changes nothing about how its disk behaves. The shared
+  read-only images (OCI base ext4, guest rootfs) stay in the host page cache:
+  hits are free, misses are throttled as the box's reads. The guest's own
+  page cache is unaffected.
 - Rootless Linux needs the `io` controller delegated to the user session:
   `systemctl edit user@<uid>.service` → `[Service] Delegate=cpu cpuset io memory pids`.
 - The boxlite home must live on a filesystem backed by a block device (a disk,

@@ -240,6 +240,32 @@ fn disk_image_paths(layout: &BoxFilesystemLayout) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Whether this host will actually throttle a box's disk I/O, i.e. whether the
+/// `io.max` write in [`sandbox`] can happen at all: cgroup v2 with the `io`
+/// controller delegated, reached through a jailer that is switched on.
+///
+/// Callers pair this with "limits were requested" to decide whether opening the
+/// box's writable image with O_DIRECT buys anything. O_DIRECT exists only so
+/// that `io.max` accounting attributes the box's writes to the box; where
+/// nothing throttles, it costs the host page cache and — off Linux, where the
+/// engine also has to raise the disk's sync mode to pass it — changes the
+/// durability semantics of a box whose limits are documented as merely warned
+/// about. Hence a platform predicate rather than `disk_io.is_some()`.
+///
+/// Reads one cgroup file on Linux; the answer is a property of the host, so it
+/// is resolved once at spawn time rather than cached.
+pub(crate) fn disk_io_throttling_available(jailer_enabled: bool) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        jailer_enabled && cgroup::io_controller_available()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = jailer_enabled;
+        false
+    }
+}
+
 fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Vec<PathAccess> {
     let mut paths = Vec::new();
 
@@ -678,6 +704,23 @@ mod tests {
 
     fn test_layout(box_dir: PathBuf) -> BoxFilesystemLayout {
         BoxFilesystemLayout::new(box_dir, FsLayoutConfig::without_bind_mount(), false)
+    }
+
+    /// A box whose limits are only warned about must not get O_DIRECT: off
+    /// Linux the engine has to raise the disk's sync mode to pass it, so
+    /// deriving the flag from `disk_io.is_some()` silently changed durability
+    /// for a box the docs promise is merely unthrottled there.
+    #[test]
+    fn disk_io_throttling_is_unavailable_without_a_cgroup() {
+        // The jailer owns the box cgroup, so switching it off removes the only
+        // thing that could write `io.max` — on every platform.
+        assert!(!disk_io_throttling_available(false));
+
+        #[cfg(not(target_os = "linux"))]
+        assert!(
+            !disk_io_throttling_available(true),
+            "no cgroup v2 io controller exists off Linux"
+        );
     }
 
     #[test]
