@@ -46,6 +46,9 @@ pub struct ShimSpawner<'a> {
     box_id: &'a str,
     options: &'a BoxOptions,
     nested_virtualization: bool,
+    /// Host paths of the block devices the VM attaches (the directly attached
+    /// guest rootfs image among them), so disk I/O limits cover their devices.
+    block_device_paths: Vec<PathBuf>,
 }
 
 impl<'a> ShimSpawner<'a> {
@@ -61,7 +64,20 @@ impl<'a> ShimSpawner<'a> {
             box_id,
             options,
             nested_virtualization: false,
+            block_device_paths: Vec::new(),
         }
+    }
+
+    /// Record the block devices the VM will attach. The jailer resolves their
+    /// host devices for `io.max`; the layout alone only knows the box's own
+    /// COW disk and its backing chain, not the shared guest rootfs image.
+    pub fn with_block_devices(mut self, devices: &crate::vmm::BlockDevices) -> Self {
+        self.block_device_paths = devices
+            .devices()
+            .iter()
+            .map(|d| d.disk_path.clone())
+            .collect();
+        self
     }
 
     /// Grant the confined shim the host files libkrun probes before enabling
@@ -119,6 +135,8 @@ impl<'a> ShimSpawner<'a> {
             .with_box_id(self.box_id)
             .with_layout(self.layout.clone())
             .with_security(self.options.advanced.security.clone())
+            .with_disk_io(self.options.disk_io.clone())
+            .with_disk_images(self.block_device_paths.clone())
             .with_volumes(self.options.volumes.clone())
             .with_additional_path_access(self.additional_path_access())
             .with_network_backend_enabled(matches!(

@@ -10,10 +10,28 @@ import { ApiClient } from '@/api/apiClient'
 // go through this door so the dashboard and SDKs speak the same dialect;
 // cloud-capability reads stay on the generated api-client.
 
+// Disk I/O ceilings: bytes per second and operations per second, per
+// direction. Undefined leaves a dimension unlimited.
+export interface DiskIoLimits {
+  readBps?: number
+  writeBps?: number
+  readIops?: number
+  writeIops?: number
+}
+
 export interface Resources {
   cpu?: number
   memory?: number
   disk?: number
+  diskIo?: DiskIoLimits
+}
+
+// Wire shape of DiskIoLimits in openapi/box.openapi.yaml.
+export type BoxApiDiskIoLimits = {
+  read_bps?: number
+  write_bps?: number
+  read_iops?: number
+  write_iops?: number
 }
 
 export type BoxApiNetworkSpec = {
@@ -56,6 +74,7 @@ export type BoxApiCreateRequest = {
   cpus?: number
   memory_mib?: number
   disk_size_gb?: number
+  disk_io?: BoxApiDiskIoLimits
   env?: Record<string, string>
   user?: string
   network?: BoxApiNetworkSpec
@@ -82,6 +101,18 @@ export type BoxApiBoxResponse = {
   auto_resume?: boolean
 }
 
+// Only dimensions that are set go on the wire; an all-unset object is dropped
+// so an unlimited box sends no `disk_io` key at all.
+function toBoxApiDiskIoLimits(limits?: DiskIoLimits): BoxApiDiskIoLimits | undefined {
+  if (!limits) return undefined
+  const wire: BoxApiDiskIoLimits = {}
+  if (limits.readBps !== undefined) wire.read_bps = limits.readBps
+  if (limits.writeBps !== undefined) wire.write_bps = limits.writeBps
+  if (limits.readIops !== undefined) wire.read_iops = limits.readIops
+  if (limits.writeIops !== undefined) wire.write_iops = limits.writeIops
+  return Object.keys(wire).length > 0 ? wire : undefined
+}
+
 export function toBoxApiCreateRequest(params?: CreateBoxParams): BoxApiCreateRequest {
   const p = params ?? {}
   return {
@@ -93,6 +124,7 @@ export function toBoxApiCreateRequest(params?: CreateBoxParams): BoxApiCreateReq
     // The dashboard form works in GiB; the Box API contract takes MiB.
     memory_mib: p.resources?.memory !== undefined ? p.resources.memory * 1024 : undefined,
     disk_size_gb: p.resources?.disk,
+    disk_io: toBoxApiDiskIoLimits(p.resources?.diskIo),
     network: p.network,
     auto_stop: p.autoStopIntervalSeconds,
     auto_delete: p.autoDelete,

@@ -34,8 +34,16 @@ pub(crate) const CAPABILITY_POLICY_ARCHIVE_VERSION: u32 = 4;
 /// v5, and the importer canonicalizes anything below it.
 pub(crate) const PUBLISHED_PORTS_ARCHIVE_VERSION: u32 = 5;
 
+/// First archive version that carries disk I/O rate limits (`disk_io`).
+///
+/// A pre-`disk_io` importer would deserialize the manifest fine and silently
+/// start the box unthrottled. Stamping v6 makes it refuse the archive instead;
+/// a box without limits still exports at the lowest version its other options
+/// allow.
+pub(crate) const DISK_IO_ARCHIVE_VERSION: u32 = 6;
+
 /// Maximum archive version this build can import.
-pub(crate) const MAX_SUPPORTED_VERSION: u32 = PUBLISHED_PORTS_ARCHIVE_VERSION;
+pub(crate) const MAX_SUPPORTED_VERSION: u32 = DISK_IO_ARCHIVE_VERSION;
 
 /// Pick the archive format an exported box needs.
 ///
@@ -45,7 +53,9 @@ pub(crate) const MAX_SUPPORTED_VERSION: u32 = PUBLISHED_PORTS_ARCHIVE_VERSION;
 /// rather than silently drop. Only `None` (the caller never touched the
 /// field) is indistinguishable from what a v3 importer already does.
 pub(crate) fn archive_version_for_options(options: &crate::runtime::options::BoxOptions) -> u32 {
-    if !options.ports.is_empty() {
+    if options.disk_io.is_some() {
+        DISK_IO_ARCHIVE_VERSION
+    } else if !options.ports.is_empty() {
         PUBLISHED_PORTS_ARCHIVE_VERSION
     } else if options.advanced.capabilities().is_none() {
         ARCHIVE_VERSION
@@ -61,9 +71,10 @@ pub(crate) fn archive_version_for_options(options: &crate::runtime::options::Box
 /// v3: adds `box_options` for full configuration preservation
 /// v4: `box_options.advanced` carries a custom capability policy
 /// v5: `ports` carry publication semantics (automatic host port, bind IP)
+/// v6: `box_options.disk_io` carries disk I/O rate limits
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ArchiveManifest {
-    /// Archive format version (1 through 5).
+    /// Archive format version (1 through 6).
     pub version: u32,
     /// Original box name (optional, may be renamed on import).
     pub box_name: Option<String>,
@@ -394,6 +405,31 @@ mod tests {
                 PUBLISHED_PORTS_ARCHIVE_VERSION
             );
         }
+    }
+
+    /// Disk I/O limits are the newest option an older importer would silently
+    /// drop (starting the box unthrottled), so any box carrying them exports
+    /// at v6 regardless of what else it configures.
+    #[test]
+    fn disk_io_limits_raise_the_archive_version_to_v6() {
+        assert_eq!(DISK_IO_ARCHIVE_VERSION, 6);
+        assert_eq!(MAX_SUPPORTED_VERSION, DISK_IO_ARCHIVE_VERSION);
+
+        let throttled = crate::runtime::options::BoxOptions {
+            disk_io: Some(crate::runtime::options::DiskIoLimits {
+                write_bps: Some(4 * 1024 * 1024),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            archive_version_for_options(&throttled),
+            DISK_IO_ARCHIVE_VERSION
+        );
+
+        // An unlimited box is not dragged up to v6 by the field's existence.
+        let unlimited = crate::runtime::options::BoxOptions::default();
+        assert_eq!(archive_version_for_options(&unlimited), ARCHIVE_VERSION);
     }
 
     /// Regression: the export stamp and the importer's canonicalization window

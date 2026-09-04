@@ -101,6 +101,7 @@ Configuration options for creating a box.
 | `cpus` | `number` | `1` | Number of CPU cores |
 | `memoryMib` | `number` | `512` | Memory limit in MiB |
 | `diskSizeGb` | `number` | - | Persistent disk size in GB |
+| `diskIo` | `JsDiskIoLimits` | - | Disk I/O ceilings (`readBps`, `writeBps`, `readIops`, `writeIops`); Linux cgroup v2, ignored with a warning elsewhere |
 | `workingDir` | `string` | `"/root"` | Working directory inside container |
 | `env` | `JsEnvVar[]` | `[]` | Environment variables |
 | `volumes` | `JsVolumeSpec[]` | `[]` | Volume mounts |

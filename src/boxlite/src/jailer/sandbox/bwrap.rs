@@ -5,6 +5,7 @@
 
 use super::{Sandbox, SandboxContext};
 use crate::jailer::{bwrap, cgroup};
+use crate::runtime::options::DiskIoLimits;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::process::Command;
 
@@ -21,6 +22,34 @@ impl BwrapSandbox {
 impl Default for BwrapSandbox {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl BwrapSandbox {
+    /// Write the box's disk I/O limits to its (already created) cgroup.
+    ///
+    /// Degrades to a warning like the other cgroup limits, but a disk-io
+    /// specific one: the usual cause — a rootless session without an `io`
+    /// delegation — is fixable, so the warning carries the operator fix.
+    fn apply_disk_io_limits(&self, ctx: &SandboxContext, limits: &DiskIoLimits) {
+        if !cgroup::io_controller_available() {
+            super::warn_disk_io_not_enforced(
+                ctx,
+                &format!(
+                    "the cgroup io controller is not available here; {}",
+                    cgroup::io_delegation_hint()
+                ),
+            );
+            return;
+        }
+        let applied = cgroup::io_max_entries(limits, &ctx.disk_images)
+            .and_then(|entries| cgroup::apply_io_max(ctx.id, &entries).map(|()| entries));
+        match applied {
+            Ok(entries) => {
+                tracing::info!(id = %ctx.id, devices = entries.len(), "Disk io limits applied");
+            }
+            Err(e) => super::warn_disk_io_not_enforced(ctx, &e.to_string()),
+        }
     }
 }
 
@@ -49,10 +78,14 @@ impl Sandbox for BwrapSandbox {
         match cgroup::setup_cgroup(ctx.id, &cgroup_config) {
             Ok(path) => {
                 tracing::info!(id = %ctx.id, path = %path.display(), "Cgroup created");
+                if let Some(limits) = ctx.disk_io {
+                    self.apply_disk_io_limits(ctx, limits);
+                }
             }
             Err(e) => {
                 tracing::warn!(id = %ctx.id, error = %e,
                     "Cgroup setup failed (continuing without cgroup limits)");
+                super::warn_disk_io_not_enforced(ctx, "the box cgroup could not be created");
             }
         }
 
@@ -200,6 +233,8 @@ mod tests {
             network_enabled: false,
             sandbox_profile: None,
             detached: false,
+            disk_io: None,
+            disk_images: vec![],
         };
 
         let shim = "/var/lib/boxlite/boxes/abc/bin/boxlite-shim";
@@ -245,6 +280,8 @@ mod tests {
                 network_enabled: false,
                 sandbox_profile: None,
                 detached,
+                disk_io: None,
+                disk_images: vec![],
             };
             let mut cmd = Command::new("/var/lib/boxlite/boxes/abc/bin/boxlite-shim");
             BwrapSandbox::new().apply(&ctx, &mut cmd);

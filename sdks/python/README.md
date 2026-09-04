@@ -237,6 +237,7 @@ Configuration options for creating a box.
 - `cpus: int` - Number of CPUs (default: 1, max: host CPU count)
 - `memory_mib: int` - Memory in MiB (default: 512, range: 128-65536)
 - `disk_size_gb: int | None` - Persistent disk size in GB (default: None)
+- `disk_io: DiskIoLimits | None` - Disk I/O ceilings: `read_bps`/`write_bps` (bytes per second) and `read_iops`/`write_iops`, each optional (default: None = unlimited; Linux cgroup v2, ignored with a warning elsewhere)
 - `working_dir: str` - Working directory in container (default: `"/root"`)
 - `env: List[Tuple[str, str]]` - Environment variables as (key, value) pairs
 - `volumes: List[Tuple | Dict]` - Volume mounts; a tuple is a host bind, a dict takes `managed_volume` (id or name) or `host_path`

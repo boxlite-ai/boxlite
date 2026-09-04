@@ -55,6 +55,7 @@ func TestRecoverForwardsSecrets(t *testing.T) {
 		GpuQuota:     1,
 		MemoryQuota:  4,
 		StorageQuota: 10,
+		DiskIo:       &dto.DiskIoLimitsDTO{WriteBps: 4194304, ReadIops: 500},
 		Env:          map[string]string{"FOO": "bar"},
 		Volumes:      []dto.VolumeDTO{{VolumeId: "vol-1", MountPath: "/data"}},
 		Secrets: []dto.SecretDTO{
@@ -84,6 +85,9 @@ func TestRecoverForwardsSecrets(t *testing.T) {
 	}
 	if createDto.StorageQuota != recoverDto.StorageQuota {
 		t.Errorf("createDto.StorageQuota = %d, want %d", createDto.StorageQuota, recoverDto.StorageQuota)
+	}
+	if createDto.DiskIo == nil || *createDto.DiskIo != *recoverDto.DiskIo {
+		t.Errorf("createDto.DiskIo = %v, want %v", createDto.DiskIo, recoverDto.DiskIo)
 	}
 	if len(createDto.Env) != 1 || createDto.Env["FOO"] != "bar" {
 		t.Errorf("createDto.Env = %v, want FOO=bar", createDto.Env)

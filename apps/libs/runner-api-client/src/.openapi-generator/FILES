@@ -13,6 +13,7 @@ docs/BoxInfoResponse.md
 docs/BoxliteApi.md
 docs/CreateBoxDTO.md
 docs/DefaultApi.md
+docs/DiskIoLimitsDTO.md
 docs/DtoVolumeDTO.md
 docs/EnumsBoxState.md
 docs/ErrorResponse.md
@@ -30,6 +31,7 @@ git_push.sh
 index.ts
 models/box-info-response.ts
 models/create-box-dto.ts
+models/disk-io-limits-dto.ts
 models/dto-volume-dto.ts
 models/enums-box-state.ts
 models/error-response.ts

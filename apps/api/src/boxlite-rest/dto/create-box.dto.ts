@@ -12,6 +12,7 @@ import {
   IsOptional,
   IsString,
   IsNumber,
+  IsInt,
   IsBoolean,
   IsObject,
   IsArray,
@@ -197,6 +198,31 @@ export class SecretSpecDto {
   placeholder?: string
 }
 
+// Disk I/O ceilings (openapi DiskIoLimits): bandwidth in bytes/s and IOPS,
+// each per direction. Every field is optional and must be >= 1 — zero is never
+// "block all I/O", it is a caller who meant "unlimited" and should omit it.
+export class DiskIoLimitsDto {
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  read_bps?: number
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  write_bps?: number
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  read_iops?: number
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  write_iops?: number
+}
+
 export class CreateBoxDto {
   @IsOptional()
   @IsString()
@@ -223,6 +249,12 @@ export class CreateBoxDto {
   @IsNumber()
   @Min(1)
   disk_size_gb?: number
+
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => DiskIoLimitsDto)
+  disk_io?: DiskIoLimitsDto
 
   @IsOptional()
   @IsString()

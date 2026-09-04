@@ -86,6 +86,7 @@ describe('BoxliteBoxController request validation', () => {
         cpus: 2,
         memory_mib: 512,
         disk_size_gb: 10,
+        disk_io: { read_bps: 52428800, write_iops: 1000 },
         working_dir: '/app',
         env: { DEBUG: '1' },
         entrypoint: ['python'],
@@ -105,6 +106,15 @@ describe('BoxliteBoxController request validation', () => {
     expect(dto.image).toBe('python:3.11-slim')
     expect(dto.network?.outbound?.allow_net).toEqual(['api.openai.com'])
     expect(dto.volumes?.[0]?.guest_path).toBe('/data')
+    expect(dto.disk_io?.write_iops).toBe(1000)
+  })
+
+  // Nested whitelisting: an unknown key inside disk_io must fail the same way
+  // one inside network does, and a zero ceiling must be a 400 here rather than
+  // a runner-side failure after the box was accepted.
+  it('rejects an unrecognised field or a zero ceiling inside disk_io', async () => {
+    await expect(pipe!.transform({ image: 'alpine:latest', disk_io: { bogus: 1 } }, meta)).rejects.toThrow()
+    await expect(pipe!.transform({ image: 'alpine:latest', disk_io: { read_bps: 0 } }, meta)).rejects.toThrow()
   })
 
   // Already-deployed callers send the pre-split flat network shape. Whitelisting

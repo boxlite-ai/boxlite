@@ -4,6 +4,16 @@
 
 package dto
 
+// DiskIoLimitsDTO caps a box's disk I/O: bandwidth in bytes per second and
+// operations per second, each per direction. A zero or omitted field is
+// unlimited. Mirrors BoxOptions.disk_io in the runtime.
+type DiskIoLimitsDTO struct {
+	ReadBps   uint64 `json:"readBps,omitempty"`
+	WriteBps  uint64 `json:"writeBps,omitempty"`
+	ReadIops  uint64 `json:"readIops,omitempty"`
+	WriteIops uint64 `json:"writeIops,omitempty"`
+} //	@name	DiskIoLimitsDTO
+
 // CreateBoxDTO carries two unrelated "user" fields. OsUser is a Daytona-era
 // provisioning label: it only ever became a DAYTONA_SANDBOX_USER env var for a
 // computer-use daemon that never read it, and nothing acts on it today.
@@ -18,6 +28,7 @@ type CreateBoxDTO struct {
 	GpuQuota         int64             `json:"gpuQuota" validate:"min=0"`
 	MemoryQuota      int64             `json:"memoryQuota" validate:"min=1"`
 	StorageQuota     int64             `json:"storageQuota" validate:"min=1"`
+	DiskIo           *DiskIoLimitsDTO  `json:"diskIo,omitempty"`
 	Env              map[string]string `json:"env,omitempty"`
 	Registry         *RegistryDTO      `json:"registry,omitempty"`
 	Entrypoint       []string          `json:"entrypoint,omitempty"`
@@ -51,6 +62,7 @@ type RecoverBoxDTO struct {
 	GpuQuota         int64             `json:"gpuQuota" validate:"min=0"`
 	MemoryQuota      int64             `json:"memoryQuota" validate:"min=1"`
 	StorageQuota     int64             `json:"storageQuota" validate:"min=1"`
+	DiskIo           *DiskIoLimitsDTO  `json:"diskIo,omitempty"`
 	Env              map[string]string `json:"env,omitempty"`
 	Volumes          []VolumeDTO       `json:"volumes,omitempty"`
 	Secrets          []SecretDTO       `json:"secrets,omitempty" validate:"dive"`

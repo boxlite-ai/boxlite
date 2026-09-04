@@ -6,9 +6,9 @@ use boxlite::runtime::advanced_options::{
 };
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, InboundNetworkConfig,
-    NetworkMode, NetworkSpec, OutboundNetworkConfig, PortProtocol, PortSpec, RegistryTransport,
-    RootfsSpec, Secret, VolumeSpec,
+    BoxOptions, BoxliteOptions, DiskIoLimits, ImageRegistry, ImageRegistryAuth,
+    InboundNetworkConfig, NetworkMode, NetworkSpec, OutboundNetworkConfig, PortProtocol, PortSpec,
+    RegistryTransport, RootfsSpec, Secret, VolumeSpec,
 };
 use napi::bindgen_prelude::Error;
 use napi_derive::napi;
@@ -183,6 +183,10 @@ pub struct JsBoxOptions {
     /// Disk size in GB for container rootfs (sparse, grows as needed)
     pub disk_size_gb: Option<f64>,
 
+    /// Disk I/O rate limits (bytes/s and IOPS, per direction). Linux only;
+    /// logged and ignored where cgroup v2 `io.max` is unavailable.
+    pub disk_io: Option<JsDiskIoLimits>,
+
     /// Working directory inside container (default: /root)
     pub working_dir: Option<String>,
 
@@ -254,6 +258,35 @@ pub struct JsBoxOptions {
 pub struct JsEnvVar {
     pub key: String,
     pub value: String,
+}
+
+/// Disk I/O rate limits: bandwidth in bytes per second and operations per
+/// second, each split by direction. Omit a field for unlimited; values must
+/// be greater than zero.
+#[napi(object)]
+#[derive(Clone, Debug, Default)]
+pub struct JsDiskIoLimits {
+    /// Read bandwidth ceiling in bytes per second.
+    pub read_bps: Option<f64>,
+    /// Write bandwidth ceiling in bytes per second.
+    pub write_bps: Option<f64>,
+    /// Read operations per second ceiling.
+    pub read_iops: Option<f64>,
+    /// Write operations per second ceiling.
+    pub write_iops: Option<f64>,
+}
+
+impl From<JsDiskIoLimits> for DiskIoLimits {
+    fn from(js: JsDiskIoLimits) -> Self {
+        // JS numbers are f64; the same truncation `disk_size_gb` uses.
+        let to_u64 = |v: Option<f64>| v.map(|v| v as u64);
+        Self {
+            read_bps: to_u64(js.read_bps),
+            write_bps: to_u64(js.write_bps),
+            read_iops: to_u64(js.read_iops),
+            write_iops: to_u64(js.write_iops),
+        }
+    }
 }
 
 /// Volume mount specification.
@@ -559,6 +592,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             cpus: js_opts.cpus,
             memory_mib: js_opts.memory_mib,
             disk_size_gb: js_opts.disk_size_gb.map(|v| v as u64),
+            disk_io: js_opts.disk_io.map(DiskIoLimits::from),
             working_dir: js_opts.working_dir,
             env,
             rootfs,
@@ -897,6 +931,7 @@ mod tests {
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,
+            disk_io: None,
             working_dir: None,
             env: None,
             volumes: None,
@@ -949,7 +984,28 @@ mod tests {
         assert_eq!(capabilities.add, ["NET_ADMIN", "SYS_PTRACE"]);
         assert_eq!(capabilities.drop, ["MKNOD", "NET_RAW"]);
 
+        // Disk I/O limits: JS numbers land as u64 per dimension, unset stays
+        // None, and a request without the object leaves disk_io unset.
+        let mut with_disk_io = js.clone();
+        with_disk_io.disk_io = Some(JsDiskIoLimits {
+            read_bps: Some(50.0 * 1024.0 * 1024.0),
+            write_bps: None,
+            read_iops: None,
+            write_iops: Some(1000.0),
+        });
+        let with_disk_io = BoxOptions::try_from(with_disk_io).unwrap();
+        assert_eq!(
+            with_disk_io.disk_io,
+            Some(DiskIoLimits {
+                read_bps: Some(50 * 1024 * 1024),
+                write_bps: None,
+                read_iops: None,
+                write_iops: Some(1000),
+            })
+        );
+
         let opts = BoxOptions::try_from(js).unwrap();
+        assert_eq!(opts.disk_io, None);
         assert!(!opts.auto_remove);
         assert_eq!(opts.auto_delete, None);
         assert!(opts.advanced.capabilities().is_none());
@@ -973,6 +1029,7 @@ mod tests {
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,
+            disk_io: None,
             working_dir: None,
             env: None,
             volumes: None,

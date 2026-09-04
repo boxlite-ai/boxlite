@@ -15,6 +15,9 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
+import type { DiskIoLimitsDTO } from './disk-io-limits-dto';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { DtoSecretDTO } from './dto-secret-dto';
 // May contain unused imports in some cases
 // @ts-ignore
@@ -22,6 +25,7 @@ import type { DtoVolumeDTO } from './dto-volume-dto';
 
 export interface RecoverBoxDTO {
     'cpuQuota'?: number;
+    'diskIo'?: DiskIoLimitsDTO;
     'env'?: { [key: string]: string; };
     'errorReason': string;
     'fromVolumeId'?: string;

@@ -897,6 +897,8 @@ boxlite.BoxOptions(
     cpus=2,               # Limit CPUs
     memory_mib=1024,      # Limit memory
     disk_size_gb=10,      # Limit disk
+    # Limit disk bandwidth/IOPS (Linux cgroup v2)
+    disk_io=boxlite.DiskIoLimits(write_bps=20 * 1024 * 1024, read_iops=2000),
     # No port forwarding = no incoming connections
 )
 ```

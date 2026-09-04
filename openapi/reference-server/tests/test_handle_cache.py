@@ -60,6 +60,7 @@ def _install_boxlite_stub() -> None:
             "tty",
             "advanced",
             "secrets",
+            "disk_io",
         }
     )
 
@@ -77,6 +78,7 @@ def _install_boxlite_stub() -> None:
     module.BoxOptions = _BoxOptions
     module.AdvancedBoxOptions = _Noop
     module.ContainerCapabilities = _Noop
+    module.DiskIoLimits = _Noop
     module.CloneOptions = _Noop
     module.ExportOptions = _Noop
     module.SnapshotOptions = _Noop
@@ -228,6 +230,33 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
         options = SERVER.build_box_options(request)
 
         self.assertNotIn("tty", options.kwargs)
+
+    def test_build_box_options_forwards_disk_io_limits(self) -> None:
+        request = SERVER.CreateBoxRequest.model_validate(
+            {"image": "alpine:latest", "disk_io": {"write_bps": 4194304, "read_iops": 500}}
+        )
+
+        limits = object()
+        with patch.object(SERVER.boxlite, "DiskIoLimits", return_value=limits) as constructor:
+            options = SERVER.build_box_options(request)
+
+        constructor.assert_called_once_with(
+            read_bps=None, write_bps=4194304, read_iops=500, write_iops=None
+        )
+        self.assertIs(options.kwargs["disk_io"], limits)
+
+    def test_create_request_omits_disk_io_when_not_asked_for(self) -> None:
+        request = SERVER.CreateBoxRequest.model_validate({"image": "alpine:latest"})
+
+        options = SERVER.build_box_options(request)
+
+        self.assertNotIn("disk_io", options.kwargs)
+
+    def test_create_request_rejects_zero_disk_io_limit(self) -> None:
+        with self.assertRaises(ValidationError):
+            SERVER.CreateBoxRequest.model_validate(
+                {"image": "alpine:latest", "disk_io": {"read_bps": 0}}
+            )
 
     def test_dedicated_ports_route_is_removed(self) -> None:
         paths = {route.path for route in SERVER.app.routes}

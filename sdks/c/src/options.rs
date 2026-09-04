@@ -53,6 +53,21 @@ pub unsafe extern "C" fn boxlite_options_set_disk_size_gb(
     options_set_disk_size_gb(opts, disk_size_gb)
 }
 
+/// Set disk I/O rate limits: bandwidth in bytes/s and operations/s, per
+/// direction. Pass 0 for a dimension to leave it unlimited; all four 0 clears
+/// the limits. Enforced on Linux via cgroup v2 `io.max`; elsewhere logged and
+/// ignored.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_disk_io_limits(
+    opts: *mut CBoxliteOptions,
+    read_bps: u64,
+    write_bps: u64,
+    read_iops: u64,
+    write_iops: u64,
+) {
+    options_set_disk_io_limits(opts, read_bps, write_bps, read_iops, write_iops)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_workdir(
     opts: *mut CBoxliteOptions,
@@ -372,6 +387,29 @@ pub unsafe fn options_set_disk_size_gb(handle: *mut OptionsHandle, disk_size_gb:
     unsafe {
         if !handle.is_null() && disk_size_gb > 0 {
             (*handle).options.disk_size_gb = Some(disk_size_gb as u64);
+        }
+    }
+}
+
+pub unsafe fn options_set_disk_io_limits(
+    handle: *mut OptionsHandle,
+    read_bps: u64,
+    write_bps: u64,
+    read_iops: u64,
+    write_iops: u64,
+) {
+    // C has no Option; 0 is the "unlimited" sentinel, matching how the other
+    // numeric setters treat non-positive values.
+    let nonzero = |v: u64| (v > 0).then_some(v);
+    let limits = boxlite::runtime::options::DiskIoLimits {
+        read_bps: nonzero(read_bps),
+        write_bps: nonzero(write_bps),
+        read_iops: nonzero(read_iops),
+        write_iops: nonzero(write_iops),
+    };
+    unsafe {
+        if !handle.is_null() {
+            (*handle).options.disk_io = (!limits.is_empty()).then_some(limits);
         }
     }
 }

@@ -1242,6 +1242,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         cpus: req.cpus,
         memory_mib: req.memory_mib,
         disk_size_gb: req.disk_size_gb,
+        disk_io: req.disk_io.as_ref().map(Into::into),
         working_dir: req.working_dir.clone(),
         env,
         secrets,
@@ -2013,6 +2014,41 @@ mod tests {
             !build_box_options(&without).expect("build").tty,
             "no tty asked for, none granted"
         );
+    }
+
+    /// `disk_io` must reach `BoxOptions` verbatim: the server rejects unknown
+    /// fields, so a client that sends limits to a serve build without this
+    /// mapping would get a 400, and a build that parsed but dropped them
+    /// would run the box unthrottled while reporting success.
+    #[test]
+    fn build_box_options_carries_disk_io_from_the_wire() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","disk_io":{"write_bps":4194304,"read_iops":500}}"#,
+        )
+        .expect("body with disk_io must deserialize");
+
+        let opts = build_box_options(&req).expect("build with disk_io");
+        assert_eq!(
+            opts.disk_io,
+            Some(boxlite::runtime::options::DiskIoLimits {
+                read_bps: None,
+                write_bps: Some(4_194_304),
+                read_iops: Some(500),
+                write_iops: None,
+            })
+        );
+
+        let without: super::types::CreateBoxRequest =
+            serde_json::from_str(r#"{"image": "alpine:latest"}"#).expect("body must deserialize");
+        assert_eq!(build_box_options(&without).expect("build").disk_io, None);
+
+        // A misspelled dimension must be a 400, not an unlimited box: with a
+        // permissive nested type `write_bsp` would parse as an empty object
+        // that sanitize() folds to None.
+        let typo = serde_json::from_str::<super::types::CreateBoxRequest>(
+            r#"{"image":"alpine:latest","disk_io":{"write_bsp":4194304}}"#,
+        );
+        assert!(typo.is_err(), "unknown disk_io key must be rejected");
     }
 
     #[test]

@@ -25,6 +25,12 @@ pub const KRUN_LOG_STYLE_NEVER: u32 = 2;
 pub const KRUN_DISK_FORMAT_RAW: u32 = 0;
 pub const KRUN_DISK_FORMAT_QCOW2: u32 = 1;
 
+/// Disk sync modes for `krun_add_disk3` (libkrun.h `KRUN_SYNC_*`).
+/// `krun_add_disk`/`krun_add_disk2` use FULL on Linux.
+pub const KRUN_SYNC_NONE: u32 = 0;
+pub const KRUN_SYNC_RELAXED: u32 = 1;
+pub const KRUN_SYNC_FULL: u32 = 2;
+
 // External kernel format constants from libkrun.h
 pub const KRUN_KERNEL_FORMAT_RAW: u32 = 0;
 pub const KRUN_KERNEL_FORMAT_ELF: u32 = 1;
@@ -91,6 +97,15 @@ extern "C" {
         disk_path: *const c_char,
         disk_format: u32,
         read_only: bool,
+    ) -> i32;
+    pub fn krun_add_disk3(
+        ctx_id: u32,
+        block_id: *const c_char,
+        disk_path: *const c_char,
+        disk_format: u32,
+        read_only: bool,
+        direct_io: bool,
+        sync_mode: u32,
     ) -> i32;
     pub fn krun_add_net_unixstream(
         ctx_id: u32,

@@ -10,6 +10,20 @@ describe('toBoxApiCreateRequest', () => {
     expect(request.disk_size_gb).toBe(10)
   })
 
+  it('maps disk I/O ceilings to the snake_case wire shape, omitting unset ones', () => {
+    const request = toBoxApiCreateRequest({
+      resources: { cpu: 1, diskIo: { readBps: 52428800, writeIops: 1000 } },
+    })
+
+    expect(request.disk_io).toEqual({ read_bps: 52428800, write_iops: 1000 })
+    expect(request.disk_io).not.toHaveProperty('write_bps')
+  })
+
+  it('sends no disk_io when no ceiling is set', () => {
+    expect(toBoxApiCreateRequest({ resources: { cpu: 1 } }).disk_io).toBeUndefined()
+    expect(toBoxApiCreateRequest({ resources: { cpu: 1, diskIo: {} } }).disk_io).toBeUndefined()
+  })
+
   it('passes only supported cloud create fields through unchanged', () => {
     const request = toBoxApiCreateRequest({
       name: 'data-loader',

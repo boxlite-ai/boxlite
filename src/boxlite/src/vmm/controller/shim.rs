@@ -338,6 +338,7 @@ impl VmmController for ShimController {
             network_backend_spec: config.network_backend_spec.clone(), // provisioning spec passed to the shim (stands up gvproxy)
             network_backend_endpoint: None, // Will be populated by shim (not serialized)
             disable_network: config.disable_network,
+            disk_direct_io: config.disk_direct_io,
             home_dir: config.home_dir.clone(),
             console_output: config.console_output.clone(),
             exit_file: config.exit_file.clone(),
@@ -374,7 +375,8 @@ impl VmmController for ShimController {
             self.box_id.as_str(),
             &self.options,
         )
-        .with_nested_virtualization(config.nested_virtualization);
+        .with_nested_virtualization(config.nested_virtualization)
+        .with_block_devices(&config.block_devices);
         let spawned = spawner.spawn(&config_json, config.detach)?;
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();

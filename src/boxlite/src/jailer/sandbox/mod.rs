@@ -44,6 +44,7 @@ pub use landlock::LandlockSandbox;
 pub use seatbelt::SeatbeltSandbox;
 
 use crate::runtime::advanced_options::ResourceLimits;
+use crate::runtime::options::DiskIoLimits;
 use boxlite_shared::errors::BoxliteResult;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -144,6 +145,22 @@ pub struct SandboxContext<'a> {
     /// launching process, so the sandbox must not tie their lifetime to it
     /// (e.g. bwrap's `--die-with-parent`).
     pub detached: bool,
+    /// Disk I/O rate limits requested for the box, if any.
+    pub disk_io: Option<&'a DiskIoLimits>,
+    /// The disk image files the VMM reads and writes (COW layers and their
+    /// backing chain). Their host block devices are what `disk_io` throttles.
+    pub disk_images: Vec<PathBuf>,
+}
+
+/// Log that requested disk I/O limits will not be enforced, and why.
+///
+/// Disk limits degrade like the rest of the cgroup limits (warn and continue,
+/// see `BwrapSandbox::setup`) rather than failing the spawn, so every sandbox
+/// that cannot enforce them says so in one recognizable place.
+pub(super) fn warn_disk_io_not_enforced(ctx: &SandboxContext, reason: &str) {
+    if ctx.disk_io.is_some() {
+        tracing::warn!(id = %ctx.id, "Disk io limits requested but not enforced: {reason}");
+    }
 }
 
 impl SandboxContext<'_> {
@@ -206,6 +223,11 @@ impl Default for NoopSandbox {
 impl Sandbox for NoopSandbox {
     fn is_available(&self) -> bool {
         false
+    }
+
+    fn setup(&self, ctx: &SandboxContext) -> BoxliteResult<()> {
+        warn_disk_io_not_enforced(ctx, "no sandbox on this platform (no cgroups)");
+        Ok(())
     }
 
     fn apply(&self, _ctx: &SandboxContext, _cmd: &mut Command) {}

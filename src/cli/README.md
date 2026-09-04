@@ -343,6 +343,8 @@ silently restarting it, because restarting would run the command a second time.
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--disk-size GB` | | Sparse rootfs disk size; smaller values than the base image are ignored |
+| `--disk-read-bps BYTES` / `--disk-write-bps BYTES` | | Disk bandwidth ceilings in bytes per second (Linux, cgroup v2 `io.max`; warns and runs unthrottled where unavailable) |
+| `--disk-read-iops IOPS` / `--disk-write-iops IOPS` | | Disk operations-per-second ceilings (same enforcement as above) |
 | `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--network <enabled\|disabled>` | | Outbound network mode (default `enabled`) |
@@ -403,6 +405,8 @@ default, and `exec` still starts it on demand.
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--disk-size GB` | | Sparse rootfs disk size; smaller values than the base image are ignored |
+| `--disk-read-bps BYTES` / `--disk-write-bps BYTES` | | Disk bandwidth ceilings in bytes per second (Linux, cgroup v2 `io.max`; warns and runs unthrottled where unavailable) |
+| `--disk-read-iops IOPS` / `--disk-write-iops IOPS` | | Disk operations-per-second ceilings (same enforcement as above) |
 | `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--network <enabled\|disabled>` | | Outbound network mode (default `enabled`) |

@@ -23,7 +23,7 @@ import { CreateBoxDto } from '../dto/create-box.dto'
 export function requiresFreshBox(
   createBoxDto: Pick<
     CreateBoxDto,
-    'networkBlockAll' | 'networkAllowList' | 'runAsUser' | 'workingDir' | 'entrypoint' | 'cmd' | 'secrets'
+    'networkBlockAll' | 'networkAllowList' | 'runAsUser' | 'workingDir' | 'entrypoint' | 'cmd' | 'secrets' | 'diskIo'
   >,
   organization: { boxLimitedNetworkEgress?: boolean },
 ): boolean {
@@ -46,5 +46,9 @@ export function requiresFreshBox(
   // silently drop them.
   const overridesSecrets = (createBoxDto.secrets?.length ?? 0) > 0
 
-  return overridesNetworkPolicy || overridesContainerProcess || overridesSecrets
+  // Disk I/O limits are written to the box's cgroup when the runner creates
+  // it; a warm box was created unthrottled and is not in the pool key.
+  const overridesDiskIo = createBoxDto.diskIo !== undefined
+
+  return overridesNetworkPolicy || overridesContainerProcess || overridesSecrets || overridesDiskIo
 }

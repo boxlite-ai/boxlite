@@ -169,6 +169,17 @@ export interface JsContainerCapabilities {
   drop?: string[];
 }
 
+export interface JsDiskIoLimits {
+  /** Read bandwidth ceiling in bytes per second. */
+  readBps?: number;
+  /** Write bandwidth ceiling in bytes per second. */
+  writeBps?: number;
+  /** Read operations per second ceiling. */
+  readIops?: number;
+  /** Write operations per second ceiling. */
+  writeIops?: number;
+}
+
 export interface JsAdvancedBoxOptions {
   capabilities?: JsContainerCapabilities;
 }
@@ -179,6 +190,11 @@ export interface JsBoxOptions {
   cpus?: number;
   memoryMib?: number;
   diskSizeGb?: number;
+  /**
+   * Disk I/O ceilings, each optional and independent. Linux cgroup v2
+   * `io.max`; logged and not applied where the host cannot enforce them.
+   */
+  diskIo?: JsDiskIoLimits;
   workingDir?: string;
   env?: JsEnvVar[];
   volumes?: JsVolumeSpec[];

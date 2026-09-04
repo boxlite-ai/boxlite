@@ -9,6 +9,7 @@ import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxSecret, BoxVolume } from '../dto/box.dto'
+import { DiskIoLimits } from '../dto/disk-io-limits'
 import { nanoid } from 'nanoid'
 import { BoxLastActivity } from './box-last-activity.entity'
 import { BOX_ID_LENGTH, BOX_ID_REGEX, generateBoxId } from '../utils/box-id.util'
@@ -152,6 +153,12 @@ export class Box {
 
   @Column({ type: 'int', default: 10 })
   disk = 10
+
+  // Disk I/O rate limits, enforced on the runner through the box's cgroup.
+  // Persisted so a recreate on another runner keeps the caller's limits;
+  // null means unlimited.
+  @Column({ type: 'jsonb', nullable: true })
+  diskIo?: DiskIoLimits
 
   @Column({
     type: 'jsonb',

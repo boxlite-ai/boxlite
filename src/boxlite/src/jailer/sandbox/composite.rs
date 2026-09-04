@@ -130,6 +130,8 @@ mod tests {
             network_enabled: false,
             sandbox_profile: None,
             detached: false,
+            disk_io: None,
+            disk_images: vec![],
         }
     }
 

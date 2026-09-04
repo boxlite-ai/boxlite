@@ -5,7 +5,7 @@ use super::PathAccess;
 use super::sandbox::{PlatformSandbox, Sandbox};
 use crate::runtime::advanced_options::{ResourceLimits, SecurityOptions};
 use crate::runtime::layout::BoxFilesystemLayout;
-use crate::runtime::options::VolumeSpec;
+use crate::runtime::options::{DiskIoLimits, VolumeSpec};
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 
@@ -33,6 +33,8 @@ pub struct JailerBuilder {
     detach: bool,
     additional_path_access: Vec<PathAccess>,
     network_backend_enabled: bool,
+    disk_io: Option<DiskIoLimits>,
+    disk_images: Vec<PathBuf>,
 }
 
 impl Default for JailerBuilder {
@@ -53,7 +55,23 @@ impl JailerBuilder {
             detach: false,
             additional_path_access: Vec::new(),
             network_backend_enabled: false,
+            disk_io: None,
+            disk_images: Vec::new(),
         }
+    }
+
+    /// Set the box's disk I/O rate limits (applied via the sandbox cgroup).
+    pub fn with_disk_io(mut self, disk_io: Option<DiskIoLimits>) -> Self {
+        self.disk_io = disk_io;
+        self
+    }
+
+    /// Additional disk image files the VM opens, beyond the box's own COW disk
+    /// and its backing chain (which the layout already implies). Their host
+    /// block devices are included in the disk I/O limits.
+    pub fn with_disk_images(mut self, paths: Vec<PathBuf>) -> Self {
+        self.disk_images = paths;
+        self
     }
 
     /// Set the box ID (required).
@@ -347,6 +365,8 @@ impl JailerBuilder {
             detach: self.detach,
             additional_path_access: self.additional_path_access,
             network_backend_enabled: self.network_backend_enabled,
+            disk_io: self.disk_io,
+            disk_images: self.disk_images,
         })
     }
 }
