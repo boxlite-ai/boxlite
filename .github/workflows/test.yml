@@ -281,6 +281,16 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
 
+      # npm picks manifests by `engines`, so under Node 22 vitest's peer set
+      # resolves to vite 8 → @vitejs/devtools, a chain any npm 10.x crashes on
+      # ("Cannot read properties of null (reading 'edgesOut')") and npm 11
+      # walks fine. Node 18/20 resolve a different set and are unaffected.
+      # sdks/node keeps no lockfile, so every run re-resolves. npm 11 needs
+      # node ^20.17 || >=22.9, so this must not run on the 18 leg.
+      - name: Pin npm (Node 22 only)
+        if: matrix.node-version == '22'
+        run: npm install -g npm@^11
+
       - name: Install dependencies
         working-directory: sdks/node
         run: npm install

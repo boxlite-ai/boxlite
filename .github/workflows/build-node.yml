@@ -138,6 +138,12 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
 
+      # See the matching note in test.yml: under Node 22, npm 10.x cannot
+      # resolve sdks/node's dependency graph.
+      - name: Pin npm (Node 22 only)
+        if: matrix.node-version == '22'
+        run: npm install -g npm@^11
+
       # Remove npm/* from git checkout to avoid platform mismatch
       # (git contains all platforms, but we only want the one from artifacts)
       - name: Clean npm workspaces
