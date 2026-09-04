@@ -221,9 +221,15 @@ impl CreateBoxRequest {
                 }
             }),
             // The deprecated remove-on-stop flag was never applied by the cloud
-            // control-plane mapper. Keep remote defaults unchanged and only send
-            // the modern lifecycle fields when callers explicitly configure them.
-            auto_stop: options.auto_stop,
+            // control-plane mapper. Keep remote defaults unchanged, but make the
+            // modern remove-on-stop spelling explicit enough that the server does
+            // not combine `auto_delete=1` with its default auto-stop interval.
+            auto_stop: options.auto_stop.or_else(|| {
+                options
+                    .auto_delete
+                    .is_some_and(|value| value > 0)
+                    .then_some(0)
+            }),
             auto_delete: options.auto_delete,
             auto_resume: options.auto_resume,
         }
@@ -949,6 +955,17 @@ mod tests {
         let req = CreateBoxRequest::from_options(&modern, None);
         assert_eq!(req.auto_stop, Some(900));
         assert_eq!(req.auto_delete, Some(3600));
+    }
+
+    #[test]
+    fn remove_on_stop_sends_zero_autostop() {
+        let opts = BoxOptions {
+            auto_delete: Some(1),
+            ..Default::default()
+        };
+        let req = CreateBoxRequest::from_options(&opts, None);
+        assert_eq!(req.auto_stop, Some(0));
+        assert_eq!(req.auto_delete, Some(1));
     }
 
     #[test]
