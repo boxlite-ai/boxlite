@@ -690,18 +690,13 @@ Commerce, which does not currently call them.
 
 Admission applies the plan value to the organization's non-finalized Box total.
 `STOPPED` and `UNKNOWN` Boxes count, while `ERROR`, `DESTROYING`, `DESTROYED`,
-`ARCHIVING`, and `ARCHIVED` do not. The two admission reads have a
-cross-repository contract test that runs the current Commerce controllers and
-passes their responses through the BoxLite consumer. The remaining billing
-client is hand-written rather than generated, so neither side detects its
-divergence. Five of its 20 routes — the billing-email group — have no
+`ARCHIVING`, and `ARCHIVED` do not. The billing client is hand-written rather
+than generated, so neither side detects its divergence. Five of its 20 routes —
+the billing-email group — have no
 implementation in Commerce, of which only `email/verify` has a live caller here
 ([`EmailVerify.tsx`](./dashboard/src/pages/EmailVerify.tsx)); Commerce in turn
 serves card default/delete, `plan/pay-open-charge`, and a credit admission API
-that nothing in this repository calls. The full inventory and the open decisions
-are catalogued in `docs/boxlite-client-contract.md` in the `boxlite-commerce`
-repository — a companion change that lands there separately, so that path
-resolves only once it has merged.
+that nothing in this repository calls.
 
 </details>
 
