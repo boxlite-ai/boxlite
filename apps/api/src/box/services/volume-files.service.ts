@@ -37,6 +37,11 @@ const S3_MAX_KEYS_PER_CALL = 1000
 /** How long a presigned URL stays valid before the caller must ask again. */
 const PRESIGNED_URL_TTL_SECONDS = 900
 
+/** Max concurrent presign operations in presignBatchWrite - bounds how long
+ * one request can monopolize the event loop, independent of the DTO's
+ * overall array-size cap. */
+const PRESIGN_BATCH_CONCURRENCY = 50
+
 @Injectable()
 export class VolumeFilesService {
   private readonly logger = new Logger(VolumeFilesService.name)
@@ -167,17 +172,22 @@ export class VolumeFilesService {
 
     // Presigning is a local signature computation, not a network call, so
     // there's no batching primitive to reach for here the way there is for
-    // DeleteObjects - each path is signed independently.
-    await Promise.all(
-      paths.map(async (path) => {
-        try {
-          const { url, expiresAt } = await this.presign(new PutObjectCommand({ Bucket: bucket, Key: path }))
-          urls.push({ path, url, expiresAt })
-        } catch (error) {
-          errors.push({ path, message: error instanceof Error ? error.message : String(error) })
-        }
-      }),
-    )
+    // DeleteObjects. DTO validation caps `paths` at 1000, but firing all of
+    // them through one Promise.all would still run the whole batch as a
+    // single microtask burst with no chance for other requests to interleave
+    // on the event loop - process in bounded chunks instead.
+    for (const chunk of chunked(paths, PRESIGN_BATCH_CONCURRENCY)) {
+      await Promise.all(
+        chunk.map(async (path) => {
+          try {
+            const { url, expiresAt } = await this.presign(new PutObjectCommand({ Bucket: bucket, Key: path }))
+            urls.push({ path, url, expiresAt })
+          } catch (error) {
+            errors.push({ path, message: error instanceof Error ? error.message : String(error) })
+          }
+        }),
+      )
+    }
 
     return { urls, errors }
   }

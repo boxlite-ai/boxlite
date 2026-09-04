@@ -223,4 +223,23 @@ describe('VolumeFilesService presignBatchWrite', () => {
     expect(result.urls).toEqual([{ path: 'a.txt', url: 'https://s3.example/a', expiresAt: expect.any(Date) }])
     expect(result.errors).toEqual([{ path: 'b.txt', message: 'signing failed' }])
   })
+
+  it('signs in bounded chunks instead of firing every path at once', async () => {
+    const { service } = createService(READY_VOLUME)
+    let inFlight = 0
+    let maxInFlight = 0
+    ;(getSignedUrl as jest.Mock).mockImplementation(async () => {
+      inFlight++
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await Promise.resolve()
+      inFlight--
+      return 'https://s3.example/signed'
+    })
+    const paths = Array.from({ length: 120 }, (_, i) => `file-${i}.txt`)
+
+    const result = await service.presignBatchWrite('volume-1', paths)
+
+    expect(result.urls).toHaveLength(120)
+    expect(maxInFlight).toBeLessThanOrEqual(50)
+  })
 })
