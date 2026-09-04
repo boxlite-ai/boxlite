@@ -284,6 +284,11 @@ impl ImageStorage {
         digest: &str,
         expected_size: i64,
     ) -> BoxliteResult<StagedDownload> {
+        // Reject malformed digests before interpolating them into a file path
+        // (defense in depth: the staged file is created before commit() verifies
+        // the content hash).
+        super::validate_digest(digest)?;
+
         // Extract expected hash from digest
         let expected_hash = digest
             .strip_prefix("sha256:")
@@ -373,6 +378,10 @@ impl ImageStorage {
     /// Use `staged.file()` to get the file for writing, then `staged.commit()`
     /// to verify and atomically move to final location.
     pub async fn stage_config_download(&self, digest: &str) -> BoxliteResult<StagedDownload> {
+        // Reject malformed digests before interpolating them into a file path
+        // (defense in depth: see stage_layer_download).
+        super::validate_digest(digest)?;
+
         // Extract expected hash from digest
         let expected_hash = digest
             .strip_prefix("sha256:")

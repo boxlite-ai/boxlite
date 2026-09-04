@@ -14,7 +14,46 @@ pub use image_disk::ImageDiskManager;
 pub use manager::ImageManager;
 pub use object::ImageObject;
 
+use boxlite_shared::{BoxliteError, BoxliteResult};
 use oci_client::Reference;
+
+/// Validate that a content digest is a well-formed `algorithm:hex` string before
+/// it is used to build filesystem paths.
+///
+/// Digests read from OCI `index.json` / image manifests are attacker-controlled
+/// for locally loaded bundles (and not content-verified there), yet they are
+/// interpolated into blob paths via `digest.replace(':', "/")` /
+/// `digest.replace(':', "-")`. Without this check a crafted digest such as
+/// `sha256:../../../../etc/passwd` escapes the blob directory (path traversal —
+/// arbitrary host file read, or a confused-deputy write into the cache). A valid
+/// digest contains exactly one `:` and a fixed-length lower-case hex body, so it
+/// can never contain `/`, `\`, or `..`.
+pub(crate) fn validate_digest(digest: &str) -> BoxliteResult<()> {
+    let (algorithm, hex) = digest.split_once(':').ok_or_else(|| {
+        BoxliteError::Storage(format!(
+            "invalid digest {digest:?}: missing 'algorithm:' prefix"
+        ))
+    })?;
+
+    // Registered OCI digest algorithms; lengths are the hex-encoded digest sizes.
+    let expected_len = match algorithm {
+        "sha256" => 64,
+        "sha512" => 128,
+        _ => {
+            return Err(BoxliteError::Storage(format!(
+                "invalid digest {digest:?}: unsupported algorithm {algorithm:?}"
+            )));
+        }
+    };
+
+    if hex.len() != expected_len || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(BoxliteError::Storage(format!(
+            "invalid digest {digest:?}: malformed {algorithm} hex body"
+        )));
+    }
+
+    Ok(())
+}
 
 // ============================================================================
 // Registry Resolution (Reference Iterator)

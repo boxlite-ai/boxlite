@@ -296,7 +296,10 @@ impl ImageStore {
         // 4. Resolve to ImageManifest (handles at most one level of ImageIndex)
         let manifest_digest = self.get_image_manifest(&path, manifest_desc)?;
 
-        // 5. Parse ImageManifest to extract config and layers
+        // 5. Parse ImageManifest to extract config and layers. The digest comes
+        // from attacker-controlled bundle metadata and is interpolated into a
+        // path below, so reject anything that isn't a well-formed digest.
+        super::validate_digest(&manifest_digest)?;
         let manifest_blob_path = path.join("blobs").join(manifest_digest.replace(':', "/"));
 
         let (config_digest_str, layers) = self.parse_oci_manifest_from_path(
@@ -349,6 +352,10 @@ impl ImageStore {
         match media_type {
             MediaType::ImageIndex => {
                 tracing::info!("ImageIndex detected, selecting platform-specific manifest");
+
+                // descriptor.digest is attacker-controlled bundle metadata and is
+                // interpolated into a path below; reject malformed digests.
+                super::validate_digest(&descriptor.digest)?;
 
                 // Load the ImageIndex blob
                 let index_blob_path = image_dir
@@ -1037,6 +1044,15 @@ impl ImageStore {
         let config_digest_str = oci_manifest.config.digest.clone();
         let layers = Self::layers_from_image(&oci_manifest)?;
 
+        // config and layer digests flow into blob paths (LocalBundleBlobSource /
+        // ImageStorage build paths from them). For local bundles the blobs are
+        // not content-verified, so a malformed digest would be a path-traversal
+        // primitive — validate every digest at this parse boundary.
+        super::validate_digest(&config_digest_str)?;
+        for layer in &layers {
+            super::validate_digest(&layer.digest)?;
+        }
+
         Ok((config_digest_str, layers))
     }
 }
@@ -1414,6 +1430,83 @@ mod tests {
         assert_eq!(manifest.layers[0].digest, layer_digest);
         assert!(!manifest.config_digest.is_empty());
         assert!(!manifest.manifest_digest.is_empty());
+    }
+
+    /// Build a local OCI bundle whose manifest declares a layer digest containing
+    /// a path-traversal payload instead of a real `sha256:<hex>`. The config blob
+    /// and the index→manifest reference are well-formed so that the only invalid
+    /// digest is the layer digest.
+    fn create_traversal_layer_bundle(bundle_dir: &Path, malicious_layer_digest: &str) {
+        use sha2::Digest;
+
+        std::fs::create_dir_all(bundle_dir.join("blobs/sha256")).unwrap();
+        std::fs::write(
+            bundle_dir.join("oci-layout"),
+            r#"{"imageLayoutVersion": "1.0.0"}"#,
+        )
+        .unwrap();
+
+        let config =
+            r#"{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}"#;
+        let config_bytes = config.as_bytes();
+        let config_hex = sha2::Sha256::digest(config_bytes)
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
+        let config_digest = format!("sha256:{config_hex}");
+        std::fs::write(
+            bundle_dir.join("blobs/sha256").join(&config_hex),
+            config_bytes,
+        )
+        .unwrap();
+
+        let manifest = format!(
+            r#"{{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"{config_digest}","size":{}}},"layers":[{{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"{malicious_layer_digest}","size":123}}]}}"#,
+            config_bytes.len()
+        );
+        let manifest_bytes = manifest.as_bytes();
+        let manifest_hex = sha2::Sha256::digest(manifest_bytes)
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
+        let manifest_digest = format!("sha256:{manifest_hex}");
+        std::fs::write(
+            bundle_dir.join("blobs/sha256").join(&manifest_hex),
+            manifest_bytes,
+        )
+        .unwrap();
+
+        let index = format!(
+            r#"{{"schemaVersion":2,"manifests":[{{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"{manifest_digest}","size":{}}}]}}"#,
+            manifest_bytes.len()
+        );
+        std::fs::write(bundle_dir.join("index.json"), index).unwrap();
+    }
+
+    /// A layer digest carrying `../` path-traversal must be rejected at load time
+    /// rather than flowing into LocalBundleBlobSource's blob path (where, since
+    /// local bundles are not content-verified, it would be an arbitrary host-file
+    /// read primitive). With the digest validation reverted, load_from_local
+    /// accepts the malicious manifest and returns it (test fails); with the fix it
+    /// returns an error.
+    #[tokio::test]
+    async fn test_load_from_local_rejects_traversal_layer_digest() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bundle_dir = temp_dir.path().join("bundle");
+        let images_dir = temp_dir.path().join("images");
+        let db_path = temp_dir.path().join("test.db");
+
+        create_traversal_layer_bundle(&bundle_dir, "sha256:../../../../../../../../etc/passwd");
+
+        let db = Database::open(&db_path).unwrap();
+        let store = ImageStore::new(images_dir, db, vec![]).unwrap();
+
+        let result = store.load_from_local(bundle_dir).await;
+        assert!(
+            result.is_err(),
+            "load_from_local accepted a path-traversal layer digest: {:?}",
+            result.map(|m| m.layers)
+        );
     }
 
     #[tokio::test]
