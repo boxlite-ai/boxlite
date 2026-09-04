@@ -109,12 +109,15 @@ permission.
 
 | Advisory | Severity | Affected | Fixed in |
 |----------|----------|----------|----------|
+| [GHSA-xjhv-pp2r-6f82](https://github.com/boxlite-ai/boxlite/security/advisories/GHSA-xjhv-pp2r-6f82) — exec timeout bypass via SIGALRM (catchable signal) | Moderate | `<= 0.9.5` (all SDKs) | **0.9.6** (upcoming) |
 | [GHSA-g6ww-w5j2-r7x3](https://github.com/boxlite-ai/boxlite/security/advisories/GHSA-g6ww-w5j2-r7x3) — read-only volume remount bypass | Critical | `< 0.9.0` (all SDKs) | **0.9.0** |
 | [GHSA-f396-4rp4-7v2j](https://github.com/boxlite-ai/boxlite/security/advisories/GHSA-f396-4rp4-7v2j) — OCI layer symlink escape → arbitrary host write | Critical | `< 0.9.0` (all SDKs) | **0.9.0** |
 
-If you run any boxlite SDK (PyPI, npm, Go, crates.io) or build from source
-at a version **before 0.9.0**, upgrade to **0.9.0 or later**. There is no
-workaround for affected versions.
+Upgrade to **0.9.6 or later** to address all published advisories. If you
+still run a pre-0.9.0 build, upgrading to **0.9.0+** closes the two earlier
+critical advisories (volume remount + symlink escape), and **0.9.6+** further
+closes the moderate exec-timeout bypass. There is no workaround for affected
+versions.
 
 ---
 
