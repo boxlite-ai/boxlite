@@ -289,9 +289,17 @@ export class BoxliteProxyController {
       throw new NotFoundException(`Runner endpoint for box ${boxId} not found`)
     }
 
+    // TLS verification for the internal API→runner hop. Defaults to the prior
+    // behavior (disabled) so deployments whose runners present an internal /
+    // self-signed certificate are not broken, but can be enabled by operators
+    // whose runners present a verifiable certificate by setting
+    // BOXLITE_RUNNER_TLS_VERIFY=true. Without verification the Bearer-authed hop
+    // still lacks integrity/MITM protection (audit finding #17).
+    const verifyRunnerTls = process.env.BOXLITE_RUNNER_TLS_VERIFY === 'true'
+
     const proxyOptions: Options = {
       target: targetUrl,
-      secure: false,
+      secure: verifyRunnerTls,
       changeOrigin: true,
       autoRewrite: true,
       ws: opts?.ws ?? false,
