@@ -24,7 +24,12 @@ pub async fn execute(args: StopArgs, global: &crate::cli::GlobalFlags) -> anyhow
             }
         };
 
-        if let Err(e) = litebox.stop().await {
+        // Retry briefly if the runtime is mid-transition — e.g. a prior
+        // `stop` is still draining — so a second user-initiated stop
+        // doesn't hard-fail on a transient state error (POL-34).
+        let stop_res =
+            crate::util::retry::retry_on_transient_state(|| async { litebox.stop().await }).await;
+        if let Err(e) = stop_res {
             eprintln!("Error stopping box '{}': {}", target, e);
             errors.push(format!("{}: {}", target, e));
         } else {

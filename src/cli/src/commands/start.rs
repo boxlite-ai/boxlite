@@ -23,7 +23,13 @@ pub async fn execute(args: StartArgs, global: &crate::cli::GlobalFlags) -> anyho
             }
         };
 
-        if let Err(e) = litebox.start().await {
+        // Retry briefly if the box is mid-transition (e.g. still
+        // Stopping from a previous call) so a `start` issued right
+        // after `stop` doesn't hard-fail on the transient state
+        // (POL-34).
+        let start_res =
+            crate::util::retry::retry_on_transient_state(|| async { litebox.start().await }).await;
+        if let Err(e) = start_res {
             eprintln!("Error starting box '{}': {}", target, e);
             errors.push(format!("{}: {}", target, e));
         } else {
