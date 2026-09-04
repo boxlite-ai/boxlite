@@ -383,6 +383,11 @@ pub(crate) struct BoxResponse {
     pub auto_delete: u32,
     #[serde(default = "default_auto_resume")]
     pub auto_resume: bool,
+    /// Present when the server publishes network/visibility metadata.
+    /// Absent from an older server, which reads the same as "not known here"
+    /// (see [`crate::BoxInfo::network`]'s own doc comment).
+    #[serde(default)]
+    pub network: Option<crate::runtime::types::NetworkInfo>,
 }
 
 impl BoxResponse {
@@ -417,10 +422,12 @@ impl BoxResponse {
             image: self.image.clone(),
             cpus: self.cpus,
             memory_mib: self.memory_mib,
-            // The remote REST surface intentionally does not publish local
-            // host bindings. Missing network metadata is therefore distinct
-            // from a locally verified, resolved-empty publication list.
-            network: None,
+            // The remote REST surface publishes mode/visibility but never
+            // local host bindings (`published_ports` stays server-side).
+            // `None` here means an older server omitted `network` entirely,
+            // distinct from a locally verified, resolved-empty publication
+            // list.
+            network: self.network.clone(),
             labels: self.labels.clone(),
             auto_stop: self.auto_stop,
             auto_delete: self.auto_delete,
@@ -1041,15 +1048,63 @@ mod tests {
             auto_stop: 1800,
             auto_delete: 604800,
             auto_resume: true,
+            network: None,
         };
         let info = resp.to_box_info().expect("valid ULID box_id should parse");
         assert_eq!(info.name.as_deref(), Some("mybox"));
         assert_eq!(info.image, "python:3.11");
         assert_eq!(info.cpus, 2);
         assert_eq!(info.memory_mib, 512);
+        // An older server that omits `network` entirely must not be
+        // confused with one that resolved an empty publication list.
         assert!(info.network.is_none());
         assert_eq!(info.auto_stop, 1800);
         assert_eq!(info.auto_delete, 604800);
+    }
+
+    /// The bug this guards against (POL-311): a server that publishes
+    /// `network` (and therefore `inbound.mode`, the box's visibility) must
+    /// have that survive into `BoxInfo`, not get dropped on the floor the
+    /// way `network: None` used to be hardcoded here.
+    #[test]
+    fn test_box_response_to_box_info_carries_network_visibility() {
+        use crate::runtime::options::NetworkMode;
+        use crate::runtime::types::{InboundNetworkInfo, NetworkInfo, OutboundNetworkInfo};
+
+        let resp = BoxResponse {
+            box_id: "01J0000000000000000000000A".to_string(),
+            name: Some("mybox".to_string()),
+            status: "running".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:01:00Z".to_string(),
+            pid: Some(1234),
+            image: "python:3.11".to_string(),
+            cpus: 2,
+            memory_mib: 512,
+            labels: HashMap::new(),
+            exit_code: None,
+            auto_stop: 900,
+            auto_delete: 0,
+            auto_resume: true,
+            network: Some(NetworkInfo::new(
+                OutboundNetworkInfo {
+                    mode: NetworkMode::Enabled,
+                    allow_net: vec![],
+                },
+                InboundNetworkInfo {
+                    mode: NetworkMode::Disabled,
+                    allow_net: vec![],
+                },
+                None,
+            )),
+        };
+
+        let info = resp.to_box_info().expect("valid ULID box_id should parse");
+        let network = info
+            .network
+            .expect("network metadata should survive conversion");
+        assert_eq!(network.inbound.mode, NetworkMode::Disabled);
+        assert_eq!(network.outbound.mode, NetworkMode::Enabled);
     }
 
     #[test]
@@ -1071,6 +1126,7 @@ mod tests {
             auto_stop: 900,
             auto_delete: 0,
             auto_resume: true,
+            network: None,
         };
         let info = resp.to_box_info().expect("UUID box_id should parse");
         assert_eq!(info.id.as_str(), "d406c59d-eb09-4bc3-9b3a-62455c7e8f32");
@@ -1099,6 +1155,7 @@ mod tests {
             auto_stop: 900,
             auto_delete: 0,
             auto_resume: true,
+            network: None,
         };
         assert!(mk("").to_box_info().is_err(), "empty");
         assert!(mk("a/b").to_box_info().is_err(), "slash");
@@ -1171,6 +1228,7 @@ mod tests {
             auto_stop: 900,
             auto_delete: 0,
             auto_resume: true,
+            network: None,
         };
 
         // Legacy transient statuses map to Unknown (no longer valid)

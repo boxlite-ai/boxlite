@@ -29,6 +29,19 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     auto_stop: box.autoStop ?? DEFAULT_AUTO_STOP_SECONDS,
     auto_delete: box.autoDelete ?? AUTO_DELETE_DISABLED,
     auto_resume: box.autoResume ?? DEFAULT_AUTO_RESUME,
+    network: {
+      outbound: {
+        mode: box.networkBlockAll ? 'disabled' : 'enabled',
+        allow_net: box.networkAllowList ? box.networkAllowList.split(',').filter(Boolean) : [],
+      },
+      // `public` is the runner's own boolean — mirror it here rather than
+      // re-deriving it, so this can never disagree with what the runner
+      // actually enforces (see POL-311).
+      inbound: {
+        mode: box.public ? 'enabled' : 'disabled',
+        allow_net: [],
+      },
+    },
   }
 }
 
