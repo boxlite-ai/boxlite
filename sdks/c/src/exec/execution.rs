@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::runtime::Runtime as TokioRuntime;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 
 /// Synthetic exit code emitted when `boxlite_execution_free` tears down a
@@ -92,6 +92,15 @@ pub struct ExecutionHandle {
     /// claimer pushes Exit. Both `execution_free` and `exit_pump`
     /// race for it; the loser silently no-ops.
     exit_dispatched: Arc<AtomicBool>,
+    /// Per-execution stream back-pressure flag driven by high-level bindings
+    /// with their own delivery queues. The Go SDK sets this via
+    /// `boxlite_execution_set_stream_paused` when its bounded queue crosses
+    /// high/low-water marks; direct C callback delivery is already bounded by
+    /// the runtime EventQueue. When set, stdout/stderr pumps stop reading their
+    /// bounded upstream channel, which fills, blocks the attach reader's
+    /// `send().await`, stops draining the guest gRPC stream, and ultimately
+    /// blocks the guest process's write().
+    stream_pause_tx: watch::Sender<bool>,
 }
 
 #[unsafe(no_mangle)]
@@ -156,6 +165,28 @@ pub unsafe extern "C" fn boxlite_execution_stdin_close(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     close_stdin(execution, out_error)
+}
+
+/// Binding-only hook for SDKs with their own delivery queues to pause or
+/// resume stdout/stderr. It is intentionally not part of the public C header:
+/// direct C callback delivery is already bounded by the runtime EventQueue,
+/// while higher-level bindings such as Go drive this automatically from their
+/// own high/low-water marks.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn boxlite_execution_set_stream_paused(
+    execution: *mut CExecutionHandle,
+    paused: c_int,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if execution.is_null() {
+            write_error(out_error, null_pointer_error("execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let exec_ref = &*execution;
+        exec_ref.stream_pause_tx.send_replace(paused != 0);
+        BoxliteErrorCode::Ok
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -266,6 +297,10 @@ unsafe fn box_exec(
                     tokio_rt: handle_ref.tokio_rt.clone(),
                     process_completed: Arc::new(AtomicBool::new(false)),
                     exit_dispatched: Arc::new(AtomicBool::new(false)),
+                    stream_pause_tx: {
+                        let (tx, _rx) = watch::channel(false);
+                        tx
+                    },
                 };
                 *out_execution = Box::into_raw(Box::new(exec_handle));
                 BoxliteErrorCode::Ok
@@ -306,9 +341,14 @@ unsafe fn register_stdout(
         let user_data_addr = user_data as usize;
         let (done_tx, done_rx) = oneshot::channel::<()>();
         exec_ref.stream_done_rx.lock().unwrap().push(done_rx);
-        let pump = exec_ref
-            .tokio_rt
-            .spawn(stdout_pump(stream, cb, user_data_addr, queue, done_tx));
+        let pump = exec_ref.tokio_rt.spawn(stdout_pump(
+            stream,
+            cb,
+            user_data_addr,
+            queue,
+            exec_ref.stream_pause_tx.subscribe(),
+            done_tx,
+        ));
         exec_ref.pumps.lock().unwrap().push(pump);
         BoxliteErrorCode::Ok
     }
@@ -341,9 +381,14 @@ unsafe fn register_stderr(
         let user_data_addr = user_data as usize;
         let (done_tx, done_rx) = oneshot::channel::<()>();
         exec_ref.stream_done_rx.lock().unwrap().push(done_rx);
-        let pump = exec_ref
-            .tokio_rt
-            .spawn(stderr_pump(stream, cb, user_data_addr, queue, done_tx));
+        let pump = exec_ref.tokio_rt.spawn(stderr_pump(
+            stream,
+            cb,
+            user_data_addr,
+            queue,
+            exec_ref.stream_pause_tx.subscribe(),
+            done_tx,
+        ));
         exec_ref.pumps.lock().unwrap().push(pump);
         BoxliteErrorCode::Ok
     }
@@ -719,11 +764,29 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
 
 // ─── Pump tasks ────────────────────────────────────────────────────────────
 
+/// Block while the execution's stream is paused (Go-side back-pressure). The
+/// pump calls this AFTER delivering a chunk so it stops reading the next one
+/// from the bounded upstream channel — which then fills and back-pressures the
+/// guest. Blocks on the watch channel (zero CPU) until the pause flag changes,
+/// so resumes wake the pump immediately; pauses are seconds-scale.
+async fn await_unpaused(rx: &mut watch::Receiver<bool>) {
+    // Block (zero CPU) while paused; wake on the next pause-flag change. watch
+    // is version-tracked, so a resume that races the check is never missed. A
+    // dropped sender (Err) means the execution is torn down — return and let
+    // the pump finish.
+    while *rx.borrow_and_update() {
+        if rx.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
 async fn stdout_pump<S>(
     mut stream: S,
     cb: CBoxStdoutFn,
     user_data_addr: usize,
     queue: Arc<EventQueue>,
+    mut paused: watch::Receiver<bool>,
     done_tx: oneshot::Sender<()>,
 ) where
     S: futures::Stream<Item = String> + Unpin,
@@ -738,6 +801,7 @@ async fn stdout_pump<S>(
             },
         )
         .await;
+        await_unpaused(&mut paused).await;
     }
     // Signal the exit pump we're done. Failure (rx dropped) means exit_pump
     // already completed or was never registered — either way harmless.
@@ -749,6 +813,7 @@ async fn stderr_pump<S>(
     cb: CBoxStderrFn,
     user_data_addr: usize,
     queue: Arc<EventQueue>,
+    mut paused: watch::Receiver<bool>,
     done_tx: oneshot::Sender<()>,
 ) where
     S: futures::Stream<Item = String> + Unpin,
@@ -763,6 +828,7 @@ async fn stderr_pump<S>(
             },
         )
         .await;
+        await_unpaused(&mut paused).await;
     }
     let _ = done_tx.send(());
 }
@@ -873,6 +939,10 @@ mod tests {
             tokio_rt: runtime,
             process_completed: Arc::new(AtomicBool::new(false)),
             exit_dispatched: Arc::new(AtomicBool::new(false)),
+            stream_pause_tx: {
+                let (tx, _rx) = watch::channel(false);
+                tx
+            },
         }
     }
 
@@ -1349,7 +1419,15 @@ mod tests {
         ];
         let stream = stream_iter(chunks.into_iter());
 
-        stdout_pump(stream, noop_stdout_cb, 0xFEED_DEAD, queue.clone(), done_tx).await;
+        stdout_pump(
+            stream,
+            noop_stdout_cb,
+            0xFEED_DEAD,
+            queue.clone(),
+            watch::channel(false).1,
+            done_tx,
+        )
+        .await;
 
         let bytes = drain_stdout_bytes(&queue);
         assert_eq!(bytes.len(), 4, "expected 4 stdout events");
@@ -1375,7 +1453,15 @@ mod tests {
         let chunks = vec!["error".to_string(), "trace".to_string()];
         let stream = stream_iter(chunks.into_iter());
 
-        stderr_pump(stream, noop_stderr_cb, 0xCAFE_BABE, queue.clone(), done_tx).await;
+        stderr_pump(
+            stream,
+            noop_stderr_cb,
+            0xCAFE_BABE,
+            queue.clone(),
+            watch::channel(false).1,
+            done_tx,
+        )
+        .await;
 
         let bytes = drain_stderr_bytes(&queue);
         assert_eq!(bytes.len(), 2);

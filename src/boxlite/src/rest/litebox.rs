@@ -79,8 +79,8 @@ impl RestBox {
         stream: WsStream,
         wire_stdin: bool,
     ) -> Execution {
-        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, stdout_rx) = mpsc::channel::<String>(64);
+        let (stderr_tx, stderr_rx) = mpsc::channel::<String>(64);
         let (result_tx, result_rx) = mpsc::unbounded_channel::<ExecResult>();
         let stdin = wire_stdin.then(mpsc::unbounded_channel::<Vec<u8>>);
         let (stdin_tx, stdin_rx) = match stdin {
@@ -153,8 +153,8 @@ impl BoxBackend for RestBox {
         let execution_id = resp.execution_id;
 
         // 2. Set up channels for stdout, stderr, stdin, and result
-        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, stdout_rx) = mpsc::channel::<String>(64);
+        let (stderr_tx, stderr_rx) = mpsc::channel::<String>(64);
         let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (result_tx, result_rx) = mpsc::unbounded_channel::<ExecResult>();
 
@@ -625,8 +625,8 @@ async fn attach_ws(
     box_id: &str,
     execution_id: &str,
     stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
-    stdout_tx: mpsc::UnboundedSender<String>,
-    stderr_tx: mpsc::UnboundedSender<String>,
+    stdout_tx: mpsc::Sender<String>,
+    stderr_tx: mpsc::Sender<String>,
     result_tx: mpsc::UnboundedSender<ExecResult>,
 ) {
     let path = format!("/boxes/{}/executions/{}/attach", box_id, execution_id);
@@ -680,8 +680,8 @@ async fn attach_ws_pump(
     initial_stream: WsStream,
     // `None` for a read-only attach: there is no writer, so no channel exists.
     mut stdin_rx: Option<mpsc::UnboundedReceiver<Vec<u8>>>,
-    stdout_tx: mpsc::UnboundedSender<String>,
-    stderr_tx: mpsc::UnboundedSender<String>,
+    stdout_tx: mpsc::Sender<String>,
+    stderr_tx: mpsc::Sender<String>,
     result_tx: mpsc::UnboundedSender<ExecResult>,
 ) {
     use futures::{SinkExt, StreamExt};
@@ -715,6 +715,11 @@ async fn attach_ws_pump(
     // Sticky across reconnects: once the server has ever sent a frame the
     // exec is real, so a later reconnect uses the steady-state watchdog.
     let mut first_frame_seen = false;
+    // Counts stdout/stderr frames dropped when the consumer's bounded channel
+    // is full. We warn once on the first drop (so backpressure-induced output
+    // loss is visible without flooding logs) and report the running total on
+    // clean exit.
+    let mut dropped_output_frames: u64 = 0;
 
     let mut current_stream = Some(initial_stream);
 
@@ -827,13 +832,29 @@ async fn attach_ws_pump(
                             if let Some((channel, payload)) = bytes.split_first() {
                                 let text = String::from_utf8_lossy(payload).into_owned();
                                 match *channel {
+                                    // try_send (drop on full), NOT send().await: this single
+                                    // loop also processes the Exit/Error control frames, so a
+                                    // back-pressured stdout/stderr must never block — otherwise a
+                                    // slow consumer would stall exit propagation and hang Wait.
                                     0x01 => {
                                         tracing::trace!(len = text.len(), "WS attach: stdout frame");
-                                        let _ = stdout_tx.send(text);
+                                        if let Err(err) = stdout_tx.try_send(text) {
+                                            note_dropped_frame(
+                                                "stdout",
+                                                err,
+                                                &mut dropped_output_frames,
+                                            );
+                                        }
                                     }
                                     0x02 => {
                                         tracing::trace!(len = text.len(), "WS attach: stderr frame");
-                                        let _ = stderr_tx.send(text);
+                                        if let Err(err) = stderr_tx.try_send(text) {
+                                            note_dropped_frame(
+                                                "stderr",
+                                                err,
+                                                &mut dropped_output_frames,
+                                            );
+                                        }
                                     }
                                     other => {
                                         tracing::warn!(channel = other, "WS attach: unknown channel prefix");
@@ -844,6 +865,12 @@ async fn attach_ws_pump(
                         Message::Text(text) => match parse_control_frame(&text) {
                             ControlFrame::Exit { exit_code } => {
                                 tracing::debug!(exit_code, "WS attach: exit control frame");
+                                if dropped_output_frames > 0 {
+                                    tracing::warn!(
+                                        dropped_output_frames,
+                                        "WS attach: exec completed but some output frames were dropped (consumer fell behind)"
+                                    );
+                                }
                                 let _ = result_tx.send(ExecResult {
                                     exit_code,
                                     error_message: None,
@@ -979,6 +1006,28 @@ async fn probe_execution_status(
         // the reconnect budget against something that isn't there.
         Ok(Err(BoxliteError::NotFound(_))) => ProbeResult::Gone,
         _ => ProbeResult::Unavailable,
+    }
+}
+
+/// Record a stdout/stderr frame that couldn't be delivered to the consumer's
+/// bounded channel. `Full` means backpressure dropped output — warn once (on the
+/// first drop) so the loss is visible without flooding logs, and keep counting.
+/// `Closed` means the consumer is gone — that's the normal teardown race, so it
+/// stays at debug.
+fn note_dropped_frame(stream: &str, err: mpsc::error::TrySendError<String>, dropped: &mut u64) {
+    match err {
+        mpsc::error::TrySendError::Full(_) => {
+            *dropped += 1;
+            if *dropped == 1 {
+                tracing::warn!(
+                    stream,
+                    "WS attach: dropping output frame (consumer channel full)"
+                );
+            }
+        }
+        mpsc::error::TrySendError::Closed(_) => {
+            tracing::debug!(stream, "WS attach: consumer channel closed; dropping frame");
+        }
     }
 }
 
@@ -1615,8 +1664,8 @@ mod tests {
         });
 
         let client = client_for(port);
-        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, mut stdout_rx) = mpsc::channel::<String>(64);
+        let (stderr_tx, _stderr_rx) = mpsc::channel::<String>(64);
         let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
 
@@ -1682,8 +1731,8 @@ mod tests {
         });
 
         let client = client_for(port);
-        let (stdout_tx, _stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, _stdout_rx) = mpsc::channel::<String>(64);
+        let (stderr_tx, _stderr_rx) = mpsc::channel::<String>(64);
         let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
 
@@ -1738,8 +1787,8 @@ mod tests {
         });
 
         let client = client_for(port);
-        let (stdout_tx, _stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, _stdout_rx) = mpsc::channel::<String>(64);
+        let (stderr_tx, _stderr_rx) = mpsc::channel::<String>(64);
         let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
 
@@ -2127,8 +2176,8 @@ mod tests {
         });
 
         let client = client_for(port);
-        let (stdout_tx, _stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, _stdout_rx) = mpsc::channel::<String>(64);
+        let (stderr_tx, _stderr_rx) = mpsc::channel::<String>(64);
         let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (result_tx, _result_rx) = mpsc::unbounded_channel::<ExecResult>();
 
@@ -2181,8 +2230,8 @@ mod tests {
         });
 
         let client = client_for(port);
-        let (stdout_tx, _stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, _stdout_rx) = mpsc::channel::<String>(64);
+        let (stderr_tx, _stderr_rx) = mpsc::channel::<String>(64);
         let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
 
@@ -2298,5 +2347,28 @@ mod tests {
         );
 
         server.await.unwrap();
+    }
+
+    #[test]
+    fn note_dropped_frame_counts_full_not_closed() {
+        // A full bounded channel yields TrySendError::Full — that's a real
+        // backpressure drop and must be counted.
+        let (tx, _rx) = mpsc::channel::<String>(1);
+        tx.try_send("first".to_string()).unwrap(); // fills the single slot
+        let full = tx.try_send("dropped".to_string()).unwrap_err();
+        assert!(matches!(full, mpsc::error::TrySendError::Full(_)));
+
+        let mut dropped = 0u64;
+        note_dropped_frame("stdout", full, &mut dropped);
+        assert_eq!(dropped, 1, "a Full drop must be counted");
+
+        // A closed channel (consumer gone) is the normal teardown race, not a
+        // backpressure drop — it must NOT inflate the dropped-output count.
+        let (tx2, rx2) = mpsc::channel::<String>(1);
+        drop(rx2);
+        let closed = tx2.try_send("after-close".to_string()).unwrap_err();
+        assert!(matches!(closed, mpsc::error::TrySendError::Closed(_)));
+        note_dropped_frame("stdout", closed, &mut dropped);
+        assert_eq!(dropped, 1, "a Closed send must not be counted as a drop");
     }
 }

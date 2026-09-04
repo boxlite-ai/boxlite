@@ -44,4 +44,12 @@ extern CExecutionResizeCb cbExecutionResize(void);
 extern CTunnelForwarderWaitCb cbTunnelForwarderWait(void);
 extern CTunnelForwarderCloseCb cbTunnelForwarderClose(void);
 
+// Binding-only back-pressure hook. This symbol is exported by the C SDK for
+// language bindings but intentionally omitted from the public boxlite.h API:
+// direct C callback delivery is already bounded by the runtime EventQueue,
+// while the Go SDK drives pause/resume automatically from high/low-water marks.
+enum BoxliteErrorCode boxlite_execution_set_stream_paused(CExecutionHandle *execution,
+                                                          int paused,
+                                                          CBoxliteError *out_error);
+
 #endif // BOXLITE_GO_BRIDGE_H

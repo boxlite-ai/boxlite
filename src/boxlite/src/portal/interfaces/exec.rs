@@ -19,14 +19,22 @@ pub struct ExecutionInterface {
     client: ExecutionClient<Channel>,
 }
 
+/// Bounded capacity for the per-execution stdout/stderr text channels.
+/// Bounding these (rather than the original unbounded channels) is what lets
+/// host-side back-pressure propagate: when the consumer pauses, this channel
+/// fills, `DecodedStream::send_bytes().await` blocks the attach reader, which
+/// stops draining the guest gRPC stream and ultimately blocks the guest
+/// process's write(). Keep stdin/result channels unbounded (single messages).
+const STREAM_CHANNEL_CAP: usize = 64;
+
 /// Components for building an Execution.
 pub struct ExecComponents {
     pub execution_id: String,
     /// `None` for a read-only attach: no stdin pump was spawned, so there is
     /// no sender for the caller to write into.
     pub stdin_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
-    pub stdout_rx: mpsc::UnboundedReceiver<String>,
-    pub stderr_rx: mpsc::UnboundedReceiver<String>,
+    pub stdout_rx: mpsc::Receiver<String>,
+    pub stderr_rx: mpsc::Receiver<String>,
     pub result_rx: mpsc::UnboundedReceiver<ExecResult>,
 }
 
@@ -50,8 +58,8 @@ impl ExecutionInterface {
     ) -> BoxliteResult<ExecComponents> {
         // Create channels
         let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, stdout_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
+        let (stderr_tx, stderr_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
         let (result_tx, result_rx) = mpsc::unbounded_channel();
 
         // Build request
@@ -120,8 +128,8 @@ impl ExecutionInterface {
         wire_stdin: bool,
         shutdown_token: CancellationToken,
     ) -> BoxliteResult<ExecComponents> {
-        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, stdout_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
+        let (stderr_tx, stderr_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
         let (result_tx, result_rx) = mpsc::unbounded_channel();
 
         let execution_id = execution_id.to_string();
@@ -317,8 +325,8 @@ impl ExecProtocol {
     fn spawn_attach(
         mut client: ExecutionClient<Channel>,
         execution_id: String,
-        stdout_tx: mpsc::UnboundedSender<String>,
-        stderr_tx: mpsc::UnboundedSender<String>,
+        stdout_tx: mpsc::Sender<String>,
+        stderr_tx: mpsc::Sender<String>,
         shutdown_token: CancellationToken,
     ) {
         tokio::spawn(async move {
@@ -362,8 +370,8 @@ impl ExecProtocol {
                                     message_count,
                                     "Attach stream cancelled during shutdown"
                                 );
-                                stdout.flush();
-                                stderr.flush();
+                                stdout.flush().await;
+                                stderr.flush().await;
                                 break;
                             }
                             msg = stream.message() => msg,
@@ -372,7 +380,7 @@ impl ExecProtocol {
                         match output.transpose() {
                             Some(Ok(output)) => {
                                 message_count += 1;
-                                Self::route_output(output, &mut stdout, &mut stderr);
+                                Self::route_output(output, &mut stdout, &mut stderr).await;
                             }
                             Some(Err(e)) => {
                                 tracing::debug!(
@@ -385,10 +393,13 @@ impl ExecProtocol {
                                 // the held-over partial bytes (as U+FFFD)
                                 // arrive in correct order ahead of the
                                 // synthesized "Attach stream error: …" line.
-                                stdout.flush();
-                                stderr.flush();
-                                let _ =
-                                    stderr.stream.tx.send(format!("Attach stream error: {}", e));
+                                stdout.flush().await;
+                                stderr.flush().await;
+                                let _ = stderr
+                                    .stream
+                                    .tx
+                                    .send(format!("Attach stream error: {}", e))
+                                    .await;
                                 break;
                             }
                             None => {
@@ -396,8 +407,8 @@ impl ExecProtocol {
                                 // bytes still in the decoders as U+FFFD,
                                 // matching `from_utf8_lossy` semantics for
                                 // a truncated input at EOF.
-                                stdout.flush();
-                                stderr.flush();
+                                stdout.flush().await;
+                                stderr.flush().await;
                                 break;
                             }
                         }
@@ -411,13 +422,17 @@ impl ExecProtocol {
                 }
                 Err(e) => {
                     tracing::debug!(execution_id = %execution_id, error = %e, "Attach failed");
-                    let _ = stderr_tx.send(format!("Attach failed: {}", e));
+                    let _ = stderr_tx.send(format!("Attach failed: {}", e)).await;
                 }
             }
         });
     }
 
-    fn route_output(output: ExecOutput, stdout: &mut OutputTracker, stderr: &mut OutputTracker) {
+    async fn route_output(
+        output: ExecOutput,
+        stdout: &mut OutputTracker,
+        stderr: &mut OutputTracker,
+    ) {
         match output.event {
             Some(exec_output::Event::Stdout(chunk)) => {
                 tracing::trace!(len = chunk.data.len(), "Received exec stdout");
@@ -427,7 +442,8 @@ impl ExecProtocol {
                     chunk.offset,
                     chunk.data,
                     chunk.total_bytes,
-                );
+                )
+                .await;
             }
             Some(exec_output::Event::Stderr(chunk)) => {
                 tracing::trace!(len = chunk.data.len(), "Received exec stderr");
@@ -437,44 +453,49 @@ impl ExecProtocol {
                     chunk.offset,
                     chunk.data,
                     chunk.total_bytes,
-                );
+                )
+                .await;
             }
             None => {}
         }
     }
 
-    fn forward_output(
+    async fn forward_output(
         output: &mut OutputTracker,
         source: &str,
         offset: Option<u64>,
         data: Vec<u8>,
         total_bytes: Option<u64>,
     ) {
-        match output.receive(offset, data, total_bytes) {
+        match output.receive(offset, data, total_bytes).await {
             ReceivedOutput::Data { data, lost_bytes } => {
                 if let Some(lost_bytes) = lost_bytes {
-                    Self::report_gap(output, source, lost_bytes);
+                    Self::report_gap(output, source, lost_bytes).await;
                 }
-                output.stream.send_bytes(data);
+                output.stream.send_bytes(data).await;
             }
             ReceivedOutput::End { lost_bytes } => {
                 if let Some(lost_bytes) = lost_bytes {
-                    Self::report_gap(output, source, lost_bytes);
+                    Self::report_gap(output, source, lost_bytes).await;
                 }
             }
             ReceivedOutput::Ignore => {}
         }
     }
 
-    fn report_gap(output: &mut OutputTracker, source: &str, lost_bytes: u64) {
+    async fn report_gap(output: &mut OutputTracker, source: &str, lost_bytes: u64) {
         tracing::warn!(
             source,
             lost_bytes,
             "Guest output buffer dropped older output"
         );
-        let _ = output.stream.tx.send(format!(
-            "[boxlite] {source} output dropped {lost_bytes} bytes\r\n"
-        ));
+        let _ = output
+            .stream
+            .tx
+            .send(format!(
+                "[boxlite] {source} output dropped {lost_bytes} bytes\r\n"
+            ))
+            .await;
     }
 
     fn spawn_wait(
@@ -749,12 +770,12 @@ impl Utf8StreamDecoder {
 /// so the two can't drift apart across the attach loop's branches (the same
 /// co-location tungstenite uses in `StringCollector`).
 struct DecodedStream {
-    tx: mpsc::UnboundedSender<String>,
+    tx: mpsc::Sender<String>,
     decoder: Utf8StreamDecoder,
 }
 
 impl DecodedStream {
-    fn new(tx: mpsc::UnboundedSender<String>) -> Self {
+    fn new(tx: mpsc::Sender<String>) -> Self {
         Self {
             tx,
             decoder: Utf8StreamDecoder::default(),
@@ -762,18 +783,20 @@ impl DecodedStream {
     }
 
     /// Decode a wire chunk and forward any completed text to the receiver.
-    fn send_bytes(&mut self, data: Vec<u8>) {
+    /// The send is awaited on a bounded channel: if the consumer has paused,
+    /// this blocks the attach reader and back-pressures the guest.
+    async fn send_bytes(&mut self, data: Vec<u8>) {
         let text = self.decoder.decode(data);
         if !text.is_empty() {
-            let _ = self.tx.send(text);
+            let _ = self.tx.send(text).await;
         }
     }
 
     /// Drain a held partial codepoint as U+FFFD when the stream ends.
-    fn flush(&mut self) {
+    async fn flush(&mut self) {
         let tail = self.decoder.flush();
         if !tail.is_empty() {
-            let _ = self.tx.send(tail);
+            let _ = self.tx.send(tail).await;
         }
     }
 }
@@ -795,14 +818,14 @@ enum ReceivedOutput {
 }
 
 impl OutputTracker {
-    fn new(tx: mpsc::UnboundedSender<String>) -> Self {
+    fn new(tx: mpsc::Sender<String>) -> Self {
         Self {
             expected_offset: 0,
             stream: DecodedStream::new(tx),
         }
     }
 
-    fn receive(
+    async fn receive(
         &mut self,
         offset: Option<u64>,
         data: Vec<u8>,
@@ -828,7 +851,7 @@ impl OutputTracker {
 
             let lost_bytes = total_bytes - self.expected_offset;
             self.expected_offset = total_bytes;
-            self.stream.flush();
+            self.stream.flush().await;
             return ReceivedOutput::End {
                 lost_bytes: (lost_bytes > 0).then_some(lost_bytes),
             };
@@ -853,7 +876,7 @@ impl OutputTracker {
 
         let lost_bytes = offset - self.expected_offset;
         if lost_bytes > 0 {
-            self.stream.flush();
+            self.stream.flush().await;
         }
         self.expected_offset = offset + data.len() as u64;
         ReceivedOutput::Data {
@@ -862,8 +885,8 @@ impl OutputTracker {
         }
     }
 
-    fn flush(&mut self) {
-        self.stream.flush();
+    async fn flush(&mut self) {
+        self.stream.flush().await;
     }
 }
 
@@ -1288,12 +1311,12 @@ mod tests {
     /// route_output uses the decoder; verify it doesn't double-emit U+FFFD
     /// when a 3-byte char straddles two ExecOutput messages. This is the
     /// integration-shaped reproducer for the original bug.
-    #[test]
-    fn route_output_recovers_split_codepoint_across_messages() {
+    #[tokio::test]
+    async fn route_output_recovers_split_codepoint_across_messages() {
         use boxlite_shared::{Stdout as StdoutMsg, exec_output};
 
-        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, mut stdout_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
+        let (stderr_tx, mut stderr_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
         let mut stdout = OutputTracker::new(stdout_tx);
         let mut stderr = OutputTracker::new(stderr_tx);
 
@@ -1306,8 +1329,8 @@ mod tests {
         };
 
         // "─" split into [E2] and [94 80] across two messages.
-        ExecProtocol::route_output(mk_stdout(0, vec![0xE2]), &mut stdout, &mut stderr);
-        ExecProtocol::route_output(mk_stdout(1, vec![0x94, 0x80]), &mut stdout, &mut stderr);
+        ExecProtocol::route_output(mk_stdout(0, vec![0xE2]), &mut stdout, &mut stderr).await;
+        ExecProtocol::route_output(mk_stdout(1, vec![0x94, 0x80]), &mut stdout, &mut stderr).await;
 
         // First message: holdover only, no emission.
         // Second message: complete "─" emitted.
@@ -1319,12 +1342,12 @@ mod tests {
         assert!(stderr_rx.try_recv().is_err());
     }
 
-    #[test]
-    fn output_gap_only_flushes_the_affected_utf8_decoder() {
+    #[tokio::test]
+    async fn output_gap_only_flushes_the_affected_utf8_decoder() {
         use boxlite_shared::{Stderr as StderrMsg, Stdout as StdoutMsg, exec_output};
 
-        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, mut stdout_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
+        let (stderr_tx, mut stderr_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
         let mut stdout = OutputTracker::new(stdout_tx);
         let mut stderr = OutputTracker::new(stderr_tx);
 
@@ -1337,7 +1360,8 @@ mod tests {
             })),
             &mut stdout,
             &mut stderr,
-        );
+        )
+        .await;
         ExecProtocol::route_output(
             output(exec_output::Event::Stdout(StdoutMsg {
                 data: b"after-gap".to_vec(),
@@ -1346,7 +1370,8 @@ mod tests {
             })),
             &mut stdout,
             &mut stderr,
-        );
+        )
+        .await;
         ExecProtocol::route_output(
             output(exec_output::Event::Stderr(StderrMsg {
                 data: vec![0x94, 0x80],
@@ -1355,7 +1380,8 @@ mod tests {
             })),
             &mut stdout,
             &mut stderr,
-        );
+        )
+        .await;
 
         assert_eq!(
             stdout_rx.try_recv().ok(),
@@ -1365,12 +1391,12 @@ mod tests {
         assert_eq!(stderr_rx.try_recv().ok(), Some("─".to_string()));
     }
 
-    #[test]
-    fn output_end_reports_a_missing_tail() {
+    #[tokio::test]
+    async fn output_end_reports_a_missing_tail() {
         use boxlite_shared::{Stdout as StdoutMsg, exec_output};
 
-        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, mut stdout_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
+        let (stderr_tx, mut stderr_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
         let mut stdout = OutputTracker::new(stdout_tx);
         let mut stderr = OutputTracker::new(stderr_tx);
 
@@ -1383,7 +1409,8 @@ mod tests {
             })),
             &mut stdout,
             &mut stderr,
-        );
+        )
+        .await;
         ExecProtocol::route_output(
             output(exec_output::Event::Stdout(StdoutMsg {
                 data: Vec::new(),
@@ -1392,7 +1419,8 @@ mod tests {
             })),
             &mut stdout,
             &mut stderr,
-        );
+        )
+        .await;
 
         assert_eq!(stdout_rx.try_recv().ok(), Some("hello".to_string()));
         assert_eq!(
@@ -1402,12 +1430,12 @@ mod tests {
         assert!(stderr_rx.try_recv().is_err());
     }
 
-    #[test]
-    fn legacy_output_without_offsets_remains_contiguous() {
+    #[tokio::test]
+    async fn legacy_output_without_offsets_remains_contiguous() {
         use boxlite_shared::{Stdout as StdoutMsg, exec_output};
 
-        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, mut stdout_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
+        let (stderr_tx, mut stderr_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
         let mut stdout = OutputTracker::new(stdout_tx);
         let mut stderr = OutputTracker::new(stderr_tx);
 
@@ -1418,8 +1446,8 @@ mod tests {
                 total_bytes: None,
             })),
         };
-        ExecProtocol::route_output(output(b"hello ".to_vec()), &mut stdout, &mut stderr);
-        ExecProtocol::route_output(output(b"world".to_vec()), &mut stdout, &mut stderr);
+        ExecProtocol::route_output(output(b"hello ".to_vec()), &mut stdout, &mut stderr).await;
+        ExecProtocol::route_output(output(b"world".to_vec()), &mut stdout, &mut stderr).await;
 
         assert_eq!(stdout_rx.try_recv().ok(), Some("hello ".to_string()));
         assert_eq!(stdout_rx.try_recv().ok(), Some("world".to_string()));
@@ -1432,22 +1460,22 @@ mod tests {
     /// shutdown cancellation) so trailing partial UTF-8 bytes are never
     /// silently dropped — keeping the helper correct keeps all three paths
     /// correct.
-    #[test]
-    fn decoded_stream_flush_drains_held_bytes_on_any_exit_path() {
-        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
+    #[tokio::test]
+    async fn decoded_stream_flush_drains_held_bytes_on_any_exit_path() {
+        let (stdout_tx, mut stdout_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
+        let (stderr_tx, mut stderr_rx) = mpsc::channel::<String>(STREAM_CHANNEL_CAP);
         let mut stdout = DecodedStream::new(stdout_tx);
         let mut stderr = DecodedStream::new(stderr_tx);
 
         // Seed each stream with the first byte of a 3-byte codepoint so it
         // has held-over bytes that would be lost without an explicit flush.
-        stdout.send_bytes(vec![0xE2]);
-        stderr.send_bytes(vec![0xE2]);
+        stdout.send_bytes(vec![0xE2]).await;
+        stderr.send_bytes(vec![0xE2]).await;
         assert!(stdout_rx.try_recv().is_err());
         assert!(stderr_rx.try_recv().is_err());
 
-        stdout.flush();
-        stderr.flush();
+        stdout.flush().await;
+        stderr.flush().await;
 
         // Both channels must receive U+FFFD (matches from_utf8_lossy on a
         // truncated tail). Without the flush, error/shutdown paths silently
@@ -1455,8 +1483,8 @@ mod tests {
         assert_eq!(stdout_rx.try_recv().ok(), Some("\u{FFFD}".to_string()));
         assert_eq!(stderr_rx.try_recv().ok(), Some("\u{FFFD}".to_string()));
         // Idempotent: a second flush is a no-op (channels stay empty).
-        stdout.flush();
-        stderr.flush();
+        stdout.flush().await;
+        stderr.flush().await;
         assert!(stdout_rx.try_recv().is_err());
         assert!(stderr_rx.try_recv().is_err());
     }
