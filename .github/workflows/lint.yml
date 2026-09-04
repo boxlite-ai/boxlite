@@ -68,6 +68,7 @@ jobs:
               - 'sdks/python/pyproject.toml'
             node:
               - 'sdks/node/**/*.ts'
+              - 'sdks/node/**/*.mjs'
               - 'sdks/node/package.json'
               - 'sdks/node/package-lock.json'
               - 'sdks/node/tsconfig.json'
