@@ -652,22 +652,27 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
                 wait_on_clone(&exec_arc).await
             });
         }
-        // Abort stream pumps FIRST. Otherwise a pump that's mid-yield on
-        // push_event can enqueue Stdout/Stderr AFTER the synthetic Exit
-        // lands, violating the "Exit is strictly last" invariant. The Go
-        // exit callback deletes the per-execution `cgo.Handle`; a later
-        // stream callback would call `h.Value()` on the deleted handle
-        // and panic the process.
+        // Stop stream pumps FIRST. Otherwise a pump can enqueue Stdout/Stderr
+        // AFTER the synthetic Exit lands, violating the "Exit is strictly last"
+        // invariant. The Go exit callback deletes the per-execution
+        // `cgo.Handle`; a later stream callback would call `h.Value()` on the
+        // deleted handle and panic the process.
         //
-        // Aborting drops the stream pump's future; if it was waiting
-        // on push_event's yield_now loop, the future is dropped before
-        // the next push_event re-check, so no Stdout/Stderr lands. If
-        // it was on its own done_tx send, the receiver (already-
-        // completed exit_pump) is gone — harmless.
+        // `abort()` only *requests* cancellation — a pump task already running
+        // between await points can still complete one more `push_event` before
+        // it observes the cancel. So abort, then AWAIT each task: only once the
+        // futures are dropped is it guaranteed no further Stdout/Stderr can be
+        // enqueued. Bounded by a timeout so a wedged pump cannot hang teardown.
+        const PUMP_ABORT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
         let pumps = std::mem::take(&mut *exec_box.pumps.lock().unwrap());
         for pump in &pumps {
             pump.abort();
         }
+        exec_box.tokio_rt.block_on(async {
+            for pump in pumps {
+                let _ = tokio::time::timeout(PUMP_ABORT_WAIT, pump).await;
+            }
+        });
 
         // Race exit dispatch with `exit_pump`. Two outcomes:
         //
