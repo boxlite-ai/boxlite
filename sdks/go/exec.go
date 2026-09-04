@@ -82,8 +82,23 @@ type ExecutionOptions struct {
 // callback could race a sibling callback's value lookup. The released
 // flag short-circuits any post-exit stream events that still arrive.
 //
+// Concurrency: deliverStdout/deliverStderr/deliverExit run on the runtime-
+// wide drain goroutine, which dispatches events for every live execution
+// serially. They must NEVER block on user code (a slow Stdout Writer) —
+// otherwise a single execution's slow consumer stalls dispatch for every
+// other execution in the runtime. So each execution lazily starts a pair
+// of per-stream deliverer goroutines on first event. drainLoop enqueues
+// chunks into per-stream slice queues under a short mutex and signals
+// the corresponding cond; the deliverer drains the queue and calls the
+// user's Writer/callback OUTSIDE the lock. Slow Writers park their own
+// deliverer, never drainLoop. Mirrors os/exec.Cmd's per-Cmd copy goroutine
+// model adapted to the shared-dispatch-loop architecture.
+//
 // Memory overhead is bounded: each execution adds one map entry plus the
-// state struct (a few writers, two atomics, and a mutex).
+// state struct (a few writers, two atomics, a mutex, two slice queues).
+// Pending-chunk memory grows if the user's Writer hangs indefinitely; this
+// matches the prior implementation's behavior (drainLoop simply blocked
+// instead) and is bounded in practice by the C-side stream pump rate.
 type executionStreamState struct {
 	mu       sync.Mutex
 	stdout   io.Writer
@@ -93,25 +108,127 @@ type executionStreamState struct {
 
 	released atomic.Bool
 
-	// drained is the os/exec `goroutineErr` analog: closed by
-	// deliverExit when the C-side on_exit callback fires. C's exit_pump
-	// gates Exit on every stream pump's done_tx, so by the time on_exit
-	// runs, the drain goroutine has already dispatched every
-	// Stdout/Stderr callback for this execution. Execution.Wait blocks
-	// on this after the process's exit code has been collected, so a
-	// caller using buffered Stdout/Stderr sinks never sees a truncated
-	// buffer. The fold happens at the SDK boundary; the C-side Wait
-	// task stays decoupled from streams.
+	// Per-stream queues + signals. drainLoop appends under mu and
+	// signals the per-stream cond; the per-execution deliverer goroutine
+	// pulls batches out under mu, then calls the user's Writer/callback
+	// OUTSIDE the lock. Two separate conds so a stdout enqueue doesn't
+	// wake the stderr deliverer (and vice versa).
+	stdoutQ          [][]byte
+	stderrQ          [][]byte
+	stdoutCond       *sync.Cond
+	stderrCond       *sync.Cond
+	closed           bool // deliverExit (or markReleased) has fired; no more enqueues incoming
+	delivererStarted bool
+
+	// drained is the os/exec `goroutineErr` analog: closed AFTER both
+	// per-stream deliverer goroutines finish flushing their queues post-
+	// closed. Execution.Wait blocks on this after the process's exit
+	// code has been collected, so a caller using buffered Stdout/Stderr
+	// sinks never sees a truncated buffer. The fold happens at the SDK
+	// boundary; the C-side Wait task stays decoupled from streams.
 	drained chan struct{}
 }
 
 func newExecutionStreamState(opts ExecutionOptions) *executionStreamState {
-	return &executionStreamState{
+	s := &executionStreamState{
 		stdout:   opts.Stdout,
 		stderr:   opts.Stderr,
 		onStdout: opts.OnStdout,
 		onStderr: opts.OnStderr,
 		drained:  make(chan struct{}),
+	}
+	s.stdoutCond = sync.NewCond(&s.mu)
+	s.stderrCond = sync.NewCond(&s.mu)
+	return s
+}
+
+// ensureDeliverersLocked lazily launches the two per-stream deliverer
+// goroutines and the barrier goroutine that closes `drained` after both
+// finish. Idempotent. Caller must hold s.mu.
+//
+// Lazy because most executions never produce stream events (no Stdout/
+// Stderr set, or empty output) — spawning two goroutines upfront for
+// every StartExecution would be wasteful. The first enqueue (or
+// deliverExit, which can fire on a no-output exec) starts them.
+func (s *executionStreamState) ensureDeliverersLocked() {
+	if s.delivererStarted {
+		return
+	}
+	s.delivererStarted = true
+	stdoutDone := make(chan struct{})
+	stderrDone := make(chan struct{})
+	go s.runStdoutDeliverer(stdoutDone)
+	go s.runStderrDeliverer(stderrDone)
+	go func() {
+		<-stdoutDone
+		<-stderrDone
+		close(s.drained)
+	}()
+}
+
+func (s *executionStreamState) runStdoutDeliverer(done chan<- struct{}) {
+	defer close(done)
+	for {
+		s.mu.Lock()
+		for len(s.stdoutQ) == 0 && !s.closed {
+			s.stdoutCond.Wait()
+		}
+		if len(s.stdoutQ) == 0 {
+			// closed && empty
+			s.mu.Unlock()
+			return
+		}
+		batch := s.stdoutQ
+		s.stdoutQ = nil
+		writer := s.stdout
+		cb := s.onStdout
+		s.mu.Unlock()
+
+		for _, chunk := range batch {
+			if s.released.Load() {
+				// Close() raced ahead of the flush — discard remaining
+				// chunks. Parity with the prior in-callback released
+				// short-circuit.
+				continue
+			}
+			if cb != nil {
+				cb(chunk)
+			}
+			if writer != nil {
+				_, _ = writer.Write(chunk)
+			}
+		}
+	}
+}
+
+func (s *executionStreamState) runStderrDeliverer(done chan<- struct{}) {
+	defer close(done)
+	for {
+		s.mu.Lock()
+		for len(s.stderrQ) == 0 && !s.closed {
+			s.stderrCond.Wait()
+		}
+		if len(s.stderrQ) == 0 {
+			s.mu.Unlock()
+			return
+		}
+		batch := s.stderrQ
+		s.stderrQ = nil
+		writer := s.stderr
+		cb := s.onStderr
+		s.mu.Unlock()
+
+		for _, chunk := range batch {
+			if s.released.Load() {
+				continue
+			}
+			if cb != nil {
+				cb(chunk)
+			}
+			if writer != nil {
+				_, _ = writer.Write(chunk)
+			}
+		}
 	}
 }
 
@@ -119,41 +236,59 @@ func (s *executionStreamState) deliverStdout(data []byte) {
 	if s.released.Load() {
 		return
 	}
+	// Copy: the C buffer backing `data` may be reused by the next
+	// stream event the moment this callback returns, but the deliverer
+	// goroutine consumes the chunk asynchronously.
+	chunk := make([]byte, len(data))
+	copy(chunk, data)
 	s.mu.Lock()
-	stdout := s.stdout
-	cb := s.onStdout
+	s.ensureDeliverersLocked()
+	s.stdoutQ = append(s.stdoutQ, chunk)
+	s.stdoutCond.Signal()
 	s.mu.Unlock()
-	if cb != nil {
-		cb(data)
-	}
-	if stdout != nil {
-		_, _ = stdout.Write(data)
-	}
 }
 
 func (s *executionStreamState) deliverStderr(data []byte) {
 	if s.released.Load() {
 		return
 	}
+	chunk := make([]byte, len(data))
+	copy(chunk, data)
 	s.mu.Lock()
-	stderr := s.stderr
-	cb := s.onStderr
+	s.ensureDeliverersLocked()
+	s.stderrQ = append(s.stderrQ, chunk)
+	s.stderrCond.Signal()
 	s.mu.Unlock()
-	if cb != nil {
-		cb(data)
-	}
-	if stderr != nil {
-		_, _ = stderr.Write(data)
-	}
 }
 
 func (s *executionStreamState) deliverExit(_ int) {
-	s.released.Store(true)
-	close(s.drained)
+	s.mu.Lock()
+	s.ensureDeliverersLocked()
+	s.closed = true
+	s.stdoutCond.Broadcast()
+	s.stderrCond.Broadcast()
+	s.mu.Unlock()
+	// `drained` is closed by the barrier goroutine launched in
+	// ensureDeliverersLocked, after both deliverers flush. Don't
+	// close it here — that would race the deliverer's queue drain
+	// and break the post-exit "every chunk has been delivered to
+	// the user's Writer" guarantee that Execution.Wait depends on.
 }
 
 func (s *executionStreamState) markReleased() {
 	s.released.Store(true)
+	s.mu.Lock()
+	if s.delivererStarted && !s.closed {
+		// Close() was called before on_exit fired (e.g. Wait was
+		// never called, or Close races Wait). Force the deliverers
+		// to exit so the barrier can close `drained` and any concurrent
+		// Wait can return. Pending chunks are skipped via the
+		// released check inside the deliverer loop.
+		s.closed = true
+		s.stdoutCond.Broadcast()
+		s.stderrCond.Broadcast()
+	}
+	s.mu.Unlock()
 }
 
 // Execution is a handle to a running command.
