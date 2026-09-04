@@ -14,6 +14,7 @@ import { BoxliteConfigController } from './boxlite-config.controller'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
+import { TunnelLiveWsService } from './tunnel-live-ws.service'
 import { BoxAutoResumeService } from './box-auto-resume.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
@@ -27,7 +28,7 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
     BoxliteProxyController,
     BoxliteVolumeController,
   ],
-  providers: [BoxliteWsProxyService, BoxAutoResumeService, CommerceBoxLimitService],
-  exports: [BoxliteWsProxyService],
+  providers: [BoxliteWsProxyService, TunnelLiveWsService, BoxAutoResumeService, CommerceBoxLimitService],
+  exports: [BoxliteWsProxyService, TunnelLiveWsService],
 })
 export class BoxliteRestModule {}

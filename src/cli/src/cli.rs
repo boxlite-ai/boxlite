@@ -898,6 +898,18 @@ impl GlobalFlags {
 
         Some(opts)
     }
+
+    /// Returns the resolved REST options (URL + API key) if this invocation
+    /// targets a remote boxlite service, or an error when they cannot be
+    /// resolved (local mode, missing profile, etc.).
+    pub fn rest_options(&self) -> anyhow::Result<BoxliteRestOptions> {
+        let stored = crate::credentials::load_named(&self.resolved_profile())
+            .ok()
+            .flatten();
+        let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
+        self.resolve_rest_options(stored, env_api_key)
+            .ok_or_else(|| anyhow::anyhow!("no remote boxlite service configured; use `boxlite auth login` or set BOXLITE_REST_URL"))
+    }
 }
 
 // ============================================================================

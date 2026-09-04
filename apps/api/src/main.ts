@@ -31,6 +31,7 @@ import type { IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { Logger as PinoLogger, LoggerErrorInterceptor } from 'nestjs-pino'
 import { BoxliteWsProxyService } from './boxlite-rest/boxlite-ws-proxy.service'
+import { TunnelLiveWsService } from './boxlite-rest/tunnel-live-ws.service'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -206,7 +207,12 @@ async function bootstrap() {
     // from under it; everything else is unauthenticated traffic and gets
     // closed here.
     const wsProxy = app.get(BoxliteWsProxyService)
+    const tunnelLiveWs = app.get(TunnelLiveWsService)
     httpServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
+      if (tunnelLiveWs.matchPath(req.url)) {
+        void tunnelLiveWs.upgrade(req, socket, head)
+        return
+      }
       if (wsProxy.matchAttachPath(req.url)) {
         void wsProxy.upgrade(req, socket, head)
         return

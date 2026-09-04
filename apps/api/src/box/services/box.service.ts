@@ -807,7 +807,20 @@ export class BoxService {
     }
   }
 
-  async getNetworkTunnelUrl(boxIdOrName: string, organizationId: string, port: number): Promise<string> {
+  // TTL must be longer than the CLI/SDK renewal interval (5s) with ample
+  // headroom for slow renewals.  The proxy's boxPublicCache TTL (3s) adds
+  // to the worst-case reachability window after a tunnel closes.
+  private static readonly NETWORK_TUNNEL_LIVE_TTL_SECONDS = 15
+
+  private networkTunnelLiveKey(boxId: string): string {
+    return `box:network-tunnel-live:${boxId}`
+  }
+
+  // openNetworkTunnel sets a short-lived Redis liveness lease so the Go proxy
+  // will forward browser traffic, then returns the public URL.  The caller
+  // (CLI/SDK) must renew the lease regularly; expiry makes the box private
+  // again automatically.
+  async openNetworkTunnel(boxIdOrName: string, organizationId: string, port: number): Promise<string> {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
     }
@@ -815,14 +828,25 @@ export class BoxService {
     const proxyDomain = this.configService.getOrThrow('proxy.domain')
     const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    await this.redis.setex(
+      this.networkTunnelLiveKey(box.id),
+      BoxService.NETWORK_TUNNEL_LIVE_TTL_SECONDS,
+      '1',
+    )
     const endpointId = encodeDirectPreviewBoxId(box.id)
-
     let url = `${proxyProtocol}://${port}-${endpointId}.${proxyDomain}`
     const region = await this.regionService.findOne(box.region, true)
     if (region?.proxyUrl) {
       url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${endpointId}.`)
     }
     return url
+  }
+
+  // closeNetworkTunnel deletes the liveness lease immediately so the proxy
+  // stops forwarding without waiting for the TTL to expire.
+  async closeNetworkTunnel(boxIdOrName: string, organizationId: string): Promise<void> {
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    await this.redis.del(this.networkTunnelLiveKey(box.id))
   }
 
   async getSignedPortPreviewUrl(

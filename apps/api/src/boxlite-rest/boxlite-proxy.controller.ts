@@ -230,8 +230,17 @@ export class BoxliteProxyController {
       throw new ConflictException(`Box ${boxId} is not public; set public: true before opening a tunnel`)
     }
 
-    const uri = await this.boxService.getNetworkTunnelUrl(boxId, authContext.organizationId, port)
+    const uri = await this.boxService.openNetworkTunnel(boxId, authContext.organizationId, port)
     return { uri }
+  }
+
+  @Delete(':boxId/network/tunnel')
+  @HttpCode(HttpStatus.OK)
+  async proxyNetworkTunnelClose(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+  ) {
+    await this.boxService.closeNetworkTunnel(boxId, authContext.organizationId)
   }
 
   private async proxyToRunner(

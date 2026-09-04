@@ -280,6 +280,15 @@ func (p *Proxy) getBoxPublic(ctx context.Context, boxId string) (*bool, error) {
 		return nil, err
 	}
 
+	// A public box still requires an active network-tunnel lease (set by the
+	// CLI/SDK `network tunnel` command and renewed every 5s). Without a live
+	// lease the proxy treats the box as private, so browser access lapses
+	// automatically when the CLI exits — even though box.public stays true.
+	// We check Redis here so isBoxPublic on the API side stays a pure DB read.
+	if isPublic && !p.tunnelChecker.IsLive(ctx, boxId) {
+		isPublic = false
+	}
+
 	if cacheErr := p.boxPublicCache.Set(ctx, boxId, isPublic, 3*time.Second); cacheErr != nil {
 		slog.ErrorContext(ctx, "Failed to set box public in cache", "error", cacheErr)
 	}

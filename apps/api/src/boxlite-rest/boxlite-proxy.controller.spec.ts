@@ -26,7 +26,8 @@ function makeHarness() {
       .fn()
       .mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true, state: 'started', public: true }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
-    getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://3000-box.proxy.test'),
+    openNetworkTunnel: jest.fn().mockResolvedValue('https://3000-box.proxy.test'),
+    closeNetworkTunnel: jest.fn().mockResolvedValue(undefined),
   }
   const runnerService = {
     findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
@@ -112,7 +113,7 @@ describe('BoxliteProxyController', () => {
 
     const result = await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)
 
-    expect(boxService.getNetworkTunnelUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
+    expect(boxService.openNetworkTunnel).toHaveBeenCalledWith('public-box', 'org-1', 3000)
     expect(result).toEqual({ uri: 'https://3000-box.proxy.test' })
   })
 
@@ -129,7 +130,15 @@ describe('BoxliteProxyController', () => {
     await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
       status: 409,
     })
-    expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
+    expect(boxService.openNetworkTunnel).not.toHaveBeenCalled()
+  })
+
+  it('closes the tunnel on DELETE', async () => {
+    const { controller, boxService } = makeHarness()
+
+    await controller.proxyNetworkTunnelClose(activeAuth as never, 'public-box')
+
+    expect(boxService.closeNetworkTunnel).toHaveBeenCalledWith('public-box', 'org-1')
   })
 
   it('rejects a tunnel request for a stopped box with 409, without auto-resuming it', async () => {
@@ -148,7 +157,7 @@ describe('BoxliteProxyController', () => {
       status: 409,
     })
     expect(autoResume.ensureReady).not.toHaveBeenCalled()
-    expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
+    expect(boxService.openNetworkTunnel).not.toHaveBeenCalled()
   })
 
   it.each(['creating', 'starting', 'error', 'archived', 'unknown'])(
@@ -165,7 +174,7 @@ describe('BoxliteProxyController', () => {
       await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
         status: 409,
       })
-      expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
+      expect(boxService.openNetworkTunnel).not.toHaveBeenCalled()
     },
   )
 

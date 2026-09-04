@@ -76,6 +76,12 @@ url = "2"
 
 gtmpl = "0.7"
 gtmpl_value = "0.5"
+
+# WebSocket client for the tunnel-live keepalive connection.
+# Already resolved through axum/axum-extra; adding here promotes it to a
+# named (non-transitive) dependency so we can use it directly.
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+
 [build-dependencies]
 
 [dev-dependencies]

@@ -218,6 +218,7 @@ function makeNetworkTunnelService() {
     }),
   } as any
   const regionService = { findOne: jest.fn().mockResolvedValue(null) } as any
+  const redis = { setex: jest.fn().mockResolvedValue('OK'), del: jest.fn().mockResolvedValue(1) } as any
   const noop = {} as any
   const service = new BoxService(
     noop,
@@ -236,6 +237,7 @@ function makeNetworkTunnelService() {
     noop, // jobRepository
     noop, // jobService
   )
+  ;(service as any).redis = redis
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
     region: 'region-1',
@@ -243,13 +245,24 @@ function makeNetworkTunnelService() {
   return service
 }
 
-describe('BoxService network tunnel URLs', () => {
-  it('creates a case-safe endpoint for an SDK tunnel', async () => {
+describe('BoxService network tunnel', () => {
+  it('openNetworkTunnel sets liveness lease and returns a case-safe endpoint', async () => {
     const service = makeNetworkTunnelService()
+    const redis = (service as any).redis
 
-    const result = await service.getNetworkTunnelUrl('MixedCaseBox', 'org-1', 3000)
+    const result = await service.openNetworkTunnel('MixedCaseBox', 'org-1', 3000)
 
     expect(result).toBe('https://3000-d-4d6978656443617365426f78.proxy.example.test')
+    expect(redis.setex).toHaveBeenCalledWith('box:network-tunnel-live:MixedCaseBox', 15, '1')
+  })
+
+  it('closeNetworkTunnel deletes the liveness lease', async () => {
+    const service = makeNetworkTunnelService()
+    const redis = (service as any).redis
+
+    await service.closeNetworkTunnel('MixedCaseBox', 'org-1')
+
+    expect(redis.del).toHaveBeenCalledWith('box:network-tunnel-live:MixedCaseBox')
   })
 })
 

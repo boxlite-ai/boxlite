@@ -73,6 +73,9 @@ type Proxy struct {
 	boxAuthKeyValidCache       common_cache.ICache[bool]
 	boxLastActivityUpdateCache common_cache.ICache[bool]
 	guestPortTransport         *http.Transport
+	// tunnelChecker checks the Redis liveness lease set by network-tunnel.
+	// Nil when Redis is not configured (local/dev deployment without Redis).
+	tunnelChecker *common_cache.NetworkTunnelChecker
 }
 
 func StartProxy(ctx context.Context, config *config.Config) error {
@@ -88,6 +91,15 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 
 	proxy.apiclient = config.ApiClient
 	proxy.guestPortTransport = proxy.newGuestPortTransport()
+
+	// tunnelChecker is intentionally initialised outside the Redis block so
+	// it can reuse the same client; NewNetworkTunnelChecker returns nil,nil
+	// when config.Redis is nil (no Redis configured).
+	var tunnelErr error
+	proxy.tunnelChecker, tunnelErr = common_cache.NewNetworkTunnelChecker(config.Redis)
+	if tunnelErr != nil {
+		return tunnelErr
+	}
 
 	if config.Redis != nil {
 		var err error
