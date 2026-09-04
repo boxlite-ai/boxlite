@@ -20,8 +20,13 @@ describe('createS3Client endpoint scheme', () => {
 
     expect(client.config.endpoint).toBeDefined()
     // @aws-sdk/client-s3 stores the endpoint as a resolver; assert via the
-    // resolved value instead of reaching into SDK internals.
-    return expect(client.config.endpoint()).resolves.toMatchObject({ hostname: 's3.example-region.amazonaws.com' })
+    // resolved value instead of reaching into SDK internals. Assert the
+    // protocol too, not just the hostname - an http endpoint with the same
+    // hostname would otherwise satisfy this test just as well.
+    return expect(client.config.endpoint()).resolves.toMatchObject({
+      hostname: 's3.example-region.amazonaws.com',
+      protocol: 'https:',
+    })
   })
 
   it('keeps a bare minio endpoint on http', async () => {

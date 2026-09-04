@@ -11,6 +11,11 @@ describe.each([
     expect(await validate(dto)).toHaveLength(0)
   })
 
+  it('accepts exactly 1000 paths (the cap boundary)', async () => {
+    const dto = plainToInstance(DtoClass, { paths: Array.from({ length: 1000 }, (_, i) => `f${i}.txt`) })
+    expect(await validate(dto)).toHaveLength(0)
+  })
+
   it('rejects an empty array', async () => {
     const dto = plainToInstance(DtoClass, { paths: [] })
     const errors = await validate(dto)
