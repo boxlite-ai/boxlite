@@ -39,11 +39,27 @@ export function createS3Client(configService: TypedConfigService): S3Client | nu
   }
 
   return new S3Client({
-    endpoint: endpoint.startsWith('http') ? endpoint : `http://${endpoint}`,
+    endpoint: withScheme(endpoint),
     region,
     // Static keys for S3-compatible deployments (MinIO); unset on AWS,
     // where the SDK default chain supplies the ECS task-role credentials.
     ...(accessKeyId && secretAccessKey ? { credentials: { accessKeyId, secretAccessKey } } : {}),
     forcePathStyle: true,
   })
+}
+
+/**
+ * Adds a URL scheme to a bare host:port endpoint. Defaults to HTTPS - this
+ * client now also signs presigned URLs handed straight to external callers
+ * (`VolumeFilesService`), so a scheme-less production endpoint must not
+ * silently downgrade every read/write to plaintext. Only known local/dev
+ * deployments (MinIO, localhost) fall back to HTTP, matching the existing
+ * MinIO carve-out for the credential requirement above.
+ */
+function withScheme(endpoint: string): string {
+  if (endpoint.startsWith('http://') || endpoint.startsWith('https://')) {
+    return endpoint
+  }
+  const isLocal = endpoint.includes('minio') || endpoint.includes('localhost') || endpoint.includes('127.0.0.1')
+  return `${isLocal ? 'http' : 'https'}://${endpoint}`
 }

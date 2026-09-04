@@ -50,6 +50,9 @@ export class VolumeFilesService {
   }
 
   async listFiles(volumeId: string, prefix: string, cursor?: string): Promise<ListVolumeFilesResponseDto> {
+    if (prefix) {
+      assertSafeVolumePath(prefix)
+    }
     const volume = await this.assertReady(volumeId)
 
     const response = await this.s3.send(

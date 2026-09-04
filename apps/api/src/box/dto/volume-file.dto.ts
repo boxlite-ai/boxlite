@@ -5,7 +5,11 @@
  */
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
-import { IsArray, IsNotEmpty, IsString } from 'class-validator'
+import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsNotEmpty, IsString } from 'class-validator'
+
+/** S3 caps DeleteObjects at 1000 keys per call; mirrored here for presign
+ * batches too so one request can't force unbounded signing/S3 work. */
+const MAX_BATCH_SIZE = 1000
 
 export class VolumeFileEntryDto {
   @ApiProperty({ description: 'Entry name relative to the listed path' })
@@ -54,6 +58,8 @@ export class PresignedUrlResponseDto {
 export class BatchDeleteVolumeFilesDto {
   @ApiProperty({ type: [String], description: 'Object keys to delete, relative to the volume root' })
   @IsArray()
+  @ArrayNotEmpty()
+  @ArrayMaxSize(MAX_BATCH_SIZE)
   @IsString({ each: true })
   @IsNotEmpty({ each: true })
   paths: string[]
@@ -78,6 +84,8 @@ export class BatchDeleteVolumeFilesResponseDto {
 export class PresignBatchWriteVolumeFilesDto {
   @ApiProperty({ type: [String], description: 'Object keys to presign for upload, relative to the volume root' })
   @IsArray()
+  @ArrayNotEmpty()
+  @ArrayMaxSize(MAX_BATCH_SIZE)
   @IsString({ each: true })
   @IsNotEmpty({ each: true })
   paths: string[]

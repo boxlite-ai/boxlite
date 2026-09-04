@@ -94,6 +94,24 @@ describe('VolumeFilesService listFiles', () => {
       ContinuationToken: 'cursor-1',
     })
   })
+
+  it('rejects a traversal prefix before touching S3', async () => {
+    const { service, send } = createService(READY_VOLUME)
+
+    await expect(service.listFiles('volume-1', '../secret')).rejects.toThrow('escapes the volume root')
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('does not validate the default empty prefix (volume root listing)', async () => {
+    const { service, send } = createService(READY_VOLUME)
+    send.mockResolvedValue({ Contents: [], IsTruncated: false })
+
+    await expect(service.listFiles('volume-1', '')).resolves.toEqual({
+      entries: [],
+      nextCursor: undefined,
+      hasMore: false,
+    })
+  })
 })
 
 describe('VolumeFilesService statFile', () => {
