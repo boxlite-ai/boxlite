@@ -187,7 +187,7 @@ issuer: ${DEX_ISSUER}
 storage:
   type: sqlite3
   config:
-    file: /var/dex/dex.db
+    file: /tmp/dex.db
 web:
   http: 0.0.0.0:5556
   allowedOrigins: ['*']
@@ -223,7 +223,7 @@ staticPasswords:
 
 _DEX_ENTRYPOINT = """\
 set -e
-mkdir -p /var/dex /tmp
+mkdir -p /tmp
 cat > /tmp/dex-config.yaml <<'__CFG__'
 """ + _DEX_CONFIG + """\
 __CFG__
