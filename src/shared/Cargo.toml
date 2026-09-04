@@ -13,7 +13,9 @@ serde_json = "1.0"
 thiserror = "2.0"
 prost = "0.13"
 tonic = "0.12"
-tokio = { version = "1", features = ["io-util", "rt"] }
+tokio = { version = "1", features = ["io-util", "rt", "sync"] }
+tokio-stream = "0.1"
+futures = "0.3"
 tar = "0.4"
 
 [build-dependencies]

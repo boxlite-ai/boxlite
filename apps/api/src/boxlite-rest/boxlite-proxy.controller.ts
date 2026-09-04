@@ -301,6 +301,14 @@ export class BoxliteProxyController {
           proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)
           fixRequestBody(proxyReq, originalReq)
         },
+        proxyRes: (proxyRes: any, _req: any, res: any) => {
+          // Carry the file-download archive-shape hint through the proxy so the
+          // client's copy_out can distinguish single-file vs directory streams.
+          const shape = proxyRes.headers?.['x-boxlite-source-is-dir']
+          if (shape) {
+            res.setHeader('x-boxlite-source-is-dir', shape)
+          }
+        },
       },
       proxyTimeout: opts?.proxyTimeoutMs ?? 5 * 60 * 1000,
     }

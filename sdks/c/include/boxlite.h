@@ -81,6 +81,16 @@ typedef enum BoxliteRegistryTransport {
   BoxliteRegistryTransportHttp = 1,
 } BoxliteRegistryTransport;
 
+// Streaming-copy source shape. For copy-in, `BoxliteCopySourceKindUnknown`
+// means the caller cannot tell and the guest peeks at the archive. For
+// copy-out, it means the peer omitted the hint. The C-ABI mirror of the core
+// `CopySourceKind`.
+typedef enum BoxliteCopySourceKind {
+  BoxliteCopySourceKindUnknown = 0,
+  BoxliteCopySourceKindFile = 1,
+  BoxliteCopySourceKindDir = 2,
+} BoxliteCopySourceKind;
+
 // Opaque handle wrapping an `AdvancedBoxOptions`. Allocated via
 // `boxlite_advanced_options_new`, freed via `boxlite_advanced_options_free`.
 typedef struct AdvancedBoxOptionsHandle AdvancedBoxOptionsHandle;
@@ -99,6 +109,25 @@ typedef struct BoxRunner BoxRunner;
 
 // Opaque handle for a one-shot prepared tunnel.
 typedef struct BoxTunnelHandle BoxTunnelHandle;
+
+// Opaque handle for a streaming copy-in (push archive bytes into the guest).
+//
+// The lifecycle is fixed, and the third step is not optional:
+//
+//     boxlite_copy_in_start
+//       boxlite_copy_in_write   (repeat)
+//       boxlite_copy_in_close   on success
+//       boxlite_copy_in_abort   when the source read failed
+//     boxlite_copy_in_free
+//
+// Going straight from write to free is what makes a truncated upload
+// dangerous: freeing the handle drops the channel, which the guest reads
+// as a clean EOF and commits. Only boxlite_copy_in_abort turns a
+// mid-transfer source failure into a terminal error the guest can refuse.
+typedef struct CBoxCopyInStream CBoxCopyInStream;
+
+// Opaque handle for a streaming copy-out (pull archive bytes from the guest).
+typedef struct CBoxCopyOutStream CBoxCopyOutStream;
 
 // Opaque credential handle. Wraps a core `Arc<dyn Credential>` so the
 // concrete credential kind (today only `ApiKeyCredential`) is hidden
@@ -611,6 +640,81 @@ enum BoxliteErrorCode boxlite_copy_out(CBoxHandle *handle,
                                        CBoxCopyCb cb,
                                        void *user_data,
                                        CBoxliteError *out_error);
+
+// Begin downloading `guest_src` as a pull-based raw archive stream.
+//
+// This call blocks until the stream and its optional source-shape hint are
+// ready. On success the returned handle must be released with
+// [`boxlite_copy_out_free`]. A non-null `out_source_kind` is initialized to
+// `BoxliteCopySourceKindUnknown` and updated to the `...File` or `...Dir`
+// variant when the peer supplies the hint.
+struct CBoxCopyOutStream *boxlite_copy_out_start(CBoxHandle *handle,
+                                                 const char *guest_src,
+                                                 int32_t *out_source_kind,
+                                                 CBoxliteError *out_error);
+
+// Read the next raw archive bytes from a copy-out stream.
+//
+// This call blocks while the upstream stream is pending. `Ok` with a
+// positive `out_read` returns data; `Ok` with zero length is sticky EOF. A
+// stream item error is terminal: its first read reports the stream error and
+// later reads return `InvalidState` without polling upstream again.
+enum BoxliteErrorCode boxlite_copy_out_read(struct CBoxCopyOutStream *stream,
+                                            uint8_t *buffer,
+                                            size_t capacity,
+                                            size_t *out_read,
+                                            CBoxliteError *out_error);
+
+// Reclaim a copy-out stream handle. A null handle is a no-op.
+//
+// The caller must not invoke [`boxlite_copy_out_read`] concurrently or race
+// a read with this function.
+void boxlite_copy_out_free(struct CBoxCopyOutStream *stream);
+
+// Begin a streaming copy-in, returning an opaque transfer handle.
+//
+// `source_kind` describes the archive shape: `BoxliteCopySourceKind`'s
+// discriminant (`...Unknown`=0, `...File`=1, `...Dir`=2), or 0 when the
+// caller cannot tell (older clients) — the guest then peeks the archive to
+// decide.
+// Taken as an integer because C callers can pass any value, and
+// out-of-range discriminants must behave as Unknown rather than as an
+// invalid Rust enum.
+struct CBoxCopyInStream *boxlite_copy_in_start(CBoxHandle *handle,
+                                               const char *guest_dst,
+                                               int32_t source_kind,
+                                               CBoxCopyCb copy_cb,
+                                               void *user_data,
+                                               CBoxliteError *out_error);
+
+// Push a chunk of archive bytes into the guest. Blocks when the guest is
+// slow (bounded-channel backpressure).
+enum BoxliteErrorCode boxlite_copy_in_write(struct CBoxCopyInStream *stream,
+                                            const uint8_t *data,
+                                            size_t len,
+                                            CBoxliteError *out_error);
+
+// Close the copy-in stream, signalling EOF to the guest. Idempotent.
+enum BoxliteErrorCode boxlite_copy_in_close(struct CBoxCopyInStream *stream,
+                                            CBoxliteError *out_error);
+
+// Abort the copy-in stream: deliver a terminal error to the guest and then
+// close the channel. Unlike [`boxlite_copy_in_close`], the guest sees a
+// failed stream — a truncated upload can never pass as a clean EOF. Call
+// this when the source read failed mid-transfer. This is a one-shot
+// transition: after the first call (abort or close), later abort calls return
+// `InvalidState`.
+enum BoxliteErrorCode boxlite_copy_in_abort(struct CBoxCopyInStream *stream,
+                                            CBoxliteError *out_error);
+
+// Reclaim a copy-in stream handle.
+//
+// Freeing a stream that was never closed or aborted still drops the
+// channel, so it signals EOF exactly as boxlite_copy_in_close would — the
+// guest commits whatever it received. Call boxlite_copy_in_abort first
+// whenever the transfer did not complete; see CBoxCopyInStream for the
+// full sequence.
+void boxlite_copy_in_free(struct CBoxCopyInStream *stream);
 
 void boxlite_error_free(CBoxliteError *error);
 

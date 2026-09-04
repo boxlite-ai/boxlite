@@ -1,7 +1,9 @@
 //! Runtime backend trait — internal abstraction for local vs REST execution.
 
+use std::any::Any;
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -68,7 +70,12 @@ pub(crate) trait RuntimeBackend: Send + Sync {
 /// Local backend is implemented directly by `BoxImpl`.
 /// REST backend delegates to HTTP API calls.
 #[async_trait]
-pub(crate) trait BoxBackend: Send + Sync {
+pub(crate) trait BoxBackend: Send + Sync + Any {
+    /// Owned downcast helper (`Arc` upcast), so callers can move the local
+    /// backend out of the trait object without borrowing `&self` across an
+    /// `await`.
+    fn as_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
+
     fn id(&self) -> &BoxID;
 
     fn name(&self) -> Option<&str>;

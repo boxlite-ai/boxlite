@@ -2,7 +2,11 @@
 //!
 //! Provides tar-based upload/download to the guest container rootfs.
 
-use boxlite_shared::{BoxliteError, BoxliteResult, DownloadRequest, FilesClient, UploadChunk};
+use crate::litebox::CopySourceKind;
+use boxlite_shared::{
+    BoxByteStream, BoxliteError, BoxliteResult, DownloadRequest, FilesClient, UploadChunk,
+};
+use futures::StreamExt;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tonic::transport::Channel;
@@ -54,6 +58,7 @@ impl FilesInterface {
                         data: buf[..n].to_vec(),
                         mkdir_parents,
                         overwrite,
+                        source_is_dir: None,
                     };
                     first = false;
                     chunks.push(chunk);
@@ -131,6 +136,139 @@ impl FilesInterface {
             .map_err(|e| BoxliteError::Storage(format!("Failed to flush tar file: {}", e)))?;
 
         Ok(())
+    }
+
+    /// Upload a byte stream to the guest and extract at `dest_path`.
+    ///
+    /// `source` is the archive shape (dir tree vs single file);
+    /// [`CopySourceKind::Unknown`] when the caller cannot tell — the guest then
+    /// peeks the archive to decide extraction mode. It is attached to the first
+    /// chunk only.
+    pub async fn upload_stream<S>(
+        &mut self,
+        stream: S,
+        dest_path: &str,
+        container_id: Option<&str>,
+        mkdir_parents: bool,
+        overwrite: bool,
+        source: CopySourceKind,
+    ) -> BoxliteResult<()>
+    where
+        S: futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static,
+    {
+        let dest = dest_path.to_string();
+        let cid = container_id.unwrap_or_default().to_string();
+
+        // tonic client-streaming yields the message directly (no per-item
+        // `Result`); a mid-stream error is signalled by ending the stream, and
+        // the guest reports the failure in `UploadResponse`. The generator
+        // parks the first source-stream error in a shared slot: the guest may
+        // still report success on the truncated archive it received, and the
+        // caller must not see that as a successful copy.
+        let stream_err: std::sync::Arc<tokio::sync::Mutex<Option<std::io::Error>>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(None));
+        let stream_err_slot = stream_err.clone();
+        let source_is_dir = source.to_wire();
+        let chunks = async_stream::stream! {
+            futures::pin_mut!(stream);
+            let mut first = true;
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(data) => {
+                        yield UploadChunk {
+                            dest_path: if first { dest.clone() } else { String::new() },
+                            container_id: cid.clone(),
+                            data,
+                            mkdir_parents,
+                            overwrite,
+                            source_is_dir: if first { source_is_dir } else { None },
+                        };
+                        first = false;
+                    }
+                    Err(e) => {
+                        *stream_err_slot.lock().await = Some(e);
+                        break;
+                    }
+                }
+            }
+        };
+
+        let response = self
+            .client
+            .upload(chunks)
+            .await
+            .map_err(map_tonic_err)?
+            .into_inner();
+
+        // Prefer the source-stream failure over the guest's verdict: a pack or
+        // read failure (or an explicit abort) must never surface as a
+        // successful copy of a truncated archive.
+        if let Some(e) = stream_err.lock().await.take() {
+            return Err(BoxliteError::Internal(format!(
+                "source stream failed during upload: {e}"
+            )));
+        }
+
+        if response.success {
+            Ok(())
+        } else {
+            Err(BoxliteError::Internal(
+                response.error.unwrap_or_else(|| "Upload failed".into()),
+            ))
+        }
+    }
+
+    /// Download a path from the guest as a byte stream.
+    ///
+    /// Returns the stream plus the source shape read from the guest's first
+    /// chunk. [`CopySourceKind::Unknown`] means the guest predates the hint
+    /// (older peer).
+    pub async fn download_stream(
+        &mut self,
+        container_src: &str,
+        container_id: Option<&str>,
+        include_parent: bool,
+        follow_symlinks: bool,
+    ) -> BoxliteResult<(BoxByteStream, CopySourceKind)> {
+        let request = DownloadRequest {
+            src_path: container_src.to_string(),
+            container_id: container_id.unwrap_or_default().to_string(),
+            include_parent,
+            follow_symlinks,
+        };
+
+        let mut stream = self
+            .client
+            .download(request)
+            .await
+            .map_err(map_tonic_err)?
+            .into_inner();
+
+        let first = stream.message().await.map_err(map_tonic_err)?;
+        let source = CopySourceKind::from_wire(first.as_ref().and_then(|c| c.source_is_dir));
+        let mut first_data = first.map(|c| c.data);
+
+        let out = async_stream::stream! {
+            if let Some(data) = first_data.take().filter(|d| !d.is_empty()) {
+                yield Ok(data);
+            }
+            loop {
+                match stream.message().await {
+                    Ok(Some(chunk)) => {
+                        if !chunk.data.is_empty() {
+                            yield Ok(chunk.data);
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        yield Err(std::io::Error::other(e));
+                        break;
+                    }
+                }
+            }
+        };
+
+        Ok((Box::pin(out), source))
     }
 }
 

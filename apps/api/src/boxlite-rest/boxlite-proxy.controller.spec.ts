@@ -70,6 +70,43 @@ describe('BoxliteProxyController', () => {
     expect(execOptions.proxyTimeout).toBe(300000)
   })
 
+  // This hook is the only hop carrying the archive-shape hint through the
+  // hosted API. If it stops forwarding, every hosted copy_out silently
+  // degrades to Unknown and the client re-peeks the archive instead of
+  // trusting the guest — a correctness loss with no error to notice.
+  it('forwards the archive-shape hint from the runner response', async () => {
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller } = makeHarness()
+
+    await controller.proxyFiles(activeAuth as never, 'public-box', { url: '/files' } as never, {} as never, jest.fn())
+
+    const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
+    const proxyRes = proxyOptions.on?.proxyRes as (p: unknown, q: unknown, r: unknown) => void
+    const res = { setHeader: jest.fn() }
+
+    proxyRes({ headers: { 'x-boxlite-source-is-dir': 'true' } }, {}, res)
+
+    expect(res.setHeader).toHaveBeenCalledWith('x-boxlite-source-is-dir', 'true')
+  })
+
+  // A runner that predates the hint sends no header. Forwarding a fabricated
+  // one would tell the client "single file" for a directory stream, so absence
+  // must stay absence rather than become a default.
+  it('sets no shape header when the runner sends none', async () => {
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller } = makeHarness()
+
+    await controller.proxyFiles(activeAuth as never, 'public-box', { url: '/files' } as never, {} as never, jest.fn())
+
+    const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
+    const proxyRes = proxyOptions.on?.proxyRes as (p: unknown, q: unknown, r: unknown) => void
+    const res = { setHeader: jest.fn() }
+
+    proxyRes({ headers: {} }, {}, res)
+
+    expect(res.setHeader).not.toHaveBeenCalled()
+  })
+
   it('returns the public endpoint for JSON tunnel requests', async () => {
     const { controller, boxService } = makeHarness()
 
