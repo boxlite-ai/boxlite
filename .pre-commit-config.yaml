@@ -19,6 +19,7 @@ repos:
             .*\.py|
             .*\.ts|
             .*\.js|
+            .*\.mjs|
             .*\.c|
             .*\.h|
             .*\.go|
@@ -26,6 +27,7 @@ repos:
             Cargo\.lock|
             sdks/python/pyproject\.toml|
             sdks/node/package\.json|
+            sdks/node/package-lock\.json|
             make/quality\.mk|
             \.pre-commit-config\.yaml
           )$
