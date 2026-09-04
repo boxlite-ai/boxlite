@@ -6,8 +6,8 @@
 
 use std::path::PathBuf;
 
-use super::blob_source::BlobSource;
-use super::manager::ImageManifest;
+use super::blob_source::{BlobSource, LocalBundleBlobSource};
+use super::manager::{ImageManifest, LayerInfo};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 // ============================================================================
@@ -40,6 +40,48 @@ pub struct ImageObject {
 impl ImageObject {
     /// Create new ImageObject (internal use only)
     pub(super) fn new(reference: String, manifest: ImageManifest, blob_source: BlobSource) -> Self {
+        Self {
+            reference,
+            manifest,
+            blob_source,
+        }
+    }
+
+    /// Build a metadata-only `ImageObject` for the REST backend.
+    ///
+    /// REST callers never touch blob bytes locally — the runner owns the
+    /// blob cache — but they still need to surface `reference()`,
+    /// `config_digest()`, and `layer_count()` through the same handle
+    /// that the local backend returns. This constructor packs only
+    /// those three fields and parks a sentinel `BlobSource`
+    /// (`LocalBundle` with empty paths) in the unused slot so any
+    /// accidental blob access fails fast with a clear path mismatch
+    /// rather than silently reading garbage.
+    ///
+    /// Layer digests are not transmitted over REST today, so we
+    /// synthesize empty `LayerInfo` placeholders sized to `layer_count`
+    /// — enough to make `layer_count()` honest without claiming we
+    /// know the digests.
+    pub(crate) fn new_remote_metadata(
+        reference: String,
+        config_digest: String,
+        layer_count: usize,
+    ) -> Self {
+        let layers = (0..layer_count)
+            .map(|_| LayerInfo {
+                digest: String::new(),
+                media_type: String::new(),
+                size: -1,
+            })
+            .collect();
+        let manifest = ImageManifest {
+            manifest_digest: String::new(),
+            layers,
+            config_digest,
+            diff_ids: Vec::new(),
+        };
+        let blob_source =
+            BlobSource::LocalBundle(LocalBundleBlobSource::new(PathBuf::new(), PathBuf::new()));
         Self {
             reference,
             manifest,

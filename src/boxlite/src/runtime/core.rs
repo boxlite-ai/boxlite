@@ -135,9 +135,12 @@ impl BoxliteRuntime {
         let rest_runtime = Arc::new(RestRuntime::new(&config)?);
         let auth_backend = Arc::clone(&rest_runtime) as Arc<dyn crate::runtime::auth::AuthBackend>;
         let volume_backend = Arc::clone(&rest_runtime) as Arc<dyn VolumeBackend>;
+        let image_backend = Arc::new(crate::rest::images::RestImageBackend::new(
+            rest_runtime.client_clone(),
+        )) as Arc<dyn ImageBackend>;
         Ok(Self {
             backend: rest_runtime,
-            image_backend: None, // REST runtime doesn't support image operations
+            image_backend: Some(image_backend),
             volume_backend: Some(volume_backend),
             auth_backend: Some(auth_backend),
         })
@@ -411,14 +414,22 @@ impl BoxliteRuntime {
 
     /// Get a handle for image operations (pull, list).
     ///
-    /// Returns an `ImageHandle` that provides methods for pulling and listing images.
-    /// This abstraction separates image management from runtime management,
-    /// following the same pattern as `LiteBox` for box operations.
+    /// Returns an `ImageHandle` that provides methods for pulling and
+    /// listing images. This abstraction separates image management
+    /// from runtime management, following the same pattern as
+    /// `LiteBox` for box operations.
+    ///
+    /// Available on both local and REST runtimes. On REST, `pull`
+    /// round-trips to the API server via `POST /v1/{prefix}/images/pull`
+    /// and returns metadata-only (`reference` / `config_digest` /
+    /// `layer_count`) since blobs live on the runner; `list` is not
+    /// yet exposed over REST.
     ///
     /// # Errors
     ///
-    /// Returns `BoxliteError::Unsupported` if called on a REST runtime,
-    /// as image operations are only supported for local runtimes.
+    /// Returns `BoxliteError::Unsupported` only for runtimes built
+    /// without an `image_backend` wired in (today this only happens
+    /// in tests / partial builds).
     ///
     /// # Example
     ///
@@ -443,7 +454,7 @@ impl BoxliteRuntime {
         match &self.image_backend {
             Some(manager) => Ok(crate::runtime::ImageHandle::new(Arc::clone(manager))),
             None => Err(BoxliteError::Unsupported(
-                "Image operations not supported over REST API".to_string(),
+                "Image operations require a runtime with an image_backend wired in".to_string(),
             )),
         }
     }

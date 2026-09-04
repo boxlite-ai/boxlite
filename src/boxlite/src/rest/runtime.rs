@@ -30,6 +30,14 @@ impl RestRuntime {
         let client = ApiClient::new(config)?;
         Ok(Self { client })
     }
+
+    /// Hand a clone of the underlying `ApiClient` to peers that need
+    /// their own copy (e.g., `RestImageBackend`). `ApiClient` already
+    /// holds an `Arc<reqwest::Client>` internally, so cloning is cheap
+    /// and shares the connection pool — no second TCP fan-out.
+    pub(crate) fn client_clone(&self) -> ApiClient {
+        self.client.clone()
+    }
 }
 
 #[async_trait::async_trait]

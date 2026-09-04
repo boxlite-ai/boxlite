@@ -12,6 +12,7 @@ import { OrganizationModule } from '../organization/organization.module'
 import { BoxliteMeController } from './boxlite-me.controller'
 import { BoxliteConfigController } from './boxlite-config.controller'
 import { BoxliteBoxController } from './boxlite-box.controller'
+import { BoxliteImagesController } from './boxlite-images.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxAutoResumeService } from './box-auto-resume.service'
@@ -24,6 +25,7 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
     BoxliteMeController,
     BoxliteConfigController,
     BoxliteBoxController,
+    BoxliteImagesController,
     BoxliteProxyController,
     BoxliteVolumeController,
   ],

@@ -160,6 +160,12 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		boxliteApi.Handle(http.MethodConnect, "/:boxId/network/tunnel", controllers.BoxliteNetworkTunnel(boxControllerLogger))
 	}
 
+	// BoxLite REST API — runtime-scoped image operations.
+	boxliteImages := protected.Group("/v1/images")
+	{
+		boxliteImages.POST("/pull", controllers.BoxliteImagePull)
+	}
+
 	a.httpServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", a.apiPort),
 		Handler: a.router,

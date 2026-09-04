@@ -18,6 +18,7 @@ import (
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
+	"github.com/containerd/errdefs"
 	"go.opentelemetry.io/otel/propagation"
 )
 
@@ -506,6 +507,54 @@ func (c *Client) CopyOut(ctx context.Context, boxId string, guestSrc, hostDst st
 		return err
 	}
 	return bx.CopyOut(ctx, guestSrc, hostDst)
+}
+
+// PullImage pulls an OCI image into the runtime's cache and returns
+// metadata about the cached result (reference / config digest /
+// layer count) so REST callers can construct an image handle without
+// a second round-trip.
+func (c *Client) PullImage(ctx context.Context, imageName string) (*boxlite.ImagePullResult, error) {
+	c.logger.Info("pulling image", "image", imageName)
+	images, err := c.runtime.Images()
+	if err != nil {
+		return nil, err
+	}
+	defer images.Close()
+	return images.Pull(ctx, imageName)
+}
+
+// RemoveImage removes a cached image.
+func (c *Client) RemoveImage(ctx context.Context, imageName string, force bool) error {
+	c.logger.Warn("remove image not yet implemented in BoxLite", "image", imageName)
+	return errdefs.ErrNotImplemented.WithMessage("image removal is not supported by the BoxLite Go SDK")
+}
+
+// ImageExists checks if an image is cached locally.
+func (c *Client) ImageExists(ctx context.Context, imageName string) (bool, error) {
+	images, err := c.ListImages(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, img := range images {
+		if img.Reference == imageName || img.Repository+":"+img.Tag == imageName {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// GetImageInfo returns metadata about a cached image.
+func (c *Client) GetImageInfoFromCache(ctx context.Context, imageName string) (*boxlite.ImageInfo, error) {
+	images, err := c.ListImages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, img := range images {
+		if img.Reference == imageName || img.Repository+":"+img.Tag == imageName {
+			return &img, nil
+		}
+	}
+	return nil, fmt.Errorf("image not found: %s", imageName)
 }
 
 // ListImages returns all locally cached images.
