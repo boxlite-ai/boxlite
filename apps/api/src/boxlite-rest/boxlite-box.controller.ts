@@ -34,6 +34,7 @@ import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
 import { CreateBoxDto } from './dto/create-box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.mapper'
+import { resolveAllowNetHostnames } from './mappers/resolve-allow-net'
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
@@ -114,6 +115,14 @@ export class BoxliteBoxController {
     @Body() dto: CreateBoxDto,
   ): Promise<BoxResponseDto> {
     const organization = authContext.organization
+
+    // Resolve hostname allow_net entries to /32 CIDRs before mapping, so egress
+    // is bound to concrete IPs rather than a guest-supplied SNI/Host (audit
+    // finding #1, REST-side layer).
+    if (dto.network?.mode === 'enabled' && dto.network.allow_net?.length) {
+      dto.network = { ...dto.network, allow_net: await resolveAllowNetHostnames(dto.network.allow_net) }
+    }
+
     const createBoxDto = createBoxToCreateBox(dto)
     const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
 
