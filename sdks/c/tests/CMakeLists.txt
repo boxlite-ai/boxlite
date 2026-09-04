@@ -64,10 +64,21 @@ endforeach()
 # Enable testing
 enable_testing()
 
-# Register tests
+# Register tests. test_simple_api is special-cased below (needs an isolated home).
 foreach(TARGET ${TEST_TARGETS})
-    add_test(NAME ${TARGET} COMMAND ${TARGET})
+    if(NOT "${TARGET}" STREQUAL "test_simple_api")
+        add_test(NAME ${TARGET} COMMAND ${TARGET})
+    endif()
 endforeach()
+
+# test_simple_api creates a box via the Simple API, which has no home parameter
+# — it always uses BoxOptions::default() (home = ~/.boxlite). A shared,
+# cross-version ~/.boxlite can hold a forward-incompatible DB, failing create
+# with "Schema version mismatch". Run it under a fresh per-invocation
+# BOXLITE_HOME (mktemp) and remove it after, so the test is hermetic regardless
+# of what other boxlite versions left on the machine.
+add_test(NAME test_simple_api COMMAND sh -c
+    "d=$(mktemp -d /tmp/boxlite-c-simple.XXXXXX) && export BOXLITE_HOME=\"$d\" && trap 'rm -rf \"$d\"' EXIT && \"$<TARGET_FILE:test_simple_api>\"")
 
 # Label integration tests (require VM)
 set_tests_properties(test_simple_api PROPERTIES LABELS "integration")
