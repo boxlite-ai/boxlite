@@ -22,7 +22,6 @@ import { BoxWarmPoolService } from './services/box-warm-pool.service'
 import { WarmPool } from './entities/warm-pool.entity'
 import { PreviewController } from './controllers/preview.controller'
 import { VolumeController } from './controllers/volume.controller'
-import { VolumeFilesController } from './controllers/volume-files.controller'
 import { VolumeService } from './services/volume.service'
 import { VolumeFilesService } from './services/volume-files.service'
 import { VolumeManager } from './managers/volume.manager'
@@ -61,14 +60,7 @@ import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.s
     RegionModule,
     TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, Region, Job, BoxLastActivity, BoxMigration]),
   ],
-  controllers: [
-    BoxController,
-    RunnerController,
-    PreviewController,
-    VolumeController,
-    VolumeFilesController,
-    JobController,
-  ],
+  controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
   providers: [
     BoxService,
     BoxManager,
@@ -112,6 +104,7 @@ import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.s
     RunnerService,
     RedisLockProvider,
     VolumeService,
+    VolumeFilesService,
     VolumeManager,
     BoxRepository,
     RunnerAdapterFactory,

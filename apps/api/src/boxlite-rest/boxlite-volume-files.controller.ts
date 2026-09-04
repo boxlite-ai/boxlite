@@ -5,15 +5,13 @@
  */
 
 import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common'
-import { ApiBearerAuth, ApiHeader, ApiOAuth2, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger'
-import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
-import { CustomHeaders } from '../../common/constants/header.constants'
-import { RequiredOrganizationResourcePermissions } from '../../organization/decorators/required-organization-resource-permissions.decorator'
-import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
-import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
-import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
-import { VolumeAccessGuard } from '../guards/volume-access.guard'
-import { VolumeFilesService } from '../services/volume-files.service'
+import { ApiExcludeController } from '@nestjs/swagger'
+import { CombinedAuthGuard } from '../auth/combined-auth.guard'
+import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
+import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
+import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
+import { VolumeAccessGuard } from '../box/guards/volume-access.guard'
+import { VolumeFilesService } from '../box/services/volume-files.service'
 import {
   BatchDeleteVolumeFilesDto,
   BatchDeleteVolumeFilesResponseDto,
@@ -22,22 +20,24 @@ import {
   PresignBatchWriteVolumeFilesResponseDto,
   PresignedUrlResponseDto,
   VolumeFileStatDto,
-} from '../dto/volume-file.dto'
+} from '../box/dto/volume-file.dto'
 
-@ApiTags('volumes')
-@Controller('volumes/:volumeId/files')
-@ApiHeader(CustomHeaders.ORGANIZATION_ID)
-@UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard, AuthenticatedRateLimitGuard, VolumeAccessGuard)
-@ApiOAuth2(['openid', 'profile', 'email'])
-@ApiBearerAuth()
-@ApiParam({ name: 'volumeId', description: 'ID of the volume', type: 'string' })
-export class VolumeFilesController {
+/**
+ * File-level operations on a Volume's contents, without attaching it to a
+ * box (POL-216). Lives in the Box API dialect, not `box/controllers` -
+ * `/files` operations are single-owner Box-contract territory (see the CI
+ * "Contract boundary guard"), same reasoning that already put box exec/files
+ * behind `boxlite-proxy.controller.ts` rather than the cloud `box.module.ts`.
+ */
+@Controller(['v1/volumes/:volumeId/files', 'v1/:prefix/volumes/:volumeId/files'])
+@ApiExcludeController()
+@UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
+export class BoxliteVolumeFilesController {
   constructor(private readonly volumeFilesService: VolumeFilesService) {}
 
   @Get()
-  @ApiOperation({ summary: 'List files under a path in a volume', operationId: 'listVolumeFiles' })
-  @ApiResponse({ status: 200, type: ListVolumeFilesResponseDto })
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.READ_VOLUMES])
+  @UseGuards(VolumeAccessGuard)
   async listFiles(
     @Param('volumeId') volumeId: string,
     @Query('path') path = '',
@@ -47,20 +47,15 @@ export class VolumeFilesController {
   }
 
   @Get('stat')
-  @ApiOperation({ summary: 'Get metadata for a single file in a volume', operationId: 'statVolumeFile' })
-  @ApiResponse({ status: 200, type: VolumeFileStatDto })
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.READ_VOLUMES])
+  @UseGuards(VolumeAccessGuard)
   async statFile(@Param('volumeId') volumeId: string, @Query('path') path: string): Promise<VolumeFileStatDto> {
     return this.volumeFilesService.statFile(volumeId, path)
   }
 
   @Get('presign-read')
-  @ApiOperation({
-    summary: 'Get a short-lived URL to read a file directly from object storage',
-    operationId: 'presignReadVolumeFile',
-  })
-  @ApiResponse({ status: 200, type: PresignedUrlResponseDto })
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.READ_VOLUMES])
+  @UseGuards(VolumeAccessGuard)
   async presignRead(
     @Param('volumeId') volumeId: string,
     @Query('path') path: string,
@@ -69,12 +64,8 @@ export class VolumeFilesController {
   }
 
   @Post('presign-write')
-  @ApiOperation({
-    summary: 'Get a short-lived URL to write a file directly to object storage',
-    operationId: 'presignWriteVolumeFile',
-  })
-  @ApiResponse({ status: 200, type: PresignedUrlResponseDto })
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_VOLUMES])
+  @UseGuards(VolumeAccessGuard)
   async presignWrite(
     @Param('volumeId') volumeId: string,
     @Query('path') path: string,
@@ -84,17 +75,15 @@ export class VolumeFilesController {
 
   @Delete('content')
   @HttpCode(204)
-  @ApiOperation({ summary: 'Delete a single file from a volume', operationId: 'deleteVolumeFile' })
-  @ApiResponse({ status: 204, description: 'File deleted' })
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_VOLUMES])
+  @UseGuards(VolumeAccessGuard)
   async deleteFile(@Param('volumeId') volumeId: string, @Query('path') path: string): Promise<void> {
     await this.volumeFilesService.deleteFile(volumeId, path)
   }
 
   @Post('batch-delete')
-  @ApiOperation({ summary: 'Delete a batch of files from a volume', operationId: 'batchDeleteVolumeFiles' })
-  @ApiResponse({ status: 200, type: BatchDeleteVolumeFilesResponseDto })
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_VOLUMES])
+  @UseGuards(VolumeAccessGuard)
   async batchDelete(
     @Param('volumeId') volumeId: string,
     @Body() dto: BatchDeleteVolumeFilesDto,
@@ -103,12 +92,8 @@ export class VolumeFilesController {
   }
 
   @Post('presign-batch-write')
-  @ApiOperation({
-    summary: 'Get short-lived URLs to write a batch of files directly to object storage',
-    operationId: 'presignBatchWriteVolumeFiles',
-  })
-  @ApiResponse({ status: 200, type: PresignBatchWriteVolumeFilesResponseDto })
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_VOLUMES])
+  @UseGuards(VolumeAccessGuard)
   async presignBatchWrite(
     @Param('volumeId') volumeId: string,
     @Body() dto: PresignBatchWriteVolumeFilesDto,
