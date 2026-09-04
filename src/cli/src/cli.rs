@@ -579,6 +579,9 @@ pub enum Commands {
     /// Remove one or more boxes
     Rm(crate::commands::rm::RmArgs),
 
+    /// Reclaim orphaned cache: boxes/<id>/, bases/*.qcow2, images/disk-images/*.ext4
+    Gc(crate::commands::gc::GcArgs),
+
     /// Start one or more stopped boxes
     Start(crate::commands::start::StartArgs),
 

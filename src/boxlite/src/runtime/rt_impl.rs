@@ -1840,6 +1840,13 @@ impl super::backend::RuntimeBackend for LocalRuntime {
     fn shutdown_sync(&self) {
         self.0.shutdown_sync();
     }
+
+    fn collect_garbage(
+        &self,
+        opts: &crate::runtime::gc::GcOptions,
+    ) -> BoxliteResult<crate::runtime::gc::GcReport> {
+        self.0.collect_garbage(opts)
+    }
 }
 
 // Image operations (separate from RuntimeBackend)

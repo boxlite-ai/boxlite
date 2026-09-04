@@ -405,6 +405,17 @@ impl BoxliteRuntime {
         self.backend.shutdown(timeout).await
     }
 
+    /// Reclaim orphan box dirs, orphan bases, and orphan image disk-images
+    /// from the on-disk cache. Local backend only — REST runtimes return
+    /// [`BoxliteError::Unsupported`]. See [`crate::runtime::gc`] for sweep
+    /// semantics and the safety posture.
+    pub fn collect_garbage(
+        &self,
+        opts: &crate::runtime::gc::GcOptions,
+    ) -> BoxliteResult<crate::runtime::gc::GcReport> {
+        self.backend.collect_garbage(opts)
+    }
+
     // ========================================================================
     // IMAGE OPERATIONS (via ImageHandle)
     // ========================================================================
