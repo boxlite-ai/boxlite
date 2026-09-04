@@ -30,6 +30,27 @@ func isWebSocketUpgrade(req *http.Request) bool {
 	return strings.EqualFold(upgrade, "websocket")
 }
 
+// rejectWebSocketUpgrade wraps the MITM reverse-proxy handler. When the host has
+// secrets configured (guard=true), it refuses WebSocket upgrades fail-closed:
+// frame bodies are relayed verbatim by httputil.ReverseProxy and are never
+// scanned for secret placeholders, so allowing the upgrade could leak a
+// `<BOXLITE_SECRET:...>` placeholder upstream. When guard=false the request is
+// passed through unchanged.
+func rejectWebSocketUpgrade(next http.Handler, hostname string, guard bool) http.Handler {
+	if !guard {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if isWebSocketUpgrade(req) {
+			logrus.WithField("hostname", hostname).
+				Warn("MITM: refusing WebSocket upgrade for secret-bearing host (frame bodies are not scrubbed)")
+			http.Error(w, "websocket upgrade not permitted for secret-injected host", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, req)
+	})
+}
+
 // handleWebSocketUpgrade handles a WebSocket upgrade through the MITM proxy.
 // Optional upstreamTLSConfig overrides upstream TLS (nil = derive from hostname).
 //

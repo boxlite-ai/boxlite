@@ -62,6 +62,15 @@ func mitmAndForward(guestConn net.Conn, hostname string, destAddr string, ca *Bo
 		},
 	}
 
+	// mitmAndForward is only entered for hosts that have secrets configured, so
+	// fail closed on WebSocket upgrades: httputil.ReverseProxy relays Upgrade
+	// connections by copying frames verbatim, and secret substitution only runs
+	// on the HTTP request headers/body — a `<BOXLITE_SECRET:...>` placeholder
+	// inside a WebSocket message frame would be forwarded upstream unsubstituted.
+	// Reliable in-frame substitution is impractical (frames may be fragmented
+	// arbitrarily), so reject the upgrade rather than leak the placeholder.
+	handler := rejectWebSocketUpgrade(proxy, hostname, len(secrets) > 0)
+
 	if err := tlsGuest.Handshake(); err != nil {
 		logrus.WithError(err).WithField("hostname", hostname).Debug("MITM: TLS handshake failed")
 		guestConn.Close()
@@ -70,13 +79,13 @@ func mitmAndForward(guestConn net.Conn, hostname string, destAddr string, ca *Bo
 
 	if tlsGuest.ConnectionState().NegotiatedProtocol == "h2" {
 		h2srv := &http2.Server{}
-		h2srv.ServeConn(tlsGuest, &http2.ServeConnOpts{Handler: proxy})
+		h2srv.ServeConn(tlsGuest, &http2.ServeConnOpts{Handler: handler})
 	} else {
 		// HTTP/1.1: use http.Server with a proper shutdown mechanism.
 		// After the single connection closes, shut down the server to avoid
 		// leaking a goroutine blocked in Accept().
 		listener := newSingleConnListener(tlsGuest)
-		srv := &http.Server{Handler: proxy}
+		srv := &http.Server{Handler: handler}
 		srv.Serve(listener) //nolint:errcheck
 		// Serve returns when the connection closes — shut down to release resources
 		srv.Close()

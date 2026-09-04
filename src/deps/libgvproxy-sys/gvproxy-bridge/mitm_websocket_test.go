@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
@@ -244,5 +245,83 @@ func TestHandleWebSocketUpgrade_BidirectionalRelay(t *testing.T) {
 
 	if strings.TrimSpace(line) != "hello" {
 		t.Errorf("expected echo 'hello', got %q", strings.TrimSpace(line))
+	}
+}
+
+// TestMitmAndForward_RejectsWebSocketForSecretHost drives the production MITM
+// entry point (mitmAndForward, only reached for secret-bearing hosts) and asserts
+// a WebSocket upgrade is refused fail-closed (403) and never relayed upstream.
+// Without the guard, httputil.ReverseProxy relays the upgrade verbatim, so the
+// guest receives 101 and the upstream sees the request — a `<BOXLITE_SECRET:...>`
+// placeholder embedded in a later frame body would be forwarded unsubstituted.
+// This test references only mitmAndForward so it compiles (and fails) with the
+// production change fully reverted.
+func TestMitmAndForward_RejectsWebSocketForSecretHost(t *testing.T) {
+	const host = "api.openai.com"
+	ca := newTestCA(t)
+
+	// TLS upstream: records if it is ever reached, replies with a 101 so the
+	// reverted (vulnerable) path would surface a switching-protocols response.
+	upstreamCert, err := ca.GenerateHostCert(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamLn := tls.NewListener(rawLn, &tls.Config{Certificates: []tls.Certificate{*upstreamCert}})
+	defer upstreamLn.Close()
+
+	upstreamHit := make(chan struct{}, 1)
+	go func() {
+		conn, err := upstreamLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, err := http.ReadRequest(bufio.NewReader(conn)); err != nil {
+			return
+		}
+		select {
+		case upstreamHit <- struct{}{}:
+		default:
+		}
+		conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"))
+	}()
+
+	guestConn, proxySide := net.Pipe()
+	defer guestConn.Close()
+	secrets := []SecretConfig{{Name: "o", Hosts: []string{host}, Placeholder: "<BOXLITE_SECRET:o>", Value: "v"}}
+	go mitmAndForward(proxySide, host, upstreamLn.Addr().String(), ca, secrets, &tls.Config{InsecureSkipVerify: true})
+
+	pool := x509.NewCertPool()
+	pool.AddCert(ca.cert)
+	cli := tls.Client(guestConn, &tls.Config{RootCAs: pool, ServerName: host, NextProtos: []string{"http/1.1"}})
+	_ = guestConn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	req, err := http.NewRequest("GET", "https://"+host+"/ws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	if err := req.Write(cli); err != nil {
+		t.Fatalf("write upgrade request: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(cli), req)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("WebSocket upgrade to secret host: status = %d, want %d (fail-closed)", resp.StatusCode, http.StatusForbidden)
+	}
+	select {
+	case <-upstreamHit:
+		t.Error("upstream received the WebSocket upgrade — guard did not block it; frame-body placeholders could leak")
+	case <-time.After(300 * time.Millisecond):
+		// expected: the guard rejected before any upstream dial
 	}
 }
