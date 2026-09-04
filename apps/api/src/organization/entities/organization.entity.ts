@@ -37,14 +37,14 @@ export class Organization {
 
   @Column({
     type: 'int',
-    default: 8,
+    default: 32,
     name: 'max_memory_per_box',
   })
   maxMemoryPerBox: number
 
   @Column({
     type: 'int',
-    default: 10,
+    default: 120,
     name: 'max_disk_per_box',
   })
   maxDiskPerBox: number
