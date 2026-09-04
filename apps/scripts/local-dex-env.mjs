@@ -122,12 +122,40 @@ function ensureDexConfig(config) {
 
   fs.mkdirSync(targetDir, { recursive: true })
 
-  const configText = fs
-    .readFileSync(sourcePath, 'utf8')
-    .replaceAll('${DEX_ISSUER}', config.dexIssuer)
-    .replaceAll('${REDIRECT_URI}', config.dashboardUrl)
+  const configText = renderDexConfig(fs.readFileSync(sourcePath, 'utf8'), {
+    dexIssuer: config.dexIssuer,
+    dashboardUrl: config.dashboardUrl,
+  })
 
   fs.writeFileSync(targetPath, configText)
+}
+
+// renderDexConfig fills the committed Dex config template for LOCAL DEV / e2e.
+// The committed config no longer hard-codes `allowedOrigins: ['*']` or the static
+// admin password (so production is secure by default); dev re-injects both here
+// so the documented `admin@boxlite.dev` / `password` login keeps working.
+export function renderDexConfig(rawText, { dexIssuer, dashboardUrl }) {
+  // Local dev CORS origins (dashboard, Vite, CLI loopback callback) — never '*'.
+  const localAllowedOrigins = "['http://localhost:3000','http://localhost:5173','http://127.0.0.1:5555']"
+
+  const staticPasswordBlock = [
+    '',
+    'enablePasswordDB: true',
+    'staticPasswords:',
+    "  - email: 'admin@boxlite.dev'",
+    '    # password: password',
+    "    hash: '$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W'",
+    "    username: 'admin'",
+    "    userID: '1234'",
+    '',
+  ].join('\n')
+
+  return (
+    rawText
+      .replaceAll('${DEX_ISSUER}', dexIssuer)
+      .replaceAll('${REDIRECT_URI}', dashboardUrl)
+      .replaceAll('${DEX_ALLOWED_ORIGINS}', localAllowedOrigins) + staticPasswordBlock
+  )
 }
 
 function ensurePostgres(config) {

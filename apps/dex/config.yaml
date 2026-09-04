@@ -9,7 +9,10 @@ storage:
 
 web:
   http: 0.0.0.0:5556
-  allowedOrigins: ['*']
+  # CORS origins allowed to call Dex endpoints. Rendered from DEX_ALLOWED_ORIGINS
+  # (entrypoint.sh / local-dex-env.mjs). Never ship '*' — that lets any site call
+  # the identity provider's auth/token endpoints. Default is the local dev origins.
+  allowedOrigins: ${DEX_ALLOWED_ORIGINS}
   allowedHeaders: ['x-requested-with']
 
 staticClients:
@@ -35,11 +38,11 @@ staticClients:
 oauth2:
   deviceFlow: {}
 
-enablePasswordDB: true
-
-staticPasswords:
-  - email: 'admin@boxlite.dev'
-    # password: password
-    hash: '$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W'
-    username: 'admin'
-    userID: '1234'
+# enablePasswordDB / staticPasswords are intentionally NOT hard-coded here.
+# Shipping the static `admin@boxlite.dev` / `password` account in the committed
+# config means any deployment using this file as-is has a known admin login.
+# The static dev account is now injected only when explicitly enabled:
+#   - entrypoint.sh (container/prod): appends it ONLY if DEX_ENABLE_STATIC_PASSWORD=true,
+#     otherwise renders `enablePasswordDB: false` (secure default).
+#   - local-dex-env.mjs (local dev / e2e): always injects it, so the documented
+#     `admin@boxlite.dev` / `password` dev login keeps working.
