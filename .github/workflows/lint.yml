@@ -69,6 +69,7 @@ jobs:
             node:
               - 'sdks/node/**/*.ts'
               - 'sdks/node/package.json'
+              - 'sdks/node/package-lock.json'
               - 'sdks/node/tsconfig.json'
             c:
               - 'sdks/c/**/*.c'
@@ -197,10 +198,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: npm
+          cache-dependency-path: sdks/node/package-lock.json
 
       - name: Install dependencies
         working-directory: sdks/node
-        run: npm install
+        run: npm ci
 
       - name: Run Node lint
         run: make lint:node

@@ -280,10 +280,22 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: sdks/node/package-lock.json
 
+      # `npm ci` installs the committed tree verbatim. `npm install` would
+      # re-resolve per leg — npm picks manifests by `engines`, so Node 22 lands
+      # on vite 8 while Node 18 lands on vite 6, and npm 10.x's arborist
+      # crashes walking the Node 22 peer set. One committed tree removes both.
+      # The lockfile is resolved under Node 18, the floor of the SDK's
+      # supported range, which keeps vite on 6 — a tree all three legs run.
+      # Regenerating under Node 22 pins vite 8, whose rolldown dependency
+      # imports `styleText` from `node:util`, and the Node 18 leg then dies
+      # at vitest startup. vitest 4 itself excludes Node 18 in its `engines`,
+      # so that leg warns EBADENGINE either way; the suite passes there.
       - name: Install dependencies
         working-directory: sdks/node
-        run: npm install
+        run: npm ci
 
       - name: Run Node.js unit tests
         working-directory: sdks/node
