@@ -127,8 +127,10 @@ func (p *Proxy) AuthCallback(ctx *gin.Context) {
 
 	ctx.SetCookie(BOX_AUTH_COOKIE_NAME+boxId, encoded, 3600, "/", cookieDomain, p.config.EnableTLS, true)
 
-	// Redirect back to the original URL
-	ctx.Redirect(http.StatusFound, returnTo)
+	// Redirect back to the original URL. returnTo comes from the (unsigned)
+	// state parameter, so validate it against the proxy's own host to avoid an
+	// open redirect; safeRedirectTarget falls back to "/" when it isn't trusted.
+	ctx.Redirect(http.StatusFound, safeRedirectTarget(returnTo, ctx.Request.Host, p.cookieDomain))
 }
 
 func (p *Proxy) getAuthUrl(ctx *gin.Context, boxId string) (string, error) {
