@@ -698,6 +698,9 @@ describe('CreateBoxDialog trigger slot', () => {
     vi.restoreAllMocks()
   })
 
+  /**
+   * Renders CreateBoxDialog with an optional trigger control to verify the children slot.
+   */
   async function renderWithTrigger(children?: ReactNode) {
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -708,6 +711,9 @@ describe('CreateBoxDialog trigger slot', () => {
     await flush()
   }
 
+  /**
+   * Checks whether the dialog is currently open by looking for its title text.
+   */
   function dialogIsOpen() {
     return [...document.querySelectorAll('*')].some((el) => el.textContent === 'Create a box for your agent')
   }

@@ -50,10 +50,10 @@ vi.mock('@tanstack/react-query', () => ({
 }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
-// Matches links as well as buttons on purpose. The control this page used to
-// render for "+ Box" was an `<a target="_blank">`, so a button-only query would
-// report "no control" against that code and let a permission assertion pass for
-// the wrong reason.
+/**
+ * Finds a row action by its text label, matching both buttons and links.
+ * Searches both element types because the "+ Box" action was previously a link.
+ */
 function rowAction(label: string): HTMLElement | undefined {
   return Array.from(document.querySelectorAll<HTMLElement>('button, a')).find(
     (element) => element.textContent?.trim() === label,
