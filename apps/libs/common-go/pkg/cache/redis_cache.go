@@ -72,35 +72,73 @@ func (c *RedisCache[T]) Delete(ctx context.Context, key string) error {
 	return c.redis.Del(ctx, c.keyPrefix+key).Err()
 }
 
-func NewRedisCache[T any](config *RedisConfig, keyPrefix string) (*RedisCache[T], error) {
+// NetworkTunnelChecker checks whether a box has an active network-tunnel live
+// lease in Redis. The lease key is set by the API's openNetworkTunnel endpoint
+// and renewed by the CLI/SDK tunnel foreground loop; it expires automatically
+// when the holder stops renewing (TTL set server-side).
+type NetworkTunnelChecker struct {
+	redis *redis.Client
+}
+
+// NewNetworkTunnelChecker returns a checker backed by the given Redis config.
+// Returns nil, nil when config is nil (no Redis available), so callers can
+// handle the no-Redis case without branching on error.
+func NewNetworkTunnelChecker(config *RedisConfig) (*NetworkTunnelChecker, error) {
+	if config == nil {
+		return nil, nil
+	}
+	c, err := redisClient(config)
+	if err != nil {
+		return nil, err
+	}
+	return &NetworkTunnelChecker{redis: c}, nil
+}
+
+// IsLive reports whether boxId currently has an active tunnel lease.
+// A Redis error is treated as "not live" (fail-closed).
+func (c *NetworkTunnelChecker) IsLive(ctx context.Context, boxId string) bool {
+	if c == nil {
+		return false
+	}
+	n, err := c.redis.Exists(ctx, "box:network-tunnel-live:"+boxId).Result()
+	return err == nil && n > 0
+}
+
+func redisClient(config *RedisConfig) (*redis.Client, error) {
 	if config.Host == nil || config.Port == nil {
 		return nil, errors.New("host and port are required")
 	}
-
+	// Reuse the module-level singleton when one is already initialised.
+	if client != nil {
+		return client, nil
+	}
 	username := ""
 	if config.Username != nil {
 		username = *config.Username
 	}
-
 	password := ""
 	if config.Password != nil {
 		password = *config.Password
 	}
-
-	if client == nil {
-		options := &redis.Options{
-			Addr:     fmt.Sprintf("%s:%d", *config.Host, *config.Port),
-			Username: username,
-			Password: password,
-		}
-		if config.TLS != nil && *config.TLS {
-			options.TLSConfig = &tls.Config{}
-		}
-		client = redis.NewClient(options)
+	options := &redis.Options{
+		Addr:     fmt.Sprintf("%s:%d", *config.Host, *config.Port),
+		Username: username,
+		Password: password,
 	}
+	if config.TLS != nil && *config.TLS {
+		options.TLSConfig = &tls.Config{}
+	}
+	client = redis.NewClient(options)
+	return client, nil
+}
 
+func NewRedisCache[T any](config *RedisConfig, keyPrefix string) (*RedisCache[T], error) {
+	c, err := redisClient(config)
+	if err != nil {
+		return nil, err
+	}
 	return &RedisCache[T]{
-		redis:     client,
+		redis:     c,
 		keyPrefix: keyPrefix,
 	}, nil
 }
