@@ -240,9 +240,9 @@ func (b *tokenBucket) refillLocked() {
 	elapsedNs := elapsed.Nanoseconds()
 
 	gained, ok := mulDiv(elapsedNs, b.rateBytes, b.refillNs)
-	if !ok || gained >= b.capacity {
-		// More than a bucket's worth of time has passed (or so much that the
-		// conversion does not fit); either way the bucket is full.
+	if !ok || (b.tokens >= 0 && gained >= b.capacity-b.tokens) {
+		// Clamp before adding to avoid overflow. A negative balance must
+		// first repay its debt, even when gained exceeds one full bucket.
 		b.tokens = b.capacity
 		b.last = now
 		return

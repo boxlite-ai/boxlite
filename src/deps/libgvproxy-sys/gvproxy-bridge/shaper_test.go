@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/bits"
 	"net"
@@ -669,5 +670,48 @@ func TestRateLimitConfigUnmarshalsTheJSONTheCoreEmits(t *testing.T) {
 	}
 	if !bare.RateLimit.unlimited() {
 		t.Error("a config without rate_limit must read as unlimited")
+	}
+}
+
+// Refilling must repay outstanding reservations before granting another burst.
+func TestBucketRefillRepaysDebtBeforeFilling(t *testing.T) {
+	for _, debt := range []int64{1500, maxFrameBytes / 2, maxFrameBytes, maxFrameBytes + 1500} {
+		t.Run(fmt.Sprint(debt), func(t *testing.T) {
+			clk := newFakeClock()
+			b := newTokenBucket(bucketCfg(12500, 100), clk.now)
+			b.reserve(b.capacity)
+			b.reserve(debt)
+			clk.advance(time.Duration(b.capacity) * time.Second / 125000)
+			b.waitNonNegative()
+			if want := b.capacity - debt; b.tokens != want {
+				t.Fatalf("tokens = %d, want %d after refilling one capacity with %d bytes of debt", b.tokens, want, debt)
+			}
+		})
+	}
+}
+
+func TestRxMaximumFramesRespectSustainedRate(t *testing.T) {
+	delivered := make(chan struct{}, 4)
+	inner := newFakeConn(func(p []byte) (int, error) {
+		delivered <- struct{}{}
+		return len(p), nil
+	})
+	c := newShapedConn(inner, 4, &RateLimitConfig{RX: bucketCfg(12500, 100)}, nil)
+	defer c.Close()
+	frame := qemuFrame(bytes.Repeat([]byte{0x42}, maxFrameBytes))
+	start := time.Now()
+	for i := 0; i < 4; i++ {
+		if _, err := c.Write(frame); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-delivered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("frame was not delivered")
+		}
+	}
+	// 4 frames minus the initial bucket: 196647 bytes / 125000 B/s = 1.573s.
+	if elapsed := time.Since(start); elapsed < 1400*time.Millisecond {
+		t.Fatalf("elapsed = %v, want at least 1.4s at 1000 kbps after the initial burst", elapsed)
 	}
 }

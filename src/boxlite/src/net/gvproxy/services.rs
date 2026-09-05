@@ -1495,9 +1495,10 @@ mod tests {
 
         // Bind a real gvproxy instance; it derives + serves its control socket
         // (`gvproxy-ctl.sock`) as a sibling of net.sock.
-        let _instance = GvproxyInstance::new(crate::net::gvproxy::config::GvproxyConfig::new(
-            net_sock.clone(),
-        ))
+        let _instance = GvproxyInstance::new(
+            crate::net::gvproxy::config::GvproxyConfig::new(net_sock.clone())
+                .with_control_socket_path(super::super::control_socket_path(&net_sock)),
+        )
         .expect("create gvproxy instance");
 
         let config = NetworkBackendConfig {
@@ -1555,9 +1556,10 @@ mod tests {
             .tempdir_in("/tmp")
             .unwrap();
         let net_sock = dir.path().join("net.sock");
-        let _instance = GvproxyInstance::new(crate::net::gvproxy::config::GvproxyConfig::new(
-            net_sock.clone(),
-        ))
+        let _instance = GvproxyInstance::new(
+            crate::net::gvproxy::config::GvproxyConfig::new(net_sock.clone())
+                .with_control_socket_path(super::super::control_socket_path(&net_sock)),
+        )
         .expect("create gvproxy instance");
 
         let config = NetworkBackendConfig {
