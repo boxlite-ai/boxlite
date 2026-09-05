@@ -5,6 +5,7 @@
  */
 
 import { PanelNote, StatusMark } from '@/components/ascii'
+import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,7 +18,6 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Database, Plus, Search, Trash } from '@/components/ui/icon'
-import { RoutePath } from '@/enums/RoutePath'
 import { useCreateVolumeMutation } from '@/hooks/mutations/useCreateVolumeMutation'
 import { useDeleteVolumeMutation } from '@/hooks/mutations/useDeleteVolumeMutation'
 import { queryKeys } from '@/hooks/queries/queryKeys'
@@ -82,8 +82,8 @@ const STATE_TONE: Record<string, 'ok' | 'warn' | 'bad' | 'idle'> = {
 // meant a "used by 0 boxes" that was confidently wrong against a real API.
 // Showing nothing beats showing a wrong zero. If it comes back, the honest
 // source is either a new endpoint or aggregating `BoxDto.volumes` over the
-// full box list — matching on id *or* name, since the API persists whichever
-// the caller sent.
+// full box list, matching on the stored `volumeId` — the API resolves a name
+// to the volume's id before persisting it (box.service.ts).
 const Volumes: React.FC = () => {
   const queryClient = useQueryClient()
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
@@ -97,12 +97,14 @@ const Volumes: React.FC = () => {
   const deleteVolume = useDeleteVolumeMutation({ invalidateOnSuccess: false })
 
   const canWrite = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_VOLUMES)
+  const canCreateBox = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
   const canDelete = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_VOLUMES)
 
   const [filter, setFilter] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [newName, setNewName] = useState('')
   const [pendingDelete, setPendingDelete] = useState<VolumeDto | null>(null)
+  const [boxVolumeId, setBoxVolumeId] = useState<string | null>(null)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [busy, setBusy] = useState<Record<string, boolean>>({})
 
@@ -272,19 +274,17 @@ const Volumes: React.FC = () => {
                         label; destroy is the app's established icon treatment
                         (and a little harder to hit by accident that way). */}
                     <div className="flex items-center justify-end gap-[6px]">
-                      {canWrite && volume.state === VolumeState.READY && (
-                        <a
+                      {canCreateBox && volume.state === VolumeState.READY && (
+                        <button
+                          type="button"
                           // The id, not the name — see the mount-row comment in
-                          // CreateBoxDialog: a name persisted into box.volumes
-                          // is invisible to the server's delete guard.
-                          href={`${RoutePath.BOXES}?createBox=1&volume=${encodeURIComponent(volume.id)}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title={`Create a box with ${volume.name} mounted (opens a new tab)`}
+                          // CreateBoxDialog.
+                          onClick={() => setBoxVolumeId(volume.id)}
+                          title={`Create a box with ${volume.name} mounted`}
                           className="whitespace-nowrap border border-border px-[9px] py-[5px] font-mono text-[11px] text-muted-foreground transition-colors hover:border-brand hover:text-foreground"
                         >
                           + Box
-                        </a>
+                        </button>
                       )}
                       {canDelete && (
                         <button
@@ -369,6 +369,19 @@ const Volumes: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Opened here rather than at /boxes: the trip loses the list the user
+          was reading, and the row is the only thing that knows which volume
+          they meant. */}
+      {boxVolumeId && (
+        <CreateBoxDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setBoxVolumeId(null)
+          }}
+          prefillVolume={boxVolumeId}
+        />
+      )}
 
       <AlertDialog
         open={!!pendingDelete}
