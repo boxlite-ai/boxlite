@@ -2,7 +2,7 @@
 
 use crate::cli::GlobalFlags;
 use crate::formatter::{self, GtmplWithJson, OutputFormat, value_from_serde_json};
-use boxlite::{BoxInfo, BoxStateInfo};
+use boxlite::{BoxInfo, BoxStateInfo, NetworkInfo};
 use clap::Args;
 use serde::Serialize;
 
@@ -46,6 +46,61 @@ struct InspectPresenter {
     cpus: u8,
     #[serde(rename = "Memory")]
     memory: u64,
+    /// `null` when the runtime has not resolved network metadata yet.
+    #[serde(rename = "Network")]
+    network: Option<InspectNetworkPresenter>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectNetworkDirectionPresenter {
+    #[serde(rename = "Mode")]
+    mode: String,
+    /// Empty when no allowlist is configured (full access within the mode).
+    #[serde(rename = "AllowNet")]
+    allow_net: Vec<String>,
+}
+
+impl InspectNetworkDirectionPresenter {
+    fn new(mode: boxlite::NetworkMode, allow_net: Vec<String>) -> Self {
+        Self {
+            mode: match mode {
+                boxlite::NetworkMode::Enabled => "enabled".to_string(),
+                boxlite::NetworkMode::Disabled => "disabled".to_string(),
+            },
+            allow_net,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct InspectNetworkPresenter {
+    #[serde(rename = "Outbound")]
+    outbound: InspectNetworkDirectionPresenter,
+    #[serde(rename = "Inbound")]
+    inbound: InspectNetworkDirectionPresenter,
+    /// Mirrors `Outbound.Mode` for pre-split readers.
+    ///
+    /// Deprecated: read `Network.Outbound.Mode`.
+    #[serde(rename = "Mode")]
+    mode: String,
+    /// Mirrors `Outbound.AllowNet` for pre-split readers.
+    ///
+    /// Deprecated: read `Network.Outbound.AllowNet`.
+    #[serde(rename = "AllowNet")]
+    allow_net: Vec<String>,
+}
+
+impl From<NetworkInfo> for InspectNetworkPresenter {
+    fn from(n: NetworkInfo) -> Self {
+        let outbound =
+            InspectNetworkDirectionPresenter::new(n.outbound.mode, n.outbound.allow_net);
+        Self {
+            mode: outbound.mode.clone(),
+            allow_net: outbound.allow_net.clone(),
+            outbound,
+            inbound: InspectNetworkDirectionPresenter::new(n.inbound.mode, n.inbound.allow_net),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -81,6 +136,7 @@ impl From<&BoxInfo> for InspectPresenter {
             },
             cpus: info.cpus,
             memory: info.memory_mib as u64 * 1024 * 1024,
+            network: info.network.clone().map(InspectNetworkPresenter::from),
         }
     }
 }
@@ -236,7 +292,10 @@ fn write_inspect_output<W: std::io::Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use boxlite::{BoxID, BoxStatus, HealthStatus};
+    use boxlite::{
+        BoxID, BoxStatus, HealthStatus, InboundNetworkInfo, NetworkInfo, NetworkMode,
+        OutboundNetworkInfo,
+    };
     use std::collections::HashMap;
 
     fn inspect_info(started_at: Option<chrono::DateTime<chrono::Utc>>) -> BoxInfo {
@@ -279,5 +338,48 @@ mod tests {
 
         let value = serde_json::to_value(InspectPresenter::from(&inspect_info(None))).unwrap();
         assert!(value["State"]["StartedAt"].is_null());
+    }
+
+    #[test]
+    fn inspect_exposes_network_outbound_and_inbound() {
+        let now = chrono::Utc::now();
+        let mut info = inspect_info(None);
+        info.created_at = now;
+        info.last_updated = now;
+        info.network = Some(NetworkInfo::new(
+            OutboundNetworkInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: vec!["api.example.com".to_string()],
+            },
+            InboundNetworkInfo {
+                mode: NetworkMode::Disabled,
+                allow_net: Vec::new(),
+            },
+            None,
+        ));
+
+        let value = serde_json::to_value(InspectPresenter::from(&info)).unwrap();
+
+        // Nested fields
+        assert_eq!(value["Network"]["Outbound"]["Mode"], "enabled");
+        assert_eq!(
+            value["Network"]["Outbound"]["AllowNet"][0],
+            "api.example.com"
+        );
+        assert_eq!(value["Network"]["Inbound"]["Mode"], "disabled");
+        assert!(
+            value["Network"]["Inbound"]["AllowNet"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+
+        // Deprecated top-level mirrors
+        assert_eq!(value["Network"]["Mode"], "enabled");
+        assert_eq!(value["Network"]["AllowNet"][0], "api.example.com");
+
+        // None network → null
+        let no_net = serde_json::to_value(InspectPresenter::from(&inspect_info(None))).unwrap();
+        assert!(no_net["Network"].is_null());
     }
 }
