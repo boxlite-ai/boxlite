@@ -8,6 +8,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
+import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { WalletSection } from './WalletSection'
 
 const mocks = vi.hoisted(() => ({
@@ -219,7 +220,7 @@ describe('WalletSection top-up checkout', () => {
     })
     await flush()
 
-    expect(mocks.invoicesQuery).toHaveBeenCalledWith(1, 100)
+    expect(mocks.invoicesQuery).toHaveBeenCalledWith(1, DEFAULT_PAGE_SIZE)
     expect(document.body.textContent).toContain('2026-09-04')
 
     const nextPage = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
@@ -230,7 +231,7 @@ describe('WalletSection top-up checkout', () => {
     await act(async () => nextPage?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     await flush()
 
-    expect(mocks.invoicesQuery).toHaveBeenLastCalledWith(2, 100)
+    expect(mocks.invoicesQuery).toHaveBeenLastCalledWith(2, DEFAULT_PAGE_SIZE)
     expect(document.body.textContent).toContain('2026-08-30')
   })
 
@@ -250,7 +251,7 @@ describe('WalletSection top-up checkout', () => {
     await act(async () => fold?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     await flush()
 
-    expect(mocks.walletTransactionsQuery).toHaveBeenCalledWith(1, 100)
+    expect(mocks.walletTransactionsQuery).toHaveBeenCalledWith(1, DEFAULT_PAGE_SIZE)
     expect(document.body.textContent).toContain('2026-07-18')
 
     const creditActivity = document.querySelector('#credit-activity')
@@ -262,7 +263,7 @@ describe('WalletSection top-up checkout', () => {
     await act(async () => nextPage?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     await flush()
 
-    expect(mocks.walletTransactionsQuery).toHaveBeenLastCalledWith(2, 100)
+    expect(mocks.walletTransactionsQuery).toHaveBeenLastCalledWith(2, DEFAULT_PAGE_SIZE)
     expect(document.body.textContent).toContain('2026-07-15')
   })
 

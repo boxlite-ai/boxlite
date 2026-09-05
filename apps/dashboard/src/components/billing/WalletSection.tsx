@@ -7,6 +7,7 @@
 import { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
 import { AsciiButton, AsciiChip, BRAND, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
 import { BalanceThresholdBanner } from '@/components/billing/BalanceLowBanner'
+import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { InvoicesTable } from '@/components/Invoices'
 import { WalletTransactionsTable } from '@/components/WalletTransactions'
 import { Input } from '@/components/ui/input'
@@ -33,9 +34,6 @@ import { NumericFormat } from 'react-number-format'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
 import { PaymentMethodsPanel } from './PaymentMethodsPanel'
-
-const TRANSACTION_HISTORY_LIMIT = 100
-const INVOICE_HISTORY_LIMIT = 100
 
 /** Commerce rejects anything smaller, so the form says so before the round trip. */
 export const MIN_TOP_UP_DOLLARS = 10
@@ -128,7 +126,7 @@ function Pager({
  */
 function BillingHistorySection() {
   const [page, setPage] = useState(1)
-  const invoicesQuery = useOwnerInvoicesQuery(page, INVOICE_HISTORY_LIMIT)
+  const invoicesQuery = useOwnerInvoicesQuery(page, DEFAULT_PAGE_SIZE)
   const totalPages = invoicesQuery.data?.totalPages ?? 0
   useClampPage(page, totalPages, setPage)
 
@@ -160,7 +158,7 @@ function BillingHistorySection() {
 function WalletTransactionsSection() {
   const [open, setOpen] = useState(false)
   const [page, setPage] = useState(1)
-  const transactionsQuery = useOwnerWalletTransactionsQuery(page, TRANSACTION_HISTORY_LIMIT, open)
+  const transactionsQuery = useOwnerWalletTransactionsQuery(page, DEFAULT_PAGE_SIZE, open)
   const totalPages = transactionsQuery.data?.totalPages ?? 0
   useClampPage(page, totalPages, setPage)
 
