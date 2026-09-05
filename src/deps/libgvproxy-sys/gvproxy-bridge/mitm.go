@@ -241,9 +241,18 @@ func matchesWildcard(hostname, suffix string) bool {
 		!strings.Contains(hostname[:len(hostname)-len(suffix)], ".")
 }
 
+// normalizeHost lower-cases and strips the FQDN trailing dot so a guest-supplied
+// SNI like "api.openai.com." matches the same way the allow_net filter normalizes
+// it (tcp_filter.go MatchesHostname). Without trimming, a trailing-dot SNI would
+// pass the allowlist but skip secret substitution, sending the raw placeholder
+// upstream.
+func normalizeHost(hostname string) string {
+	return strings.ToLower(strings.TrimSuffix(hostname, "."))
+}
+
 // Matches returns true if hostname has associated secrets.
 func (m *SecretHostMatcher) Matches(hostname string) bool {
-	h := strings.ToLower(hostname)
+	h := normalizeHost(hostname)
 	if m.exactHosts[h] {
 		return true
 	}
@@ -257,7 +266,7 @@ func (m *SecretHostMatcher) Matches(hostname string) bool {
 
 // SecretsForHost returns all secrets whose Hosts list includes hostname.
 func (m *SecretHostMatcher) SecretsForHost(hostname string) []SecretConfig {
-	h := strings.ToLower(hostname)
+	h := normalizeHost(hostname)
 	var result []SecretConfig
 	for _, s := range m.secrets {
 		for _, host := range s.Hosts {

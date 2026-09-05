@@ -876,3 +876,27 @@ func containsString(ss []string, target string) bool {
 	}
 	return false
 }
+
+// TestSecretHostMatcher_TrailingDot verifies that a guest-supplied SNI with a
+// FQDN trailing dot ("api.openai.com.") still matches secret rules, the same way
+// the allow_net filter normalizes it (tcp_filter.go MatchesHostname strips the
+// trailing dot). Before the fix, the allowlist would admit the trailing-dot SNI
+// but the secret matcher would not, so the placeholder was forwarded upstream
+// unsubstituted.
+func TestSecretHostMatcher_TrailingDot(t *testing.T) {
+	m := NewSecretHostMatcher([]SecretConfig{
+		{Name: "openai", Hosts: []string{"api.openai.com"}, Placeholder: "<S>", Value: "v"},
+		{Name: "wild", Hosts: []string{"*.example.com"}, Placeholder: "<W>", Value: "w"},
+	})
+
+	assertTrue(t, m.Matches("api.openai.com."), "exact host with trailing dot")
+	assertTrue(t, m.Matches("API.OPENAI.COM."), "trailing dot + uppercase")
+	assertTrue(t, m.Matches("api.example.com."), "wildcard host with trailing dot")
+
+	if got := m.SecretsForHost("api.openai.com."); len(got) != 1 || got[0].Name != "openai" {
+		t.Errorf("SecretsForHost(trailing dot) = %v, want the openai secret", got)
+	}
+	if got := m.SecretsForHost("api.example.com."); len(got) != 1 || got[0].Name != "wild" {
+		t.Errorf("SecretsForHost(wildcard trailing dot) = %v, want the wild secret", got)
+	}
+}
