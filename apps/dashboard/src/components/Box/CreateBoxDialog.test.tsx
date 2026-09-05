@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { act } from 'react'
+import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CreateBoxDialog, resolvePerBoxLimits } from './CreateBoxDialog'
@@ -492,11 +492,9 @@ describe('CreateBoxDialog per-org resource cap', () => {
     )
   })
 
-  // Data-loss guard, not a preference. The API validates a mount by id OR name
-  // but persists the string verbatim, while its delete guard matches
-  // `box.volumes @> [{volumeId: <uuid>}]`. Submitting the name would store a
-  // value that guard cannot see, letting a mounted volume be deleted with no
-  // 409 — so picking from the list must yield the id.
+  // The API takes a mount by id or by name and resolves either to the volume's
+  // id, but a name is only unique within one organization — the picker holds
+  // the id, so that is what a click must submit.
   it('submits the volume id, never the display name', async () => {
     await rerenderOpen()
 
@@ -675,5 +673,66 @@ describe('CreateBoxDialog hourly price', () => {
     await renderOpen()
 
     expect(document.body.textContent).toContain('Unavailable')
+  })
+})
+
+// The trigger used to be built in and styled through `triggerClassName`. It is
+// now a children slot, so both halves of that contract need holding: a page
+// that passes a control gets a working opener, and a page that passes none —
+// the Volumes list, which opens the dialog from a table row — gets no stray
+// button of its own.
+describe('CreateBoxDialog trigger slot', () => {
+  let root: Root | null = null
+
+  beforeEach(() => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true
+    state.org = makeOrg({})
+    state.config = { billingApiUrl: 'http://billing.test' }
+    state.pricesQuery = { data: LIVE_PRICES, isLoading: false }
+  })
+
+  afterEach(() => {
+    act(() => root?.unmount())
+    root = null
+    document.body.innerHTML = ''
+    vi.restoreAllMocks()
+  })
+
+  async function renderWithTrigger(children?: ReactNode) {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root ??= createRoot(host)
+      root.render(<CreateBoxDialog>{children}</CreateBoxDialog>)
+    })
+    await flush()
+  }
+
+  function dialogIsOpen() {
+    return [...document.querySelectorAll('*')].some((el) => el.textContent === 'Create a box for your agent')
+  }
+
+  it('opens on the control the caller passes in', async () => {
+    await renderWithTrigger(<button type="button">Launch a box</button>)
+
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')]
+    const trigger = buttons.find((b) => b.textContent?.trim() === 'Launch a box')
+    expect(trigger).toBeDefined()
+    // Nothing but the caller's own control: the built-in "New Box" trigger this
+    // slot replaced must not still be rendered alongside it.
+    expect(buttons).toHaveLength(1)
+    expect(dialogIsOpen()).toBe(false)
+
+    await act(async () => trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flush()
+
+    expect(dialogIsOpen()).toBe(true)
+  })
+
+  it('renders no button of its own when the caller passes none', async () => {
+    await renderWithTrigger()
+
+    expect(document.querySelectorAll('button')).toHaveLength(0)
+    expect(dialogIsOpen()).toBe(false)
   })
 })

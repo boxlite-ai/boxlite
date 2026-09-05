@@ -20,8 +20,8 @@ import { useVolumesQuery } from '@/hooks/queries/useVolumesQuery'
 import { VolumeState } from '@boxlite-ai/api-client'
 import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
-import { ChevronDown, Plus } from '@/components/ui/icon'
-import { useEffect, useRef, useState } from 'react'
+import { ChevronDown } from '@/components/ui/icon'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -519,12 +519,10 @@ function MountRow({
                   key={v.id}
                   disabled={!ready}
                   className={cn('cursor-pointer', v.id === mount.volumeId && 'text-brand')}
-                  // Submit the id, never the name. The API accepts either for
-                  // validation, but it persists whatever it is given verbatim
-                  // (box.service.ts resolveVolumes), while the delete guard
-                  // matches `box.volumes @> [{volumeId: <uuid>}]`. A name stored
-                  // here is invisible to that guard, so the volume could be
-                  // deleted out from under this box with no 409.
+                  // Submit the id. The API takes a name too and resolves
+                  // either to the volume's id, but a name is only unique
+                  // within one organization and this picker already holds the
+                  // id, so there is nothing to gain by sending the weaker one.
                   onClick={() => ready && onChange({ ...mount, volumeId: v.id })}
                 >
                   {v.name}
@@ -560,18 +558,28 @@ function MountRow({
 
 export const CreateBoxDialog = ({
   className,
-  triggerClassName,
+  children,
   open: controlledOpen,
   onOpenChange,
   onCreated,
   prefillVolume,
 }: {
   className?: string
-  triggerClassName?: string
+  /**
+   * The control that opens the dialog. Omit it where the page already owns one
+   * — a table row's action, say — and drive `open` instead; the dialog then
+   * mounts without a button of its own.
+   */
+  children?: ReactNode
   open?: boolean
   onOpenChange?: (open: boolean) => void
   onCreated?: (box: Box) => void
-  /** Volume name to pre-mount, set when arriving from the Volumes page. */
+  /**
+   * Volume id to pre-mount at /data. The API takes a name too and resolves
+   * either to the canonical id, but a name is only unique within one
+   * organization (volume.service.ts validateVolumes), so the id is the
+   * selector to hand it — see MountRow above.
+   */
   prefillVolume?: string
 }) => {
   const navigate = useNavigate()
@@ -630,8 +638,8 @@ export const CreateBoxDialog = ({
     setStopSeconds(DEFAULTS.autoStopIntervalSeconds)
     setDeleteDelaySeconds(0)
     setAutoResumeEnabled(true)
-    // A volume passed in from the Volumes page arrives as navigation state, so
-    // "Create a box with this volume" lands on a form already holding it.
+    // The Volumes page mounts this dialog with a volume already chosen, so its
+    // "+ Box" row action lands on a form that is holding it.
     setMounts(prefillVolume ? [{ volumeId: prefillVolume, mountPath: '/data' }] : [])
     setSizePreset('small')
     setSubmitting(false)
@@ -731,19 +739,7 @@ export const CreateBoxDialog = ({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <button
-          type="button"
-          title="New Box"
-          className={cn(
-            'inline-flex h-9 items-center gap-[7px] bg-primary px-[15px] text-[12.5px] font-semibold text-primary-foreground transition-opacity hover:opacity-85',
-            triggerClassName,
-          )}
-        >
-          <Plus className="size-3.5" strokeWidth={2.4} />
-          New Box
-        </button>
-      </DialogTrigger>
+      {children && <DialogTrigger asChild>{children}</DialogTrigger>}
 
       <DialogContent
         className={cn(
