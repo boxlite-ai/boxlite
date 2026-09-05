@@ -152,12 +152,8 @@ jobs:
         with:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          # Least privilege: the registration-token and list-runners calls need
-          # repo Administration; `gh variable set EC2_E2E_INSTANCE_ID` needs
-          # Variables. Scope the token so it does not inherit other installation
-          # permissions.
-          permission-administration: write
-          permission-variables: write
+          # v1 has no input for Actions variables. Inherit the App installation's
+          # two configured permissions: Administration and Actions variables.
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -425,9 +421,12 @@ jobs:
 
       - name: Verify KVM access
         run: |
-          test -c /dev/kvm && test -r /dev/kvm -a -w /dev/kvm && echo "/dev/kvm is accessible" || {
-            echo "::error::/dev/kvm not accessible"; exit 1
-          }
+          if test -c /dev/kvm && test -r /dev/kvm && test -w /dev/kvm; then
+            echo "/dev/kvm is accessible"
+          else
+            echo "::error::/dev/kvm not accessible"
+            exit 1
+          fi
 
       - name: Install build dependencies (make setup)
         run: |

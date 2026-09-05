@@ -188,7 +188,7 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
-          file: lcov.info
+          files: lcov.info
           flags: rust-shared
           use_oidc: true
           fail_ci_if_error: false
