@@ -199,10 +199,106 @@ describe('PR 829 real-data parity: settlement invoices', () => {
     }
     const api = serve(response)
 
-    await expect(api.listInvoices('org-1', 2, 25)).resolves.toEqual(response)
+    // The three fields the billing history needs are absent here on purpose:
+    // this is the payload a Commerce predating that change still returns, and
+    // either side may deploy first. The client fills them rather than letting
+    // the page throw on undefined.toLowerCase() and print NaN.
+    await expect(api.listInvoices('org-1', 2, 25)).resolves.toEqual({
+      ...response,
+      items: [{ ...response.items[0], type: 'advance_charges', paymentStatus: 'succeeded', totalPaidCents: 250 }],
+    })
     expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/invoices?page=2&perPage=25')
     expect(api).not.toHaveProperty('createInvoicePaymentUrl')
     expect(api).not.toHaveProperty('voidInvoice')
+  })
+
+  it('leaves the fields alone once Commerce sends them', async () => {
+    const api = serve({
+      items: [
+        {
+          id: 'invoice-2',
+          number: 'BOX-2026-0002',
+          sequentialId: 2,
+          type: 'credit',
+          chargedAt: '2026-09-04T00:00:00.000Z',
+          totalAmountCents: 5_000,
+          totalPaidCents: 5_000,
+          quotaCoveredCents: 0,
+          paymentStatus: 'pending',
+          voided: false,
+        },
+      ],
+      totalItems: 1,
+      totalPages: 1,
+    })
+
+    const page = await api.listInvoices('org-1', 1, 25, 'all')
+    expect(page.items[0].type).toBe('credit')
+    expect(page.items[0].paymentStatus).toBe('pending')
+    expect(page.items[0].totalPaidCents).toBe(5_000)
+  })
+
+  it('never defaults a paid amount below zero', async () => {
+    // Quota covering more than the total should not turn into a negative charge.
+    const api = serve({
+      items: [
+        {
+          id: 'invoice-3',
+          number: 'INV-000003',
+          sequentialId: 3,
+          chargedAt: '2026-08-18T12:00:00.000Z',
+          totalAmountCents: 1_000,
+          quotaCoveredCents: 4_000,
+          voided: false,
+        },
+      ],
+      totalItems: 1,
+      totalPages: 1,
+    })
+
+    const page = await api.listInvoices('org-1')
+    expect(page.items[0].totalPaidCents).toBe(0)
+  })
+})
+
+describe('listInvoices type filter', () => {
+  const creditInvoice = {
+    id: 'invoice-1',
+    number: 'BOX-2026-0001',
+    sequentialId: 1,
+    type: 'credit',
+    chargedAt: '2026-09-04T00:00:00.000Z',
+    totalAmountCents: 5_000,
+    totalPaidCents: 5_000,
+    quotaCoveredCents: 0,
+    paymentStatus: 'succeeded',
+    voided: false,
+  }
+
+  it('omits the parameter entirely when no filter is given', async () => {
+    const api = serve({ items: [], totalItems: 0, totalPages: 0 })
+
+    await api.listInvoices('org-1')
+    // Commerce then serves settlement invoices only, which is what every
+    // caller predating the billing history already expects.
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/invoices')
+  })
+
+  it("asks for every kind on 'all' so a later one is not silently dropped", async () => {
+    const api = serve({ items: [creditInvoice], totalItems: 1, totalPages: 1 })
+
+    const page = await api.listInvoices('org-1', 1, 50, 'all')
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/invoices?page=1&perPage=50&type=all')
+    expect(page.items[0].type).toBe('credit')
+    expect(page.items[0].paymentStatus).toBe('succeeded')
+    expect(page.items[0].totalPaidCents).toBe(5_000)
+  })
+
+  it('comma-joins an explicit subset', async () => {
+    const api = serve({ items: [], totalItems: 0, totalPages: 0 })
+
+    await api.listInvoices('org-1', undefined, undefined, ['credit', 'one_off'])
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/invoices?type=credit%2Cone_off')
   })
 })
 

@@ -51,6 +51,16 @@ export const queryKeys = {
     portalUrl: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'portal-url'] as const,
     checkoutUrl: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'checkout-url'] as const,
     paymentMethods: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'payment-methods'] as const,
+    // Called with the organization alone this is the prefix every invoice
+    // listing shares, which is what the money mutations invalidate.
+    invoices: (organizationId: string, type?: string, page?: number, perPage?: number) =>
+      [
+        ...queryKeys.billing.all,
+        organizationId,
+        'invoices',
+        ...(type !== undefined ? [type] : []),
+        ...(page !== undefined && perPage !== undefined ? [{ page, perPage }] : []),
+      ] as const,
     transactions: (organizationId: string, page?: number, perPage?: number) =>
       [
         ...queryKeys.billing.all,

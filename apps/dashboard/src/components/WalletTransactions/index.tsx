@@ -10,11 +10,18 @@ import { walletTransactionLabel } from './columns'
 
 const ROW = 'grid grid-cols-[100px_110px_1fr_90px_80px] items-center gap-x-4'
 
-const STATUS = {
+// Keyed loosely on purpose: `status` is a hand-copied union, so a value
+// Commerce adds later arrives here before this map knows the key.
+const STATUS: Record<string, { label: string; color: string } | undefined> = {
   settled: { label: 'ok', color: 'hsl(var(--success))' },
   pending: { label: 'pending', color: 'hsl(var(--warning))' },
   failed: { label: 'failed', color: 'hsl(var(--destructive))' },
-} as const
+}
+
+/** Falls back to the raw name rather than throwing on `undefined.color`. */
+function statusMark(status: WalletTransaction['status']): { label: string; color: string } {
+  return STATUS[status] ?? { label: status, color: 'hsl(var(--muted-foreground))' }
+}
 
 function transactionDate(transaction: WalletTransaction): string {
   return transaction.createdAt.slice(0, 10)
@@ -46,7 +53,7 @@ export function WalletTransactionsTable({ data, loading }: WalletTransactionsTab
         </span>
       </div>
       {data.map((transaction) => {
-        const status = STATUS[transaction.status]
+        const status = statusMark(transaction.status)
         return (
           <div
             key={transaction.id}

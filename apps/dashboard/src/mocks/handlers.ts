@@ -26,7 +26,10 @@ import {
   MOCK_PAGINATED_BOXES,
   MOCK_VOLUMES,
   MOCK_VOLUME_USAGE,
+  buildInvoiceHistory,
   buildMockConfig,
+  buildWalletHistory,
+  newestFirst,
 } from './fixtures'
 
 const BILLING_API_URL = 'http://localhost:3000/api/billing'
@@ -347,47 +350,126 @@ export const handlers = [
 
     const mockInvoices: Invoice[] = [
       {
+        // A standing auto-reload rule bought these off-session — the charge the
+        // customer did not initiate, and the one hardest to place on a card
+        // statement. The wire carries no `source`, so it is deliberately
+        // indistinguishable here from the manual purchase below; that is why
+        // the label is "Credits" and not "Top-up".
+        id: 'inv-013',
+        number: 'BOX-2026-0012',
+        sequentialId: 12,
+        type: 'credit',
+        chargedAt: new Date('2026-01-22').toISOString(),
+        totalAmountCents: 5_000,
+        totalPaidCents: 5_000,
+        quotaCoveredCents: 0,
+        paymentStatus: 'succeeded',
+        voided: false,
+      },
+      {
+        id: 'inv-010',
+        number: 'BOX-2026-0011',
+        sequentialId: 11,
+        type: 'credit',
+        chargedAt: new Date('2026-01-14').toISOString(),
+        totalAmountCents: 10_000,
+        totalPaidCents: 10_000,
+        quotaCoveredCents: 0,
+        paymentStatus: 'succeeded',
+        voided: false,
+      },
+      {
+        id: 'inv-011',
+        number: 'BOX-2026-0010',
+        sequentialId: 10,
+        type: 'one_off',
+        // The upgrade that granted 548.37 of quota cost this much to buy.
+        chargedAt: new Date('2026-01-09').toISOString(),
+        totalAmountCents: 4_231,
+        totalPaidCents: 4_231,
+        quotaCoveredCents: 0,
+        paymentStatus: 'succeeded',
+        voided: false,
+      },
+      {
+        id: 'inv-012',
+        number: 'BOX-2026-0009',
+        sequentialId: 9,
+        type: 'subscription',
+        chargedAt: new Date('2026-01-05').toISOString(),
+        totalAmountCents: 25_000,
+        totalPaidCents: 0,
+        quotaCoveredCents: 0,
+        paymentStatus: 'pending',
+        voided: false,
+      },
+      {
         id: 'inv-001',
         number: 'INV-2026-001',
         sequentialId: 1,
+        type: 'advance_charges',
         chargedAt: new Date('2026-01-01').toISOString(),
         totalAmountCents: 9847,
+        totalPaidCents: 1_847,
         quotaCoveredCents: 8_000,
+        paymentStatus: 'succeeded',
         voided: false,
       },
       {
         id: 'inv-004',
         number: 'INV-2025-010',
         sequentialId: 10,
+        type: 'advance_charges',
         chargedAt: new Date('2025-10-01').toISOString(),
         totalAmountCents: 12150,
+        totalPaidCents: 0,
         quotaCoveredCents: 12_150,
+        paymentStatus: 'succeeded',
         voided: false,
       },
       {
         id: 'inv-009',
         number: 'INV-2030-010',
         sequentialId: 10,
+        type: 'advance_charges',
         chargedAt: new Date('2025-10-01').toISOString(),
         totalAmountCents: 12150,
+        totalPaidCents: 2_150,
         quotaCoveredCents: 10_000,
+        paymentStatus: 'succeeded',
         voided: true,
       },
       {
         id: 'inv-005',
         number: 'INV-2025-009',
         sequentialId: 9,
+        type: 'advance_charges',
         chargedAt: new Date('2025-09-01').toISOString(),
         totalAmountCents: 8900,
+        // Nothing reached the card, which is what the Amount column reports.
+        totalPaidCents: 0,
         quotaCoveredCents: 0,
+        paymentStatus: 'failed',
         voided: false,
       },
+      // A year of ordinary months underneath, so the page fills and pages.
+      ...buildInvoiceHistory(),
     ]
+
+    // Mirror Commerce: no `type` means settlements only, `all` means every
+    // kind, otherwise the named subset. Without this the mock cannot show the
+    // difference the billing history exists to make visible.
+    const requestedTypes = url.searchParams.get('type')
+    const visibleInvoices = newestFirst(
+      requestedTypes === 'all'
+        ? mockInvoices
+        : mockInvoices.filter((invoice) => (requestedTypes?.split(',') ?? ['advance_charges']).includes(invoice.type)),
+    )
 
     const startIndex = (page - 1) * perPage
     const endIndex = startIndex + perPage
-    const paginatedItems = mockInvoices.slice(startIndex, endIndex)
-    const totalItems = mockInvoices.length
+    const paginatedItems = visibleInvoices.slice(startIndex, endIndex)
+    const totalItems = visibleInvoices.length
     const totalPages = Math.ceil(totalItems / perPage)
 
     return HttpResponse.json<PaginatedInvoices>({
@@ -558,13 +640,17 @@ export const handlers = [
         createdAt: '2026-08-23T10:00:00.000Z',
         settledAt: null,
       },
+      // The same year of ordinary months as the invoice feed: the cycle grant
+      // that funds the plan and the usage that draws it back down.
+      ...buildWalletHistory(),
     ]
+    const ledger = newestFirst(transactions)
     const start = (page - 1) * perPage
 
     return HttpResponse.json<PaginatedWalletTransactions>({
-      items: transactions.slice(start, start + perPage),
-      totalItems: transactions.length,
-      totalPages: Math.ceil(transactions.length / perPage),
+      items: ledger.slice(start, start + perPage),
+      totalItems: ledger.length,
+      totalPages: Math.ceil(ledger.length / perPage),
     })
   }),
   http.post(`${BILLING_API_URL}/organization/:organizationId/wallet/top-up`, async () => {

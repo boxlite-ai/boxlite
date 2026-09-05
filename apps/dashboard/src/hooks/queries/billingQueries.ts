@@ -14,6 +14,7 @@ import {
   useFetchOrganizationCheckoutUrlQuery,
   useIsOrganizationCheckoutUrlFetching,
 } from './useOrganizationCheckoutUrlQuery'
+import { useOrganizationInvoicesQuery } from './useOrganizationInvoicesQuery'
 import { useOrganizationWalletTransactionsQuery } from './useOrganizationWalletTransactionsQuery'
 import { useOrganizationPaymentMethodsQuery } from './useOrganizationPaymentMethodsQuery'
 import { useOrganizationPlanQuery } from './useOrganizationPlanQuery'
@@ -68,12 +69,27 @@ export function useIsOwnerCheckoutUrlFetching() {
   return useIsOrganizationCheckoutUrlFetching(organizationId)
 }
 
-export function useOwnerWalletTransactionsQuery(page?: number, perPage?: number) {
+/**
+ * The billing history: every document kind Commerce mints, so a kind added
+ * later appears here without a dashboard deploy.
+ */
+export function useOwnerInvoicesQuery(page?: number, perPage?: number) {
   const scope = useSelectedOrgBillingScope()
-  return useOrganizationWalletTransactionsQuery({
+  return useOrganizationInvoicesQuery({
     ...scope,
+    type: 'all',
     page,
     perPage,
+  })
+}
+
+export function useOwnerWalletTransactionsQuery(page?: number, perPage?: number, enabled = true) {
+  const scope = useSelectedOrgBillingScope()
+  return useOrganizationWalletTransactionsQuery({
+    organizationId: scope.organizationId,
+    page,
+    perPage,
+    enabled: scope.enabled && enabled,
   })
 }
 

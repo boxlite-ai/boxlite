@@ -82,4 +82,32 @@ describe('wallet transaction invalidation', () => {
 
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.billing.transactions('org-1') })
   })
+
+  it('refreshes the billing history after a top-up, not only the credit ledger', async () => {
+    // A top-up now mints its own document. Leaving the invoice key out would
+    // hold the primary section on stale data for the 5-minute staleTime while
+    // the ledger folded beneath it refreshed immediately.
+    await act(async () => {
+      await topUpWallet?.mutateAsync({ organizationId: 'org-1', amountCents: 500 })
+    })
+
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.billing.invoices('org-1') })
+  })
+
+  it('refreshes the billing history after a coupon redemption', async () => {
+    await act(async () => {
+      await redeemCoupon?.mutateAsync({ organizationId: 'org-1', couponCode: 'SAVE10' })
+    })
+
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.billing.invoices('org-1') })
+  })
+
+  it('shares one prefix between the filtered listing and the invalidation key', () => {
+    // Invalidation only reaches the listing if its key is a prefix of it; a
+    // separate shape would silently no-op.
+    const prefix = queryKeys.billing.invoices('org-1')
+    const listing = queryKeys.billing.invoices('org-1', 'all', 1, 100)
+
+    expect(listing.slice(0, prefix.length)).toEqual([...prefix])
+  })
 })

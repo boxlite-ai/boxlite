@@ -7,6 +7,7 @@
 import { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
 import { AsciiButton, AsciiChip, BRAND, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
 import { BalanceThresholdBanner } from '@/components/billing/BalanceLowBanner'
+import { InvoicesTable } from '@/components/Invoices'
 import { WalletTransactionsTable } from '@/components/WalletTransactions'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -18,6 +19,7 @@ import {
   useFetchOwnerCheckoutUrlQuery,
   useIsOwnerCheckoutUrlFetching,
   useOwnerBillingPortalUrlQuery,
+  useOwnerInvoicesQuery,
   useOwnerPaymentMethodsQuery,
   useOwnerPlanQuery,
   useOwnerWalletTransactionsQuery,
@@ -33,6 +35,7 @@ import { toast } from 'sonner'
 import { PaymentMethodsPanel } from './PaymentMethodsPanel'
 
 const TRANSACTION_HISTORY_LIMIT = 100
+const INVOICE_HISTORY_LIMIT = 100
 
 /** Commerce rejects anything smaller, so the form says so before the round trip. */
 export const MIN_TOP_UP_DOLLARS = 10
@@ -54,42 +57,106 @@ export function topUpGate(amountDollars: number | undefined): { enabled: boolean
   return { enabled: true, reason: null }
 }
 
-/** Own the server page so the PR #829 grid can stay a presentation-only component. */
-function WalletTransactionsSection() {
-  const [page, setPage] = useState(1)
-  const transactionsQuery = useOwnerWalletTransactionsQuery(page, TRANSACTION_HISTORY_LIMIT)
-  const totalPages = transactionsQuery.data?.totalPages ?? 0
-
+/** Keep the requested page inside a total that shrinks under it. */
+function useClampPage(page: number, totalPages: number, setPage: (page: number) => void) {
   useEffect(() => {
     if (totalPages > 0 && page > totalPages) {
       setPage(totalPages)
     }
-  }, [page, totalPages])
+  }, [page, totalPages, setPage])
+}
+
+function Pager({
+  page,
+  totalPages,
+  onPage,
+}: {
+  page: number
+  totalPages: number
+  onPage: (next: (current: number) => number) => void
+}) {
+  if (totalPages <= 1) {
+    return null
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-3 border-b border-border/40 py-3 font-mono text-[11px] text-muted-foreground">
+      <span>
+        Page {page} of {totalPages}
+      </span>
+      <AsciiButton onClick={() => onPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>
+        ← Previous
+      </AsciiButton>
+      <AsciiButton onClick={() => onPage((current) => Math.min(totalPages, current + 1))} disabled={page >= totalPages}>
+        Next →
+      </AsciiButton>
+    </div>
+  )
+}
+
+/**
+ * The money history: what was actually charged, for usage, plan changes and
+ * credit purchases alike. This is the primary billing surface — a credit grant
+ * is quota rather than a payment, and reading both off one table is what let a
+ * prorated upgrade's granted quota be mistaken for the amount billed for it.
+ */
+function BillingHistorySection() {
+  const [page, setPage] = useState(1)
+  const invoicesQuery = useOwnerInvoicesQuery(page, INVOICE_HISTORY_LIMIT)
+  const totalPages = invoicesQuery.data?.totalPages ?? 0
+  useClampPage(page, totalPages, setPage)
 
   return (
     <section>
       <SectionTitle
-        title="Transactions"
-        count={transactionsQuery.data ? `${transactionsQuery.data.totalItems} records` : undefined}
+        title="Billing history"
+        count={invoicesQuery.data ? `${invoicesQuery.data.totalItems} documents` : undefined}
       />
-      <WalletTransactionsTable
-        data={transactionsQuery.data?.items ?? []}
-        loading={Boolean(transactionsQuery.isLoading || transactionsQuery.isFetching)}
+      <InvoicesTable
+        data={invoicesQuery.data?.items ?? []}
+        loading={Boolean(invoicesQuery.isLoading || invoicesQuery.isFetching)}
       />
-      {totalPages > 1 && (
-        <div className="flex items-center justify-end gap-3 border-b border-border/40 py-3 font-mono text-[11px] text-muted-foreground">
-          <span>
-            Page {page} of {totalPages}
-          </span>
-          <AsciiButton onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>
-            ← Previous
-          </AsciiButton>
-          <AsciiButton
-            onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
-            disabled={page >= totalPages}
-          >
-            Next →
-          </AsciiButton>
+      <Pager page={page} totalPages={totalPages} onPage={setPage} />
+      <PanelNote>Amounts charged to your payment method. Credit grants are listed under Credit activity.</PanelNote>
+    </section>
+  )
+}
+
+/**
+ * Grants, expiries and void-restores are free quota with no invoice behind
+ * them, so they appear in no other feed and still need a home — but folded,
+ * because a top-up already shows in the billing history above as the money it
+ * cost, and showing it twice at equal weight is what caused the confusion.
+ */
+function WalletTransactionsSection() {
+  const [open, setOpen] = useState(false)
+  const [page, setPage] = useState(1)
+  const transactionsQuery = useOwnerWalletTransactionsQuery(page, TRANSACTION_HISTORY_LIMIT, open)
+  const totalPages = transactionsQuery.data?.totalPages ?? 0
+  useClampPage(page, totalPages, setPage)
+
+  return (
+    <section>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls="credit-activity"
+        onClick={() => setOpen((wasOpen) => !wasOpen)}
+        className="flex w-full items-center gap-2 border-b border-border pb-2 font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <span style={{ color: BRAND }}>{open ? '▾' : '▸'}</span>
+        Credit activity
+        <span className="ml-auto normal-case tracking-normal">
+          {transactionsQuery.data ? `${transactionsQuery.data.totalItems} records` : ''}
+        </span>
+      </button>
+      {open && (
+        <div id="credit-activity" className="mt-3">
+          <WalletTransactionsTable
+            data={transactionsQuery.data?.items ?? []}
+            loading={Boolean(transactionsQuery.isLoading || transactionsQuery.isFetching)}
+          />
+          <Pager page={page} totalPages={totalPages} onPage={setPage} />
         </div>
       )}
     </section>
@@ -553,7 +620,9 @@ export function WalletSection() {
             </Panel>
           </section>
 
-          <WalletTransactionsSection key={selectedOrganization?.id ?? 'no-organization'} />
+          <BillingHistorySection key={`invoices-${selectedOrganization?.id ?? 'no-organization'}`} />
+
+          <WalletTransactionsSection key={`credits-${selectedOrganization?.id ?? 'no-organization'}`} />
         </div>
       )}
     </div>

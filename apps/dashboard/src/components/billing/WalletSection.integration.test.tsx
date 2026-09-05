@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   redeemCoupon: vi.fn(),
   setAutomaticTopUp: vi.fn(),
   topUpWallet: vi.fn(),
+  invoicesQuery: vi.fn(),
   walletTransactionsQuery: vi.fn(),
   wallet: {
     automaticTopUp: undefined as AutomaticTopUp | undefined,
@@ -44,6 +45,30 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
   useFetchOwnerCheckoutUrlQuery: () => mocks.fetchCheckoutUrl,
   useIsOwnerCheckoutUrlFetching: () => false,
   useOwnerBillingPortalUrlQuery: () => ({ data: undefined, isLoading: false }),
+  useOwnerInvoicesQuery: (page = 1, perPage?: number) => {
+    mocks.invoicesQuery(page, perPage)
+    return {
+      data: {
+        items: [
+          {
+            id: `invoice-${page}`,
+            number: page === 1 ? 'BOX-2026-0002' : 'BOX-2026-0001',
+            sequentialId: page === 1 ? 2 : 1,
+            type: page === 1 ? 'one_off' : 'credit',
+            chargedAt: page === 1 ? '2026-09-04T00:00:00.000Z' : '2026-08-30T00:00:00.000Z',
+            totalAmountCents: page === 1 ? 1_212 : 5_000,
+            totalPaidCents: page === 1 ? 1_212 : 5_000,
+            quotaCoveredCents: 0,
+            paymentStatus: 'succeeded',
+            voided: false,
+          },
+        ],
+        totalItems: 101,
+        totalPages: 2,
+      },
+      isLoading: false,
+    }
+  },
   useOwnerWalletTransactionsQuery: (page = 1, perPage?: number) => {
     mocks.walletTransactionsQuery(page, perPage)
     return {
@@ -110,6 +135,7 @@ describe('WalletSection top-up checkout', () => {
     mocks.wallet.ongoingBalanceCents = 0
     mocks.wallet.creditCardConnected = false
     mocks.topUpWallet.mockClear()
+    mocks.invoicesQuery.mockClear()
     mocks.walletTransactionsQuery.mockClear()
     mocks.topUpWallet.mockResolvedValue({ url: 'https://checkout.stripe.com/pay/cs_top_up' })
   })
@@ -133,7 +159,8 @@ describe('WalletSection top-up checkout', () => {
     })
     await flush()
 
-    expect(document.body.textContent).toContain('Transactions')
+    expect(document.body.textContent).toContain('Billing history')
+    expect(document.body.textContent).toContain('Credit activity')
     expect(document.body.textContent).not.toContain('Usage Settlements')
 
     const topUpButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
@@ -154,7 +181,7 @@ describe('WalletSection top-up checkout', () => {
     expect(checkoutWindow.location.href).toBe('https://checkout.stripe.com/pay/cs_top_up')
   })
 
-  it('loads older transactions when history exceeds the first page', async () => {
+  it('leads with the money history and folds the credit ledger away', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
 
@@ -164,10 +191,70 @@ describe('WalletSection top-up checkout', () => {
     })
     await flush()
 
+    // The charge is on the page; the grant that shares its date is not, because
+    // showing both at equal weight is what made a grant read as an amount billed.
+    expect(document.body.textContent).toContain('BOX-2026-0002')
+    expect(document.body.textContent).toContain('2026-09-04')
+    expect(document.body.textContent).not.toContain('2026-07-18')
+
+    const fold = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+      button.textContent?.includes('Credit activity'),
+    )
+    expect(fold?.getAttribute('aria-expanded')).toBe('false')
+
+    await act(async () => fold?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flush()
+
+    expect(fold?.getAttribute('aria-expanded')).toBe('true')
+    expect(document.body.textContent).toContain('2026-07-18')
+  })
+
+  it('loads older invoices when the billing history exceeds the first page', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection />)
+    })
+    await flush()
+
+    expect(mocks.invoicesQuery).toHaveBeenCalledWith(1, 100)
+    expect(document.body.textContent).toContain('2026-09-04')
+
+    const nextPage = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'Next →',
+    )
+    expect(nextPage).toBeDefined()
+
+    await act(async () => nextPage?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flush()
+
+    expect(mocks.invoicesQuery).toHaveBeenLastCalledWith(2, 100)
+    expect(document.body.textContent).toContain('2026-08-30')
+  })
+
+  it('loads older transactions when credit activity exceeds the first page', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection />)
+    })
+    await flush()
+
+    const fold = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+      button.textContent?.includes('Credit activity'),
+    )
+    await act(async () => fold?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flush()
+
     expect(mocks.walletTransactionsQuery).toHaveBeenCalledWith(1, 100)
     expect(document.body.textContent).toContain('2026-07-18')
 
-    const nextPage = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+    const creditActivity = document.querySelector('#credit-activity')
+    const nextPage = [...(creditActivity?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find(
       (button) => button.textContent?.trim() === 'Next →',
     )
     expect(nextPage).toBeDefined()
