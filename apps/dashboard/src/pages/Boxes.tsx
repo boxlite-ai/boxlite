@@ -9,7 +9,7 @@ import { StatCard } from '@/components/ascii'
 import { OnboardingGuideDialog } from '@/components/OnboardingGuideDialog'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import { BoxTable } from '@/components/BoxTable'
-import { Search } from '@/components/ui/icon'
+import { Plus, Search } from '@/components/ui/icon'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -62,14 +62,8 @@ import {
 import { QueryKey, useQuery, useQueryClient } from '@tanstack/react-query'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
-import { generatePath, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { generatePath, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-
-interface BoxesLocationState {
-  openCreateBox?: boolean
-  /** Volume name to pre-mount, set when arriving from the Volumes page. */
-  mountVolume?: string
-}
 
 const Boxes: React.FC = () => {
   const api = useApi()
@@ -77,7 +71,6 @@ const Boxes: React.FC = () => {
   const { user } = useAuth()
   const userId = user?.profile.sub
   const navigate = useNavigate()
-  const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
   const { notificationSocket } = useNotificationSocket()
   const config = useConfig()
@@ -85,7 +78,6 @@ const Boxes: React.FC = () => {
   const { selectedOrganization, authenticatedUserOrganizationMember, authenticatedUserHasPermission } =
     useSelectedOrganization()
   const [createBoxOpen, setCreateBoxOpen] = useState(false)
-  const [prefillVolume, setPrefillVolume] = useState<string | undefined>(undefined)
   const [showOnboardingDialog, setShowOnboardingDialog] = useState(false)
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
 
@@ -655,31 +647,6 @@ const Boxes: React.FC = () => {
     }, 220)
   }, [clearOnboardingUrlParam, userId])
 
-  // Two channels open this dialog: router state for a same-tab navigation, and
-  // query params for anything that has to survive being opened in a new tab
-  // (router state does not cross a tab boundary) — e.g. the Volumes page's
-  // "create a box with this volume".
-  useEffect(() => {
-    const state = location.state as BoxesLocationState | null
-    const fromUrl = searchParams.get('createBox') === '1'
-    if (!state?.openCreateBox && !fromUrl) {
-      return
-    }
-
-    setShowOnboardingDialog(false)
-    setPrefillVolume(state?.mountVolume ?? searchParams.get('volume') ?? undefined)
-    setCreateBoxOpen(true)
-
-    if (fromUrl) {
-      const nextParams = new URLSearchParams(searchParams)
-      nextParams.delete('createBox')
-      nextParams.delete('volume')
-      setSearchParams(nextParams, { replace: true })
-      return
-    }
-    navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null })
-  }, [location.pathname, location.search, location.state, navigate, searchParams, setSearchParams])
-
   // Fleet stat cards — real data, independent of the table's current filter/page.
   const orgId = selectedOrganization?.id
 
@@ -793,15 +760,22 @@ const Boxes: React.FC = () => {
         <div className="flex-1" />
         {authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES) && (
           <CreateBoxDialog
-            triggerClassName="h-11 justify-center sm:h-9"
             open={createBoxOpen}
             onOpenChange={setCreateBoxOpen}
-            prefillVolume={prefillVolume}
             onCreated={() => {
               updateOnboardingProgress({ boxCreated: true })
               setShowOnboardingDialog(false)
             }}
-          />
+          >
+            <button
+              type="button"
+              title="New Box"
+              className="inline-flex h-11 items-center justify-center gap-[7px] bg-primary px-[15px] text-[12.5px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 sm:h-9"
+            >
+              <Plus className="size-3.5" strokeWidth={2.4} />
+              New Box
+            </button>
+          </CreateBoxDialog>
         )}
       </div>
 
