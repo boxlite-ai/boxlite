@@ -25,7 +25,7 @@ export class Volume {
   @Column({
     type: 'enum',
     enum: VolumeState,
-    default: VolumeState.PENDING_CREATE,
+    default: VolumeState.CREATING,
   })
   state: VolumeState
 

@@ -168,7 +168,7 @@ export const MOCK_PAGINATED_BOXES: PaginatedBoxes = {
 // ── Volumes ─────────────────────────────────────────────────────────────────
 // Covers the states the page has to render differently: a healthy mounted
 // volume, one nobody has mounted for a month (the cleanup candidate the list
-// exists to surface), a soft-deleted one still sitting in `pending_delete`
+// exists to surface), a soft-deleted one still sitting in `destroying`
 // because removal is asynchronous, one still coming up, and a failed one.
 function buildVolume(overrides: Partial<VolumeDto> & Pick<VolumeDto, 'id' | 'name' | 'state'>): VolumeDto {
   return {
@@ -212,7 +212,7 @@ export const MOCK_VOLUMES: VolumeDto[] = [
   buildVolume({
     id: 'vol-m3n4o5p6',
     name: 'tmp-debug',
-    state: VolumeState.PENDING_DELETE,
+    state: VolumeState.DESTROYING,
     createdAt: daysAgo(9),
     lastUsedAt: daysAgo(5),
   }),

@@ -122,7 +122,7 @@ export const handlers = [
   }),
   // Volumes. Deletion mirrors the real service (volume.service.ts:74-113):
   // a volume still mounted by a live box is refused with 409, and a successful
-  // delete only moves the row to `pending_delete` — the reconciler finishes it
+  // delete only moves the row to `destroying` — the reconciler finishes it
   // later, so the row must not vanish from the list.
   http.get(`${API_URL}/volumes`, () => HttpResponse.json(MOCK_VOLUMES)),
   http.post(`${API_URL}/volumes`, async ({ request }) => {
@@ -158,7 +158,7 @@ export const handlers = [
     }
     const row = MOCK_VOLUMES.find((v) => v.id === id)
     if (!row) return new HttpResponse(null, { status: 404 })
-    row.state = 'pending_delete' as (typeof row)['state']
+    row.state = 'destroying' as (typeof row)['state']
     return new HttpResponse(null, { status: 204 })
   }),
 

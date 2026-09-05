@@ -8,7 +8,7 @@ import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown, OnMo
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository, In } from 'typeorm'
 import { Volume } from '../entities/volume.entity'
-import { VolumeState } from '../enums/volume-state.enum'
+import { canonicalVolumeState, RETIRED_VOLUME_STATES, VolumeState } from '../enums/volume-state.enum'
 import { Cron, CronExpression, SchedulerRegistry } from '@nestjs/schedule'
 import { S3Client, CreateBucketCommand, ListObjectsV2Command, PutBucketTaggingCommand } from '@aws-sdk/client-s3'
 import { InjectRedis } from '@nestjs-modules/ioredis'
@@ -142,7 +142,7 @@ export class VolumeManager
 
       const pendingVolumes = await this.volumeRepository.find({
         where: {
-          state: In([VolumeState.PENDING_CREATE, VolumeState.PENDING_DELETE]),
+          state: In([VolumeState.CREATING, VolumeState.DESTROYING, ...RETIRED_VOLUME_STATES]),
         },
       })
 
@@ -179,12 +179,12 @@ export class VolumeManager
     const volumeLockKey = `${VOLUME_STATE_LOCK_KEY}${volume.id}`
 
     try {
-      switch (volume.state) {
-        case VolumeState.PENDING_CREATE:
-          await this.handlePendingCreate(volume, volumeLockKey)
+      switch (canonicalVolumeState(volume.state)) {
+        case VolumeState.CREATING:
+          await this.handleCreating(volume, volumeLockKey)
           break
-        case VolumeState.PENDING_DELETE:
-          await this.handlePendingDelete(volume, volumeLockKey)
+        case VolumeState.DESTROYING:
+          await this.handleDestroying(volume, volumeLockKey)
           break
       }
     } catch (error) {
@@ -196,17 +196,8 @@ export class VolumeManager
     }
   }
 
-  private async handlePendingCreate(volume: Volume, lockKey: string): Promise<void> {
+  private async handleCreating(volume: Volume, lockKey: string): Promise<void> {
     try {
-      // Refresh lock before state change
-      await this.redis.setex(lockKey, 30, '1')
-
-      // Update state to CREATING
-      await this.volumeRepository.save({
-        ...volume,
-        state: VolumeState.CREATING,
-      })
-
       // Refresh lock before S3 operation
       await this.redis.setex(lockKey, 30, '1')
 
@@ -258,17 +249,8 @@ export class VolumeManager
     }
   }
 
-  private async handlePendingDelete(volume: Volume, lockKey: string): Promise<void> {
+  private async handleDestroying(volume: Volume, lockKey: string): Promise<void> {
     try {
-      // Refresh lock before state change
-      await this.redis.setex(lockKey, 30, '1')
-
-      // Update state to DELETING
-      await this.volumeRepository.save({
-        ...volume,
-        state: VolumeState.DELETING,
-      })
-
       // Refresh lock before S3 operation
       await this.redis.setex(lockKey, 30, '1')
 
@@ -288,20 +270,20 @@ export class VolumeManager
       // Refresh lock before final state update
       await this.redis.setex(lockKey, 30, '1')
 
-      // Delete any existing volume record with the deleted state and the same name in the same organization
+      // Delete any existing volume record with the destroyed state and the same name in the same organization
       await this.volumeRepository.delete({
         organizationId: volume.organizationId,
-        name: `${volume.name}-deleted`,
-        state: VolumeState.DELETED,
+        name: `${volume.name}-destroyed`,
+        state: VolumeState.DESTROYED,
       })
 
-      // Update volume state to DELETED and rename
+      // Update volume state to DESTROYED and rename
       await this.volumeRepository.save({
         ...volume,
-        state: VolumeState.DELETED,
-        name: `${volume.name}-deleted`,
+        state: VolumeState.DESTROYED,
+        name: `${volume.name}-destroyed`,
       })
-      this.logger.debug(`Volume ${volume.id} deleted successfully`)
+      this.logger.debug(`Volume ${volume.id} destroyed successfully`)
     } catch (error) {
       this.logger.error(`Error deleting volume ${volume.id}:`, error)
       await this.volumeRepository.save({

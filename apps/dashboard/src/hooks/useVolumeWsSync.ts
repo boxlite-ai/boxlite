@@ -56,7 +56,7 @@ export function useVolumeWsSync() {
       oldState: VolumeState
       newState: VolumeState
     }) => {
-      if (data.newState === VolumeState.DELETED) {
+      if (data.newState === VolumeState.DESTROYED) {
         removeVolumeFromCache(data.volume.id)
         invalidate('active')
       } else {

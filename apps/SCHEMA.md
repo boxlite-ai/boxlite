@@ -458,7 +458,7 @@ derived from the row id (`boxlite-volume-<id>`).
 | `id` | `uuid` | primary key |
 | `organizationId` | `uuid` | nullable |
 | `name` | `character varying` | unique per organization |
-| `state` | `enum` | 7 values, default `pending_create` |
+| `state` | `enum` | `creating` \| `ready` \| `destroying` \| `destroyed` \| `error`, default `creating` (the type also carries the retired `pending_create` / `pending_delete` / `deleting` / `deleted` labels so instances on the previous release can still write during a rolling deploy; the reconciler polls and canonicalizes them so such rows are not stranded) |
 | `errorReason` | `character varying` | nullable |
 | `lastUsedAt` | `timestamp` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |

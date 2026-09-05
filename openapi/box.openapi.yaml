@@ -1978,8 +1978,8 @@ components:
 
     VolumeState:
       type: string
-      description: Managed volume lifecycle state
-      enum: [creating, ready, pending_create, pending_delete, deleting, deleted, error]
+      description: Managed volume lifecycle state. Mirrors BoxState's vocabulary.
+      enum: [creating, ready, destroying, destroyed, error]
 
     VolumeSummary:
       type: object

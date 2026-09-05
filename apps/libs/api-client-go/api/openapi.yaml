@@ -6568,10 +6568,8 @@ components:
       enum:
       - creating
       - ready
-      - pending_create
-      - pending_delete
-      - deleting
-      - deleted
+      - destroying
+      - destroyed
       - error
       type: string
     VolumeDto:

@@ -62,16 +62,14 @@ function timeAgo(value?: string | null): string {
 }
 
 // Transitional states read as `warn` rather than blending in with the healthy
-// ones: a volume stuck in `pending_delete` is exactly the leak this page exists
+// ones: a volume stuck in `destroying` is exactly the leak this page exists
 // to surface, so it must not look calm.
 const STATE_TONE: Record<string, 'ok' | 'warn' | 'bad' | 'idle'> = {
   [VolumeState.READY]: 'ok',
   [VolumeState.CREATING]: 'warn',
-  [VolumeState.PENDING_CREATE]: 'warn',
-  [VolumeState.PENDING_DELETE]: 'warn',
-  [VolumeState.DELETING]: 'warn',
+  [VolumeState.DESTROYING]: 'warn',
   [VolumeState.ERROR]: 'bad',
-  [VolumeState.DELETED]: 'idle',
+  [VolumeState.DESTROYED]: 'idle',
 }
 
 // Deliberately absent: "which boxes mount this volume".
@@ -159,7 +157,7 @@ const Volumes: React.FC = () => {
   // opinion about the same question.
   const handleDelete = async (volume: VolumeDto) => {
     setBusy((prev) => ({ ...prev, [volume.id]: true }))
-    updateVolumeStateInCache(volume.id, VolumeState.PENDING_DELETE)
+    updateVolumeStateInCache(volume.id, VolumeState.DESTROYING)
     try {
       await deleteVolume.mutateAsync({ volumeId: volume.id, organizationId: selectedOrganization?.id })
       if (selectedOrganization?.id) {
@@ -239,7 +237,7 @@ const Volumes: React.FC = () => {
               // the explanation for the two states that have one.
               const statusDetail =
                 volume.errorReason ||
-                (volume.state === VolumeState.PENDING_DELETE || volume.state === VolumeState.DELETING
+                (volume.state === VolumeState.DESTROYING
                   ? 'Reclaiming — this can take a few minutes. The volume stays listed until it finishes.'
                   : undefined)
               return (
