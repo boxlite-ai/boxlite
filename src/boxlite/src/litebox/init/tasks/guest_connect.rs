@@ -82,7 +82,7 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
                 &console_log,
                 &stderr_file,
                 box_id.as_str(),
-                GUEST_READY_TIMEOUT,
+                guest_ready_timeout(),
             )
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -107,7 +107,24 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
 /// Exposed as a constant so tests can call `wait_for_guest_ready` with a
 /// short timeout and exercise the real timeout branch (including its
 /// diagnostic-collection logic) without waiting 30s.
-const GUEST_READY_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_GUEST_READY_TIMEOUT_SECS: u64 = 30;
+const GUEST_READY_TIMEOUT_ENV: &str = "BOXLITE_GUEST_READY_TIMEOUT_SECS";
+
+/// Returns the configured timeout for the guest-ready handshake.
+fn guest_ready_timeout() -> Duration {
+    guest_ready_timeout_from(std::env::var(GUEST_READY_TIMEOUT_ENV).ok().as_deref())
+}
+
+/// Resolves the guest-ready timeout from an optional environment value.
+///
+/// Invalid, missing, and zero values retain the production default.
+fn guest_ready_timeout_from(value: Option<&str>) -> Duration {
+    let seconds = value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|&seconds| seconds > 0)
+        .unwrap_or(DEFAULT_GUEST_READY_TIMEOUT_SECS);
+    Duration::from_secs(seconds)
+}
 
 /// Wait for guest to signal readiness, racing against shim process death.
 ///
@@ -302,6 +319,20 @@ async fn wait_for_process_exit(pid: Option<u32>) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guest_ready_timeout_uses_override_and_defaults_invalid_values() {
+        assert_eq!(
+            guest_ready_timeout_from(Some("90")),
+            Duration::from_secs(90)
+        );
+        assert_eq!(guest_ready_timeout_from(Some("0")), Duration::from_secs(30));
+        assert_eq!(
+            guest_ready_timeout_from(Some("not-a-number")),
+            Duration::from_secs(30)
+        );
+        assert_eq!(guest_ready_timeout_from(None), Duration::from_secs(30));
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // wait_for_guest_ready tests
