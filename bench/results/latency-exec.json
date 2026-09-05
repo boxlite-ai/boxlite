@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "scenario": "latency-exec",
+  "metadata": {
+    "started_at": "2026-06-17T11:57:10.505744+00:00",
+    "label": "https://api.dev.boxlite.ai/api (20260605-p0-r3)",
+    "git_commit": "9e153f8b",
+    "host": {
+      "kernel": "macOS-26.4-arm64-arm-64bit",
+      "arch": "arm64",
+      "target": "https://api.dev.boxlite.ai/api"
+    }
+  },
+  "sample_count": 4,
+  "warmup_count": 1,
+  "samples": [
+    {
+      "iteration": 1,
+      "warmup": true,
+      "wall_ms": 1269.4566661957651,
+      "metrics": {
+        "exec_wall_ms": 1269.4566661957651
+      }
+    },
+    {
+      "iteration": 2,
+      "warmup": false,
+      "wall_ms": 1324.691542191431,
+      "metrics": {
+        "exec_wall_ms": 1324.691542191431
+      }
+    },
+    {
+      "iteration": 3,
+      "warmup": false,
+      "wall_ms": 1047.2902080509812,
+      "metrics": {
+        "exec_wall_ms": 1047.2902080509812
+      }
+    },
+    {
+      "iteration": 4,
+      "warmup": false,
+      "wall_ms": 1323.3436248265207,
+      "metrics": {
+        "exec_wall_ms": 1323.3436248265207
+      }
+    },
+    {
+      "iteration": 5,
+      "warmup": false,
+      "wall_ms": 972.9088328313082,
+      "metrics": {
+        "exec_wall_ms": 972.9088328313082
+      }
+    }
+  ],
+  "aggregates": [
+    {
+      "name": "exec_wall_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 972.9088328313082,
+      "p50": 1185.316916438751,
+      "p90": 1324.2871669819579,
+      "p99": 1324.6511046704836,
+      "max": 1324.691542191431,
+      "mean": 1167.0585519750603,
+      "stdev": 183.7677458556996,
+      "n": 4
+    }
+  ]
+}

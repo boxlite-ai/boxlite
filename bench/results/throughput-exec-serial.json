@@ -1,0 +1,127 @@
+{
+  "schema_version": "1.0",
+  "scenario": "throughput-exec-serial",
+  "metadata": {
+    "started_at": "2026-06-17T12:14:52.320462+00:00",
+    "label": "https://api.dev.boxlite.ai/api (20260605-p0-r3)",
+    "git_commit": "9e153f8b",
+    "host": {
+      "kernel": "macOS-26.4-arm64-arm-64bit",
+      "arch": "arm64",
+      "target": "https://api.dev.boxlite.ai/api"
+    }
+  },
+  "sample_count": 4,
+  "warmup_count": 1,
+  "samples": [
+    {
+      "iteration": 1,
+      "warmup": true,
+      "wall_ms": 29440.824541961774,
+      "metrics": {
+        "total_wall_ms": 29440.824541961774,
+        "exec_count": 20.0,
+        "execs_per_sec": 0.6793287997587893,
+        "avg_exec_ms": 1472.0412270980887
+      }
+    },
+    {
+      "iteration": 2,
+      "warmup": false,
+      "wall_ms": 34346.95858298801,
+      "metrics": {
+        "total_wall_ms": 34346.95858298801,
+        "exec_count": 20.0,
+        "execs_per_sec": 0.5822931876683244,
+        "avg_exec_ms": 1717.3479291494004
+      }
+    },
+    {
+      "iteration": 3,
+      "warmup": false,
+      "wall_ms": 26724.6862500906,
+      "metrics": {
+        "total_wall_ms": 26724.6862500906,
+        "exec_count": 20.0,
+        "execs_per_sec": 0.7483717418733848,
+        "avg_exec_ms": 1336.23431250453
+      }
+    },
+    {
+      "iteration": 4,
+      "warmup": false,
+      "wall_ms": 27192.295416956767,
+      "metrics": {
+        "total_wall_ms": 27192.295416956767,
+        "exec_count": 20.0,
+        "execs_per_sec": 0.7355024536666461,
+        "avg_exec_ms": 1359.6147708478384
+      }
+    },
+    {
+      "iteration": 5,
+      "warmup": false,
+      "wall_ms": 26200.674292165786,
+      "metrics": {
+        "total_wall_ms": 26200.674292165786,
+        "exec_count": 20.0,
+        "execs_per_sec": 0.7633391330688066,
+        "avg_exec_ms": 1310.0337146082893
+      }
+    }
+  ],
+  "aggregates": [
+    {
+      "name": "avg_exec_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 1310.0337146082893,
+      "p50": 1347.9245416761842,
+      "p90": 1610.0279816589318,
+      "p99": 1706.6159344003536,
+      "max": 1717.3479291494004,
+      "mean": 1430.8076817775145,
+      "stdev": 192.09738611098606,
+      "n": 4
+    },
+    {
+      "name": "exec_count",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 20.0,
+      "p50": 20.0,
+      "p90": 20.0,
+      "p99": 20.0,
+      "max": 20.0,
+      "mean": 20.0,
+      "stdev": 0.0,
+      "n": 4
+    },
+    {
+      "name": "execs_per_sec",
+      "unit": "ms",
+      "higher_is_better": true,
+      "min": 0.5822931876683244,
+      "p50": 0.7419370977700155,
+      "p90": 0.7588489157101801,
+      "p99": 0.762890111332944,
+      "max": 0.7633391330688066,
+      "mean": 0.7073766290692904,
+      "stdev": 0.08416121523541671,
+      "n": 4
+    },
+    {
+      "name": "total_wall_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 26200.674292165786,
+      "p50": 26958.490833523683,
+      "p90": 32200.55963317864,
+      "p99": 34132.31868800707,
+      "max": 34346.95858298801,
+      "mean": 28616.15363555029,
+      "stdev": 3841.947722219721,
+      "n": 4
+    }
+  ]
+}

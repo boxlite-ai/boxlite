@@ -1,0 +1,127 @@
+{
+  "schema_version": "1.0",
+  "scenario": "throughput-exec-parallel",
+  "metadata": {
+    "started_at": "2026-06-17T12:11:53.657439+00:00",
+    "label": "https://api.dev.boxlite.ai/api (20260605-p0-r3)",
+    "git_commit": "9e153f8b",
+    "host": {
+      "kernel": "macOS-26.4-arm64-arm-64bit",
+      "arch": "arm64",
+      "target": "https://api.dev.boxlite.ai/api"
+    }
+  },
+  "sample_count": 4,
+  "warmup_count": 1,
+  "samples": [
+    {
+      "iteration": 1,
+      "warmup": true,
+      "wall_ms": 2679.127665935084,
+      "metrics": {
+        "batch_wall_ms": 2679.127665935084,
+        "concurrency": 10.0,
+        "per_exec_mean_ms": 1284.5329166390002,
+        "per_exec_max_ms": 2678.3877089619637
+      }
+    },
+    {
+      "iteration": 2,
+      "warmup": false,
+      "wall_ms": 3144.4284170866013,
+      "metrics": {
+        "batch_wall_ms": 3144.4284170866013,
+        "concurrency": 10.0,
+        "per_exec_mean_ms": 2266.0685039591044,
+        "per_exec_max_ms": 3141.7815419845283
+      }
+    },
+    {
+      "iteration": 3,
+      "warmup": false,
+      "wall_ms": 2346.654040971771,
+      "metrics": {
+        "batch_wall_ms": 2346.654040971771,
+        "concurrency": 10.0,
+        "per_exec_mean_ms": 1414.616237510927,
+        "per_exec_max_ms": 2344.272625166923
+      }
+    },
+    {
+      "iteration": 4,
+      "warmup": false,
+      "wall_ms": 2787.9763750825077,
+      "metrics": {
+        "batch_wall_ms": 2787.9763750825077,
+        "concurrency": 10.0,
+        "per_exec_mean_ms": 1527.1886666538194,
+        "per_exec_max_ms": 2785.0872080307454
+      }
+    },
+    {
+      "iteration": 5,
+      "warmup": false,
+      "wall_ms": 3430.6123331189156,
+      "metrics": {
+        "batch_wall_ms": 3430.6123331189156,
+        "concurrency": 10.0,
+        "per_exec_mean_ms": 1715.2613540645689,
+        "per_exec_max_ms": 3429.351749829948
+      }
+    }
+  ],
+  "aggregates": [
+    {
+      "name": "batch_wall_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 2346.654040971771,
+      "p50": 2966.2023960845545,
+      "p90": 3344.7571583092213,
+      "p99": 3422.026815637946,
+      "max": 3430.6123331189156,
+      "mean": 2927.417791564949,
+      "stdev": 467.98461544253433,
+      "n": 4
+    },
+    {
+      "name": "concurrency",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 10.0,
+      "p50": 10.0,
+      "p90": 10.0,
+      "p99": 10.0,
+      "max": 10.0,
+      "mean": 10.0,
+      "stdev": 0.0,
+      "n": 4
+    },
+    {
+      "name": "per_exec_max_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 2344.272625166923,
+      "p50": 2963.434375007637,
+      "p90": 3343.080687476322,
+      "p99": 3420.7246435945854,
+      "max": 3429.351749829948,
+      "mean": 2925.123281253036,
+      "stdev": 468.39610621275096,
+      "n": 4
+    },
+    {
+      "name": "per_exec_mean_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 1414.616237510927,
+      "p50": 1621.2250103591941,
+      "p90": 2100.8263589907438,
+      "p99": 2249.5442894622684,
+      "max": 2266.0685039591044,
+      "mean": 1730.783690547105,
+      "stdev": 377.79340320378253,
+      "n": 4
+    }
+  ]
+}

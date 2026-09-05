@@ -1,0 +1,163 @@
+{
+  "schema_version": "1.0",
+  "scenario": "stability-churn",
+  "metadata": {
+    "started_at": "2026-06-17T12:04:13.728135+00:00",
+    "label": "https://api.dev.boxlite.ai/api (20260605-p0-r3)",
+    "git_commit": "9e153f8b",
+    "host": {
+      "kernel": "macOS-26.4-arm64-arm-64bit",
+      "arch": "arm64",
+      "target": "https://api.dev.boxlite.ai/api"
+    }
+  },
+  "sample_count": 4,
+  "warmup_count": 1,
+  "samples": [
+    {
+      "iteration": 1,
+      "warmup": true,
+      "wall_ms": 10.0,
+      "metrics": {
+        "cycles": 10.0,
+        "first_cycle_ms": 7182.926582871005,
+        "last_cycle_ms": 7340.350749902427,
+        "mean_cycle_ms": 7324.33072917629,
+        "max_cycle_ms": 9805.654415860772,
+        "drift_ms": 157.42416703142226
+      }
+    },
+    {
+      "iteration": 2,
+      "warmup": false,
+      "wall_ms": 10.0,
+      "metrics": {
+        "cycles": 10.0,
+        "first_cycle_ms": 7342.134666861966,
+        "last_cycle_ms": 7083.020499907434,
+        "mean_cycle_ms": 8021.569795743562,
+        "max_cycle_ms": 11236.863166792318,
+        "drift_ms": -259.11416695453227
+      }
+    },
+    {
+      "iteration": 3,
+      "warmup": false,
+      "wall_ms": 10.0,
+      "metrics": {
+        "cycles": 10.0,
+        "first_cycle_ms": 9219.60841701366,
+        "last_cycle_ms": 12760.74929209426,
+        "mean_cycle_ms": 8099.970362661406,
+        "max_cycle_ms": 12760.74929209426,
+        "drift_ms": 3541.1408750806004
+      }
+    },
+    {
+      "iteration": 4,
+      "warmup": false,
+      "wall_ms": 10.0,
+      "metrics": {
+        "cycles": 10.0,
+        "first_cycle_ms": 9233.286458067596,
+        "last_cycle_ms": 7973.614916903898,
+        "mean_cycle_ms": 7404.302483308129,
+        "max_cycle_ms": 11010.297999950126,
+        "drift_ms": -1259.6715411636978
+      }
+    },
+    {
+      "iteration": 5,
+      "warmup": false,
+      "wall_ms": 10.0,
+      "metrics": {
+        "cycles": 10.0,
+        "first_cycle_ms": 6702.772417105734,
+        "last_cycle_ms": 6296.033707913011,
+        "mean_cycle_ms": 7905.180679121986,
+        "max_cycle_ms": 12435.241499915719,
+        "drift_ms": -406.73870919272304
+      }
+    }
+  ],
+  "aggregates": [
+    {
+      "name": "cycles",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 10.0,
+      "p50": 10.0,
+      "p90": 10.0,
+      "p99": 10.0,
+      "max": 10.0,
+      "mean": 10.0,
+      "stdev": 0.0,
+      "n": 4
+    },
+    {
+      "name": "drift_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": -1259.6715411636978,
+      "p50": -332.92643807362765,
+      "p90": 2401.064362470061,
+      "p99": 3427.1332238195455,
+      "max": 3541.1408750806004,
+      "mean": 403.9041144424118,
+      "stdev": 2137.480875797691,
+      "n": 4
+    },
+    {
+      "name": "first_cycle_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 6702.772417105734,
+      "p50": 8280.871541937813,
+      "p90": 9229.183045751415,
+      "p99": 9232.876116835978,
+      "max": 9233.286458067596,
+      "mean": 8124.450489762239,
+      "stdev": 1298.983535854317,
+      "n": 4
+    },
+    {
+      "name": "last_cycle_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 6296.033707913011,
+      "p50": 7528.317708405666,
+      "p90": 11324.608979537152,
+      "p99": 12617.135260838548,
+      "max": 12760.74929209426,
+      "mean": 8528.354604204651,
+      "stdev": 2903.6269372291194,
+      "n": 4
+    },
+    {
+      "name": "max_cycle_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 11010.297999950126,
+      "p50": 11836.052333354019,
+      "p90": 12663.096954440698,
+      "p99": 12750.984058328904,
+      "max": 12760.74929209426,
+      "mean": 11860.787989688106,
+      "stdev": 866.5145870115629,
+      "n": 4
+    },
+    {
+      "name": "mean_cycle_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 7404.302483308129,
+      "p50": 7963.375237432774,
+      "p90": 8076.450192586053,
+      "p99": 8097.618345653871,
+      "max": 8099.970362661406,
+      "mean": 7857.755830208771,
+      "stdev": 312.7149656078294,
+      "n": 4
+    }
+  ]
+}

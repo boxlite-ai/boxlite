@@ -1,0 +1,163 @@
+{
+  "schema_version": "1.0",
+  "scenario": "stability-exec-loop",
+  "metadata": {
+    "started_at": "2026-06-17T12:11:04.262851+00:00",
+    "label": "https://api.dev.boxlite.ai/api (20260605-p0-r3)",
+    "git_commit": "9e153f8b",
+    "host": {
+      "kernel": "macOS-26.4-arm64-arm-64bit",
+      "arch": "arm64",
+      "target": "https://api.dev.boxlite.ai/api"
+    }
+  },
+  "sample_count": 4,
+  "warmup_count": 1,
+  "samples": [
+    {
+      "iteration": 1,
+      "warmup": true,
+      "wall_ms": 50.0,
+      "metrics": {
+        "exec_count": 50.0,
+        "mean_exec_ms": 1398.8010699907318,
+        "max_exec_ms": 3553.1241251155734,
+        "first_10_mean_ms": 1358.2221748773009,
+        "last_10_mean_ms": 1415.5296125914901,
+        "degradation_ms": 57.30743771418929
+      }
+    },
+    {
+      "iteration": 2,
+      "warmup": false,
+      "wall_ms": 50.0,
+      "metrics": {
+        "exec_count": 50.0,
+        "mean_exec_ms": 1354.3089783890173,
+        "max_exec_ms": 5588.053917046636,
+        "first_10_mean_ms": 1525.4153877263889,
+        "last_10_mean_ms": 1607.0998541312292,
+        "degradation_ms": 81.68446640484035
+      }
+    },
+    {
+      "iteration": 3,
+      "warmup": false,
+      "wall_ms": 50.0,
+      "metrics": {
+        "exec_count": 50.0,
+        "mean_exec_ms": 1392.742221658118,
+        "max_exec_ms": 3187.2187920380384,
+        "first_10_mean_ms": 1186.9040749035776,
+        "last_10_mean_ms": 1279.979266738519,
+        "degradation_ms": 93.0751918349415
+      }
+    },
+    {
+      "iteration": 4,
+      "warmup": false,
+      "wall_ms": 50.0,
+      "metrics": {
+        "exec_count": 50.0,
+        "mean_exec_ms": 1398.031120034866,
+        "max_exec_ms": 2866.791500011459,
+        "first_10_mean_ms": 1344.996629259549,
+        "last_10_mean_ms": 1473.0090293101966,
+        "degradation_ms": 128.01240005064756
+      }
+    },
+    {
+      "iteration": 5,
+      "warmup": false,
+      "wall_ms": 50.0,
+      "metrics": {
+        "exec_count": 50.0,
+        "mean_exec_ms": 1861.4900708571076,
+        "max_exec_ms": 10562.904916005209,
+        "first_10_mean_ms": 2072.206091834232,
+        "last_10_mean_ms": 1363.2030125940219,
+        "degradation_ms": -709.0030792402104
+      }
+    }
+  ],
+  "aggregates": [
+    {
+      "name": "degradation_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": -709.0030792402104,
+      "p50": 87.37982911989093,
+      "p90": 117.53123758593576,
+      "p99": 126.96428380417638,
+      "max": 128.01240005064756,
+      "mean": -101.55775523744524,
+      "stdev": 405.44295683047136,
+      "n": 4
+    },
+    {
+      "name": "exec_count",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 50.0,
+      "p50": 50.0,
+      "p90": 50.0,
+      "p99": 50.0,
+      "max": 50.0,
+      "mean": 50.0,
+      "stdev": 0.0,
+      "n": 4
+    },
+    {
+      "name": "first_10_mean_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 1186.9040749035776,
+      "p50": 1435.206008492969,
+      "p90": 1908.1688806018794,
+      "p99": 2055.802370710997,
+      "max": 2072.206091834232,
+      "mean": 1532.380545930937,
+      "stdev": 385.54154886308197,
+      "n": 4
+    },
+    {
+      "name": "last_10_mean_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 1279.979266738519,
+      "p50": 1418.1060209521092,
+      "p90": 1566.8726066849194,
+      "p99": 1603.0771293865982,
+      "max": 1607.0998541312292,
+      "mean": 1430.8227906934917,
+      "stdev": 141.6327233048371,
+      "n": 4
+    },
+    {
+      "name": "max_exec_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 2866.791500011459,
+      "p50": 4387.636354542337,
+      "p90": 9070.449616317637,
+      "p99": 10413.659386036452,
+      "max": 10562.904916005209,
+      "mean": 5551.242281275336,
+      "stdev": 3554.949625314432,
+      "n": 4
+    },
+    {
+      "name": "mean_exec_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 1354.3089783890173,
+      "p50": 1395.386670846492,
+      "p90": 1722.4523856104352,
+      "p99": 1847.5863023324403,
+      "max": 1861.4900708571076,
+      "mean": 1501.6430977347773,
+      "stdev": 240.68792347619257,
+      "n": 4
+    }
+  ]
+}

@@ -1,0 +1,127 @@
+{
+  "schema_version": "1.0",
+  "scenario": "latency-cold-start",
+  "metadata": {
+    "started_at": "2026-06-17T11:56:30.838525+00:00",
+    "label": "https://api.dev.boxlite.ai/api (20260605-p0-r3)",
+    "git_commit": "9e153f8b",
+    "host": {
+      "kernel": "macOS-26.4-arm64-arm-64bit",
+      "arch": "arm64",
+      "target": "https://api.dev.boxlite.ai/api"
+    }
+  },
+  "sample_count": 4,
+  "warmup_count": 1,
+  "samples": [
+    {
+      "iteration": 1,
+      "warmup": true,
+      "wall_ms": 1672.9062909726053,
+      "metrics": {
+        "api_create_wall_ms": 1672.9062909726053,
+        "runner_create_ms": 561.0,
+        "first_exec_wall_ms": 1898.1214999221265,
+        "total_ready_wall_ms": 5571.027790894732
+      }
+    },
+    {
+      "iteration": 2,
+      "warmup": false,
+      "wall_ms": 1746.9586660154164,
+      "metrics": {
+        "api_create_wall_ms": 1746.9586660154164,
+        "runner_create_ms": 559.0,
+        "first_exec_wall_ms": 1913.9461249578744,
+        "total_ready_wall_ms": 5660.904790973291
+      }
+    },
+    {
+      "iteration": 3,
+      "warmup": false,
+      "wall_ms": 1987.1243329253048,
+      "metrics": {
+        "api_create_wall_ms": 1987.1243329253048,
+        "runner_create_ms": 557.0,
+        "first_exec_wall_ms": 1277.7571249753237,
+        "total_ready_wall_ms": 5264.881457900628
+      }
+    },
+    {
+      "iteration": 4,
+      "warmup": false,
+      "wall_ms": 2309.0840000659227,
+      "metrics": {
+        "api_create_wall_ms": 2309.0840000659227,
+        "runner_create_ms": 549.0,
+        "first_exec_wall_ms": 992.5624160096049,
+        "total_ready_wall_ms": 5301.646416075528
+      }
+    },
+    {
+      "iteration": 5,
+      "warmup": false,
+      "wall_ms": 1629.7256250400096,
+      "metrics": {
+        "api_create_wall_ms": 1629.7256250400096,
+        "runner_create_ms": 565.0,
+        "first_exec_wall_ms": 1313.9789160341024,
+        "total_ready_wall_ms": 4943.704541074112
+      }
+    }
+  ],
+  "aggregates": [
+    {
+      "name": "api_create_wall_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 1629.7256250400096,
+      "p50": 1867.0414994703606,
+      "p90": 2212.4960999237373,
+      "p99": 2299.425210051704,
+      "max": 2309.0840000659227,
+      "mean": 1918.2231560116634,
+      "stdev": 300.04550905115923,
+      "n": 4
+    },
+    {
+      "name": "first_exec_wall_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 992.5624160096049,
+      "p50": 1295.868020504713,
+      "p90": 1733.9559622807428,
+      "p99": 1895.947108690161,
+      "max": 1913.9461249578744,
+      "mean": 1374.5611454942264,
+      "stdev": 387.2554756720032,
+      "n": 4
+    },
+    {
+      "name": "runner_create_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 549.0,
+      "p50": 558.0,
+      "p90": 563.2,
+      "p99": 564.8199999999999,
+      "max": 565.0,
+      "mean": 557.5,
+      "stdev": 6.60807586719967,
+      "n": 4
+    },
+    {
+      "name": "total_ready_wall_ms",
+      "unit": "ms",
+      "higher_is_better": false,
+      "min": 4943.704541074112,
+      "p50": 5283.263936988078,
+      "p90": 5553.127278503962,
+      "p99": 5650.127039726357,
+      "max": 5660.904790973291,
+      "mean": 5292.78430150589,
+      "stdev": 293.38625261176963,
+      "n": 4
+    }
+  ]
+}
