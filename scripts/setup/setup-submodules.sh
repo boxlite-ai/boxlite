@@ -67,6 +67,26 @@ validate_submodules() {
         "https://github.com/containers/bubblewrap.git"
 }
 
+# `git submodule status` prefixes a submodule with "-" only while its gitlink is
+# absent. A clone interrupted between fetch and checkout keeps the gitlink and the
+# fetched objects but leaves an empty index and no worktree files, so it reports "+"
+# or " " and reads as healthy. Emit those paths too, or the broken checkout is never
+# repaired.
+unchecked_paths() {
+    local repo_root="$1"
+    local path
+
+    # Fields are "<status><sha> <path> [(describe)]"; only the path is needed.
+    while read -r _ path _; do
+        [[ -n "$path" ]] || continue
+        if [[ ! -e "$repo_root/$path/.git" ]]; then
+            printf '%s\n' "$path"
+        elif [[ -z "$(git -C "$repo_root/$path" ls-files --cached 2>/dev/null | head -n 1)" ]]; then
+            printf '%s\n' "$path"
+        fi
+    done
+}
+
 validate_jobs() {
     local jobs="$1"
 
@@ -80,6 +100,8 @@ main() {
     local repo_root="${1:-$PROJECT_ROOT}"
     local jobs="${BOXLITE_SUBMODULE_JOBS:-4}"
     local submodule_status
+    local path
+    local unchecked=()
 
     validate_submodules "$repo_root"
     validate_jobs "$jobs"
@@ -91,14 +113,23 @@ main() {
     fi
 
     print_step "Checking git submodules... "
-    if ! grep -q '^-' <<<"$submodule_status"; then
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        unchecked+=("$path")
+    done < <(unchecked_paths "$repo_root" <<<"$submodule_status")
+
+    if ((${#unchecked[@]} == 0)); then
         print_success "Already initialized"
         return 0
     fi
 
     echo -e "${YELLOW}Initializing with $jobs jobs...${NC}"
     git -C "$repo_root" submodule sync
-    git -C "$repo_root" submodule update --init --depth 1 --jobs "$jobs"
+    # --force is what re-runs the checkout when the recorded commit already matches
+    # the submodule's HEAD — the interrupted-clone case. It is confined to the paths
+    # with no checkout, so a healthy submodule's local changes are never discarded.
+    git -C "$repo_root" submodule update --init --force --depth 1 --jobs "$jobs" \
+        -- "${unchecked[@]}"
     print_success "Submodules initialized"
 }
 

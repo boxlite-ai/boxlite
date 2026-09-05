@@ -149,4 +149,27 @@ GIT_CONFIG_GLOBAL="$scratch/gitconfig" GIT_ALLOW_PROTOCOL=file:https \
     "$subject" "$fixture" >"$scratch/second-run.log"
 grep -qi 'already initialized' "$scratch/second-run.log" || fail "second run was not idempotent"
 
+# A clone interrupted between fetch and checkout keeps its gitlink and objects but
+# loses the index and every worktree file. Git still reports such a submodule as
+# present, so the script has to recognise the empty checkout on its own.
+interrupted="src/deps/bubblewrap-sys/vendor/bubblewrap"
+interrupted_gitdir="$fixture/.git/modules/$interrupted"
+[[ -f "$interrupted_gitdir/index" ]] || fail "fixture submodule has no index to remove"
+rm -f "$interrupted_gitdir/index"
+find "$fixture/$interrupted" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+[[ ! -e "$fixture/$interrupted/README.md" ]] || fail "interrupted-clone fixture kept its checkout"
+if git -C "$fixture" submodule status | grep -q "^-.*$interrupted"; then
+    fail "interrupted-clone fixture reads as missing; it must read as present"
+fi
+
+GIT_CONFIG_GLOBAL="$scratch/gitconfig" GIT_ALLOW_PROTOCOL=file:https \
+    "$subject" "$fixture" >"$scratch/repair-run.log" 2>&1 || \
+    fail "repair run failed: $(cat "$scratch/repair-run.log")"
+[[ -f "$fixture/$interrupted/README.md" ]] || \
+    fail "interrupted clone was not repaired: $interrupted has no checkout"
+verify_oid "$interrupted"
+if git -C "$fixture" submodule status --recursive | grep -q '^[+-U]'; then
+    fail "repaired submodule status was not clean"
+fi
+
 printf 'test-setup-submodules: all checks passed\n'
