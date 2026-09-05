@@ -47,7 +47,7 @@ static int example_drain_until_done(CBoxliteRuntime *runtime, const int *done,
                                     const char *context) {
   while (!*done) {
     CBoxliteError error = {0};
-    if (boxlite_runtime_drain(runtime, -1, &error) < 0) {
+    if (boxlite_runtime_drain(runtime, 100, &error) < 0) {
       print_error(context, &error);
       boxlite_error_free(&error);
       return 0;
