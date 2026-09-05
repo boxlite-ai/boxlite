@@ -23,6 +23,11 @@ export const useUpgradePlanMutation = () => {
     onSuccess: async (_data, { organizationId }) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.organization.plan(organizationId) }),
+        // The upgrade path reconciles subscription credit and invalidates the
+        // available balance (boxlite-commerce upgrade-subscription.ts,
+        // finish-upgrade.ts), so the wallet moves with the plan block — and the
+        // two are read side by side (ThisCycleCard, CycleOverview).
+        queryClient.invalidateQueries({ queryKey: queryKeys.organization.wallet(organizationId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.organization.usage.overview(organizationId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.billing.transactions(organizationId) }),
       ])

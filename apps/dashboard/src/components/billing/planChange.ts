@@ -174,7 +174,7 @@ export function planChangeSummary({
     walletNote: wallet
       ? `Usage beyond the included quota draws on the wallet, which holds ${formatAmount(wallet.balanceCents)}.`
       : null,
-    caveats: caveatsFor({ planId, plan, current, catalog, rollDay }),
+    caveats: caveatsFor({ planId, direction, plan, current, catalog, rollDay }),
     blocked: blockFor({ planId, target, plan, ended, rollDay }),
   }
 }
@@ -228,7 +228,18 @@ function effectFor({
     return `Switches you to ${targetName}. Because your current plan is negotiated, the terms and any charge are settled by billing rather than shown here.`
   }
   if (direction === 'upgrade') {
-    return `Applies immediately. Your subscription is charged the prorated difference today, and ${targetName}'s quota is available right away.`
+    // An in-place upgrade restarts the billing cycle at the upgrade instant:
+    // the charge is a whole period of the new plan less the unused share of the
+    // old one, and the renewal moves with it.
+    //
+    // NOT YET TRUE OF THE DEPLOYED SERVICE. That contract arrives with
+    // boxlite-commerce's `feat/upgrade-opens-fresh-cycle`
+    // (docs/boxlite-client-contract.md there; write-upgrade.ts anchors the
+    // successor at the upgrade instant, cycle.ts prices the credit as
+    // unusedPeriodCents). Until it merges, Commerce still charges the price
+    // difference and keeps the billing day — and this is the sentence read
+    // immediately before money moves, so it must not ship ahead of it.
+    return `Applies immediately and restarts your billing cycle today: you are charged a full period of ${targetName} less the unused part of your current cycle. ${targetName}'s full quota is available right away, and the next renewal is one month from today.`
   }
   return rollDay
     ? `Applies on ${rollDay}, when the current cycle rolls. Nothing is charged today.`
@@ -237,12 +248,14 @@ function effectFor({
 
 function caveatsFor({
   planId,
+  direction,
   plan,
   current,
   catalog,
   rollDay,
 }: {
   planId: string
+  direction: PlanChangeDirection
   plan: OrganizationPlan | null
   current: Plan | undefined
   catalog: Plan[]
@@ -259,10 +272,21 @@ function caveatsFor({
     })
   }
   const queued = queuedChange(plan)
-  if (queued?.kind === 'cancel') {
+  if (plan && queued?.kind === 'cancel') {
+    // A downgrade clears the scheduled end and takes over at the boundary; an
+    // upgrade keeps it, re-derived as the end of the period just bought
+    // (boxlite-commerce subscription.repository.ts, queueDowngrade and
+    // replaceActivePlan — same unmerged change as `effectFor`'s upgrade
+    // branch). That end arrives as the plan block's next `cycleTo`, which does
+    // not exist until the change applies, so this states an offset from today
+    // rather than a date.
+    const ends = `Your subscription is set to end${rollDay ? ` on ${rollDay}` : ''}.`
     caveats.push({
       tone: 'warn',
-      text: `Your subscription is set to end${rollDay ? ` on ${rollDay}` : ''}. Confirming replaces that with this change.`,
+      text:
+        direction === 'upgrade'
+          ? `${ends} This change starts a new billing period today and the cancellation moves to the end of it, one month from today. Use "Keep ${plan.planName}" on the billing page if you want to stay subscribed.`
+          : `${ends} Confirming replaces that with this change.`,
     })
     // When the queued plan IS the one being viewed, `blocked` already says there
     // is nothing to confirm — "confirming replaces it" beside that contradicts it.
