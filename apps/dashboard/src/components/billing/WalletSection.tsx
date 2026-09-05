@@ -46,7 +46,13 @@ export const MIN_TOP_UP_DOLLARS = 10
  */
 const DEFAULT_AUTO_RELOAD: AutomaticTopUp = { thresholdAmount: 20, targetAmount: 100 }
 
-/** Whether Top up can run, and why not when it cannot. */
+/**
+ * Validates whether a top-up amount meets requirements.
+ * Whether Top up can run, and why not when it cannot.
+ *
+ * @param amountDollars - The amount in dollars to validate, or undefined
+ * @returns Object with enabled flag and optional reason string when disabled
+ */
 export function topUpGate(amountDollars: number | undefined): { enabled: boolean; reason: string | null } {
   if (!amountDollars) {
     return { enabled: false, reason: null }
@@ -57,7 +63,14 @@ export function topUpGate(amountDollars: number | undefined): { enabled: boolean
   return { enabled: true, reason: null }
 }
 
-/** Keep the requested page inside a total that shrinks under it. */
+/**
+ * Ensures the current page stays within valid bounds when total pages change.
+ * Keep the requested page inside a total that shrinks under it.
+ *
+ * @param page - Current page number
+ * @param totalPages - Total number of available pages
+ * @param setPage - Function to update the page number
+ */
 function useClampPage(page: number, totalPages: number, setPage: (page: number) => void) {
   useEffect(() => {
     if (totalPages > 0 && page > totalPages) {
@@ -66,6 +79,16 @@ function useClampPage(page: number, totalPages: number, setPage: (page: number) 
   }, [page, totalPages, setPage])
 }
 
+/**
+ * Renders pagination controls for navigating between pages.
+ * Hidden when there's only one page or no pages.
+ *
+ * @param props - Component props
+ * @param props.page - Current page number
+ * @param props.totalPages - Total number of pages
+ * @param props.onPage - Callback to update page number, receives updater function
+ * @returns Pagination controls or null if not needed
+ */
 function Pager({
   page,
   totalPages,
@@ -95,10 +118,13 @@ function Pager({
 }
 
 /**
+ * Displays the billing history section showing all charged invoices.
  * The money history: what was actually charged, for usage, plan changes and
  * credit purchases alike. This is the primary billing surface — a credit grant
  * is quota rather than a payment, and reading both off one table is what let a
  * prorated upgrade's granted quota be mistaken for the amount billed for it.
+ *
+ * @returns The billing history section component with invoice table and pagination
  */
 function BillingHistorySection() {
   const [page, setPage] = useState(1)
@@ -123,10 +149,13 @@ function BillingHistorySection() {
 }
 
 /**
+ * Displays the collapsible credit activity section showing wallet ledger transactions.
  * Grants, expiries and void-restores are free quota with no invoice behind
  * them, so they appear in no other feed and still need a home — but folded,
  * because a top-up already shows in the billing history above as the money it
  * cost, and showing it twice at equal weight is what caused the confusion.
+ *
+ * @returns The wallet transactions section component with collapsible content
  */
 function WalletTransactionsSection() {
   const [open, setOpen] = useState(false)
@@ -163,6 +192,12 @@ function WalletTransactionsSection() {
   )
 }
 
+/**
+ * Main wallet section component displaying balance, payment methods, billing history, and credit activity.
+ * Manages state for top-ups, auto-reload settings, and coupon redemption.
+ *
+ * @returns The complete wallet section component
+ */
 export function WalletSection() {
   const { selectedOrganization } = useSelectedOrganization()
   const { user } = useAuth()

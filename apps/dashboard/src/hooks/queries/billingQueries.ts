@@ -83,6 +83,15 @@ export function useOwnerInvoicesQuery(page?: number, perPage?: number) {
   })
 }
 
+/**
+ * Fetches wallet credit transactions for the selected organization owner.
+ * Returns grants, expiries, purchases, and usage charges affecting the wallet balance.
+ *
+ * @param page - Page number for pagination
+ * @param perPage - Number of items per page
+ * @param enabled - Whether the query should run, defaults to true
+ * @returns React Query result with paginated wallet transactions
+ */
 export function useOwnerWalletTransactionsQuery(page?: number, perPage?: number, enabled = true) {
   const scope = useSelectedOrgBillingScope()
   return useOrganizationWalletTransactionsQuery({

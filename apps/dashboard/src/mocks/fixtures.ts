@@ -263,6 +263,12 @@ const HISTORY_END = new Date('2026-01-22T00:00:00.000Z')
 
 const DAY_MS = 86_400_000
 
+/**
+ * Calculates a date string counting back from the mock "today".
+ *
+ * @param days - Number of days to count back from HISTORY_END
+ * @returns ISO 8601 date string
+ */
 function daysBefore(days: number): string {
   return new Date(HISTORY_END.getTime() - days * DAY_MS).toISOString()
 }

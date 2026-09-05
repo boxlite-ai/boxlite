@@ -24,23 +24,49 @@ const STATUS: Record<string, { label: string; color: string } | undefined> = {
   voided: { label: 'voided', color: MUTED },
 }
 
+/**
+ * Returns the display label and color for an invoice status.
+ * Falls back to a muted color and the raw status name for unmapped values.
+ *
+ * @param status - The invoice status
+ * @returns Object with label text and HSL color string
+ */
 function statusMark(status: InvoiceStatus): { label: string; color: string } {
   return STATUS[status] ?? { label: status, color: MUTED }
 }
 
+/**
+ * Extracts the date portion from an invoice's charged timestamp.
+ *
+ * @param invoice - The invoice
+ * @returns Date string in YYYY-MM-DD format
+ */
 function invoiceDate(invoice: Invoice): string {
   return invoice.chargedAt.slice(0, 10)
 }
 
 /**
+ * Formats the amount actually charged to the payment method.
  * What reached the payment method, not what the document totalled. A usage
  * settlement covered by included quota is charged nothing, and showing its
  * gross total here would contradict the section's own note.
+ *
+ * @param invoice - The invoice
+ * @returns Formatted dollar amount with two decimal places
  */
 function invoiceAmount(invoice: Invoice): string {
   return (invoice.totalPaidCents / 100).toFixed(2)
 }
 
+/**
+ * Renders a table of billing invoices with columns for date, type, number, amount, and status.
+ * Shows a loading state or empty state when appropriate.
+ *
+ * @param props - Component props
+ * @param props.data - Array of invoices to display
+ * @param props.loading - Whether the data is currently loading
+ * @returns The invoices table component
+ */
 export function InvoicesTable({ data, loading }: InvoicesTableProps) {
   if (loading) {
     return <div className="border-b border-border/40 py-[13px] font-mono text-[13px]">Loading...</div>

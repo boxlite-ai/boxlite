@@ -22,7 +22,13 @@ const INVOICE_LABEL: Record<string, string> = {
   credit: 'Credits',
 }
 
-/** Falls back to the raw wire name so an unmapped kind still reads as something. */
+/**
+ * Returns the display label for an invoice type.
+ * Falls back to the raw wire name so an unmapped kind still reads as something.
+ *
+ * @param invoice - The invoice to get the label for
+ * @returns The human-readable label for the invoice type
+ */
 export function invoiceLabel(invoice: Invoice): string {
   return INVOICE_LABEL[invoice.type] ?? invoice.type
 }
@@ -30,8 +36,12 @@ export function invoiceLabel(invoice: Invoice): string {
 export type InvoiceStatus = 'voided' | 'succeeded' | 'pending' | 'failed'
 
 /**
+ * Determines the display status of an invoice.
  * A voided document was cancelled after issue, which outranks however its
  * payment ended — a voided-but-succeeded row must not read as money kept.
+ *
+ * @param invoice - The invoice to get the status for
+ * @returns The status to display: 'voided' if voided, otherwise the payment status
  */
 export function invoiceStatus(invoice: Invoice): InvoiceStatus {
   return invoice.voided ? 'voided' : invoice.paymentStatus
