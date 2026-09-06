@@ -64,14 +64,18 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
             voided: false,
           },
         ],
-        totalItems: 101,
+        totalItems: DEFAULT_PAGE_SIZE * 2,
         totalPages: 2,
       },
       isLoading: false,
     }
   },
-  useOwnerWalletTransactionsQuery: (page = 1, perPage?: number) => {
-    mocks.walletTransactionsQuery(page, perPage)
+  useOwnerWalletTransactionsQuery: (page = 1, perPage?: number, enabled = true) => {
+    if (!enabled) {
+      return { data: undefined, isLoading: false }
+    }
+
+    mocks.walletTransactionsQuery(page, perPage, enabled)
     return {
       data: {
         items: [
@@ -88,7 +92,7 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
             settledAt: page === 1 ? '2026-07-18T00:00:00.000Z' : '2026-07-15T00:00:00.000Z',
           },
         ],
-        totalItems: 101,
+        totalItems: DEFAULT_PAGE_SIZE * 2,
         totalPages: 2,
       },
       isLoading: false,
@@ -245,13 +249,15 @@ describe('WalletSection top-up checkout', () => {
     })
     await flush()
 
+    expect(mocks.walletTransactionsQuery).not.toHaveBeenCalled()
+
     const fold = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
       button.textContent?.includes('Credit activity'),
     )
     await act(async () => fold?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     await flush()
 
-    expect(mocks.walletTransactionsQuery).toHaveBeenCalledWith(1, DEFAULT_PAGE_SIZE)
+    expect(mocks.walletTransactionsQuery).toHaveBeenCalledWith(1, DEFAULT_PAGE_SIZE, true)
     expect(document.body.textContent).toContain('2026-07-18')
 
     const creditActivity = document.querySelector('#credit-activity')
@@ -263,7 +269,7 @@ describe('WalletSection top-up checkout', () => {
     await act(async () => nextPage?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     await flush()
 
-    expect(mocks.walletTransactionsQuery).toHaveBeenLastCalledWith(2, DEFAULT_PAGE_SIZE)
+    expect(mocks.walletTransactionsQuery).toHaveBeenLastCalledWith(2, DEFAULT_PAGE_SIZE, true)
     expect(document.body.textContent).toContain('2026-07-15')
   })
 
