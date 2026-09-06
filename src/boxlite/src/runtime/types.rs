@@ -9,6 +9,7 @@ use std::fmt;
 use std::hash::Hash;
 
 pub use crate::litebox::{BoxState, BoxStatus, HealthStatus};
+use crate::runtime::advanced_options::AdvancedBoxInfo;
 use crate::runtime::id::BoxID;
 use crate::runtime::options::{NetworkConfig, NetworkMode, PortProtocol};
 /// Re-exported here so the CLI can reach volume metadata the same way it
@@ -466,6 +467,14 @@ pub struct BoxInfo {
     /// Allocated memory in MiB.
     pub memory_mib: u32,
 
+    /// Advanced policy needed to decide whether a named box can be reused.
+    ///
+    /// Local producers always populate this field. `None` identifies metadata
+    /// from an older or remote producer that did not report enough information
+    /// to verify reuse safely.
+    #[serde(default)]
+    pub advanced: Option<AdvancedBoxInfo>,
+
     /// Network configuration and current runtime publication metadata.
     ///
     /// Local producers always populate this field. `None` indicates metadata
@@ -529,6 +538,7 @@ impl BoxInfo {
             },
             cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
+            advanced: Some(AdvancedBoxInfo::from(&config.options.advanced)),
             network: Some(NetworkInfo::new(
                 OutboundNetworkInfo {
                     mode: network_config.outbound.mode,
@@ -562,6 +572,7 @@ impl PartialEq for BoxInfo {
             && self.image == other.image
             && self.cpus == other.cpus
             && self.memory_mib == other.memory_mib
+            && self.advanced == other.advanced
             && self.network == other.network
             && self.labels == other.labels
             && self.auto_stop == other.auto_stop

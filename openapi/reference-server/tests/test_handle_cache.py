@@ -115,6 +115,31 @@ def _make_box_handle(box_id: str, *, name: str = "test-box"):
     return handle
 
 
+class BoxInfoSerializationTests(unittest.TestCase):
+    def test_reports_the_policy_needed_for_safe_reuse(self):
+        info = _make_box_info("box-with-policy")
+        info.advanced = SimpleNamespace(
+            capabilities=SimpleNamespace(add=["SYS_ADMIN"], drop=["NET_RAW"]),
+            privileged=False,
+            nested_virtualization=True,
+        )
+
+        response = SERVER.box_info_to_dict(info)
+
+        self.assertEqual(
+            response["advanced"],
+            {
+                "capabilities": {"add": ["SYS_ADMIN"], "drop": ["NET_RAW"]},
+                "privileged": False,
+                "nested_virtualization": True,
+            },
+        )
+
+    def test_older_sdk_metadata_remains_inspectable(self):
+        response = SERVER.box_info_to_dict(_make_box_info("old-sdk-box"))
+        self.assertNotIn("advanced", response)
+
+
 class _DummyRequest:
     def __init__(self, payload: bytes):
         self._payload = payload

@@ -318,6 +318,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 2,
             memory_mib: 512,
+            advanced: None,
             network,
             labels: HashMap::new(),
             auto_stop: 0,

@@ -6,6 +6,25 @@
 
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 
+class ContainerCapabilitiesInfoDto {
+  @ApiProperty({ type: [String] })
+  add: string[]
+
+  @ApiProperty({ type: [String] })
+  drop: string[]
+}
+
+class AdvancedBoxInfoDto {
+  @ApiProperty({ type: ContainerCapabilitiesInfoDto })
+  capabilities: ContainerCapabilitiesInfoDto
+
+  @ApiProperty({ example: false })
+  privileged: boolean
+
+  @ApiProperty({ example: false })
+  nested_virtualization: boolean
+}
+
 @ApiSchema({ name: 'Box' })
 export class BoxResponseDto {
   @ApiProperty({
@@ -61,6 +80,12 @@ export class BoxResponseDto {
     example: 4096,
   })
   memory_mib: number
+
+  @ApiProperty({
+    type: AdvancedBoxInfoDto,
+    description: 'Effective advanced policy used to verify named-box reuse',
+  })
+  advanced: AdvancedBoxInfoDto
 
   @ApiProperty({
     description: 'Labels attached to the box',
