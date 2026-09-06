@@ -102,7 +102,18 @@ pub use sandbox::{
 /// no-op. Idempotent — safe on an already-stopped or never-started box.
 #[cfg(target_os = "linux")]
 pub(crate) fn reap_box(box_id: &crate::runtime::id::BoxID) -> bool {
-    cgroup::kill_cgroup(box_id)
+    let reaped = cgroup::kill_cgroup(box_id);
+    if !reaped {
+        // The box's cgroup could not be killed, so this call reaped nothing —
+        // and for a detached box the inner pid-ns tree (inner bwrap + shim +
+        // libkrun) outlives the recorded pid, which `stop` kills separately.
+        // The caller reports success either way, so without this line the leak
+        // leaves no trace at all. A cgroup-independent fallback reap is the
+        // actual fix and is tracked separately.
+        tracing::warn!(box_id = %box_id,
+            "Box cgroup could not be killed; a detached box's VM may still be running");
+    }
+    reaped
 }
 
 /// See the Linux variant. No host-side sandbox process tree to reap here.

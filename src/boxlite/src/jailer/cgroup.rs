@@ -49,12 +49,12 @@ const BOXLITE_CGROUP: &str = "boxlite";
 
 /// Check if the current process is running as root.
 #[cfg(target_os = "linux")]
-fn is_root() -> bool {
+pub(crate) fn is_root() -> bool {
     unsafe { libc::getuid() == 0 }
 }
 
 #[cfg(not(target_os = "linux"))]
-fn is_root() -> bool {
+pub(crate) fn is_root() -> bool {
     false
 }
 
@@ -425,6 +425,28 @@ pub fn add_self_to_cgroup_raw(cgroup_procs_path: &std::ffi::CStr) -> Result<(), 
 /// Returns a CString that can be passed to `add_self_to_cgroup_raw`.
 /// This should be called in the parent process before spawning.
 #[cfg(target_os = "linux")]
+/// Build the `pre_exec` body that joins the box's cgroup, with the fail-closed
+/// contract this function exists to pin: a failed join is returned as an
+/// `io::Error`, which makes `Command::spawn()` fail before `execve` instead of
+/// letting the child run in the inherited parent cgroup.
+///
+/// Extracted from `BwrapSandbox::apply` so the contract is testable against an
+/// ordinary unwritable file — no delegated cgroup, no root, no VM. The returned
+/// closure is the exact body installed in production.
+///
+/// Async-signal-safe: `add_self_to_cgroup_raw` uses only raw syscalls and
+/// `io::Error::from_raw_os_error` does not allocate.
+pub(crate) fn cgroup_join_pre_exec(
+    cgroup_procs: std::ffi::CString,
+) -> impl FnMut() -> std::io::Result<()> + Send + Sync + 'static {
+    move || add_self_to_cgroup_raw(&cgroup_procs).map_err(std::io::Error::from_raw_os_error)
+}
+
+/// Path to a box's `cgroup.procs`, as a NUL-terminated string ready for the
+/// async-signal-safe join in `cgroup_join_pre_exec`.
+///
+/// `None` when cgroup v2 is not mounted at all — there is no cgroup to join, so
+/// callers must not claim limits were applied.
 pub fn build_cgroup_procs_path(box_id: &str) -> Option<std::ffi::CString> {
     if !is_cgroup_v2_available() {
         return None;
@@ -488,5 +510,144 @@ mod tests {
         assert_eq!(config.memory_max, Some(1024 * 1024 * 1024));
         assert_eq!(config.pids_max, Some(100));
         assert!(config.cpu_max.is_some());
+    }
+
+    /// POL-348 regression, load-bearing: a failed cgroup join must abort
+    /// `spawn()`, not be discarded. Crosses the production closure built by
+    /// `cgroup_join_pre_exec` — the same one `BwrapSandbox::apply` installs.
+    ///
+    /// Two-sided: restore `let _ = add_self_to_cgroup_raw(..); Ok(())` in
+    /// `cgroup_join_pre_exec` and this fails — spawn succeeds and the child
+    /// runs in the inherited parent cgroup, which is the reported bug.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cgroup_join_failure_aborts_spawn() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::process::CommandExt;
+
+        // As root the 0o000 probe is writable, which would make the assertion
+        // vacuous rather than wrong.
+        if is_root() {
+            eprintln!("skipping: root can write a 0o000 file, the probe cannot fail");
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("pol348-spawn-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let procs = dir.join("cgroup.procs");
+        fs::write(&procs, b"").expect("create probe");
+        fs::set_permissions(&procs, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+        let c_path = std::ffi::CString::new(procs.as_os_str().as_encoded_bytes())
+            .expect("path has no interior NUL");
+        let mut cmd = std::process::Command::new("/bin/true");
+        // SAFETY: the closure performs only async-signal-safe work.
+        unsafe {
+            cmd.pre_exec(cgroup_join_pre_exec(c_path));
+        }
+        let spawned = cmd.spawn();
+
+        let _ = fs::set_permissions(&procs, fs::Permissions::from_mode(0o600));
+        let _ = fs::remove_dir_all(&dir);
+
+        let err = spawned.expect_err("spawn must fail closed when the cgroup join fails");
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "expected the join's EACCES to surface verbatim, got {err:?}"
+        );
+    }
+
+    /// The success side of the same contract: a writable target joins cleanly
+    /// and writes the caller's pid. Without this, a change that made the hook
+    /// always fail would still pass the test above.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cgroup_join_writes_own_pid_when_target_is_writable() {
+        let dir = std::env::temp_dir().join(format!("pol348-ok-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let procs = dir.join("cgroup.procs");
+        fs::write(&procs, b"").expect("create probe");
+
+        let c_path = std::ffi::CString::new(procs.as_os_str().as_encoded_bytes())
+            .expect("path has no interior NUL");
+        let result = cgroup_join_pre_exec(c_path)();
+
+        let written = fs::read_to_string(&procs).unwrap_or_default();
+        let _ = fs::remove_dir_all(&dir);
+
+        result.expect("writable target must join cleanly");
+        assert_eq!(
+            written.trim(),
+            std::process::id().to_string(),
+            "the join must write the calling pid"
+        );
+    }
+
+    /// A missing cgroup — the shape left behind when `setup_cgroup` failed —
+    /// must also fail closed rather than running unconfined.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cgroup_join_failure_on_missing_cgroup_aborts_spawn() {
+        let missing = std::env::temp_dir()
+            .join(format!("pol348-absent-{}", std::process::id()))
+            .join("cgroup.procs");
+        let c_path = std::ffi::CString::new(missing.as_os_str().as_encoded_bytes())
+            .expect("path has no interior NUL");
+
+        let err = cgroup_join_pre_exec(c_path)().expect_err("missing cgroup must fail closed");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound, "got {err:?}");
+    }
+
+    /// POL-348 acceptance: the join is verified to actually place the child in
+    /// the box's cgroup, not merely to return `Ok`. Without this, a change that
+    /// wrote the pid somewhere harmless would satisfy every failure-path test
+    /// above while enforcing nothing.
+    ///
+    /// Asserted from the child's own `/proc/self/cgroup` rather than by reading
+    /// back the `cgroup.procs` this test just wrote — membership is what the
+    /// kernel acts on, and the child's view is the only place it is observable.
+    ///
+    /// Root and cgroup v2 only: a rootless process cannot migrate itself into
+    /// `/sys/fs/cgroup/boxlite/<id>`, which is the whole reason `apply` installs
+    /// no hook for it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cgroup_join_places_the_child_in_the_box_cgroup() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        if !is_root() || !is_cgroup_v2_available() {
+            eprintln!("skipping: needs root and cgroup v2 to create and enter a real cgroup");
+            return;
+        }
+
+        let box_id = format!("pol348member{}", std::process::id());
+        let created = match setup_cgroup(&box_id, &CgroupConfig::default()) {
+            Ok(path) => path,
+            Err(e) => {
+                eprintln!("skipping: host cgroup unusable ({e})");
+                return;
+            }
+        };
+
+        let procs = build_cgroup_procs_path(&box_id).expect("cgroup v2 checked above");
+        let mut cmd = Command::new("/bin/cat");
+        cmd.arg("/proc/self/cgroup").stdout(Stdio::piped());
+        // SAFETY: the closure performs only async-signal-safe work.
+        unsafe {
+            cmd.pre_exec(cgroup_join_pre_exec(procs));
+        }
+        let output = cmd.output();
+
+        // Clean up before asserting so a failure does not leak the cgroup.
+        let _ = fs::remove_dir(&created);
+
+        let output = output.expect("spawn must succeed once the cgroup exists");
+        let seen = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert!(
+            seen.contains(&format!("{BOXLITE_CGROUP}/{box_id}")),
+            "child must run in the box cgroup, its own /proc/self/cgroup says: {seen}"
+        );
     }
 }
