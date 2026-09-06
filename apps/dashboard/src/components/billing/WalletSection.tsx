@@ -7,6 +7,8 @@
 import { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
 import { AsciiButton, AsciiChip, BRAND, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
 import { BalanceThresholdBanner } from '@/components/billing/BalanceLowBanner'
+import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
+import { InvoicesTable } from '@/components/Invoices'
 import { WalletTransactionsTable } from '@/components/WalletTransactions'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -18,6 +20,7 @@ import {
   useFetchOwnerCheckoutUrlQuery,
   useIsOwnerCheckoutUrlFetching,
   useOwnerBillingPortalUrlQuery,
+  useOwnerInvoicesQuery,
   useOwnerPaymentMethodsQuery,
   useOwnerPlanQuery,
   useOwnerWalletTransactionsQuery,
@@ -32,8 +35,6 @@ import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
 import { PaymentMethodsPanel } from './PaymentMethodsPanel'
 
-const TRANSACTION_HISTORY_LIMIT = 100
-
 /** Commerce rejects anything smaller, so the form says so before the round trip. */
 export const MIN_TOP_UP_DOLLARS = 10
 
@@ -43,7 +44,13 @@ export const MIN_TOP_UP_DOLLARS = 10
  */
 const DEFAULT_AUTO_RELOAD: AutomaticTopUp = { thresholdAmount: 20, targetAmount: 100 }
 
-/** Whether Top up can run, and why not when it cannot. */
+/**
+ * Validates whether a top-up amount meets requirements.
+ * Whether Top up can run, and why not when it cannot.
+ *
+ * @param amountDollars - The amount in dollars to validate, or undefined
+ * @returns Object with enabled flag and optional reason string when disabled
+ */
 export function topUpGate(amountDollars: number | undefined): { enabled: boolean; reason: string | null } {
   if (!amountDollars) {
     return { enabled: false, reason: null }
@@ -54,48 +61,141 @@ export function topUpGate(amountDollars: number | undefined): { enabled: boolean
   return { enabled: true, reason: null }
 }
 
-/** Own the server page so the PR #829 grid can stay a presentation-only component. */
-function WalletTransactionsSection() {
-  const [page, setPage] = useState(1)
-  const transactionsQuery = useOwnerWalletTransactionsQuery(page, TRANSACTION_HISTORY_LIMIT)
-  const totalPages = transactionsQuery.data?.totalPages ?? 0
-
+/**
+ * Ensures the current page stays within valid bounds when total pages change.
+ * Keep the requested page inside a total that shrinks under it.
+ *
+ * @param page - Current page number
+ * @param totalPages - Total number of available pages
+ * @param setPage - Function to update the page number
+ */
+function useClampPage(page: number, totalPages: number, setPage: (page: number) => void) {
   useEffect(() => {
     if (totalPages > 0 && page > totalPages) {
       setPage(totalPages)
     }
-  }, [page, totalPages])
+  }, [page, totalPages, setPage])
+}
+
+/**
+ * Renders pagination controls for navigating between pages.
+ * Hidden when there's only one page or no pages.
+ *
+ * @param props - Component props
+ * @param props.page - Current page number
+ * @param props.totalPages - Total number of pages
+ * @param props.onPage - Callback to update page number, receives updater function
+ * @returns Pagination controls or null if not needed
+ */
+function Pager({
+  page,
+  totalPages,
+  onPage,
+}: {
+  page: number
+  totalPages: number
+  onPage: (next: (current: number) => number) => void
+}) {
+  if (totalPages <= 1) {
+    return null
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-3 border-b border-border/40 py-3 font-mono text-[11px] text-muted-foreground">
+      <span>
+        Page {page} of {totalPages}
+      </span>
+      <AsciiButton onClick={() => onPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>
+        ← Previous
+      </AsciiButton>
+      <AsciiButton onClick={() => onPage((current) => Math.min(totalPages, current + 1))} disabled={page >= totalPages}>
+        Next →
+      </AsciiButton>
+    </div>
+  )
+}
+
+/**
+ * Displays the billing history section showing all charged invoices.
+ * The money history: what was actually charged, for usage, plan changes and
+ * credit purchases alike. This is the primary billing surface — a credit grant
+ * is quota rather than a payment, and reading both off one table is what let a
+ * prorated upgrade's granted quota be mistaken for the amount billed for it.
+ *
+ * @returns The billing history section component with invoice table and pagination
+ */
+function BillingHistorySection() {
+  const [page, setPage] = useState(1)
+  const invoicesQuery = useOwnerInvoicesQuery(page, DEFAULT_PAGE_SIZE)
+  const totalPages = invoicesQuery.data?.totalPages ?? 0
+  useClampPage(page, totalPages, setPage)
 
   return (
     <section>
       <SectionTitle
-        title="Transactions"
-        count={transactionsQuery.data ? `${transactionsQuery.data.totalItems} records` : undefined}
+        title="Billing history"
+        count={invoicesQuery.data ? `${invoicesQuery.data.totalItems} documents` : undefined}
       />
-      <WalletTransactionsTable
-        data={transactionsQuery.data?.items ?? []}
-        loading={Boolean(transactionsQuery.isLoading || transactionsQuery.isFetching)}
+      <InvoicesTable
+        data={invoicesQuery.data?.items ?? []}
+        loading={Boolean(invoicesQuery.isLoading || invoicesQuery.isFetching)}
       />
-      {totalPages > 1 && (
-        <div className="flex items-center justify-end gap-3 border-b border-border/40 py-3 font-mono text-[11px] text-muted-foreground">
-          <span>
-            Page {page} of {totalPages}
-          </span>
-          <AsciiButton onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>
-            ← Previous
-          </AsciiButton>
-          <AsciiButton
-            onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
-            disabled={page >= totalPages}
-          >
-            Next →
-          </AsciiButton>
+      <Pager page={page} totalPages={totalPages} onPage={setPage} />
+      <PanelNote>Amounts charged to your payment method. Credit grants are listed under Credit activity.</PanelNote>
+    </section>
+  )
+}
+
+/**
+ * Displays the collapsible credit activity section showing wallet ledger transactions.
+ * Grants, expiries and void-restores are free quota with no invoice behind
+ * them, so they appear in no other feed and still need a home — but folded,
+ * because a top-up already shows in the billing history above as the money it
+ * cost, and showing it twice at equal weight is what caused the confusion.
+ *
+ * @returns The wallet transactions section component with collapsible content
+ */
+function WalletTransactionsSection() {
+  const [open, setOpen] = useState(false)
+  const [page, setPage] = useState(1)
+  const transactionsQuery = useOwnerWalletTransactionsQuery(page, DEFAULT_PAGE_SIZE, open)
+  const totalPages = transactionsQuery.data?.totalPages ?? 0
+  useClampPage(page, totalPages, setPage)
+
+  return (
+    <section>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls="credit-activity"
+        onClick={() => setOpen((wasOpen) => !wasOpen)}
+        className="flex w-full items-center gap-2 border-b border-border pb-2 font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <span style={{ color: BRAND }}>{open ? '▾' : '▸'}</span>
+        Credit activity
+        <span className="ml-auto normal-case tracking-normal">
+          {transactionsQuery.data ? `${transactionsQuery.data.totalItems} records` : ''}
+        </span>
+      </button>
+      {open && (
+        <div id="credit-activity" className="mt-3">
+          <WalletTransactionsTable
+            data={transactionsQuery.data?.items ?? []}
+            loading={Boolean(transactionsQuery.isLoading || transactionsQuery.isFetching)}
+          />
+          <Pager page={page} totalPages={totalPages} onPage={setPage} />
         </div>
       )}
     </section>
   )
 }
 
+/**
+ * Main wallet section component displaying balance, payment methods, billing history, and credit activity.
+ * Manages state for top-ups, auto-reload settings, and coupon redemption.
+ *
+ * @returns The complete wallet section component
+ */
 export function WalletSection() {
   const { selectedOrganization } = useSelectedOrganization()
   const { user } = useAuth()
@@ -553,7 +653,9 @@ export function WalletSection() {
             </Panel>
           </section>
 
-          <WalletTransactionsSection key={selectedOrganization?.id ?? 'no-organization'} />
+          <BillingHistorySection key={`invoices-${selectedOrganization?.id ?? 'no-organization'}`} />
+
+          <WalletTransactionsSection key={`credits-${selectedOrganization?.id ?? 'no-organization'}`} />
         </div>
       )}
     </div>
