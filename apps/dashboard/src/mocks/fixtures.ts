@@ -9,6 +9,8 @@
 // boxes) with no backend and no login, so local UI work doesn't depend on a
 // reachable dev API. Shapes follow the generated API client types.
 
+import type { Invoice } from '@/billing-api/types/Invoice'
+import type { WalletTransaction } from '@/billing-api/types/WalletTransaction'
 import {
   type Box,
   BoxClassEnum,
@@ -243,4 +245,141 @@ export const MOCK_VOLUME_USAGE: Record<string, { boxId: string; boxName: string;
     { boxId: 'mock-box-stopped', boxName: 'batch-worker', mountPath: '/models' },
   ],
   'vol-e5f6g7h8': [{ boxId: 'mock-box-running', boxName: 'web-api', mountPath: '/data' }],
+}
+
+// --- Billing history depth -------------------------------------------------
+//
+// The hand-written invoice and wallet rows in handlers.ts are a *coverage*
+// fixture: one of every type, status and label variant, so nothing renders as
+// `undefined`. They are deliberately few, which means the billing page in mock
+// never fills, never paginates, and never shows what a year of documents looks
+// like. These generators supply the *depth* the curated rows sit on top of.
+//
+// Everything below is arithmetic, no RNG: the same reload gives the same
+// history, so a screenshot is reproducible and a change in the UI is a real one.
+
+/** The mock "today". Every generated date is counted back from here. */
+const HISTORY_END = new Date('2026-01-22T00:00:00.000Z')
+
+const DAY_MS = 86_400_000
+
+/**
+ * Calculates a date string counting back from the mock "today".
+ *
+ * @param days - Number of days to count back from HISTORY_END
+ * @returns ISO 8601 date string
+ */
+function daysBefore(days: number): string {
+  return new Date(HISTORY_END.getTime() - days * DAY_MS).toISOString()
+}
+
+/**
+ * Usage settles every third day and the plan renews monthly, so a year reaches
+ * ~150 documents — past the page size the billing history requests, which is
+ * the only way the pager is reachable in mock at all.
+ */
+export function buildInvoiceHistory(): Invoice[] {
+  const rows: Invoice[] = []
+
+  for (let day = 3; day <= 365; day += 3) {
+    // A sawtooth between roughly $6 and $46, so the amount column has shape
+    // instead of one repeated number. Quota absorbs the first $20 of each.
+    const amountCents = 640 + ((day * 37) % 4_000)
+    rows.push({
+      id: `inv-usage-${day}`,
+      number: `BOX-2025-${String(2_000 - day).padStart(4, '0')}`,
+      sequentialId: 2_000 - day,
+      type: 'advance_charges',
+      chargedAt: daysBefore(day),
+      totalAmountCents: amountCents,
+      totalPaidCents: Math.max(0, amountCents - 2_000),
+      quotaCoveredCents: Math.min(amountCents, 2_000),
+      paymentStatus: 'succeeded',
+      voided: false,
+    })
+  }
+
+  for (let month = 1; month <= 12; month += 1) {
+    rows.push({
+      id: `inv-renewal-${month}`,
+      number: `BOX-2025-${String(2_100 + month).padStart(4, '0')}`,
+      sequentialId: 2_100 + month,
+      type: 'subscription',
+      chargedAt: daysBefore(month * 30),
+      totalAmountCents: 25_000,
+      totalPaidCents: 25_000,
+      quotaCoveredCents: 0,
+      paymentStatus: 'succeeded',
+      voided: false,
+    })
+  }
+
+  // Roughly every six weeks the balance ran low and credits were bought. Some
+  // of these were a person clicking Top up and some were a standing auto-reload
+  // rule firing off-session; the invoice wire carries no `source`, so they are
+  // indistinguishable here on purpose — which is why the label is "Credits".
+  for (let index = 1; index <= 8; index += 1) {
+    rows.push({
+      id: `inv-credit-${index}`,
+      number: `BOX-2025-${String(2_200 + index).padStart(4, '0')}`,
+      sequentialId: 2_200 + index,
+      type: 'credit',
+      chargedAt: daysBefore(index * 42),
+      totalAmountCents: index % 2 === 0 ? 5_000 : 10_000,
+      totalPaidCents: index % 2 === 0 ? 5_000 : 10_000,
+      quotaCoveredCents: 0,
+      paymentStatus: 'succeeded',
+      voided: false,
+    })
+  }
+
+  return rows
+}
+
+/**
+ * The credit ledger over the same span: the monthly cycle grant that funds the
+ * plan, and the usage that draws it back down.
+ */
+export function buildWalletHistory(): WalletTransaction[] {
+  const rows: WalletTransaction[] = []
+
+  for (let month = 1; month <= 12; month += 1) {
+    const createdAt = daysBefore(month * 30)
+    rows.push({
+      id: `txn-cycle-${month}`,
+      direction: 'inbound',
+      kind: 'granted',
+      status: 'settled',
+      source: 'interval',
+      amountCents: 25_000,
+      name: 'Pro monthly quota',
+      subscriptionCreditKind: 'cycle',
+      createdAt,
+      settledAt: createdAt,
+    })
+  }
+
+  for (let day = 3; day <= 365; day += 3) {
+    const createdAt = daysBefore(day)
+    rows.push({
+      id: `txn-usage-${day}`,
+      direction: 'outbound',
+      kind: 'invoiced',
+      status: 'settled',
+      source: 'interval',
+      amountCents: 640 + ((day * 37) % 4_000),
+      name: null,
+      subscriptionCreditKind: null,
+      createdAt,
+      settledAt: createdAt,
+    })
+  }
+
+  return rows
+}
+
+/** Newest first — the order both feeds are served in. */
+export function newestFirst<T extends Invoice | WalletTransaction>(rows: T[]): T[] {
+  const chargedOrCreated = (row: T) => ('chargedAt' in row ? row.chargedAt : row.createdAt)
+  return [...rows].sort((left, right) => chargedOrCreated(right).localeCompare(chargedOrCreated(left)))
 }

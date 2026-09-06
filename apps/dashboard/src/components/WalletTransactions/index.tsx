@@ -10,21 +10,55 @@ import { walletTransactionLabel } from './columns'
 
 const ROW = 'grid grid-cols-[100px_110px_1fr_90px_80px] items-center gap-x-4'
 
-const STATUS = {
+// Keyed loosely on purpose: `status` is a hand-copied union, so a value
+// Commerce adds later arrives here before this map knows the key.
+const STATUS: Record<string, { label: string; color: string } | undefined> = {
   settled: { label: 'ok', color: 'hsl(var(--success))' },
   pending: { label: 'pending', color: 'hsl(var(--warning))' },
   failed: { label: 'failed', color: 'hsl(var(--destructive))' },
-} as const
+}
 
+/**
+ * Returns the display label and color for a transaction status.
+ * Falls back to the raw name rather than throwing on `undefined.color`.
+ *
+ * @param status - The wallet transaction status
+ * @returns Object with label text and HSL color string
+ */
+function statusMark(status: WalletTransaction['status']): { label: string; color: string } {
+  return STATUS[status] ?? { label: status, color: 'hsl(var(--muted-foreground))' }
+}
+
+/**
+ * Extracts the date portion from a transaction's created timestamp.
+ *
+ * @param transaction - The wallet transaction
+ * @returns Date string in YYYY-MM-DD format
+ */
 function transactionDate(transaction: WalletTransaction): string {
   return transaction.createdAt.slice(0, 10)
 }
 
+/**
+ * Formats the transaction amount with a sign prefix indicating direction.
+ *
+ * @param transaction - The wallet transaction
+ * @returns Formatted amount with '+' prefix for inbound or '-' for outbound
+ */
 function transactionAmount(transaction: WalletTransaction): string {
   const prefix = transaction.direction === 'inbound' ? '+' : '-'
   return `${prefix}${(transaction.amountCents / 100).toFixed(2)}`
 }
 
+/**
+ * Renders a table of wallet credit transactions with columns for date, type, amount, and status.
+ * Shows a loading state when data is being fetched.
+ *
+ * @param props - Component props
+ * @param props.data - Array of wallet transactions to display
+ * @param props.loading - Whether the data is currently loading
+ * @returns The wallet transactions table component
+ */
 export function WalletTransactionsTable({ data, loading }: WalletTransactionsTableProps) {
   if (loading) {
     return <div className="border-b border-border/40 py-[13px] font-mono text-[13px]">Loading...</div>
@@ -46,7 +80,7 @@ export function WalletTransactionsTable({ data, loading }: WalletTransactionsTab
         </span>
       </div>
       {data.map((transaction) => {
-        const status = STATUS[transaction.status]
+        const status = statusMark(transaction.status)
         return (
           <div
             key={transaction.id}
