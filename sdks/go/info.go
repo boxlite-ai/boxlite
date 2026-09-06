@@ -91,6 +91,11 @@ type BoxInfo struct {
 	// the configured user task becomes ready, exits, or completes; those are
 	// workload lifecycle outcomes.
 	StartedAt time.Time
+	// LastActivityAt is when the box was last active, as recorded by the
+	// control plane from toolbox and proxy traffic — the clock AutoStop
+	// measures idleness against. The zero time means no activity was
+	// recorded, which is always the case for local runtimes.
+	LastActivityAt time.Time
 }
 
 // Info returns information about the box.
@@ -183,6 +188,10 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 	if ms := int64(info.started_at); ms > 0 {
 		boxStartedAt = time.UnixMilli(ms)
 	}
+	var boxLastActivityAt time.Time
+	if ms := int64(info.last_activity_at); ms > 0 {
+		boxLastActivityAt = time.UnixMilli(ms)
+	}
 	return BoxInfo{
 		ID:         cString(info.id),
 		Name:       cString(info.name),
@@ -198,7 +207,8 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 		AutoResume: info.auto_resume != 0,
 		CreatedAt:  time.Unix(int64(info.created_at), 0),
 
-		StartedAt: boxStartedAt,
+		StartedAt:      boxStartedAt,
+		LastActivityAt: boxLastActivityAt,
 	}
 }
 

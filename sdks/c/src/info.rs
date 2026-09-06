@@ -114,6 +114,10 @@ pub struct CBoxInfo {
     /// Milliseconds — not `created_at`'s seconds — preserve sub-second ordering
     /// against a job's timeline.
     pub started_at: i64,
+    /// Unix milliseconds of the box's last recorded activity — the clock
+    /// AutoStop measures idleness against; `0` when nothing was recorded, which
+    /// is always the case for local runtimes.
+    pub last_activity_at: i64,
 }
 
 #[repr(C)]
@@ -314,6 +318,10 @@ impl CBoxInfo {
             created_at: info.created_at.timestamp(),
             network: network_to_c_ptr(&info.network),
             started_at: info.started_at.map(|at| at.timestamp_millis()).unwrap_or(0),
+            last_activity_at: info
+                .last_activity_at
+                .map(|at| at.timestamp_millis())
+                .unwrap_or(0),
         }
     }
 }

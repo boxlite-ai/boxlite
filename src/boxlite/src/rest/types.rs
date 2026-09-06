@@ -366,6 +366,10 @@ pub(crate) struct BoxResponse {
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
+    /// Absent when the server recorded no activity for the box, and from any
+    /// server too old to publish it.
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
     pub pid: Option<u32>,
     pub image: String,
     pub cpus: u8,
@@ -407,6 +411,16 @@ impl BoxResponse {
             .map(|dt| dt.with_timezone(&chrono::Utc))
             .unwrap_or_else(|_| chrono::Utc::now());
 
+        // Unlike the two timestamps above, an unparseable value becomes `None`
+        // rather than `now()`: activity dated to this instant would read as a
+        // box that was just used, which is exactly the wrong answer for the
+        // idleness this field describes.
+        let last_activity_at = self
+            .last_activity_at
+            .as_deref()
+            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+
         Ok(crate::BoxInfo {
             id,
             name: self.name.clone(),
@@ -431,6 +445,7 @@ impl BoxResponse {
             // local start timestamp; `None` means "not known here", not
             // "the box never entered Running".
             started_at: None,
+            last_activity_at,
         })
     }
 }
@@ -1032,6 +1047,7 @@ mod tests {
             status: "running".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:01:00Z".to_string(),
+            last_activity_at: None,
             pid: Some(1234),
             image: "python:3.11".to_string(),
             cpus: 2,
@@ -1053,6 +1069,40 @@ mod tests {
     }
 
     #[test]
+    fn box_response_to_box_info_reports_last_activity() {
+        let mut resp = BoxResponse {
+            box_id: "01J0000000000000000000000A".to_string(),
+            name: None,
+            status: "running".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:01:00Z".to_string(),
+            last_activity_at: Some("2024-01-01T00:02:30Z".to_string()),
+            pid: None,
+            image: "python:3.11".to_string(),
+            cpus: 2,
+            memory_mib: 512,
+            labels: HashMap::new(),
+            exit_code: None,
+            auto_stop: 1800,
+            auto_delete: 0,
+            auto_resume: true,
+        };
+
+        let info = resp.to_box_info().expect("valid box_id should parse");
+        assert_eq!(
+            info.last_activity_at.map(|at| at.to_rfc3339()),
+            Some("2024-01-01T00:02:30+00:00".to_string())
+        );
+
+        // An absent value means "no activity recorded", and an unparseable one
+        // must not be rounded up to "active now".
+        resp.last_activity_at = None;
+        assert!(resp.to_box_info().unwrap().last_activity_at.is_none());
+        resp.last_activity_at = Some("yesterday".to_string());
+        assert!(resp.to_box_info().unwrap().last_activity_at.is_none());
+    }
+
+    #[test]
     fn test_box_response_to_box_info_uuid() {
         // Some servers may return UUIDs as box_id (not just 12-char Base62 / 26-char ULID).
         // Verify the SDK accepts them and round-trips the id verbatim.
@@ -1062,6 +1112,7 @@ mod tests {
             status: "running".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:01:00Z".to_string(),
+            last_activity_at: None,
             pid: Some(5678),
             image: "alpine:latest".to_string(),
             cpus: 1,
@@ -1090,6 +1141,7 @@ mod tests {
             status: "running".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:01:00Z".to_string(),
+            last_activity_at: None,
             pid: None,
             image: "alpine:latest".to_string(),
             cpus: 1,
@@ -1162,6 +1214,7 @@ mod tests {
             status: "snapshotting".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:01:00Z".to_string(),
+            last_activity_at: None,
             pid: Some(1234),
             image: "python:3.11".to_string(),
             cpus: 2,

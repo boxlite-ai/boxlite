@@ -39,6 +39,12 @@ export class BoxResponseDto {
   updated_at: string
 
   @ApiPropertyOptional({
+    description: 'Timestamp of the last recorded activity on the box; absent when none was recorded',
+    example: '2026-06-04T12:04:30.000Z',
+  })
+  last_activity_at?: string
+
+  @ApiPropertyOptional({
     description: 'Runtime process ID when available',
     example: 12345,
   })

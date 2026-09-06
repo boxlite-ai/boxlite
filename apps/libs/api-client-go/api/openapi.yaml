@@ -5693,6 +5693,7 @@ components:
           subpath: users/alice
         createdAt: 2024-10-01T12:00:00Z
         updatedAt: 2024-10-01T12:00:00Z
+        lastActivityAt: 2024-10-01T12:00:00Z
         class: small
         daemonVersion: 1.0.0
         runnerId: runner123
@@ -5808,6 +5809,11 @@ components:
           description: The last update timestamp of the box
           example: 2024-10-01T12:00:00Z
           type: string
+        lastActivityAt:
+          description: "The timestamp of the last recorded activity on the box, absent\
+            \ when no activity has been recorded yet"
+          example: 2024-10-01T12:00:00Z
+          type: string
         class:
           deprecated: true
           description: The class of the box
@@ -5881,6 +5887,7 @@ components:
             subpath: users/alice
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
+          lastActivityAt: 2024-10-01T12:00:00Z
           class: small
           daemonVersion: 1.0.0
           runnerId: runner123
@@ -5918,6 +5925,7 @@ components:
             subpath: users/alice
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
+          lastActivityAt: 2024-10-01T12:00:00Z
           class: small
           daemonVersion: 1.0.0
           runnerId: runner123

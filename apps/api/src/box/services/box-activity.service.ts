@@ -7,7 +7,7 @@ import { Injectable, Logger } from '@nestjs/common'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import { InjectDataSource } from '@nestjs/typeorm'
-import { DataSource } from 'typeorm'
+import { DataSource, In } from 'typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
@@ -56,14 +56,60 @@ export class BoxActivityService {
    * Checks Redis buffer first, falls back to the database.
    */
   async getLastActivityAt(boxId: string): Promise<Date | null> {
-    const score = await this.redis.zscore(REDIS_ACTIVITY_KEY, boxId)
-    if (score !== null) {
-      return new Date(Number(score))
+    const timestamps = await this.getLastActivityAtMany([boxId])
+    return timestamps.get(boxId) ?? null
+  }
+
+  /**
+   * Read the last activity timestamps for many boxes.
+   *
+   * Same buffer-before-database precedence as {@link getLastActivityAt}, in two
+   * round trips regardless of how many boxes are asked for: one pipelined Redis
+   * read, then a single query for the boxes the buffer did not answer. Boxes
+   * with no recorded activity are absent from the map.
+   */
+  async getLastActivityAtMany(boxIds: string[]): Promise<Map<string, Date>> {
+    const timestamps = new Map<string, Date>()
+    const uniqueBoxIds = [...new Set(boxIds)]
+    if (uniqueBoxIds.length === 0) {
+      return timestamps
     }
 
-    const row = await this.dataSource.getRepository(BoxLastActivity).findOne({ where: { boxId } })
+    const pipeline = this.redis.pipeline()
+    for (const boxId of uniqueBoxIds) {
+      pipeline.zscore(REDIS_ACTIVITY_KEY, boxId)
+    }
+    // ZMSCORE would be one command, but it needs Redis 6.2; a pipeline reads
+    // the same buffer in one round trip against any server version.
+    const bufferedScores = await pipeline.exec()
 
-    return row?.lastActivityAt ?? null
+    const unbufferedBoxIds: string[] = []
+    uniqueBoxIds.forEach((boxId, index) => {
+      const [error, score] = bufferedScores?.[index] ?? [null, null]
+      // A per-command failure is raised rather than answered from the database:
+      // a single-box ZSCORE failure has always surfaced to the caller.
+      if (error) {
+        throw error
+      }
+      if (score === null || score === undefined) {
+        unbufferedBoxIds.push(boxId)
+        return
+      }
+      timestamps.set(boxId, new Date(Number(score)))
+    })
+
+    if (unbufferedBoxIds.length === 0) {
+      return timestamps
+    }
+
+    const rows = await this.dataSource.getRepository(BoxLastActivity).findBy({ boxId: In(unbufferedBoxIds) })
+    for (const row of rows) {
+      if (row.lastActivityAt) {
+        timestamps.set(row.boxId, row.lastActivityAt)
+      }
+    }
+
+    return timestamps
   }
 
   /**

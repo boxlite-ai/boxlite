@@ -22,6 +22,7 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     status: mapState(box.state),
     created_at: box.createdAt || new Date().toISOString(),
     updated_at: box.updatedAt || new Date().toISOString(),
+    last_activity_at: box.lastActivityAt,
     image: box.image || '',
     cpus: box.cpu || 1,
     memory_mib: (box.memory || 1) * 1024,

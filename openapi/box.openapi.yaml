@@ -1743,6 +1743,14 @@ components:
           type: string
           format: date-time
           description: Last state change timestamp (UTC)
+        last_activity_at:
+          type: string
+          format: date-time
+          description: |
+            Last recorded activity on the box (UTC) — the clock AutoStop
+            measures idleness against. Absent when the server recorded no
+            activity, which is always the case for a server without an
+            AutoStop sweeper.
         pid:
           type: integer
           nullable: true

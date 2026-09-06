@@ -125,6 +125,10 @@ export interface Box {
      */
     'updatedAt'?: string;
     /**
+     * The timestamp of the last recorded activity on the box, absent when no activity has been recorded yet
+     */
+    'lastActivityAt'?: string;
+    /**
      * The class of the box
      * @deprecated
      */

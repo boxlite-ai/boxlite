@@ -532,7 +532,9 @@ Show detailed information for one or more boxes.
 The Go-template engine exposes a `json` function for serializing nested values.
 `State.StartedAt` is when the box most recently entered `Running`, in RFC 3339
 format, or `null` if the start time has not been recorded or is unavailable
-over REST.
+over REST. `State.LastActivityAt` is when the box was last active in RFC 3339
+format — the clock AutoStop measures idleness against — or `null` for a local
+box, which records no activity.
 
 **Examples:**
 
@@ -540,6 +542,7 @@ over REST.
 boxlite inspect mybox
 boxlite inspect --format '{{.State.Status}}' mybox
 boxlite inspect --format '{{.State.StartedAt}}' mybox
+boxlite inspect --format '{{.State.LastActivityAt}}' mybox
 boxlite inspect -l --format yaml
 ```
 

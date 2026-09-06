@@ -384,6 +384,10 @@ typedef struct CBoxInfo {
   // Milliseconds — not `created_at`'s seconds — preserve sub-second ordering
   // against a job's timeline.
   int64_t started_at;
+  // Unix milliseconds of the box's last recorded activity — the clock
+  // AutoStop measures idleness against; `0` when nothing was recorded, which
+  // is always the case for local runtimes.
+  int64_t last_activity_at;
 } CBoxInfo;
 
 // Box info completion. On success the callback owns the non-null metadata and
