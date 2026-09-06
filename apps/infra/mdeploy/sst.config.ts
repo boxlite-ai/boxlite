@@ -105,7 +105,11 @@ export default $config({
     const stackEnvironment = readStackEnvironment({
       environment: process.env,
       // The one declaration of which keys are a service's, not the deploy's.
-      declaration: { groups: stageConfig.envSelectGroup, where: stageConfig.path },
+      declaration: {
+        groups: stageConfig.envSelectGroup,
+        optional: stageConfig.envOptional,
+        where: stageConfig.path,
+      },
       stage: $app.stage,
       region: AWS_REGION,
       home: 'aws',

@@ -37,6 +37,32 @@ test('both clouds can be federated, and each only when it is the one', () => {
   assert.match(workflow, /if: steps\.config\.outputs\.kind == 'artifact-registry'/)
 })
 
+/*
+ * The AWS role is composed, not looked up in a repository variable.
+ *
+ * Every other deploy workflow here builds it from `vars.AWS_ACCOUNT_ID` and the
+ * fixed per-stage role name. A workflow that read `vars.AWS_DEPLOY_ROLE_ARN`
+ * instead would federate against a variable this repository does not define —
+ * the OIDC step fails with an empty role, which reads as an auth problem rather
+ * than as a missing setting.
+ *
+ * Both new workflows are checked here so the two cannot drift apart.
+ */
+test('the AWS role is composed from the account id, as every other workflow does', () => {
+  const mbuild = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mbuild.yml', import.meta.url)), 'utf8')
+  for (const [name, source] of [
+    ['mdeploy.yml', workflow],
+    ['mbuild.yml', mbuild],
+  ] as const) {
+    assert.match(
+      source,
+      /role-to-assume: arn:aws:iam::\$\{\{ vars\.AWS_ACCOUNT_ID \}\}:role\/boxlite-\$\{\{ [^}]+ \}\}-github-deploy/,
+      `${name} does not compose the role ARN`,
+    )
+    assert.doesNotMatch(source, /vars\.AWS_DEPLOY_ROLE_ARN|vars\.AWS_ECR_PUSH_ROLE_ARN/, `${name} reads an undefined variable`)
+  }
+})
+
 test('every gate runs before the apply, because a refusal afterwards is not a gate', () => {
   const digest = commands.indexOf('mstage env digest')
   const images = commands.indexOf('mbuild verify')

@@ -22,7 +22,34 @@ test('a group that names something that is not a key is refused at load', () => 
   assert.throws(() => config({ selectGroup: { deploy: ['lower_case'] } }), ConfigError)
   assert.throws(() => config({ selectGroup: { deploy: ['has-dash'] } }), /is not a key name/)
   assert.throws(() => config({ selectGroup: { deploy: [42] } }), /is not a key name/)
-  assert.throws(() => config({ selectGroup: { deploy: 'A' } }), /must be an array/)
+  assert.throws(() => config({ selectGroup: { deploy: 'A' } }), /must be an array of key names, or an object/)
+})
+
+test('a group may separate what the store must hold from what a stage may skip', () => {
+  // The two are different statements. A missing required key is the silently
+  // short environment `valuesOfGroup` refuses on purpose; a missing optional one
+  // is a feature this stage did not configure, and the consumer has an answer
+  // for it. One list cannot say both, and forcing the second into the first
+  // means seeding a row of empty strings per stage to say nothing at all.
+  const parsed = config({ selectGroup: { deploy: { required: ['A'], optional: ['B'] } } })
+  assert.deepEqual(parsed.envSelectGroup.deploy, ['A', 'B'], 'a group still names every key it names')
+  assert.deepEqual(parsed.envOptional.deploy, ['B'])
+
+  // The short form still means every key is required.
+  assert.deepEqual(config({ selectGroup: { deploy: ['A'] } }).envOptional.deploy, [])
+})
+
+test('a key cannot be both required and optional', () => {
+  // Left in, the required list would win and the optional list would read as a
+  // promise the store never made.
+  assert.throws(
+    () => config({ selectGroup: { deploy: { required: ['A'], optional: ['A'] } } }),
+    /names A as both required and optional/,
+  )
+  assert.throws(
+    () => config({ selectGroup: { deploy: { required: ['A'], soptional: ['B'] } } }),
+    /does not take soptional/,
+  )
 })
 
 test('a group with no keys is a declaration, not a mistake', () => {

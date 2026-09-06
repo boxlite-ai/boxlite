@@ -68,8 +68,29 @@ export type LoginRequirement = { required: boolean }
  * One group name means more than the rest: `secret` says its keys hold the
  * *address* of a secret rather than the secret, which is what lets a workload be
  * handed one by reference (`env/secret-address.ts`).
+ *
+ * Every key a group names, required and optional together. What tells the two
+ * apart is `envOptional` below.
  */
 export type EnvExports = Record<string, string[]>
+
+/**
+ * A group may be written two ways.
+ *
+ * An array is the short form and means every key is required. The object form
+ * separates the two, and exists because "the store must hold this" and "this
+ * stage may not have set this" are different statements that a single list
+ * cannot make.
+ *
+ * The distinction is not cosmetic. A missing *required* key is the failure
+ * `valuesOfGroup` refuses on purpose: a process handed a silently short
+ * environment fails hours later, somewhere that does not mention the key. A
+ * missing *optional* key is a feature this stage did not configure — a billing
+ * origin nobody set, an incident.io source nobody wired — and the consumer
+ * already has an answer for it. Forcing those into the required list means
+ * seeding a row of empty strings per stage to say nothing at all.
+ */
+export type EnvGroupDeclaration = string[] | { required?: string[]; optional?: string[] }
 
 /**
  * Which key holds the fingerprint of which group. Absent means this repository
@@ -83,7 +104,17 @@ export type MstageConfig = {
   app: string
   home: Cloud
   login: Record<string, LoginRequirement>
+  /** Every key each group names, required and optional together. */
   envSelectGroup: EnvExports
+  /**
+   * The subset of each group whose keys the store need not hold.
+   *
+   * A separate map rather than a richer `envSelectGroup`, because almost every
+   * consumer asks only "which keys does this group name" — the CLI's listing,
+   * the secret-address check, the digest's own key set. Splitting the type
+   * there would have made all of them ask a question they do not have.
+   */
+  envOptional: EnvExports
   envDigest: EnvDigest | null
   stages: Record<string, StageConfig>
 }
@@ -145,37 +176,77 @@ const assertMarkedKeysAreDelivered = (groups: EnvExports, path: string): void =>
   }
 }
 
-const parseEnvSelectGroup = (raw: unknown, path: string): EnvExports => {
-  if (raw === undefined) return {}
-  const env = assertObject(raw, `${path}: "env"`)
-  if (env.selectGroup === undefined) return {}
-  const show = assertObject(env.selectGroup, `${path}: "env.selectGroup"`)
-  const groups = Object.fromEntries(
-    Object.entries(show).map(([group, keys]) => {
-      // Empty is a state, not a mistake. A group names a set a consumer asks
-      // for, and a consumer that has one service per group needs to say "this
-      // service reads nothing yet" — refusing that forces a placeholder key or
-      // no declaration at all, and the second hides the service entirely.
-      if (!Array.isArray(keys)) {
-        throw new ConfigError(`${path}: "env.selectGroup.${group}" must be an array of key names`)
-      }
-      for (const key of keys) {
-        if (typeof key !== 'string' || !ENV_KEY.test(key)) {
-          throw new ConfigError(`${path}: "env.selectGroup.${group}" contains ${JSON.stringify(key)}, which is not a key name`)
-        }
-      }
-      const duplicates = (keys as string[]).filter((key, index) => keys.indexOf(key) !== index)
-      if (duplicates.length > 0) {
-        throw new ConfigError(`${path}: "env.selectGroup.${group}" repeats ${[...new Set(duplicates)].join(', ')}`)
-      }
-      return [group, [...(keys as string[])]]
-    }),
-  )
-  assertMarkedKeysAreDelivered(groups, path)
-  return groups
+/** One list of key names, checked for shape and for repeats. */
+const parseKeyList = (keys: unknown, where: string): string[] => {
+  // Empty is a state, not a mistake. A group names a set a consumer asks for,
+  // and a consumer that has one service per group needs to say "this service
+  // reads nothing yet" — refusing that forces a placeholder key or no
+  // declaration at all, and the second hides the service entirely.
+  if (!Array.isArray(keys)) throw new ConfigError(`${where} must be an array of key names`)
+  for (const key of keys) {
+    if (typeof key !== 'string' || !ENV_KEY.test(key)) {
+      throw new ConfigError(`${where} contains ${JSON.stringify(key)}, which is not a key name`)
+    }
+  }
+  const duplicates = (keys as string[]).filter((key, index) => keys.indexOf(key) !== index)
+  if (duplicates.length > 0) {
+    throw new ConfigError(`${where} repeats ${[...new Set(duplicates)].join(', ')}`)
+  }
+  return [...(keys as string[])]
 }
 
-const parseEnvDigest = (raw: unknown, groups: EnvExports, path: string): EnvDigest | null => {
+/**
+ * Both forms of a group: the bare array, and the required/optional object.
+ *
+ * Returns the union and the optional half separately, because those are the two
+ * questions consumers ask and neither is derivable from the other.
+ */
+const parseEnvSelectGroup = (raw: unknown, path: string): { all: EnvExports; optional: EnvExports } => {
+  if (raw === undefined) return { all: {}, optional: {} }
+  const env = assertObject(raw, `${path}: "env"`)
+  if (env.selectGroup === undefined) return { all: {}, optional: {} }
+  const show = assertObject(env.selectGroup, `${path}: "env.selectGroup"`)
+
+  const all: EnvExports = {}
+  const optional: EnvExports = {}
+  for (const [group, declared] of Object.entries(show)) {
+    const where = `${path}: "env.selectGroup.${group}"`
+    if (Array.isArray(declared)) {
+      all[group] = parseKeyList(declared, where)
+      optional[group] = []
+      continue
+    }
+    if (!declared || typeof declared !== 'object') {
+      // Named here rather than left to `assertObject`, so the refusal describes
+      // both accepted shapes instead of only the one it happened to try last.
+      throw new ConfigError(`${where} must be an array of key names, or an object with required and optional`)
+    }
+    const block = assertObject(declared, where)
+    const unknown = Object.keys(block).filter((key) => key !== 'required' && key !== 'optional')
+    if (unknown.length > 0) {
+      throw new ConfigError(`${where} does not take ${unknown.join(', ')}. It takes required, optional`)
+    }
+    const required = parseKeyList(block.required ?? [], `${where}.required`)
+    const mayBeAbsent = parseKeyList(block.optional ?? [], `${where}.optional`)
+    const both = required.filter((key) => mayBeAbsent.includes(key))
+    if (both.length > 0) {
+      // A key cannot be two things. Left in, the required list would win and the
+      // optional list would read as a promise the store never made.
+      throw new ConfigError(`${where} names ${both.join(', ')} as both required and optional`)
+    }
+    all[group] = [...required, ...mayBeAbsent]
+    optional[group] = mayBeAbsent
+  }
+  assertMarkedKeysAreDelivered(all, path)
+  return { all, optional }
+}
+
+const parseEnvDigest = (
+  raw: unknown,
+  groups: EnvExports,
+  optional: EnvExports,
+  path: string,
+): EnvDigest | null => {
   if (raw === undefined) return null
   const env = assertObject(raw, `${path}: "env"`)
   if (env.digest === undefined) return null
@@ -191,6 +262,11 @@ const parseEnvDigest = (raw: unknown, groups: EnvExports, path: string): EnvDige
     // The digest travels with the group it describes, so a consumer that reads
     // the group has it without a second lookup.
     throw new ConfigError(`${path}: env.selectGroup.${group} must include ${key}, the key its digest is written to`)
+  }
+  if ((optional[group] ?? []).includes(key)) {
+    // An optional fingerprint is no fingerprint: the check that compares it
+    // would pass on every stage that simply never wrote one.
+    throw new ConfigError(`${path}: ${key} is the digest of env.selectGroup.${group} and cannot be optional`)
   }
   return { key, group }
 }
@@ -262,7 +338,7 @@ export const parseConfig = (path: string, contents: string): MstageConfig => {
   // Bound once: narrowing a property of a `Record<string, unknown>` does not
   // survive into the closure each stage is parsed in.
   const home: Cloud = root.home
-  const envSelectGroup = parseEnvSelectGroup(root.env, path)
+  const { all: envSelectGroup, optional: envOptional } = parseEnvSelectGroup(root.env, path)
   const stages = assertObject(root.stages, `${path}: "stages"`)
   const names = Object.keys(stages)
   if (names.length === 0) throw new ConfigError(`${path}: "stages" must declare at least one stage`)
@@ -272,8 +348,9 @@ export const parseConfig = (path: string, contents: string): MstageConfig => {
     app: root.app as string,
     home,
     login: parseLogin(root.login, path),
-    envSelectGroup: envSelectGroup,
-    envDigest: parseEnvDigest(root.env, envSelectGroup, path),
+    envSelectGroup,
+    envOptional,
+    envDigest: parseEnvDigest(root.env, envSelectGroup, envOptional, path),
     stages: Object.fromEntries(names.map((name) => [name, parseStage(name, stages[name], path, home)])),
   }
 }
