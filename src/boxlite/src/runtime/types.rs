@@ -505,6 +505,16 @@ pub struct BoxInfo {
     /// readable.
     #[serde(default)]
     pub started_at: Option<DateTime<Utc>>,
+
+    /// When the box was last active, as recorded by the control plane from
+    /// toolbox and proxy traffic — the clock AutoStop measures idleness
+    /// against. `None` when no activity has been recorded yet.
+    ///
+    /// Local runtimes never report this: AutoStop needs an idle sweeper they
+    /// do not have, so they record no activity. Serde default keeps metadata
+    /// from an older producer readable.
+    #[serde(default)]
+    pub last_activity_at: Option<DateTime<Utc>>,
 }
 
 impl BoxInfo {
@@ -549,6 +559,8 @@ impl BoxInfo {
             health_status: state.health_status,
             exit_code: state.exit_code,
             started_at: state.started_at,
+            // Activity is recorded by the control plane, not by a local box.
+            last_activity_at: None,
         }
     }
 }

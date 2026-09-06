@@ -1088,19 +1088,40 @@ export class BoxService {
     return this.resolveToolboxProxyUrl(box.region)
   }
 
+  /**
+   * Last activity is metadata about the box rather than part of it, so the read
+   * degrades to absent instead of failing the conversion: create() has already
+   * persisted the box by the time it converts, and a rejection there would read
+   * to the client as a failed creation and invite a duplicate on retry. The
+   * auto-lifecycle paths keep reading it directly, where the distinction
+   * between "unknown" and "idle" decides whether a box is stopped.
+   */
   async toBoxDto(box: Box): Promise<BoxDto> {
-    const toolboxProxyUrl = await this.resolveToolboxProxyUrl(box.region)
-    return BoxDto.fromBox(box, toolboxProxyUrl)
+    const [toolboxProxyUrl, lastActivityAt] = await Promise.all([
+      this.resolveToolboxProxyUrl(box.region),
+      this.boxActivityService.getLastActivityAt(box.id).catch((err) => {
+        this.logger.warn(`Failed to read last activity for box ${box.id}: ${err}`)
+        return null
+      }),
+    ])
+    return BoxDto.fromBox(box, toolboxProxyUrl, lastActivityAt)
   }
 
+  /** Degrades a failed activity read to absent, as {@link toBoxDto} does. */
   async toBoxDtos(boxes: Box[]): Promise<BoxDto[]> {
-    const urlMap = await this.resolveToolboxProxyUrls(boxes.map((s) => s.region))
+    const [urlMap, activityMap] = await Promise.all([
+      this.resolveToolboxProxyUrls(boxes.map((s) => s.region)),
+      this.boxActivityService.getLastActivityAtMany(boxes.map((s) => s.id)).catch((err) => {
+        this.logger.warn(`Failed to read last activity for ${boxes.length} boxes: ${err}`)
+        return new Map<string, Date>()
+      }),
+    ])
     return boxes.map((s) => {
       const url = urlMap.get(s.region)
       if (!url) {
         throw new NotFoundException(`Toolbox proxy URL not resolved for region ${s.region}`)
       }
-      return BoxDto.fromBox(s, url)
+      return BoxDto.fromBox(s, url, activityMap.get(s.id))
     })
   }
 

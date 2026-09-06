@@ -71,6 +71,8 @@ type Box struct {
 	CreatedAt *string `json:"createdAt,omitempty"`
 	// The last update timestamp of the box
 	UpdatedAt *string `json:"updatedAt,omitempty"`
+	// The timestamp of the last recorded activity on the box, absent when no activity has been recorded yet
+	LastActivityAt *string `json:"lastActivityAt,omitempty"`
 	// The class of the box
 	// Deprecated
 	Class *string `json:"class,omitempty"`
@@ -812,6 +814,38 @@ func (o *Box) SetUpdatedAt(v string) {
 	o.UpdatedAt = &v
 }
 
+// GetLastActivityAt returns the LastActivityAt field value if set, zero value otherwise.
+func (o *Box) GetLastActivityAt() string {
+	if o == nil || IsNil(o.LastActivityAt) {
+		var ret string
+		return ret
+	}
+	return *o.LastActivityAt
+}
+
+// GetLastActivityAtOk returns a tuple with the LastActivityAt field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *Box) GetLastActivityAtOk() (*string, bool) {
+	if o == nil || IsNil(o.LastActivityAt) {
+		return nil, false
+	}
+	return o.LastActivityAt, true
+}
+
+// HasLastActivityAt returns a boolean if a field has been set.
+func (o *Box) HasLastActivityAt() bool {
+	if o != nil && !IsNil(o.LastActivityAt) {
+		return true
+	}
+
+	return false
+}
+
+// SetLastActivityAt gets a reference to the given string and assigns it to the LastActivityAt field.
+func (o *Box) SetLastActivityAt(v string) {
+	o.LastActivityAt = &v
+}
+
 // GetClass returns the Class field value if set, zero value otherwise.
 // Deprecated
 func (o *Box) GetClass() string {
@@ -994,6 +1028,9 @@ func (o Box) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.UpdatedAt) {
 		toSerialize["updatedAt"] = o.UpdatedAt
 	}
+	if !IsNil(o.LastActivityAt) {
+		toSerialize["lastActivityAt"] = o.LastActivityAt
+	}
 	if !IsNil(o.Class) {
 		toSerialize["class"] = o.Class
 	}
@@ -1085,6 +1122,7 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "volumes")
 		delete(additionalProperties, "createdAt")
 		delete(additionalProperties, "updatedAt")
+		delete(additionalProperties, "lastActivityAt")
 		delete(additionalProperties, "class")
 		delete(additionalProperties, "daemonVersion")
 		delete(additionalProperties, "runnerId")

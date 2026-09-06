@@ -104,6 +104,9 @@ class TestBoxInfoStructure:
     def test_has_started_at(self, box_info_cls):
         assert "started_at" in dir(box_info_cls)
 
+    def test_has_last_activity_at(self, box_info_cls):
+        assert "last_activity_at" in dir(box_info_cls)
+
     def test_has_image(self, box_info_cls):
         assert "image" in dir(box_info_cls)
 

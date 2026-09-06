@@ -234,6 +234,10 @@ pub struct JsBoxInfo {
     /// When the box most recently entered `Running` (RFC 3339), when recorded
     pub started_at: Option<String>,
 
+    /// When the box was last active (RFC 3339), as recorded by the control
+    /// plane; absent for local runtimes and before any activity
+    pub last_activity_at: Option<String>,
+
     /// Image reference or rootfs path
     pub image: String,
 
@@ -277,6 +281,7 @@ impl From<BoxInfo> for JsBoxInfo {
             state,
             created_at: info.created_at.to_rfc3339(),
             started_at: info.started_at.map(|at| at.to_rfc3339()),
+            last_activity_at: info.last_activity_at.map(|at| at.to_rfc3339()),
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
@@ -326,6 +331,7 @@ mod tests {
             health_status: HealthStatus::default(),
             exit_code: None,
             started_at: None,
+            last_activity_at: None,
         }
     }
 
@@ -418,5 +424,18 @@ mod tests {
             Some("1970-01-01T00:00:01+00:00")
         );
         assert!(JsBoxInfo::from(core_info(None)).started_at.is_none());
+    }
+
+    #[test]
+    fn box_info_conversion_exposes_last_activity_at() {
+        let mut info = core_info(None);
+        info.last_activity_at = Some((SystemTime::UNIX_EPOCH + Duration::from_secs(2)).into());
+
+        let active = JsBoxInfo::from(info);
+        assert_eq!(
+            active.last_activity_at.as_deref(),
+            Some("1970-01-01T00:00:02+00:00")
+        );
+        assert!(JsBoxInfo::from(core_info(None)).last_activity_at.is_none());
     }
 }

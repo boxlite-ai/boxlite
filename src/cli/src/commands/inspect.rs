@@ -61,6 +61,10 @@ struct InspectStatePresenter {
     exit_code: i32,
     #[serde(rename = "StartedAt")]
     started_at: Option<String>,
+    /// Control-plane activity clock, not a local state transition; `null` for
+    /// local boxes, which record no activity.
+    #[serde(rename = "LastActivityAt")]
+    last_activity_at: Option<String>,
 }
 
 impl From<&BoxInfo> for InspectPresenter {
@@ -78,6 +82,7 @@ impl From<&BoxInfo> for InspectPresenter {
                 pid: state.pid.unwrap_or(0),
                 exit_code: state.exit_code.unwrap_or(0),
                 started_at: info.started_at.as_ref().map(|at| at.to_rfc3339()),
+                last_activity_at: info.last_activity_at.as_ref().map(|at| at.to_rfc3339()),
             },
             cpus: info.cpus,
             memory: info.memory_mib as u64 * 1024 * 1024,
@@ -259,6 +264,7 @@ mod tests {
             health_status: HealthStatus::new(),
             exit_code: None,
             started_at,
+            last_activity_at: None,
         }
     }
 
@@ -279,5 +285,21 @@ mod tests {
 
         let value = serde_json::to_value(InspectPresenter::from(&inspect_info(None))).unwrap();
         assert!(value["State"]["StartedAt"].is_null());
+    }
+
+    #[test]
+    fn inspect_exposes_last_activity_at() {
+        let last_activity_at = chrono::DateTime::from_timestamp(2, 0).unwrap();
+        let mut info = inspect_info(None);
+        info.last_activity_at = Some(last_activity_at);
+
+        let value = serde_json::to_value(InspectPresenter::from(&info)).unwrap();
+        assert_eq!(
+            value["State"]["LastActivityAt"],
+            last_activity_at.to_rfc3339()
+        );
+
+        let value = serde_json::to_value(InspectPresenter::from(&inspect_info(None))).unwrap();
+        assert!(value["State"]["LastActivityAt"].is_null());
     }
 }
