@@ -497,12 +497,18 @@ the three the copy is kept and named: that edit is the operator's work and the
 only place it exists. The comparison is not atomic and is not sold as one — it
 closes the window that is minutes long, not the one that is milliseconds long.
 
-Both act on SST's own objects — `app/<app>/<stage>.json` and
-`lock/<app>/<stage>.json`, beside the store's `secret/<app>/<stage>.json` — and
-do the same thing `sst unlock` and `sst state edit` do. They are here rather than
-run through the SST CLI because SST has to load a stack config to do either, and
-which stack a repository deploys is that repository's business; the objects are
-ones mstage already reads.
+Both act on the engine's own objects, and which those are is the backend's
+business rather than the command's. On an AWS home they are SST's —
+`app/<app>/<stage>.json` and `lock/<app>/<stage>.json`, beside the store's
+`secret/<app>/<stage>.json` — and these do what `sst unlock` and `sst state edit`
+do. On a GCP home the engine is Pulumi itself, which keeps its checkpoint at
+`.pulumi/stacks/<app>/<stage>.json` and its locks as a _directory_ of files, one
+per operation holding the stage; `unlock` refuses rather than guessing when it
+finds more than one, and removes every one of them when it acts.
+
+They are here rather than run through either CLI because both have to load a
+stack config to do it, and which stack a repository deploys is that repository's
+business; the objects are ones mstage already reads.
 
 Clearing a pending operation is not the same as knowing what became of the
 resource it names. The operation was interrupted, so the cloud may hold something

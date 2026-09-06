@@ -24,7 +24,7 @@ import { CLICKHOUSE_PASSWORD_VARIABLE } from '../../clickhouse.ts'
 import { DATABASE_PASSWORD_VARIABLE } from '../../database.ts'
 import type { Placement } from '../../network.ts'
 import type { StorageBinding } from '../../storage.ts'
-import { containerEnvironment } from './secret-env.ts'
+import { containerEnvironment, secretIdOf } from './secret-env.ts'
 import { VOLUME_OBJECT_ACCESS_ROLE } from './storage.ts'
 
 const onGcp = (storage: { binding: StorageBinding }): Extract<StorageBinding, { cloud: 'gcp' }> => {
@@ -108,13 +108,6 @@ const bindingsFor = ({
         }),
       ]
   }
-}
-
-/** The secret's own id, out of a version reference. */
-const secretIdOf = (reference: string): string => {
-  const match = /^projects\/[^/]+\/secrets\/([^/]+)\/versions\/[^/]+$/.exec(reference)
-  if (!match) throw new Error(`Cannot name a secret from ${JSON.stringify(reference)}`)
-  return match[1] as string
 }
 
 export const gcpApiProvider =

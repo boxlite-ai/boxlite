@@ -57,8 +57,18 @@ const memoryBackend = () => {
       calls.push('passphrase')
       return KEY
     },
-    // Nothing deploys into a Map, so there is no checkpoint and no lock here.
-    state: null,
+    /*
+     * Nothing deploys into a Map, and these tests ask the store's five
+     * questions rather than the engine's two. Refusing rather than answering
+     * emptily: a test that reached one of these by accident would otherwise
+     * read a checkpoint that was never written and call it an empty stage.
+     */
+    state: {
+      readCheckpoint: () => Promise.reject(new Error('the in-memory backend keeps no checkpoint')),
+      writeCheckpoint: () => Promise.reject(new Error('the in-memory backend keeps no checkpoint')),
+      readLock: () => Promise.reject(new Error('the in-memory backend takes no lock')),
+      removeLock: () => Promise.reject(new Error('the in-memory backend takes no lock')),
+    },
   }
   return { backend, calls, objects }
 }

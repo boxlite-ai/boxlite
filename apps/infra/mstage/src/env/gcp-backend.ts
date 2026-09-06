@@ -1,12 +1,19 @@
 /*
- * The store on GCP: one bucket, one secret per stage.
+ * The store on GCP: one bucket, one secret per stage — and, in the same bucket,
+ * the state the deploy engine keeps.
  *
- * Unlike the AWS backend this one is not copying anyone. No deploy tool reads
- * these objects, so the layout is mstage's own and is chosen to be boring:
+ * The store's own layout is mstage's, chosen to be boring, because nothing else
+ * reads it:
  *
  *   Secret Manager  mstage-bootstrap                   which bucket holds the store
  *   GCS             secret/<app>/<stage>.json          the sealed map
  *   Secret Manager  mstage-passphrase-<app>-<stage>    the key
+ *
+ * The deployment objects below `state` are not mstage's to choose. Pulumi
+ * deploys a GCP stage (`mdeploy/src/pulumi.ts`) and keeps its checkpoint and
+ * locks in this bucket, so those keys are its layout and are read exactly as it
+ * writes them — the same relationship the AWS backend has with SST, against a
+ * different engine.
  *
  * The bucket is discovered rather than passed, the same way AWS reads
  * `/sst/bootstrap`. Not for obscurity — IAM is the boundary either way — but so
@@ -36,10 +43,13 @@ export type GcpClients = {
         download: () => Promise<[Buffer]>
         save: (data: Buffer, options?: { contentType?: string }) => Promise<void>
         getMetadata: () => Promise<[{ generation?: string | number; updated?: string; size?: string | number }]>
+        /** Only the lock files are ever deleted; the store keeps every version. */
+        delete: () => Promise<unknown>
       }
       getFiles: (options: {
         prefix: string
-        versions: boolean
+        /** Omitted when listing distinct keys rather than one object's history. */
+        versions?: boolean
       }) => Promise<[{ name: string; metadata: Record<string, unknown> }[]]>
     }
   }
@@ -55,6 +65,64 @@ const isNotFound = (error: unknown): boolean => {
 }
 
 const BOOTSTRAP_SECRET = 'mstage-bootstrap'
+
+/*
+ * Where the engine keeps this stage's deployment state, which is not where SST
+ * keeps it.
+ *
+ * On AWS the engine is SST and writes `app/<app>/<stage>.json` with a single
+ * `lock/<app>/<stage>.json` beside it. On GCP the engine is Pulumi itself
+ * (`mdeploy/src/pulumi.ts`), and its own backend keeps everything under
+ * `.pulumi/` — so the same bucket holds the store and the checkpoint, which is
+ * the whole reason a GCP stage needs no second cloud to deploy.
+ *
+ * Two differences are worth naming rather than smoothing over. The stack path
+ * is scoped by project, which is what Pulumi writes into a new or empty backend
+ * from 3.61.0 on and therefore what the bucket `iam/src/gcp.ts` creates gets; a
+ * backend upgraded from the older flat layout is not read here, because nothing
+ * in this repository makes one. And a lock is a *directory* — Pulumi writes one
+ * file per operation holding the stage, named by a unique id — where SST has a
+ * single object.
+ *
+ * `app` is the Pulumi project: mdeploy passes the app name as `projectName` and
+ * the stage as `stackName`, so the two halves line up with SST's keys.
+ */
+const PULUMI = '.pulumi'
+
+/**
+ * `.pulumi/stacks/<project>/<stack>.json` — `projectReferenceStore.StackBasePath`
+ * joins the stacks directory, the project and the stack name, and nothing else
+ * (`pkg/backend/diy/store.go`).
+ */
+const checkpointKey = (app: string, stage: string): string => `${PULUMI}/stacks/${app}/${stage}.json`
+
+/**
+ * `.pulumi/locks/organization/<project>/<stack>/` — and the extra segment is not
+ * a typo.
+ *
+ * Locks are keyed by `FullyQualifiedName()`, which renders a project-scoped
+ * reference as `organization/<project>/<stack>` (`pkg/backend/diy/backend.go`),
+ * and `lockPath` joins that under the locks directory
+ * (`pkg/backend/diy/lock.go`). Stacks are keyed by the store instead, which
+ * omits it. The two paths really are asymmetric; Pulumi's own DIY-backend
+ * documentation describes the lock path without the segment, so reading the
+ * docs rather than the source is how this gets written wrong — and wrong here
+ * means listing an empty prefix and reporting a locked stage as free.
+ */
+const lockPrefix = (app: string, stage: string): string => `${PULUMI}/locks/organization/${app}/${stage}/`
+
+/**
+ * The lock files this stage currently has, by key.
+ *
+ * Listed rather than addressed: the name of each is a unique id the engine
+ * chose, so there is nothing to construct. Distinct keys, not one object's
+ * history, which is why `versions` is left off.
+ */
+const lockFiles = async (clients: GcpClients, project: string, app: string, stage: string): Promise<string[]> => {
+  const bucket = await readStateBucket(clients, project)
+  const [files] = await clients.storage.bucket(bucket).getFiles({ prefix: lockPrefix(app, stage) })
+  return files.map((file) => file.name).sort()
+}
 
 /** Reads one Secret Manager version, or reports what is missing. */
 const secretValue = async (clients: GcpClients, name: string): Promise<string> => {
@@ -169,9 +237,71 @@ export const gcpBackend = ({ clients, project }: { clients: GcpClients; project:
     }
   },
 
-  // Nothing deploys into this home. `sst deploy` writes its checkpoint and takes
-  // its lock on AWS, so there is no checkpoint here to repair and no lock to drop,
-  // and inventing a layout for objects nothing writes would only make `mstage
-  // state` answer about a stage it cannot see.
-  state: null,
+  state: {
+    async readCheckpoint({ app, stage }) {
+      const bucket = await readStateBucket(clients, project)
+      try {
+        const [payload] = await clients.storage.bucket(bucket).file(checkpointKey(app, stage)).download()
+        return payload.length === 0 ? null : payload
+      } catch (error) {
+        if (isNotFound(error)) return null
+        throw error
+      }
+    },
+
+    async writeCheckpoint({ app, stage, checkpoint }) {
+      const bucket = await readStateBucket(clients, project)
+      await clients.storage
+        .bucket(bucket)
+        .file(checkpointKey(app, stage))
+        .save(checkpoint, { contentType: 'application/json' })
+    },
+
+    async readLock({ app, stage }) {
+      const held = await lockFiles(clients, project, app, stage)
+      if (held.length === 0) return null
+      /*
+       * Refused rather than half-answered. Each file is one operation holding
+       * the stage, so two files are two holders, and reporting one of them
+       * would name a holder nobody asked about — and would quietly break the
+       * check in `state/store.ts` that the lock being dropped is the lock that
+       * was named. The names are not printed: the caller is told how many, and
+       * `unlock` removes them all once it knows.
+       */
+      if (held.length > 1) {
+        throw new EnvError(
+          `${app}/${stage} has ${held.length} locks, so no single one holds it. ` +
+            'Read them in the bucket before dropping any',
+        )
+      }
+      const bucket = await readStateBucket(clients, project)
+      try {
+        const [payload] = await clients.storage.bucket(bucket).file(held[0]!).download()
+        return payload.length === 0 ? null : payload
+      } catch (error) {
+        // Released between the listing and this read: no lock, which is the
+        // answer the caller wanted. Guarded like the two reads either side of
+        // it — an unguarded 404 leaves here as a GCS message naming the bucket,
+        // and `bin/mstage.ts` prints what reaches it.
+        if (isNotFound(error)) return null
+        throw error
+      }
+    },
+
+    async removeLock({ app, stage }) {
+      const bucket = await readStateBucket(clients, project)
+      // Every one of them: a stage with any lock file left is a stage the next
+      // deploy still refuses, so removing one of two would report success and
+      // change nothing a caller can see.
+      for (const key of await lockFiles(clients, project, app, stage)) {
+        try {
+          await clients.storage.bucket(bucket).file(key).delete()
+        } catch (error) {
+          // A lock released between the listing and here is the outcome asked
+          // for, not a failure.
+          if (!isNotFound(error)) throw error
+        }
+      }
+    },
+  },
 })

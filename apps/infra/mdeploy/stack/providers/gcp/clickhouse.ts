@@ -83,9 +83,10 @@ export const gcpClickHouseProvider =
         mode: 'managed',
         url: $util.output(managed.url),
         database: request.database,
-        // The two names are Secret Manager versions here rather than Secrets
-        // Manager ARNs; the store holds whichever this stage's cloud uses, and
-        // the key names are shared because the *idea* is.
+        // Secret Manager references here rather than Secrets Manager ARNs;
+        // the store holds whichever this stage's cloud uses, and the key names
+        // are shared because the *idea* is. A managed endpoint's are whatever
+        // was seeded, which mstage guarantees carries no version.
         writer: {
           username: request.writerUsername,
           passwordRef: $util.output(managed.writerSecretArn),

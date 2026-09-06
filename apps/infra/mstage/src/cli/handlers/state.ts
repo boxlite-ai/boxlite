@@ -1,11 +1,12 @@
 /**
  * `mstage state` — the two repairs a stage needs after a deploy stops halfway.
  *
- * Both are SST's own (`sst unlock`, `sst state edit`), done against the state
- * bucket directly rather than through the SST CLI. That is deliberate: SST has
- * to load a stack config to run either of them, and which stack this repository
- * deploys is mdeploy's business, not mstage's. The objects, on the other hand,
- * are the ones mstage already reads for the stage environment.
+ * Both are the engine's own — `sst unlock` and `sst state edit` on AWS, and the
+ * equivalent repairs to Pulumi's checkpoint and locks on GCP — done against the
+ * bucket directly rather than through either CLI. That is deliberate: both have
+ * to load a stack config to run them, and which stack this repository deploys is
+ * mdeploy's business, not mstage's. The objects, on the other hand, are in the
+ * bucket mstage already reads for the stage environment.
  *
  * What mstage adds around them is the rest of a stage: the region it resolves to,
  * the credentials the chain answers with, and the refusal to touch a protected
@@ -58,7 +59,8 @@ const refuseProtected = (scope: Scope, options: Input['options'], what: string):
  * What held it is printed before it goes, because the one thing this command
  * cannot tell is whether that deploy is still running somewhere. A lock removed
  * out from under a live deploy lets a second one start against the same
- * checkpoint, so the operator gets the run id and the time and makes that call.
+ * checkpoint, so the operator gets whatever the engine recorded — the command
+ * and run id from SST, the user, host and pid from Pulumi — and makes that call.
  */
 export const unlock = async ({ scope, options, log, backend }: Input): Promise<number> => {
   refuseProtected(scope, options, 'drop its lock')

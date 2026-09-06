@@ -102,7 +102,7 @@ export const gcpDatabaseProvider =
      * The password, generated and immediately put out of reach.
      *
      * `$util.secret` marks it so the engine seals it in state; the workload
-     * receives the version's name and resolves it through `secretKeyRef`. Both
+     * receives the reference and resolves it through `secretKeyRef`. Both
      * halves matter — sealing the state without changing the delivery would
      * still put the password in every revision.
      */
@@ -142,8 +142,11 @@ export const gcpDatabaseProvider =
       },
       binding: {
         cloud: 'gcp',
-        // The version, not the secret: `latest` would let a rotation change
-        // what a running revision reads without the deploy seeing anything.
+        // Pinned to the version this deploy created, rather than left to
+        // resolve `latest`: a rotation then changes what a running revision
+        // reads without the deploy seeing anything. A stored address cannot
+        // be pinned — mstage refuses a version on one — so `secret-env.ts`
+        // accepts both and resolves an unpinned reference to the latest.
         passwordRef: version.name,
         clientGrant: clientAccount,
       },

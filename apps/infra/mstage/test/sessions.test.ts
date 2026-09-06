@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { checkAuth0, checkGitHub } from '../src/auth/sessions.ts'
+import { checkAuth0, checkGcp, checkGitHub } from '../src/auth/sessions.ts'
 import { report } from '../src/cli/handlers/login.ts'
 
 // Shapes taken from the installed CLIs: gh 2.98.0 and auth0 1.33.0.
@@ -129,4 +129,68 @@ test('an optional provider that is not signed in does not fail the command', asy
     log,
   })
   assert.equal(required, 1)
+})
+
+// ── gcp ─────────────────────────────────────────────────────────────────────
+
+const ADC = 'auth application-default print-access-token'
+
+/** Answers per command line, because this check asks gcloud more than one thing. */
+const gcloud = (answers: Record<string, any>) => {
+  const calls: any[] = []
+  return {
+    calls,
+    runCommand: (command: string, args: string[], options: any) => {
+      calls.push({ command, args, options })
+      return { status: 0, stdout: '', stderr: '', ...(answers[args.join(' ')] ?? {}) }
+    },
+  }
+}
+
+test('application default credentials that mint a token are signed in, whatever gcloud is pointed at', async () => {
+  // The credential is the whole question here. Which project a stage lives in
+  // comes from mstage.config.json and is handed to every client explicitly
+  // (`home.ts`), so a machine that never ran `gcloud config set project` still
+  // has a session mstage can use — reporting that as "not signed in" is a
+  // false statement about the world, and it blocked a working setup.
+  const { runCommand } = gcloud({ [ADC]: { stdout: 'ya29.a0AdMD6Eg\n' }, 'config get-value project': { stdout: '' } })
+  assert.deepEqual(await checkGcp({ runCommand }), {
+    provider: 'gcp',
+    state: 'ready',
+    detail: 'application default credentials are usable',
+    expiresAt: null,
+  })
+})
+
+test('the check never asks gcloud which project is configured', async () => {
+  // The guard rather than the instance. That setting is global while a project
+  // is per stage: mstage builds its clients from the config, and the gcloud
+  // calls that act on a project pass `--project` themselves. The one call that
+  // does consult it is the ADC sign-in, which writes it into the credential as
+  // a quota project — at login time, so a gate here would pass on a project set
+  // afterwards and leave that credential exactly as it was.
+  const { runCommand, calls } = gcloud({ [ADC]: { stdout: 'ya29.a0AdMD6Eg' } })
+  await checkGcp({ runCommand })
+  assert.deepEqual(
+    calls.filter((call) => call.args.includes('config')),
+    [],
+    'a global gcloud setting decides nothing here',
+  )
+})
+
+test('credentials that cannot mint a token are not signed in, and say how to get them', async () => {
+  const { runCommand } = gcloud({
+    [ADC]: { status: 1, stderr: 'ERROR: (gcloud.auth.application-default.print-access-token) Your default credentials were not found.' },
+  })
+  const status = await checkGcp({ runCommand })
+  assert.equal(status.state, 'not signed in')
+  assert.match(status.detail, /Your default credentials were not found\./)
+  assert.match(status.detail, /Sign in with: gcloud auth application-default login/)
+})
+
+test('an absent gcloud says how to install it, with the name Homebrew answers to', async () => {
+  const enoent = () => ({ error: Object.assign(new Error('x'), { code: 'ENOENT' }) })
+  const status = await checkGcp({ runCommand: enoent })
+  assert.equal(status.state, 'not signed in')
+  assert.match(status.detail, /gcloud is not installed\. Install it with: brew install gcloud-cli/)
 })

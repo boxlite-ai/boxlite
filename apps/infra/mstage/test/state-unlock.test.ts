@@ -149,9 +149,35 @@ test('a protected stage keeps its lock until --confirm says otherwise', async ()
   assert.deepEqual(store.deleted, [LOCK_KEY])
 })
 
-test('a home nothing deploys into says so rather than guessing a layout', async () => {
-  const nowhere = { home: 'gcp', state: null } as unknown as StoreBackend
-  await assert.rejects(() => drop({ backend: nowhere }).run(), /"gcp" home, so it keeps no deployment state/)
+test("a Pulumi lock is described by what it records, not by what SST would have", async () => {
+  // `lockContent` (pkg/backend/diy/lock.go) records the person and the machine
+  // where SST records the command and the run. A renderer that read only SST's
+  // fields answered "an unrecorded command" and dropped all four, on the one
+  // cloud where the operator has least else to go on.
+  const held = JSON.stringify({
+    pid: 41,
+    username: 'kx',
+    hostname: 'runner-1',
+    timestamp: '2026-09-06T11:02:44.117Z',
+  })
+  const attempt = drop({ backend: bucket({ lock: held }).backend })
+  assert.equal(await attempt.run(), 0)
+  assert.match(attempt.lines.join('\n'), /locked by kx on runner-1, pid 41, since 2026-09-06T11:02:44\.117Z/)
+})
+
+test('a lock swapped for another the reader cannot parse is still not the one removed', async () => {
+  // The guard compares what was named against what is there. It used to compare
+  // only the four fields SST records, so two locks written by an engine that
+  // records different ones — Pulumi's, on a GCP stage — both read as four
+  // nulls, compared equal, and the second was deleted while the first was the
+  // one reported. Identity has to come from the bytes, not from fields this
+  // reader happens to recognise.
+  const foreign = JSON.stringify({ pid: 41, hostname: 'runner-a' })
+  const swapped = JSON.stringify({ pid: 57, hostname: 'runner-b' })
+  const store = bucket({ lock: foreign, meanwhile: () => store.objects.set(LOCK_KEY, Buffer.from(swapped)) })
+  const attempt = drop({ backend: store.backend })
+  await assert.rejects(() => attempt.run(), /is not the lock that was just reported/)
+  assert.deepEqual(store.deleted, [], 'a lock nobody named was removed')
 })
 
 test('the state bucket is not named, on either outcome', async () => {

@@ -120,7 +120,7 @@ const STAGE_OPTIONS = ['app', 'region', 'role-arn', 'role-session-name']
  */
 const LOGIN_PROVIDERS: Record<string, { check: ProviderCheck; summary: string }> = {
   aws: { check: checkAws, summary: 'AWS credentials, through the SDK default chain' },
-  gcp: { check: checkGcp as ProviderCheck, summary: 'Google application default credentials, and the project set' },
+  gcp: { check: checkGcp as ProviderCheck, summary: 'Google application default credentials' },
   // These two read a CLI session and ignore the AWS identity in the context.
   github: { check: checkGitHub as ProviderCheck, summary: 'The gh CLI session, and which account it holds' },
   auth0: { check: checkAuth0 as ProviderCheck, summary: 'The auth0 CLI session, and its active tenant' },
