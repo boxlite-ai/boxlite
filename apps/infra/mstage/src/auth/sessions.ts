@@ -36,7 +36,9 @@ export const PROVIDER_TOOLS: Record<string, ProviderTool> = {
   gcp: {
     signIn: ['gcloud', 'auth', 'application-default', 'login'],
     signOut: ['gcloud', 'auth', 'application-default', 'revoke'],
-    install: { manager: 'brew', formula: 'google-cloud-sdk' },
+    // Homebrew renamed this cask from google-cloud-sdk; the old name is still an
+    // alias for it, and an alias is not what a hint should teach.
+    install: { manager: 'brew', formula: 'gcloud-cli' },
   },
   github: {
     signIn: ['gh', 'auth', 'login'],
@@ -212,29 +214,43 @@ const notSignedIn = (provider: string, detail: string) => ({
  * per-host `state` is what says whether the session works.
  */
 /**
- * The gcloud session, and which account holds it.
+ * Whether Application Default Credentials can actually authenticate.
  *
- * Application Default Credentials rather than the logged-in user: a deploy runs
- * as ADC, so checking `gcloud auth list` would report a person being signed in
- * while the thing that actually authenticates is absent. On a runner there is no
- * user at all and ADC comes from workload identity, which this still sees.
+ * ADC rather than the logged-in user: a deploy runs as ADC, so checking
+ * `gcloud auth list` would report a person being signed in while the thing that
+ * actually authenticates is absent. On a runner there is no user at all and ADC
+ * comes from workload identity, which this still sees.
+ *
+ * Which project a stage lives in is deliberately not checked. `mstage.config.json`
+ * declares it per stage, `home.ts` hands that to every client explicitly, and the
+ * gcloud calls that act on a project — `iam/src/gcp.ts`, mbuild's Artifact
+ * Registry registrar — pass `--project` themselves. So gating on
+ * `gcloud config get-value project` reported usable credentials as "not signed
+ * in" over a setting the work does not consult.
+ *
+ * One call does consult it, and it is the reason a gate here looks tempting:
+ * `gcloud auth application-default login` writes the configured project into ADC
+ * as its `quota_project_id`. But that is written at login time, so a project set
+ * afterwards satisfies such a gate and changes nothing about the credential
+ * already on disk — the check would pass and the hazard would remain. Catching
+ * that means reading the quota project out of ADC, which no gcloud command
+ * reports, not asking whether some global is populated.
+ *
+ * `checkAws` is the mirror — it proves the credential resolves and leaves the
+ * region to the stage.
  */
 export const checkGcp = async ({ runCommand }: { runCommand?: RunCommand } = {} as any) => {
   const advice = 'Sign in with: gcloud auth application-default login'
   const result = capture('gcp', 'gcloud', ['auth', 'application-default', 'print-access-token'], runCommand)
   if (!result.ok) return notSignedIn('gcp', `${result.detail}. ${advice}`)
-
-  const project = capture('gcp', 'gcloud', ['config', 'get-value', 'project'], runCommand)
-  const named = project.ok ? project.stdout.trim() : ''
-  if (!named || named === '(unset)') {
-    return notSignedIn('gcp', `credentials are present but no project is set. Set one with: gcloud config set project`)
-  }
   return {
     provider: 'gcp',
     state: 'ready',
-    detail: `project ${named}`,
-    // The token this printed expires, but ADC mints another on demand; there is
-    // no deadline a caller could act on.
+    // No account name: ADC carries no identity gcloud will report, and the one
+    // thing this proved is that a token can be minted.
+    detail: 'application default credentials are usable',
+    // That token expires, but ADC mints another on demand; there is no deadline
+    // a caller could act on.
     expiresAt: null,
   }
 }

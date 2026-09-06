@@ -19,7 +19,8 @@
  * order is that one first.
  */
 
-import type { StateObjects, StoreBackend } from '../env/backend.ts'
+import { createHash } from 'node:crypto'
+import type { StoreBackend } from '../env/backend.ts'
 
 export class StateError extends Error {
   constructor(message: string) {
@@ -28,24 +29,36 @@ export class StateError extends Error {
   }
 }
 
-/** What SST records for whoever holds the lock (`lockData`, pkg/project/provider/provider.go). */
+/**
+ * Whoever holds the lock, as much of it as the engine that took it recorded.
+ *
+ * Two disjoint sets, because the two engines record different things and this
+ * has to render either. Neither is a superset of the other: SST says what was
+ * running and Pulumi says who ran it, and a lock carries one set or the other.
+ */
 export type StageLock = {
+  /** SST's (`lockData`, pkg/project/provider/provider.go). */
   created: string | null
   updateID: string | null
   runID: string | null
   command: string | null
+  /** Pulumi's (`lockContent`, pkg/backend/diy/lock.go). */
+  username: string | null
+  hostname: string | null
+  pid: number | null
+  timestamp: string | null
+  /**
+   * What tells one lock from another, whatever engine wrote it.
+   *
+   * Neither field set can do this: an engine this does not recognise leaves all
+   * of them null, so comparing them made any two such locks equal and turned
+   * "the lock being dropped is the lock that was named" into a check that could
+   * not fail. A digest of the bytes is the one identity every engine has.
+   */
+  identity: string
 }
 
 type Stage = { backend: StoreBackend; app: string; stage: string }
-
-const objectsOf = (backend: StoreBackend): StateObjects => {
-  if (!backend.state) {
-    throw new StateError(
-      `Nothing deploys into a "${backend.home}" home, so it keeps no deployment state to unlock or edit`,
-    )
-  }
-  return backend.state
-}
 
 const text = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null)
 
@@ -58,7 +71,7 @@ const text = (value: unknown): string | null => (typeof value === 'string' && va
  * that would also block removing it.
  */
 export const readLock = async ({ backend, app, stage }: Stage): Promise<StageLock | null> => {
-  const payload = await objectsOf(backend).readLock({ app, stage })
+  const payload = await backend.state.readLock({ app, stage })
   if (!payload) return null
   let held: Record<string, unknown> = {}
   try {
@@ -72,23 +85,41 @@ export const readLock = async ({ backend, app, stage }: Stage): Promise<StageLoc
     updateID: text(held.updateID),
     runID: text(held.runID),
     command: text(held.command),
+    username: text(held.username),
+    hostname: text(held.hostname),
+    pid: typeof held.pid === 'number' ? held.pid : null,
+    timestamp: text(held.timestamp),
+    identity: createHash('sha256').update(payload).digest('hex'),
   }
 }
 
-/** Who is being interrupted. A lock a deploy still holds is not a stale one. */
+/**
+ * Who is being interrupted. A lock a deploy still holds is not a stale one, and
+ * this line is the whole basis for telling those apart.
+ *
+ * Reads both field sets, because a renderer that knew only one would answer "an
+ * unrecorded command" for every lock the other engine took — throwing away the
+ * user, host and time that were sitting in the file, on exactly the stage where
+ * the operator has least context.
+ */
 export const describeLock = ({ app, stage, lock }: { app: string; stage: string; lock: StageLock }): string =>
   [
-    `${app}/${stage} is locked by ${lock.command ?? 'an unrecorded command'}`,
+    `${app}/${stage} is locked by ${holderOf(lock)}`,
     lock.runID ? ` in run ${lock.runID}` : '',
     lock.updateID ? `, update ${lock.updateID}` : '',
-    lock.created ? `, since ${lock.created}` : '',
+    lock.pid === null ? '' : `, pid ${lock.pid}`,
+    lock.created ?? lock.timestamp ? `, since ${lock.created ?? lock.timestamp}` : '',
   ].join('')
 
-const sameLock = (left: StageLock, right: StageLock): boolean =>
-  left.created === right.created &&
-  left.updateID === right.updateID &&
-  left.runID === right.runID &&
-  left.command === right.command
+/** What SST calls a command, Pulumi calls a person on a machine. */
+const holderOf = (lock: StageLock): string => {
+  if (lock.command) return lock.command
+  if (lock.username) return lock.hostname ? `${lock.username} on ${lock.hostname}` : lock.username
+  return 'an unrecorded command'
+}
+
+/** The bytes, not the fields: an engine whose fields this cannot read still has bytes. */
+const sameLock = (left: StageLock, right: StageLock): boolean => left.identity === right.identity
 
 /**
  * Removes the lock that was named, and only that one.
@@ -112,21 +143,34 @@ export const clearLock = async ({
       `${describeLock({ app, stage, lock: held })}, which is not the lock that was just reported. Nothing was removed`,
     )
   }
-  await objectsOf(backend).removeLock({ app, stage })
+  await backend.state.removeLock({ app, stage })
   return true
 }
 
 /** The checkpoint as stored. A stage nothing has ever deployed into has none. */
 export const readCheckpoint = async ({ backend, app, stage }: Stage): Promise<Buffer> => {
-  const payload = await objectsOf(backend).readCheckpoint({ app, stage })
+  const payload = await backend.state.readCheckpoint({ app, stage })
   if (!payload) throw new StateError(`${app}/${stage} has no deployment state; nothing has been deployed into it`)
   return payload
 }
 
-/** What SST stores: a versioned Pulumi checkpoint (`Import`, pkg/project/workdir.go). */
+/**
+ * A versioned Pulumi checkpoint — what SST stores (`Import`,
+ * pkg/project/workdir.go) and what Pulumi's own backend stores directly.
+ */
 type VersionedCheckpoint = { checkpoint?: { latest?: { pending_operations?: unknown[] } | null } }
 
-/** The one SST 3.19.3 writes, and the one every key in this backend belongs to. */
+/**
+ * The version both engines write today, and the only one this opens.
+ *
+ * `apitype.DeploymentSchemaVersionCurrent` is 3 "when not using features that
+ * require v4"; a stack that uses one gets a `version: 4` wrapper with a
+ * `features` list beside it. Such a checkpoint is refused here rather than
+ * edited, which is the safe direction — this reads `pending_operations` and
+ * writes the whole file back, so opening a shape it does not understand is how
+ * a stage loses everything it had. Raising this means reading what v4 changed,
+ * not widening the comparison.
+ */
 const CHECKPOINT_VERSION = 3
 
 const isObject = (value: unknown): boolean => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -191,7 +235,8 @@ export const writeCheckpoint = async ({
 }: Stage & { checkpoint: Buffer; replacing: Buffer }): Promise<void> => {
   if (!parse(checkpoint)) {
     throw new StateError(
-      `That is not a checkpoint: SST stores {"version":3,"checkpoint":{…}}, so ${app}/${stage} was left as it was`,
+      `That is not a checkpoint this reader opens: it stores {"version":3,"checkpoint":{…}}, ` +
+        `so ${app}/${stage} was left as it was`,
     )
   }
   const lock = await readLock({ backend, app, stage })
@@ -200,9 +245,9 @@ export const writeCheckpoint = async ({
       `${describeLock({ app, stage, lock })}, which happened while this was open. Nothing was written`,
     )
   }
-  const current = await objectsOf(backend).readCheckpoint({ app, stage })
+  const current = await backend.state.readCheckpoint({ app, stage })
   if (!current || !current.equals(replacing)) {
     throw new StateError(`${app}/${stage} was rewritten while this was open. Nothing was written`)
   }
-  await objectsOf(backend).writeCheckpoint({ app, stage, checkpoint })
+  await backend.state.writeCheckpoint({ app, stage, checkpoint })
 }

@@ -7,10 +7,10 @@
  * same objects are read and written by `sst deploy` and diverging from it would
  * mean two stores; anywhere else mstage is free to choose, and does.
  *
- * A backend may answer for two more objects, `StateObjects` below, and a backend
- * on a home nothing deploys into answers for neither. That is a separate
- * capability rather than a sixth question because those objects exist only where
- * something deploys, and this store exists everywhere.
+ * A backend answers for two more objects, `StateObjects` below, in whatever
+ * layout the engine that deploys into its home uses. Grouped rather than asked
+ * as two more questions, because they belong to that engine and the five above
+ * belong to mstage.
  *
  * The encryption is not a backend's business either. Values are sealed before
  * they reach one and opened after they leave it, so a backend never holds a
@@ -42,18 +42,23 @@ export type StoredVersion = {
 }
 
 /**
- * The two objects SST keeps for a stage beside the store.
+ * The two things an engine keeps for a stage beside the store: a checkpoint,
+ * and whatever it holds while rewriting one.
  *
- * Both exist only because something deploys: `app/…` is the Pulumi checkpoint
- * every deploy reads and rewrites, and `lock/…` is what one holds while it does.
- * mstage does not deploy, so it writes no checkpoint of its own and takes no
- * lock — it offers the two repairs a deploy cannot make for itself, because both
- * are needed exactly when a deploy stopped halfway: dropping a lock the process
- * did not live to release, and editing a checkpoint whose pending operations
- * refuse the next deploy.
+ * Both exist only because something deploys. mstage does not, so it writes no
+ * checkpoint of its own and takes no lock — it offers the two repairs a deploy
+ * cannot make for itself, because both are needed exactly when a deploy stopped
+ * halfway: dropping a lock the process did not live to release, and editing a
+ * checkpoint whose pending operations refuse the next deploy.
+ *
+ * Deliberately says nothing about where either lives. The two engines disagree:
+ * SST keeps `app/<app>/<stage>.json` with one `lock/…` object beside it, and
+ * Pulumi keeps everything under `.pulumi/` with a *directory* of lock files.
+ * Each backend answers for its own layout, and a caller works in checkpoints and
+ * locks rather than keys.
  *
  * Neither object is sealed. Whatever is secret inside the checkpoint was
- * encrypted by Pulumi before SST stored it, so these are bytes to carry
+ * encrypted by Pulumi before it was stored, so these are bytes to carry
  * unchanged rather than something to open.
  */
 export type StateObjects = {
@@ -82,10 +87,11 @@ export type StoreBackend = {
   /** The key this stage's object is sealed with. Never logged, never returned to a caller. */
   passphrase: (input: { app: string; stage: string }) => Promise<Buffer>
   /**
-   * SST's deployment objects for this stage, or null on a home nothing deploys
-   * into — where there is no checkpoint to repair and no lock to drop.
+   * The deployment objects the engine of this home leaves for a stage. Which
+   * engine, and therefore which layout, is the backend's own business — SST on
+   * AWS, Pulumi on GCP.
    */
-  readonly state: StateObjects | null
+  readonly state: StateObjects
 }
 
 /**

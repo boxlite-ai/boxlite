@@ -8,7 +8,10 @@
  */
 
 import assert from 'node:assert/strict'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { containerEnvironment, splitSecretRef } from '../stack/providers/gcp/secret-env.ts'
 
 const REFERENCE = 'projects/boxlite-gcp-dev/secrets/boxlite-dev-db-password/versions/4'
@@ -28,12 +31,70 @@ test('a version reference is split into the two halves Cloud Run wants', () => {
   assert.deepEqual(splitSecretRef('projects/p/secrets/s/versions/latest'), { secret: 's', version: 'latest' })
 })
 
+test('a stored address carries no version, and resolves the latest one', () => {
+  // The reproducer. mstage's own validator *refuses* a version on a stored
+  // address, so every secret the `secret` marker group delivers arrives in this
+  // shape — and a parser that demanded one threw on all of them, on the one
+  // channel whose whole point is that the value never travels.
+  assert.deepEqual(splitSecretRef('projects/boxlite-gcp-dev/secrets/boxlite-dev-oidc-client-secret'), {
+    secret: 'boxlite-dev-oidc-client-secret',
+    version: 'latest',
+  })
+})
+
+test('the shape mstage accepts for a stored address is a shape this parses', () => {
+  // One convention rather than two. Both land in the same Cloud Run field, so a
+  // form mstage would write and this would reject is a deploy that fails on a
+  // string neither side thinks is wrong. Read from mstage's own validator rather
+  // than restated here — a copy is what lets the two drift.
+  const source = readFileSync(fileURLToPath(new URL('../../mstage/src/env/secret-address.ts', import.meta.url)), 'utf8')
+  const declared = /gcp:\s*\{\s*pattern:\s*(\/.+?\/),/s.exec(source)
+  assert.ok(declared, 'mstage no longer declares a gcp address pattern where this test looks for it')
+
+  const pattern = new RegExp(declared[1]!.slice(1, -1))
+  const address = 'projects/boxlite-gcp-dev/secrets/boxlite-dev-oidc-client-secret'
+  assert.match(address, pattern, 'the fixture below has to be an address mstage would accept')
+  assert.doesNotThrow(() => splitSecretRef(address))
+  // And the reverse: mstage refuses a version, so this must not require one.
+  assert.doesNotMatch(`${address}/versions/4`, pattern)
+})
+
 test('a string that is not a reference is refused, because it is a plaintext secret', () => {
   // Delivering it anyway would put the secret into the revision as if it named
   // one — the exact failure the reference channel exists to prevent.
-  for (const wrong of ['arn:aws:secretsmanager:::secret:x', 'hunter2', 'projects/p/secrets/s', '']) {
-    assert.throws(() => splitSecretRef(wrong), /is not a Secret Manager version reference/)
+  for (const wrong of ['arn:aws:secretsmanager:::secret:x', 'hunter2', 'projects/p/secrets', '']) {
+    assert.throws(() => splitSecretRef(wrong), /is not a Secret Manager reference/)
   }
+})
+
+test('no provider spells a secret reference itself; they all go through the one builder', () => {
+  // The class rather than its instances. The shape written out at each call site
+  // is how it goes wrong four times before anyone notices — which is exactly how
+  // it went wrong upstream.
+  //
+  // Recursive: a provider moved into a subdirectory is still a provider, and a
+  // guard that read only the top level would stop guarding the day one moves.
+  const bundle = fileURLToPath(new URL('../stack/providers/gcp', import.meta.url))
+  const offenders: string[] = []
+  const walk = (directory: string) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const full = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        walk(full)
+        continue
+      }
+      if (!entry.name.endsWith('.ts') || entry.name === 'secret-env.ts') continue
+      const source = readFileSync(full, 'utf8')
+      // Code, not prose: a doc comment may name the field it is describing.
+      const code = source
+        .split('\n')
+        .filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line))
+        .join('\n')
+      if (/secretKeyRef/.test(code) || /secrets\\\/\(\[\^\/\]\+\)/.test(code)) offenders.push(entry.name)
+    }
+  }
+  walk(bundle)
+  assert.deepEqual(offenders, [], 'these build a secret reference by hand instead of through secret-env.ts')
 })
 
 test('values and addresses arrive in one list and stay distinguishable inside it', () => {

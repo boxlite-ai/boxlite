@@ -12,11 +12,32 @@
  * whichever was written last. The composition root refuses it earlier, but this
  * is where the difference would surface, so it is named here too.
  *
- * A reference is `projects/<p>/secrets/<s>/versions/<v>`, and the two halves
- * Cloud Run wants are the secret and the version. Splitting it here rather than
- * at each call site is what keeps the parsing in one place — and lets a
- * malformed reference say so by name.
+ * `secretKeyRef.secret` takes a secret and `version` takes the version beside
+ * it, so a reference carrying `/versions/<v>` in the `secret` field declares the
+ * version twice and Cloud Run resolves the pair to nothing. Splitting happens
+ * here and only here, which is what keeps the shape from being written out at
+ * each call site — the way it goes wrong four times before anyone notices.
+ *
+ * Two forms arrive, from two sources that genuinely differ:
+ *
+ *   projects/<p>/secrets/<s>              a stored address, from the `secret`
+ *                                         marker group. mstage's own validator
+ *                                         *refuses* a version on the end
+ *                                         (`env/secret-address.ts`), so this
+ *                                         form can never carry one.
+ *   projects/<p>/secrets/<s>/versions/<v> minted by a provider in this bundle,
+ *                                         which controls the string and pins the
+ *                                         version so a rotation is a change the
+ *                                         deploy can see.
+ *
+ * Accepting both rather than picking one: an operator writing into the store
+ * cannot pin, and a provider that has just created a version should not throw
+ * that away. A stored address resolves `latest`, which is the only thing it
+ * could mean.
  */
+
+/** What a reference with no version of its own resolves to. */
+const LATEST = 'latest'
 
 /** One `env` entry, in the shape `gcp.cloudrunv2.Service` takes. */
 export type ContainerEnv = {
@@ -26,23 +47,31 @@ export type ContainerEnv = {
 }
 
 /**
- * A Secret Manager version reference, split into the two parts Cloud Run wants.
+ * A Secret Manager reference, split into the two parts Cloud Run wants.
  *
- * `latest` is accepted and pinned versions are preferred, which is the
- * providers' own choice rather than this function's — what it refuses is a
- * string that is not a reference at all, because that is a plaintext secret
- * about to be delivered as if it named one.
+ * Both accepted forms are named above. What it refuses is a string that is not
+ * a reference at all — a plaintext secret about to be delivered as if it named
+ * one, which is the failure the whole by-reference channel exists to prevent.
  */
 export const splitSecretRef = (reference: string): { secret: string; version: string } => {
-  const match = /^projects\/[^/]+\/secrets\/([^/]+)\/versions\/([^/]+)$/.exec(reference)
+  const match = /^projects\/[^/]+\/secrets\/([^/]+)(?:\/versions\/([^/]+))?$/.exec(reference)
   if (!match) {
     throw new Error(
-      `${JSON.stringify(reference)} is not a Secret Manager version reference; ` +
-        'a GCP stage delivers a secret as projects/<project>/secrets/<secret>/versions/<version>',
+      `${JSON.stringify(reference)} is not a Secret Manager reference; a GCP stage delivers a secret as ` +
+        'projects/<project>/secrets/<secret>, optionally with /versions/<version> when a provider pinned one',
     )
   }
-  return { secret: match[1] as string, version: match[2] as string }
+  return { secret: match[1] as string, version: match[2] ?? LATEST }
 }
+
+/**
+ * The secret's own id, for a caller that grants access rather than mounts it.
+ *
+ * The same parse, so a form one of them accepts is a form the other does. Two
+ * regexes for one reference is how the granting side ends up refusing an address
+ * the mounting side had just accepted.
+ */
+export const secretIdOf = (reference: string): string => splitSecretRef(reference).secret
 
 /**
  * The container's whole environment: values and addresses, in one list.

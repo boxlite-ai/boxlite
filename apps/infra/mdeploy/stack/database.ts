@@ -60,7 +60,13 @@ export type DatabaseBinding =
     }
   | {
       cloud: 'gcp'
-      /** A Secret Manager version name Cloud Run resolves through `secretKeyRef`. */
+      /**
+       * A Secret Manager reference Cloud Run resolves through `secretKeyRef`.
+       *
+       * `projects/<p>/secrets/<s>`, or that with `/versions/<v>` when the
+       * provider pinned one. `providers/gcp/secret-env.ts` splits either into
+       * the two fields Cloud Run wants and is the only place that does.
+       */
       passwordRef: $util.Output<string>
       /** A service account email, attached through a service's `serviceAccount`. */
       clientGrant: $util.Output<string>
