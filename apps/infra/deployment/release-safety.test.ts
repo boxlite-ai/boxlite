@@ -1700,7 +1700,11 @@ test('every workflow that selects a deployment Environment does so from an allow
 
   assert.deepEqual(
     [...swept].sort(),
-    ['build-apps-api-image.yml', 'deploy-infra.yml', 'deploy-release.yml'],
+    // mbuild.yml and mdeploy.yml are the mstage/mbuild/mdeploy replacements,
+    // dispatched by hand while the incumbents above still run. Listed here
+    // deliberately: the point of pinning the set is that a fifth deploy
+    // workflow is a reviewed addition rather than one that appeared.
+    ['build-apps-api-image.yml', 'deploy-infra.yml', 'deploy-release.yml', 'mbuild.yml', 'mdeploy.yml'],
     'the swept set no longer matches the deployment workflows',
   )
 })
