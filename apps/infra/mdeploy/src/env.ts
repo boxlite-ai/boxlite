@@ -79,7 +79,20 @@ export const ROLLOUT_GROUPS = [DEPLOY_GROUP, ...SERVICE_GROUPS]
 export type Environment = Record<string, string | undefined>
 
 /** Where `env.selectGroup` is declared, and what it declares. */
-export type GroupDeclaration = { groups: Record<string, string[]>; where: string }
+export type GroupDeclaration = {
+  groups: Record<string, string[]>
+  /**
+   * The subset of each group the store need not hold.
+   *
+   * Carried beside `groups` rather than folded into it, because the two
+   * questions are different: "what does this group name" is what the secret
+   * marker and the digest ask, and "which of those may be absent" is what a
+   * fetch asks. Absent here means every key is required, which is the shape a
+   * declaration written as a plain array has.
+   */
+  optional?: Record<string, string[]>
+  where: string
+}
 
 /**
  * The secrets one service reads, and no other.
@@ -114,7 +127,11 @@ export const serviceSecretsFrom = ({
   environment: Environment
 }): Record<string, string> => {
   const keys = groupKeys({ group, groups: declaration.groups, where: declaration.where })
-  const undelivered = keys.filter((key) => environment[key] === undefined)
+  // What the declaration marked as "this stage may not have set it". A feature
+  // nobody configured is not a short environment: the service already has an
+  // answer for an absent billing origin or an unwired incident.io source.
+  const mayBeAbsent = new Set(declaration.optional?.[group] ?? [])
+  const undelivered = keys.filter((key) => environment[key] === undefined && !mayBeAbsent.has(key))
   if (undelivered.length > 0) {
     throw new Error(
       `${undelivered.join(', ')} must reach the deploy — env.selectGroup.${group} names ` +
@@ -122,7 +139,9 @@ export const serviceSecretsFrom = ({
         `${undelivered.length === 1 ? 'it' : 'them'} at boot`,
     )
   }
-  return Object.fromEntries(keys.map((key) => [key, (environment[key] as string).trim()]))
+  return Object.fromEntries(
+    keys.filter((key) => environment[key] !== undefined).map((key) => [key, (environment[key] as string).trim()]),
+  )
 }
 
 /**
@@ -254,7 +273,13 @@ export const fetchStageEnvironment = async ({
   // and a service group from after would be a stage nobody configured.
   const stored = await readStore({ clients: backend, app, stage })
   const narrow = (group: string): Record<string, string> =>
-    valuesOfGroup({ group, groups: config.envSelectGroup, values: stored, where: config.path })
+    valuesOfGroup({
+      group,
+      groups: config.envSelectGroup,
+      values: stored,
+      where: config.path,
+      optional: config.envOptional[group] ?? [],
+    })
 
   return {
     values: Object.assign({}, ...groups.map(narrow)) as Record<string, string>,

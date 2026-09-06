@@ -188,7 +188,11 @@ export const gcpProgram =
     const stackEnvironment = readStackEnvironment({
       environment,
       // The one declaration of which keys are the service's, not the deploy's.
-      declaration: { groups: stageConfig.envSelectGroup, where: stageConfig.path },
+      declaration: {
+        groups: stageConfig.envSelectGroup,
+        optional: stageConfig.envOptional,
+        where: stageConfig.path,
+      },
       stage,
       region,
       home: 'gcp',

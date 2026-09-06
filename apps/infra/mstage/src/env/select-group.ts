@@ -118,5 +118,14 @@ export const selectGroup = async ({
     stage,
     ...(versionId ? { versionId } : {}),
   })
-  return valuesOfGroup({ group, groups: config.envSelectGroup, values, where: config.path })
+  return valuesOfGroup({
+    group,
+    groups: config.envSelectGroup,
+    values,
+    where: config.path,
+    // What the declaration said may be absent. Read from the config rather than
+    // taken as an argument: a caller that supplied its own list would be a
+    // second answer to a question this file already asked.
+    optional: config.envOptional[group] ?? [],
+  })
 }
