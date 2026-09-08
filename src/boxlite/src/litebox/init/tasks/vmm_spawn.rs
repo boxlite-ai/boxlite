@@ -360,7 +360,7 @@ fn build_network_backend(
         allow_net,
         secrets: options.secrets.clone(),
         ca_dir: layout.ca_dir(),
-        net_bandwidth: options.net_bandwidth,
+        rate_limit: options.advanced.network_rate_limit,
     };
 
     // Hand the config to the backend abstraction — the one backend for this box.

@@ -109,11 +109,11 @@ impl BoxOptions {
             ));
         }
 
-        if !self.net_bandwidth.is_unlimited() {
+        if !self.advanced.network_rate_limit.is_unlimited() {
             return Err(BoxliteError::Unsupported(
-                "Network bandwidth limits are enforced by the local gvproxy bridge and \
-                 are local-only for remote runtimes; the remote server owns its own \
-                 network policy."
+                "network rate limits (advanced.network_rate_limit) are enforced by the \
+                 local gvproxy bridge and are local-only for remote runtimes; the remote \
+                 server owns its own network policy."
                     .to_string(),
             ));
         }
@@ -769,21 +769,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_rejects_net_bandwidth_in_rest_mode() {
+    async fn create_rejects_network_rate_limit_in_rest_mode() {
         let options = BoxliteRestOptions::new("http://localhost:1");
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.network_rate_limit = crate::runtime::advanced_options::NetworkRateLimit {
+            tx_kbps: Some(10_000),
+            rx_kbps: None,
+        };
         let box_options = BoxOptions {
-            net_bandwidth: crate::runtime::options::NetBandwidth {
-                tx_kbps: Some(10_000),
-                rx_kbps: None,
-            },
+            advanced,
             ..Default::default()
         };
 
         let error = RuntimeBackend::create(&runtime, box_options, None)
             .await
             .err()
-            .expect("REST bandwidth limits must be rejected before network I/O");
+            .expect("REST network rate limits must be rejected before network I/O");
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
         assert!(error.to_string().contains("local-only"));
@@ -796,14 +798,16 @@ mod tests {
     /// fail on the transport, not on `sanitize_remote`, which is what
     /// distinguishes a zero from a real limit.
     #[tokio::test]
-    async fn zero_net_bandwidth_passes_the_remote_refusal() {
+    async fn zero_network_rate_limit_passes_the_remote_refusal() {
         let options = BoxliteRestOptions::new("http://localhost:1");
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.network_rate_limit = crate::runtime::advanced_options::NetworkRateLimit {
+            tx_kbps: Some(0),
+            rx_kbps: Some(0),
+        };
         let box_options = BoxOptions {
-            net_bandwidth: crate::runtime::options::NetBandwidth {
-                tx_kbps: Some(0),
-                rx_kbps: Some(0),
-            },
+            advanced,
             ..Default::default()
         };
 
@@ -814,7 +818,7 @@ mod tests {
 
         assert!(
             !matches!(error, BoxliteError::Unsupported(_)),
-            "a zero cap must not be refused as a bandwidth limit, got: {error}"
+            "a zero cap must not be refused as a rate limit, got: {error}"
         );
     }
 

@@ -40,7 +40,7 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
                 NetworkSpec::Enabled { allow_net } => Some((
                     allow_net.clone(),
                     ctx.config.options.secrets.clone(),
-                    ctx.config.options.net_bandwidth,
+                    ctx.config.options.advanced.network_rate_limit,
                 )),
                 NetworkSpec::Disabled => None,
             };
@@ -100,13 +100,13 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
         // live gvproxy. No wire spec is produced on reattach; PortPublishTask
         // uses this client to adopt or repair forwards before LiveState is
         // returned.
-        let network_backend = network.and_then(|(allow_net, secrets, net_bandwidth)| {
+        let network_backend = network.and_then(|(allow_net, secrets, rate_limit)| {
             let config = NetworkBackendConfig {
                 socket_path: layout.net_backend_socket_path(),
                 allow_net,
                 secrets,
                 ca_dir: layout.ca_dir(),
-                net_bandwidth,
+                rate_limit,
             };
             runtime.network_factory.create(&config)
         });

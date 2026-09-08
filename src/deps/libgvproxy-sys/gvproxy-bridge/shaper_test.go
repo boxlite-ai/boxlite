@@ -854,7 +854,7 @@ func TestBucketReserveDoesNotOverflowOnHugeDeficit(t *testing.T) {
 // literal shape this test unmarshals.
 func TestRateLimitConfigUnmarshalsTheJSONTheCoreEmits(t *testing.T) {
 	// Byte-for-byte what GvproxyRateLimit produces for
-	// NetBandwidth { tx_kbps: 10_000, rx_kbps: 20_000 }.
+	// NetworkRateLimit { tx_kbps: 10_000, rx_kbps: 20_000 }.
 	const payload = `{"rate_limit":{"rx":{"size":250000,"refill_time_ms":100},` +
 		`"tx":{"size":125000,"refill_time_ms":100}}}`
 

@@ -8,12 +8,11 @@ use boxlite::experimental::{
     EXPERIMENTAL_FEATURES_ENV, ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder,
 };
 use boxlite::runtime::options::{
-    InboundNetworkConfig, NetBandwidth, NetworkMode, OutboundNetworkConfig, PortProtocol, PortSpec,
-    VolumeSpec,
+    InboundNetworkConfig, NetworkMode, OutboundNetworkConfig, PortProtocol, PortSpec, VolumeSpec,
 };
 use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime,
-    ContainerCapabilities, ImageRegistry, NetworkSpec,
+    ContainerCapabilities, ImageRegistry, NetworkRateLimit, NetworkSpec,
 };
 use clap::error::ErrorKind;
 use clap::parser::ValueSource;
@@ -1183,11 +1182,11 @@ pub struct NetworkFlags {
 
 impl NetworkFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
-        // Bandwidth is independent of mode and allowlist, so it is assigned
-        // before the early return below. Folding it into that condition instead
-        // would mean a lone --net-tx-kbps is silently dropped the day someone
-        // adds another flag and forgets to extend the guard.
-        opts.net_bandwidth = NetBandwidth {
+        // The rate limit is independent of mode and allowlist, so it is
+        // assigned before the early return below. Folding it into that
+        // condition instead would mean a lone --net-tx-kbps is silently dropped
+        // the day someone adds another flag and forgets to extend the guard.
+        opts.advanced.network_rate_limit = NetworkRateLimit {
             tx_kbps: self.net_tx_kbps,
             rx_kbps: self.net_rx_kbps,
         };
@@ -2266,19 +2265,19 @@ mod tests {
         }
     }
 
-    /// apply_to returns early when no mode or allowlist flag is set. A bandwidth
-    /// cap must survive that path, or `--net-tx-kbps` on its own is dropped with
-    /// no error at all.
+    /// apply_to returns early when no mode or allowlist flag is set. A rate
+    /// limit must survive that path, or `--net-tx-kbps` on its own is dropped
+    /// with no error at all.
     #[test]
-    fn bandwidth_flags_apply_without_any_other_network_flag() {
+    fn rate_limit_flags_apply_without_any_other_network_flag() {
         let mut opts = BoxOptions::default();
         let mut flags = network_flags(None, &[]);
         flags.net_tx_kbps = Some(10_000);
 
         flags.apply_to(&mut opts).expect("apply_to");
 
-        assert_eq!(opts.net_bandwidth.tx_kbps, Some(10_000));
-        assert_eq!(opts.net_bandwidth.rx_kbps, None);
+        assert_eq!(opts.advanced.network_rate_limit.tx_kbps, Some(10_000));
+        assert_eq!(opts.advanced.network_rate_limit.rx_kbps, None);
         // The early return still protects the untouched network defaults.
         assert!(matches!(
             opts.network,
@@ -2287,7 +2286,7 @@ mod tests {
     }
 
     #[test]
-    fn bandwidth_flags_apply_alongside_an_allowlist() {
+    fn rate_limit_flags_apply_alongside_an_allowlist() {
         let mut opts = BoxOptions::default();
         let mut flags = network_flags(None, &["example.com"]);
         flags.net_tx_kbps = Some(1_000);
@@ -2295,8 +2294,8 @@ mod tests {
 
         flags.apply_to(&mut opts).expect("apply_to");
 
-        assert_eq!(opts.net_bandwidth.tx_kbps, Some(1_000));
-        assert_eq!(opts.net_bandwidth.rx_kbps, Some(2_000));
+        assert_eq!(opts.advanced.network_rate_limit.tx_kbps, Some(1_000));
+        assert_eq!(opts.advanced.network_rate_limit.rx_kbps, Some(2_000));
     }
 
     #[test]

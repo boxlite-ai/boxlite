@@ -8,7 +8,7 @@
 //! In the shim, the concrete gvproxy instance consumes the spec and yields the
 //! [`NetworkBackendEndpoint`] value type the engine wires into the NIC.
 
-use crate::runtime::options::NetBandwidth;
+use crate::runtime::advanced_options::NetworkRateLimit;
 use async_trait::async_trait;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use serde_json::Value;
@@ -67,8 +67,8 @@ pub struct NetworkBackendConfig {
     /// Directory in which to mint the ephemeral MITM CA — used only when
     /// `secrets` is non-empty. The backend mints the CA in [`NetworkBackend::spec`].
     pub ca_dir: PathBuf,
-    /// Per-direction bandwidth cap for the guest link. Default is unlimited.
-    pub net_bandwidth: NetBandwidth,
+    /// Per-direction rate limit for the guest link. Default is unlimited.
+    pub rate_limit: NetworkRateLimit,
 }
 
 /// The wire blob a [`NetworkBackend`] produces (via [`NetworkBackend::spec`]) for
@@ -94,10 +94,10 @@ pub struct NetworkBackendSpec {
     /// PEM-encoded MITM CA private key (PKCS8, minted when secrets are configured).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca_key_pem: Option<String>,
-    /// Per-direction bandwidth cap for the guest link. Defaulted so a spec
+    /// Per-direction rate limit for the guest link. Defaulted so a spec
     /// written by an older core still deserializes.
-    #[serde(default, skip_serializing_if = "NetBandwidth::is_unlimited")]
-    pub net_bandwidth: NetBandwidth,
+    #[serde(default, skip_serializing_if = "NetworkRateLimit::is_unlimited")]
+    pub rate_limit: NetworkRateLimit,
 }
 
 impl std::fmt::Debug for NetworkBackendSpec {
@@ -114,7 +114,7 @@ impl std::fmt::Debug for NetworkBackendSpec {
                 "ca_key_pem",
                 &self.ca_key_pem.as_ref().map(|_| "[REDACTED]"),
             )
-            .field("net_bandwidth", &self.net_bandwidth)
+            .field("rate_limit", &self.rate_limit)
             .finish()
     }
 }
@@ -496,7 +496,7 @@ mod tests {
             secrets: Vec::new(),
             ca_cert_pem: Some(cert_sentinel.to_string()),
             ca_key_pem: Some(key_sentinel.to_string()),
-            net_bandwidth: Default::default(),
+            rate_limit: Default::default(),
         };
 
         let rendered = format!("{:?}", spec);
@@ -529,7 +529,7 @@ mod tests {
             secrets: Vec::new(),
             ca_cert_pem: Some("CERTDATA".to_string()),
             ca_key_pem: Some("KEYDATA".to_string()),
-            net_bandwidth: Default::default(),
+            rate_limit: Default::default(),
         };
         let json = serde_json::to_string(&spec).unwrap();
         let back: NetworkBackendSpec = serde_json::from_str(&json).unwrap();
@@ -549,36 +549,36 @@ mod tests {
         assert!(spec.ca_key_pem.is_none());
         // A spec written before shaping existed carries no cap and must
         // deserialize as unlimited rather than failing.
-        assert!(spec.net_bandwidth.is_unlimited());
+        assert!(spec.rate_limit.is_unlimited());
     }
 
     /// The cap must survive the core -> shim hop, and an unlimited one must not
     /// take up room on that wire.
     #[test]
-    fn spec_round_trips_net_bandwidth_and_omits_it_when_unlimited() {
+    fn spec_round_trips_rate_limit_and_omits_it_when_unlimited() {
         let spec = NetworkBackendSpec {
             socket_path: PathBuf::from("/tmp/net.sock"),
             allow_net: Vec::new(),
             secrets: Vec::new(),
             ca_cert_pem: None,
             ca_key_pem: None,
-            net_bandwidth: NetBandwidth {
+            rate_limit: NetworkRateLimit {
                 tx_kbps: Some(10_000),
                 rx_kbps: None,
             },
         };
         let json = serde_json::to_string(&spec).unwrap();
         let back: NetworkBackendSpec = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.net_bandwidth.tx_kbps, Some(10_000));
-        assert_eq!(back.net_bandwidth.rx_kbps, None);
+        assert_eq!(back.rate_limit.tx_kbps, Some(10_000));
+        assert_eq!(back.rate_limit.rx_kbps, None);
 
         let unlimited = NetworkBackendSpec {
-            net_bandwidth: NetBandwidth::default(),
+            rate_limit: NetworkRateLimit::default(),
             ..spec
         };
         let json = serde_json::to_string(&unlimited).unwrap();
         assert!(
-            !json.contains("net_bandwidth"),
+            !json.contains("rate_limit"),
             "an unlimited cap must be omitted; got: {json}"
         );
     }
@@ -590,7 +590,7 @@ mod tests {
             allow_net: vec!["example.com".to_string()],
             secrets: Vec::new(),
             ca_dir: PathBuf::from("/tmp/default-factory/ca"),
-            net_bandwidth: Default::default(),
+            rate_limit: Default::default(),
         };
 
         let backend = default_factory()
@@ -671,7 +671,7 @@ mod tests {
                 secrets: Vec::new(),
                 ca_cert_pem: None,
                 ca_key_pem: None,
-                net_bandwidth: Default::default(),
+                rate_limit: Default::default(),
             }
         }
     }

@@ -129,11 +129,11 @@ pub struct GvproxyTokenBucket {
 /// burst small, long enough that the shaper is not waking on every frame.
 const RATE_LIMIT_REFILL_MS: u64 = 100;
 
-impl From<crate::runtime::options::NetBandwidth> for GvproxyRateLimit {
-    fn from(bw: crate::runtime::options::NetBandwidth) -> Self {
+impl From<crate::runtime::advanced_options::NetworkRateLimit> for GvproxyRateLimit {
+    fn from(limit: crate::runtime::advanced_options::NetworkRateLimit) -> Self {
         Self {
-            rx: bucket_from_kbps(bw.rx_kbps),
-            tx: bucket_from_kbps(bw.tx_kbps),
+            rx: bucket_from_kbps(limit.rx_kbps),
+            tx: bucket_from_kbps(limit.tx_kbps),
         }
     }
 }
@@ -353,13 +353,16 @@ impl GvproxyConfig {
         self
     }
 
-    /// Set the per-direction bandwidth cap. An unlimited value is left off the
+    /// Set the per-direction rate limit. An unlimited value is left off the
     /// wire entirely rather than serialized as an empty object.
-    pub fn with_rate_limit(mut self, bandwidth: crate::runtime::options::NetBandwidth) -> Self {
-        self.rate_limit = if bandwidth.is_unlimited() {
+    pub fn with_rate_limit(
+        mut self,
+        limit: crate::runtime::advanced_options::NetworkRateLimit,
+    ) -> Self {
+        self.rate_limit = if limit.is_unlimited() {
             None
         } else {
-            Some(bandwidth.into())
+            Some(limit.into())
         };
         self
     }
@@ -644,10 +647,10 @@ mod tests {
 
     #[test]
     fn kbps_converts_to_a_bucket_at_the_configured_rate() {
-        use crate::runtime::options::NetBandwidth;
+        use crate::runtime::advanced_options::NetworkRateLimit;
 
         // 10 Mbit/s = 1_250_000 B/s; one 100ms refill period is 125_000 bytes.
-        let limit: GvproxyRateLimit = NetBandwidth {
+        let limit: GvproxyRateLimit = NetworkRateLimit {
             tx_kbps: Some(10_000),
             rx_kbps: None,
         }
@@ -662,21 +665,24 @@ mod tests {
     }
 
     #[test]
-    fn maximum_bandwidth_maps_to_bridge_bucket_limit() {
-        use crate::runtime::options::{BoxOptions, NetBandwidth};
+    fn maximum_rate_limit_maps_to_bridge_bucket_limit() {
+        use crate::runtime::advanced_options::{AdvancedBoxOptions, NetworkRateLimit};
+        use crate::runtime::options::BoxOptions;
 
         // Independent wire bound enforced by TokenBucketConfig.validate in shaper.go.
         const BRIDGE_MAX_BUCKET_BYTES: u64 = (1_u64 << 62) / 1000;
 
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.network_rate_limit = NetworkRateLimit {
+            tx_kbps: Some(NetworkRateLimit::MAX_KBPS),
+            rx_kbps: Some(NetworkRateLimit::MAX_KBPS),
+        };
         let opts = BoxOptions {
-            net_bandwidth: NetBandwidth {
-                tx_kbps: Some(NetBandwidth::MAX_KBPS),
-                rx_kbps: Some(NetBandwidth::MAX_KBPS),
-            },
+            advanced,
             ..Default::default()
         };
         opts.sanitize_common().unwrap();
-        let limit: GvproxyRateLimit = opts.net_bandwidth.into();
+        let limit: GvproxyRateLimit = opts.advanced.network_rate_limit.into();
 
         for bucket in [limit.tx.unwrap(), limit.rx.unwrap()] {
             assert_eq!(bucket.size, BRIDGE_MAX_BUCKET_BYTES);
@@ -690,9 +696,9 @@ mod tests {
     /// the burst and lift every cap under ~5.2 Mbit/s to that floor.
     #[test]
     fn slow_rates_keep_their_configured_rate() {
-        use crate::runtime::options::NetBandwidth;
+        use crate::runtime::advanced_options::NetworkRateLimit;
 
-        let limit: GvproxyRateLimit = NetBandwidth {
+        let limit: GvproxyRateLimit = NetworkRateLimit {
             tx_kbps: Some(64), // 8000 B/s; a 100ms window is only 800 bytes
             rx_kbps: None,
         }
@@ -709,17 +715,17 @@ mod tests {
 
     #[test]
     fn zero_and_none_both_mean_unlimited() {
-        use crate::runtime::options::NetBandwidth;
+        use crate::runtime::advanced_options::NetworkRateLimit;
 
-        for bw in [
-            NetBandwidth::default(),
-            NetBandwidth {
+        for limit in [
+            NetworkRateLimit::default(),
+            NetworkRateLimit {
                 tx_kbps: Some(0),
                 rx_kbps: Some(0),
             },
         ] {
-            assert!(bw.is_unlimited());
-            let config = GvproxyConfig::new(test_socket_path()).with_rate_limit(bw);
+            assert!(limit.is_unlimited());
+            let config = GvproxyConfig::new(test_socket_path()).with_rate_limit(limit);
             assert!(
                 config.rate_limit.is_none(),
                 "an unlimited cap must not reach the wire at all"
@@ -731,9 +737,9 @@ mod tests {
     /// on either side silently disables shaping, so pin the shape.
     #[test]
     fn rate_limit_serializes_with_the_keys_the_bridge_reads() {
-        use crate::runtime::options::NetBandwidth;
+        use crate::runtime::advanced_options::NetworkRateLimit;
 
-        let config = GvproxyConfig::new(test_socket_path()).with_rate_limit(NetBandwidth {
+        let config = GvproxyConfig::new(test_socket_path()).with_rate_limit(NetworkRateLimit {
             tx_kbps: Some(10_000),
             rx_kbps: Some(20_000),
         });

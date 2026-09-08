@@ -34,7 +34,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [RootfsSpec](#rootfsspec)
   - [VolumeSpec](#volumespec)
   - [NetworkSpec](#networkspec)
-  - [NetBandwidth](#netbandwidth)
+  - [NetworkRateLimit](#networkratelimit)
   - [PortSpec](#portspec)
 - [Security](#security)
   - [SecurityOptions](#securityoptions)
@@ -600,10 +600,6 @@ pub struct BoxOptions {
     /// Port mappings
     pub ports: Vec<PortSpec>,
 
-    /// Per-direction bandwidth cap for the box's interface, in kilobits/sec.
-    /// Local runtime only; remote runtimes reject it.
-    pub net_bandwidth: NetBandwidth,
-
     /// Auto-remove box when stopped (default: true)
     pub auto_remove: bool,
 
@@ -662,6 +658,7 @@ pub struct AdvancedBoxOptions {
     pub security: SecurityOptions,
     pub isolate_mounts: bool,
     pub health_check: Option<HealthCheckOptions>,
+    pub network_rate_limit: NetworkRateLimit,
 }
 ```
 
@@ -671,6 +668,7 @@ pub struct AdvancedBoxOptions {
 | `security` | `SecurityOptions` | `SecurityOptions::default()` (fully enabled profile; jailer enabled) | Security isolation options (jailer, seccomp, namespaces) |
 | `isolate_mounts` | `bool` | `false` | Enable bind mount isolation (requires CAP_SYS_ADMIN on Linux) |
 | `health_check` | `Option<HealthCheckOptions>` | `None` | Optional guest-agent health monitoring |
+| `network_rate_limit` | `NetworkRateLimit` | Unlimited | Per-direction rate limit for the box's interface, in kilobits/sec. Local runtime only; see [NetworkRateLimit](#networkratelimit) |
 
 ### RootfsSpec
 
@@ -779,12 +777,13 @@ controlled by enabled/disabled alone.
 Pre-split code needs no change: `network` keeps its name, type and meaning,
 and box configs persisted without `inbound_network` load with it defaulted.
 
-### NetBandwidth
+### NetworkRateLimit
 
-Bandwidth cap for the box's network interface, in kilobits per second.
+Per-direction rate limit for the box's network interface, in kilobits per
+second. Set through `BoxOptions::advanced`.
 
 ```rust
-pub struct NetBandwidth {
+pub struct NetworkRateLimit {
     pub tx_kbps: Option<u64>,   // guest -> internet
     pub rx_kbps: Option<u64>,   // internet -> guest
 }
@@ -803,11 +802,13 @@ covers TCP, UDP, ICMP and ARP together; there is no per-protocol split.
 Firecracker, Kata and Cloud Hypervisor share.
 
 ```rust
+let mut advanced = AdvancedBoxOptions::default();
+advanced.network_rate_limit = NetworkRateLimit {
+    tx_kbps: Some(10_000),   // 10 Mbit/s up
+    rx_kbps: Some(100_000),  // 100 Mbit/s down
+};
 let opts = BoxOptions {
-    net_bandwidth: NetBandwidth {
-        tx_kbps: Some(10_000),   // 10 Mbit/s up
-        rx_kbps: Some(100_000),  // 100 Mbit/s down
-    },
+    advanced,
     ..Default::default()
 };
 ```

@@ -530,7 +530,7 @@ mod tests {
                 secrets: Vec::new(),
                 ca_cert_pem: None,
                 ca_key_pem: None,
-                net_bandwidth: Default::default(),
+                rate_limit: Default::default(),
             }
         }
 
