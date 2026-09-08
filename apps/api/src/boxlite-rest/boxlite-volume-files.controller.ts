@@ -30,8 +30,8 @@ import {
 
 /**
  * File-level operations on a Volume's contents, without attaching it to a
- * box (POL-216). Lives in the Box API dialect, not `box/controllers` -
- * `/files` operations are single-owner Box-contract territory (see the CI
+ * box. Lives in the Box API dialect, not `box/controllers` - `/files`
+ * operations are single-owner Box-contract territory (see the CI
  * "Contract boundary guard"), same reasoning that already put box exec/files
  * behind `boxlite-proxy.controller.ts` rather than the cloud `box.module.ts`.
  */
