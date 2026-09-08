@@ -11,6 +11,7 @@ describe('BoxliteVolumeFilesController', () => {
       deleteFile: jest.fn().mockResolvedValue(undefined),
       batchDelete: jest.fn().mockResolvedValue({ deleted: ['a.txt'], errors: [] }),
       presignBatchWrite: jest.fn().mockResolvedValue({ urls: [], errors: [] }),
+      copyFiles: jest.fn().mockResolvedValue({ copied: ['b/a.txt'], errors: [] }),
     }
     return {
       controller: new BoxliteVolumeFilesController(volumeFilesService as unknown as VolumeFilesService),
@@ -79,5 +80,17 @@ describe('BoxliteVolumeFilesController', () => {
     await controller.presignBatchWrite('volume-1', { paths: ['a.txt', 'b.txt'] })
 
     expect(volumeFilesService.presignBatchWrite).toHaveBeenCalledWith('volume-1', ['a.txt', 'b.txt'])
+  })
+
+  it('delegates copyFiles to the service with the caller organization and DTO fields', async () => {
+    const { controller, volumeFilesService } = createController()
+
+    await controller.copyFiles('dest-volume', { organizationId: 'org-1' } as never, {
+      sourceVolumeId: 'source-volume',
+      sourcePrefix: 'a/',
+      destPrefix: 'b/',
+    })
+
+    expect(volumeFilesService.copyFiles).toHaveBeenCalledWith('dest-volume', 'org-1', 'source-volume', 'a/', 'b/')
   })
 })

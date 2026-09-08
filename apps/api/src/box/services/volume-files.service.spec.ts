@@ -42,6 +42,25 @@ function createService(volume: { id: string; state: VolumeState } | null) {
   return { service, send, volumeService }
 }
 
+function createServiceWithVolumes(volumes: { id: string; state: VolumeState; organizationId: string }[]) {
+  const send = jest.fn()
+  const s3Client = { send }
+  ;(createS3Client as jest.Mock).mockReturnValue(s3Client)
+
+  const volumeService = {
+    findOne: jest.fn().mockImplementation((id: string) => {
+      const volume = volumes.find((v) => v.id === id)
+      if (!volume) {
+        throw new NotFoundException(`Volume with ID ${id} not found`)
+      }
+      return { ...volume, getBucketName: () => `boxlite-volume-${volume.id}` }
+    }),
+  }
+
+  const service = new VolumeFilesService(volumeService as never, {} as never)
+  return { service, send, volumeService }
+}
+
 const READY_VOLUME = { id: 'volume-1', state: VolumeState.READY }
 
 describe('VolumeFilesService readiness gate', () => {
@@ -241,5 +260,85 @@ describe('VolumeFilesService presignBatchWrite', () => {
 
     expect(result.urls).toHaveLength(120)
     expect(maxInFlight).toBeLessThanOrEqual(50)
+  })
+})
+
+describe('VolumeFilesService copyFiles', () => {
+  const DEST = { id: 'dest-volume', state: VolumeState.READY, organizationId: 'org-1' }
+  const SOURCE = { id: 'source-volume', state: VolumeState.READY, organizationId: 'org-1' }
+  const FOREIGN_SOURCE = { id: 'foreign-volume', state: VolumeState.READY, organizationId: 'org-2' }
+
+  it('copies within the same volume when no source volume is given', async () => {
+    const { service, send } = createServiceWithVolumes([DEST])
+    send.mockResolvedValueOnce({ Contents: [{ Key: 'a/1.txt' }, { Key: 'a/2.txt' }], IsTruncated: false })
+    send.mockResolvedValue({}) // CopyObject calls
+
+    const result = await service.copyFiles('dest-volume', 'org-1', undefined, 'a/', 'b/')
+
+    expect(result).toEqual({ copied: ['b/1.txt', 'b/2.txt'], errors: [] })
+    expect(send.mock.calls[1][0].input).toMatchObject({
+      Bucket: 'boxlite-volume-dest-volume',
+      Key: 'b/1.txt',
+      CopySource: 'boxlite-volume-dest-volume/a%2F1.txt',
+    })
+  })
+
+  it('copies across volumes in the same organization', async () => {
+    const { service, send } = createServiceWithVolumes([DEST, SOURCE])
+    send.mockResolvedValueOnce({ Contents: [{ Key: 'model.bin' }], IsTruncated: false })
+    send.mockResolvedValue({})
+
+    const result = await service.copyFiles('dest-volume', 'org-1', 'source-volume', '', 'checkpoints/')
+
+    expect(result).toEqual({ copied: ['checkpoints/model.bin'], errors: [] })
+    expect(send.mock.calls[1][0].input).toMatchObject({
+      Bucket: 'boxlite-volume-dest-volume',
+      Key: 'checkpoints/model.bin',
+      CopySource: 'boxlite-volume-source-volume/model.bin',
+    })
+  })
+
+  it('rejects a source volume belonging to another organization', async () => {
+    const { service } = createServiceWithVolumes([DEST, FOREIGN_SOURCE])
+
+    await expect(service.copyFiles('dest-volume', 'org-1', 'foreign-volume', '', 'x/')).rejects.toThrow(
+      'does not belong to the calling organization',
+    )
+  })
+
+  it('reports partial failure without aborting the rest of the copy', async () => {
+    const { service, send } = createServiceWithVolumes([DEST])
+    send.mockResolvedValueOnce({ Contents: [{ Key: 'a.txt' }, { Key: 'b.txt' }], IsTruncated: false })
+    send.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('access denied'))
+
+    const result = await service.copyFiles('dest-volume', 'org-1', undefined, '', 'copy/')
+
+    expect(result.copied).toEqual(['copy/a.txt'])
+    expect(result.errors).toEqual([{ path: 'copy/b.txt', message: 'access denied' }])
+  })
+
+  it('refuses a source prefix with more objects than the safety cap', async () => {
+    const { service, send } = createServiceWithVolumes([DEST])
+    send.mockResolvedValueOnce({
+      Contents: Array.from({ length: 10_001 }, (_, i) => ({ Key: `f${i}.txt` })),
+      IsTruncated: false,
+    })
+
+    await expect(service.copyFiles('dest-volume', 'org-1', undefined, '', 'copy/')).rejects.toThrow(
+      'more than 10000 objects',
+    )
+  })
+
+  it('pages through more than one ListObjectsV2 call', async () => {
+    const { service, send } = createServiceWithVolumes([DEST])
+    send
+      .mockResolvedValueOnce({ Contents: [{ Key: 'a.txt' }], IsTruncated: true, NextContinuationToken: 'page-2' })
+      .mockResolvedValueOnce({ Contents: [{ Key: 'b.txt' }], IsTruncated: false })
+      .mockResolvedValue({})
+
+    const result = await service.copyFiles('dest-volume', 'org-1', undefined, '', 'copy/')
+
+    expect(result.copied.sort()).toEqual(['copy/a.txt', 'copy/b.txt'])
+    expect(send.mock.calls[1][0].input).toMatchObject({ ContinuationToken: 'page-2' })
   })
 })

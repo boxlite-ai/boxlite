@@ -10,11 +10,15 @@ import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
+import { AuthContext } from '../common/decorators/auth-context.decorator'
+import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { VolumeAccessGuard } from '../box/guards/volume-access.guard'
 import { VolumeFilesService } from '../box/services/volume-files.service'
 import {
   BatchDeleteVolumeFilesDto,
   BatchDeleteVolumeFilesResponseDto,
+  CopyVolumeFilesDto,
+  CopyVolumeFilesResponseDto,
   ListVolumeFilesResponseDto,
   PresignBatchWriteVolumeFilesDto,
   PresignBatchWriteVolumeFilesResponseDto,
@@ -99,5 +103,26 @@ export class BoxliteVolumeFilesController {
     @Body() dto: PresignBatchWriteVolumeFilesDto,
   ): Promise<PresignBatchWriteVolumeFilesResponseDto> {
     return this.volumeFilesService.presignBatchWrite(volumeId, dto.paths)
+  }
+
+  // VolumeAccessGuard authorizes the destination (:volumeId in the URL) as
+  // usual. A cross-volume copy also names a *source* volume in the body,
+  // which the guard has no visibility into - the service itself authorizes
+  // that one (assertReadyAndOwned).
+  @Post('copy')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_VOLUMES])
+  @UseGuards(VolumeAccessGuard)
+  async copyFiles(
+    @Param('volumeId') volumeId: string,
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Body() dto: CopyVolumeFilesDto,
+  ): Promise<CopyVolumeFilesResponseDto> {
+    return this.volumeFilesService.copyFiles(
+      volumeId,
+      authContext.organizationId,
+      dto.sourceVolumeId,
+      dto.sourcePrefix,
+      dto.destPrefix,
+    )
   }
 }

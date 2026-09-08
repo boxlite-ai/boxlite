@@ -6,6 +6,7 @@
 
 import { ConflictException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
@@ -16,7 +17,9 @@ import {
   S3ServiceException,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { ForbiddenException, BadRequestException } from '@nestjs/common'
 import { VolumeService } from './volume.service'
+import { Volume } from '../entities/volume.entity'
 import { VolumeState } from '../enums/volume-state.enum'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { createS3Client } from '../../common/utils/s3-client.factory'
@@ -24,6 +27,7 @@ import { assertSafeVolumePath } from '../utils/volume-path.util'
 import {
   BatchDeleteVolumeFilesResponseDto,
   BatchOperationErrorDto,
+  CopyVolumeFilesResponseDto,
   ListVolumeFilesResponseDto,
   PresignBatchWriteVolumeFilesResponseDto,
   PresignedUrlResponseDto,
@@ -41,6 +45,17 @@ const PRESIGNED_URL_TTL_SECONDS = 900
  * one request can monopolize the event loop, independent of the DTO's
  * overall array-size cap. */
 const PRESIGN_BATCH_CONCURRENCY = 50
+
+/** Max concurrent CopyObject calls in copyFiles. Lower than the presign
+ * concurrency because these are real outbound S3 calls from the API
+ * server, not local signature computation. */
+const COPY_CONCURRENCY = 20
+
+/** Safety valve on copyFiles: refuse a prefix with more objects than this
+ * rather than run a single HTTP request against an unbounded object count
+ * with no timeout/resumability. Callers with a larger tree should copy
+ * narrower sub-prefixes instead. */
+const MAX_COPY_OBJECTS = 10_000
 
 @Injectable()
 export class VolumeFilesService {
@@ -190,6 +205,108 @@ export class VolumeFilesService {
     }
 
     return { urls, errors }
+  }
+
+  /**
+   * Server-side copy: replicates every object under `sourcePrefix` (in
+   * `sourceVolumeId`, or this volume if omitted) to `destPrefix` in this
+   * volume, via S3's native `CopyObject` - the bytes never leave the
+   * storage backend, so this is the one batch operation where a whole
+   * "folder" genuinely moves in a single request (unlike upload, where
+   * the caller's local files are opaque to the server until it lists
+   * them itself).
+   */
+  async copyFiles(
+    destVolumeId: string,
+    organizationId: string,
+    sourceVolumeId: string | undefined,
+    sourcePrefix: string,
+    destPrefix: string,
+  ): Promise<CopyVolumeFilesResponseDto> {
+    if (sourcePrefix) {
+      assertSafeVolumePath(sourcePrefix)
+    }
+    if (destPrefix) {
+      assertSafeVolumePath(destPrefix)
+    }
+
+    const destVolume = await this.assertReady(destVolumeId)
+    const sourceVolume =
+      sourceVolumeId && sourceVolumeId !== destVolumeId
+        ? await this.assertReadyAndOwned(sourceVolumeId, organizationId)
+        : destVolume
+
+    const sourceBucket = sourceVolume.getBucketName()
+    const destBucket = destVolume.getBucketName()
+
+    const keys = await this.listAllKeys(sourceBucket, sourcePrefix)
+
+    const copied: string[] = []
+    const errors: BatchOperationErrorDto[] = []
+
+    for (const chunk of chunked(keys, COPY_CONCURRENCY)) {
+      await Promise.all(
+        chunk.map(async (sourceKey) => {
+          const destKey = destPrefix + stripPrefix(sourceKey, sourcePrefix)
+          try {
+            await this.s3.send(
+              new CopyObjectCommand({
+                Bucket: destBucket,
+                Key: destKey,
+                CopySource: `${sourceBucket}/${encodeURIComponent(sourceKey)}`,
+              }),
+            )
+            copied.push(destKey)
+          } catch (error) {
+            errors.push({ path: destKey, message: error instanceof Error ? error.message : String(error) })
+          }
+        }),
+      )
+    }
+
+    return { copied, errors }
+  }
+
+  /** Like assertReady, but additionally rejects a volume outside the
+   * caller's organization - needed here because copyFiles takes a second,
+   * body-supplied volume id that the URL-scoped VolumeAccessGuard never
+   * sees. Without this a caller could name any volume id and copy out of
+   * a bucket that isn't theirs. */
+  private async assertReadyAndOwned(volumeId: string, organizationId: string): Promise<Volume> {
+    const volume = await this.assertReady(volumeId)
+    if (volume.organizationId !== organizationId) {
+      throw new ForbiddenException(`Volume ${volumeId} does not belong to the calling organization`)
+    }
+    return volume
+  }
+
+  /** Pages through every object under `prefix` (no delimiter - this needs
+   * the full recursive tree, unlike listFiles' single-level browsing).
+   * Throws if the prefix holds more than MAX_COPY_OBJECTS rather than
+   * silently truncating the copy. */
+  private async listAllKeys(bucket: string, prefix: string): Promise<string[]> {
+    const keys: string[] = []
+    let continuationToken: string | undefined
+
+    do {
+      const response = await this.s3.send(
+        new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: prefix || undefined,
+          MaxKeys: S3_MAX_KEYS_PER_CALL,
+          ContinuationToken: continuationToken,
+        }),
+      )
+      keys.push(...(response.Contents ?? []).map((object) => object.Key).filter((key): key is string => !!key))
+      if (keys.length > MAX_COPY_OBJECTS) {
+        throw new BadRequestException(
+          `source prefix has more than ${MAX_COPY_OBJECTS} objects; copy a narrower sub-prefix instead`,
+        )
+      }
+      continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined
+    } while (continuationToken)
+
+    return keys
   }
 
   private async assertReady(volumeId: string) {

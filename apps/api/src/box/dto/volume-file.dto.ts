@@ -5,7 +5,7 @@
  */
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
-import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsNotEmpty, IsString } from 'class-validator'
+import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsNotEmpty, IsOptional, IsString } from 'class-validator'
 
 /** S3 caps DeleteObjects at 1000 keys per call; mirrored here for presign
  * batches too so one request can't force unbounded signing/S3 work. */
@@ -99,6 +99,31 @@ export class PresignedWriteUrlDto extends PresignedUrlResponseDto {
 export class PresignBatchWriteVolumeFilesResponseDto {
   @ApiProperty({ type: [PresignedWriteUrlDto] })
   urls: PresignedWriteUrlDto[]
+
+  @ApiProperty({ type: [BatchOperationErrorDto] })
+  errors: BatchOperationErrorDto[]
+}
+
+export class CopyVolumeFilesDto {
+  @ApiPropertyOptional({
+    description: 'Volume to copy from. Defaults to the destination volume (a same-volume prefix-to-prefix copy).',
+  })
+  @IsOptional()
+  @IsString()
+  sourceVolumeId?: string
+
+  @ApiProperty({ description: 'Prefix to copy from, relative to the source volume root (empty copies everything)' })
+  @IsString()
+  sourcePrefix: string
+
+  @ApiProperty({ description: 'Prefix to copy into, relative to the destination volume root' })
+  @IsString()
+  destPrefix: string
+}
+
+export class CopyVolumeFilesResponseDto {
+  @ApiProperty({ type: [String], description: 'Destination keys that were copied' })
+  copied: string[]
 
   @ApiProperty({ type: [BatchOperationErrorDto] })
   errors: BatchOperationErrorDto[]
