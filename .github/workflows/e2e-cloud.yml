@@ -267,6 +267,22 @@ jobs:
           pip install --break-system-packages --force-reinstall ../../target/wheels/boxlite-*.whl
           pip install --break-system-packages --quiet pytest pytest-asyncio pytest-timeout
 
+      # ── Cross-org secret presence ────────────────────────────────
+      # test_cross_org_isolation.py needs an API key from a *second*
+      # organisation. Absent it, the module skips; announce that here so the
+      # lost coverage shows up in the run summary rather than as a green run
+      # with five silent SKIPs.
+      - name: Check cross-org secret
+        env:
+          BOXLITE_E2E_CROSS_ORG_API_KEY: ${{ secrets.BOXLITE_E2E_CROSS_ORG_API_KEY }}
+        run: |
+          if [ -z "${BOXLITE_E2E_CROSS_ORG_API_KEY:-}" ]; then
+            echo "::warning::Secret BOXLITE_E2E_CROSS_ORG_API_KEY is not set — apps/e2e/cases/test_cross_org_isolation.py will SKIP and cross-org isolation is unverified in this run. Add a second-organisation API key in Settings → Secrets → Actions."
+          else
+            echo "::add-mask::$BOXLITE_E2E_CROSS_ORG_API_KEY"
+            echo "::notice::Cross-org isolation tests enabled."
+          fi
+
       # ── Run pytest ───────────────────────────────────────────────
       # --ignore rationale:
       #  - C/Go entry+coverage: FFI-binding tests whose SDKs aren't built here.
@@ -286,6 +302,16 @@ jobs:
         env:
           BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
           BOXLITE_E2E_PROFILE: p1
+          # Second organisation for apps/e2e/cases/test_cross_org_isolation.py.
+          # REQUIRE is set only when the secret is actually present, so a
+          # missing key is a collection error rather than a silent module skip
+          # once it is configured — and the step above annotates the run when
+          # it is not, instead of the module skipping unnoticed. A missing
+          # secret is not made a hard failure here because only an org admin
+          # can add it; set BOXLITE_E2E_REQUIRE_CROSS_ORG=1 unconditionally to
+          # make these tests mandatory.
+          BOXLITE_E2E_CROSS_ORG_API_KEY: ${{ secrets.BOXLITE_E2E_CROSS_ORG_API_KEY }}
+          BOXLITE_E2E_REQUIRE_CROSS_ORG: ${{ secrets.BOXLITE_E2E_CROSS_ORG_API_KEY != '' && '1' || '' }}
         run: |
           timeout 35m python3 -m pytest apps/e2e/cases/ \
               --ignore=apps/e2e/cases/test_c_entry.py \
