@@ -22,7 +22,7 @@ describe('BoxliteVolumeFilesController', () => {
   it('lists files, defaulting to the volume root', async () => {
     const { controller, volumeFilesService } = createController()
 
-    await controller.listFiles('volume-1', undefined as never, 'cursor-1')
+    await controller.listFiles('volume-1', { cursor: 'cursor-1' })
 
     expect(volumeFilesService.listFiles).toHaveBeenCalledWith('volume-1', '', 'cursor-1')
   })
@@ -30,7 +30,7 @@ describe('BoxliteVolumeFilesController', () => {
   it('lists files under a given path', async () => {
     const { controller, volumeFilesService } = createController()
 
-    await controller.listFiles('volume-1', 'checkpoints/')
+    await controller.listFiles('volume-1', { path: 'checkpoints/' })
 
     expect(volumeFilesService.listFiles).toHaveBeenCalledWith('volume-1', 'checkpoints/', undefined)
   })
@@ -38,7 +38,7 @@ describe('BoxliteVolumeFilesController', () => {
   it('delegates statFile to the service', async () => {
     const { controller, volumeFilesService } = createController()
 
-    await controller.statFile('volume-1', 'a.txt')
+    await controller.statFile('volume-1', { path: 'a.txt' })
 
     expect(volumeFilesService.statFile).toHaveBeenCalledWith('volume-1', 'a.txt')
   })
@@ -46,7 +46,7 @@ describe('BoxliteVolumeFilesController', () => {
   it('delegates presignRead to the service', async () => {
     const { controller, volumeFilesService } = createController()
 
-    await controller.presignRead('volume-1', 'a.txt')
+    await controller.presignRead('volume-1', { path: 'a.txt' })
 
     expect(volumeFilesService.presignRead).toHaveBeenCalledWith('volume-1', 'a.txt')
   })
@@ -54,7 +54,7 @@ describe('BoxliteVolumeFilesController', () => {
   it('delegates presignWrite to the service', async () => {
     const { controller, volumeFilesService } = createController()
 
-    await controller.presignWrite('volume-1', 'a.txt')
+    await controller.presignWrite('volume-1', { path: 'a.txt' })
 
     expect(volumeFilesService.presignWrite).toHaveBeenCalledWith('volume-1', 'a.txt')
   })
@@ -62,7 +62,7 @@ describe('BoxliteVolumeFilesController', () => {
   it('delegates deleteFile to the service', async () => {
     const { controller, volumeFilesService } = createController()
 
-    await expect(controller.deleteFile('volume-1', 'a.txt')).resolves.toBeUndefined()
+    await expect(controller.deleteFile('volume-1', { path: 'a.txt' })).resolves.toBeUndefined()
     expect(volumeFilesService.deleteFile).toHaveBeenCalledWith('volume-1', 'a.txt')
   })
 

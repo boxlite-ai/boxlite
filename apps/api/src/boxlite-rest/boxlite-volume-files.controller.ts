@@ -19,10 +19,12 @@ import {
   BatchDeleteVolumeFilesResponseDto,
   CopyVolumeFilesDto,
   CopyVolumeFilesResponseDto,
+  ListVolumeFilesQueryDto,
   ListVolumeFilesResponseDto,
   PresignBatchWriteVolumeFilesDto,
   PresignBatchWriteVolumeFilesResponseDto,
   PresignedUrlResponseDto,
+  VolumeFilePathQueryDto,
   VolumeFileStatDto,
 } from '../box/dto/volume-file.dto'
 
@@ -44,17 +46,19 @@ export class BoxliteVolumeFilesController {
   @UseGuards(VolumeAccessGuard)
   async listFiles(
     @Param('volumeId') volumeId: string,
-    @Query('path') path = '',
-    @Query('cursor') cursor?: string,
+    @Query() query: ListVolumeFilesQueryDto,
   ): Promise<ListVolumeFilesResponseDto> {
-    return this.volumeFilesService.listFiles(volumeId, path, cursor)
+    return this.volumeFilesService.listFiles(volumeId, query.path ?? '', query.cursor)
   }
 
   @Get('stat')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.READ_VOLUMES])
   @UseGuards(VolumeAccessGuard)
-  async statFile(@Param('volumeId') volumeId: string, @Query('path') path: string): Promise<VolumeFileStatDto> {
-    return this.volumeFilesService.statFile(volumeId, path)
+  async statFile(
+    @Param('volumeId') volumeId: string,
+    @Query() query: VolumeFilePathQueryDto,
+  ): Promise<VolumeFileStatDto> {
+    return this.volumeFilesService.statFile(volumeId, query.path)
   }
 
   @Get('presign-read')
@@ -62,9 +66,9 @@ export class BoxliteVolumeFilesController {
   @UseGuards(VolumeAccessGuard)
   async presignRead(
     @Param('volumeId') volumeId: string,
-    @Query('path') path: string,
+    @Query() query: VolumeFilePathQueryDto,
   ): Promise<PresignedUrlResponseDto> {
-    return this.volumeFilesService.presignRead(volumeId, path)
+    return this.volumeFilesService.presignRead(volumeId, query.path)
   }
 
   @Post('presign-write')
@@ -72,17 +76,20 @@ export class BoxliteVolumeFilesController {
   @UseGuards(VolumeAccessGuard)
   async presignWrite(
     @Param('volumeId') volumeId: string,
-    @Query('path') path: string,
+    @Query() query: VolumeFilePathQueryDto,
   ): Promise<PresignedUrlResponseDto> {
-    return this.volumeFilesService.presignWrite(volumeId, path)
+    return this.volumeFilesService.presignWrite(volumeId, query.path)
   }
 
   @Delete('content')
   @HttpCode(204)
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_VOLUMES])
   @UseGuards(VolumeAccessGuard)
-  async deleteFile(@Param('volumeId') volumeId: string, @Query('path') path: string): Promise<void> {
-    await this.volumeFilesService.deleteFile(volumeId, path)
+  async deleteFile(
+    @Param('volumeId') volumeId: string,
+    @Query() query: VolumeFilePathQueryDto,
+  ): Promise<void> {
+    await this.volumeFilesService.deleteFile(volumeId, query.path)
   }
 
   @Post('batch-delete')

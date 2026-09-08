@@ -11,6 +11,33 @@ import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsNotEmpty, IsOptional, IsString 
  * batches too so one request can't force unbounded signing/S3 work. */
 const MAX_BATCH_SIZE = 1000
 
+/**
+ * A raw `@Query('path') path: string` accepts whatever Express hands it -
+ * including an array, if the caller sends the key twice (`?path=a&path=b`)
+ * or with explicit array syntax (`?path[]=a`). `@IsString()` on a DTO bound
+ * through the app's global `ValidationPipe` rejects that with 400 before
+ * any downstream string method (`.slice`, `.normalize`, ...) runs on a
+ * value it wasn't written to expect.
+ */
+export class ListVolumeFilesQueryDto {
+  @ApiPropertyOptional({ description: 'Prefix to list under, relative to the volume root' })
+  @IsOptional()
+  @IsString()
+  path?: string
+
+  @ApiPropertyOptional({ description: 'Pass the previous response\'s nextCursor to fetch the next page' })
+  @IsOptional()
+  @IsString()
+  cursor?: string
+}
+
+export class VolumeFilePathQueryDto {
+  @ApiProperty({ description: 'Object key, relative to the volume root' })
+  @IsString()
+  @IsNotEmpty()
+  path: string
+}
+
 export class VolumeFileEntryDto {
   @ApiProperty({ description: 'Entry name relative to the listed path' })
   name: string
