@@ -162,14 +162,14 @@ func TestBucketOneTimeBurstIsSpentFirstAndNeverRefilled(t *testing.T) {
 	if b.tokens != before {
 		t.Fatalf("sustained tokens = %d, want them untouched at %d", b.tokens, before)
 	}
-	if b.oneTime != 0 {
-		t.Fatalf("one-time burst = %d, want it fully spent", b.oneTime)
+	if b.oneTimeBurst != 0 {
+		t.Fatalf("one-time burst = %d, want it fully spent", b.oneTimeBurst)
 	}
 	// Refilling never restores it.
 	clk.advance(time.Hour)
 	b.reserve(0)
-	if b.oneTime != 0 {
-		t.Fatalf("one-time burst = %d after refill, want it to stay spent", b.oneTime)
+	if b.oneTimeBurst != 0 {
+		t.Fatalf("one-time burst = %d after refill, want it to stay spent", b.oneTimeBurst)
 	}
 }
 
@@ -245,7 +245,7 @@ func TestFramerConsumeSplitAtEveryOffset(t *testing.T) {
 		wantBytes += len(b)
 	}
 	for split := 1; split < len(stream); split++ {
-		f := &framer{hdrLen: 4}
+		f := &framer{prefixLen: 4}
 		gotBytes, gotFrames := 0, 0
 		for i := 0; i < len(stream); i += split {
 			end := i + split
@@ -269,7 +269,7 @@ func TestFramerConsumeSplitAtEveryOffset(t *testing.T) {
 // socket bytes would bill 4 extra per frame on Linux and none on macOS.
 func TestFramerExcludesTheLengthPrefixFromTheCharge(t *testing.T) {
 	body := bytes.Repeat([]byte{0x01}, 66) // a bare TCP ACK
-	f := &framer{hdrLen: 4}
+	f := &framer{prefixLen: 4}
 	frameBytes, frames := f.consume(qemuFrame(body))
 	if frameBytes != len(body) {
 		t.Fatalf("frameBytes = %d, want %d (the 4-byte prefix must not be charged)", frameBytes, len(body))
@@ -280,7 +280,7 @@ func TestFramerExcludesTheLengthPrefixFromTheCharge(t *testing.T) {
 }
 
 func TestFramerZeroHeaderIsPassthrough(t *testing.T) {
-	f := &framer{hdrLen: 0}
+	f := &framer{prefixLen: 0}
 	buf := bytes.Repeat([]byte{0x02}, 1500)
 	frameBytes, frames := f.consume(buf)
 	if frameBytes != len(buf) || frames != 1 {
@@ -288,14 +288,14 @@ func TestFramerZeroHeaderIsPassthrough(t *testing.T) {
 	}
 }
 
-// hdrLen is a parameter, not a constant: hyperkit uses a 2-byte little-endian
+// prefixLen is a parameter, not a constant: hyperkit uses a 2-byte little-endian
 // prefix. A hardcoded 4 would decode garbage here.
 func TestFramerHandlesHyperkitTwoByteHeader(t *testing.T) {
 	body := bytes.Repeat([]byte{0x03}, 300)
 	frame := make([]byte, 2+len(body))
 	binary.LittleEndian.PutUint16(frame[:2], uint16(len(body)))
 	copy(frame[2:], body)
-	f := &framer{hdrLen: 2}
+	f := &framer{prefixLen: 2}
 	frameBytes, frames := f.consume(frame)
 	if frameBytes != len(body) || frames != 1 {
 		t.Fatalf("consume = (%d, %d), want (%d, 1)", frameBytes, frames, len(body))
@@ -511,9 +511,9 @@ func newTXDebtConn(t *testing.T) (*shapedConn, <-chan struct{}) {
 	clock := newFakeClock()
 	cfg := &RateLimitConfig{TX: bucketCfg(deadlineTestBucketBytes, deadlineTestRefillPeriod.Milliseconds())}
 	c := newShapedConn(inner, deadlineTestQEMUHeaderBytes, cfg, clock.now)
-	c.tx.reserve(c.tx.capacity + deadlineTestTXDebtBytes)
+	c.txTokenBucket.reserve(c.txTokenBucket.capacity + deadlineTestTXDebtBytes)
 	started := make(chan struct{}, 1)
-	c.tx.now = func() time.Time {
+	c.txTokenBucket.now = func() time.Time {
 		select {
 		case started <- struct{}{}:
 		default:
@@ -587,9 +587,9 @@ func TestTxReadDeadlineInterruptsThrottle(t *testing.T) {
 					case <-time.After(deadlineTestWaitTimeout):
 						t.Fatalf("read deadline did not interrupt TX throttle (%s debt)", deadlineTestTXDebtWait)
 					}
-					c.tx.mu.Lock()
-					tokens := c.tx.tokens
-					c.tx.mu.Unlock()
+					c.txTokenBucket.mu.Lock()
+					tokens := c.txTokenBucket.tokens
+					c.txTokenBucket.mu.Unlock()
 					if tokens != -deadlineTestTXDebtBytes {
 						t.Fatalf("deadline changed TX debt: tokens = %d, want %d", tokens, -deadlineTestTXDebtBytes)
 					}
@@ -689,7 +689,7 @@ func TestShapedConnReadDeadlineDoesNotStopRXPacer(t *testing.T) {
 	c := newShapedConn(inner, deadlineTestQEMUHeaderBytes, cfg, newFakeClock().now)
 	defer c.Close()
 	defer peer.Close()
-	c.rx.reserve(c.rx.capacity)
+	c.rxTokenBucket.reserve(c.rxTokenBucket.capacity)
 	if err := c.SetReadDeadline(time.Now().Add(deadlineTestExpiredOffset)); err != nil {
 		t.Fatal(err)
 	}

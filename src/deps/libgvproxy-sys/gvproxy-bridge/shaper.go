@@ -125,20 +125,20 @@ func (c *RateLimitConfig) unlimited() bool {
 
 // tokenBucket meters bytes against a configured rate.
 //
-// rateBytes and refillNs are the configured rate pair and are never adjusted;
+// bytesPerRefill and refillNs are the configured rate pair and are never adjusted;
 // capacity — the ceiling on accumulated tokens, i.e. the burst size — is floored
 // separately at maxFrameBytes. Keeping the two apart matters: raising capacity
 // to the floor while deriving the rate from it would silently speed the limit up
 // for any box configured below 64 KiB of burst.
 type tokenBucket struct {
-	mu        sync.Mutex
-	rateBytes int64
-	refillNs  int64
-	capacity  int64
-	tokens    int64
-	oneTime   int64
-	last      time.Time
-	now       func() time.Time
+	mu             sync.Mutex
+	bytesPerRefill int64 // tokens gained per refillNs; with refillNs this is the rate
+	refillNs       int64
+	capacity       int64 // ceiling on tokens, i.e. the burst size
+	tokens         int64 // may go negative: a debt the caller sleeps off
+	oneTimeBurst   int64 // spent before tokens, never refilled
+	lastRefill     time.Time
+	now            func() time.Time
 }
 
 // mulDiv returns a*b/d computed in 128 bits, and whether the result fits in
@@ -170,13 +170,13 @@ func newTokenBucket(cfg *TokenBucketConfig, now func() time.Time) *tokenBucket {
 		capacity = maxFrameBytes
 	}
 	return &tokenBucket{
-		rateBytes: cfg.Size,
-		refillNs:  cfg.refillNs(),
-		capacity:  capacity,
-		tokens:    capacity,
-		oneTime:   cfg.OneTimeBurst,
-		last:      now(),
-		now:       now,
+		bytesPerRefill: cfg.Size,
+		refillNs:       cfg.refillNs(),
+		capacity:       capacity,
+		tokens:         capacity,
+		oneTimeBurst:   cfg.OneTimeBurst,
+		lastRefill:     now(),
+		now:            now,
 	}
 }
 
@@ -193,12 +193,12 @@ func (b *tokenBucket) reserve(n int64) time.Duration {
 	b.refillLocked()
 
 	if n > 0 {
-		if b.oneTime > 0 {
+		if b.oneTimeBurst > 0 {
 			spend := n
-			if spend > b.oneTime {
-				spend = b.oneTime
+			if spend > b.oneTimeBurst {
+				spend = b.oneTimeBurst
 			}
-			b.oneTime -= spend
+			b.oneTimeBurst -= spend
 			n -= spend
 		}
 		b.tokens -= n
@@ -209,7 +209,7 @@ func (b *tokenBucket) reserve(n int64) time.Duration {
 	}
 	// Guarded like refillLocked: the deficit is normally one frame, but the
 	// product is checked rather than assumed.
-	wait, ok := mulDiv(-b.tokens, b.refillNs, b.rateBytes)
+	wait, ok := mulDiv(-b.tokens, b.refillNs, b.bytesPerRefill)
 	if !ok {
 		return time.Duration(math.MaxInt64)
 	}
@@ -234,22 +234,22 @@ func (b *tokenBucket) waitNonNegative() time.Duration { return b.reserve(0) }
 // Validate instead.
 func (b *tokenBucket) refillLocked() {
 	now := b.now()
-	elapsed := now.Sub(b.last)
+	elapsed := now.Sub(b.lastRefill)
 	if elapsed <= 0 {
 		return
 	}
 	elapsedNs := elapsed.Nanoseconds()
 
-	gained, ok := mulDiv(elapsedNs, b.rateBytes, b.refillNs)
+	gained, ok := mulDiv(elapsedNs, b.bytesPerRefill, b.refillNs)
 	if !ok || (b.tokens >= 0 && gained >= b.capacity-b.tokens) {
 		// Clamp before adding to avoid overflow. A negative balance must
 		// first repay its debt, even when gained exceeds one full bucket.
 		b.tokens = b.capacity
-		b.last = now
+		b.lastRefill = now
 		return
 	}
 	if gained <= 0 {
-		// Not a whole token yet. Leave `last` alone so repeated sub-token calls
+		// Not a whole token yet. Leave `lastRefill` alone so repeated sub-token calls
 		// do not discard the remainder.
 		return
 	}
@@ -257,14 +257,14 @@ func (b *tokenBucket) refillLocked() {
 	if b.tokens > b.capacity {
 		b.tokens = b.capacity
 	}
-	// Advance `last` by exactly the time those tokens represent, keeping the
+	// Advance `lastRefill` by exactly the time those tokens represent, keeping the
 	// sub-token remainder for next time.
-	usedNs, ok := mulDiv(gained, b.refillNs, b.rateBytes)
+	usedNs, ok := mulDiv(gained, b.refillNs, b.bytesPerRefill)
 	if !ok {
-		b.last = now
+		b.lastRefill = now
 		return
 	}
-	b.last = b.last.Add(time.Duration(usedNs))
+	b.lastRefill = b.lastRefill.Add(time.Duration(usedNs))
 }
 
 // ---------------------------------------------------------------------------
@@ -283,14 +283,14 @@ func (b *tokenBucket) refillLocked() {
 // but 5.7% on a stream of 66-byte ACKs, and inconsistent across platforms
 // either way.
 //
-// hdrLen comes from the caller and is never assumed: gvisor-tap-vsock's
+// prefixLen comes from the caller and is never assumed: gvisor-tap-vsock's
 // pkg/tap/protocols.go uses four big-endian bytes for qemu, two little-endian
 // for hyperkit, and no prefix at all for the datagram protocols.
 type framer struct {
-	hdrLen int
-	hdrGot int
-	hdrBuf [4]byte
-	body   int
+	prefixLen     int     // length-prefix bytes per frame: 4 for qemu, 2 for hyperkit, 0 for datagram
+	prefixGot     int     // prefix bytes collected so far for the current frame
+	prefixBuf     [4]byte // the partial prefix, decoded once prefixGot == prefixLen
+	bodyRemaining int     // body bytes still to come for the current frame
 }
 
 func (f *framer) consume(b []byte) (frameBytes, frames int) {
@@ -298,38 +298,38 @@ func (f *framer) consume(b []byte) (frameBytes, frames int) {
 		return 0, 0
 	}
 	// Datagram protocols carry no prefix: one read is exactly one frame.
-	if f.hdrLen == 0 {
+	if f.prefixLen == 0 {
 		return len(b), 1
 	}
 
 	i := 0
 	for i < len(b) {
-		if f.body == 0 {
-			need := f.hdrLen - f.hdrGot
+		if f.bodyRemaining == 0 {
+			need := f.prefixLen - f.prefixGot
 			n := len(b) - i
 			if n > need {
 				n = need
 			}
-			copy(f.hdrBuf[f.hdrGot:], b[i:i+n])
-			f.hdrGot += n
+			copy(f.prefixBuf[f.prefixGot:], b[i:i+n])
+			f.prefixGot += n
 			i += n
-			if f.hdrGot == f.hdrLen {
-				f.body = f.decodeLen()
-				f.hdrGot = 0
-				if f.body == 0 {
+			if f.prefixGot == f.prefixLen {
+				f.bodyRemaining = f.decodeLen()
+				f.prefixGot = 0
+				if f.bodyRemaining == 0 {
 					frames++
 				}
 			}
 			continue
 		}
 		n := len(b) - i
-		if n > f.body {
-			n = f.body
+		if n > f.bodyRemaining {
+			n = f.bodyRemaining
 		}
-		f.body -= n
+		f.bodyRemaining -= n
 		frameBytes += n
 		i += n
-		if f.body == 0 {
+		if f.bodyRemaining == 0 {
 			frames++
 		}
 	}
@@ -339,10 +339,10 @@ func (f *framer) consume(b []byte) (frameBytes, frames int) {
 // decodeLen mirrors pkg/tap/protocols.go exactly: qemu writes a big-endian
 // uint32, hyperkit a little-endian uint16.
 func (f *framer) decodeLen() int {
-	if f.hdrLen == 2 {
-		return int(binary.LittleEndian.Uint16(f.hdrBuf[:2]))
+	if f.prefixLen == 2 {
+		return int(binary.LittleEndian.Uint16(f.prefixBuf[:2]))
 	}
-	return int(binary.BigEndian.Uint32(f.hdrBuf[:4]))
+	return int(binary.BigEndian.Uint32(f.prefixBuf[:4]))
 }
 
 // ---------------------------------------------------------------------------
@@ -389,23 +389,38 @@ func (s *shaperStats) snapshot() shaperSnapshot {
 // shaped connection
 // ---------------------------------------------------------------------------
 
+// shapedConn wraps the guest link and meters both directions. The two sides
+// use different mechanisms because of how tap.Switch drives them: Read (TX) may
+// block, so it sleeps off the bucket debt in place; Write (RX) must never block
+// or fail, so it queues and a pacer goroutine delivers at the configured rate.
 type shapedConn struct {
 	net.Conn
 
-	hdrLen int
-	tx     *tokenBucket
-	rx     *tokenBucket
-	framer framer // read side only; tap.Switch reads from a single goroutine
+	// Nil in an unlimited direction; that side then passes through untouched.
+	txTokenBucket *tokenBucket // guest -> internet, charged in Read
+	rxTokenBucket *tokenBucket // internet -> guest, charged in pace
 
-	queue      chan []byte
-	queueBytes atomic.Int64
-	maxQueueB  int64
+	// Tracks frame boundaries on the read side so TX is charged for frame bytes
+	// only, not the length prefix. Its state is advanced by Read alone, and
+	// tap.Switch reads from a single goroutine, so it needs no lock; the pacer
+	// only consults the immutable prefixLen.
+	framer framer
 
+	// RX queue between Write and the pacer goroutine. Bounded both by frame
+	// count (the channel capacity) and by bytes (maxQueueBytes); a frame that
+	// would exceed either is dropped and counted rather than blocking Write.
+	queue         chan []byte
+	queueBytes    atomic.Int64 // bytes currently queued
+	maxQueueBytes int64
+
+	// Mirror of the read deadline set on Conn, so the TX token wait in Read can
+	// honor it too. readDeadlineChanged is closed and replaced on every update
+	// to wake a waiter without restarting its token wait.
 	readDeadlineMu      sync.Mutex
 	readDeadline        time.Time
 	readDeadlineChanged chan struct{}
 
-	stop      chan struct{}
+	stop      chan struct{} // closed once by Close; every wait in the shaper selects on it
 	closeOnce sync.Once
 	stats     shaperStats
 }
@@ -415,28 +430,27 @@ type shapedConn struct {
 //
 // An unlimited configuration returns the connection untouched, so a box with no
 // limit pays nothing, not even an interface indirection.
-func wrapConn(conn net.Conn, hdrLen int, cfg *RateLimitConfig) net.Conn {
+func wrapConn(conn net.Conn, prefixLen int, cfg *RateLimitConfig) net.Conn {
 	if cfg.unlimited() {
 		return conn
 	}
-	return newShapedConn(conn, hdrLen, cfg, nil)
+	return newShapedConn(conn, prefixLen, cfg, nil)
 }
 
-func newShapedConn(conn net.Conn, hdrLen int, cfg *RateLimitConfig, now func() time.Time) *shapedConn {
+func newShapedConn(conn net.Conn, prefixLen int, cfg *RateLimitConfig, now func() time.Time) *shapedConn {
 	c := &shapedConn{
 		Conn:                conn,
-		hdrLen:              hdrLen,
-		framer:              framer{hdrLen: hdrLen},
+		framer:              framer{prefixLen: prefixLen},
 		stop:                make(chan struct{}),
 		readDeadlineChanged: make(chan struct{}),
 	}
 	if !cfg.TX.unlimited() {
-		c.tx = newTokenBucket(cfg.TX, now)
+		c.txTokenBucket = newTokenBucket(cfg.TX, now)
 	}
 	if !cfg.RX.unlimited() {
-		c.rx = newTokenBucket(cfg.RX, now)
+		c.rxTokenBucket = newTokenBucket(cfg.RX, now)
 		queueBytes, queueFrames := queueBounds(cfg.RX)
-		c.maxQueueB = queueBytes
+		c.maxQueueBytes = queueBytes
 		c.queue = make(chan []byte, queueFrames)
 		go c.pace()
 	}
@@ -522,7 +536,7 @@ func (c *shapedConn) setReadDeadlineLocked(t time.Time) {
 }
 
 func (c *shapedConn) waitForTX() error {
-	d := c.tx.waitNonNegative()
+	d := c.txTokenBucket.waitNonNegative()
 	if d <= 0 {
 		return nil
 	}
@@ -583,15 +597,15 @@ func (c *shapedConn) waitForTX() error {
 // macOS unixgram backend has no equivalent mechanism and its behaviour under a
 // full receive buffer is unverified — do not assume it backpressures.
 func (c *shapedConn) Read(p []byte) (int, error) {
-	if c.tx != nil {
+	if c.txTokenBucket != nil {
 		if err := c.waitForTX(); err != nil {
 			return 0, err
 		}
 	}
 	n, err := c.Conn.Read(p)
-	if n > 0 && c.tx != nil {
+	if n > 0 && c.txTokenBucket != nil {
 		frameBytes, _ := c.framer.consume(p[:n])
-		c.tx.reserve(int64(frameBytes))
+		c.txTokenBucket.reserve(int64(frameBytes))
 	}
 	return n, err
 }
@@ -617,12 +631,12 @@ func (c *shapedConn) Read(p []byte) (int, error) {
 // frame is fine without a pool: the queue is bounded and drains at the
 // configured rate, so churn is capped by the limit the user asked for.
 func (c *shapedConn) Write(p []byte) (int, error) {
-	if c.rx == nil {
+	if c.rxTokenBucket == nil {
 		return c.Conn.Write(p)
 	}
 
 	size := int64(len(p))
-	if c.queueBytes.Load()+size > c.maxQueueB {
+	if c.queueBytes.Load()+size > c.maxQueueBytes {
 		c.dropped(size)
 		return len(p), nil
 	}
@@ -661,10 +675,10 @@ func (c *shapedConn) pace() {
 			// The frame arrives whole, so the only adjustment needed is to
 			// leave the length prefix out of the charge.
 			charge := int64(len(frame))
-			if charge > int64(c.hdrLen) {
-				charge -= int64(c.hdrLen)
+			if charge > int64(c.framer.prefixLen) {
+				charge -= int64(c.framer.prefixLen)
 			}
-			if d := c.rx.reserve(charge); d > 0 {
+			if d := c.rxTokenBucket.reserve(charge); d > 0 {
 				c.stats.rxThrottledEvents.Add(1)
 				c.stats.rxThrottledNs.Add(int64(d))
 				if !c.sleep(d) {
