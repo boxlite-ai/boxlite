@@ -802,6 +802,8 @@ covers TCP, UDP, ICMP and ARP together; there is no per-protocol split.
 Firecracker, Kata and Cloud Hypervisor share.
 
 ```rust
+use boxlite::{AdvancedBoxOptions, BoxOptions, NetworkRateLimit};
+
 let mut advanced = AdvancedBoxOptions::default();
 advanced.network_rate_limit = NetworkRateLimit {
     tx_kbps: Some(10_000),   // 10 Mbit/s up
