@@ -59,9 +59,16 @@ test('a command list is described after it, where the note can qualify it', asyn
 })
 
 test("the example is the module's own, not a generic one that would be wrong", async () => {
-  // login takes no --stage; an example claiming otherwise is worse than none.
+  // An example is the one line a reader copies, so a generic one is worse than
+  // none. `login` does take `--stage` now — it narrows which cloud is required
+  // to the one that stage lives in — but its example is about a provider, and
+  // showing a stage there would teach the wrong thing about what login answers.
   const login = await helpFor('login')
-  assert.ok(!login.text.includes('--stage'), login.text)
+  assert.match(login.text, /example: npm run mstage login github -- --force/)
+  assert.ok(
+    !/example:.*--stage/.test(login.text),
+    `login's example should not be about a stage: ${login.text}`,
+  )
   assert.match(
     (await helpFor('env')).text,
     /example: npm run mstage env list -- --stage=dev --select-group=deploy --json > \.deploy\.env\.json/,

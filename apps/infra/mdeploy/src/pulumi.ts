@@ -179,7 +179,7 @@ export const pulumiDeploy = async ({
   const stack = await createStackWith({
     projectName: app,
     stackName: stage,
-    program: gcpProgram({ app, stage, region: scope.region, project, environment, cwd: config.root }),
+    program: gcpProgram({ app, stage, region: scope.region, project, zone: scope.zone, environment, cwd: config.root }),
     /*
      * The whole stage environment, not only the credentials and the passphrase.
      * The engine spawns a provider plugin per provider, and those are the

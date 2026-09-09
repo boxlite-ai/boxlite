@@ -79,6 +79,9 @@ export const awsDatabaseProvider =
         port: postgres.port.apply(String),
         username: postgres.username,
         database: postgres.database,
+        // RDS presents a certificate chaining to a root the image already
+        // trusts, so the client encrypts and verifies for itself.
+        applicationTls: true,
       },
       binding: {
         cloud: 'aws',

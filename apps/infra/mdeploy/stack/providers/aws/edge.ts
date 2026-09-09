@@ -2,10 +2,17 @@
  * The box proxy, behind a network load balancer with a wildcard certificate.
  *
  * A network load balancer rather than an application one, and a `443/tls`
- * listener rather than `443/https`: the proxy terminates TLS itself so it can
- * read the SNI name — `<port>-<boxid>.<domain>` — before it has anywhere to
- * forward to. An application load balancer would have terminated first and lost
- * the name the routing decision depends on.
+ * listener rather than `443/https`. Both of those terminate — an NLB `443/tls`
+ * listener holds the certificate and hands the task plaintext on 4000, which is
+ * why `ENABLE_TLS` is unset on the container. What the NLB buys over an ALB is
+ * a layer-4 forward with no HTTP handling of its own in the way.
+ *
+ * The routing survives termination because it never depended on the handshake:
+ * the proxy reads `<port>-<boxid>.<domain>` out of the **Host header**
+ * (`parseHost` in `apps/proxy/pkg/proxy/get_box_target.go`), not out of SNI.
+ * This comment used to claim the opposite, and the GCP side was built as a
+ * genuine passthrough to match it — which left every box's hostname with no
+ * certificate at all, because nothing in `apps/proxy` can obtain one.
  *
  * The topology is protected: the load balancer, the listener and the target
  * group all carry `protect`. A replacement that swapped the listener before ECS

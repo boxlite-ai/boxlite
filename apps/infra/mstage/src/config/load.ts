@@ -51,6 +51,17 @@ export type StageConfig = {
   home: Cloud | null
   /** The GCP project this stage lives in. Null on AWS, which reads it from STS. */
   project: string | null
+  /**
+   * The zone inside the region this stage's machines are created in.
+   *
+   * Null means "the region's first", which is what a stage with nothing to say
+   * about placement wants. It is declarable because that default is not always
+   * available: a machine family is stocked per zone, and a region's first zone
+   * answering `stockout` for the family a runner needs is ordinary. Derived,
+   * that is a deploy nothing can make succeed without editing code; declared,
+   * it is one field. Nothing on AWS reads it — there a subnet carries the zone.
+   */
+  zone: string | null
   roleArn: string | null
   protect: boolean
 }
@@ -278,7 +289,7 @@ const parseStage = (name: string, raw: unknown, path: string, repositoryHome: Cl
     throw new ConfigError(`${path}: stage "${name}" may only contain letters, digits and "-"`)
   }
   const stage = assertObject(raw, `${path}: stage "${name}"`)
-  for (const key of ['region', 'project', 'roleArn'] as const) {
+  for (const key of ['region', 'project', 'zone', 'roleArn'] as const) {
     if (stage[key] !== undefined) assertNonEmptyString(stage[key], `${path}: stage "${name}" ${key}`)
   }
   if (stage.protect !== undefined && typeof stage.protect !== 'boolean') {
@@ -304,6 +315,7 @@ const parseStage = (name: string, raw: unknown, path: string, repositoryHome: Cl
     region: (stage.region as string) ?? null,
     home: (stage.home as Cloud) ?? null,
     project: (stage.project as string) ?? null,
+    zone: (stage.zone as string) ?? null,
     roleArn: (stage.roleArn as string) ?? null,
     protect: (stage.protect as boolean) ?? false,
   }

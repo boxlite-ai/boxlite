@@ -523,10 +523,10 @@ credential chain and nothing else: no `--profile`, no `MSTAGE_AWS_PROFILE`, no
 profile field in `mstage.config.json`, and no translation of the SDK's errors. A
 failure surfaces exactly as the SDK reported it.
 
-mstage does not second-guess which account the chain reaches. `aws whoami`
-prints the account and principal it found, and that is the way to check before
-spending anything; `aws region` calls nothing at all, resolving the region
-locally from the table below.
+mstage does not second-guess which tenant the chain reaches. `aws whoami`
+prints the tenant and principal it found — an account and an ARN on AWS, a
+project on GCP — and that is the way to check before spending anything; `aws
+region` calls nothing at all, resolving the region locally from the table below.
 
 `mstage login` applies the same rule to GitHub and Auth0 — it reads the session
 `gh auth login` and `auth0 login` left behind, and repeats those CLIs' own

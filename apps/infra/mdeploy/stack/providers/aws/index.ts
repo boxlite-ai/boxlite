@@ -90,14 +90,20 @@ export const awsStackProviders = ({
     api: ({ dependencies }) => awsApiProvider({ dependencies, dns, domain }),
     edge: ({ host: where, network, dependsOn }) =>
       awsEdgeProvider({ host: host(where), placement: placement(network.placementFor('proxy')), dns, dependsOn }),
+    // 64 alphanumeric characters: the value travels through a systemd
+    // EnvironmentFile and a JSON payload, and punctuation would drag quoting
+    // rules into both.
+    mintRunnerToken: (name) => new random.RandomPassword(name, { length: 64, special: false }).result,
     // No host: a runner is a machine, so it takes its placement straight from
     // the network. That placement is `egress-only-public`, and the provider
     // refuses anything else rather than creating a host that cannot pull.
-    runners: ({ network, dependsOn }) =>
+    runners: ({ network, adminApiKey, regionId, dependsOn }) =>
       awsRunnerProvider({
         placement: placement(network.placementFor('runner')),
         region,
         artifactsBucket,
+        adminApiKey,
+        regionId,
         dependsOn,
       }),
     alarms: ({ subjects }) => awsAlarmProvider({ subjects }),

@@ -35,10 +35,10 @@
         "scanOnPush": true
       }
     },
-    "gcp-dev": {
+    "dev2": {
       "registry": {
         "kind": "artifact-registry",
-        "repository": "boxlite-app-gcp-dev",
+        "repository": "boxlite-app-dev2",
         "immutableTags": true,
         "scanOnPush": true
       }

@@ -121,6 +121,28 @@ type Registrar = {
   scanReport: (artifact: string, tag: string) => Promise<ScanReport>
 }
 
+/*
+ * "The registry does not hold this" and "the registry did not answer" are
+ * different facts, and only the first belongs in a boolean.
+ *
+ * The read runs as whoever asks, and the two callers are not the same identity:
+ * `publish` asks as the publisher, while a deploy's preflight asks as the
+ * deploy. So a grant one of them lacks arrives here as a failed read — and
+ * answered with `false` it becomes "the stage does not hold this commit's
+ * images", which sends the reader to publish images that are already there.
+ *
+ * How absence is spelled differs per registry and stays with each registrar;
+ * what they share is the refusal, carrying the registry's own words.
+ */
+const ECR_IMAGE_ABSENT = /ImageNotFoundException/
+
+const unreadable = ({ result, address }: { result: RunResult; address: string }): PublishError =>
+  new PublishError(
+    `Could not tell whether ${address} is published: ${
+      result.stderr.trim() || result.stdout.trim() || `the registry read exited ${result.code}`
+    }`,
+  )
+
 const ecrRegistrar = ({
   run,
   config,
@@ -163,7 +185,9 @@ const ecrRegistrar = ({
         '--image-ids',
         `imageTag=${tag}-${artifact}`,
       ])
-      return found.code === 0
+      if (found.code === 0) return true
+      if (ECR_IMAGE_ABSENT.test(found.stderr)) return false
+      throw unreadable({ result: found, address: addressFor({ config, registry, artifact, tag }) })
     },
     async login() {
       const password = await aws(['ecr', 'get-login-password'])
@@ -248,17 +272,28 @@ const ecrRegistrar = ({
  */
 const artifactRegistryRegistrar = ({
   run,
+  config,
+  stage,
   registry,
 }: {
   run: Run
+  config: BuildConfig
+  stage: string
   registry: Extract<Registry, { kind: 'artifact-registry' }>
 }): Registrar => {
+  const declared = config.stages[stage]!.registry
   const region = registry.host.replace(/-docker\.pkg\.dev$/, '')
   const gcloud = async (args: string[]): Promise<RunResult> =>
     run('gcloud', [...args, '--project', registry.project, '--quiet'])
   const path = `${registry.host}/${registry.project}/${registry.repository}`
   return {
     async ensureRepository() {
+      // The describe answers both questions at once: whether it is there, and
+      // whether it matches what the stage declared. Tag immutability is fixed at
+      // creation, so a repository that predates the declaration cannot be
+      // brought to it — and publishing into it anyway would mean the config
+      // claims exact bytes for a tag that can still be moved. The field is
+      // absent rather than false when unset.
       const existing = await gcloud([
         'artifacts',
         'repositories',
@@ -266,8 +301,17 @@ const artifactRegistryRegistrar = ({
         registry.repository,
         '--location',
         region,
+        '--format=value(dockerConfig.immutableTags)',
       ])
-      if (existing.code === 0) return
+      if (existing.code === 0) {
+        if (declared.immutableTags && existing.stdout.trim() !== 'True') {
+          throw new PublishError(
+            `${registry.repository} has mutable tags and this stage declares immutableTags. ` +
+              'That setting is fixed at creation, so it cannot be corrected here.',
+          )
+        }
+        return
+      }
       const created = await gcloud([
         'artifacts',
         'repositories',
@@ -277,14 +321,47 @@ const artifactRegistryRegistrar = ({
         region,
         '--repository-format',
         'docker',
+        // The same declaration ECR reads as IMMUTABLE. Nothing here addresses an
+        // image by digest, so this is the only thing making a deployed commit
+        // tag mean exact bytes; a repository created without it silently drops
+        // that guarantee while the config still claims it.
+        ...(declared.immutableTags ? ['--immutable-tags'] : []),
       ])
       if (created.code !== 0) {
         throw new PublishError(`Could not create ${registry.repository}: ${created.stderr.trim()}`)
       }
     },
+    /*
+     * `list`, not `describe`. For a pkg.dev repository `describe` reaches
+     * Container Analysis unconditionally — `DescribeDockerImage` calls
+     * `GetImageSummaryMetadata` and `GetContainerAnalysisMetadata` whenever the
+     * repo is not an unredirected gcr.io one (google-cloud-sdk's
+     * `command_lib/artifacts/docker_util.py`) — so asking "does this repository
+     * hold this tag" through it makes every caller need read on vulnerability
+     * metadata as well. A deploy has no business holding that: the question is
+     * Artifact Registry's alone, and `list` asks only Artifact Registry.
+     *
+     * It also answers absence with an empty page rather than with an error,
+     * which is the difference between "not there" and "could not tell" without
+     * matching on message text. A missing repository still fails the read,
+     * which is the honest answer: nothing was looked in.
+     */
     async isPublished(artifact, tag) {
-      const found = await gcloud(['artifacts', 'docker', 'images', 'describe', `${path}/${artifact}:${tag}`])
-      return found.code === 0
+      const found = await gcloud([
+        'artifacts',
+        'docker',
+        'images',
+        'list',
+        `${path}/${artifact}`,
+        '--include-tags',
+        `--filter=tags:${tag}`,
+        '--format=value(version)',
+      ])
+      if (found.code !== 0) {
+        throw unreadable({ result: found, address: addressFor({ config, registry, artifact, tag }) })
+      }
+      // The banner and any warning go to stderr, so an empty page is empty here.
+      return found.stdout.trim() !== ''
     },
     async login() {
       // No password to fetch: the Docker credential helper reads the ambient
@@ -343,7 +420,7 @@ const registrarFor = ({
     case 'ecr':
       return ecrRegistrar({ run, config, stage, registry })
     case 'artifact-registry':
-      return artifactRegistryRegistrar({ run, registry })
+      return artifactRegistryRegistrar({ run, config, stage, registry })
   }
 }
 

@@ -31,6 +31,8 @@ export type Scope = {
   home: Cloud
   /** The GCP project the stage declares. Null on AWS, which has no use for it. */
   project: string | null
+  /** The zone the stage declares, or null for the region's first. GCP's alone. */
+  zone: string | null
   app: string | null
   appSource?: string
   region: string
@@ -138,6 +140,7 @@ export const resolveScope = ({
     protect: stage.protect,
     home: homeFor(config, stage.name),
     project: stage.project,
+    zone: stage.zone,
     app: app.value,
     appSource: app.source,
     region: region.value,

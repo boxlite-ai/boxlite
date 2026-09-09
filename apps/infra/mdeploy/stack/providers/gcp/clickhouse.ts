@@ -23,8 +23,26 @@
 import type { ClickHouse, ClickHouseProvider, ClickHouseRequest } from '../../clickhouse.ts'
 import type { NetworkBinding } from '../../network.ts'
 
-/** What each requested size answers to. */
-const MACHINE = { small: 'n2-standard-2', medium: 'n2-standard-4' } as const
+/**
+ * What each requested size answers to.
+ *
+ * N4, the same family the runner fleet uses, because this is the other machine
+ * the AWS side runs on EC2. Nested virtualization is irrelevant here — nothing
+ * on this host starts a VM — so what N4 buys is one machine generation across
+ * the stack rather than two to keep in mind.
+ */
+export const MACHINE = { small: 'n4-standard-2', medium: 'n4-standard-4' } as const
+
+/**
+ * The only disk type N4 attaches, for the boot disk and the data disk alike.
+ *
+ * The family takes no Persistent Disk at all, so a `pd-balanced` data disk is
+ * refused at create time rather than silently downgraded. No GCP stage holds a
+ * ClickHouse disk today — every one of them disables the module — so this is a
+ * type chosen rather than a type migrated; an existing disk could not be
+ * converted in place, and the retained one would have to be replaced by hand.
+ */
+export const DISK_TYPE = 'hyperdisk-balanced'
 
 const HTTP_PORT = 8123
 
@@ -138,7 +156,7 @@ export const gcpClickHouseProvider =
      */
     const disk = new gcp.compute.Disk(
       'ClickHouseData',
-      { name: `${prefix}-clickhouse-data`, project, zone, size: request.dataGb, type: 'pd-balanced' },
+      { name: `${prefix}-clickhouse-data`, project, zone, size: request.dataGb, type: DISK_TYPE },
       { retainOnDelete: true },
     )
 
@@ -196,7 +214,7 @@ echo "clickhouse setup complete"
         project,
         zone,
         machineType: MACHINE[request.instanceSize],
-        bootDisk: { initializeParams: { image: IMAGE, size: 20, type: 'pd-balanced' } },
+        bootDisk: { initializeParams: { image: IMAGE, size: 20, type: DISK_TYPE } },
         attachedDisks: [{ source: disk.id, deviceName: 'clickhouse-data' }],
         networkInterfaces: [
           {

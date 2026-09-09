@@ -64,6 +64,7 @@ test('both clouds answer every module the stack asks about', () => {
     'edge',
     'images',
     'mail',
+    'mintRunnerToken',
     'network',
     'runners',
     'storage',

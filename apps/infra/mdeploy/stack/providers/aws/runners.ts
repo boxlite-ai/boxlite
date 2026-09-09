@@ -23,12 +23,21 @@
  * start, not through the boot script. Anything written into user data is
  * readable from the instance metadata by whatever runs on the host, and what
  * runs on a runner is untrusted code by design.
+ *
+ * The registration token is the one deliberate exception, and `runner-boot.ts`
+ * records why it was accepted rather than leaving it to look like a slip.
  */
 
 import type { Placement } from '../../network.ts'
 import type { RunnerProvider, RunnerRequest, Runners } from '../../runners.ts'
-import { RUNNER_PORT } from '../../runners.ts'
+import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE } from '../../runners.ts'
 import { renderRunnerBoot, type BootPlatform } from '../../runner-boot.ts'
+import {
+  REGISTER_RUNNERS_COMMAND,
+  extraRunnersOf,
+  registrationDir,
+  registrationPayload,
+} from '../../runner-registration.ts'
 
 /** What each requested size answers to. Every one of these can nest. */
 const INSTANCE = { small: 'c8i.large', medium: 'c8i.xlarge', large: 'c8i.2xlarge' } as const
@@ -84,12 +93,18 @@ export const awsRunnerProvider =
     placement,
     region,
     artifactsBucket,
+    adminApiKey,
+    regionId,
     dependsOn,
   }: {
     placement: Extract<Placement, { cloud: 'aws' }>
     region: string
     /** Where a build-mode binary is staged. Read-only, and only under `runner/`. */
     artifactsBucket: string
+    /** What registers the hosts the API does not seed. See `runner-registration.ts`. */
+    adminApiKey: $util.Input<string>
+    /** The region those rows go in — the same one the API seeded its own into. */
+    regionId: string
     dependsOn: any[]
   }): RunnerProvider =>
   (request: RunnerRequest): Runners => {
@@ -192,8 +207,10 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
       unitEnvironment: { AWS_REGION: region },
     }
 
-    const instances = request.fleet.map(
-      (slot) =>
+    const assignments = request.fleet
+
+    const instances = assignments.map(
+      ({ slot, token }) =>
         new aws.ec2.Instance(
           slot.resourceName,
           {
@@ -209,22 +226,42 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
             // IMDSv2 and one hop, so a container escape or an SSRF on this
             // untrusted-code host cannot read the instance role's credentials.
             metadataOptions: { httpEndpoint: 'enabled', httpTokens: 'required', httpPutResponseHopLimit: 1 },
-            userDataBase64: $resolve([request.apiUrl, request.otlpUrl, request.binary.url, request.binary.sha256]).apply(
-              ([apiUrl, otlpUrl, url, sha256]) =>
-                renderRunnerBoot({
-                  apiUrl,
-                  otlpUrl,
-                  binary: { url, sha256 },
-                  port: RUNNER_PORT,
-                  environment: {
-                    ...(request.environment as Record<string, string>),
-                    // Which host this is, as the control plane knows it.
-                    BOXLITE_RUNNER_NAME: slot.controlPlaneRunnerName,
-                    // The wrapper reads each secret's address from here.
-                    ...Object.fromEntries(secretNames.map((name) => [`${name}_ARN`, String(request.secrets[name])])),
-                  },
-                  platform,
-                }),
+            userDataBase64: $resolve([
+              request.apiUrl,
+              request.otlpUrl,
+              request.binary.url,
+              request.binary.sha256,
+              // Resolved rather than cast, and the secret addresses with them:
+              // both are `Input<string>`, and the composition root sets
+              // `OTEL_EXPORTER_OTLP_ENDPOINT` from the collector's own URL. An
+              // unresolved one renders as Pulumi's `[toString]` refusal text,
+              // so the host ships telemetry nowhere and the start wrapper
+              // fetches each secret from an address that is that text.
+              $resolve(Object.values(request.environment)),
+              $resolve(Object.values(request.secrets)),
+              token,
+            ]).apply(([apiUrl, otlpUrl, url, sha256, resolved, addresses, hostToken]) =>
+              renderRunnerBoot({
+                apiUrl: apiUrl as string,
+                otlpUrl: otlpUrl as string,
+                binary: { url: url as string, sha256: sha256 as string },
+                port: RUNNER_PORT,
+                environment: {
+                  ...Object.fromEntries(
+                    Object.keys(request.environment).map((name, index) => [name, String((resolved as string[])[index])]),
+                  ),
+                  // Which host this is, as the control plane knows it.
+                  BOXLITE_RUNNER_NAME: slot.controlPlaneRunnerName,
+                  // The wrapper reads each secret's address from here.
+                  ...Object.fromEntries(
+                    secretNames.map((name, index) => [`${name}_ARN`, String((addresses as string[])[index])]),
+                  ),
+                  // Last, so this host's own token wins over the fleet-wide one
+                  // the store delivered. Every host but the first has its own.
+                  [RUNNER_TOKEN_VARIABLE]: hostToken as string,
+                },
+                platform,
+              }),
             ),
             rootBlockDevice: { volumeSize: request.rootDiskGb, encrypted: true },
             tags: { Name: slot.nameTag, 'boxlite:control-plane-runner-name': slot.controlPlaneRunnerName },
@@ -240,6 +277,53 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
           },
         ),
     )
+
+    /*
+     * The rows the API will not seed.
+     *
+     * Only when there are any: a single-host fleet is complete the moment the
+     * API is up, and creating a command for it would run a script that has
+     * nothing to do on every deploy. `triggers` is what keeps this from
+     * re-running otherwise — the API's address and the payload are the only two
+     * inputs that change the answer.
+     */
+    const extras = extraRunnersOf(assignments)
+    if (extras.length > 0) {
+      const payload = $resolve(extras.map((extra) => extra.token)).apply((tokens) =>
+        registrationPayload({ runners: extras, tokens: tokens as string[] }),
+      )
+      new command.local.Command(
+        'RegisterExtraRunners',
+        {
+          // A local command runs from the engine's own cwd, so the directory
+          // has to be given. Derived rather than read from `$cli`, which only
+          // SST defines — see `runner-registration.ts`.
+          dir: registrationDir(),
+          create: REGISTER_RUNNERS_COMMAND,
+          update: REGISTER_RUNNERS_COMMAND,
+          environment: {
+            API_URL: request.apiUrl,
+            // Sealed in state rather than handed over plain. `local.Command`
+            // marks nothing on this resource secret, so an admin-scoped
+            // control-plane key would otherwise be readable in the checkpoint
+            // by anyone who can read the stage's state bucket.
+            ADMIN_API_KEY: $util.secret(adminApiKey),
+            REGION_ID: regionId,
+            RUNNERS: payload,
+          },
+          // Every input that changes the answer, and nothing secret: the
+          // payload carries the tokens, so it is named here by the ids of the
+          // resources that mint them rather than by its own value.
+          triggers: [
+            request.apiUrl,
+            extras.map((extra) => extra.slot.controlPlaneRunnerName).join(','),
+          ],
+        },
+        // After the hosts exist and after the API answers: the script waits on
+        // /api/health, but a row created before its host is a row nothing holds.
+        { dependsOn: [...instances, ...dependsOn] },
+      )
+    }
 
     return { ids: instances.map((instance) => instance.id), ready: instances }
   }

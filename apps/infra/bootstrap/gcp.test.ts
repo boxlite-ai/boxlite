@@ -30,13 +30,46 @@ const QUERIES = [
  * existence questions are answered; every change succeeds, which is what
  * makes a failing change its own test below.
  */
-const recorder = ({ existing = false } = {}) => {
+const recorder = ({ existing = false, readsBeforeVisible = 0 } = {}) => {
   const calls: string[][] = []
   const stdin: string[] = []
+  /*
+   * How many `describe` reads a just-created service account answers NOT_FOUND
+   * for before it is visible. Zero is an API that is immediately consistent;
+   * the real one is not, and answers `Service account <email> does not exist`
+   * to the grant that follows `create`. Modelled per account, because that is
+   * how the window behaves.
+   */
+  const pending = new Map<string, number>()
   const run: Run = async (command, args, options = {}) => {
     calls.push([command, ...args])
     if (options.stdin !== undefined && options.stdin !== '') stdin.push(options.stdin)
     const asked = args.join(' ')
+    if (asked.startsWith('iam service-accounts create')) {
+      pending.set(`${args[3]}@boxlite-gcp-dev.iam.gserviceaccount.com`, readsBeforeVisible)
+      return { code: 0, stdout: '', stderr: '' }
+    }
+    if (asked.startsWith('iam service-accounts describe')) {
+      const email = args[3] as string
+      if (!pending.has(email)) return existing ? { code: 0, stdout: '{}', stderr: '' } : { code: 254, stdout: '', stderr: 'NOT_FOUND' }
+      const left = pending.get(email) as number
+      if (left <= 0) return { code: 0, stdout: '{}', stderr: '' }
+      pending.set(email, left - 1)
+      return { code: 254, stdout: '', stderr: 'NOT_FOUND' }
+    }
+    /*
+     * The refusal the propagation window actually produces. A grant attempted
+     * before the account is visible does not queue — it fails, naming as absent
+     * the account the line above created.
+     */
+    if (asked.startsWith('projects add-iam-policy-binding')) {
+      const member = args.find((argument) => argument.startsWith('--member=serviceAccount:'))
+      const email = member?.replace('--member=serviceAccount:', '') ?? ''
+      if ((pending.get(email) ?? 0) > 0) {
+        return { code: 1, stdout: '', stderr: `INVALID_ARGUMENT: Service account ${email} does not exist.` }
+      }
+      return { code: 0, stdout: '', stderr: '' }
+    }
     if (asked.startsWith('projects describe')) return { code: 0, stdout: '999999999999\n', stderr: '' }
     // A project already bootstrapped names its bucket here, which is what makes
     // the re-run path reachable at all; an absent record is the first run.
@@ -66,8 +99,11 @@ const invoke = (run: Run) =>
     app: 'boxlite',
     stage: 'gcp-dev',
     repository: 'boxlite-app-gcp-dev',
+    immutableTags: true,
     github: GITHUB,
     log: () => {},
+    // The retry is proved without spending it; the real default is a timer.
+    wait: async () => {},
   })
 
 test('a fresh project gets every prerequisite mdeploy and mbuild cannot create for themselves', async () => {
@@ -88,6 +124,16 @@ test('a fresh project gets every prerequisite mdeploy and mbuild cannot create f
   assert.equal(gcloud.applied('service-accounts create', 'boxlite-gcp-dev-deploy').length, 1, 'no deployer')
   assert.equal(gcloud.applied('service-accounts create', 'boxlite-mbuild').length, 1, 'no image publisher')
   assert.equal(gcloud.applied('artifacts repositories create', 'boxlite-app-gcp-dev').length, 1, 'no docker repository')
+  /*
+   * The declaration mbuild reads, honoured at the one moment it can be: tag
+   * immutability is fixed at creation and no command changes it afterwards. A
+   * repository made without it is one mbuild then refuses to publish into, so
+   * the mismatch costs a repository that has to be deleted by hand.
+   */
+  assert.ok(
+    gcloud.applied('artifacts repositories create', '--immutable-tags').length === 1,
+    'the repository was created with movable tags',
+  )
 
   assert.equal(result.deployerEmail, 'boxlite-gcp-dev-deploy@boxlite-gcp-dev.iam.gserviceaccount.com')
   assert.equal(result.publisherEmail, 'boxlite-mbuild@boxlite-gcp-dev.iam.gserviceaccount.com')
@@ -140,10 +186,38 @@ test('a service account is probed by the name gcloud accepts, not the one it is 
   const gcloud = recorder()
   await invoke(gcloud.run)
   const probes = gcloud.applied('service-accounts describe')
-  assert.equal(probes.length, 2, 'the deployer and the publisher are both probed')
+  assert.ok(probes.length >= 2, 'the deployer and the publisher are both probed')
   for (const probe of probes) {
     assert.ok(probe.some((argument) => argument.endsWith('.iam.gserviceaccount.com')), `probed with: ${probe.join(' ')}`)
   }
+})
+
+test('a service account is granted its roles on the run that created it', async () => {
+  /*
+   * `create` returns before the account is visible to the IAM policy API, so
+   * the grant that follows was refused with `Service account <email> does not
+   * exist` — naming as absent the account the line above had just made. A first
+   * bootstrap died there with the deployer created and none of its twelve roles
+   * attached, and only a second run completed. Reconciling on re-run is not the
+   * same as working.
+   */
+  const gcloud = recorder({ readsBeforeVisible: 2 })
+  const result = await invoke(gcloud.run)
+
+  const grants = gcloud.applied('projects add-iam-policy-binding', 'boxlite-gcp-dev-deploy@')
+  assert.equal(grants.length, 12, 'the deployer did not receive every role')
+  assert.ok(result.deployerEmail.startsWith('boxlite-gcp-dev-deploy@'))
+  // The wait is a read loop, not a blind sleep: it stops as soon as the account
+  // answers, so an immediately consistent API costs one extra read and no time.
+  const probes = gcloud.applied('service-accounts describe', 'boxlite-gcp-dev-deploy@')
+  assert.equal(probes.length, 4, `expected one absent probe, two retries and the answer: ${probes.length}`)
+})
+
+test('an account that never becomes visible is reported rather than waited on forever', async () => {
+  // The budget is finite: the grant below reports its own refusal, which names
+  // the role it was attaching and says more than a timeout here would.
+  const gcloud = recorder({ readsBeforeVisible: 99 })
+  await assert.rejects(() => invoke(gcloud.run), /Could not grant \S+ to boxlite-gcp-dev-deploy@/)
 })
 
 test('neither secret reaches the process table', async () => {
@@ -168,6 +242,7 @@ test('the state bucket never reaches the log', async () => {
     app: 'boxlite',
     stage: 'gcp-dev',
     repository: 'boxlite-app-gcp-dev',
+    immutableTags: true,
     github: GITHUB,
     log: (line) => lines.push(line),
   })
@@ -195,6 +270,7 @@ test('a project number that cannot be read stops the run before anything is crea
         app: 'boxlite',
         stage: 'gcp-dev',
         repository: 'boxlite-app-gcp-dev',
+        immutableTags: true,
         github: GITHUB,
         log: () => {},
       }),

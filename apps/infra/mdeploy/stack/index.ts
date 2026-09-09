@@ -37,7 +37,8 @@ import type { Images, ImagesRequest } from './image.ts'
 import type { Mail, MailProvider } from './mail.ts'
 import { mailEnvironment } from './mail.ts'
 import type { Network, NetworkProvider } from './network.ts'
-import type { RunnerProvider, RunnerSlot, Runners } from './runners.ts'
+import type { RunnerAssignment, RunnerProvider, RunnerSlot, Runners } from './runners.ts'
+import { API_RUNNER_TOKEN_VARIABLE } from './runners.ts'
 import type { Storage, StorageProvider } from './storage.ts'
 import type { DeployConfig } from '../src/config.ts'
 import { alarmsFor, cacheFor, clickHouseFor, databaseFor, runnersFor, storageFor } from '../src/config.ts'
@@ -67,6 +68,14 @@ export type StackInputs = {
   proxyDomain: string
   /** What the proxy speaks to a box. */
   proxyProtocol: string
+  /**
+   * The origin the control plane hands a client composing a box URL.
+   *
+   * Carried into the API's environment rather than derived there: the API takes
+   * it with `getOrThrow`, so a container without it answers `/api/config` with
+   * a 500 — and the proxy reads that route before it forwards a byte.
+   */
+  proxyTemplateUrl: string
   /** Whether private workloads get outbound internet. */
   internetEgress: boolean
   /** The verified sender domain, or null for a stage that sends no mail. */
@@ -115,10 +124,26 @@ export type StackProviders = {
   api: (input: { dependencies: ApiDependencies; network: Network }) => ApiProvider
   edge: (input: { host: WorkloadHost; network: Network; dependsOn: any[] }) => EdgeProvider
   /**
+   * One host's registration token, minted so it survives the next deploy.
+   *
+   * A provider member rather than a `new random.RandomPassword` here, because
+   * nothing else in this file constructs a resource — that property is what
+   * lets a bundle of fakes drive the same wiring. Both engines carry the same
+   * `random` provider, so neither implementation names a cloud.
+   */
+  mintRunnerToken: (name: string) => $util.Input<string>
+  /**
    * No host: a runner is a machine rather than a task, so it takes a placement
    * from the network directly. See `cluster.ts`.
    */
-  runners: (input: { network: Network; dependsOn: any[] }) => RunnerProvider
+  runners: (input: {
+    network: Network
+    /** What registers the hosts the API does not seed. See `runner-registration.ts`. */
+    adminApiKey: $util.Input<string>
+    /** The region those rows go in — the same one the API seeded its own into. */
+    regionId: string
+    dependsOn: any[]
+  }) => RunnerProvider
   alarms: (input: { subjects: AlarmSubjects }) => AlarmProvider
 }
 
@@ -235,17 +260,51 @@ export const deployStack = ({
 
   // The stack's own names last: a stale copy of a database host in the store
   // must not shadow the database this deploy just built.
+  /*
+   * The fleet's tokens, minted before the API because the API spends one.
+   *
+   * Pairing is token-based: the API seeds the first runner's row from
+   * `DEFAULT_RUNNER_API_KEY`, and that host presents the same value as
+   * `BOXLITE_RUNNER_TOKEN`. So the two have to come from one place, and it has
+   * to be a place that runs before the API — which is here, not in a provider.
+   *
+   * One resource name per control-plane name rather than per index, so growing
+   * the fleet mints a new token instead of renumbering the existing ones and
+   * invalidating every row already registered.
+   */
+  const fleet: RunnerAssignment[] = inputs.runnerFleet.map((slot) => ({
+    slot,
+    token: providers.mintRunnerToken(`RunnerToken-${slot.controlPlaneRunnerName}`),
+  }))
+  const defaultRunnerToken = fleet[0]?.token
+  if (defaultRunnerToken === undefined) {
+    throw new Error('the fleet is empty; a stage runs at least one runner, which the API seeds its row from')
+  }
+
   const apiEnvironment = {
     ...inputs.apiEnvironment,
+    // The first host's token, which is the one row the API seeds itself. Every
+    // later host is registered explicitly — see `runner-registration.ts`.
+    [API_RUNNER_TOKEN_VARIABLE]: defaultRunnerToken,
     ...databaseEnvironment(database),
     ...cacheEnvironment(cache),
     ...mailEnvironment(mail),
     ...clickHouseEnvironment(clickhouse, 'reader'),
-    DB_TLS_ENABLED: 'true',
+    /*
+     * `DB_TLS_ENABLED` is not here. It used to be, as a constant `'true'`
+     * written after `databaseEnvironment` and therefore winning over it — which
+     * is fine while every database presents a certificate the image trusts, and
+     * wrong the moment one does not. A Cloud Run workload reaches Cloud SQL
+     * through the platform's proxy, over a socket, and telling the client to
+     * negotiate TLS across it gets `The server does not support SSL
+     * connections`. The database module derives it from `applicationTls`, which
+     * is the one place that knows.
+     */
     OTEL_EXPORTER_OTLP_ENDPOINT: collector.otlpUrl,
     BOX_OTEL_ENDPOINT_URL: collector.otlpUrl,
     PROXY_DOMAIN: inputs.proxyDomain,
     PROXY_PROTOCOL: inputs.proxyProtocol,
+    PROXY_TEMPLATE_URL: inputs.proxyTemplateUrl,
     S3_DEFAULT_BUCKET: storage.name,
   }
   assertOneChannelPerName({
@@ -321,15 +380,35 @@ export const deployStack = ({
     secrets: inputs.runnerSecrets,
     injected: [],
   })
+  /*
+   * What registers the hosts the API will not seed.
+   *
+   * The API seeds one row, from its own `DEFAULT_RUNNER_*`; a fleet of more
+   * than one needs the rest registered through the admin API, which needs that
+   * key. Demanded here rather than where the command is built, because this is
+   * the layer that knows how many hosts there are — a single-host stage needs
+   * none of this and must not be failed for it.
+   */
+  const adminApiKey = inputs.apiEnvironment.ADMIN_API_KEY
+  if (inputs.runnerFleet.length > 1 && adminApiKey === undefined) {
+    throw new Error(
+      `this stage runs ${inputs.runnerFleet.length} runners, and the API seeds only the first — ` +
+        'registering the rest needs ADMIN_API_KEY, which reached the API as an address rather than a value',
+    )
+  }
   const runners: Runners = providers.runners({
     network,
+    adminApiKey: adminApiKey ?? '',
+    // The same region the API seeded its own row into, or that seed and these
+    // registrations would land in two different regions.
+    regionId: (inputs.apiEnvironment.DEFAULT_REGION_ID as string) ?? 'us',
     // A host registers itself with the control plane at first boot, so the
     // control plane has to be answering before one exists.
     dependsOn: [...api.ready],
   })({
     ...runnersFor(config, inputs.stage),
     nestedVirtualization: true,
-    fleet: inputs.runnerFleet,
+    fleet,
     binary: inputs.runnerBinary,
     apiUrl: api.address,
     otlpUrl: collector.otlpUrl,

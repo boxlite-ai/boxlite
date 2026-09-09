@@ -19,7 +19,6 @@ import type { NetworkBinding } from '../../network.ts'
 /** What each requested size answers to, in gigabytes. */
 const MEMORY_GB = { small: 1, medium: 5 } as const
 
-const PORT = '6379'
 
 export const gcpCacheProvider =
   ({
@@ -73,10 +72,50 @@ export const gcpCacheProvider =
       secretData: $util.secret(instance.authString),
     })
 
+    /*
+     * The instance's own CA, put where a workload can be handed it.
+     *
+     * Memorystore signs with a certificate no image trusts, exactly as Cloud
+     * SQL does — but there is no platform proxy for Redis, so the certificate
+     * has to travel. Through Secret Manager rather than as a stack output: a
+     * mounted secret is the delivery channel a Cloud Run workload already has
+     * for a file, and this keeps the CA on the same path as every credential.
+     */
+    const ca = new gcp.secretmanager.Secret('CacheCaSecret', {
+      project,
+      secretId: `${prefix}-cache-ca`,
+      replication: { auto: {} },
+    })
+    const caVersion = new gcp.secretmanager.SecretVersion('CacheCaValue', {
+      secret: ca.id,
+      /*
+       * With a trailing newline, which the API does not return one with.
+       *
+       * A PEM whose final `-----END CERTIFICATE-----` has no newline after it
+       * is not parsed, and nothing says so: OpenSSL skips the block, Node
+       * carries on with the default trust store, and the connection fails with
+       * `unable to verify the first certificate` — the identical error to
+       * having mounted no CA at all.
+       */
+      secretData: instance.serverCaCerts.apply(
+        (certificates: { cert: string }[]) => `${certificates[0]!.cert.trimEnd()}\n`,
+      ),
+    })
+
     return {
-      connection: { host: instance.host, port: $util.output(PORT) },
-      binding: { cloud: 'gcp', passwordRef: version.name, clientGrant: clientAccount },
+      /*
+       * The port the instance reports, not Redis's default.
+       *
+       * Memorystore moves the listener when transit encryption is on: an
+       * instance with `SERVER_AUTHENTICATION` serves 6378, and 6379 is then a
+       * port nothing is bound to. A client dialling the constant does not get
+       * refused, it gets a connect timeout — which reads as a firewall or a
+       * peering problem and sends the reader to look at the network. Asking the
+       * instance is both shorter and true whichever mode it is in.
+       */
+      connection: { host: instance.host, port: instance.port.apply(String) },
+      binding: { cloud: 'gcp', passwordRef: version.name, clientGrant: clientAccount, caRef: caVersion.name },
       id: instance.id,
-      ready: [version],
+      ready: [version, caVersion],
     }
   }

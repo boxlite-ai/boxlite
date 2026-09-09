@@ -26,6 +26,7 @@ type Config struct {
 	OtelTracingEnabled                 bool          `envconfig:"OTEL_TRACING_ENABLED"`
 	OtelEndpoint                       string        `envconfig:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 	OtelHeaders                        string        `envconfig:"OTEL_EXPORTER_OTLP_HEADERS"`
+	OtelGoogleIDToken                  bool          `envconfig:"OTEL_EXPORTER_OTLP_GOOGLE_ID_TOKEN" default:"false"`
 	Environment                        string        `envconfig:"ENVIRONMENT"`
 	ContainerRuntime                   string        `envconfig:"CONTAINER_RUNTIME"`
 	ContainerNetwork                   string        `envconfig:"CONTAINER_NETWORK"`

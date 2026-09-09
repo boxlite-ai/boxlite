@@ -1,25 +1,27 @@
 /*
  * The runner fleet on Compute Engine, with nested virtualization.
  *
- * This is the module BoxLite exists for, and the one where GCP asks for three
- * things AWS asks for none of. Getting any of them wrong produces a host that
- * boots, registers, and fails every box with no `/dev/kvm` — so all three are
- * named here rather than assumed:
+ * This is the module BoxLite exists for, and the one where GCP asks for things
+ * AWS asks for none of. Getting any of them wrong produces a host that boots,
+ * registers, and fails every box with no `/dev/kvm` — so each is named here
+ * rather than assumed:
  *
- *   1. A machine family that can nest. N2, N2D and C3 can; E2 cannot, and the
- *      cheapest machine on this cloud is an E2. `MACHINE` below has no E2 in it
- *      for that reason.
- *   2. `minCpuPlatform` of Haswell or later. Google will otherwise schedule an
- *      older platform and nested virtualization is refused on it.
- *   3. `advancedMachineFeatures.enableNestedVirtualization`, explicitly.
+ *   1. A machine family that can nest. E2 cannot, and the cheapest machine on
+ *      this cloud is an E2; neither can the memory-optimised families, nor the
+ *      AMD-based ones other than N4D. `MACHINE` below is N4 for that reason —
+ *      Intel, current, and the counterpart of the EC2 sizes the AWS side names.
+ *   2. `advancedMachineFeatures.enableNestedVirtualization`, explicitly. The
+ *      family being capable is not the same as the device being present.
+ *   3. The boot disk N4 actually takes, which is Hyperdisk and not Persistent
+ *      Disk. `BOOT_DISK_TYPE` says why.
  *
- * `scripts/deploy/gcp/create-instance.sh` has been doing exactly these three by
- * hand — `--machine-type=n2-standard-4 --min-cpu-platform='Intel Haswell'
- * --enable-nested-virtualization` — for a developer's own box host. This module
- * is that script's content, made part of a deploy, so the fleet a stage runs is
- * described in the same place as everything else it runs.
+ * `scripts/deploy/gcp/create-instance.sh` has been doing this by hand for a
+ * developer's own box host. This module is that script's content, made part of
+ * a deploy, so the fleet a stage runs is described in the same place as
+ * everything else it runs — with the machine family moved forward to N4, which
+ * has one CPU platform and therefore needs no `--min-cpu-platform` floor.
  *
- * The fourth thing that script does is `setup-kvm.sh`: on GCP the guest's
+ * The other thing that script does is `setup-kvm.sh`: on GCP the guest's
  * `/dev/kvm` is owned by `root:kvm` and the account the runner runs as is not
  * in that group, so it has to be added. That is the `prepareKvm` hook, and it
  * is the reason `stack/runner-boot.ts` has one at all.
@@ -31,27 +33,38 @@
 
 import type { Placement } from '../../network.ts'
 import type { RunnerProvider, RunnerRequest, Runners } from '../../runners.ts'
-import { RUNNER_PORT } from '../../runners.ts'
+import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE } from '../../runners.ts'
 import { renderRunnerBoot, type BootPlatform } from '../../runner-boot.ts'
+import {
+  REGISTER_RUNNERS_COMMAND,
+  extraRunnersOf,
+  registrationDir,
+  registrationPayload,
+} from '../../runner-registration.ts'
 import { splitSecretRef } from './secret-env.ts'
 
 /**
  * What each requested size answers to.
  *
- * Every one of these is a family that can nest. E2 — which is what a
- * cost-minimising default would reach for — cannot, and a host on one accepts
- * work and fails every box.
+ * N4, which is this cloud's counterpart of the EC2 instances the AWS side runs:
+ * the current general-purpose family, on Emerald Rapids. Every one of these can
+ * nest — the families that cannot are E2, the memory-optimised ones, and the
+ * AMD-based ones other than N4D, and a host on one of those accepts work and
+ * fails every box.
  */
-const MACHINE = { small: 'n2-standard-4', medium: 'n2-standard-8', large: 'n2-standard-16' } as const
+export const MACHINE = { small: 'n4-standard-4', medium: 'n4-standard-8', large: 'n4-standard-16' } as const
 
 /**
- * The oldest CPU platform that supports nested virtualization.
+ * The only disk type N4 takes.
  *
- * Without this Google may schedule an older one, and the flag above is then
- * accepted and does nothing. The same value `scripts/deploy/gcp/
- * create-instance.sh` passes.
+ * Not a preference: the family does not attach Persistent Disk at all, so the
+ * `pd-balanced` an earlier N2 fleet used is refused at create time rather than
+ * silently downgraded. It is also why no `minCpuPlatform` is set below — N4 has
+ * exactly one platform, and naming an older one (the `Intel Haswell` that N2
+ * needed to be held above its floor) is rejected rather than treated as a
+ * minimum that is already met.
  */
-const MIN_CPU_PLATFORM = 'Intel Haswell'
+export const BOOT_DISK_TYPE = 'hyperdisk-balanced'
 
 const IMAGE = 'ubuntu-os-cloud/ubuntu-2404-lts-amd64'
 
@@ -99,21 +112,21 @@ export const gcpRunnerProvider =
     project,
     zone,
     placement,
+    adminApiKey,
+    regionId,
     dependsOn,
   }: {
     project: string
     /** A zone. An instance is zonal even where its subnet is not. */
     zone: string
     placement: Extract<Placement, { cloud: 'gcp' }>
+    /** What registers the hosts the API does not seed. See `runner-registration.ts`. */
+    adminApiKey: $util.Input<string>
+    /** The region those rows go in — the same one the API seeded its own into. */
+    regionId: string
     dependsOn: any[]
   }): RunnerProvider =>
   (request: RunnerRequest): Runners => {
-    if (placement.exposure !== 'egress-only-public') {
-      throw new Error(
-        `The runner was placed as ${placement.exposure}; it pulls box images constantly and must ` +
-          'egress through its own address rather than queue behind Cloud NAT',
-      )
-    }
 
     const platform: BootPlatform = {
       // Google's metadata server. `Metadata-Flavor` is what distinguishes a
@@ -142,17 +155,41 @@ KVMRULE
 udevadm control --reload-rules
 udevadm trigger --name-match=kvm || true`,
       startWrapper: null,
-      unitEnvironment: { CLOUDSDK_CORE_PROJECT: project },
+      unitEnvironment: {
+        CLOUDSDK_CORE_PROJECT: project,
+        /*
+         * The collector is a Cloud Run service with an invoker list, and that
+         * is enforced per request against a Google ID token — so a host on the
+         * list that sends none is answered 403 by Google's front end and
+         * exports nothing. This tells the runner to mint one from the metadata
+         * server; `apps/libs/common-go/pkg/telemetry/gcp_idtoken.go` says why a
+         * static `OTEL_EXPORTER_OTLP_HEADERS` cannot carry it.
+         *
+         * Only on this cloud: the AWS collector is behind an internal load
+         * balancer that authorises no caller, and a host there has no metadata
+         * server to ask.
+         */
+        OTEL_EXPORTER_OTLP_GOOGLE_ID_TOKEN: 'true',
+      },
     }
 
-    const instances = request.fleet.map((slot) => {
+    const assignments = request.fleet
+
+    const instances = assignments.map(({ slot, token }) => {
       const userData = $resolve([
         request.apiUrl,
         request.otlpUrl,
         request.binary.url,
         request.binary.sha256,
         $resolve(Object.values(request.secrets)),
-      ]).apply(([apiUrl, otlpUrl, url, sha256, references]) => {
+        // Resolved, not cast. See the note in `renderRunnerBoot`: these values
+        // are `Input<string>` and the composition root sets
+        // `OTEL_EXPORTER_OTLP_ENDPOINT` from the collector's own URL, so an
+        // unresolved one is rendered as Pulumi's `[toString]` refusal text and
+        // the host ships telemetry to that instead of to the collector.
+        $resolve(Object.values(request.environment)),
+        token,
+      ]).apply(([apiUrl, otlpUrl, url, sha256, references, resolved, hostToken]) => {
         const secrets = Object.keys(request.secrets).map((name, index) => ({
           name,
           ...splitSecretRef((references as string[])[index] as string),
@@ -163,8 +200,13 @@ udevadm trigger --name-match=kvm || true`,
           binary: { url: url as string, sha256: sha256 as string },
           port: RUNNER_PORT,
           environment: {
-            ...(request.environment as Record<string, string>),
+            ...Object.fromEntries(
+              Object.keys(request.environment).map((name, index) => [name, String((resolved as string[])[index])]),
+            ),
             BOXLITE_RUNNER_NAME: slot.controlPlaneRunnerName,
+            // Last, so this host's own token wins over the fleet-wide one the
+            // store delivered. Every host but the first has its own.
+            [RUNNER_TOKEN_VARIABLE]: hostToken as string,
           },
           platform: { ...platform, startWrapper: startWrapper(secrets) },
         })
@@ -177,18 +219,28 @@ udevadm trigger --name-match=kvm || true`,
           project,
           zone,
           machineType: MACHINE[request.size],
-          // All three, and none of them optional. See the note at the top.
-          minCpuPlatform: MIN_CPU_PLATFORM,
+          // Explicitly, or the device is absent on a machine that can host it.
           advancedMachineFeatures: { enableNestedVirtualization: request.nestedVirtualization },
           bootDisk: {
-            initializeParams: { image: IMAGE, size: request.rootDiskGb, type: 'pd-balanced' },
+            initializeParams: { image: IMAGE, size: request.rootDiskGb, type: BOOT_DISK_TYPE },
           },
           networkInterfaces: [
             {
               subnetwork: placement.subnetwork,
-              // Its own address, so image pulls do not queue behind Cloud NAT.
-              // The firewall admits only the API and the proxy, on one port.
-              accessConfigs: [{}],
+              /*
+               * No external address, and so image pulls go out through Cloud
+               * NAT rather than each host's own.
+               *
+               * The AWS side gives a runner a public address because it pulls
+               * box images constantly and a shared NAT is a shared throughput
+               * ceiling. That reasoning does not survive contact with
+               * `constraints/compute.vmExternalIpAccess`: an organization that
+               * forbids external addresses refuses the instance outright —
+               * `Constraint … violated`, at create — so the choice is Cloud NAT
+               * or no fleet. Cloud NAT it is, and if the ceiling ever bites,
+               * the fix is more NAT addresses rather than a policy exemption
+               * per host.
+               */
             },
           ],
           serviceAccount: { email: placement.serviceAccount, scopes: ['cloud-platform'] },
@@ -212,6 +264,53 @@ udevadm trigger --name-match=kvm || true`,
         },
       )
     })
+
+    /*
+     * The rows the API will not seed.
+     *
+     * Only when there are any: a single-host fleet is complete the moment the
+     * API is up, and creating a command for it would run a script that has
+     * nothing to do on every deploy. `triggers` is what keeps this from
+     * re-running otherwise — the API's address and the payload are the only two
+     * inputs that change the answer.
+     */
+    const extras = extraRunnersOf(assignments)
+    if (extras.length > 0) {
+      const payload = $resolve(extras.map((extra) => extra.token)).apply((tokens) =>
+        registrationPayload({ runners: extras, tokens: tokens as string[] }),
+      )
+      new command.local.Command(
+        'RegisterExtraRunners',
+        {
+          // A local command runs from the engine's own cwd, so the directory
+          // has to be given. Derived rather than read from `$cli`, which only
+          // SST defines — see `runner-registration.ts`.
+          dir: registrationDir(),
+          create: REGISTER_RUNNERS_COMMAND,
+          update: REGISTER_RUNNERS_COMMAND,
+          environment: {
+            API_URL: request.apiUrl,
+            // Sealed in state rather than handed over plain. `local.Command`
+            // marks nothing on this resource secret, so an admin-scoped
+            // control-plane key would otherwise be readable in the checkpoint
+            // by anyone who can read the stage's state bucket.
+            ADMIN_API_KEY: $util.secret(adminApiKey),
+            REGION_ID: regionId,
+            RUNNERS: payload,
+          },
+          // Every input that changes the answer, and nothing secret: the
+          // payload carries the tokens, so it is named here by the ids of the
+          // resources that mint them rather than by its own value.
+          triggers: [
+            request.apiUrl,
+            extras.map((extra) => extra.slot.controlPlaneRunnerName).join(','),
+          ],
+        },
+        // After the hosts exist and after the API answers: the script waits on
+        // /api/health, but a row created before its host is a row nothing holds.
+        { dependsOn: [...instances, ...dependsOn] },
+      )
+    }
 
     return { ids: instances.map((instance) => instance.id), ready: instances }
   }

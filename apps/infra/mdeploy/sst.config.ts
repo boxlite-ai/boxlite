@@ -145,6 +145,7 @@ export default $config({
         domain: stackEnvironment.domain,
         proxyDomain: stackEnvironment.proxyDomain,
         proxyProtocol: stackEnvironment.proxyProtocol,
+        proxyTemplateUrl: stackEnvironment.proxyTemplateUrl,
         // Outbound HTTPS for the private workloads, through the NAT. Inbound is
         // the load balancers' alone; this is the other direction, which every
         // image pull needs.

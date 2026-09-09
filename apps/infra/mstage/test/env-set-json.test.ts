@@ -53,7 +53,7 @@ const harness = ({
     written: () => (puts.length > 0 ? opened(puts[puts.length - 1].Body) : null),
     run: (positionals: string[] = [], options: Record<string, string | boolean> = {}) =>
       set({
-        config: { path: '/repo/mstage.config.json', home, envSelectGroup: groups, envDigest: digest } as any,
+        config: { path: '/repo/mstage.config.json', home, envSelectGroup: groups, envOptional: {}, envDigest: digest } as any,
         scope: { app: 'a', stage: 'dev', protect: false } as any,
         positionals,
         options,

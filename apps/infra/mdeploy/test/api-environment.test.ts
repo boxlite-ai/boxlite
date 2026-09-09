@@ -184,7 +184,11 @@ test('the deploy group demands only what a deploy cannot run without', () => {
       'CLOUDFLARE_API_TOKEN',
       'CLOUDFLARE_DEFAULT_ACCOUNT_ID',
       'CLOUDFLARE_ZONE_ID',
-      'IAM_PERMISSIONS_BOUNDARY_STAGE',
+      // IAM_PERMISSIONS_BOUNDARY_STAGE is optional, not absent: it names an AWS
+      // permissions boundary that only the incumbent SST path reads
+      // (`deployment/environment.ts`), and demanding it of every stage means
+      // demanding an AWS concept of a stage that has no AWS in its deploy path
+      // at all. That path still refuses when it is genuinely missing.
       'OIDC_ISSUER_BASE_URL',
       'PROXY_DOMAIN',
       'STACK_DOMAIN',

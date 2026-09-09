@@ -44,6 +44,11 @@ func InitLogger(ctx context.Context, logger *slog.Logger, config Config) (*slog.
 	if config.TLSConfig != nil {
 		logOpts = append(logOpts, otlploghttp.WithTLSClientConfig(config.TLSConfig))
 	}
+	if config.GoogleIDTokenAudience != "" {
+		// Adds an Authorization header per request; everything else about the
+		// exporter's transport is left alone.
+		logOpts = append(logOpts, otlploghttp.WithHTTPClient(newGoogleIDTokenClient(config.GoogleIDTokenAudience, nil)))
+	}
 	exporter, err := otlploghttp.New(ctx, logOpts...)
 	if err != nil {
 		return logger, nil, fmt.Errorf("failed to create OTLP log exporter: %w", err)

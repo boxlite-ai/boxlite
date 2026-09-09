@@ -31,10 +31,30 @@ export type DatabaseRequest = {
 
 /** Everything a client needs except the password, which is never a value here. */
 export type DatabaseConnection = {
+  /**
+   * A hostname, or a Unix socket directory when it begins with `/`.
+   *
+   * `pg` reads the second form as a socket, which is how a Cloud Run workload
+   * reaches Cloud SQL through the proxy the platform builds in.
+   */
   host: $util.Output<string>
   port: $util.Output<string>
   username: $util.Output<string>
   database: $util.Output<string>
+  /**
+   * Whether the *client* encrypts, which is not the same as whether the
+   * connection is encrypted.
+   *
+   * RDS presents a certificate chaining to a root the image already trusts, so
+   * the client does the encrypting and this is true. Cloud SQL signs with a CA
+   * of its own per instance, and a client that verifies against the public
+   * trust store gets `UNABLE_TO_VERIFY_LEAF_SIGNATURE` — so a GCP workload
+   * connects through the platform's proxy instead, which authenticates as the
+   * workload's own service account and takes a short-lived client certificate
+   * per connection. The traffic is encrypted either way; only who encrypts it
+   * differs, and this is that.
+   */
+  applicationTls: boolean
 }
 
 /**
@@ -70,6 +90,12 @@ export type DatabaseBinding =
       passwordRef: $util.Output<string>
       /** A service account email, attached through a service's `serviceAccount`. */
       clientGrant: $util.Output<string>
+      /**
+       * `<project>:<region>:<instance>`, which a Cloud Run workload mounts to
+       * get the proxy's socket. On AWS there is nothing to mount: the client
+       * opens a TCP connection to a host and there is no platform in between.
+       */
+      connectionName: $util.Output<string>
     }
 
 export type Database = {
@@ -100,9 +126,16 @@ export const DATABASE_PASSWORD_VARIABLE = 'DB_PASSWORD'
  * edit here rather than a hunt through providers. The password is not among
  * them: it arrives through `binding`, by reference.
  */
-export const databaseEnvironment = (database: Database): Record<string, $util.Output<string>> => ({
+export const databaseEnvironment = (database: Database): Record<string, $util.Input<string>> => ({
   DB_HOST: database.connection.host,
   DB_PORT: database.connection.port,
   DB_USERNAME: database.connection.username,
   DB_DATABASE: database.connection.database,
+  /*
+   * Derived from the connection rather than set per provider: the two are one
+   * decision, and a socket host with the client still encrypting is a container
+   * that cannot start. A plain string, not an output — nothing about it is
+   * discovered while the stack runs, and an `Input` is what the consumer takes.
+   */
+  DB_TLS_ENABLED: String(database.connection.applicationTls),
 })

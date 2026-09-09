@@ -58,7 +58,7 @@ test('an unknown module or command lists what exists', async () => {
 test('a provider this repository does not declare is refused', async () => {
   await assert.rejects(
     () => run({ argv: ['login', 'okta'], environment: {}, log() {} }),
-    /This repository does not use "okta"\. mstage\.config\.json declares: aws, github, auth0/,
+    /This repository does not use "okta"\. mstage\.config\.json declares: aws, gcp, github, auth0/,
   )
 })
 

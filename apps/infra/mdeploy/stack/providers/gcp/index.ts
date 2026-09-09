@@ -14,9 +14,7 @@
  * the runner's identities, and the collector is handed all three. On AWS
  * nothing is passed, because the network already arranged it.
  *
- * Nothing here has been deployed. Every provider typechecks against
- * `@pulumi/gcp`; there is no project, no network and no billing to run them
- * against.
+ * Applied against a real project: the `dev2` stage in `asia-southeast1`.
  */
 
 import type { StackProviders } from '../../index.ts'
@@ -45,20 +43,23 @@ const placement = (network: Network, role: Parameters<Network['placementFor']>[0
   onGcp(network.placementFor(role), 'placement')
 
 /**
- * A zone in the stage's region.
+ * A zone in the stage's region: the one declared, or the region's first.
  *
  * An instance is zonal even where a subnet is not, so the two resources that
- * are machines — ClickHouse and the runners — need one. Derived rather than
- * declared: `mstage.config.json` names a region, and a second setting for the
- * zone inside it would be one more thing to keep in step for a value that only
- * ever means "the first one".
+ * are machines — ClickHouse and the runners — need one. The default is derived
+ * because "the first one" is what a stage with nothing to say about placement
+ * means, and the override exists because that default can simply be unavailable:
+ * a machine family is stocked per zone, and `asia-southeast1-a` refuses an N4
+ * with `stockout` while `-b` creates one. A derived-only zone makes that a
+ * deploy nothing can fix without editing this file.
  */
-const zoneIn = (region: string): string => `${region}-a`
+const zoneIn = (region: string, declared: string | null): string => declared ?? `${region}-a`
 
 export const gcpStackProviders = ({
   stage,
   region,
   project,
+  zone: declaredZone = null,
   domain,
   zoneId,
   relayHost = null,
@@ -68,6 +69,8 @@ export const gcpStackProviders = ({
   stage: string
   region: string
   project: string
+  /** The zone machines are created in, or null for the region's first. */
+  zone?: string | null
   /** The hostname the dashboard and the SDKs reach the control plane on. */
   domain: string
   /** The Cloudflare zone every public record is written into. */
@@ -77,7 +80,7 @@ export const gcpStackProviders = ({
   managedClickHouse?: { url: string; writerSecretArn: string; readerSecretArn: string } | null
   notificationChannels?: string[]
 }): StackProviders => {
-  const zone = zoneIn(region)
+  const zone = zoneIn(region, declaredZone)
 
   return {
     images: gcpImages({ stage, region, project }),
@@ -140,12 +143,34 @@ export const gcpStackProviders = ({
         callers: [placement(network, 'proxy').serviceAccount, placement(network, 'runner').serviceAccount],
         zoneId,
       }),
-    // Not a Cloud Run service: the proxy reads the SNI name itself, which needs
-    // a layer-4 path no Cloud Run front end offers. See `edge.ts`.
+    // Not a Cloud Run service: Cloud Run cannot be a backend of the balancer
+    // this needs, so the proxy runs on VMs. See `edge.ts`.
     edge: ({ network, dependsOn }) =>
-      gcpEdgeProvider({ project, region, placement: placement(network, 'proxy'), zoneId, dependsOn }),
-    runners: ({ network, dependsOn }) =>
-      gcpRunnerProvider({ project, zone, placement: placement(network, 'runner'), dependsOn }),
+      gcpEdgeProvider({
+        project,
+        region,
+        zone,
+        placement: placement(network, 'proxy'),
+        // The network itself, because a firewall rule attaches to one. The
+        // placement carries only a subnetwork, and the two are not derivable
+        // from each other by string surgery — see the note in `edge.ts`.
+        network: binding(network).network,
+        zoneId,
+        dependsOn,
+      }),
+    // 64 alphanumeric characters: the value travels through a systemd
+    // EnvironmentFile and a JSON payload, and punctuation would drag quoting
+    // rules into both.
+    mintRunnerToken: (name) => new random.RandomPassword(name, { length: 64, special: false }).result,
+    runners: ({ network, adminApiKey, regionId, dependsOn }) =>
+      gcpRunnerProvider({
+        project,
+        zone,
+        placement: placement(network, 'runner'),
+        adminApiKey,
+        regionId,
+        dependsOn,
+      }),
     alarms: ({ subjects }) => gcpAlarmProvider({ subjects, project, notificationChannels }),
   }
 }

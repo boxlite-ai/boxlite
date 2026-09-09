@@ -142,6 +142,7 @@ test('a stage that was never written has nothing to remove', async () => {
 const CONFIG = {
   path: '/repo/mstage.config.json',
   envSelectGroup: { deploy: ['KEPT', 'DIGEST'] },
+  envOptional: {},
   envDigest: { key: 'DIGEST', group: 'deploy' },
 } as any
 

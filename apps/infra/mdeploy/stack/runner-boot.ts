@@ -15,11 +15,25 @@
  * `scripts/deploy/gcp/setup-kvm.sh` has been doing by hand. A shared renderer
  * with an explicit hook is what stops that from being a step someone remembers.
  *
- * No secret is ever written into this script. The registration token is the one
- * value that looks like an exception and is not: it reaches the unit file
- * through a fetch the hook renders, for the same reason the registry credential
- * does — a value baked in here would be readable from the instance metadata by
- * anything running on the host, which on a runner is untrusted code by design.
+ * One secret is written into this script, deliberately: the registration token.
+ *
+ * That is a decision and not an oversight, so it is recorded here rather than
+ * left for someone to "fix". Everything else a host reads — a private registry
+ * credential, anything the store marks as an address — still reaches the unit
+ * through the fetch the `startWrapper` hook renders, and must keep doing so.
+ *
+ * The cost is real and known: this script *is* the instance metadata, so the
+ * token is readable by anything running on the host, and what runs on a runner
+ * is untrusted code by design. It is readable off the API too, by any caller
+ * holding no more than `compute.instances.get` — no login required. Anyone
+ * holding it can speak to the control plane as that runner.
+ *
+ * It was accepted to keep the token out of a secret store: the value has to be
+ * the same one the API seeded the row from, and routing it through a per-cloud
+ * store adds a resource, a grant and a fetch to the one path that must work on
+ * a host nobody can log into. If that trade is ever revisited, the machinery is
+ * already here — deliver the token as an address in `RunnerRequest.secrets` and
+ * the wrapper fetches it like any other secret.
  */
 
 /** What one cloud contributes to the boot script. */

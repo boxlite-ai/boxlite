@@ -10,11 +10,17 @@
  * from the service — and a stage whose DNS zone cannot be written is a stage
  * where no box is reachable, which is worth failing the deploy over.
  *
- * The second is that TLS terminates at the proxy rather than at the load
- * balancer. The load balancer is a layer-4 passthrough on both clouds — an NLB
- * with a `443/tls` listener on AWS, a passthrough forwarding rule on GCP — so
- * `protocol` is what the proxy is told to speak, not something the balancer
- * negotiates on its behalf.
+ * The second is that TLS terminates at the *balancer* on both clouds, and the
+ * container is handed plaintext. That is what an NLB `443/tls` listener does on
+ * AWS and what a target SSL proxy does on GCP, and it is safe because the
+ * routing reads the Host header rather than SNI — a Host header survives
+ * termination. `protocol` is therefore what the proxy composes URLs with, not
+ * something it negotiates: the balancer already did that.
+ *
+ * Worth stating because the opposite was written here for a while, and the GCP
+ * provider was built as a real passthrough to honour it. Nothing in
+ * `apps/proxy` can obtain a certificate — it serves two files something else
+ * must place — so a passthrough left every box hostname failing its handshake.
  *
  * The topology is protected on both clouds. A replacement that swapped the
  * listener before the new target was attached would take every running box

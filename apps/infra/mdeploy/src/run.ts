@@ -77,13 +77,26 @@ export const run = async ({
   const { options, inner } = parseInvocation(['deploy', ...argv], environment, OWN_OPTIONS)
   if (inner) throw new UsageError(`mdeploy takes no inner command. ${USAGE}`)
 
-  // Ask mstage first: a deploy that starts without a usable session fails later
-  // and more expensively than one that never starts.
-  const signedIn = await checkLogin({ argv: ['login'], environment, cwd, log })
-  if (signedIn !== 0) throw new UsageError('Required sign-ins are missing; run `npm run mstage login -- -f` first')
-
   const config = loadConfig({ cwd, environment })
   const scope = resolveScope({ options: options as Options, config, environment })
+
+  /*
+   * Ask mstage first: a deploy that starts without a usable session fails later
+   * and more expensively than one that never starts.
+   *
+   * Named with the stage, because which sign-ins this deploy needs is the
+   * stage's question rather than the repository's. A repository with stages in
+   * both clouds declares both, and without the stage an expired session in the
+   * cloud this deploy does not touch refuses it — which is what an AWS session
+   * timing out did to a GCP stage that needed no AWS credential at all.
+   */
+  const signedIn = await checkLogin({
+    argv: ['login', ...(scope.stage ? ['--stage', scope.stage] : [])],
+    environment,
+    cwd,
+    log,
+  })
+  if (signedIn !== 0) throw new UsageError('Required sign-ins are missing; run `npm run mstage login -- -f` first')
   if (options.diff === true && options.remove === true) {
     throw new UsageError('--diff and --remove ask for opposite things; name one')
   }

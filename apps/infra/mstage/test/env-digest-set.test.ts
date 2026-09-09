@@ -40,6 +40,7 @@ const harness = (stored: Record<string, string>, envDigest: unknown) => {
         config: {
           path: '/repo/mstage.config.json',
           envSelectGroup: { deploy: ['A', 'B', 'D'] },
+          envOptional: {},
           envDigest,
         } as any,
         scope: { app: 'a', stage: 'dev', protect: false } as any,

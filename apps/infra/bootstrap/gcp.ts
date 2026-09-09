@@ -108,6 +108,10 @@ const SERVICES = [
   'storage.googleapis.com',
   // The repository a stage's images are published into.
   'artifactregistry.googleapis.com',
+  // certificatemanager.DnsAuthorization, Certificate, CertificateMap and
+  // CertificateMapEntry: the box proxy's wildcard certificate, which only
+  // Certificate Manager can issue as a Google-managed one.
+  'certificatemanager.googleapis.com',
   // serviceaccount.Account and the workload identity pool this file creates.
   'iam.googleapis.com',
   // Minting tokens for a federated identity, which is how CI signs in at all.
@@ -497,12 +501,14 @@ const ensureServiceAccount = async ({
   email,
   description,
   log,
+  wait,
 }: {
   gcloud: Gcloud
   id: string
   email: string
   description: string
   log: (line: string) => void
+  wait: (milliseconds: number) => Promise<unknown>
 }): Promise<void> => {
   if (await gcloud.present(['iam', 'service-accounts', 'describe', email])) {
     log('    already exists')
@@ -516,6 +522,52 @@ const ensureServiceAccount = async ({
     `--description=${description}`,
   ])
   log('    created')
+  await waitUntilVisible({ gcloud, email, log, wait })
+}
+
+/**
+ * How long to keep asking whether a new service account exists yet.
+ *
+ * Five reads a second apart. The observed gap was under one; the budget is
+ * generous because the cost of waiting is a few seconds on the one run that
+ * creates the account, and the cost of not waiting is a bootstrap that dies
+ * halfway through with an account created and none of its roles granted.
+ */
+const VISIBILITY_READS = 5
+const VISIBILITY_INTERVAL_MS = 1_000
+
+/**
+ * Waits for a just-created service account to be readable.
+ *
+ * `create` returns before the account is visible to the IAM policy API, so the
+ * grant that follows can be refused with `Service account <email> does not
+ * exist` — naming, as absent, the account the line above just made. It is a
+ * propagation window and not a failure, but it is indistinguishable from one at
+ * the call site, which is why it is closed here rather than reported.
+ *
+ * This is what stopped `bootstrapGcp` from being the reconcile its own comment
+ * promises: a first run created the deployer, failed every role on it, and only
+ * a second run — by which point the account was visible — completed. Silent
+ * recovery by re-running is not the same as working.
+ */
+const waitUntilVisible = async ({
+  gcloud,
+  email,
+  log,
+  wait,
+}: {
+  gcloud: Gcloud
+  email: string
+  log: (line: string) => void
+  wait: (milliseconds: number) => Promise<unknown>
+}): Promise<void> => {
+  for (let read = 0; read < VISIBILITY_READS; read += 1) {
+    if (await gcloud.present(['iam', 'service-accounts', 'describe', email])) return
+    await wait(VISIBILITY_INTERVAL_MS)
+  }
+  // Not thrown: the grant below reports its own refusal with the role it was
+  // trying to attach, which says more than a timeout here would.
+  log('    still not readable; the grants below may need a second run')
 }
 
 /** Project-level roles. `add-iam-policy-binding` is idempotent by design. */
@@ -581,16 +633,28 @@ const allowImpersonation = async ({
   ])
 }
 
-/** The repository a stage's images are published into. */
+/**
+ * The repository a stage's images are published into.
+ *
+ * `immutableTags` is `mbuild.config.json`'s declaration, carried here rather
+ * than decided here, because this is the only moment it can be honoured: the
+ * setting is fixed when the repository is created and there is no command that
+ * changes it afterwards. A repository made without it is one where a deployed
+ * commit tag can still be repointed under a running service — and mbuild refuses
+ * to publish into that mismatch rather than quietly dropping the guarantee, so
+ * getting it wrong here costs a repository that has to be deleted by hand.
+ */
 const ensureRepository = async ({
   gcloud,
   repository,
   region,
+  immutableTags,
   log,
 }: {
   gcloud: Gcloud
   repository: string
   region: string
+  immutableTags: boolean
   log: (line: string) => void
 }): Promise<void> => {
   log(`==> ${repository}`)
@@ -605,9 +669,10 @@ const ensureRepository = async ({
     repository,
     '--repository-format=docker',
     `--location=${region}`,
+    ...(immutableTags ? ['--immutable-tags'] : []),
     '--description=BoxLite’s api and otel-collector images',
   ])
-  log('    created')
+  log(`    created${immutableTags ? ' with immutable tags' : ''}`)
 }
 
 export type GcpBootstrapInput = {
@@ -620,8 +685,15 @@ export type GcpBootstrapInput = {
   stage: string
   /** Which docker repository this stage publishes into, from `mbuild.config.json`. */
   repository: string
+  /** Whether that repository's tags are fixed once written. Same file's declaration. */
+  immutableTags: boolean
   github: GitHubRepository
   log: (line: string) => void
+  /**
+   * How this waits out a propagation window. Injected for the same reason
+   * `run` is: a test proves the retry happens without spending the seconds.
+   */
+  wait?: (milliseconds: number) => Promise<unknown>
 }
 
 /** What was created, for the caller to wire into GitHub. gcp.ts never calls `gh` itself. */
@@ -648,8 +720,10 @@ export const bootstrapGcp = async ({
   app,
   stage,
   repository,
+  immutableTags,
   github,
   log,
+  wait = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 }: GcpBootstrapInput): Promise<GcpBootstrapResult> => {
   const gcloud = gcloudFor({ run, project })
 
@@ -678,6 +752,7 @@ export const bootstrapGcp = async ({
     email: deployerEmail,
     description: `Deploys BoxLite's ${stage} stage, assumed by GitHub Actions in the ${stage} environment`,
     log,
+    wait,
   })
   await grantProjectRoles({ gcloud, project, email: deployerEmail, roles: DEPLOYER_ROLES, log })
   // One stage, one environment: the same claim the AWS deploy role trusts.
@@ -693,6 +768,7 @@ export const bootstrapGcp = async ({
     email: publisherEmail,
     description: "Publishes BoxLite's images, assumed by GitHub Actions",
     log,
+    wait,
   })
   await grantProjectRoles({ gcloud, project, email: publisherEmail, roles: PUBLISHER_ROLES, log })
   /*
@@ -706,7 +782,7 @@ export const bootstrapGcp = async ({
   await allowImpersonation({ gcloud, email: publisherEmail, projectNumber, pool, attribute: 'environment', value: stage })
   log(`    refs/heads/main and environment ${stage} may act as it`)
 
-  await ensureRepository({ gcloud, repository, region, log })
+  await ensureRepository({ gcloud, repository, region, immutableTags, log })
 
   log('')
   log('The state bucket is deliberately not returned; mstage reads it from')

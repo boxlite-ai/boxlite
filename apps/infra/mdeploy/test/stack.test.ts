@@ -53,6 +53,7 @@ const inputs = (overrides: Partial<StackInputs> = {}): StackInputs => ({
   domain: 'dev.boxlite.ai',
   proxyDomain: 'box.dev.boxlite.ai',
   proxyProtocol: 'http',
+  proxyTemplateUrl: 'http://box.dev.boxlite.ai',
   internetEgress: true,
   senderDomain: 'mail.dev.boxlite.ai',
   runnerBinary: { url: 'https://example.invalid/runner.tar.gz', sha256: 'b'.repeat(64), source: 'release' },
@@ -67,6 +68,24 @@ const inputs = (overrides: Partial<StackInputs> = {}): StackInputs => ({
   runnerSecrets: {},
   ...overrides,
 })
+
+/**
+ * A fleet of the given control-plane names, shaped as `fleetFrom` shapes one.
+ *
+ * The first slot keeps the resource name `Runner`; every later one is numbered.
+ * Copied in that detail on purpose — a test that invented its own naming would
+ * pass while the real fleet renamed a host, which replaces a machine.
+ */
+const fleetOf = (...names: string[]) =>
+  names.map((controlPlaneRunnerName, index) =>
+    index === 0
+      ? { resourceName: 'Runner', nameTag: 'boxlite-runner-default', controlPlaneRunnerName }
+      : {
+          resourceName: `Runner-runner-${index + 1}`,
+          nameTag: `boxlite-runner-${index + 1}`,
+          controlPlaneRunnerName,
+        },
+  )
 
 const clickHouseFake = (active: boolean): ClickHouse =>
   active
@@ -165,6 +184,9 @@ const bundle = ({ clickhouse = true }: { clickhouse?: boolean } = {}) => {
       }),
     edge: (input: any) => (request: any) =>
       record('edge', { input, request, url: out('https://box.dev.boxlite.ai'), metricTarget: out('net/proxy/1'), ready: ['edge'] }),
+    // Named by what it mints, so a test can tell one host's token from another's
+    // — which is the whole property `RunnerAssignment` exists to hold.
+    mintRunnerToken: (name: string) => `minted:${name}`,
     runners: (input: any) => (request: any) =>
       record('runners', { input, request, ids: [out('i-runner')], ready: ['runners'] }),
     alarms: (input: any) => (request: any) => record('alarms', { input, request }),
@@ -207,6 +229,25 @@ test('the stack’s own names win over a stale copy in the store', () => {
   assert.equal(environment.OIDC_AUDIENCE, 'boxlite', 'and a name only the store decides is carried through')
 })
 
+test('the API is told the origin a client composes a box URL from', () => {
+  /*
+   * `ConfigurationDto` takes `proxy.templateUrl` with `getOrThrow`
+   * (`apps/api/src/config/dto/configuration.dto.ts`), so a container without
+   * `PROXY_TEMPLATE_URL` answers `/api/config` with a 500. The box proxy reads
+   * that exact route before it forwards a byte — `get BoxLite API config`, ten
+   * attempts, then it exits — so the whole edge stays down while the API's own
+   * `/api/health` keeps answering 200 and the deploy reports success.
+   *
+   * The incumbent path carries it (`stack/api.ts`); this one dropped it, and
+   * `PROXY_TEMPLATE_URL` appeared nowhere under `mdeploy/` at all. Observed on
+   * `dev2`: two proxy hosts the balancer never called healthy, with nothing in
+   * the apply having failed.
+   */
+  const { providers, seen } = bundle()
+  deployStack({ providers, config, inputs: inputs({ proxyTemplateUrl: 'https://box.dev.boxlite.ai' }) })
+  assert.equal(read(seen.api.request.environment.PROXY_TEMPLATE_URL), 'https://box.dev.boxlite.ai')
+})
+
 test('a name the store delivers as an address and the stack also carries is refused', () => {
   // Two entries for one variable: an ECS task takes the last one written and a
   // Cloud Run revision refuses the pair, so the divergence is refused here
@@ -238,6 +279,37 @@ test('each workload reads its own group and no other', () => {
   assert.deepEqual(Object.keys(seen.edge.request.secrets), ['PROXY_API_KEY'])
   assert.deepEqual(Object.keys(seen.collector.request.secrets), ['OTEL_COLLECTOR_API_KEY'])
   assert.deepEqual(Object.keys(seen.runners.request.secrets), ['DEFAULT_RUNNER_API_KEY'])
+})
+
+test('the API and the first host are handed the same minted token', () => {
+  // Pairing is token-based: the API seeds the first runner's row from
+  // DEFAULT_RUNNER_API_KEY and that host presents the same value as
+  // BOXLITE_RUNNER_TOKEN. Two different values is a host that boots, is
+  // answered 401 on every call it makes, and never reports in — which is what a
+  // provider minting its own token after the API was built would produce.
+  const { providers, seen } = bundle()
+  deployStack({ providers, config, inputs: inputs({ runnerFleet: fleetOf('default', 'runner-2'), apiEnvironment: { ADMIN_API_KEY: 'admin' } }) })
+
+  const forApi = seen.api.request.environment.DEFAULT_RUNNER_API_KEY
+  const forHost = seen.runners.request.fleet[0].token
+  assert.equal(forApi, forHost, 'the API seeds the row this host authenticates against')
+  assert.equal(forApi, 'minted:RunnerToken-default')
+})
+
+test('every host gets its own token, named after the row it will hold', () => {
+  // A shared token makes two hosts one identity to the control plane: whichever
+  // reported last owns the row, and the other's work is attributed to it. The
+  // resource name follows the control-plane name rather than the index, so
+  // growing the fleet does not renumber tokens already registered.
+  const { providers, seen } = bundle()
+  deployStack({ providers, config, inputs: inputs({
+      runnerFleet: fleetOf('default', 'runner-2', 'runner-3'),
+      apiEnvironment: { ADMIN_API_KEY: 'admin' },
+    }) })
+
+  const tokens = seen.runners.request.fleet.map((assignment: any) => assignment.token)
+  assert.deepEqual(tokens, ['minted:RunnerToken-default', 'minted:RunnerToken-runner-2', 'minted:RunnerToken-runner-3'])
+  assert.equal(new Set(tokens).size, tokens.length, 'two hosts sharing a token are one identity to the control plane')
 })
 
 test('a stage with no telemetry runs the BoxLite exporter alone', () => {

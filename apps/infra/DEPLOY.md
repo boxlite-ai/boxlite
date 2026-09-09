@@ -62,7 +62,8 @@ differs:
 "stages": {
   "dev":     { "region": "ap-southeast-1" },
   "prod":    { "region": "ap-southeast-1", "protect": true },
-  "gcp-dev": { "home": "gcp", "region": "asia-southeast1", "project": "boxlite-gcp-dev" }
+  "dev2":    { "home": "gcp", "region": "asia-southeast1", "project": "avid-vine-500315-u4",
+             "zone": "asia-southeast1-b" }
 }
 ```
 
@@ -90,26 +91,43 @@ Written down rather than smoothed over:
 | clickhouse | EC2 + retained EBS, schema reconciled over SSM | GCE + retained disk, schema applied at boot |
 | mail | SES, DKIM and DMARC verified | nothing — Google has no sending service; a relay is named or mail is off |
 | api | ECS behind an ALB and a CDN | Cloud Run behind a global load balancer |
-| edge | ECS behind an NLB with `443/tls` | **a managed instance group** behind a passthrough load balancer |
-| runners | EC2, `cpuOptions.nestedVirtualization` | GCE, an N2 family, `minCpuPlatform` and `enableNestedVirtualization` |
+| edge | ECS behind an NLB with `443/tls` | **a managed instance group** behind a global proxy load balancer, wildcard via Certificate Manager |
+| runners | EC2, `cpuOptions.nestedVirtualization` | GCE, an N4 family, Hyperdisk and `enableNestedVirtualization` |
 | alarms | CloudWatch on emitted counters | alert policies on log-based metrics |
 
 Two of those are worth reading the file for.
 
-**The proxy is not a Cloud Run service.** It terminates TLS itself so it can
-read the SNI name — `<port>-<boxid>.<domain>` — and decide which runner holds
-that box. Google offers exactly one load balancer that does not terminate on the
-way in, and Cloud Run cannot be a backend of it. So the GCP proxy runs on
-container-optimised VMs, which costs a machine per zone the AWS side does not
-spend. `stack/providers/gcp/edge.ts` says so at the top.
+**The proxy is not a Cloud Run service.** Cloud Run cannot be a backend of the
+load balancer it needs, so the GCP proxy runs on container-optimised VMs, which
+costs a machine per zone the AWS side does not spend.
+
+The balancer *terminates*, on both clouds. This document and three file headers
+used to say the opposite — that the proxy reads the SNI name itself and needs a
+layer-4 path. It does not: it routes on the Host header (`parseHost` in
+`apps/proxy/pkg/proxy/get_box_target.go`), and the AWS side's `443/tls` NLB
+listener terminates too, handing the task plaintext. Built as a real passthrough,
+the GCP edge served no certificate at all — `apps/proxy` has no ACME client and
+reads two files nothing placed — so every box hostname failed its handshake.
+`stack/providers/gcp/edge.ts` says all of this at the top.
 
 **A runner needs three things on GCP that it needs none of on AWS**: a machine
-family that can nest (E2 cannot), `minCpuPlatform` of Haswell or later, and
-`enableNestedVirtualization` set explicitly — plus the guest's `/dev/kvm` made
-readable by the account the runner runs as. Those are exactly what
+family that can nest (E2 cannot, and nor do the AMD families but N4D),
+`enableNestedVirtualization` set explicitly, and a Hyperdisk boot disk — N4
+attaches no Persistent Disk at all, so the `pd-balanced` an N2 fleet used is a
+create-time refusal rather than a slower disk. Plus the guest's `/dev/kvm` made
+readable by the account the runner runs as. Those are what
 `scripts/deploy/gcp/create-instance.sh` and `setup-kvm.sh` have been doing by
 hand for a developer's own box host; `stack/providers/gcp/runners.ts` and
-`stack/runner-boot.ts` make them part of a deploy.
+`stack/runner-boot.ts` make them part of a deploy. No `minCpuPlatform`: N4 has
+one CPU platform, and naming an older one is rejected rather than read as a
+floor already met.
+
+**A zone is declared, not derived.** `mstage.config.json` takes an optional
+`zone` beside the region, and the two machines in the stack — the runners and a
+self-hosted ClickHouse — are created in it. The default is the region's first,
+and the reason it is overridable is that a machine family is stocked per zone:
+`asia-southeast1-a` answers `stockout` for an N4 while `-b` creates one, and a
+derived-only zone makes that a deploy nothing can fix without editing code.
 
 ## Commands
 
@@ -136,12 +154,12 @@ npm run mdeploy -- --stage dev --remove --confirm
 
 | | |
 |---|---|
-| mstage — sign-ins, the store, digests, object versions, state repair | 327 tests |
-| mbuild — addresses, the publish sequence, the scan gate, the workflow | 58 tests |
-| mdeploy — the plan, both configs, the environment, the wiring, both bundles | 82 tests |
-| the incumbent stack and its release guards, plus `bootstrap/gcp.ts` | 522 tests |
+| mstage — sign-ins, the store, digests, object versions, state repair | 357 tests |
+| mbuild — addresses, the publish sequence, the scan gate, the workflow | 64 tests |
+| mdeploy — the plan, both configs, the environment, the wiring, both bundles | 134 tests |
+| the incumbent stack and its release guards, plus `bootstrap/gcp.ts` | 527 tests |
 | mstage, mbuild **and mdeploy** typecheck | `tsc` clean, without `sst install` |
-| every GCP provider, applied | **never run** — no project, no network, no billing |
+| every GCP provider, applied | `dev2`, in `asia-southeast1` |
 
 `mdeploy` being inside the typecheck is the one place this diverges from the
 repository the pattern came from, where it was left outside. `globals.d.ts`
@@ -152,16 +170,26 @@ file says so.
 
 ## What is left
 
-- **A GCP account.** The deploy path is written, typechecked and tested, and
-  `bootstrap/gcp.ts` now creates everything an identity needs beyond the
-  project itself — the enabled APIs, the state bucket, the workload identity
-  pool, the deployer and publisher service accounts, the Artifact Registry
-  repository — and wires `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEPLOYER` and
-  `GCP_IMAGE_PUBLISHER` into GitHub the same way the AWS half already wires
-  its own role ARN. What is still manual is the project and its billing
-  account: nothing here creates either, and no bootstrap can — a project
-  needs a parent to be created under, and enabling billing needs a billing
-  account already linked to it.
+- **A person's own grants.** `bootstrap/gcp.ts` creates everything an identity
+  needs beyond the project — the enabled APIs, the state bucket, the workload
+  identity pool, the deployer and publisher service accounts, the Artifact
+  Registry repository — and wires `GCP_WORKLOAD_IDENTITY_PROVIDER`,
+  `GCP_DEPLOYER` and `GCP_IMAGE_PUBLISHER` into GitHub the same way the AWS
+  half wires its own role ARN. `DEPLOYER_ROLES` is what CI federates into; a
+  *local* deploy runs as the person's application default credentials and holds
+  none of it, so the first local apply fails on whichever role that person
+  lacks — `roles/servicenetworking.networksAdmin`, for the Private Service
+  Access peering, is the one it reaches first. Impersonating the deployer
+  instead of granting the person is the shape this should take. Still manual
+  either way: the project and its billing account, which no bootstrap can
+  create.
+- **Building the images on a workstation.** `mbuild publish` builds locally, and
+  on Apple Silicon the api image cannot be built at all: colima's VM is aarch64
+  with no buildx, and under QEMU `cpu-features`' gyp build segfaults compiling
+  its own sources. `DOCKER_DEFAULT_PLATFORM=linux/amd64` is enough for a
+  tsc-only image and not for this one. Until mbuild can hand the build to
+  something amd64, a workstation publishes through Cloud Build into the same
+  repository, at the addresses `addressesFor` resolves.
 - **The batch pipeline.** `src/plan.ts` and `--module` are complete and tested,
   and `sst` targeting aborts with `Duplicate resource URN`
   ([pulumi/pulumi#24303](https://github.com/pulumi/pulumi/issues/24303), open).

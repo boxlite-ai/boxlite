@@ -40,12 +40,18 @@ export class PulumiProgramError extends Error {
  * without the packages, and mdeploy floats to repositories that have not
  * adopted GCP.
  *
- * Four, not one. `gcp` is the obvious one; the other three are what the GCP
- * bundle also reaches for, and each was found by reading it rather than by
- * assuming. `random` generates the database and cache passwords, and
- * `cloudflare` writes the two DNS records — the zone is not Google's on either
- * cloud. A missing one is not a type error anywhere: the deploy reaches that
- * module and dies on `random is not defined`, halfway through an apply.
+ * Five, not one. `gcp` is the obvious one; the rest are what the GCP bundle also
+ * reaches for, and each was found by reading it rather than by assuming.
+ * `random` generates the database and cache passwords and each extra runner's
+ * token, `cloudflare` writes the two DNS records — the zone is not Google's on
+ * either cloud — and `command` runs the post-deploy registration of the runners
+ * the API does not seed itself.
+ *
+ * `command` is the one SST supplies on its own, which is why the AWS providers
+ * use it with nothing declared: this engine has no such bundle and injects only
+ * what is listed here. A missing one is not a type error anywhere — the deploy
+ * reaches that module and dies on `command is not defined`, halfway through an
+ * apply.
  */
 export type PulumiModules = {
   pulumi: {
@@ -58,6 +64,7 @@ export type PulumiModules = {
   gcp: object
   random: object
   cloudflare: object
+  command: object
 }
 
 /** What a program returns to the engine: the stack's outputs, by name. */
@@ -69,6 +76,7 @@ const PULUMI = '@pulumi/pulumi'
 const PULUMI_GCP = '@pulumi/gcp'
 const PULUMI_RANDOM = '@pulumi/random'
 const PULUMI_CLOUDFLARE = '@pulumi/cloudflare'
+const PULUMI_COMMAND = '@pulumi/command'
 
 /**
  * The real modules, imported only when a GCP stage asks for them.
@@ -80,16 +88,17 @@ const PULUMI_CLOUDFLARE = '@pulumi/cloudflare'
  */
 const loadModules: ModuleLoader = async () => {
   try {
-    const [pulumi, gcp, random, cloudflare] = await Promise.all([
+    const [pulumi, gcp, random, cloudflare, command] = await Promise.all([
       import(PULUMI),
       import(PULUMI_GCP),
       import(PULUMI_RANDOM),
       import(PULUMI_CLOUDFLARE),
+      import(PULUMI_COMMAND),
     ])
-    return { pulumi: pulumi as PulumiModules['pulumi'], gcp, random, cloudflare }
+    return { pulumi: pulumi as PulumiModules['pulumi'], gcp, random, cloudflare, command }
   } catch (error) {
     throw new PulumiProgramError(
-      `A GCP stage needs ${[PULUMI, PULUMI_GCP, PULUMI_RANDOM, PULUMI_CLOUDFLARE].join(', ')} ` +
+      `A GCP stage needs ${[PULUMI, PULUMI_GCP, PULUMI_RANDOM, PULUMI_CLOUDFLARE, PULUMI_COMMAND].join(', ')} ` +
         `installed in apps/infra. Install them, or pass a loader to gcpProgram. (${(error as Error).message})`,
     )
   }
@@ -128,6 +137,7 @@ export const installGlobals = ({
   target.gcp = modules.gcp
   target.random = modules.random
   target.cloudflare = modules.cloudflare
+  target.command = modules.command
 }
 
 export type ProgramInput = {
@@ -138,6 +148,11 @@ export type ProgramInput = {
   region: string
   /** The project this stage deploys into, which mstage also pins its store to. */
   project: string
+  /**
+   * The zone this stage's machines are created in, or null for the region's
+   * first. Declared per stage in `mstage.config.json`, beside the region.
+   */
+  zone?: string | null
   /**
    * The stage's configuration, handed in rather than read from `process.env`.
    * An inline Pulumi program runs inside the driver's own process, so reading
@@ -166,7 +181,7 @@ export type ProgramInput = {
  * the stack.
  */
 export const gcpProgram =
-  ({ app, stage, region, project, environment, cwd, loadModules: load = loadModules, deployStackWith }: ProgramInput) =>
+  ({ app, stage, region, project, zone = null, environment, cwd, loadModules: load = loadModules, deployStackWith }: ProgramInput) =>
   async (): Promise<ProgramOutputs> => {
     const modules = await load()
     installGlobals({ modules, app, stage })
@@ -203,6 +218,7 @@ export const gcpProgram =
         stage,
         region,
         project,
+        zone,
         domain: stackEnvironment.domain,
         zoneId: stackEnvironment.dnsZoneId,
         relayHost: stackEnvironment.mailRelayHost,
@@ -215,6 +231,7 @@ export const gcpProgram =
         domain: stackEnvironment.domain,
         proxyDomain: stackEnvironment.proxyDomain,
         proxyProtocol: stackEnvironment.proxyProtocol,
+        proxyTemplateUrl: stackEnvironment.proxyTemplateUrl,
         internetEgress: true,
         senderDomain: stackEnvironment.senderDomain,
         runnerBinary: stackEnvironment.runnerBinary,

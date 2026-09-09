@@ -19,7 +19,7 @@ const capture = () => {
     backend: {} as any,
     set: (positionals: string[], readInput?: () => Promise<string>) =>
       set({
-        config: { path: '/repo/mstage.config.json', envSelectGroup: {}, envDigest: null } as any,
+        config: { path: '/repo/mstage.config.json', envSelectGroup: {}, envOptional: {}, envDigest: null } as any,
         scope,
         positionals,
         options: {},

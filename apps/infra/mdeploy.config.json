@@ -43,9 +43,12 @@
         "size": "medium"
       }
     },
-    "gcp-dev": {
+    "dev2": {
       "clickhouse": {
         "mode": "disabled"
+      },
+      "runners": {
+        "size": "small"
       }
     }
   }

@@ -25,7 +25,7 @@ import { CLICKHOUSE_PASSWORD_VARIABLE } from '../../clickhouse.ts'
 import type { Collector, CollectorProvider, CollectorRequest } from '../../collector.ts'
 import { OTLP_HTTP_PORT } from '../../collector.ts'
 import type { Placement } from '../../network.ts'
-import { containerEnvironment } from './secret-env.ts'
+import { containerEnvironment, secretIdOf } from './secret-env.ts'
 
 export const gcpCollectorProvider =
   ({
@@ -51,6 +51,30 @@ export const gcpCollectorProvider =
   (request: CollectorRequest): Collector => {
     const prefix = `${$app.name}-${$app.stage}`
     const name = `${prefix}-otel`
+
+    /*
+     * Every name handed over by reference, and the grants derived from it.
+     *
+     * The same shape as `api.ts`, and for the same reason: a reference the
+     * platform cannot resolve is not a container that starts and logs about it,
+     * it is a create Cloud Run refuses outright. The API's list and this one had
+     * both grown a password the stack itself mints with no grant beside it.
+     */
+    const addresses: Record<string, $util.Input<string>> = {
+      ...request.secrets,
+      ...(clickhouse.active ? { [CLICKHOUSE_PASSWORD_VARIABLE]: clickhouse.writer.passwordRef } : {}),
+    }
+    const readable = Object.keys(addresses).map(
+      (variable) =>
+        new gcp.secretmanager.SecretIamMember(`OtelCollectorSecretAccess-${variable}`, {
+          project,
+          secretId: $util.output(addresses[variable] as $util.Input<string>).apply((reference: string) =>
+            secretIdOf(reference),
+          ),
+          role: 'roles/secretmanager.secretAccessor',
+          member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
+        }),
+    )
 
     const service = new gcp.cloudrunv2.Service(
       'OtelCollector',
@@ -79,18 +103,14 @@ export const gcpCollectorProvider =
                 `service::pipelines::logs::exporters=${request.exporters}`,
               ],
               ports: [{ name: 'http1', containerPort: OTLP_HTTP_PORT }],
-              envs: containerEnvironment({
-                values: request.environment,
-                addresses: {
-                  ...request.secrets,
-                  ...(clickhouse.active ? { [CLICKHOUSE_PASSWORD_VARIABLE]: clickhouse.writer.passwordRef } : {}),
-                },
-              }),
+              envs: containerEnvironment({ values: request.environment, addresses }),
             },
           ],
         },
       },
-      { dependsOn },
+      // The grants among them: the revision resolves every reference as it is
+      // created, so one landing afterwards lands after the refusal.
+      { dependsOn: [...dependsOn, ...readable] },
     )
 
     /*
@@ -116,6 +136,6 @@ export const gcpCollectorProvider =
       // Cloud Run answers on 443 with no port suffix, so unlike the AWS side
       // there is nothing to append: the URI is the endpoint.
       otlpUrl: service.uri,
-      ready: [service, ...invokers],
+      ready: [service, ...invokers, ...readable],
     }
   }

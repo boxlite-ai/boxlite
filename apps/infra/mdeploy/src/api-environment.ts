@@ -21,6 +21,7 @@
  */
 
 import { API_GROUP, serviceSecretsFrom, splitServiceChannels, type Environment, type GroupDeclaration } from './env.ts'
+import { API_PORT } from '../stack/api.ts'
 import { SECRET_GROUP } from 'mstage/secret-address'
 import type { MstageConfig } from 'mstage/config'
 
@@ -252,7 +253,26 @@ export const apiEnvironmentFrom = ({
       // Constant on every deployed stage. The per-stage identity is the stage
       // name, which is what the status sync's dedup prefix uses.
       ENVIRONMENT: 'production',
-      PORT: String(3000),
+      /*
+       * The API applies its own schema at boot, on both clouds.
+       *
+       * Carried over from the incumbent stack (`stack/api.ts`), which sets it
+       * unconditionally and always has. Dropping it in the port was invisible
+       * against a database that already had a schema and fatal against one that
+       * did not: the first deploy of a new stage comes up, connects, and exits
+       * on `42P01 undefined_table` with nothing in the deploy having failed.
+       */
+      RUN_MIGRATIONS: 'true',
+      /*
+       * The container still requires `PORT`; only the channel differs.
+       *
+       * Cloud Run sets it itself, from the container port the service declares,
+       * and refuses a revision that also declares it — `template.containers[0].
+       * env: The following reserved env names were provided: PORT`, as a 400
+       * before anything is created. ECS reserves nothing, so on AWS this is the
+       * only thing that tells the task which port to listen on.
+       */
+      ...(home === 'aws' ? { PORT: String(API_PORT) } : {}),
       S3_REGION: region,
       OTEL_ENABLED: String(!flag(environment, 'OTEL_DISABLED')),
       ...dashboardFrom(environment, domain),
@@ -273,9 +293,18 @@ export const apiEnvironmentFrom = ({
       ...(optional(environment, 'DEFAULT_TEMPLATE')
         ? { DEFAULT_TEMPLATE: optional(environment, 'DEFAULT_TEMPLATE') as string }
         : {}),
-      // The first runner's registered name, which the API seeds at boot. The
-      // fleet itself is the runner module's; this is the one name the API has
-      // to agree with it about.
+      /*
+       * The first runner's registered name, which the API seeds at boot.
+       *
+       * One of two things the API and the runner module have to agree about,
+       * and the only one composed here. The other is the token: the API seeds
+       * that runner row's `apiKey` from `DEFAULT_RUNNER_API_KEY`, and the host
+       * presents the same value as `BOXLITE_RUNNER_TOKEN` — pairing is
+       * token-based, so a row seeded from a different value authenticates
+       * nobody. That key reaches this service through the `api` group like any
+       * other secret, which is why it is not named here; `stack/runners.ts`
+       * says why the host reads it under another name.
+       */
       DEFAULT_RUNNER_NAME: optional(environment, 'DEFAULT_RUNNER_NAME') ?? 'default',
       // The API's own group, as values. Last, so a name the store holds wins
       // over a default composed above — and `stack/index.ts` refuses any name

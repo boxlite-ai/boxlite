@@ -86,6 +86,9 @@ export const list = async ({
       groups: config.envSelectGroup,
       values,
       where: config.path,
+      // What the declaration said may be absent. Without it, listing a group
+      // refuses every stage that simply never configured an optional feature.
+      optional: config.envOptional[group] ?? [],
     })
     // --select-group narrows; it does not reveal. A group can hold a live credential, so
     // printing one stays an explicit act even when the group was named.
@@ -414,9 +417,12 @@ export const set = async ({
                   groups: config.envSelectGroup,
                   values,
                   where: config.path,
-                  // The one member this write is producing, so a store that has
-                  // never held a digest can still be given its first one.
-                  optional: [digest.key],
+                  // The group's own optional half, plus the one member this
+                  // write is producing — so a store that has never held a
+                  // digest can still be given its first one, and a stage that
+                  // configured none of the optional features can still be
+                  // fingerprinted at all.
+                  optional: [...(config.envOptional[digest.group] ?? []), digest.key],
                 }),
                 digestKey: digest.key,
               }),
@@ -515,6 +521,10 @@ export const digest = async ({
     groups: config.envSelectGroup,
     values,
     where: config.path,
+    // The same set `env set --digest` fingerprinted. A check that demanded more
+    // than the write could supply would report every stage as broken — and this
+    // one *is* the check, so it would be believed.
+    optional: [...(config.envOptional[declared.group] ?? []), declared.key],
   })
   const comparison = compareDigest({ values: group, digestKey: declared.key })
 

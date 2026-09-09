@@ -105,21 +105,46 @@ test('a start wrapper replaces the binary as ExecStart, and only when there is o
   assert.match(wrapped, /# fetches secrets/)
 })
 
-test('no secret is written into the script, because metadata is readable on the host', () => {
+test('a secret delivered as an address stays an address, and is fetched rather than written', () => {
   // What runs on a runner is untrusted code by design, and instance metadata is
-  // readable by all of it. A secret reaches the unit through the wrapper's own
-  // fetch instead.
+  // readable by all of it. Everything the store marks as an address therefore
+  // reaches the unit through the wrapper's own fetch.
+  //
+  // The registration token is the one deliberate exception and is asserted
+  // separately below — `stack/runner-boot.ts` records why it was accepted. This
+  // test guards everything else, which is the part that must not drift.
   const script = render({
-    environment: { BOXLITE_RUNNER_NAME: 'default', DEFAULT_RUNNER_API_KEY_ARN: 'arn:aws:secretsmanager:::secret:key' },
+    environment: { BOXLITE_RUNNER_NAME: 'default', GHCR_TOKEN_ARN: 'arn:aws:secretsmanager:::secret:ghcr' },
     platform: platform({
       startWrapper: {
         path: '/usr/local/bin/boxlite-runner-start.sh',
-        script: 'fetch DEFAULT_RUNNER_API_KEY "$DEFAULT_RUNNER_API_KEY_ARN"',
+        script: 'fetch GHCR_TOKEN "$GHCR_TOKEN_ARN"',
       },
     }),
   })
-  assert.match(script, /DEFAULT_RUNNER_API_KEY_ARN=arn:aws:secretsmanager:::secret:key/, 'the address may be written')
-  assert.doesNotMatch(script, /^DEFAULT_RUNNER_API_KEY=/m, 'the value may not')
+  assert.match(script, /GHCR_TOKEN_ARN=arn:aws:secretsmanager:::secret:ghcr/, 'the address may be written')
+  assert.doesNotMatch(script, /^GHCR_TOKEN=/m, 'the value may not')
+})
+
+test('the registration token is written into the unit file, which is the accepted trade', () => {
+  // Deliberate, and asserted so the decision is visible rather than implied by
+  // its absence: pairing is token-based and the value has to be the one the API
+  // seeded the row from, so it is delivered as a value. The cost — metadata is
+  // readable on the host and off the API — is recorded in `runner-boot.ts`.
+  //
+  // Asserted here because a provider that quietly stopped delivering it is the
+  // failure that crash-loops a host, and the one nothing else would catch.
+  const script = render({ environment: { BOXLITE_RUNNER_NAME: 'default', BOXLITE_RUNNER_TOKEN: 'host-token' } })
+  assert.match(script, /^BOXLITE_RUNNER_TOKEN=host-token$/m)
+  // Inside the heredoc that writes the EnvironmentFile, which is the only place
+  // systemd will read it from. Anchored on the heredoc itself rather than on
+  // `[Install]`: the script mentions that section in a comment long before the
+  // unit exists, so an index comparison against it proves nothing.
+  const opens = script.indexOf("runner.env << 'RUNNERENV'")
+  const closes = script.indexOf('RUNNERENV', opens + "runner.env << 'RUNNERENV'".length)
+  const wrote = script.indexOf('BOXLITE_RUNNER_TOKEN=host-token')
+  assert.ok(opens !== -1 && closes !== -1)
+  assert.ok(wrote > opens && wrote < closes, 'it lands inside the EnvironmentFile, not loose in the script')
 })
 
 test('the platform’s own unit settings win over what the caller passed', () => {

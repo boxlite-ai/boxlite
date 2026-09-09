@@ -21,10 +21,26 @@ test('a complete config keeps every declared stage field', () => {
     region: 'ap-southeast-1',
     home: null,
     project: null,
+    zone: null,
     roleArn: null,
     protect: false,
   })
   assert.equal(config.stages.prod.protect, true)
+})
+
+test('a stage may pin the zone its machines are created in', () => {
+  // Not decoration: a machine family is stocked per zone, and the region's first
+  // is the one a derived value would always pick. `asia-southeast1-a` refuses an
+  // N4 with `stockout` while `-b` creates one, so a stage that cannot say which
+  // zone it wants is a stage that cannot be deployed.
+  const config = parse({
+    stages: { dev: { region: 'asia-southeast1', home: 'gcp', project: 'p', zone: 'asia-southeast1-b' } },
+  })
+  assert.equal(config.stages.dev!.zone, 'asia-southeast1-b')
+  // Silence still means the region's first, which is resolved where it is used
+  // rather than written in here — a stage with nothing to say about placement
+  // should not have to say it.
+  assert.equal(parse({ stages: { dev: { region: 'ap-southeast-1' } } }).stages.dev!.zone, null)
 })
 
 test('a stage takes the repository home unless it declares its own', () => {

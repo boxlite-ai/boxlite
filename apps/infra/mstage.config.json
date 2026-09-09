@@ -5,6 +5,9 @@
     "aws": {
       "required": true
     },
+    "gcp": {
+      "required": true
+    },
     "github": {
       "required": true
     },
@@ -19,13 +22,13 @@
           "STACK_DOMAIN",
           "PROXY_DOMAIN",
           "OIDC_ISSUER_BASE_URL",
-          "IAM_PERMISSIONS_BOUNDARY_STAGE",
           "CLOUDFLARE_API_TOKEN",
           "CLOUDFLARE_DEFAULT_ACCOUNT_ID",
           "CLOUDFLARE_ZONE_ID",
           "BOXLITE_STAGE_CONFIG_DIGEST"
         ],
         "optional": [
+          "IAM_PERMISSIONS_BOUNDARY_STAGE",
           "PROXY_PROTOCOL",
           "PROXY_TEMPLATE_URL",
           "DASHBOARD_URL",
@@ -90,7 +93,7 @@
       },
       "proxy": ["PROXY_API_KEY"],
       "otel-collector": ["OTEL_COLLECTOR_API_KEY"],
-      "runner": ["DEFAULT_RUNNER_API_KEY"]
+      "runner": []
     },
     "digest": {
       "key": "BOXLITE_STAGE_CONFIG_DIGEST",
@@ -105,10 +108,11 @@
       "region": "ap-southeast-1",
       "protect": true
     },
-    "gcp-dev": {
+    "dev2": {
       "home": "gcp",
       "region": "asia-southeast1",
-      "project": "boxlite-gcp-dev"
+      "project": "avid-vine-500315-u4",
+      "zone": "asia-southeast1-b"
     }
   }
 }

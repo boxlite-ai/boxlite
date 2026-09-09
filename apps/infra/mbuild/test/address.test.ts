@@ -145,7 +145,7 @@ test('the repository file declares the artifacts that are actually built', () =>
   assert.equal(real.artifacts['otel-collector']!.dockerfile, 'apps/otel-collector/Dockerfile')
   assert.deepEqual(real.scan.blockOn, ['CRITICAL', 'HIGH'])
   // Every stage is publishable, or a promotion has nowhere to go.
-  assert.deepEqual(Object.keys(real.stages).sort(), ['dev', 'gcp-dev', 'prod'])
+  assert.deepEqual(Object.keys(real.stages).sort(), ['dev', 'dev2', 'prod'])
   // And no stage repeats what mstage already declares.
   assert.equal('region' in registryFor(real, 'dev'), false, 'the region belongs to mstage.config.json')
   assert.notEqual(

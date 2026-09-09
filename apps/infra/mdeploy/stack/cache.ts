@@ -29,7 +29,21 @@ export type CacheConnection = {
 
 export type CacheBinding =
   | { cloud: 'aws'; passwordRef: $util.Output<string>; clientGrant: $util.Output<string> }
-  | { cloud: 'gcp'; passwordRef: $util.Output<string>; clientGrant: $util.Output<string> }
+  | {
+      cloud: 'gcp'
+      passwordRef: $util.Output<string>
+      clientGrant: $util.Output<string>
+      /**
+       * A Secret Manager reference holding the instance's own CA certificate.
+       *
+       * Memorystore's transit encryption presents a certificate signed per
+       * instance, which no image trusts — the same shape as Cloud SQL's. Unlike
+       * Cloud SQL there is no platform proxy to hand the problem to, so the
+       * certificate itself has to reach the container, and it reaches it as a
+       * mounted file rather than as a value.
+       */
+      caRef: $util.Output<string>
+    }
 
 export type Cache = {
   connection: CacheConnection
@@ -55,4 +69,28 @@ export const cacheEnvironment = (cache: Cache): Record<string, $util.Output<stri
   REDIS_HOST: cache.connection.host,
   REDIS_PORT: cache.connection.port,
   REDIS_TLS: 'true',
+  /*
+   * Where Node finds a CA the image does not ship with, on the cloud that needs
+   * one. Derived from the binding for the same reason `DB_TLS_ENABLED` is
+   * derived from the connection: the module that knows the certificate is the
+   * module that should say so, and a second place deciding is a second place to
+   * disagree.
+   *
+   * Set only where the file is actually mounted — pointing this at a path that
+   * does not exist makes Node refuse to start, so an unconditional value would
+   * break the cloud that needs nothing.
+   */
+  ...(cache.binding.cloud === 'gcp' ? { NODE_EXTRA_CA_CERTS: CACHE_CA_PATH } : {}),
 })
+
+/**
+ * Where a workload finds the CA that signs its cache's certificate.
+ *
+ * A path rather than a value, and `NODE_EXTRA_CA_CERTS` rather than a setting
+ * of the client's: `apps/api` builds its Redis TLS options as a bare `tls: {}`
+ * (`config/configuration.ts`) and has nowhere to put a CA. Node reads this
+ * variable and *adds* what it finds to the default trust store, so the client
+ * verifies without knowing anything new — which is the difference between an
+ * infrastructure change and an application one.
+ */
+export const CACHE_CA_PATH = '/etc/ssl/boxlite/cache-ca.pem'

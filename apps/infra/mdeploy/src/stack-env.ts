@@ -139,6 +139,16 @@ export type StackEnvironment = {
   domain: string
   proxyDomain: string
   proxyProtocol: string
+  /**
+   * The origin the control plane hands a client composing a box URL.
+   *
+   * The API reads it as `proxy.templateUrl` and `ConfigurationDto` takes it
+   * with `getOrThrow`, so a container without it answers `/api/config` with a
+   * 500 — and the box proxy reads that route before it forwards a byte, so it
+   * never finishes starting. Defaulted from the protocol and the zone, which is
+   * the rule `deployment/environment.ts` already applies on the incumbent path.
+   */
+  proxyTemplateUrl: string
   /** The verified sender domain, or null for a stage that sends no mail. */
   senderDomain: string | null
   runnerFleet: RunnerSlot[]
@@ -241,14 +251,19 @@ export const readStackEnvironment = ({
 }): StackEnvironment => {
   const tag = required(environment, 'BOXLITE_IMAGE_TAG', 'a deploy names the exact commit it ships')
   if (!/^[0-9a-f]{40}$/.test(tag)) throw new StackEnvError('BOXLITE_IMAGE_TAG must be one full lowercase commit SHA')
+  const proxyDomain = required(environment, 'PROXY_DOMAIN', 'every box is a name under this zone')
+  // A default rather than a requirement: the proxy speaks to a box inside the
+  // network, and `http` there is the shape every stage has used. What must
+  // never be defaulted is the zone above, which is public.
+  const proxyProtocol = optional(environment, 'PROXY_PROTOCOL') ?? 'http'
   return {
     tag,
     domain: required(environment, 'STACK_DOMAIN', 'the hostname the dashboard and the SDKs reach this stage on'),
-    proxyDomain: required(environment, 'PROXY_DOMAIN', 'every box is a name under this zone'),
-    // A default rather than a requirement: the proxy speaks to a box inside the
-    // network, and `http` there is the shape every stage has used. What must
-    // never be defaulted is the zone above, which is public.
-    proxyProtocol: optional(environment, 'PROXY_PROTOCOL') ?? 'http',
+    proxyDomain,
+    proxyProtocol,
+    // Composed from the two above when the store says nothing, which is the
+    // same rule the incumbent path applies. See the field's own note.
+    proxyTemplateUrl: optional(environment, 'PROXY_TEMPLATE_URL') ?? `${proxyProtocol}://${proxyDomain}`,
     // Absent is a stage that sends no mail, which is a supported state — see
     // `stack/mail.ts`. An empty string is the same answer, spelled by a store
     // that holds the key with nothing in it.

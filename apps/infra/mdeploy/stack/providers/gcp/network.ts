@@ -18,10 +18,12 @@
  * with a reserved range for it. Nothing can take a private address until the
  * peering exists, so it is in `ready`.
  *
- * The runner's placement is `egress-only-public` here as on AWS, and means the
- * same thing by different means: the instance gets an external address so its
- * image pulls do not queue behind Cloud NAT, and the only ingress rule that
- * names its service account admits the subnet's own range.
+ * The runner's placement is `private` here where AWS makes it
+ * `egress-only-public`, and that is an organization policy rather than a
+ * preference: `constraints/compute.vmExternalIpAccess` refuses an instance that
+ * asks for an external address, so every workload's outbound goes through Cloud
+ * NAT. The only ingress rule that names the runner's service account still
+ * admits the API and the proxy and nothing else.
  */
 
 import { API_PORT } from '../../api.ts'
@@ -197,7 +199,17 @@ export const gcpNetworkProvider =
 
     const placementFor = (role: WorkloadRole): Placement => ({
       cloud: 'gcp',
-      exposure: role === 'runner' ? 'egress-only-public' : 'private',
+      /*
+       * Private, every role, including the runner.
+       *
+       * On AWS the runner is `egress-only-public` so its constant image pulls
+       * do not queue behind a shared NAT. Here they must: an organization with
+       * `constraints/compute.vmExternalIpAccess` refuses an instance that asks
+       * for an external address, and every workload's outbound goes through
+       * Cloud NAT instead. Saying `private` is what makes that visible at the
+       * placement rather than surprising at the instance.
+       */
+      exposure: 'private',
       subnetwork: subnetwork.id,
       serviceAccount: accounts[role].email,
     })

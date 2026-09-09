@@ -43,6 +43,24 @@ export type RunnerSlot = {
 }
 
 /**
+ * One host and the token that pairs it with its row in the control plane.
+ *
+ * Carried together rather than as two lists, because they are only ever correct
+ * together: pairing is token-based — the row's `apiKey` must equal the host's
+ * `BOXLITE_RUNNER_TOKEN` — so a token that drifted one index from its host
+ * would register a fleet where every member authenticates as its neighbour.
+ *
+ * Every host's token is minted by the composition root, one per host, because
+ * two consumers in two different phases need the same value: the API reads the
+ * first host's as `DEFAULT_RUNNER_API_KEY` and seeds that row from it, and the
+ * host itself reads it as `BOXLITE_RUNNER_TOKEN`. The API is built before the
+ * fleet, so a provider that minted its own would be minting after the one value
+ * that has to match it was already spent. `stack/index.ts` holds it for the same
+ * reason `apps/infra/stack/deploy.ts:71` does on the engine this replaces.
+ */
+export type RunnerAssignment = { slot: RunnerSlot; token: $util.Input<string> }
+
+/**
  * What a host installs, as a URL and the checksum that proves it.
  *
  * One shape for both sources — a published release and a per-commit object —
@@ -64,7 +82,8 @@ export type RunnerRequest = {
    * on AWS and three separate decisions on GCP.
    */
   nestedVirtualization: true
-  fleet: readonly RunnerSlot[]
+  /** Each host and the token it authenticates with. See `RunnerAssignment`. */
+  fleet: readonly RunnerAssignment[]
   binary: RunnerBinary
   /** Where a host registers itself, and where it ships telemetry. */
   apiUrl: $util.Input<string>
@@ -98,3 +117,16 @@ export type RunnerProvider = (request: RunnerRequest) => Runners
 
 /** The one port a runner listens on: its API, the box proxy and the ssh gateway. */
 export const RUNNER_PORT = 3003
+
+/**
+ * What the host reads its registration token from.
+ *
+ * `apps/runner/cmd/runner/config/config.go` looks for this, falls back to
+ * `API_TOKEN`, and otherwise refuses to start. The API reads the same value
+ * under its own name — `DEFAULT_RUNNER_API_KEY` — because that is what seeds
+ * the first runner's row; one minted secret, two readers, two names.
+ */
+export const RUNNER_TOKEN_VARIABLE = 'BOXLITE_RUNNER_TOKEN'
+
+/** What the API reads the first host's token as, and seeds its row from. */
+export const API_RUNNER_TOKEN_VARIABLE = 'DEFAULT_RUNNER_API_KEY'

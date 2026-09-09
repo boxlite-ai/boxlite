@@ -6,7 +6,7 @@
  * and then does its own work. mstage creates and verifies access; it never spends it.
  */
 
-import { loadConfig, type MstageConfig } from '../config/load.ts'
+import { homeFor, loadConfig, type LoginRequirement, type MstageConfig } from '../config/load.ts'
 import { resolveIdentity, type AwsIdentity } from '../aws/identity.ts'
 import { resolveHome } from '../home.ts'
 import type { Identity } from '../identity.ts'
@@ -42,7 +42,7 @@ export type Log = (line: string) => void
 const AWS_COMMANDS: Record<string, CommandSpec> = {
   whoami: {
     run: aws.whoami,
-    summary: 'Which identity, account and region this stage resolves to',
+    summary: 'Which identity, tenant and region this stage resolves to',
     requires: ['stage'],
   },
   region: {
@@ -141,8 +141,9 @@ const MODULES: Record<string, ModuleSpec> = {
     commands: LOGIN_COMMANDS,
     commandNote:
       'omit the command to act on every provider mstage.config.json enables;\n' +
-      'naming one mstage.config.json does not enable is refused',
-    accepts: ['force', 'logout', 'region'],
+      'naming one mstage.config.json does not enable is refused;\n' +
+      '--stage reports a cloud that is not that stage’s home without requiring it',
+    accepts: ['force', 'logout', 'region', 'stage'],
     example: 'npm run mstage login github -- --force',
   },
   aws: {
@@ -227,6 +228,43 @@ const buildLoginContext = ({
   return { identity: resolveIdentity({ scope: { region, roleArn: null } as Scope }) }
 }
 
+/** The two providers that are clouds, and so are answered by a stage's `home`. */
+const CLOUDS = ['aws', 'gcp']
+
+/**
+ * What this invocation actually needs signed in.
+ *
+ * Without a stage, every declared provider: `mstage login` on its own is asking
+ * whether this checkout can work at all, and the honest answer covers the whole
+ * repository.
+ *
+ * With one, a cloud that is not that stage's home is reported and not required.
+ * A repository with stages in both clouds declares both — BoxLite does — and the
+ * repository-wide reading made an expired AWS session refuse a GCP deploy, on a
+ * machine that needed no AWS credential to perform it. `home` is what says which
+ * cloud a stage lives in, and this is the same answer applied one layer up.
+ *
+ * Only the clouds are narrowed. GitHub and Auth0 are not a stage's home and are
+ * needed by whichever stage names them.
+ */
+export const requirementsFor = ({
+  config,
+  stage,
+}: {
+  config: Pick<MstageConfig, 'login' | 'home' | 'stages' | 'path'>
+  stage: string | undefined
+}): Record<string, LoginRequirement> => {
+  if (!stage) return config.login
+  const home = homeFor(config, stage)
+  return Object.fromEntries(
+    Object.entries(config.login).map(([provider, requirement]) =>
+      CLOUDS.includes(provider) && provider !== home
+        ? [provider, { ...requirement, required: false }]
+        : [provider, requirement],
+    ),
+  )
+}
+
 const runLogin = async ({
   command,
   options,
@@ -250,7 +288,7 @@ const runLogin = async ({
   interactive: boolean
   checks: Record<string, ProviderCheck>
 }): Promise<number> => {
-  const declared = loadConfig({ cwd, environment }).login
+  const declared = requirementsFor({ config: loadConfig({ cwd, environment }), stage: options.stage as string | undefined })
   if (Object.keys(declared).length === 0) {
     throw new UsageError('mstage.config.json declares no "login" providers, so there is nothing to check')
   }

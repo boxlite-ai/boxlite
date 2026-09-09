@@ -110,6 +110,7 @@ const registryDouble = ({
   findings = {},
   scan = {},
   pushFails,
+  deniedReads = false,
 }: {
   published?: Set<string>
   repositories?: Set<string>
@@ -117,6 +118,12 @@ const registryDouble = ({
   scan?: { status?: string; description?: string; missingReads?: number }
   /** What a registry that is briefly unreachable looks like from `docker push`. */
   pushFails?: string
+  /**
+   * The answer the double could not express before: not "no" but "I may not
+   * say". `published` covers presence and absence; this covers the read that
+   * never happened.
+   */
+  deniedReads?: boolean
 } = {}) => {
   const { status = 'COMPLETE', description, missingReads = 0 } = scan
   const unregistered = new Map<string, number>()
@@ -144,6 +151,12 @@ const registryDouble = ({
       return repositories.has(named('--repository-names')!) ? ok() : fail('RepositoryNotFoundException')
     }
     if (operation === 'ecr describe-images') {
+      if (deniedReads) {
+        return fail(
+          'An error occurred (AccessDeniedException) when calling the DescribeImages operation: ' +
+            'User is not authorized to perform: ecr:DescribeImages',
+        )
+      }
       const key = `${named('--repository-name')}:${named('--image-ids')!.replace('imageTag=', '')}`
       return published.has(key) ? ok() : fail('ImageNotFoundException')
     }
@@ -505,6 +518,14 @@ const googleDouble = ({
   published = new Set<string>(),
   repositories = new Set(['boxlite']),
   vulnerabilities = {} as Record<string, unknown[]>,
+  /**
+   * What an existing repository reports for `dockerConfig.immutableTags`. The
+   * API omits the field rather than answering false, which is why the absent
+   * case is spelled as an empty answer rather than as `False`.
+   */
+  immutableTags = 'True',
+  /** As above: a read that refused, rather than a repository that answered no. */
+  deniedReads = false,
 } = {}) => {
   const calls: string[][] = []
   const run: Run = async (command, args) => {
@@ -515,12 +536,46 @@ const googleDouble = ({
     if (args[0] === 'auth') return ok()
     const operation = args.slice(0, 3).join(' ')
     if (operation === 'artifacts repositories describe') {
-      return repositories.has(args[3]!) ? ok() : fail('NOT_FOUND: repository')
+      return repositories.has(args[3]!) ? ok(immutableTags) : fail('NOT_FOUND: repository')
     }
     if (operation === 'artifacts repositories create') return ok()
     if (operation === 'artifacts docker images') {
+      /*
+       * Two reads, and the split is the point. `list` is the existence check and
+       * asks Artifact Registry alone; `describe` is the scan gate's read and is
+       * the one that reaches Container Analysis. Each therefore refuses with a
+       * permission from its own service.
+       */
+      if (args[3] === 'list') {
+        if (deniedReads) {
+          return fail(
+            'ERROR: (gcloud.artifacts.docker.images.list) PERMISSION_DENIED: ' +
+              "Permission 'artifactregistry.dockerimages.list' denied on resource",
+          )
+        }
+        const image = args[4]!
+        const tag = args.find((arg) => arg.startsWith('--filter=tags:'))!.replace('--filter=tags:', '')
+        /*
+         * Without `--include-tags` the resources carry no tags field, so the
+         * filter matches nothing and gcloud answers exit zero with an empty page
+         * and a warning on stderr. Modelled rather than rejected, because that
+         * is what really happens — and it reads as absence, which is why a test
+         * beside this asserts the flag is sent.
+         */
+        if (!args.includes('--include-tags')) return ok('')
+        // The banner goes to stderr, so an empty page really is empty here.
+        return published.has(`${image}:${tag}`) ? ok('sha256:0123456789abcdef\n') : ok('')
+      }
+      if (deniedReads) {
+        return fail(
+          'ERROR: (gcloud.artifacts.docker.images.describe) PERMISSION_DENIED: ' +
+            "Permission 'containeranalysis.occurrences.list' denied on resource",
+        )
+      }
       const image = args[4]!
-      if (!published.has(image)) return fail('NOT_FOUND: image')
+      if (!published.has(image)) return fail('ERROR: (gcloud.artifacts.docker.images.describe) Image not found.')
+      // Only the flagged read carries findings. A double that answered both the
+      // same way would keep the severity gate green with the flag removed.
       return args.includes('--show-package-vulnerability')
         ? ok(JSON.stringify({ package_vulnerability_summary: { vulnerabilities } }))
         : ok()
@@ -587,6 +642,58 @@ test('a repository that does not exist yet is created as a docker repository', a
   assert.ok(created.includes('asia-southeast1'), created.join(' '))
 })
 
+test('the declared tag immutability reaches Artifact Registry, as it reaches ECR', async () => {
+  // The same field ECR creates as IMMUTABLE. Nothing here addresses an image by
+  // digest, so a repository created without it drops the only thing making a
+  // deployed commit tag mean exact bytes — while the config still claims it, and
+  // with no way to set it afterwards.
+  const probe = googleDouble({ repositories: new Set() })
+  await publish({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run, log })
+  const created = probe.ran((call) => call.slice(1, 4).join(' ') === 'artifacts repositories create')[0]!
+  assert.ok(created.includes('--immutable-tags'), created.join(' '))
+})
+
+test('a stage that declares mutable tags does not get an immutable repository', async () => {
+  // The flag is the declaration's, not this function's: asking for one and
+  // getting the other is the same defect in the other direction.
+  const mutable = parseBuildConfig(
+    '/repo/apps/infra/mbuild.config.json',
+    JSON.stringify({
+      root: '../..',
+      artifacts: { api: { dockerfile: 'apps/api/Dockerfile', context: '.' } },
+      scan: { blockOn: ['CRITICAL'], timeoutSeconds: 300 },
+      stages: {
+        dev: {
+          registry: {
+            kind: 'artifact-registry',
+            repository: 'boxlite',
+            immutableTags: false,
+            scanOnPush: true,
+          },
+        },
+      },
+    }),
+  )
+  const registry = resolveRegistry({ config: mutable, stage: 'dev', region: 'asia-southeast1', project: 'boxlite' })
+  const probe = googleDouble({ repositories: new Set() })
+  await publish({ config: mutable, stage: 'dev', registry, tag: SHA, run: probe.run, log })
+  const created = probe.ran((call) => call.slice(1, 4).join(' ') === 'artifacts repositories create')[0]!
+  assert.ok(!created.includes('--immutable-tags'), created.join(' '))
+})
+
+test('a repository whose tags can still be moved is refused, not published into', async () => {
+  // Immutability is fixed when the repository is created, so one made before the
+  // declaration changed cannot be brought to it. Publishing anyway would leave
+  // the config claiming a deployed tag means exact bytes while the tag can still
+  // be repointed under a running service — the guarantee, quietly absent.
+  const probe = googleDouble({ immutableTags: '' })
+  await assert.rejects(
+    () => publish({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run, log }),
+    /has mutable tags and this stage declares immutableTags/,
+  )
+  assert.equal(probe.ran((call) => call[0] === 'docker' && call[1] === 'push').length, 0, 'it pushed anyway')
+})
+
 test('a commit already published is not rebuilt on this cloud either', async () => {
   const probe = googleDouble({ published: new Set([GAR_IMAGE]) })
   const outcomes = await publish({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run, log })
@@ -648,6 +755,57 @@ test('a config that does not say where the repository is refuses to load', async
         JSON.stringify({ artifacts: {}, scan: { blockOn: [], timeoutSeconds: 1 }, stages: {} }),
       ),
     /must set root/,
+  )
+})
+
+test('the existence check asks Artifact Registry alone, never Container Analysis', async () => {
+  /*
+   * `describe` reaches Container Analysis for a pkg.dev repository, so asking
+   * "does this repository hold this tag" through it made the answer depend on a
+   * grant the deploy has no reason to hold — three deploys refused for images
+   * the repository was holding, each naming the images it was holding.
+   */
+  const probe = googleDouble({ published: new Set([GAR_IMAGE]) })
+  await verifyPublished({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run })
+  const reads = probe.calls.filter((call) => call[0] === 'gcloud')
+  assert.ok(reads.length > 0, 'it read the registry at all')
+  assert.ok(
+    // `calls` carries the command itself, so the verb sits after `images`.
+    reads.every((call) => call[4] === 'list'),
+    `the existence check must not describe: ${JSON.stringify(reads)}`,
+  )
+  // Without this the listed resources carry no tags field, `--filter=tags:` matches
+  // nothing, and every image reads as absent — the same false absence by another
+  // route, and silent because gcloud still exits zero.
+  assert.ok(
+    reads.every((call) => call.includes('--include-tags')),
+    `a tag filter without --include-tags matches nothing: ${JSON.stringify(reads)}`,
+  )
+})
+
+test('a registry read that did not answer is not an image that is missing', async () => {
+  /*
+   * What three GCP deploys of dev actually hit, in the shape the read has now.
+   * The preflight image check runs as the deploy identity rather than as the
+   * publisher, so it is the identity most likely to be missing a registry
+   * grant; answered as "not published" a refusal was reported as "dev does not
+   * hold this commit's images" — for two images the repository was holding,
+   * pushed three minutes earlier by a green mbuild run.
+   */
+  const probe = googleDouble({ deniedReads: true })
+  await assert.rejects(
+    () => verifyPublished({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run }),
+    /Could not tell whether \S+ is published: .*PERMISSION_DENIED/,
+  )
+})
+
+test('the same on ECR, whose answer for absence is its own exception', async () => {
+  // Both registrars answer this question and both used to answer it the same
+  // wrong way, so the fix is only half applied if one of them still does.
+  const probe = registryDouble({ deniedReads: true })
+  await assert.rejects(
+    () => verifyPublished({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run }),
+    /Could not tell whether \S+\/boxlite-app-dev:\S+ is published: .*AccessDeniedException/,
   )
 })
 

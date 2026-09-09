@@ -1092,6 +1092,9 @@ async function bootstrapGcpStage({
     app: config.app,
     stage,
     repository: registry.repository,
+    // The same declaration mbuild reads. It can only be honoured at creation,
+    // and mbuild refuses to publish into a repository that contradicts it.
+    immutableTags: buildConfig.stages[stage]!.registry.immutableTags,
     github,
     log: (line) => console.log(`[${SCRIPT_NAME}] ${line}`),
   })
