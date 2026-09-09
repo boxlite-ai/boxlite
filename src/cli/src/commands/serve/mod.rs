@@ -1962,34 +1962,15 @@ mod tests {
 
     #[tokio::test]
     async fn box_response_reports_the_policy_needed_for_safe_reuse() {
-        let now = chrono::Utc::now();
-        let info = BoxInfo {
-            id: boxlite::BoxID::parse("reuse-policy").unwrap(),
-            name: Some("named".to_string()),
-            status: boxlite::BoxStatus::Configured,
-            created_at: now,
-            last_updated: now,
-            pid: None,
-            image: "alpine:latest".to_string(),
-            cpus: 1,
-            memory_mib: 512,
-            advanced: Some(boxlite::AdvancedBoxInfo {
-                capabilities: boxlite::ContainerCapabilities {
-                    add: vec!["SYS_ADMIN".to_string()],
-                    drop: Vec::new(),
-                },
-                privileged: false,
-                nested_virtualization: false,
-            }),
-            network: None,
-            labels: HashMap::new(),
-            auto_stop: 0,
-            auto_delete: 0,
-            auto_resume: true,
-            health_status: boxlite::HealthStatus::new(),
-            exit_code: None,
-            started_at: None,
-        };
+        let mut info = info_as_the_runtime_reports_it("configured");
+        info.advanced = Some(boxlite::AdvancedBoxInfo {
+            capabilities: boxlite::ContainerCapabilities {
+                add: vec!["SYS_ADMIN".to_string()],
+                drop: Vec::new(),
+            },
+            privileged: false,
+            nested_virtualization: false,
+        });
 
         let response = lifecycle_state().box_response(&info).await;
         assert_eq!(response.advanced, info.advanced);

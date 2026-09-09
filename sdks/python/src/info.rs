@@ -69,6 +69,10 @@ impl PyPublishedPort {
     }
 }
 
+/// Outbound network policy for traffic from the guest to external hosts.
+///
+/// With `mode` set to `enabled`, `allow_net` lists permitted destinations.
+/// An empty list permits unrestricted outbound access.
 #[pyclass(name = "OutboundNetworkInfo")]
 #[derive(Clone, Debug)]
 pub(crate) struct PyOutboundNetworkInfo {
@@ -103,6 +107,10 @@ impl PyOutboundNetworkInfo {
     }
 }
 
+/// Inbound reachability policy for exposed guest ports and previews.
+///
+/// `mode` records whether these endpoints are publicly reachable.
+/// `allow_net` is reserved for inbound filtering and is currently empty.
 #[pyclass(name = "InboundNetworkInfo")]
 #[derive(Clone, Debug)]
 pub(crate) struct PyInboundNetworkInfo {
@@ -359,7 +367,11 @@ impl From<BoxStateInfo> for PyBoxStateInfo {
 // BoxInfo - Container info with nested state
 // ============================================================================
 
-/// Reuse-relevant advanced policy reported for an existing box.
+/// Effective advanced policy reported for an existing box.
+///
+/// `capabilities.add` and `capabilities.drop` describe the Linux capability
+/// policy after privileged-mode resolution. `privileged` and
+/// `nested_virtualization` report the modes selected when the box was created.
 #[pyclass(name = "AdvancedBoxInfo")]
 #[derive(Clone)]
 pub(crate) struct PyAdvancedBoxInfo {
