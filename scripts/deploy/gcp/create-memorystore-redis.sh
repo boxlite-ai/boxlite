@@ -306,11 +306,17 @@ step_create_instance() {
         tls_mode="server-authentication"
     fi
 
+    # The API reports the standard tier as STANDARD_HA, not STANDARD.
+    local expected_tier="BASIC"
+    if [ "$TIER" = "standard" ]; then
+        expected_tier="STANDARD_HA"
+    fi
+
     local state
     state="$(redis_describe state || true)"
     if [ -n "$state" ]; then
         print_info "Instance $NAME already exists (state: $state); not recreating"
-        warn_if_differs "tier" "$(echo "$TIER" | tr '[:lower:]' '[:upper:]')" "$(redis_describe tier)"
+        warn_if_differs "tier" "$expected_tier" "$(redis_describe tier)"
         warn_if_differs "redisVersion" "$(echo "$REDIS_VERSION" | tr '[:lower:]' '[:upper:]')" "$(redis_describe redisVersion)"
         warn_if_differs "transitEncryptionMode" "$(echo "$tls_mode" | tr '[:lower:]-' '[:upper:]_')" "$(redis_describe transitEncryptionMode)"
         warn_if_differs "authEnabled" "True" "$(redis_describe authEnabled)"
