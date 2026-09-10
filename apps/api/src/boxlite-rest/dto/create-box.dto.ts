@@ -12,6 +12,7 @@ import {
   IsOptional,
   IsString,
   IsNumber,
+  IsInt,
   IsBoolean,
   IsObject,
   IsArray,
@@ -211,16 +212,19 @@ export class CreateBoxDto {
   // a box that fails to start.
   @IsOptional()
   @IsNumber()
+  @IsInt()
   @Min(1)
   cpus?: number
 
   @IsOptional()
   @IsNumber()
+  @IsInt()
   @Min(256)
   memory_mib?: number
 
   @IsOptional()
   @IsNumber()
+  @IsInt()
   @Min(1)
   disk_size_gb?: number
 
