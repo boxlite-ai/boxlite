@@ -154,10 +154,10 @@ npm run mdeploy -- --stage dev --remove --confirm
 
 | | |
 |---|---|
-| mstage — sign-ins, the store, digests, object versions, state repair | 357 tests |
+| mstage — sign-ins, the store, digests, object versions, state repair | 361 tests |
 | mbuild — addresses, the publish sequence, the scan gate, the workflow | 64 tests |
-| mdeploy — the plan, both configs, the environment, the wiring, both bundles | 134 tests |
-| the incumbent stack and its release guards, plus `bootstrap/gcp.ts` | 527 tests |
+| mdeploy — the plan, both configs, the environment, the wiring, both bundles | 139 tests |
+| the incumbent stack and its release guards, plus `bootstrap/gcp.ts` | 533 tests |
 | mstage, mbuild **and mdeploy** typecheck | `tsc` clean, without `sst install` |
 | every GCP provider, applied | `dev2`, in `asia-southeast1` |
 

@@ -8,11 +8,18 @@ import { requirementsFor, run } from '../src/cli/run.ts'
 import { loadConfig } from '../src/config/load.ts'
 
 test('each provider knows the command that signs it in', () => {
+  // A sequence per provider, because gcloud needs two: `auth login` writes the
+  // CLI's own account and `application-default login` writes ADC with the quota
+  // project. `auth login --update-adc` is the one command that looks like both
+  // and drops `quota_project_id`, which no token mint can detect.
   assert.deepEqual(SIGN_IN_COMMANDS, {
-    aws: ['aws', 'login'],
-    gcp: ['gcloud', 'auth', 'application-default', 'login'],
-    github: ['gh', 'auth', 'login'],
-    auth0: ['auth0', 'login'],
+    aws: [['aws', 'login']],
+    gcp: [
+      ['gcloud', 'auth', 'login'],
+      ['gcloud', 'auth', 'application-default', 'login'],
+    ],
+    github: [['gh', 'auth', 'login']],
+    auth0: [['auth0', 'login']],
   })
 })
 
@@ -24,6 +31,41 @@ test('a sign-in inherits the terminal, because it prompts or opens a browser', (
   }
   assert.deepEqual(signIn('github', runCommand), { ok: true })
   assert.deepEqual(calls, [{ command: 'gh', args: ['auth', 'login'], options: { stdio: 'inherit' } }])
+})
+
+test('a gcp sign-in writes both credential stores, in one invocation', () => {
+  /*
+   * The second step is not optional decoration. `auth login` writes the CLI's
+   * own account and nothing else; ADC — what the SDKs and the Pulumi provider
+   * resolve — is only written by `application-default login`, and only that one
+   * puts `quota_project_id` in it. Running the first alone is the bug this
+   * replaced: `mstage login` reported gcp ready, and the next gcloud call died
+   * on `Reauthentication failed. cannot prompt during non-interactive
+   * execution`.
+   */
+  const ran: string[][] = []
+  const runCommand = (command: string, args: string[]) => {
+    ran.push([command, ...args])
+    return { status: 0 }
+  }
+  assert.deepEqual(signIn('gcp', runCommand), { ok: true })
+  assert.deepEqual(ran, [
+    ['gcloud', 'auth', 'login'],
+    ['gcloud', 'auth', 'application-default', 'login'],
+  ])
+})
+
+test('a sign-in stops at the step that failed, where a sign-out would not', () => {
+  // Deliberately the opposite policy from `signOut`: nothing is left half-done
+  // by an abandoned sign-in, and sending an operator who just cancelled one
+  // browser flow into a second one is noise.
+  const ran: string[][] = []
+  const runCommand = (command: string, args: string[]) => {
+    ran.push([command, ...args])
+    return { status: 1 }
+  }
+  assert.deepEqual(signIn('gcp', runCommand), { ok: false, detail: 'gcloud auth login exited with 1' })
+  assert.deepEqual(ran, [['gcloud', 'auth', 'login']])
 })
 
 test('a failed or missing sign-in reports rather than throws', () => {

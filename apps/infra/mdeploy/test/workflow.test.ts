@@ -38,6 +38,62 @@ test('both clouds can be federated, and each only when it is the one', () => {
 })
 
 /*
+ * Every workflow that federates a GCP identity and then asks mstage about it.
+ *
+ * `checkGcp` requires both GCP credential stores to mint — ADC, which the SDKs
+ * and the Pulumi provider read, and the gcloud CLI's own, which every plain
+ * `gcloud` call uses. On a workstation one sign-in writes both. A runner has no
+ * sign-in at all, so the only thing that can satisfy the second one is the
+ * federation step, and `google-github-actions/auth` is what does:
+ * `src/main.ts:197` exports `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE` — the
+ * gcloud CLI's own credential — from the same block as
+ * `GOOGLE_APPLICATION_CREDENTIALS` four lines below, under
+ * `create_credentials_file` and `export_environment_variables`, both of which
+ * default to `true` in its `action.yml`.
+ *
+ * That gcloud honours the variable for the credential a runner actually gets
+ * was measured, not assumed: with `CLOUDSDK_CONFIG` pointed at an empty
+ * directory, `auth print-access-token` reports `You do not currently have an
+ * active account selected`, and setting only that variable at an
+ * `external_account` file — the workload-identity shape the action writes —
+ * takes gcloud all the way to a real STS token exchange. `setup-gcloud` is not
+ * part of the mechanism.
+ *
+ * So what is pinned here is our side of it: the action, and the two inputs that
+ * would switch the export off. The action's own comment calls the variable
+ * "subject to change", and if it goes, both GCP workflows fail at the preflight
+ * with a message about a stale local session on a machine nobody signed in on
+ * — far enough from the cause to be worth naming here.
+ */
+const GCP_FEDERATING_WORKFLOWS = ['mdeploy.yml', 'mbuild.yml']
+
+test('a GCP identity is federated by the action that also gives gcloud its own credential', () => {
+  for (const name of GCP_FEDERATING_WORKFLOWS) {
+    const source = readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)), 'utf8')
+    const runs = source
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n')
+    assert.match(runs, /uses: google-github-actions\/auth@v\d/, `${name} does not federate GCP`)
+    assert.match(runs, /npm run --silent mstage login/, `${name} does not ask mstage, so this test is checking nothing`)
+    assert.doesNotMatch(
+      runs,
+      /setup-gcloud/,
+      `${name}: the auth action already supplies the CLI credential, so a second step is a second answer`,
+    )
+    // The two inputs that turn the export off. Both default to true, so the
+    // only way to lose the CLI credential from here is to ask for it.
+    for (const input of ['create_credentials_file', 'export_environment_variables']) {
+      assert.doesNotMatch(
+        runs,
+        new RegExp(`${input}:\\s*'?false'?`),
+        `${name} disables ${input}, which is what supplies gcloud its credential`,
+      )
+    }
+  }
+})
+
+/*
  * The AWS role is composed, not looked up in a repository variable.
  *
  * Every other deploy workflow here builds it from `vars.AWS_ACCOUNT_ID` and the

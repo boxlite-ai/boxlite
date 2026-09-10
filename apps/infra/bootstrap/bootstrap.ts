@@ -112,8 +112,11 @@ import {
   parseReviewerIds,
 } from './github.js'
 import { resolveAwsCliPath } from '../shared/exec.js'
+import { execRun, runAs } from './exec-run.js'
 import { sesProductionAccess, sesSmtpPasswordV4 } from './ses-smtp.js'
 import { homeFor, loadConfig, type MstageConfig } from 'mstage/config'
+import { resolveHome } from 'mstage/home'
+import { resolveScope } from 'mstage/scope'
 import { loadBuildConfig, registryFor } from 'mbuild/config'
 import { bootstrapGcp, type GitHubRepository } from './gcp.js'
 import { bootstrapAws } from './aws.js'
@@ -1002,34 +1005,6 @@ function resolveGitHubRepositoryIds(repo: any) {
 }
 
 /**
- * The injected `Run` both gcp.ts's `bootstrapGcp` and aws.ts's `bootstrapAws`
- * take: a result to reconcile against, never a thrown error, because absence
- * of a resource is an answer `gcloud`/`aws` give with a non-zero exit, not a
- * fault in this process. Generic over `command` so one implementation serves
- * both clouds instead of two copies drifting apart.
- */
-async function execRun(command: string, args: string[], options: { stdin?: string } = {}) {
-  try {
-    const stdout = execFileSync(command, args, {
-      input: options.stdin,
-      encoding: 'utf8',
-      stdio: [options.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-      // Generous: a fresh project enabling a dozen APIs, or a workload identity
-      // pool provider settling, both take longer than an IAM call does on AWS.
-      timeout: 120_000,
-      killSignal: 'SIGTERM',
-    })
-    return { code: 0, stdout, stderr: '' }
-  } catch (error: any) {
-    return {
-      code: typeof error.status === 'number' ? error.status : 1,
-      stdout: error.stdout?.toString() ?? '',
-      stderr: error.stderr?.toString() ?? '',
-    }
-  }
-}
-
-/**
  * The GCP half of bootstrap, reached from `main()` below when `mstage.config.json`
  * says this stage's home is `gcp`.
  *
@@ -1085,8 +1060,30 @@ async function bootstrapGcpStage({
     )
   }
 
+  /*
+   * Every gcloud call in the GCP bootstrap, run as the identity mstage resolved.
+   *
+   * Borrowed rather than assembled here, and that is the point: `mstage login`
+   * verifies Application Default Credentials, `childEnvironment` is what hands
+   * them to a subprocess, and a second answer composed in this file is a second
+   * thing that can disagree with the check an operator just ran. It also clears
+   * every AWS variable, so a stale key triple in this shell cannot send a GCP
+   * bootstrap at the other cloud.
+   *
+   * `resolveHome` is safe on a project this has not bootstrapped yet: it builds
+   * clients and an identity, and the state bucket it could not find is behind a
+   * function nothing here calls.
+   *
+   * Wrapped here rather than inside `gcp.ts` because that file takes a `Run` so
+   * a test can drive it without a CLI at all; which credential a real run uses
+   * is this composition point's business.
+   */
+  const scope = resolveScope({ options: { stage }, config, environment: process.env })
+  const { identity } = await resolveHome({ scope })
+  const { env: credentials } = await identity.childEnvironment()
+
   const result = await bootstrapGcp({
-    run: execRun,
+    run: runAs(credentials),
     project: declared.project,
     region: declared.region,
     app: config.app,

@@ -259,22 +259,47 @@ test('the identity provider pins the repository, and never the audience', () => 
   assert.doesNotMatch(condition, /repository ==/, 'the condition pins a mutable name')
 })
 
+const invokeWith = (run: Run) =>
+  bootstrapGcp({
+    run,
+    project: 'boxlite-gcp-dev',
+    region: 'asia-southeast1',
+    app: 'boxlite',
+    stage: 'gcp-dev',
+    repository: 'boxlite-app-gcp-dev',
+    immutableTags: true,
+    github: GITHUB,
+    log: () => {},
+  })
+
 test('a project number that cannot be read stops the run before anything is created', async () => {
-  const run: Run = async (): Promise<RunResult> => ({ code: 0, stdout: '', stderr: '' })
+  // gcloud answered, with nothing. The only way to reach it is a name where an
+  // id was expected, so that is what the message says.
   await assert.rejects(
-    () =>
-      bootstrapGcp({
-        run,
-        project: 'boxlite-gcp-dev',
-        region: 'asia-southeast1',
-        app: 'boxlite',
-        stage: 'gcp-dev',
-        repository: 'boxlite-app-gcp-dev',
-        immutableTags: true,
-        github: GITHUB,
-        log: () => {},
-      }),
-    (error: Error) => error instanceof GcpBootstrapError && /Could not read the number of project/.test(error.message),
+    () => invokeWith(async () => ({ code: 0, stdout: '', stderr: '' })),
+    (error: Error) => error instanceof GcpBootstrapError && /reported no project number/.test(error.message),
+  )
+})
+
+test('a read that failed carries gcloud’s own words, not a guess about why', async () => {
+  /*
+   * The reason this is asserted rather than left to the message that reads best:
+   * every call here carries `--quiet`, so a session needing reauth cannot
+   * prompt and gcloud exits non-zero with `Reauthentication failed. cannot
+   * prompt during non-interactive execution`. Swallowing that reported it as
+   * "check that the project exists", which is the wrong place to look — and
+   * `bootstrap.ts`'s `requireGhAuthenticated` keeps gh's stderr for exactly the
+   * same reason.
+   */
+  const reauth = 'ERROR: (gcloud.projects.describe) There was a problem refreshing your current auth tokens'
+  await assert.rejects(
+    () => invokeWith(async () => ({ code: 1, stdout: '', stderr: reauth })),
+    (error: Error) => {
+      assert.ok(error instanceof GcpBootstrapError)
+      assert.match(error.message, /reading the number of project boxlite-gcp-dev/, 'which read failed')
+      assert.match(error.message, /problem refreshing your current auth tokens/, 'and what gcloud said about it')
+      return true
+    },
   )
 })
 

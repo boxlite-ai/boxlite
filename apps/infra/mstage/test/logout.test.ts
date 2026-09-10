@@ -16,11 +16,18 @@ const configRoot = (login: Record<string, { required?: boolean }>) => {
 }
 
 test('each provider knows the command that ends its session', () => {
+  // A sequence per provider, because a provider can keep a session in more than
+  // one place. gcloud is the one that does: `auth revoke` removes the local
+  // account and leaves the ADC file, and `application-default revoke` does the
+  // reverse — either alone ends half a session.
   assert.deepEqual(SIGN_OUT_COMMANDS, {
-    aws: ['aws', 'logout'],
-    gcp: ['gcloud', 'auth', 'application-default', 'revoke'],
-    github: ['gh', 'auth', 'logout'],
-    auth0: ['auth0', 'logout'],
+    aws: [['aws', 'logout']],
+    gcp: [
+      ['gcloud', 'auth', 'revoke'],
+      ['gcloud', 'auth', 'application-default', 'revoke'],
+    ],
+    github: [['gh', 'auth', 'logout']],
+    auth0: [['auth0', 'logout']],
   })
 })
 
@@ -38,6 +45,34 @@ test('a failed sign-out names the command that failed', () => {
   assert.deepEqual(signOut('auth0', (() => ({ status: 1 })) as any), {
     ok: false,
     detail: 'auth0 logout exited with 1',
+  })
+})
+
+test('a gcp sign-out runs its second step even when the first fails', () => {
+  /*
+   * The step that fails is not the only one that matters. Stopping there would
+   * leave the credential the next step revokes still on the machine, so the
+   * session an operator asked to end is half open — and `mstage login` would
+   * report gcp ready immediately after a sign-out that reported an error.
+   */
+  const ran: string[][] = []
+  const runCommand = (command: string, args: string[]) => {
+    ran.push([command, ...args])
+    return { status: ran.length === 1 ? 1 : 0 }
+  }
+  assert.deepEqual(signOut('gcp', runCommand as any), { ok: false, detail: 'gcloud auth revoke exited with 1' })
+  assert.deepEqual(ran, [
+    ['gcloud', 'auth', 'revoke'],
+    ['gcloud', 'auth', 'application-default', 'revoke'],
+  ])
+})
+
+test('a gcp sign-out that fails at both steps names both', () => {
+  // One of the two is a different fix from the other, so a detail naming only
+  // the first sends someone to re-run a command that already worked.
+  assert.deepEqual(signOut('gcp', (() => ({ status: 1 })) as any), {
+    ok: false,
+    detail: 'gcloud auth revoke exited with 1; gcloud auth application-default revoke exited with 1',
   })
 })
 

@@ -317,7 +317,10 @@ const runLogin = async ({
   // to sign out does not want to be asked to sign back in.
   if (options.logout === true) {
     for (const provider of wanted) {
-      log(`${provider.padEnd(8)}signing out: ${SIGN_OUT_COMMANDS[provider]?.join(' ')}`)
+      // Every step, in order: on GCP a sign-out is two commands, and naming
+      // one of them would describe half of what is about to happen.
+      const ending = SIGN_OUT_COMMANDS[provider]?.map((argv) => argv.join(' ')).join(' then ')
+      log(`${provider.padEnd(8)}signing out: ${ending}`)
       const attempt = signOutWith(provider)
       if (!attempt.ok) log(`        ${attempt.detail}`)
     }
@@ -327,7 +330,10 @@ const runLogin = async ({
   // that now exists rather than the one that did a moment ago.
   if (options.force === true) {
     for (const provider of wanted) {
-      log(`${provider.padEnd(8)}signing in: ${SIGN_IN_COMMANDS[provider]?.join(' ')}`)
+      // Every step, in order: on GCP a sign-in is two commands, and naming one
+      // of them would describe half of what is about to happen.
+      const starting = SIGN_IN_COMMANDS[provider]?.map((argv) => argv.join(' ')).join(' then ')
+      log(`${provider.padEnd(8)}signing in: ${starting}`)
       const attempt = signInWith(provider)
       if (!attempt.ok) log(`        ${attempt.detail}`)
     }
@@ -349,7 +355,7 @@ const runLogin = async ({
     // are reported and stepped over, and without a terminal there is nobody to
     // ask — CI gets the report and the exit code and nothing else.
     if (status.state !== 'ready' && status.required && interactive && options.logout !== true) {
-      const command = SIGN_IN_COMMANDS[provider]?.join(' ') ?? provider
+      const command = SIGN_IN_COMMANDS[provider]?.map((argv) => argv.join(' ')).join('` then `') ?? provider
       log(`${provider.padEnd(8)}${status.state}`)
       log(`        ${status.detail}`)
       if (await confirm(`        Run \`${command}\` now? [y/N] `)) {

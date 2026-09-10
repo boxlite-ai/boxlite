@@ -233,14 +233,27 @@ const ATTRIBUTE_MAPPING = [
 type Gcloud = {
   /** Whether a resource is already there. Absence is an answer, not a failure. */
   present: (args: string[]) => Promise<boolean>
-  /** A question with an answer worth reading. An empty string means "nothing". */
-  read: (args: string[]) => Promise<string>
+  /**
+   * A question with an answer worth reading, whose failure is not an answer.
+   *
+   * Carries the CLI's own message, for the same reason `requireGhAuthenticated`
+   * in `bootstrap.ts` keeps gh's: only gcloud's text separates a project this
+   * identity cannot see from a session that needs refreshing. Swallowing it
+   * reported `Reauthentication failed. cannot prompt during non-interactive
+   * execution` — every call here carries `--quiet`, so it cannot prompt — as
+   * "check that the project exists", which sends someone to the wrong place.
+   *
+   * An empty string still means "nothing", but only when gcloud said so.
+   */
+  read: (what: string, args: string[]) => Promise<string>
   /**
    * A question whose absence is an answer and whose failure is not.
    *
-   * `read` cannot tell the two apart, and for the bootstrap record they must
-   * be: a transient failure read as "no record" makes this file generate a
-   * second bucket name and strand every stored value in the first one.
+   * The difference from `read` is which of the two an empty result means: here
+   * absence is expected and reported as `null`, and for the bootstrap record
+   * the distinction is load-bearing — a transient failure read as "no record"
+   * makes this file generate a second bucket name and strand every stored value
+   * in the first one.
    */
   readOptional: (what: string, args: string[]) => Promise<string | null>
   /** A change. A non-zero exit fails the run, carrying the CLI's own message. */
@@ -256,9 +269,11 @@ const gcloudFor = ({ run, project }: { run: Run; project: string }): Gcloud => {
     async present(args) {
       return (await call(args)).code === 0
     },
-    async read(args) {
+    async read(what, args) {
       const result = await call(args)
-      if (result.code !== 0) return ''
+      if (result.code !== 0) {
+        throw new GcpBootstrapError(`${what}: ${result.stderr.trim() || `gcloud exited ${result.code}`}`)
+      }
       return result.stdout.trim()
     },
     async readOptional(what, args) {
@@ -281,7 +296,9 @@ const gcloudFor = ({ run, project }: { run: Run; project: string }): Gcloud => {
 const ensureServices = async ({ gcloud, log }: { gcloud: Gcloud; log: (line: string) => void }): Promise<void> => {
   log('==> services')
   const enabled = new Set(
-    (await gcloud.read(['services', 'list', '--enabled', '--format=value(config.name)'])).split('\n').filter(Boolean),
+    (await gcloud.read('reading which APIs are enabled', ['services', 'list', '--enabled', '--format=value(config.name)']))
+      .split('\n')
+      .filter(Boolean),
   )
   const missing = SERVICES.filter((service) => !enabled.has(service))
   if (missing.length === 0) {
@@ -727,12 +744,21 @@ export const bootstrapGcp = async ({
 }: GcpBootstrapInput): Promise<GcpBootstrapResult> => {
   const gcloud = gcloudFor({ run, project })
 
-  // Needed for every principalSet below, and a project that cannot be described
-  // is a project these credentials cannot act on — worth failing on first.
-  const projectNumber = await gcloud.read(['projects', 'describe', project, '--format=value(projectNumber)'])
+  /*
+   * Needed for every principalSet below, and the first call this file makes.
+   *
+   * Being first is deliberate twice over: a project these credentials cannot
+   * act on should fail before anything is created, and this is also where an
+   * unusable gcloud session surfaces — so the failure carries gcloud's own
+   * words rather than this file's guess about which of the two it was.
+   */
+  const projectNumber = await gcloud.read(
+    `reading the number of project ${project}`,
+    ['projects', 'describe', project, '--format=value(projectNumber)'],
+  )
   if (!projectNumber) {
     throw new GcpBootstrapError(
-      `Could not read the number of project ${project}. Check that it exists and that these credentials can see it.`,
+      `Project ${project} reported no project number. Check that ${project} is the id and not the name.`,
     )
   }
 
