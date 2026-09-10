@@ -5,8 +5,6 @@
  */
 
 import { OnboardingGuideDialog } from '@/components/OnboardingGuideDialog'
-import { LocalStorageKey } from '@/enums/LocalStorageKey'
-import { setLocalStorageItem } from '@/lib/local-storage'
 import {
   ONBOARDING_ENTRY_HIGHLIGHT_EVENT,
   ONBOARDING_OPEN_EVENT,
@@ -58,15 +56,17 @@ export function OnboardingDialogHost() {
     [userId],
   )
 
+  // Closing a dialog the user opened from the nav means "I am done looking",
+  // not "never offer onboarding again" — so this path no longer writes
+  // SkipOnboarding. Dismissing the auto-open still does, from Boxes.tsx's own
+  // close handler; that and BoxDetails' "I already have a box" are the two
+  // places where the user actually said they were done being offered it.
   const handleClose = useCallback(() => {
-    if (userId) {
-      setLocalStorageItem(`${LocalStorageKey.SkipOnboardingPrefix}${userId}`, 'true')
-    }
     setOpen(false)
     window.setTimeout(() => {
       window.dispatchEvent(new Event(ONBOARDING_ENTRY_HIGHLIGHT_EVENT))
     }, 220)
-  }, [userId])
+  }, [])
 
   return (
     <OnboardingGuideDialog

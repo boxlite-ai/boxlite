@@ -35,6 +35,22 @@ import {
 const BILLING_API_URL = 'http://localhost:3000/api/billing'
 const API_URL = import.meta.env.VITE_API_URL
 
+// Quickstart's agent handoff waits for a box created after it handed the key
+// over, then for that box turning public. Static fixtures can reach neither
+// stage, so both are exposed behind a switch that is off by default:
+//   localStorage['qs-publish-demo'] = 'created' | 'published'
+function quickstartHandoffDemoBox() {
+  const stage = globalThis.localStorage?.getItem('qs-publish-demo')
+  if (stage !== 'created' && stage !== 'published') return null
+  return {
+    ...MOCK_BOXES[0],
+    id: 'mock-box-agent',
+    name: 'agile-otter',
+    createdAt: new Date().toISOString(),
+    public: stage === 'published',
+  }
+}
+
 export const handlers = [
   // Core dashboard surface — fully self-contained so `start:mock` needs no
   // backend and no login (see MockAuthProvider for the fake session).
@@ -71,7 +87,12 @@ export const handlers = [
     // show real per-state counts in mock, not just the unfiltered total.
     const searchParams = new URL(request.url).searchParams
     const states = searchParams.getAll('states').flatMap((s) => s.split(','))
-    if (states.length === 0) return HttpResponse.json(MOCK_PAGINATED_BOXES)
+    if (states.length === 0) {
+      const agentBox = quickstartHandoffDemoBox()
+      if (!agentBox) return HttpResponse.json(MOCK_PAGINATED_BOXES)
+      const items = [agentBox, ...MOCK_PAGINATED_BOXES.items]
+      return HttpResponse.json({ ...MOCK_PAGINATED_BOXES, items, total: items.length })
+    }
     const items = MOCK_BOXES.filter((b) => b.state != null && states.includes(b.state))
     const isRunningCount = states.length === 1 && states[0] === 'started' && searchParams.get('limit') === '1'
     if (isRunningCount) return HttpResponse.json({ items: items.slice(0, 1), total: 62, page: 1, totalPages: 62 })
@@ -81,6 +102,7 @@ export const handlers = [
     const box = MOCK_BOXES.find((b) => b.id === params.boxIdOrName) ?? MOCK_BOXES[0]
     return box ? HttpResponse.json(box) : new HttpResponse(null, { status: 404 })
   }),
+
   // Network / preview surface. `public` is mutated in place so the detail page
   // reflects the toggle after its query is invalidated, the way it does against
   // a real API.

@@ -8,7 +8,10 @@ import goIcon from '@/assets/go.svg'
 import pythonIcon from '@/assets/python.svg'
 import { RustIcon } from '@/assets/RustIcon'
 import typescriptIcon from '@/assets/typescript.svg'
+import { QuickstartAgentHandoff } from '@/components/QuickstartAgentHandoff'
+import { QuickstartCopyButton } from '@/components/QuickstartCopyButton'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { FileText, KeyRound, Server, Terminal } from '@/components/ui/icon'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
@@ -51,16 +54,12 @@ const STAGES = [
   { tag: 'STEP 03', label: 'Execute code in box' },
 ] as const
 
-// Quickstart scenarios. Today there is one; future scenarios slot in here and route to
-// their own guided flow. (For now every scenario uses the SDK 3-step flow below.)
+// The two jobs an account arrives with, carried as equals. `publish` hands the
+// work to the user's own coding agent; `untrusted-code` is the SDK walkthrough
+// that has always lived here, unchanged.
 const SCENARIOS = [
-  {
-    id: 'untrusted-code',
-    tag: 'Box',
-    title: 'Box as your untrusted code container',
-    description:
-      'Run AI-generated or untrusted code in an isolated, disposable Box. Create a key, choose an interface, then execute code safely inside a box.',
-  },
+  { id: 'publish', tab: 'Build an app online' },
+  { id: 'untrusted-code', tab: 'Run untrusted code' },
 ] as const
 
 type ScenarioId = (typeof SCENARIOS)[number]['id']
@@ -156,35 +155,6 @@ function PrimaryBtn({ children, onClick }: { children: React.ReactNode; onClick:
   )
 }
 
-function QuickstartCopyButton({
-  copied,
-  onClick,
-  className,
-}: {
-  copied: boolean
-  onClick: () => void
-  className?: string
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        boxShadow: copied ? '3px 3px 0 hsl(var(--success) / 0.35)' : '3px 3px 0 hsl(var(--border))',
-      }}
-      className={cn(
-        'flex h-7 min-w-[76px] flex-none items-center justify-center border-2 bg-[hsl(var(--code-background))] px-[10px] text-[10px] font-semibold uppercase tracking-[1px] transition-[color,border-color,background-color,transform,box-shadow] active:translate-x-px active:translate-y-px active:shadow-none',
-        copied
-          ? 'border-success bg-[hsl(var(--success)/0.14)] text-success'
-          : 'border-border text-muted-foreground hover:border-brand hover:text-foreground',
-        className,
-      )}
-    >
-      {copied ? '✓ Copied' : 'Copy'}
-    </button>
-  )
-}
-
 type CopyTarget = 'api-key' | 'install' | 'code'
 
 export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: OnboardingGuideDialogProps) {
@@ -194,7 +164,9 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
   const canCreateApiKey = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
 
-  const [scenario, setScenario] = useState<ScenarioId | null>(null)
+  // The two jobs are peers, but one of them has to be showing on open: a new
+  // account has nothing to base the choice on, so it lands on the guided one.
+  const [scenario, setScenario] = useState<ScenarioId>('publish')
   const [step, setStep] = useState(0)
   const [done, setDone] = useState<[boolean, boolean, boolean]>([false, false, false])
   const [language, setLanguage] = useState<OnboardingInterface>(DEFAULT_INTERFACE)
@@ -221,7 +193,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
 
   useEffect(() => {
     if (open) {
-      setScenario(null)
+      setScenario('publish')
       setStep(0)
       setDone([false, false, false])
       setCreatedKey(null)
@@ -230,7 +202,6 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
     }
   }, [open])
 
-  const activeScenario = SCENARIOS.find((s) => s.id === scenario)
   const enterScenario = (id: ScenarioId) => {
     setScenario(id)
     setStep(0)
@@ -238,13 +209,6 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
     setCreatedKey(null)
     setKeyName('')
     setCopiedTarget(null)
-  }
-  const backToScenarios = () => {
-    setScenario(null)
-    setStep(0)
-    setDone([false, false, false])
-    setCreatedKey(null)
-    setKeyName('')
   }
 
   const finished = done.every(Boolean)
@@ -298,54 +262,41 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
       <DialogContent
         className={cn(
           'flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 font-mono sm:max-w-[860px]',
-          scenario !== null && step === 2 && 'h-[88vh]',
+          scenario === 'untrusted-code' && step === 2 && 'h-[88vh]',
         )}
       >
-        {scenario === null ? (
+        {scenario === 'publish' ? (
           <>
-            <DialogHeader className="shrink-0 px-5 pb-2 pt-[18px]">
-              <DialogTitle className="text-[18px] font-bold tracking-[-0.3px]">Quickstart</DialogTitle>
-              <DialogDescription className="font-mono text-[11px] uppercase tracking-[1.5px] text-muted-foreground">
-                {SCENARIOS.length} scenario{SCENARIOS.length === 1 ? '' : 's'} available
+            {/* The dialog is opened from a nav button labelled "Quickstart" and
+                the tabs below say what it does, so a visible title would only
+                repeat the click that got here. Kept for screen readers. */}
+            <DialogHeader className="sr-only">
+              <DialogTitle>Quickstart</DialogTitle>
+              <DialogDescription className="sr-only">
+                Two ways to start: hand the job to your coding agent, or run untrusted code yourself.
               </DialogDescription>
             </DialogHeader>
-            <div className="scrollbar-elevated min-h-0 flex-1 overflow-y-auto border-t border-border px-5 pb-3 pt-[24px]">
-              <div className="grid grid-cols-2 gap-[20px]">
-                {SCENARIOS.map((sc) => (
-                  <button
-                    key={sc.id}
-                    type="button"
-                    onClick={() => enterScenario(sc.id)}
-                    className="group relative flex min-h-[168px] flex-col border border-dashed border-border bg-[hsl(var(--code-background))] p-[16px] text-left transition-colors hover:border-brand"
-                  >
-                    <div className="text-[13px] font-semibold leading-snug">{sc.title}</div>
-                    <div className="mt-[6px] font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
-                      3 steps · sdk/api
-                    </div>
-                    <div className="mt-auto flex items-center gap-[7px] pt-4 font-mono text-[11px] uppercase tracking-[1.5px]">
-                      Start
-                      <span className="transition-transform group-hover:translate-x-1">▸</span>
-                      <span
-                        className="inline-block h-[12px] w-[7px] bg-brand opacity-0 transition-opacity group-hover:opacity-100"
-                        style={{ animation: 'blink 1s steps(1) infinite' }}
-                      />
-                    </div>
-                  </button>
-                ))}
 
-                {/* coming-soon tile — keeps the grid alive + hints extensibility (ASCII shimmer) */}
-                <div className="relative flex min-h-[168px] flex-col border border-dashed border-border/60 p-[16px] opacity-70">
-                  <div className="text-[13px] font-semibold leading-snug text-muted-foreground">
-                    Box as your agent security runtime
-                  </div>
-                  <div className="mt-[6px] font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground/70">
-                    coming soon
-                  </div>
-                  <div className="halftone-brand mt-auto h-[34px] w-full opacity-60" />
-                </div>
-              </div>
+            {/* Two jobs, equal weight. Radix Tabs so keyboard and screen-reader
+                behaviour comes from the same primitive the console already uses. */}
+            <Tabs
+              value={scenario}
+              onValueChange={(v) => enterScenario(v as ScenarioId)}
+              className="shrink-0 px-5 pt-[18px]"
+            >
+              <TabsList variant="segmented">
+                {SCENARIOS.map((sc) => (
+                  <TabsTrigger key={sc.id} value={sc.id}>
+                    {sc.tab}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+
+            <div className="scrollbar-elevated mt-[18px] min-h-0 flex-1 overflow-y-auto border-t border-border">
+              <QuickstartAgentHandoff restApiUrl={restApiUrl} onProgressChange={onProgressChange} />
             </div>
-            <div className="flex shrink-0 items-center justify-between border-t border-border px-5 py-[14px]">
+            <div className="flex shrink-0 items-center border-t border-border px-5 py-[14px]">
               <button
                 type="button"
                 onClick={() => onOpenChange(false)}
@@ -357,24 +308,34 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
           </>
         ) : (
           <>
-            <DialogHeader className="shrink-0 px-5 pb-4 pt-[18px]">
-              <button
-                type="button"
-                onClick={backToScenarios}
-                className="mb-[6px] flex w-fit items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-              >
-                ‹ Quickstart
-              </button>
-              <DialogTitle className="text-[15px] font-bold leading-snug tracking-[-0.3px]">
-                {activeScenario?.title}
-              </DialogTitle>
-              <DialogDescription className="text-[11.5px] text-muted-foreground">
-                Three steps, straight from code.
+            {/* The dialog is opened from a nav button labelled "Quickstart" and
+                the tabs below say what it does, so a visible title would only
+                repeat the click that got here. Kept for screen readers. */}
+            <DialogHeader className="sr-only">
+              <DialogTitle>Quickstart</DialogTitle>
+              <DialogDescription className="sr-only">
+                Two ways to start: hand the job to your coding agent, or run untrusted code yourself.
               </DialogDescription>
             </DialogHeader>
 
+            {/* Two jobs, equal weight. Radix Tabs so keyboard and screen-reader
+                behaviour comes from the same primitive the console already uses. */}
+            <Tabs
+              value={scenario}
+              onValueChange={(v) => enterScenario(v as ScenarioId)}
+              className="shrink-0 px-5 pt-[18px]"
+            >
+              <TabsList variant="segmented">
+                {SCENARIOS.map((sc) => (
+                  <TabsTrigger key={sc.id} value={sc.id}>
+                    {sc.tab}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+
             {/* stage rail */}
-            <div className="flex shrink-0 items-center px-5 pb-4">
+            <div className="flex shrink-0 items-center px-5 pb-4 pt-[18px]">
               {STAGES.map((s, i) => {
                 const isDone = done[i]
                 const active = step === i
