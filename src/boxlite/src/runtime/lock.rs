@@ -64,11 +64,9 @@ impl RuntimeLock {
             if result != 0 {
                 let err = std::io::Error::last_os_error();
                 if err.kind() == std::io::ErrorKind::WouldBlock {
-                    return Err(BoxliteError::Internal(format!(
-                        "Another BoxliteRuntime is already using directory: {}\n\
-                         Only one runtime instance can use a BOXLITE_HOME directory at a time.",
-                        home_dir.display()
-                    )));
+                    return Err(BoxliteError::RuntimeInUse {
+                        home_dir: home_dir.to_path_buf(),
+                    });
                 } else {
                     return Err(BoxliteError::Storage(format!(
                         "failed to acquire lock: {}",
@@ -144,7 +142,9 @@ mod tests {
         let result = RuntimeLock::acquire(&dir_path);
         assert!(result.is_err());
 
-        let err_msg = result.unwrap_err().to_string();
+        let error = result.unwrap_err();
+        assert!(matches!(&error, BoxliteError::RuntimeInUse { home_dir } if home_dir == &dir_path));
+        let err_msg = error.to_string();
         assert!(err_msg.contains("Another BoxliteRuntime"));
     }
 

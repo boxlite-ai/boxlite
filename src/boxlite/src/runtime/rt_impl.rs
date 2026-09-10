@@ -269,12 +269,13 @@ impl RuntimeImpl {
             ))
         })?;
 
-        let runtime_lock = RuntimeLock::acquire(layout.home_dir()).map_err(|e| {
-            BoxliteError::Internal(format!(
+        let runtime_lock = RuntimeLock::acquire(layout.home_dir()).map_err(|e| match e {
+            BoxliteError::RuntimeInUse { .. } => e,
+            e => BoxliteError::Internal(format!(
                 "Failed to acquire runtime lock at {}: {}",
                 layout.home_dir().display(),
                 e
-            ))
+            )),
         })?;
 
         // Clean temp dir contents to avoid stale files from previous runs
