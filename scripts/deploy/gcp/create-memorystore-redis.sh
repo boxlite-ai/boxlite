@@ -23,30 +23,31 @@ source "$GCP_SCRIPT_DIR/../../common.sh"
 # Configuration
 # ============================================================================
 
-DEFAULT_NAME="boxlite-dev-cache"
+# Names, labels and the display name derive from the stage unless overridden:
+# boxlite-<stage>-cache, boxlite-<stage>-redis-auth, boxlite-<stage>-redis-ca.
+DEFAULT_STAGE="dev"
 DEFAULT_REGION="asia-southeast1"
 DEFAULT_NETWORK="boxlite-backoffice-dev"
 DEFAULT_RESERVED_RANGE="boxlite-backoffice-dev-private-services"
 DEFAULT_TIER="basic"
 DEFAULT_SIZE="1"
 DEFAULT_REDIS_VERSION="redis_7_2"
-DEFAULT_AUTH_SECRET="boxlite-dev-redis-auth"
-DEFAULT_CA_SECRET="boxlite-dev-redis-ca"
 # UTC. 19:00 UTC is 03:00 in Singapore, where the stack runs.
 DEFAULT_MAINTENANCE_DAY="sunday"
 DEFAULT_MAINTENANCE_HOUR="19"
-LABELS="app=boxlite,env=dev,component=cache,managed-by=create-memorystore-redis"
 
 PROJECT=""
-NAME="$DEFAULT_NAME"
+STAGE="$DEFAULT_STAGE"
+NAME=""
 REGION="$DEFAULT_REGION"
 NETWORK="$DEFAULT_NETWORK"
 RESERVED_RANGE="$DEFAULT_RESERVED_RANGE"
 TIER="$DEFAULT_TIER"
 SIZE="$DEFAULT_SIZE"
 REDIS_VERSION="$DEFAULT_REDIS_VERSION"
-AUTH_SECRET="$DEFAULT_AUTH_SECRET"
-CA_SECRET="$DEFAULT_CA_SECRET"
+AUTH_SECRET=""
+CA_SECRET=""
+LABELS=""
 ENABLE_TLS=true
 ROTATE_AUTH=false
 DRY_RUN=false
@@ -74,14 +75,15 @@ changed.
 OPTIONS:
     --project PROJECT           GCP project ID (default: gcloud config)
     --region REGION             Region (default: $DEFAULT_REGION)
+    --stage STAGE               Stage; derives names and labels (default: $DEFAULT_STAGE)
     --network NETWORK           VPC network name (default: $DEFAULT_NETWORK)
     --reserved-ip-range NAME    Private Service Access range (default: $DEFAULT_RESERVED_RANGE)
-    --name NAME                 Instance name (default: $DEFAULT_NAME)
+    --name NAME                 Instance name (default: boxlite-<stage>-cache)
     --tier basic|standard       Tier (default: $DEFAULT_TIER)
     --size GIB                  Memory in GiB (default: $DEFAULT_SIZE)
     --redis-version VERSION     e.g. redis_7_2 (default: $DEFAULT_REDIS_VERSION)
-    --auth-secret NAME          Secret Manager name for the AUTH string (default: $DEFAULT_AUTH_SECRET)
-    --ca-secret NAME            Secret Manager name for the server CA (default: $DEFAULT_CA_SECRET)
+    --auth-secret NAME          Secret Manager name for the AUTH string (default: boxlite-<stage>-redis-auth)
+    --ca-secret NAME            Secret Manager name for the server CA (default: boxlite-<stage>-redis-ca)
     --no-tls                    Disable in-transit encryption (port 6379, no CA secret)
     --rotate-auth               Regenerate the AUTH string of an existing instance
     --dry-run                   Print the mutating commands instead of running them
@@ -90,6 +92,7 @@ OPTIONS:
 EXAMPLES:
     $(basename "$0")
     $(basename "$0") --project avid-vine-500315-u4 --dry-run
+    $(basename "$0") --stage dev-db --network boxlite-dev-db --reserved-ip-range boxlite-dev-db-private-services
     $(basename "$0") --rotate-auth
 
 EOF
@@ -105,6 +108,10 @@ parse_args() {
                 ;;
             --region)
                 REGION="$2"
+                shift 2
+                ;;
+            --stage)
+                STAGE="$2"
                 shift 2
                 ;;
             --network)
@@ -181,6 +188,14 @@ validate_args() {
         print_error "--size must be an integer number of GiB, got: $SIZE"
         exit 1
     fi
+    if ! [[ "$STAGE" =~ ^[a-z][a-z0-9-]{0,20}$ ]]; then
+        print_error "--stage must be lowercase letters, digits and hyphens, got: $STAGE"
+        exit 1
+    fi
+    NAME="${NAME:-boxlite-$STAGE-cache}"
+    AUTH_SECRET="${AUTH_SECRET:-boxlite-$STAGE-redis-auth}"
+    CA_SECRET="${CA_SECRET:-boxlite-$STAGE-redis-ca}"
+    LABELS="app=boxlite,env=$STAGE,component=cache,managed-by=create-memorystore-redis"
 }
 
 # Run a mutating gcloud command, or print it under --dry-run. Arguments are
@@ -345,7 +360,7 @@ step_create_instance() {
         --transit-encryption-mode="$tls_mode" \
         --maintenance-window-day="$DEFAULT_MAINTENANCE_DAY" \
         --maintenance-window-hour="$DEFAULT_MAINTENANCE_HOUR" \
-        --display-name="BoxLite dev cache" \
+        --display-name="BoxLite $STAGE cache" \
         --labels="$LABELS"
     if [ "$DRY_RUN" = true ]; then
         print_info "Would create instance $NAME"
