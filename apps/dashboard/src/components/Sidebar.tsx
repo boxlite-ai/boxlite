@@ -92,7 +92,7 @@ function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: T
             key={option.value}
             value={option.value}
             aria-label={`Use ${option.label.toLowerCase()} theme`}
-            className="h-9 justify-center gap-1.5 rounded-none border-0 border-r border-border text-xs text-muted-foreground transition-colors last:border-r-0 hover:text-foreground data-[state=on]:bg-card data-[state=on]:font-semibold data-[state=on]:text-foreground"
+            className="h-9 justify-center gap-1.5 rounded-none border-0 border-r border-border text-xs text-muted-foreground transition-colors last:border-r-0 hover:text-foreground data-[state=on]:bg-[hsl(var(--brand)/0.12)] data-[state=on]:font-semibold data-[state=on]:text-foreground data-[state=on]:shadow-[inset_0_0_0_1px_hsl(var(--brand))]"
           >
             {option.icon}
             <span>{option.label}</span>

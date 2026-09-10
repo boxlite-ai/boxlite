@@ -127,7 +127,7 @@ function InterfacePicker({
                     className={cn(
                       'flex min-h-[34px] items-center justify-center gap-2 border px-[12px] py-[7px] text-[12px] transition-colors',
                       on
-                        ? 'border-brand bg-[hsl(var(--brand)/0.12)] font-semibold text-brand'
+                        ? 'border-brand bg-[hsl(var(--brand)/0.12)] font-semibold text-foreground'
                         : 'border-border text-muted-foreground hover:border-brand/70 hover:text-foreground',
                     )}
                   >

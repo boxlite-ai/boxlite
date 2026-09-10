@@ -86,7 +86,9 @@ export function CostOverTime() {
                 key={mode}
                 onClick={() => setView(mode)}
                 className={`px-3 py-1.5 font-mono text-[11px] uppercase tracking-[1px] transition-colors ${
-                  view === mode ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'
+                  view === mode
+                    ? 'bg-[hsl(var(--brand)/0.12)] font-semibold text-foreground shadow-[inset_0_0_0_1px_hsl(var(--brand))]'
+                    : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
                 {mode}
