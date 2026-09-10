@@ -5,6 +5,7 @@ use std::{path::PathBuf, process::Child, sync::Mutex, time::Instant};
 use crate::{
     BoxID,
     runtime::layout::BoxFilesystemLayout,
+    util::PidRecord,
     vmm::{InstanceSpec, VmmKind},
 };
 
@@ -70,50 +71,57 @@ impl ShimHandler {
         }
     }
 
-    /// Create a handler for an existing VM (attach mode).
+    /// Create a handler for an existing VM (attach mode) from its recorded
+    /// identity.
     ///
     /// Used when reconnecting to a running box. We don't have a Child handle
     /// or keepalive, so we manage the process by PID only.
     ///
+    /// The fingerprint has to arrive from the record written when the shim was
+    /// spawned (`shim.pid`); sampling `/proc` here instead would fingerprint
+    /// whatever holds the pid *now*, so every later identity check would
+    /// compare that reading against itself and pass for a stranger — the guard
+    /// would still be spelled out and would mean nothing.
+    ///
     /// # Arguments
-    /// * `pid` - Process ID of the running VM
-    /// * `box_id` - Box identifier (for logging)
-    pub fn from_pid(pid: u32, box_id: BoxID) -> Self {
+    /// * `record` - PID + start-time as recorded at spawn
+    /// * `box_id` - Box identifier (for logging and the cgroup reap)
+    pub fn from_pid_record(record: PidRecord, box_id: BoxID) -> Self {
         Self {
-            pid,
+            pid: record.pid,
             box_id,
-            start_time: crate::util::process_start_time(pid),
+            start_time: record.start_time,
             process: None,
             keepalive: None,
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
     }
 
+    /// The identity this handler was built for.
+    ///
+    /// Same shape as the `shim.pid` record it came from, so the guards below
+    /// are the record's own rules rather than a second copy of them.
+    fn recorded(&self) -> PidRecord {
+        PidRecord {
+            pid: self.pid,
+            start_time: self.start_time,
+        }
+    }
+
     /// Whether `self.pid` is still the process this handler was built for.
     ///
-    /// Compares the live `/proc` start-time against the one captured at
-    /// construction. A dead pid reads `None` and fails the comparison, which is
-    /// correct: there is no tree left to sweep. Returns `true` when no
-    /// fingerprint was captured — identity cannot be disproven, so the sweep
-    /// keeps the behaviour it had before this guard existed.
+    /// A dead pid reads `None` and fails the comparison, which is correct:
+    /// there is no tree left to sweep.
     fn pid_identity_holds(&self) -> bool {
-        match self.start_time {
-            Some(captured) => crate::util::process_start_time(self.pid) == Some(captured),
-            None => true,
-        }
+        self.recorded().identity_holds()
     }
 
     /// Whether the process this handler was built for is still running.
     ///
-    /// Not the same question as bare liveness, and teardown must ask this one: a
-    /// pid recycled since construction is alive, yet answering "yes" for it lets
-    /// a wait loop run its full course and then escalate onto a stranger. A
-    /// recycled pid has to read as gone.
-    ///
     /// Collapses to plain liveness for a handler with no fingerprint, which is
     /// the most that can be said about one.
     fn recorded_process_is_running(&self) -> bool {
-        crate::util::is_process_alive(self.pid) && self.pid_identity_holds()
+        self.recorded().still_running()
     }
 
     /// Graceful shutdown of the recorded process: SIGTERM, wait, then SIGKILL.
@@ -530,6 +538,20 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    /// Attach-mode handler for a pid that is still the process it names: the
+    /// fingerprint is read from the OS now, which is what `shim.pid` holds for
+    /// a shim that has not exited. Tests that need the recycled case override
+    /// `start_time` on top of this.
+    fn attached_handler(pid: u32, box_id: &str) -> ShimHandler {
+        ShimHandler::from_pid_record(
+            PidRecord {
+                pid,
+                start_time: crate::util::process_start_time(pid),
+            },
+            BoxID::parse(box_id).expect("valid id"),
+        )
+    }
+
     /// Captures `tracing` output into a shared byte buffer so a test can
     /// assert what was (and wasn't) written by an event emitted within
     /// `tracing::subscriber::with_default`.
@@ -616,7 +638,7 @@ mod tests {
             .expect("spawn sleep");
         let pid = child.id();
 
-        let live = ShimHandler::from_pid(pid, BoxID::parse("pidguardtest").expect("valid id"));
+        let live = attached_handler(pid, "pidguardtest");
         assert!(
             live.start_time.is_some(),
             "the OS must report a start-time for a process we just spawned"
@@ -630,7 +652,7 @@ mod tests {
         // looks like from here.
         let recycled = ShimHandler {
             start_time: live.start_time.map(|t| t.wrapping_add(1)),
-            ..ShimHandler::from_pid(pid, BoxID::parse("pidguardtest").expect("valid id"))
+            ..attached_handler(pid, "pidguardtest")
         };
         assert!(
             !recycled.pid_identity_holds(),
@@ -641,7 +663,7 @@ mod tests {
         // behaviour it had before the guard existed.
         let legacy = ShimHandler {
             start_time: None,
-            ..ShimHandler::from_pid(pid, BoxID::parse("pidguardtest").expect("valid id"))
+            ..attached_handler(pid, "pidguardtest")
         };
         assert!(
             legacy.pid_identity_holds(),
@@ -669,7 +691,7 @@ mod tests {
         // be this pid's — what a recycled pid looks like at stop() time.
         let mut handler = ShimHandler {
             start_time: crate::util::process_start_time(pid).map(|t| t.wrapping_add(1)),
-            ..ShimHandler::from_pid(pid, BoxID::parse("pidguardtest").expect("valid id"))
+            ..attached_handler(pid, "pidguardtest")
         };
         assert!(
             handler.start_time.is_some(),
@@ -899,8 +921,7 @@ mod tests {
                 Command::new("sleep").arg("3600").spawn().ok()
             });
 
-            let mut handler =
-                ShimHandler::from_pid(victim, BoxID::parse("pidreusetest").expect("valid id"));
+            let mut handler = attached_handler(victim, "pidreusetest");
             assert!(
                 handler.pid_identity_holds(),
                 "the handler must start out owning its pid, or the branch under \

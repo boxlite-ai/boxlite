@@ -5,10 +5,11 @@
 //!
 //! Identity is read from the canonical PID file (`shim.pid`) and verified
 //! via start-time fingerprint. `state.pid` from the DB is a cache that
-//! could lag (PID reuse, external kill); the file + ProcessIdentity is
-//! the trust anchor.
+//! could lag (PID reuse, external kill); the file's record is the trust
+//! anchor, and the handler carries that record rather than a fresh reading
+//! so its own guards keep meaning something after this task returns.
 //!
-//! Crash enrichment: when ProcessIdentity is Absent AND the shim left a
+//! Crash enrichment: when no record is actionable AND the shim left a
 //! parseable exit file behind, the error carries the formatted
 //! CrashReport so callers see the actual crash cause instead of a
 //! generic "shim no longer alive" message.
@@ -19,7 +20,7 @@ use crate::net::NetworkBackendConfig;
 use crate::pipeline::PipelineTask;
 use crate::runtime::options::NetworkSpec;
 use crate::runtime::rt_impl::stash_exit_file;
-use crate::util::{PidFileReader, ProcessIdentity};
+use crate::util::PidFileReader;
 use crate::vmm::ExitInfo;
 use crate::vmm::controller::ShimHandler;
 use async_trait::async_trait;
@@ -49,21 +50,21 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
         let pid_file = layout.pid_file_path();
         let exit_file = layout.exit_file_path();
 
-        let pid = match PidFileReader::at(&pid_file).process_identity() {
-            ProcessIdentity::Verified(pid) | ProcessIdentity::Legacy(pid) => {
+        let record = match PidFileReader::at(&pid_file).actionable_record() {
+            Some(record) => {
                 // Live shim wins — archive any prior-lifecycle exit file
                 // so a future crash gets the canonical slot.
                 if exit_file.exists() {
                     stash_exit_file(&layout);
                     tracing::warn!(
                         box_id = %box_id,
-                        pid,
+                        pid = record.pid,
                         "Live shim found alongside stale exit file; stashed to exit.previous"
                     );
                 }
-                pid
+                record
             }
-            ProcessIdentity::Absent => {
+            None => {
                 // No live shim. If an exit file is present, surface the
                 // crash cause; otherwise fail with a generic message.
                 let msg = if ExitInfo::from_file(&exit_file).is_some() {
@@ -92,7 +93,7 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
             }
         };
 
-        let handler = ShimHandler::from_pid(pid, config_id);
+        let handler = ShimHandler::from_pid_record(record, config_id);
 
         // The box's one network backend on the reattach path: control over the
         // live gvproxy. No wire spec is produced on reattach; PortPublishTask
@@ -116,7 +117,7 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
 
         tracing::info!(
             box_id = %box_id,
-            pid,
+            pid = record.pid,
             "Attached to existing VM process"
         );
 
