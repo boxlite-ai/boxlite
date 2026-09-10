@@ -211,6 +211,12 @@ impl CreateBoxRequest {
             volumes,
             detach: Some(options.detach),
             tty: options.tty.then_some(true),
+            // Only the capability policy crosses the wire. Like `security`,
+            // `advanced.network_rate_limit` is deliberately absent: shaping is
+            // done by the local gvproxy bridge and a remote server enforces its
+            // own network policy, so there is no field for a client to set. The
+            // matching refusal lives in BoxOptions::sanitize_remote.
+            //
             // `Some`, not "non-empty", decides whether this reaches the wire:
             // an explicitly empty policy is still explicit, and collapsing it
             // into the same shape as "never touched" would leave the server
@@ -1012,6 +1018,31 @@ mod tests {
         assert!(
             !json.contains("security"),
             "wire form must NOT carry any security knob; got: {json}"
+        );
+    }
+
+    /// Network shaping is done by the local gvproxy bridge, so the wire form
+    /// has no field for it and a local value must not leak into the request.
+    #[test]
+    fn test_create_box_request_never_carries_network_rate_limit() {
+        use crate::runtime::advanced_options::{AdvancedBoxOptions, NetworkRateLimit};
+        use crate::runtime::options::{BoxOptions, RootfsSpec};
+
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.network_rate_limit = NetworkRateLimit {
+            tx_kbps: Some(10_000),
+            rx_kbps: Some(20_000),
+        };
+        let opts = BoxOptions {
+            rootfs: RootfsSpec::Image("alpine:latest".into()),
+            advanced,
+            ..Default::default()
+        };
+        let req = CreateBoxRequest::from_options(&opts, None);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(
+            !json.contains("rate_limit") && !json.contains("kbps"),
+            "wire form must NOT carry a network rate limit; got: {json}"
         );
     }
 

@@ -52,7 +52,8 @@ pub use litebox::{
 };
 pub use metrics::{BoxMetrics, RuntimeMetrics};
 pub use runtime::advanced_options::{
-    AdvancedBoxOptions, ContainerCapabilities, HealthCheckOptions, ResourceLimits, SecurityOptions,
+    AdvancedBoxOptions, ContainerCapabilities, HealthCheckOptions, NetworkRateLimit,
+    ResourceLimits, SecurityOptions,
 };
 pub use runtime::options::{
     BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, ImageRegistry,
