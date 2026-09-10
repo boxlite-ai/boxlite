@@ -272,12 +272,27 @@ const invokeWith = (run: Run) =>
     log: () => {},
   })
 
-test('a project number that cannot be read stops the run before anything is created', async () => {
-  // gcloud answered, with nothing. The only way to reach it is a name where an
-  // id was expected, so that is what the message says.
+test('a project described with no number stops the run before anything is created', async () => {
+  /*
+   * A guard rather than a diagnosis, and the message says so instead of naming
+   * a cause. Every route that was worth suspecting exits non-zero and is caught
+   * one branch up — `projects describe` given a project's display name answers
+   * `INVALID_ARGUMENT`, not an empty number. What is left is a success with
+   * nothing in it, which nothing here can explain and every principalSet below
+   * would be built from.
+   *
+   * The command is asserted along with the refusal. A message that can name no
+   * cause has to hand over something to run, or the only way forward is to read
+   * this file.
+   */
   await assert.rejects(
     () => invokeWith(async () => ({ code: 0, stdout: '', stderr: '' })),
-    (error: Error) => error instanceof GcpBootstrapError && /reported no project number/.test(error.message),
+    (error: Error) => {
+      assert.ok(error instanceof GcpBootstrapError)
+      assert.match(error.message, /printed no project number/, 'what happened')
+      assert.match(error.message, /gcloud projects describe boxlite-gcp-dev --format='value\(projectNumber\)'/, 'what to run')
+      return true
+    },
   )
 })
 

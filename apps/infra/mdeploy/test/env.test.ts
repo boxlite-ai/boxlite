@@ -148,10 +148,20 @@ test('a key the API compares against is held by the API too, or the caller is re
    *   OTEL_COLLECTOR_API_KEY — the collector's exports answered 401 while the
    *   collector itself looked healthy, so a stage simply had no telemetry.
    *
-   * Asserted as a class rather than one key at a time, and against the real
-   * declaration rather than a fixture: the defect was this file's contents, so a
-   * fixture would have agreed with itself. The pairs come from the strategy's
-   * own branches — a new one added there belongs here.
+   * Asserted against the real declaration rather than a fixture: the defect was
+   * the declaration's contents, so a fixture would have agreed with itself.
+   *
+   * The list is written out rather than derived, and it is shorter than the
+   * strategy's branch list on purpose. `api-key.strategy.ts` compares four keys;
+   * the other two belong to the health-check and billing services, which this
+   * stack does not deploy — `mbuild.config.json` builds `api`, `proxy` and
+   * `otel-collector`, and nothing under `apps/infra` names either key. So they
+   * have no caller group to be named for, and demanding one would fail every
+   * stage over a service that is not there.
+   *
+   * What that costs is worth stating: a fifth branch, or a caller this stack
+   * starts deploying, does not trip this test. It has to be added here, and
+   * this paragraph is the only thing that says so.
    */
   const compared = [
     { caller: 'proxy', key: 'PROXY_API_KEY' },

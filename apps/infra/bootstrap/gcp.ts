@@ -758,7 +758,8 @@ export const bootstrapGcp = async ({
   )
   if (!projectNumber) {
     throw new GcpBootstrapError(
-      `Project ${project} reported no project number. Check that ${project} is the id and not the name.`,
+      `gcloud described project ${project} but printed no project number. ` +
+        `Read it directly with: gcloud projects describe ${project} --format='value(projectNumber)'`,
     )
   }
 
