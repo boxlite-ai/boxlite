@@ -21,7 +21,7 @@
  */
 
 import type { ClickHouse, ClickHouseProvider, ClickHouseRequest } from '../../clickhouse.ts'
-import type { NetworkBinding } from '../../network.ts'
+import type { NetworkBinding, WorkloadRole } from '../../network.ts'
 
 /**
  * What each requested size answers to.
@@ -45,6 +45,21 @@ export const MACHINE = { small: 'n4-standard-2', medium: 'n4-standard-4' } as co
 export const DISK_TYPE = 'hyperdisk-balanced'
 
 const HTTP_PORT = 8123
+
+/**
+ * Every role that speaks to this database, as the firewall has to name them.
+ *
+ * Two, and the second one is easy to lose: the collector writes and the API
+ * reads back. A rule keyed on service accounts admits exactly what it lists, so
+ * a caller left out is *dropped* rather than refused — the reader waits out a
+ * connect timeout against a database that is plainly running, ClickHouse logs
+ * nothing because nothing arrived, and the deny at 65534 is the only trace.
+ *
+ * Declared here, beside the rule that consumes it, rather than spelled out at
+ * the composition root: that is where it was one account with a comment saying
+ * two, which is a widening or a narrowing nothing type-checks.
+ */
+export const CLICKHOUSE_CALLERS: readonly WorkloadRole[] = ['otel-collector', 'api']
 
 /** Ubuntu's own image family, the same release the runner hosts use. */
 const IMAGE = 'ubuntu-os-cloud/ubuntu-2404-lts-amd64'
@@ -70,7 +85,7 @@ export const gcpClickHouseProvider =
     network,
     project,
     zone,
-    serviceAccount,
+    callers,
     managed,
     dependsOn,
   }: {
@@ -81,8 +96,12 @@ export const gcpClickHouseProvider =
      * and the region itself is not needed here — the zone already names it.
      */
     zone: string
-    /** The identity the host runs as, so it may read its own three secrets. */
-    serviceAccount: $util.Output<string>
+    /**
+     * The identities admitted to the HTTP port, one entry per caller. See
+     * `CLICKHOUSE_CALLERS`: this is not the identity the host runs as, which is
+     * the account created below and never handed in.
+     */
+    callers: $util.Output<string>[]
     managed: { url: string; writerSecretArn: string; readerSecretArn: string } | null
     dependsOn: any[]
   }): ClickHouseProvider =>
@@ -118,7 +137,9 @@ export const gcpClickHouseProvider =
           passwordRef: $util.output(managed.readerSecretArn),
           credentialVersion: $util.output(managed.readerSecretArn),
         },
-        binding: { cloud: 'gcp', clientGrant: serviceAccount },
+        // A managed endpoint admits whoever holds its credential; there is no
+        // rule of ours to name anybody in, as on the AWS side.
+        binding: { cloud: 'gcp', clientGrants: [] },
         id: $util.output(managed.url),
         ready: [],
       }
@@ -239,8 +260,10 @@ echo "clickhouse setup complete"
       direction: 'INGRESS',
       allows: [{ protocol: 'tcp', ports: [String(HTTP_PORT)] }],
       // Whoever the caller is, by identity — the collector writes and the API
-      // reads, and nothing else in the network has a reason to reach this.
-      sourceServiceAccounts: [serviceAccount],
+      // reads, and nothing else in the network has a reason to reach this. Both
+      // of them, from one list: see `CLICKHOUSE_CALLERS` for what naming only
+      // the writer here costs.
+      sourceServiceAccounts: callers,
       targetServiceAccounts: [host.email],
     })
 
@@ -259,7 +282,7 @@ echo "clickhouse setup complete"
         passwordRef: reader.version.name,
         credentialVersion: reader.version.name,
       },
-      binding: { cloud: 'gcp', clientGrant: serviceAccount },
+      binding: { cloud: 'gcp', clientGrants: callers },
       id: instance.id,
       ready: [instance, firewall],
     }

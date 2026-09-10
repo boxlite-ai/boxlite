@@ -40,9 +40,16 @@ export type ClickHouseAccount = {
   credentialVersion: $util.Output<string>
 }
 
+/**
+ * What marks a workload as allowed to connect, in the shape its cloud uses.
+ *
+ * One value on AWS, where a security group admits every member of it at once;
+ * a list on GCP, where admission is per identity — so the two callers this
+ * database has are two entries there and cannot be collapsed into one.
+ */
 export type ClickHouseBinding =
   | { cloud: 'aws'; clientGrant: $util.Output<string> }
-  | { cloud: 'gcp'; clientGrant: $util.Output<string> }
+  | { cloud: 'gcp'; clientGrants: $util.Output<string>[] }
 
 /**
  * A stage that keeps no telemetry.

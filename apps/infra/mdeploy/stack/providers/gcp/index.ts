@@ -23,7 +23,7 @@ import { gcpImages } from '../../image.ts'
 import { gcpAlarmProvider } from './alarms.ts'
 import { gcpApiProvider } from './api.ts'
 import { gcpCacheProvider } from './cache.ts'
-import { gcpClickHouseProvider } from './clickhouse.ts'
+import { CLICKHOUSE_CALLERS, gcpClickHouseProvider } from './clickhouse.ts'
 import { gcpClusterProvider } from './cluster.ts'
 import { gcpCollectorProvider } from './collector.ts'
 import { gcpDatabaseProvider } from './database.ts'
@@ -111,8 +111,10 @@ export const gcpStackProviders = ({
         project,
         zone,
         // The collector writes and the API reads; both carry an account, and
-        // the firewall admits those two and nothing else.
-        serviceAccount: placement(network, 'otel-collector').serviceAccount,
+        // the firewall admits those two and nothing else. The roles come from
+        // the module that owns the rule, so this cannot hand over one identity
+        // while that comment claims two — which is exactly what it used to do.
+        callers: CLICKHOUSE_CALLERS.map((role) => placement(network, role).serviceAccount),
         managed: managedClickHouse,
         dependsOn: network.ready,
       }),

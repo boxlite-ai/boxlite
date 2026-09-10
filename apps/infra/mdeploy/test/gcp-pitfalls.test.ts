@@ -23,11 +23,26 @@ import { apiEnvironmentFrom } from '../src/api-environment.ts'
 import { alertPolicyFilter } from '../stack/providers/gcp/alarms.ts'
 import { DISK_TYPE as CLICKHOUSE_DISK, MACHINE as CLICKHOUSE_MACHINE } from '../stack/providers/gcp/clickhouse.ts'
 import { MACHINE as DATABASE_MACHINE } from '../stack/providers/gcp/database.ts'
+import { gcpStackProviders } from '../stack/providers/gcp/index.ts'
 import { BOOT_DISK_TYPE, MACHINE as RUNNER_MACHINE } from '../stack/providers/gcp/runners.ts'
 import { PROXY_ENV_FILE, proxyEnvLine, startProxy } from '../stack/providers/gcp/edge.ts'
 
 const sourceOf = (module: string): string =>
   readFileSync(fileURLToPath(new URL(`../stack/providers/gcp/${module}.ts`, import.meta.url)), 'utf8')
+
+/**
+ * The bundle, which creates no resource: every entry is a function from the
+ * modules it depends on to a provider. Building one is what runs the wiring
+ * that decides which identities each module is handed.
+ */
+const gcpBundle = () =>
+  gcpStackProviders({
+    stage: 'dev2',
+    region: 'asia-southeast1',
+    project: 'boxlite-dev2',
+    domain: 'dev2.boxlite.ai',
+    zoneId: 'zone-1',
+  })
 
 // ── the container's port ────────────────────────────────────────────────────
 
@@ -126,6 +141,34 @@ test('the collector pairs named invokers with internal ingress, and adds no publ
   assert.equal(sourceOf('collector').includes("member: 'allUsers'"), false)
 })
 
+test('the telemetry database admits every identity that speaks to it, not just the writer', () => {
+  /*
+   * The collector writes and the API reads, and the rule is keyed on service
+   * accounts — so an identity left out of it is *dropped* rather than refused:
+   * the reader gets a connect timeout against a database that is plainly
+   * running, ClickHouse logs nothing because nothing arrived, and the explicit
+   * deny at 65534 is the only trace. The composition root used to hand over the
+   * collector's account alone while the comment beside it said both, and no
+   * stage caught it because the one GCP stage keeps `CLICKHOUSE_MODE=disabled`.
+   *
+   * The roles are recorded as the bundle asks the network for them, so this
+   * fails when the wiring stops asking rather than when a string moves.
+   */
+  const asked: string[] = []
+  const network = {
+    binding: { cloud: 'gcp', network: 'net', subnetwork: 'subnet' },
+    placementFor: (role: string) => {
+      asked.push(role)
+      return { cloud: 'gcp', serviceAccount: `${role}@example.iam.gserviceaccount.com` }
+    },
+    ready: [],
+  } as any
+  gcpBundle().clickhouse({ network })
+  assert.deepEqual([...asked].sort(), ['api', 'otel-collector'])
+  // And the rule is keyed on the whole list it was handed rather than one of it.
+  assert.match(sourceOf('clickhouse'), /sourceServiceAccounts: callers/)
+})
+
 // ── the database's machine ──────────────────────────────────────────────────
 
 test('every Cloud SQL size names its edition beside its tier', () => {
@@ -171,7 +214,10 @@ test('a GCP workload reaches Cloud SQL through the platform’s proxy, not the a
    * startup probe. The proxy needs no certificate of ours.
    */
   const database = sourceOf('database')
-  assert.match(database, /host: instance\.connectionName\.apply\(\(connection: string\) => `\/cloudsql\/\$\{connection\}`\)/)
+  assert.match(
+    database,
+    /host: instance\.connectionName\.apply\(\(connection: string\) => `\/cloudsql\/\$\{connection\}`\)/,
+  )
   assert.match(database, /applicationTls: false/)
 
   // And the mount, whose name the platform reserves: anything else is refused
