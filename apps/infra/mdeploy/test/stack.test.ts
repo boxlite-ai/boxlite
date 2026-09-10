@@ -62,7 +62,10 @@ const inputs = (overrides: Partial<StackInputs> = {}): StackInputs => ({
   apiSecrets: {},
   proxyEnvironment: {},
   proxySecrets: {},
-  collectorEnvironment: {},
+  // The collector's key is required in its group, so an input shape without it
+  // is not one a deploy can produce — and the stack refuses it rather than
+  // shipping a collector that authenticates to the API as nobody.
+  collectorEnvironment: { OTEL_COLLECTOR_API_KEY: 'otel-key' },
   collectorSecrets: {},
   runnerEnvironment: {},
   runnerSecrets: {},
@@ -271,14 +274,73 @@ test('each workload reads its own group and no other', () => {
     inputs: inputs({
       apiSecrets: { OIDC_CLIENT_SECRET: 'arn:api' },
       proxySecrets: { PROXY_API_KEY: 'arn:proxy' },
+      // Cleared, because the store puts a key on one channel or the other: with
+      // it on both, `assertOneChannelPerName` refuses the pair — which is the
+      // guard working, not a fixture detail.
+      collectorEnvironment: {},
       collectorSecrets: { OTEL_COLLECTOR_API_KEY: 'arn:otel' },
       runnerSecrets: { DEFAULT_RUNNER_API_KEY: 'arn:runner' },
     }),
   })
   assert.deepEqual(Object.keys(seen.api.request.secrets), ['OIDC_CLIENT_SECRET'])
   assert.deepEqual(Object.keys(seen.edge.request.secrets), ['PROXY_API_KEY'])
-  assert.deepEqual(Object.keys(seen.collector.request.secrets), ['OTEL_COLLECTOR_API_KEY'])
+  // Two names, one secret: the collector reads `BOXLITE_API_KEY` and the API
+  // compares against `OTEL_COLLECTOR_API_KEY`. See the rename's own test below.
+  assert.deepEqual(Object.keys(seen.collector.request.secrets), ['OTEL_COLLECTOR_API_KEY', 'BOXLITE_API_KEY'])
   assert.deepEqual(Object.keys(seen.runners.request.secrets), ['DEFAULT_RUNNER_API_KEY'])
+})
+
+test('the collector is given its own name for the key, on whichever channel carried it', () => {
+  /*
+   * One value, two workloads, two names: the collector sends it as a bearer
+   * token and reads it from `BOXLITE_API_KEY`, while the API compares against
+   * its copy of `OTEL_COLLECTOR_API_KEY`. The store declares the one name, so
+   * the rename happens here.
+   *
+   * Both channels, because the store decides which one: a key marked in
+   * `env.selectGroup.secret` arrives as an address in `collectorSecrets`
+   * instead of as a value. A rename that read only the value channel shipped a
+   * collector with no `BOXLITE_API_KEY` on that path — and silently, because
+   * `apps/otel-collector/config.yaml` defaults it to a literal that
+   * authenticates as nobody: every export answered 401 while the collector
+   * looked healthy.
+   */
+  const asValue = bundle()
+  deployStack({
+    providers: asValue.providers,
+    config,
+    inputs: inputs({ collectorEnvironment: { OTEL_COLLECTOR_API_KEY: 'otel-key' }, collectorSecrets: {} }),
+  })
+  assert.equal(asValue.seen.collector.request.environment.BOXLITE_API_KEY, 'otel-key')
+  assert.equal(asValue.seen.collector.request.secrets.BOXLITE_API_KEY, undefined, 'a value stays a value')
+
+  const asAddress = bundle()
+  deployStack({
+    providers: asAddress.providers,
+    config,
+    inputs: inputs({ collectorEnvironment: {}, collectorSecrets: { OTEL_COLLECTOR_API_KEY: 'arn:otel' } }),
+  })
+  assert.equal(asAddress.seen.collector.request.secrets.BOXLITE_API_KEY, 'arn:otel', 'two names, one secret')
+  assert.equal(
+    asAddress.seen.collector.request.environment.BOXLITE_API_KEY,
+    undefined,
+    'an address must not be flattened into a value the task definition would carry',
+  )
+})
+
+test('a collector the key reached on neither channel is refused, not shipped', () => {
+  // Required in its group, so this means the declaration changed rather than a
+  // stage forgetting something. The alternative is a collector that starts,
+  // reports healthy, and is answered 401 forever.
+  assert.throws(
+    () =>
+      deployStack({
+        providers: bundle().providers,
+        config,
+        inputs: inputs({ collectorEnvironment: {}, collectorSecrets: {} }),
+      }),
+    /OTEL_COLLECTOR_API_KEY reached neither the collector's values nor its secrets/,
+  )
 })
 
 test('the API and the first host are handed the same minted token', () => {

@@ -80,9 +80,23 @@ test('a service reads its optional keys when present and boots without them when
   // `serviceSecretsFrom` is the delivery side of the same question, and it has
   // to agree with the store side: a key the store was allowed to omit cannot
   // then be demanded of the deploy.
-  const withoutOptional = { ADMIN_API_KEY: 'a', ENCRYPTION_KEY: 'b', ENCRYPTION_SALT: 'c', OIDC_CLIENT_ID: 'd' }
+  const withoutOptional = {
+    ADMIN_API_KEY: 'a',
+    ENCRYPTION_KEY: 'b',
+    ENCRYPTION_SALT: 'c',
+    OIDC_CLIENT_ID: 'd',
+    OTEL_COLLECTOR_API_KEY: 'e',
+    PROXY_API_KEY: 'f',
+  }
   const bare = serviceSecretsFrom({ group: 'api', declaration, environment: withoutOptional })
-  assert.deepEqual(Object.keys(bare).sort(), ['ADMIN_API_KEY', 'ENCRYPTION_KEY', 'ENCRYPTION_SALT', 'OIDC_CLIENT_ID'])
+  assert.deepEqual(Object.keys(bare).sort(), [
+    'ADMIN_API_KEY',
+    'ENCRYPTION_KEY',
+    'ENCRYPTION_SALT',
+    'OIDC_CLIENT_ID',
+    'OTEL_COLLECTOR_API_KEY',
+    'PROXY_API_KEY',
+  ])
 
   const withOne = serviceSecretsFrom({
     group: 'api',
@@ -95,7 +109,7 @@ test('a service reads its optional keys when present and boots without them when
 test('a required service key that never arrived still stops the deploy', () => {
   assert.throws(
     () => serviceSecretsFrom({ group: 'api', declaration, environment: { ADMIN_API_KEY: 'a' } }),
-    /ENCRYPTION_KEY, ENCRYPTION_SALT, OIDC_CLIENT_ID must reach the deploy/,
+    /ENCRYPTION_KEY, ENCRYPTION_SALT, OIDC_CLIENT_ID, OTEL_COLLECTOR_API_KEY, PROXY_API_KEY must reach the deploy/,
   )
 })
 
@@ -113,4 +127,42 @@ test('splitting channels still works when an optional key is simply absent', () 
   })
   assert.deepEqual(values, { PROXY_API_KEY: 'k' })
   assert.deepEqual(addresses, {})
+})
+
+test('a key the API compares against is held by the API too, or the caller is refused', () => {
+  /*
+   * The API authenticates its first-party callers by comparing a bearer token
+   * against its *own* copy of their key — `api-key.strategy.ts` is a chain of
+   * `if (thisApiKey && thisApiKey === token)` branches. So each of these keys is
+   * one value that has to reach two workloads: the caller, which sends it, and
+   * the API, which compares it.
+   *
+   * A key named for the caller alone leaves the API's copy undefined, the
+   * comparison short-circuits, and the request falls through to whatever comes
+   * after the branch. Both instances below were that, and both were silent:
+   *
+   *   PROXY_API_KEY — every box request answered `failed to get runner info:
+   *   Invalid credentials`, a 400 from the proxy for what was a 401 at the API,
+   *   with `/api/health` still green.
+   *
+   *   OTEL_COLLECTOR_API_KEY — the collector's exports answered 401 while the
+   *   collector itself looked healthy, so a stage simply had no telemetry.
+   *
+   * Asserted as a class rather than one key at a time, and against the real
+   * declaration rather than a fixture: the defect was this file's contents, so a
+   * fixture would have agreed with itself. The pairs come from the strategy's
+   * own branches — a new one added there belongs here.
+   */
+  const compared = [
+    { caller: 'proxy', key: 'PROXY_API_KEY' },
+    { caller: 'otel-collector', key: 'OTEL_COLLECTOR_API_KEY' },
+  ]
+  for (const { caller, key } of compared) {
+    for (const group of [caller, 'api']) {
+      assert.ok(
+        config.envSelectGroup[group]?.includes(key),
+        `env.selectGroup.${group} does not name ${key}, so the ${group} cannot hold the key the other side compares against`,
+      )
+    }
+  }
 })

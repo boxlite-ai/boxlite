@@ -76,7 +76,14 @@
       },
       "pulumi": ["PULUMI_CONFIG_PASSPHRASE"],
       "api": {
-        "required": ["ADMIN_API_KEY", "ENCRYPTION_KEY", "ENCRYPTION_SALT", "OIDC_CLIENT_ID"],
+        "required": [
+          "ADMIN_API_KEY",
+          "ENCRYPTION_KEY",
+          "ENCRYPTION_SALT",
+          "OIDC_CLIENT_ID",
+          "OTEL_COLLECTOR_API_KEY",
+          "PROXY_API_KEY"
+        ],
         "optional": [
           "OIDC_MANAGEMENT_API_CLIENT_ID",
           "OIDC_MANAGEMENT_API_CLIENT_SECRET",

@@ -30,6 +30,7 @@ import type { ClickHouse, ClickHouseProvider } from './clickhouse.ts'
 import { CLICKHOUSE_PASSWORD_VARIABLE, clickHouseEnvironment } from './clickhouse.ts'
 import type { Cluster, ClusterProvider, WorkloadHost } from './cluster.ts'
 import type { Collector, CollectorProvider } from './collector.ts'
+import { COLLECTOR_API_KEY_STORE_KEY, COLLECTOR_API_KEY_VARIABLE } from './collector.ts'
 import type { Database, DatabaseProvider } from './database.ts'
 import { DATABASE_PASSWORD_VARIABLE, databaseEnvironment } from './database.ts'
 import type { Edge, EdgeProvider } from './edge.ts'
@@ -233,14 +234,46 @@ export const deployStack = ({
 
   // Before the API, so every workload emits to the same collector — including
   // the API's own traces, which is why it is not the other way round.
+  /*
+   * The key the collector authenticates to the API with, under the name the
+   * collector reads. `collector.ts` owns both names and says why there are two.
+   *
+   * Renamed on whichever channel carries it, rather than on the one that
+   * usually does. The store may mark this key in `env.selectGroup.secret`, and
+   * then it arrives as an address in `collectorSecrets` instead of as a value —
+   * a first-class shape this stack supports and `stack.test.ts` exercises. A
+   * rename that only read the value channel would ship a collector with no
+   * `BOXLITE_API_KEY` on exactly that path: silent, because the collector's own
+   * config has a default which authenticates as nobody.
+   *
+   * Two entries, one secret, on both clouds: an ECS `secrets` list and a Cloud
+   * Run revision each take more than one name pointing at one place.
+   */
+  const collectorKeyValue = inputs.collectorEnvironment[COLLECTOR_API_KEY_STORE_KEY]
+  const collectorKeyAddress = inputs.collectorSecrets[COLLECTOR_API_KEY_STORE_KEY]
+  if (!collectorKeyValue && !collectorKeyAddress) {
+    // Required in its group, so reaching here means the declaration changed
+    // rather than a stage forgetting something. Refused: the alternative is a
+    // collector that starts, looks healthy, and is answered 401 forever.
+    throw new Error(
+      `${COLLECTOR_API_KEY_STORE_KEY} reached neither the collector's values nor its secrets, so the ` +
+        `collector cannot be given ${COLLECTOR_API_KEY_VARIABLE} and would authenticate to the API as nobody`,
+    )
+  }
+
   const collectorEnvironment = {
     ...inputs.collectorEnvironment,
     ...clickHouseEnvironment(clickhouse, 'writer'),
+    ...(collectorKeyValue ? { [COLLECTOR_API_KEY_VARIABLE]: collectorKeyValue } : {}),
+  }
+  const collectorSecrets = {
+    ...inputs.collectorSecrets,
+    ...(collectorKeyAddress ? { [COLLECTOR_API_KEY_VARIABLE]: collectorKeyAddress } : {}),
   }
   assertOneChannelPerName({
     workload: 'collector',
     environment: collectorEnvironment,
-    secrets: inputs.collectorSecrets,
+    secrets: collectorSecrets,
     injected: [CLICKHOUSE_PASSWORD_VARIABLE],
   })
   const collector: Collector = providers.collector({
@@ -255,7 +288,7 @@ export const deployStack = ({
     // stage runs the BoxLite exporter alone.
     exporters: clickhouse.active ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]',
     environment: collectorEnvironment,
-    secrets: inputs.collectorSecrets,
+    secrets: collectorSecrets,
   })
 
   // The stack's own names last: a stale copy of a database host in the store

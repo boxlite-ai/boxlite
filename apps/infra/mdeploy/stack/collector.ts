@@ -44,3 +44,32 @@ export type CollectorProvider = (request: CollectorRequest) => Collector
 /** The ports the collector listens on. The same on both clouds. */
 export const OTLP_HTTP_PORT = 4318
 export const COLLECTOR_HEALTH_PORT = 13133
+
+/**
+ * The store's name for the key this collector authenticates to the API with.
+ *
+ * Declared in `env.selectGroup.otel-collector`, and required there: a collector
+ * that cannot authenticate has nowhere to send what it collects.
+ */
+export const COLLECTOR_API_KEY_STORE_KEY = 'OTEL_COLLECTOR_API_KEY'
+
+/**
+ * The collector's own name for that same key.
+ *
+ * One value, two workloads, two names. The collector sends it as a bearer token
+ * — `clientConfig.AddDefaultHeader("Authorization", "Bearer "+c.ApiKey)` in
+ * `apps/otel-collector/exporter/factory.go` — and reads it from
+ * `BOXLITE_API_KEY` through `apps/otel-collector/config.yaml`, while the API
+ * compares against its copy of the store's name in `api-key.strategy.ts`.
+ *
+ * Named here rather than at the composition root for the same reason
+ * `MAIL_USER_VARIABLE` is named in `mail.ts`: the variable a workload reads is
+ * that workload's own fact.
+ *
+ * Its absence is not a missing feature but a silent one. `config.yaml` defaults
+ * it to the literal `otel_collector_api_key`, which the API matches against
+ * nothing, so every export is answered 401 while the collector itself looks
+ * perfectly healthy.
+ */
+export const COLLECTOR_API_KEY_VARIABLE = 'BOXLITE_API_KEY'
+
