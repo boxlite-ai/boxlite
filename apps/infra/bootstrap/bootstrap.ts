@@ -121,7 +121,6 @@ import { loadBuildConfig, registryFor } from 'mbuild/config'
 import { bootstrapGcp, type GitHubRepository } from './gcp.js'
 import { bootstrapAws } from './aws.js'
 
-const SCRIPT_NAME = 'bootstrap-environment'
 // The one stage that must never end up with an unreviewed deploy path. Matches
 // PRODUCTION_STAGE in stack/settings.ts, which gates retain-on-removal.
 const PROTECTED_STAGE = 'prod'
@@ -292,7 +291,8 @@ async function ensureCloudflareCredentials({ awsCliPath, region, stage, repo, fo
     const fromEnv = process.env[envVar]?.trim()
     if (fromEnv) {
       storeCloudflareCredential({ awsCliPath, region, stage, repo, name, envVar, value: fromEnv })
-      console.log(`[${SCRIPT_NAME}] ${label} ... set from ${envVar}`)
+      console.log(`==> ${label}`)
+      console.log(`    set from ${envVar}`)
       continue
     }
 
@@ -304,13 +304,15 @@ async function ensureCloudflareCredentials({ awsCliPath, region, stage, repo, fo
       force,
     })
     if (rotation === 'skip') {
-      console.log(`[${SCRIPT_NAME}] ${label} ... already set in both stores (use --force to change)`)
+      console.log(`==> ${label}`)
+      console.log('    already set in both stores (use --force to change)')
       continue
     }
 
     const value = requireNonEmptySecret(label, await promptSecret(`${label}: `))
     storeCloudflareCredential({ awsCliPath, region, stage, repo, name, envVar, value })
-    console.log(`[${SCRIPT_NAME}] ${label} ... set`)
+    console.log(`==> ${label}`)
+    console.log('    set')
   }
 }
 
@@ -380,11 +382,13 @@ function ensureSstPlatform(stage: any) {
       timeout: SST_INSTALL_TIMEOUT_MS,
       label: 'install the SST platform',
     })
-    console.log(`[${SCRIPT_NAME}] SST platform ... ready`)
+    console.log('==> SST platform')
+    console.log('    ready')
     return
   }
 
-  console.log(`[${SCRIPT_NAME}] SST platform ... installing (first run: pulumi + providers, a minute or two)`)
+  console.log('==> SST platform')
+  console.log('    installing (first run: pulumi + providers, a minute or two)')
   try {
     runSst(['install', '--stage', stage], {
       timeout: SST_COLD_INSTALL_TIMEOUT_MS,
@@ -392,10 +396,7 @@ function ensureSstPlatform(stage: any) {
     })
   } catch (error) {
     if (sstPlatformState(SST_PLATFORM_DIR) !== 'deps-missing') throw error
-    console.warn(
-      `[${SCRIPT_NAME}] SST platform ... sst's installer did not finish and left no deps; ` +
-        'retrying those with npm',
-    )
+    console.warn("    sst's installer did not finish and left no deps; retrying those with npm")
     execFileSync('npm', ['install', '--no-audit', '--no-fund'], {
       cwd: SST_PLATFORM_DIR,
       stdio: ['ignore', 'inherit', 'inherit'],
@@ -407,7 +408,7 @@ function ensureSstPlatform(stage: any) {
       label: 'install the SST platform',
     })
   }
-  console.log(`[${SCRIPT_NAME}] SST platform ... ready`)
+  console.log('    ready')
 }
 
 /*
@@ -456,7 +457,8 @@ async function ensureOidcClientId(stage: any) {
   const fromEnv = process.env.OIDC_CLIENT_ID?.trim() || undefined
   const value = requireNonEmptySecret('OIDC client ID', fromEnv ?? (await promptSecret('OIDC client ID: ')))
   setStageSecret({ stage, name: 'OIDC_CLIENT_ID', value })
-  console.log(`[${SCRIPT_NAME}] OIDC_CLIENT_ID ... set${fromEnv ? ' from OIDC_CLIENT_ID env' : ''}`)
+  console.log('==> OIDC_CLIENT_ID')
+  console.log(`    set${fromEnv ? ' from OIDC_CLIENT_ID env' : ''}`)
 }
 
 /*
@@ -509,9 +511,10 @@ function ensureStageConfig(stage: any, { payload: config, storedKeys, excluded }
     }),
   )
 
-  console.log(`[${SCRIPT_NAME}] stage config ... ${storedKeys.length} keys in the SST secret store`)
+  console.log('==> stage config')
+  console.log(`    ${storedKeys.length} keys in the SST secret store`)
   if (excluded.length > 0) {
-    console.log(`[${SCRIPT_NAME}] stage config ... kept out of the store (local-only): ${excluded.join(', ')}`)
+    console.log(`    kept out of the store (local-only): ${excluded.join(', ')}`)
   }
 }
 
@@ -533,7 +536,8 @@ function ensureGitHubOidcProvider({ awsCliPath, region }: any) {
     }),
   )
   if (hasGitHubOidcProvider(listOutput)) {
-    console.log(`[${SCRIPT_NAME}] GitHub OIDC provider ... already registered`)
+    console.log('==> GitHub OIDC provider')
+    console.log('    already registered')
     return
   }
 
@@ -551,7 +555,8 @@ function ensureGitHubOidcProvider({ awsCliPath, region }: any) {
     ],
     { stdio: ['ignore', 'ignore', 'pipe'], timeout: 30_000, killSignal: 'SIGTERM' },
   )
-  console.log(`[${SCRIPT_NAME}] GitHub OIDC provider ... created`)
+  console.log('==> GitHub OIDC provider')
+  console.log('    created')
 }
 
 function authenticatedGitHubUserId() {
@@ -581,7 +586,8 @@ function ensureGithubEnvironment({ repo, stage, reviewerIds }: any) {
       killSignal: 'SIGTERM',
     })
     const reviewers = reviewerIds.length > 0 ? `required reviewers: ${reviewerIds.join(', ')}` : 'no required reviewers'
-    console.log(`[${SCRIPT_NAME}] GitHub ${stage} environment ... ready (${reviewers})`)
+    console.log(`==> GitHub ${stage} environment`)
+    console.log(`    ready (${reviewers})`)
     return
   } catch (error: any) {
     const stderr = error.stderr?.toString() ?? ''
@@ -609,8 +615,9 @@ function ensureGithubEnvironment({ repo, stage, reviewerIds }: any) {
       timeout: 30_000,
       killSignal: 'SIGTERM',
     })
+    console.warn(`==> GitHub ${stage} environment`)
     console.warn(
-      `[${SCRIPT_NAME}] GitHub ${stage} environment ... created WITHOUT required reviewers ` +
+      '    created WITHOUT required reviewers ' +
         '(deployment protection rules need a public repository, or GitHub Pro/Team/Enterprise on a private one). ' +
         'Anyone who can run the workflow can deploy this stage unreviewed.',
     )
@@ -656,13 +663,16 @@ function provisionAuth0({ stackDomain }: any) {
   const app = auth0Json(spaApplicationArgs({ stackDomain }))
   const clientId = app.client_id ?? app.clientId
   if (!clientId) throw new Error('auth0 apps create returned no client_id')
-  console.log(`[${SCRIPT_NAME}] Auth0 SPA application ... created (client_id ${clientId})`)
+  console.log('==> Auth0 SPA application')
+  console.log(`    created (client_id ${clientId})`)
 
   const api = auth0Json(customApiArgs({ stackDomain }))
-  console.log(`[${SCRIPT_NAME}] Auth0 custom API ... created (audience ${api.identifier})`)
+  console.log('==> Auth0 custom API')
+  console.log(`    created (audience ${api.identifier})`)
 
   auth0Run(tenantSettingsArgs())
-  console.log(`[${SCRIPT_NAME}] Auth0 tenant settings ... applied (logout discovery, public-signup error)`)
+  console.log('==> Auth0 tenant settings')
+  console.log('    applied (logout discovery, public-signup error)')
 
   const tenants = auth0Json(['tenants', 'list', '--json'])
   const activeTenants = tenants.filter((tenant: any) => tenant.active)
@@ -670,15 +680,15 @@ function provisionAuth0({ stackDomain }: any) {
     throw new Error('auth0 tenants list did not return exactly one active tenant')
   }
   console.log(
-    `[${SCRIPT_NAME}] preview the email provider and email-first login policy from apps/infra:\n` +
+    'preview the email provider and email-first login policy from apps/infra:\n' +
       `  npm run auth0:configure-email -- --tenant ${activeTenants[0].name} --from <verified-sender> --region <ses-region>\n` +
       `  npm run auth0:configure-login -- --tenant ${activeTenants[0].name} --client-id ${clientId} --connection <database-connection-name>`,
   )
 
   // OIDC_CLIENT_ID is an SST secret, not a .env key — seeded below by
   // ensureOidcClientId. Only OIDC_AUDIENCE belongs in .env.
-  console.log(`[${SCRIPT_NAME}] add to .env: OIDC_AUDIENCE=${api.identifier}`)
-  console.log(`[${SCRIPT_NAME}] supply this when prompted for the OIDC client ID: ${clientId}`)
+  console.log(`add to .env: OIDC_AUDIENCE=${api.identifier}`)
+  console.log(`supply this when prompted for the OIDC client ID: ${clientId}`)
 }
 
 function iamJson(awsCliPath: any, args: readonly string[]) {
@@ -713,10 +723,12 @@ function provisionSesSmtpUser({ awsCliPath, region, stage, accountId, senderDoma
 
   try {
     iamJson(awsCliPath, ['get-user', '--user-name', userName])
-    console.log(`[${SCRIPT_NAME}] IAM user ${userName} ... exists`)
+    console.log(`==> IAM user ${userName}`)
+    console.log('    exists')
   } catch {
     iamJson(awsCliPath, ['create-user', '--user-name', userName])
-    console.log(`[${SCRIPT_NAME}] IAM user ${userName} ... created`)
+    console.log(`==> IAM user ${userName}`)
+    console.log('    created')
   }
 
   // Sending only, and only as this identity. Scoped by identity ARN rather than by a
@@ -744,7 +756,8 @@ function provisionSesSmtpUser({ awsCliPath, region, stage, accountId, senderDoma
     '--policy-document',
     policy,
   ])
-  console.log(`[${SCRIPT_NAME}] send-only policy ... attached (${identityArn})`)
+  console.log('==> send-only policy')
+  console.log(`    attached (${identityArn})`)
 
   /*
    * Replace before revoke, never the other way round.
@@ -763,7 +776,7 @@ function provisionSesSmtpUser({ awsCliPath, region, stage, accountId, senderDoma
   if (keysBefore.length >= 2) {
     const oldest = [...keysBefore].sort((a: any, b: any) => String(a.CreateDate).localeCompare(String(b.CreateDate)))[0]
     iamJson(awsCliPath, ['delete-access-key', '--user-name', userName, '--access-key-id', oldest.AccessKeyId])
-    console.log(`[${SCRIPT_NAME}] dropped the oldest access key ${oldest.AccessKeyId} to make room`)
+    console.log(`    dropped the oldest access key ${oldest.AccessKeyId} to make room`)
   }
 
   const created = iamJson(awsCliPath, ['create-access-key', '--user-name', userName]).AccessKey
@@ -773,19 +786,20 @@ function provisionSesSmtpUser({ awsCliPath, region, stage, accountId, senderDoma
 
   setStageSecret({ stage, name: 'SMTP_USER', value: created.AccessKeyId })
   setStageSecret({ stage, name: 'SMTP_PASSWORD', value: sesSmtpPasswordV4(created.SecretAccessKey, region) })
-  console.log(`[${SCRIPT_NAME}] SMTP_USER / SMTP_PASSWORD ... set for ${senderDomain} in ${region}`)
+  console.log('==> SMTP_USER / SMTP_PASSWORD')
+  console.log(`    set for ${senderDomain} in ${region}`)
 
   // Only now is the old credential safe to revoke: the store holds a working one.
   for (const key of keysBefore.filter((key: any) => key.AccessKeyId !== created.AccessKeyId)) {
     iamJson(awsCliPath, ['delete-access-key', '--user-name', userName, '--access-key-id', key.AccessKeyId])
-    console.log(`[${SCRIPT_NAME}] revoked previous access key ${key.AccessKeyId}`)
+    console.log(`    revoked previous access key ${key.AccessKeyId}`)
   }
 
   // Auth0's provider is per-tenant state this script does not own. Auth0's SES
   // provider requires the raw AWS secret rather than this derived SMTP password,
   // so its reconciler deliberately uses a separate send-only access key.
   console.log(
-    `[${SCRIPT_NAME}] configure Auth0 email delivery with a separate SES API credential:\n` +
+    'configure Auth0 email delivery with a separate SES API credential:\n' +
       `  npm run auth0:configure-email -- --tenant <tenant.auth0.com> --from <verified-sender> --region ${region}`,
   )
 }
@@ -859,18 +873,21 @@ function requestSesProductionAccess({ awsCliPath, region, senderDomain }: any) {
 
   const access = sesProductionAccess(account)
   if (access.state === 'granted') {
-    console.log(`[${SCRIPT_NAME}] SES production access ... already granted in ${region}`)
+    console.log('==> SES production access')
+    console.log(`    already granted in ${region}`)
     return
   }
   if (access.state === 'pending') {
+    console.log('==> SES production access')
     console.log(
-      `[${SCRIPT_NAME}] SES production access ... review already open${access.caseId ? ` (case ${access.caseId})` : ''}; leaving it alone`,
+      `    review already open${access.caseId ? ` (case ${access.caseId})` : ''}; leaving it alone`,
     )
     return
   }
   if (access.state === 'closed') {
+    console.warn('==> SES production access')
     console.warn(
-      `[${SCRIPT_NAME}] SES production access ... last review closed ${access.status}` +
+      `    last review closed ${access.status}` +
         `${access.caseId ? ` (case ${access.caseId})` : ''}. AWS refuses a second submission, so this is` +
         ' worked through that support case, not from here. Sending stays capped at 200/day to verified' +
         ' recipients until it is resolved.',
@@ -888,8 +905,9 @@ function requestSesProductionAccess({ awsCliPath, region, senderDomain }: any) {
    */
   const identityStatus = sesIdentityVerification({ awsCliPath, region, senderDomain })
   if (identityStatus !== 'SUCCESS') {
+    console.log('==> SES production access')
     console.log(
-      `[${SCRIPT_NAME}] SES production access ... deferred: ${senderDomain} is ${identityStatus.toLowerCase()}.` +
+      `    deferred: ${senderDomain} is ${identityStatus.toLowerCase()}.` +
         ' Deploy the stage first, then rerun this to ask with a verified domain behind the request.',
     )
     return
@@ -916,8 +934,9 @@ function requestSesProductionAccess({ awsCliPath, region, senderDomain }: any) {
     ],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000, killSignal: 'SIGTERM' },
   )
+  console.log('==> SES production access')
   console.log(
-    `[${SCRIPT_NAME}] SES production access ... requested for ${region} (${websiteUrl}), with ${senderDomain}` +
+    `    requested for ${region} (${websiteUrl}), with ${senderDomain}` +
       ' verified. AWS answers within 24h; until then sending stays capped at 200/day to verified recipients.',
   )
 }
@@ -935,7 +954,7 @@ async function bootstrapAwsRole({ region, stage, repo, accountId }: any): Promis
     stage,
     accountId,
     region,
-    log: (line) => console.log(`[${SCRIPT_NAME}] ${line}`),
+    log: console.log,
   })
 }
 
@@ -980,7 +999,8 @@ function ghEnvironmentVariableSet({ repo, stage, name, value }: any) {
 function wireGithubEnvironment({ repo, stage, accountId, region }: any) {
   ghEnvironmentVariableSet({ repo, stage, name: 'AWS_ACCOUNT_ID', value: accountId })
   ghEnvironmentVariableSet({ repo, stage, name: 'AWS_REGION', value: region })
-  console.log(`[${SCRIPT_NAME}] GitHub ${stage} environment ... AWS_ACCOUNT_ID, AWS_REGION set`)
+  console.log(`==> GitHub ${stage} environment`)
+  console.log('    AWS_ACCOUNT_ID, AWS_REGION set')
 }
 
 /**
@@ -1038,7 +1058,7 @@ async function bootstrapGcpStage({
   const effectiveReviewerIds = reviewerIds.length > 0 ? reviewerIds : [authenticatedGitHubUserId()]
 
   console.log(
-    `[${SCRIPT_NAME}] stage=${stage} home=gcp project=${declared.project} region=${declared.region} repo=${repo}`,
+    `stage=${stage} home=gcp project=${declared.project} region=${declared.region} repo=${repo}`,
   )
   ensureGithubEnvironment({ repo, stage, reviewerIds: effectiveReviewerIds })
 
@@ -1094,7 +1114,7 @@ async function bootstrapGcpStage({
     // and mbuild refuses to publish into a repository that contradicts it.
     immutableTags: buildConfig.stages[stage]!.registry.immutableTags,
     github,
-    log: (line) => console.log(`[${SCRIPT_NAME}] ${line}`),
+    log: console.log,
   })
 
   // Written the same way wireGithubEnvironment writes the AWS pair: bootstrap
@@ -1109,13 +1129,13 @@ async function bootstrapGcpStage({
   // Repository-wide, not `--env`: mbuild.yml's publish job runs before any
   // stage-specific environment would apply, matching AWS_ECR_PUSH_ROLE_ARN.
   ghEnvironmentVariableSet({ repo, stage: null, name: 'GCP_IMAGE_PUBLISHER', value: result.publisherEmail })
+  console.log(`==> GitHub ${stage} environment`)
   console.log(
-    `[${SCRIPT_NAME}] GitHub ${stage} environment ... GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_DEPLOYER set; ` +
-      'GCP_IMAGE_PUBLISHER set repository-wide',
+    '    GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_DEPLOYER set; GCP_IMAGE_PUBLISHER set repository-wide',
   )
 
   console.log(
-    `[${SCRIPT_NAME}] done. Preview next: gh workflow run mdeploy.yml --repo ${repo} --ref main -f stage=${stage} -f apply=false`,
+    `done. Preview next: gh workflow run mdeploy.yml --repo ${repo} --ref main -f stage=${stage} -f apply=false`,
   )
 }
 
@@ -1165,8 +1185,9 @@ async function main() {
   requireAwsCliWithLoginSupport(awsCliPath)
   const identity = currentAwsIdentity(awsCliPath, region)
 
-  console.log(`[${SCRIPT_NAME}] stage=${stage} region=${region} repo=${repo}`)
-  console.log(`[${SCRIPT_NAME}] AWS identity ... ${identity.Arn}`)
+  console.log(`stage=${stage} region=${region} repo=${repo}`)
+  console.log('==> AWS identity')
+  console.log(`    ${identity.Arn}`)
 
   // Default the reviewer to whoever is running this, so the environment comes
   // out actually protected rather than nominally so.
@@ -1212,8 +1233,9 @@ async function main() {
     try {
       requestSesProductionAccess({ awsCliPath, region, senderDomain })
     } catch (cause: any) {
+      console.warn('==> SES production access')
       console.warn(
-        `[${SCRIPT_NAME}] SES production access ... could not be requested: ${cause.message?.split('\n')[0] ?? cause}`,
+        `    could not be requested: ${cause.message?.split('\n')[0] ?? cause}`,
       )
     }
   }
@@ -1224,13 +1246,13 @@ async function main() {
   wireGithubEnvironment({ repo, stage, accountId: identity.Account, region })
 
   console.log(
-    `[${SCRIPT_NAME}] done. Preview next: gh workflow run deploy-infra.yml --repo ${repo} --ref main -f stage=${stage} -f apply=false`,
+    `done. Preview next: gh workflow run deploy-infra.yml --repo ${repo} --ref main -f stage=${stage} -f apply=false`,
   )
   // Not deleted here on purpose. Until this branch is merged, the deploy workflow on main still reads
   // DEPLOY_ENV, so removing it would break deploys of every commit that predates the store. Printed
   // rather than silently left behind, because a stale DEPLOY_ENV is invisible once it stops being read.
   console.log(
-    `[${SCRIPT_NAME}] after the first green apply, retire the superseded GitHub entries:\n` +
+    'after the first green apply, retire the superseded GitHub entries:\n' +
       `  gh secret delete DEPLOY_ENV --repo ${repo} --env ${stage}\n` +
       `  gh variable delete AWS_DEPLOY_ROLE_ARN --repo ${repo} --env ${stage}`,
   )
@@ -1244,9 +1266,9 @@ try {
   // advice is only right for one of the ways that tool can fail — `gh auth
   // status` also exits non-zero when it cannot reach github.com. Without the
   // cause an operator whose session is fine is sent to re-authenticate.
-  console.error(`${SCRIPT_NAME}: ${error.message}`)
+  console.error(error.message)
   for (let cause = error.cause; cause; cause = cause.cause) {
-    console.error(`${SCRIPT_NAME}:   caused by: ${cause.message ?? cause}`)
+    console.error(`  caused by: ${cause.message ?? cause}`)
   }
   process.exit(1)
 }
