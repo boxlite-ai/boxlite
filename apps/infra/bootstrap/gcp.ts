@@ -275,9 +275,44 @@ type Gcloud = {
   readOptional: (what: string, args: string[]) => Promise<string | null>
   /** A change. A non-zero exit fails the run, carrying the CLI's own message. */
   apply: (what: string, args: string[], stdin?: string) => Promise<void>
+  /**
+   * A change to an IAM policy, which is a read-modify-write and can lose.
+   *
+   * Every `add-iam-policy-binding` reads the policy, edits it and writes it
+   * back against the ETag it read; another writer in between makes the write a
+   * conflict. Retried here rather than at the call sites because it is a
+   * property of the operation, not of any one binding — and this project is
+   * shared with the other BoxLite apps, so a concurrent writer is ordinary.
+   */
+  applyPolicy: (what: string, args: string[]) => Promise<void>
 }
 
-const gcloudFor = ({ run, project }: { run: Run; project: string }): Gcloud => {
+/**
+ * How many times a policy write is re-attempted, and how long it waits first.
+ *
+ * Doubling from a quarter second: 0.25 + 0.5 + 1 + 2, so four retries cost
+ * under four seconds on the run that needs them and nothing on the runs that
+ * do not. The shape Google's own message asks for — "retry the whole
+ * read-modify-write with exponential backoff" — and finite for the same reason
+ * the visibility budget is: a policy being rewritten continuously is not
+ * something a longer loop fixes.
+ */
+const POLICY_WRITE_ATTEMPTS = 5
+const POLICY_BACKOFF_MS = 250
+
+/** What losing the race looks like, as opposed to being refused the write. */
+const isPolicyConflict = (stderr: string): boolean =>
+  /concurrent policy changes|subject of a conflict/i.test(stderr)
+
+const gcloudFor = ({
+  run,
+  project,
+  wait,
+}: {
+  run: Run
+  project: string
+  wait: (milliseconds: number) => Promise<unknown>
+}): Gcloud => {
   // `--quiet` so nothing waits for a prompt in CI, and the project on every
   // call rather than relying on whatever `gcloud config` holds locally.
   const call = (args: string[], stdin?: string) =>
@@ -305,6 +340,19 @@ const gcloudFor = ({ run, project }: { run: Run; project: string }): Gcloud => {
       const result = await call(args, stdin)
       if (result.code === 0) return
       throw new GcpBootstrapError(`${what}: ${result.stderr.trim() || `gcloud exited ${result.code}`}`)
+    },
+    async applyPolicy(what, args) {
+      let backoff = POLICY_BACKOFF_MS
+      for (let attempt = 1; ; attempt += 1) {
+        const result = await call(args)
+        if (result.code === 0) return
+        // Anything else is a refusal, and re-sending it would only repeat it.
+        if (attempt === POLICY_WRITE_ATTEMPTS || !isPolicyConflict(result.stderr)) {
+          throw new GcpBootstrapError(`${what}: ${result.stderr.trim() || `gcloud exited ${result.code}`}`)
+        }
+        await wait(backoff)
+        backoff *= 2
+      }
     },
   }
 }
@@ -619,7 +667,7 @@ const grantProjectRoles = async ({
   log: (line: string) => void
 }): Promise<void> => {
   for (const role of roles) {
-    await gcloud.apply(`Could not grant ${role} to ${email}`, [
+    await gcloud.applyPolicy(`Could not grant ${role} to ${email}`, [
       'projects',
       'add-iam-policy-binding',
       project,
@@ -657,7 +705,7 @@ const allowImpersonation = async ({
   const member =
     `principalSet://iam.googleapis.com/projects/${projectNumber}/locations/${POOL_LOCATION}` +
     `/workloadIdentityPools/${POOL}/attribute.${attribute}/${value}`
-  await gcloud.apply(`Could not let ${attribute}/${value} act as ${email}`, [
+  await gcloud.applyPolicy(`Could not let ${attribute}/${value} act as ${email}`, [
     'iam',
     'service-accounts',
     'add-iam-policy-binding',
@@ -768,7 +816,7 @@ export const bootstrapGcp = async ({
   log,
   wait = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 }: GcpBootstrapInput): Promise<GcpBootstrapResult> => {
-  const gcloud = gcloudFor({ run, project })
+  const gcloud = gcloudFor({ run, project, wait })
 
   /*
    * Needed for every principalSet below, and the first call this file makes.

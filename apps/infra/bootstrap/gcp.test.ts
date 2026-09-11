@@ -30,9 +30,19 @@ const QUERIES = [
  * existence questions are answered; every change succeeds, which is what
  * makes a failing change its own test below.
  */
-const recorder = ({ existing = false, readsBeforeVisible = 0 } = {}) => {
+const recorder = ({ existing = false, readsBeforeVisible = 0, etagConflicts = 0 } = {}) => {
   const calls: string[][] = []
   const stdin: string[] = []
+  /*
+   * How many policy writes lose the read-modify-write race before one lands.
+   *
+   * `add-iam-policy-binding` reads the policy, edits it and writes it back
+   * against the ETag it read. Another writer in between makes the write a
+   * conflict, which this project has because it is shared with the other
+   * BoxLite apps. Counted across every policy write rather than per binding:
+   * the conflict is with whoever else is editing, not with this run.
+   */
+  let conflictsLeft = etagConflicts
   /*
    * How many `describe` reads a just-created service account answers NOT_FOUND
    * for before it is visible. Zero is an API that is immediately consistent;
@@ -62,11 +72,24 @@ const recorder = ({ existing = false, readsBeforeVisible = 0 } = {}) => {
      * before the account is visible does not queue — it fails, naming as absent
      * the account the line above created.
      */
-    if (asked.startsWith('projects add-iam-policy-binding')) {
+    if (asked.includes('add-iam-policy-binding')) {
       const member = args.find((argument) => argument.startsWith('--member=serviceAccount:'))
       const email = member?.replace('--member=serviceAccount:', '') ?? ''
       if ((pending.get(email) ?? 0) > 0) {
         return { code: 1, stdout: '', stderr: `INVALID_ARGUMENT: Service account ${email} does not exist.` }
+      }
+      if (conflictsLeft > 0) {
+        conflictsLeft -= 1
+        // gcloud's own words, from the run that hit this.
+        return {
+          code: 1,
+          stdout: '',
+          stderr:
+            'ERROR: (gcloud.projects.add-iam-policy-binding) Resource in projects ' +
+            '[boxlite-dev-project:setIamPolicy] is the subject of a conflict: There were concurrent ' +
+            "policy changes. Please retry the whole read-modify-write with exponential backoff. The request's " +
+            "ETag '\\007\\006[/\\320T\\264\\254' did not match the current policy's ETag '\\007\\006[/\\320\\201\\033h'.",
+        }
       }
       return { code: 0, stdout: '', stderr: '' }
     }
@@ -239,6 +262,46 @@ test('a service account is granted its roles on the run that created it', async 
   // answers, so an immediately consistent API costs one extra read and no time.
   const probes = gcloud.applied('service-accounts describe', 'bl-app-gcp-dev-deploy@')
   assert.equal(probes.length, 4, `expected one absent probe, two retries and the answer: ${probes.length}`)
+})
+
+test('a policy write that lost the read-modify-write race is retried, not reported', async () => {
+  /*
+   * What a real run answered on the first project-level grant:
+   *
+   *   Resource in projects [...:setIamPolicy] is the subject of a conflict:
+   *   There were concurrent policy changes. Please retry the whole
+   *   read-modify-write with exponential backoff.
+   *
+   * It killed the bootstrap with the deployer created and none of its fourteen
+   * roles attached. The project is shared with the other BoxLite apps, so
+   * another writer between this run's read and its write is the ordinary case
+   * rather than bad luck — and the message says what to do about it.
+   *
+   * `add-iam-policy-binding` is itself the whole read-modify-write, so the
+   * retry is the same command again. Asserted through `bootstrapGcp` rather
+   * than on a helper: what matters is that the run completes.
+   */
+  const gcloud = recorder({ etagConflicts: 3 })
+  const result = await invoke(gcloud.run)
+
+  assert.ok(result.deployerEmail.startsWith('bl-app-gcp-dev-deploy@'))
+  const grants = gcloud.applied('projects add-iam-policy-binding', 'bl-app-gcp-dev-deploy@')
+  const roles = new Set(
+    grants.map((argv: string[]) => argv.find((arg) => arg.startsWith('--role='))?.slice('--role='.length)),
+  )
+  assert.equal(roles.size, 14, 'every role has to land, whichever attempt lands it')
+  // Three conflicts, three retries: the attempts exceed the roles by exactly
+  // what was refused, so nothing was skipped and nothing retried blindly.
+  assert.equal(grants.length, roles.size + 3, `attempts: ${grants.length}`)
+})
+
+test('a conflict that never clears is reported with what gcloud said', async () => {
+  // Finite, like the visibility budget. A project whose policy is rewritten
+  // continuously is not something a longer loop fixes, and the refusal has to
+  // name the role it was attaching.
+  const gcloud = recorder({ etagConflicts: 99 })
+  await assert.rejects(() => invoke(gcloud.run), /Could not grant \S+ to bl-app-gcp-dev-deploy@/)
+  await assert.rejects(() => invoke(gcloud.run), /concurrent policy changes/i)
 })
 
 test('an account that never becomes visible is reported rather than waited on forever', async () => {
