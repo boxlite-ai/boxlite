@@ -490,11 +490,30 @@ long-polls `JobsAPI.PollJobs` with `(timeout, limit)`. HTTP `408`
 returns are treated as "no work yet" (normal long-poll behavior); any
 other error backs off 5 s and retries.
 
-`POLL_LIMIT` (default 10) caps each batch; `MAX_CONCURRENT_JOBS` (default 10,
+`POLL_LIMIT` (default 10) caps each batch; `MAX_CONCURRENT_JOBS` (default 50,
 positive integer) caps unfinished job executions in this runner process.
 Recovered and newly polled jobs share that capacity. The poller requests at
 most the available slots and waits when full, keeping pending work in the API.
 A slot is released after execution and the completion-status report return.
+
+Set `MAX_CONCURRENT_JOBS=100` in the Runner environment to persist a startup
+limit. For API v2, authenticated `GET /config/job-concurrency` reads the current
+limit and `PATCH /config/job-concurrency` changes it without restarting:
+
+```sh
+curl -X PATCH https://RUNNER_HOST/config/job-concurrency \
+  -H 'Authorization: Bearer YOUR_RUNNER_TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{"maxConcurrentJobs":100}'
+```
+
+Runtime changes apply only to this Runner process and reset to the environment
+value (or 50) on restart. Increasing the limit wakes a poller waiting for capacity.
+Decreasing it lets admitted jobs finish and pauses new admissions until usage
+falls below the new limit. A poll already in flight may return previously claimed
+jobs; those also wait for capacity. This limits lifecycle and migration jobs,
+not user count or commands running inside existing boxes.
+
 
 Each admitted job is dispatched to a goroutine and handled in
 [`pkg/runner/v2/executor/executor.go`](pkg/runner/v2/executor/executor.go).
@@ -534,6 +553,7 @@ the Swagger UI (development only).
 | --- | --- | --- |
 | `GET` | `/` | Health check (public) |
 | `GET` | `/info` | Runner metrics + service health |
+| `GET` / `PATCH` | `/config/job-concurrency` | Read / update live job limit (API v2) |
 | `GET` | `/metrics` | Prometheus scrape |
 | `POST` | `/boxes` | Create box |
 | `GET` | `/boxes/:id` | Box info (state + backup state + runtime version) |

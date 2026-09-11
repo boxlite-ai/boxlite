@@ -231,6 +231,11 @@ definitions:
       networkLimitEgress:
         type: boolean
     type: object
+  api.JobConcurrency:
+    properties:
+      maxConcurrentJobs:
+        type: integer
+    type: object
   dto.VolumeDTO:
     properties:
       mountPath:
@@ -643,6 +648,50 @@ paths:
       summary: Stop box
       tags:
         - box
+  /config/job-concurrency:
+    get:
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/api.JobConcurrency'
+      security:
+        - Bearer: []
+      summary: Get the current Runner job concurrency limit
+      tags:
+        - config
+    patch:
+      consumes:
+        - application/json
+      description: Applies to API v2 polled jobs. Running jobs finish when lowering
+        the limit.
+      parameters:
+        - description: Positive concurrency limit
+          in: body
+          name: config
+          required: true
+          schema:
+            $ref: '#/definitions/api.JobConcurrency'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/api.JobConcurrency'
+        '400':
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+        - Bearer: []
+      summary: Update the Runner job concurrency limit until restart
+      tags:
+        - config
   /info:
     get:
       description: Runner info with system metrics

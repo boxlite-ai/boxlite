@@ -162,6 +162,7 @@ func run() int {
 
 	boxBackend := backend.NewBoxliteAdapter(boxliteClient)
 
+	var pollerService *poller.Service
 	if cfg.ApiVersion == 2 {
 		healthcheckService, err := healthcheck.NewService(&healthcheck.HealthcheckServiceConfig{
 			Interval:   cfg.HealthcheckInterval,
@@ -196,7 +197,7 @@ func run() int {
 			return 2
 		}
 
-		pollerService, err := poller.NewService(&poller.PollerServiceConfig{
+		pollerService, err = poller.NewService(&poller.PollerServiceConfig{
 			PollTimeout:       cfg.PollTimeout,
 			PollLimit:         cfg.PollLimit,
 			MaxConcurrentJobs: cfg.MaxConcurrentJobs,
@@ -222,6 +223,7 @@ func run() int {
 		TLSKeyFile:  cfg.TLSKeyFile,
 		EnableTLS:   cfg.EnableTLS,
 		LogRequests: cfg.ApiLogRequests,
+		JobPoller:   pollerService,
 	})
 
 	apiServerErrChan := make(chan error)

@@ -549,6 +549,76 @@ const docTemplate = `{
                 }
             }
         },
+        "/config/job-concurrency": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Get the current Runner job concurrency limit",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.JobConcurrency"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Applies to API v2 polled jobs. Running jobs finish when lowering the limit.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Update the Runner job concurrency limit until restart",
+                "parameters": [
+                    {
+                        "description": "Positive concurrency limit",
+                        "name": "config",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.JobConcurrency"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.JobConcurrency"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/info": {
             "get": {
                 "description": "Runner info with system metrics",
@@ -956,6 +1026,14 @@ const docTemplate = `{
                 },
                 "networkLimitEgress": {
                     "type": "boolean"
+                }
+            }
+        },
+        "api.JobConcurrency": {
+            "type": "object",
+            "properties": {
+                "maxConcurrentJobs": {
+                    "type": "integer"
                 }
             }
         },

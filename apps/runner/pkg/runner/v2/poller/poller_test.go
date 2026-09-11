@@ -27,12 +27,14 @@ import (
 // or VMs. synctest.Wait makes assertions only after the jobs and poll have blocked.
 type pollerHarness struct {
 	backend.BoxBackend
+	service       *Service
 	recovered     []apiclient.Job
 	pending       []apiclient.Job
 	statuses      []int
 	limits        []int
 	release       chan struct{}
 	reportRelease chan struct{}
+	pollRelease   chan struct{}
 	stopped       chan struct{}
 	mu            sync.Mutex
 	active        int
@@ -79,6 +81,13 @@ func (h *pollerHarness) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, req.Context().Err()
 		}
 		response = apiclient.NewPollJobsResponse(jobs)
+		if h.pollRelease != nil {
+			select {
+			case <-h.pollRelease:
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			}
+		}
 	default:
 		if req.Method != http.MethodPost || !strings.HasSuffix(req.URL.Path, "/status") {
 			return nil, fmt.Errorf("unexpected request: %s %s", req.Method, req.URL.Path)
@@ -133,6 +142,7 @@ func (h *pollerHarness) start(t *testing.T, batch, capacity int) context.CancelF
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.service = svc
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		defer close(h.stopped)
@@ -256,4 +266,62 @@ func TestNewServiceRejectsInvalidLimits(t *testing.T) {
 			t.Errorf("accepted poll limit %d, concurrency %d", cfg.PollLimit, cfg.MaxConcurrentJobs)
 		}
 	}
+}
+
+func updateLimitForTest(t *testing.T, s *Service, limit int) {
+	t.Helper()
+	if err := s.SetMaxConcurrentJobs(limit); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPollerIncreasingLimitWakesFullRunner(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := &pollerHarness{pending: jobsForTest(6)}
+		cancel := h.start(t, 10, 2)
+		defer func() { cancel(); <-h.stopped }()
+		synctest.Wait()
+		updateLimitForTest(t, h.service, 4)
+		synctest.Wait()
+		if h.active != 4 || h.started != 4 {
+			t.Fatalf("after increasing limit: active=%d started=%d, want 4 each", h.active, h.started)
+		}
+	})
+}
+
+func TestPollerDecreasingLimitDrainsExistingJobs(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := &pollerHarness{pending: jobsForTest(6)}
+		cancel := h.start(t, 10, 4)
+		defer func() { cancel(); <-h.stopped }()
+		synctest.Wait()
+		updateLimitForTest(t, h.service, 2)
+		for remaining := 3; remaining >= 2; remaining-- {
+			h.release <- struct{}{}
+			synctest.Wait()
+			if h.started != 4 || h.active != remaining {
+				t.Fatalf("while draining: active=%d started=%d, want %d, 4", h.active, h.started, remaining)
+			}
+		}
+		h.release <- struct{}{}
+		synctest.Wait()
+		if h.active != 2 || h.started != 5 {
+			t.Fatalf("after draining: active=%d started=%d, want 2, 5", h.active, h.started)
+		}
+	})
+}
+
+func TestPollerAppliesNewLimitToInFlightPoll(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := &pollerHarness{pending: jobsForTest(4), pollRelease: make(chan struct{})}
+		cancel := h.start(t, 10, 4)
+		defer func() { cancel(); <-h.stopped }()
+		synctest.Wait()
+		updateLimitForTest(t, h.service, 2)
+		h.pollRelease <- struct{}{}
+		synctest.Wait()
+		if h.active != 2 || h.started != 2 {
+			t.Fatalf("after old poll returns: active=%d started=%d, want 2 each", h.active, h.started)
+		}
+	})
 }
