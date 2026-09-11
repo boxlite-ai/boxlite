@@ -5,8 +5,25 @@
  */
 
 import Redis from 'ioredis'
-import { Controller, Get, Param, Logger, NotFoundException, UseGuards, Req } from '@nestjs/common'
+import {
+  Controller,
+  Get,
+  Post,
+  Param,
+  Logger,
+  NotFoundException,
+  UseGuards,
+  Req,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common'
 import { BoxService } from '../services/box.service'
+import { BoxAutoResumeService } from '../services/box-auto-resume.service'
+import { OrganizationService } from '../../organization/services/organization.service'
+import { OrGuard } from '../../auth/or.guard'
+import { BoxAccessGuard } from '../guards/box-access.guard'
+import { ProxyGuard } from '../guards/proxy.guard'
+import { RegionBoxAccessGuard } from '../guards/region-box-access.guard'
 import { ApiResponse, ApiOperation, ApiParam, ApiTags, ApiOAuth2, ApiBearerAuth } from '@nestjs/swagger'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
@@ -21,7 +38,58 @@ export class PreviewController {
     @InjectRedis() private readonly redis: Redis,
     private readonly boxService: BoxService,
     private readonly organizationUserService: OrganizationUserService,
+    private readonly autoResume: BoxAutoResumeService,
+    private readonly organizationService: OrganizationService,
   ) {}
+
+  // The only writing route on this controller, and deliberately here rather
+  // than on the product API: its caller is the proxy, like every other route
+  // in this file, and a wake RPC has no business in the spec-first v1/boxes
+  // surface that SDKs are generated from. Users already have `start`, and any
+  // SDK call on an auto_resume box wakes it on its own.
+  //
+  // Resuming needs the Organization entity (suspension check, state waiter)
+  // while every proxy auth path is box-scoped by design, so the organization
+  // is resolved here from the box row instead of being handed to the proxy.
+  // Reuses the same BoxAutoResumeService as the SDK-facing routes, so both
+  // paths share one lock, one join-of-an-in-flight-start and one definition
+  // of ready.
+  //
+  // Who is *allowed* to wake a box is settled before this call, by the proxy:
+  // it resumes for a request the access gate already accepted — a public box,
+  // which is the owner's explicit opt-in, or a valid box auth key.
+  @Post(':boxId/ensure-ready')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Resume a stopped box and wait until it is running',
+    operationId: 'ensureBoxReady',
+  })
+  @ApiParam({
+    name: 'boxId',
+    description: 'ID of the box',
+    type: 'string',
+  })
+  @ApiResponse({
+    status: 204,
+    description: 'Box is running',
+  })
+  @ApiResponse({
+    status: 408,
+    description: 'Box did not reach a running state before the resume timeout',
+  })
+  @UseGuards(OrGuard([BoxAccessGuard, ProxyGuard, RegionBoxAccessGuard]))
+  async ensureBoxReady(@Param('boxId') boxId: string): Promise<void> {
+    const box = await this.boxService.findOne(boxId)
+    const organization = await this.organizationService.findOne(box.organizationId)
+    if (!organization) {
+      // A box outliving its organization is not a caller error and no retry
+      // fixes it; say so rather than reporting a timeout after waiting out
+      // the full resume window.
+      throw new NotFoundException(`Organization for box ${boxId} not found`)
+    }
+
+    await this.autoResume.ensureReady(box.id, organization)
+  }
 
   @Get(':boxId/public')
   @ApiOperation({

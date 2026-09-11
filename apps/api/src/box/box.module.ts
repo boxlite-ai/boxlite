@@ -49,6 +49,7 @@ import { BoxLastActivity } from './entities/box-last-activity.entity'
 import { BoxMigration } from './entities/box-migration.entity'
 import { BoxActivityService } from './services/box-activity.service'
 import { BoxStateWaiterService } from './services/box-state-waiter.service'
+import { BoxAutoResumeService } from './services/box-auto-resume.service'
 import { BoxMigrationService } from './services/box-migration.service'
 import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.service'
 
@@ -79,6 +80,7 @@ import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.s
     JobStateHandlerService,
     BoxActivityService,
     BoxStateWaiterService,
+    BoxAutoResumeService,
     BoxMigrationService,
     BoxMigrationManager,
     BoxMigrationJobReceiver,
@@ -107,6 +109,7 @@ import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.s
     RunnerAdapterFactory,
     BoxActivityService,
     BoxStateWaiterService,
+    BoxAutoResumeService,
   ],
 })
 export class BoxModule {}

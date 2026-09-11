@@ -15,7 +15,7 @@ import { Organization } from '../organization/entities/organization.entity'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import type { Runner } from '../box/entities/runner.entity'
-import { BoxAutoResumeService } from './box-auto-resume.service'
+import { BoxAutoResumeService } from '../box/services/box-auto-resume.service'
 
 type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunner?: Runner

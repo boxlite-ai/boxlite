@@ -4,14 +4,14 @@
  */
 
 import { Injectable, RequestTimeoutException } from '@nestjs/common'
-import { BoxService } from '../box/services/box.service'
-import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
-import { RedisLockProvider } from '../box/common/redis-lock.provider'
-import { getStateChangeLockKey } from '../box/utils/lock-key.util'
-import { Box } from '../box/entities/box.entity'
-import { BoxState } from '../box/enums/box-state.enum'
-import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
-import { Organization } from '../organization/entities/organization.entity'
+import { BoxService } from './box.service'
+import { BoxStateWaiterService } from './box-state-waiter.service'
+import { RedisLockProvider } from '../common/redis-lock.provider'
+import { getStateChangeLockKey } from '../utils/lock-key.util'
+import { Box } from '../entities/box.entity'
+import { BoxState } from '../enums/box-state.enum'
+import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { Organization } from '../../organization/entities/organization.entity'
 
 export const AUTO_RESUME_TIMEOUT_SECONDS = 30
 
