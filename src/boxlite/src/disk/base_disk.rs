@@ -80,6 +80,63 @@ pub(crate) struct BaseDiskManager {
     store: BaseDiskStore,
 }
 
+/// The set of paths something still backs onto, and whether the scan that
+/// produced it saw everything.
+///
+/// An incomplete set is not a smaller set — it is an unknown one. The two read
+/// very differently to a caller about to delete what is not in it.
+pub(crate) struct ReferencedPaths {
+    pub(crate) paths: HashSet<PathBuf>,
+    /// False when any directory could not be listed or any backing chain was
+    /// cut short.
+    pub(crate) complete: bool,
+}
+
+/// Paths in one directory listing, with an entry that could not be read
+/// recorded as a hole in the answer rather than dropped.
+///
+/// `read_dir` yields a `Result` per entry, and a dropped `Err` is
+/// indistinguishable from a directory that simply holds fewer boxes — the
+/// exact conflation [`ReferencedPaths::complete`] exists to prevent one level
+/// up, where the whole directory is unlistable.
+fn listed_paths<I>(entries: I, referenced: &mut ReferencedPaths) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = std::io::Result<fs::DirEntry>>,
+{
+    let mut paths = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(entry) => paths.push(entry.path()),
+            Err(e) => {
+                tracing::warn!("GC: failed to read a directory entry: {}", e);
+                referenced.complete = false;
+            }
+        }
+    }
+    paths
+}
+
+impl ReferencedPaths {
+    fn new() -> Self {
+        Self {
+            paths: HashSet::new(),
+            complete: true,
+        }
+    }
+
+    /// Fold one chain in.
+    ///
+    /// No normalization here: qcow2 headers already record a canonical path
+    /// (`write_cow_child_header`) and the cache and base directories
+    /// canonicalize at construction, so both sides of the membership test are
+    /// in the same shape. That invariant is pinned where it is produced, by
+    /// `a_backing_path_is_recorded_canonical_even_when_given_through_a_symlink`.
+    fn absorb(&mut self, chain: super::BackingChain) {
+        self.complete &= chain.complete;
+        self.paths.extend(chain.paths);
+    }
+}
+
 impl BaseDiskManager {
     /// How long a base file must sit untouched before the orphan sweep may
     /// consider it. Covers the window between `install`'s rename and its insert.
@@ -122,34 +179,50 @@ impl BaseDiskManager {
     /// leaf is collected on this pass and its parent on the next, so the sweep
     /// still converges.
     ///
-    /// `read_backing_chain` returns partial results on a read error and caps at
-    /// `MAX_BACKING_CHAIN_DEPTH`, so this can under-report. It is one of two
-    /// independent guards in [`Self::gc_orphans`], never the sole authority.
+    /// This can under-report — see [`ReferencedPaths::complete`] and use
+    /// [`Self::referenced_backing_paths_checked`] when the answer decides a
+    /// deletion. Here it is one of two independent guards in
+    /// [`Self::gc_orphans`], never the sole authority.
     pub(crate) fn referenced_backing_paths(&self, boxes_dir: &Path) -> HashSet<PathBuf> {
-        let mut referenced = HashSet::new();
+        self.referenced_backing_paths_checked(boxes_dir).paths
+    }
+
+    /// [`Self::referenced_backing_paths`] with the flag a deleting caller needs.
+    ///
+    /// A caller that has no second guard — image-disk eviction targets entries
+    /// that *do* have index rows, so the "no row names it" guard cannot help —
+    /// must treat an incomplete answer as "unknown", not as "unreferenced".
+    /// Silently deleting on a partial scan removes the backing file out from
+    /// under a running box.
+    pub(crate) fn referenced_backing_paths_checked(&self, boxes_dir: &Path) -> ReferencedPaths {
+        let mut referenced = ReferencedPaths::new();
 
         match fs::read_dir(boxes_dir) {
             Ok(entries) => {
-                for entry in entries.flatten() {
-                    let disks_dir = entry.path().join("disks");
+                for box_dir in listed_paths(entries, &mut referenced) {
+                    let disks_dir = box_dir.join("disks");
                     for overlay in [
                         disk_filenames::CONTAINER_DISK,
                         disk_filenames::GUEST_ROOTFS_DISK,
                     ] {
                         let overlay_path = disks_dir.join(overlay);
                         if overlay_path.exists() {
-                            referenced.extend(super::read_backing_chain(&overlay_path));
+                            referenced.absorb(super::read_backing_chain_checked(&overlay_path));
                         }
                     }
                 }
             }
             Err(e) => {
+                // A boxes directory that cannot be listed is the worst case:
+                // every overlay under it is invisible, so the set looks empty
+                // rather than partial.
                 if boxes_dir.exists() {
                     tracing::warn!(
                         "GC: failed to read boxes dir {}: {}",
                         boxes_dir.display(),
                         e
                     );
+                    referenced.complete = false;
                 }
             }
         }
@@ -157,8 +230,8 @@ impl BaseDiskManager {
         // Ancestry between bases themselves.
         match fs::read_dir(&self.bases_dir) {
             Ok(entries) => {
-                for entry in entries.flatten() {
-                    referenced.extend(super::read_backing_chain(&entry.path()));
+                for base in listed_paths(entries, &mut referenced) {
+                    referenced.absorb(super::read_backing_chain_checked(&base));
                 }
             }
             Err(e) => {
@@ -168,6 +241,7 @@ impl BaseDiskManager {
                         self.bases_dir.display(),
                         e
                     );
+                    referenced.complete = false;
                 }
             }
         }
@@ -821,6 +895,30 @@ mod tests {
                 created_at: 0,
             })
             .unwrap();
+    }
+
+    /// `read_dir` hands back a `Result` per entry, and dropping the `Err`
+    /// makes a partially listed directory look like a smaller one. Eviction
+    /// has no second guard, so that reads as "no box backs onto this" and
+    /// takes the backing file out from under a running box.
+    #[test]
+    fn an_unreadable_directory_entry_reports_incomplete() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("box-a"), b"x").unwrap();
+        let mut referenced = ReferencedPaths::new();
+
+        let entries = std::fs::read_dir(dir.path())
+            .unwrap()
+            .chain(std::iter::once(Err(std::io::Error::other(
+                "readdir failed",
+            ))));
+        let paths = listed_paths(entries, &mut referenced);
+
+        assert_eq!(paths.len(), 1, "the readable entry still comes back");
+        assert!(
+            !referenced.complete,
+            "an entry that could not be read leaves the answer unknown, not smaller"
+        );
     }
 
     /// Only a file that *nothing* claims may be deleted.
