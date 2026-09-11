@@ -33,7 +33,8 @@ impl LocalSnapshotBackend {
         let _lock = self.inner.disk_ops.lock().await;
 
         let box_id = self.inner.id().as_str();
-        let snap_mgr = &self.inner.runtime.snapshot_mgr;
+        let snap_mgr = self.inner.runtime.snapshot_mgr.clone();
+        let mode = self.inner.disk_snapshot_mode()?;
 
         // Check if snapshot name already exists for this box.
         if snap_mgr.exists(box_id, name)? {
@@ -53,14 +54,25 @@ impl LocalSnapshotBackend {
             "snapshot_dir": snapshot_dir.to_string_lossy(),
             "container_disk": container_disk.to_string_lossy(),
         });
-        std::fs::write(&pending_marker, marker_data.to_string()).map_err(|e| {
-            BoxliteError::Storage(format!("Failed to write snapshot marker: {}", e))
-        })?;
+        if mode == crate::disk::DiskSnapshotMode::Fork {
+            std::fs::write(&pending_marker, marker_data.to_string()).map_err(|e| {
+                BoxliteError::Storage(format!("Failed to write snapshot marker: {}", e))
+            })?;
+        }
 
         // Quiesce VM for point-in-time snapshot consistency.
+        let box_home = box_home.clone();
+        let snapshot_name = name.to_owned();
+        let box_id = box_id.to_owned();
         let result = self
             .inner
-            .with_quiesce_async(async { snap_mgr.create(box_home, name, box_id) })
+            .with_quiesce_async(async move {
+                tokio::task::spawn_blocking(move || {
+                    snap_mgr.create(&box_home, &snapshot_name, &box_id, mode)
+                })
+                .await
+                .map_err(|e| BoxliteError::Internal(format!("Snapshot task failed: {e}")))?
+            })
             .await;
 
         // Remove marker on success.
@@ -119,6 +131,7 @@ impl LocalSnapshotBackend {
 
     async fn snapshot_restore(&self, name: &str) -> BoxliteResult<()> {
         validate_snapshot_name(name)?;
+        let _lock = self.inner.disk_ops.lock().await;
 
         // Refuse restore while the box is active — disk replacement under a running
         // VM would corrupt state and potentially lose data.
@@ -130,8 +143,6 @@ impl LocalSnapshotBackend {
                 ));
             }
         }
-
-        let _lock = self.inner.disk_ops.lock().await;
 
         let box_id = self.inner.id().as_str();
         let disks_dir = self.inner.config.box_home.join("disks");
@@ -154,7 +165,12 @@ impl LocalSnapshotBackend {
 #[async_trait::async_trait]
 impl crate::runtime::backend::SnapshotBackend for LocalSnapshotBackend {
     async fn create(&self, options: SnapshotOptions, name: &str) -> BoxliteResult<SnapshotInfo> {
-        self.snapshot_create(name, options).await
+        let inner = Arc::clone(&self.inner);
+        let name = name.to_owned();
+        // Own the freeze, copy and thaw even if the caller drops its future.
+        tokio::spawn(async move { Self::new(inner).snapshot_create(&name, options).await })
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("Snapshot task failed: {e}")))?
     }
 
     async fn list(&self) -> BoxliteResult<Vec<SnapshotInfo>> {

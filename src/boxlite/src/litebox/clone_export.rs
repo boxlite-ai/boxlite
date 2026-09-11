@@ -17,7 +17,7 @@ use crate::runtime::types::BoxStatus;
 
 impl BoxImpl {
     pub(crate) async fn clone_box(
-        &self,
+        self: Arc<Self>,
         options: crate::runtime::options::CloneOptions,
         name: Option<String>,
     ) -> BoxliteResult<crate::LiteBox> {
@@ -26,19 +26,30 @@ impl BoxImpl {
             Some(n) => vec![n],
             None => Vec::new(),
         };
-        let mut clones = self.clone_boxes(options, 1, names).await?;
+        let mut clones = BoxImpl::clone_boxes(self, options, 1, names).await?;
         Ok(clones.remove(0))
     }
 
     /// Batch clone: create N clones sharing a single base disk layer.
     ///
     /// Three-phase flow (snapshot-as-base):
-    ///   A. Inside quiesce bracket (VM paused): create disk layer (rename + COW child).
+    ///   A. Inside quiesce bracket: copy the live disk, or fork a stopped disk.
     ///   B. Outside quiesce bracket (VM resumed): create N thin overlay headers.
     ///   C. Provision each clone and increment layer ref count.
     pub(crate) async fn clone_boxes(
-        &self,
+        self: Arc<Self>,
         _options: crate::runtime::options::CloneOptions,
+        count: usize,
+        names: Vec<String>,
+    ) -> BoxliteResult<Vec<crate::LiteBox>> {
+        // Cancellation must not thaw the VM while spawn_blocking still copies.
+        tokio::spawn(async move { self.clone_boxes_inner(count, names).await })
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("Clone task failed: {e}")))?
+    }
+
+    async fn clone_boxes_inner(
+        &self,
         count: usize,
         names: Vec<String>,
     ) -> BoxliteResult<Vec<crate::LiteBox>> {
@@ -56,6 +67,7 @@ impl BoxImpl {
 
         let t0 = Instant::now();
         let _lock = self.disk_ops.lock().await;
+        let mode = self.disk_snapshot_mode()?;
 
         let rt = Arc::clone(&self.runtime);
         let src_disks = self.config.box_home.join("disks");
@@ -68,20 +80,25 @@ impl BoxImpl {
             )));
         }
 
-        // Phase A: Create shared base layer inside quiesce bracket (VM paused).
-        // This is the same operation as snapshot creation: rename + COW child.
+        // Phase A: Copy the live disk, or fork a stopped disk, into a shared base.
         let source_box_id = self.id().to_string();
         let layer = {
             let src_disks = src_disks.clone();
             let source_box_id = source_box_id.clone();
+            let base_disk_mgr = rt.base_disk_mgr.clone();
 
-            self.with_quiesce_async(async {
-                rt.base_disk_mgr.create_base_disk(
-                    &src_disks,
-                    BaseDiskKind::CloneBase,
-                    None,
-                    &source_box_id,
-                )
+            self.with_quiesce_async(async move {
+                tokio::task::spawn_blocking(move || {
+                    base_disk_mgr.create_base_disk(
+                        &src_disks,
+                        BaseDiskKind::CloneBase,
+                        None,
+                        &source_box_id,
+                        mode,
+                    )
+                })
+                .await
+                .map_err(|e| BoxliteError::Internal(format!("Clone disk task failed: {e}")))?
             })
             .await?
         };

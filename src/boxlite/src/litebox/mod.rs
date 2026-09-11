@@ -238,7 +238,7 @@ impl LiteBox {
         options: CloneOptions,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
-        self.box_backend.clone_box(options, name).await
+        self.box_backend.clone().clone_box(options, name).await
     }
 
     /// Batch clone: create N clones sharing a single base disk copy.
@@ -251,7 +251,10 @@ impl LiteBox {
         count: usize,
         names: Vec<String>,
     ) -> BoxliteResult<Vec<LiteBox>> {
-        self.box_backend.clone_boxes(options, count, names).await
+        self.box_backend
+            .clone()
+            .clone_boxes(options, count, names)
+            .await
     }
 
     /// Export this box as a portable `.boxlite` archive.

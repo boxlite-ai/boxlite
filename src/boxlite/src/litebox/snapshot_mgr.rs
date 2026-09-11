@@ -33,7 +33,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::db::snapshot::SnapshotStore;
 use crate::disk::constants::filenames as disk_filenames;
-use crate::disk::{BackingFormat, Qcow2Helper};
+use crate::disk::{BackingFormat, DiskSnapshotMode, Qcow2Helper};
 
 // ============================================================================
 // Domain Type
@@ -139,15 +139,14 @@ impl SnapshotManager {
     /// Create a snapshot from a box's live container disk.
     ///
     /// 1. Create `box_home/snapshots/{name}/` directory
-    /// 2. Read virtual size from container disk
-    /// 3. Rename container disk → `snapshots/{name}/disk.qcow2`
-    /// 4. Create COW child at original path (box keeps running)
-    /// 5. Insert DB record via `SnapshotStore`
+    /// 2. Copy a live disk, or fork a stopped disk into a COW child
+    /// 3. Insert DB record via `SnapshotStore`
     pub(crate) fn create(
         &self,
         box_home: &Path,
         name: &str,
         box_id: &str,
+        mode: DiskSnapshotMode,
     ) -> BoxliteResult<SnapshotInfo> {
         let disks_dir = box_home.join("disks");
         let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
@@ -169,13 +168,10 @@ impl SnapshotManager {
             ))
         })?;
 
-        // 2-4. Fork: move container → snapshot dir, create COW child at original path
         let snap_disk = snapshot_dir.join(disk_filenames::CONTAINER_DISK);
-        let forked = crate::disk::fork_qcow2(&container_disk, &snap_disk)?;
-        let disk_info = crate::disk::DiskInfo::from(&forked);
-        // forked is persistent (won't be deleted on drop)
+        let captured = mode.capture(&container_disk, &snap_disk)?;
+        let disk_info = crate::disk::DiskInfo::from(&captured);
 
-        // 5. Insert DB record
         let snapshot_id = nanoid::nanoid!(8);
         let now = chrono::Utc::now().timestamp();
         let info = SnapshotInfo {
@@ -186,6 +182,7 @@ impl SnapshotManager {
             disk_info,
         };
         self.store.save(&info)?;
+        captured.leak();
 
         Ok(info)
     }

@@ -123,7 +123,7 @@ pub(crate) struct BoxImpl {
     /// Cancellation token for this box (child of runtime's token).
     /// When cancelled (via stop() or runtime shutdown), all operations abort gracefully.
     pub(crate) shutdown_token: CancellationToken,
-    /// Serializes disk-mutating snapshot/clone/export operations.
+    /// Serializes disk-mutating snapshot/clone/export operations with boot/stop.
     /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
     pub(crate) disk_ops: tokio::sync::Mutex<()>,
 
@@ -675,6 +675,7 @@ impl BoxImpl {
 
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
         let t0 = Instant::now();
+        let _disk_lock = self.disk_ops.lock().await;
 
         // Early exit if already stopped (idempotent, prevents double-counting)
         // Note: We check status, not shutdown_token, because the token may be cancelled
@@ -1193,6 +1194,14 @@ impl BoxImpl {
         use super::BoxBuilder;
         use std::sync::Arc;
 
+        // Attaching an existing VM does not replace disks and is also needed
+        // by quiesce/stop while they already own disk_ops.
+        let attaching = self.state.read().status == BoxStatus::Running;
+        let _disk_lock = if attaching {
+            None
+        } else {
+            Some(self.disk_ops.lock().await)
+        };
         let state = self.state.read().clone();
         let is_first_start = state.status == BoxStatus::Configured;
         // Reattaching to a live box: its init is already running, so mark the
@@ -1338,6 +1347,21 @@ impl BoxImpl {
 // ============================================================================
 
 impl BoxImpl {
+    /// Called with disk_ops held, before quiesce changes Running to Paused.
+    pub(crate) fn disk_snapshot_mode(&self) -> BoxliteResult<crate::disk::DiskSnapshotMode> {
+        use crate::disk::DiskSnapshotMode;
+        let status = self.state.read().status;
+        if status.is_running() {
+            return Ok(DiskSnapshotMode::Copy);
+        }
+        if status.is_active() {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot snapshot box in {status} state"
+            )));
+        }
+        Ok(DiskSnapshotMode::Fork)
+    }
+
     /// Execute a future with the VM quiesced for point-in-time consistency.
     ///
     /// Follows the QEMU+libvirt quiesce protocol:
@@ -1348,8 +1372,8 @@ impl BoxImpl {
     ///   5. Guest Thaw RPC (FITHAW — unblock writes)
     ///
     /// If the VM is not running, `fut` is executed directly with no quiesce.
-    /// Guest RPCs are best-effort with timeout — failure degrades to
-    /// crash-consistent (SIGSTOP-only), not operation failure.
+    /// A failed freeze aborts capture: SIGSTOP alone can leave qcow2 metadata
+    /// buffered in the VMM. Guest flush requests drain that cache.
     pub(crate) async fn with_quiesce_async<Fut, R>(&self, fut: Fut) -> BoxliteResult<R>
     where
         Fut: Future<Output = BoxliteResult<R>>,
@@ -1380,6 +1404,13 @@ impl BoxImpl {
         // Phase 1: Freeze guest I/O (best-effort, 5s timeout)
         let t_quiesce = Instant::now();
         let frozen = self.guest_quiesce().await;
+        if !frozen {
+            // A timed-out RPC may have frozen mounts before its reply was lost.
+            self.guest_thaw().await;
+            return Err(BoxliteError::InvalidState(
+                "Cannot capture disks: guest filesystem freeze failed".into(),
+            ));
+        }
         let quiesce_ms = t_quiesce.elapsed().as_millis() as u64;
 
         // Phase 2: SIGSTOP — pause vCPUs
@@ -1456,19 +1487,14 @@ impl BoxImpl {
         match result {
             Ok(Ok(count)) => {
                 tracing::debug!(frozen_count = count, "Guest filesystems quiesced");
-                true
+                count > 0
             }
             Ok(Err(e)) => {
-                tracing::warn!(
-                    "Guest quiesce RPC failed: {}, proceeding with crash-consistent snapshot",
-                    e
-                );
+                tracing::warn!("Guest quiesce RPC failed: {}", e);
                 false
             }
             Err(_) => {
-                tracing::warn!(
-                    "Guest quiesce timed out, proceeding with crash-consistent snapshot"
-                );
+                tracing::warn!("Guest quiesce timed out");
                 false
             }
         }
@@ -1561,7 +1587,7 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     }
 
     async fn clone_box(
-        &self,
+        self: Arc<Self>,
         options: crate::runtime::options::CloneOptions,
         name: Option<String>,
     ) -> BoxliteResult<crate::LiteBox> {
@@ -1569,7 +1595,7 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     }
 
     async fn clone_boxes(
-        &self,
+        self: Arc<Self>,
         options: crate::runtime::options::CloneOptions,
         count: usize,
         names: Vec<String>,
@@ -1681,6 +1707,7 @@ mod tests {
         should_fail: AtomicBool,
         entered: Semaphore,
         release: Semaphore,
+        thawed: Semaphore,
     }
 
     impl Default for StartGate {
@@ -1690,6 +1717,7 @@ mod tests {
                 should_fail: AtomicBool::new(false),
                 entered: Semaphore::new(0),
                 release: Semaphore::new(0),
+                thawed: Semaphore::new(0),
             }
         }
     }
@@ -1697,6 +1725,54 @@ mod tests {
     #[derive(Clone)]
     struct StartStubGuest {
         gate: Arc<StartGate>,
+    }
+
+    #[tonic::async_trait]
+    impl boxlite_shared::Guest for StartStubGuest {
+        async fn init(
+            &self,
+            _: Request<boxlite_shared::GuestInitRequest>,
+        ) -> Result<Response<boxlite_shared::GuestInitResponse>, Status> {
+            Err(Status::unimplemented("init"))
+        }
+
+        async fn ping(
+            &self,
+            _: Request<boxlite_shared::PingRequest>,
+        ) -> Result<Response<boxlite_shared::PingResponse>, Status> {
+            Err(Status::unimplemented("ping"))
+        }
+
+        async fn shutdown(
+            &self,
+            _: Request<boxlite_shared::ShutdownRequest>,
+        ) -> Result<Response<boxlite_shared::ShutdownResponse>, Status> {
+            Err(Status::unimplemented("shutdown"))
+        }
+
+        async fn quiesce(
+            &self,
+            _: Request<boxlite_shared::QuiesceRequest>,
+        ) -> Result<Response<boxlite_shared::QuiesceResponse>, Status> {
+            self.gate.entered.add_permits(1);
+            self.gate.release.acquire().await.unwrap().forget();
+            if self.gate.should_fail.load(Ordering::SeqCst) {
+                return Err(Status::internal("injected freeze failure"));
+            }
+            Ok(Response::new(boxlite_shared::QuiesceResponse {
+                frozen_count: 1,
+            }))
+        }
+
+        async fn thaw(
+            &self,
+            _: Request<boxlite_shared::ThawRequest>,
+        ) -> Result<Response<boxlite_shared::ThawResponse>, Status> {
+            self.gate.thawed.add_permits(1);
+            Ok(Response::new(boxlite_shared::ThawResponse {
+                thawed_count: 1,
+            }))
+        }
     }
 
     #[tonic::async_trait]
@@ -1776,6 +1852,9 @@ mod tests {
 
         let server = tokio::spawn(async move {
             Server::builder()
+                .add_service(boxlite_shared::GuestServer::new(StartStubGuest {
+                    gate: gate.clone(),
+                }))
                 .add_service(ContainerServer::new(StartStubGuest { gate }))
                 .serve_with_incoming(incoming)
                 .await
@@ -1881,6 +1960,134 @@ mod tests {
             _temp_dir: temp_dir,
             server,
         }
+    }
+
+    async fn snapshot_fixture(gate: Arc<StartGate>) -> (StartFixture, ChildGuard, crate::LiteBox) {
+        let fixture = running_box_for_start_test(gate).await;
+        let child = ChildGuard(
+            std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap(),
+        );
+        fixture.box_impl.state.write().set_pid(Some(child.0.id()));
+        fixture.box_impl.container_start.set(()).unwrap();
+        let disks = fixture.box_impl.config.box_home.join("disks");
+        std::fs::create_dir_all(&disks).unwrap();
+        crate::disk::Qcow2Helper::create_disk(&disks.join("disk.qcow2"), true).unwrap();
+        let inner = fixture.box_impl.clone();
+        let handle = crate::LiteBox::new(
+            inner.clone(),
+            inner.clone(),
+            Arc::new(crate::litebox::LocalSnapshotBackend::new(inner)),
+        );
+        (fixture, child, handle)
+    }
+
+    #[tokio::test]
+    async fn test_live_disk_isolation_cancellation() {
+        for clone in [false, true] {
+            let gate = Arc::new(StartGate::default());
+            let (fixture, _child, handle) = snapshot_fixture(gate.clone()).await;
+            let caller = tokio::spawn(async move {
+                if clone {
+                    handle
+                        .clone_box(crate::CloneOptions::default(), Some("clone".into()))
+                        .await
+                        .map(|_| ())
+                } else {
+                    handle
+                        .snapshots()
+                        .create(crate::SnapshotOptions::default(), "live")
+                        .await
+                        .map(|_| ())
+                }
+            });
+            tokio::time::timeout(Duration::from_secs(5), gate.entered.acquire())
+                .await
+                .unwrap()
+                .unwrap()
+                .forget();
+            caller.abort();
+            assert!(caller.await.unwrap_err().is_cancelled());
+            gate.release.add_permits(1);
+            tokio::time::timeout(Duration::from_secs(5), gate.thawed.acquire())
+                .await
+                .expect("cancelled capture must still thaw")
+                .unwrap()
+                .forget();
+            let _finished =
+                tokio::time::timeout(Duration::from_secs(5), fixture.box_impl.disk_ops.lock())
+                    .await
+                    .unwrap();
+            assert_eq!(fixture.box_impl.state.read().status, BoxStatus::Running);
+            if clone {
+                assert!(
+                    fixture
+                        .box_impl
+                        .runtime
+                        .get("clone")
+                        .await
+                        .unwrap()
+                        .is_some()
+                );
+            } else {
+                assert!(
+                    fixture
+                        .box_impl
+                        .runtime
+                        .snapshot_mgr
+                        .get(fixture.box_impl.id().as_str(), "live")
+                        .unwrap()
+                        .is_some()
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_live_disk_isolation_freeze_failure() {
+        let gate = Arc::new(StartGate::default());
+        gate.should_fail.store(true, Ordering::SeqCst);
+        gate.release.add_permits(1);
+        let (fixture, _child, handle) = snapshot_fixture(gate.clone()).await;
+        let source = fixture.box_impl.config.box_home.join("disks/disk.qcow2");
+        let before = std::fs::read(&source).unwrap();
+        let result = handle
+            .snapshots()
+            .create(crate::SnapshotOptions::default(), "live")
+            .await;
+        assert!(result.is_err(), "failed freeze must abort capture");
+        assert_eq!(before, std::fs::read(&source).unwrap());
+        assert_eq!(fixture.box_impl.state.read().status, BoxStatus::Running);
+        assert_eq!(gate.thawed.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_live_disk_isolation_copy_failure() {
+        let gate = Arc::new(StartGate::default());
+        gate.release.add_permits(1);
+        let (fixture, _child, handle) = snapshot_fixture(gate.clone()).await;
+        let snapshot_dir = fixture.box_impl.config.box_home.join("snapshots/live");
+        std::fs::create_dir_all(&snapshot_dir).unwrap();
+        let occupied = snapshot_dir.join("disk.qcow2");
+        std::fs::write(&occupied, b"existing snapshot").unwrap();
+        let result = handle
+            .snapshots()
+            .create(crate::SnapshotOptions::default(), "live")
+            .await;
+        assert!(
+            result.is_err(),
+            "must not overwrite an existing snapshot file"
+        );
+        assert_eq!(std::fs::read(occupied).unwrap(), b"existing snapshot");
+        assert_eq!(
+            std::fs::read_dir(snapshot_dir).unwrap().count(),
+            1,
+            "failed copy leaked staging files"
+        );
+        assert_eq!(fixture.box_impl.state.read().status, BoxStatus::Running);
+        assert_eq!(gate.thawed.available_permits(), 1);
     }
 
     async fn wait_for_background_starts(box_impl: &BoxImpl, expected: usize) {

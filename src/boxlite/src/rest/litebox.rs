@@ -451,7 +451,7 @@ impl BoxBackend for RestBox {
     }
 
     async fn clone_box(
-        &self,
+        self: Arc<Self>,
         options: CloneOptions,
         name: Option<String>,
     ) -> BoxliteResult<crate::LiteBox> {
@@ -475,7 +475,7 @@ impl BoxBackend for RestBox {
     }
 
     async fn clone_boxes(
-        &self,
+        self: Arc<Self>,
         options: CloneOptions,
         count: usize,
         names: Vec<String>,
@@ -483,7 +483,7 @@ impl BoxBackend for RestBox {
         let mut results = Vec::with_capacity(count);
         for i in 0..count {
             let name = names.get(i).cloned();
-            let litebox = self.clone_box(options.clone(), name).await?;
+            let litebox = self.clone().clone_box(options.clone(), name).await?;
             results.push(litebox);
         }
         Ok(results)

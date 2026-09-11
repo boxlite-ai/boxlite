@@ -81,6 +81,107 @@ async fn create_stopped_box(runtime: &BoxliteRuntime) -> LiteBox {
         .expect("box not found")
 }
 
+#[tokio::test]
+async fn test_live_disk_isolation_snapshot() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+    let source = runtime
+        .create(common::alpine_opts(), Some("source".into()))
+        .await
+        .unwrap();
+    source.start().await.unwrap();
+    exec_stdout(
+        &source,
+        BoxCommand::new("sh").args(["-c", "echo before > /marker; sync"]),
+    )
+    .await;
+    let snapshot = source
+        .snapshots()
+        .create(SnapshotOptions::default(), "live")
+        .await
+        .unwrap();
+    let snapshot_bytes = std::fs::read(snapshot.disk_info.as_path()).unwrap();
+    exec_stdout(
+        &source,
+        BoxCommand::new("sh").args(["-c", "echo after > /marker; sync"]),
+    )
+    .await;
+    let unchanged = snapshot_bytes == std::fs::read(snapshot.disk_info.as_path()).unwrap();
+    source.stop().await.unwrap();
+    let restored = runtime.get("source").await.unwrap().unwrap();
+    restored.snapshots().restore("live").await.unwrap();
+    restored.start().await.unwrap();
+    let marker = exec_stdout(&restored, BoxCommand::new("cat").arg("/marker")).await;
+    restored.stop().await.unwrap();
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+    assert_eq!(
+        marker.trim(),
+        "before",
+        "snapshot captured writes made after creation"
+    );
+    assert!(unchanged, "running source modified the snapshot qcow2");
+}
+
+#[tokio::test]
+async fn test_live_disk_isolation_clone() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+    let source = runtime
+        .create(common::alpine_opts(), Some("source".into()))
+        .await
+        .unwrap();
+    source.start().await.unwrap();
+    exec_stdout(
+        &source,
+        BoxCommand::new("sh").args(["-c", "echo before > /marker; sync"]),
+    )
+    .await;
+    let cloned = source
+        .clone_box(boxlite::CloneOptions::default(), Some("clone".into()))
+        .await
+        .unwrap();
+    exec_stdout(
+        &source,
+        BoxCommand::new("sh").args(["-c", "echo source-after > /marker; sync"]),
+    )
+    .await;
+    cloned.start().await.unwrap();
+    let clone_marker = exec_stdout(&cloned, BoxCommand::new("cat").arg("/marker")).await;
+    exec_stdout(
+        &cloned,
+        BoxCommand::new("sh").args(["-c", "echo clone-after > /marker; sync"]),
+    )
+    .await;
+    let source_marker = exec_stdout(&source, BoxCommand::new("cat").arg("/marker")).await;
+    cloned.stop().await.unwrap();
+    source.stop().await.unwrap();
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+    assert_eq!(
+        clone_marker.trim(),
+        "before",
+        "clone observed later source writes"
+    );
+    assert_eq!(
+        source_marker.trim(),
+        "source-after",
+        "source observed clone writes"
+    );
+}
+
 // ============================================================================
 // SNAPSHOT CREATE — disk integrity
 // ============================================================================
