@@ -1345,7 +1345,7 @@ fn error_from_boxlite(err: &boxlite::BoxliteError) -> Response {
 /// Panic handler for [`CatchPanicLayer`]. Turns a handler panic into a
 /// `500 InternalError internal` response with our wire envelope —
 /// otherwise axum's default returns an empty `500 Internal Server Error`
-/// with no body, breaking the client's `map_http_status` 500-vs-Network
+/// with no body, breaking the client's status-table 500-vs-Network
 /// distinction.
 fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> Response {
     let detail = err
@@ -1741,7 +1741,7 @@ async fn get_or_attach_main_session(
     // per-box open lock would scope that to the same box; worth doing, not here.
     let mut executions = state.executions.write().await;
     register_main_session(&mut executions, box_id, || async {
-        litebox.attach(None).await
+        litebox.attach(boxlite::AttachOptions::main()).await
     })
     .await
     .map_err(|e| error_from_boxlite(&e))

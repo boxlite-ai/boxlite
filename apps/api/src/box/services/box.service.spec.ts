@@ -290,7 +290,7 @@ describe('BoxService public defaults', () => {
       await service.create({ name: 'restricted-box', image: 'base', ...request } as any, { id: 'org-1', ...org } as any)
 
       expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
-      expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining(expected))
+      expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining(expected), undefined)
     },
   )
 
@@ -302,7 +302,7 @@ describe('BoxService public defaults', () => {
 
     await service.create({ name: 'fresh-box', public: requestedPublic } as any, { id: 'org-1' } as any)
 
-    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ public: expectedPublic }))
+    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ public: expectedPublic }), undefined)
   })
 
   it('persists secrets on a freshly created box', async () => {
@@ -315,6 +315,7 @@ describe('BoxService public defaults', () => {
 
     expect(boxRepository.insert).toHaveBeenCalledWith(
       expect.objectContaining({ secrets: [{ name: 'openai', value: 'sk-test' }] }),
+      undefined,
     )
   })
 

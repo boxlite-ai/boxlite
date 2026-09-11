@@ -6,7 +6,6 @@
 //! All functions are platform-aware and handle cross-platform differences internally.
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use std::fs;
 use std::path::Path;
 
 #[cfg(target_os = "linux")]
@@ -127,69 +126,6 @@ pub fn unmount_overlayfs(mount_point: &Path) -> BoxliteResult<()> {
 #[allow(dead_code)]
 pub fn unmount_overlayfs(_mount_point: &Path) -> BoxliteResult<()> {
     Ok(()) // No-op on non-Linux platforms
-}
-
-/// Process OCI whiteout files in a directory tree.
-///
-/// OCI images layers use special .wh.* files to indicate deletions:
-/// - `.wh.filename` → delete "filename"
-/// - `.wh..wh..opq` → opaque directory marker (delete all contents from lower layers)
-///
-/// This function recursively walks the directory tree, removes files marked
-/// for deletion, and cleans up the whiteout marker files themselves.
-///
-/// # Arguments
-/// * `dir` - Root directory to process
-///
-/// # Returns
-/// * `Ok(())` on success
-/// * `Err(BoxliteError)` if directory cannot be read
-#[allow(dead_code)]
-pub fn process_whiteouts(dir: &Path) -> BoxliteResult<()> {
-    fn process_dir_recursive(dir: &Path) -> BoxliteResult<()> {
-        let entries: Vec<_> = fs::read_dir(dir)
-            .map_err(|e| {
-                BoxliteError::Storage(format!("Failed to read directory {}: {}", dir.display(), e))
-            })?
-            .filter_map(|e| e.ok())
-            .collect();
-
-        for entry in entries {
-            let path = entry.path();
-            let filename = entry.file_name();
-            let filename_str = filename.to_string_lossy();
-
-            if let Some(target_name) = filename_str.strip_prefix(".wh.") {
-                if target_name == ".wh..opq" {
-                    // Opaque directory marker - tar extraction order already handled this
-                    // Just remove the marker file
-                    let _ = fs::remove_file(&path);
-                } else {
-                    // Whiteout file - delete the corresponding target
-                    let target_path = dir.join(target_name);
-
-                    if target_path.exists() {
-                        if target_path.is_dir() {
-                            let _ = fs::remove_dir_all(&target_path);
-                        } else {
-                            let _ = fs::remove_file(&target_path);
-                        }
-                        tracing::debug!("Processed whiteout: removed {}", target_path.display());
-                    }
-
-                    // Remove the whiteout marker file itself
-                    let _ = fs::remove_file(&path);
-                }
-            } else if path.is_dir() {
-                // Recursively process subdirectories
-                process_dir_recursive(&path)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    process_dir_recursive(dir)
 }
 
 /// Fix rootfs permissions using xattr for permission virtualization.
@@ -328,34 +264,6 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
-
-    #[test]
-    fn test_process_whiteouts_removes_target_file() {
-        let temp = TempDir::new().unwrap();
-        let dir = temp.path();
-
-        // Create a file and its whiteout marker
-        fs::write(dir.join("file.txt"), "content").unwrap();
-        fs::write(dir.join(".wh.file.txt"), "").unwrap();
-
-        process_whiteouts(dir).unwrap();
-
-        // Both should be removed
-        assert!(!dir.join("file.txt").exists());
-        assert!(!dir.join(".wh.file.txt").exists());
-    }
-
-    #[test]
-    fn test_process_whiteouts_removes_opaque_marker() {
-        let temp = TempDir::new().unwrap();
-        let dir = temp.path();
-
-        fs::write(dir.join(".wh..wh..opq"), "").unwrap();
-
-        process_whiteouts(dir).unwrap();
-
-        assert!(!dir.join(".wh..wh..opq").exists());
-    }
 
     /// A malformed `override_stat` xattr must abort `fix_rootfs_permissions`,
     /// not be silently overwritten with a fresh 0:0 record.

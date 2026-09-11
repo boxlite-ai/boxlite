@@ -1,13 +1,15 @@
 //! Runtime backend trait — internal abstraction for local vs REST execution.
 
+use std::any::Any;
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
-use crate::litebox::{BoxCommand, BoxTunnel, Execution, LiteBox};
+use crate::litebox::{AttachOptions, BoxCommand, BoxTunnel, Execution, LiteBox};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
     BoxArchive, BoxOptions, CloneOptions, ExportOptions, SnapshotOptions,
@@ -68,7 +70,12 @@ pub(crate) trait RuntimeBackend: Send + Sync {
 /// Local backend is implemented directly by `BoxImpl`.
 /// REST backend delegates to HTTP API calls.
 #[async_trait]
-pub(crate) trait BoxBackend: Send + Sync {
+pub(crate) trait BoxBackend: Send + Sync + Any {
+    /// Owned downcast helper (`Arc` upcast), so callers can move the local
+    /// backend out of the trait object without borrowing `&self` across an
+    /// `await`.
+    fn as_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
+
     fn id(&self) -> &BoxID;
 
     fn name(&self) -> Option<&str>;
@@ -82,21 +89,27 @@ pub(crate) trait BoxBackend: Send + Sync {
 
     /// Attach to a session in the box.
     ///
-    /// - `None` — the box's main command session (docker semantics: `run`'s
-    ///   COMMAND is the container init, registered under execution_id = container
-    ///   id, which the caller cannot name — hence `None`). The unqualified verb
-    ///   mirrors the ecosystem convention (`ContainerAttach`, `podman attach`,
-    ///   CRI `Attach`).
-    /// - `Some(id)` — reattach to an already-running exec session (docker's
-    ///   `ContainerExecAttach`): a fresh `Execution` on a new stream, so the
-    ///   caller discards any prior handle for the same id. Returns
-    ///   `BoxliteError::SessionReaped` if the server reports it no longer
-    ///   attachable.
+    /// [`AttachOptions::main`] follows the box's main command session (docker
+    /// semantics: `run`'s COMMAND is the container init, registered under
+    /// execution_id = container id, which the caller cannot name). The
+    /// unqualified verb mirrors the ecosystem convention (`ContainerAttach`,
+    /// `podman attach`, CRI `Attach`).
+    ///
+    /// [`AttachOptions::execution`] reattaches to an already-running exec
+    /// session (docker's `ContainerExecAttach`): a fresh `Execution` on a new
+    /// stream, so the caller discards any prior handle for the same id. Returns
+    /// `BoxliteError::SessionReaped` if the server reports it no longer
+    /// attachable.
+    ///
+    /// [`AttachOptions::read_only`] drops stdin. Backends must enforce that
+    /// rather than rely on the caller: the returned `Execution` has no stdin
+    /// sender, and a backend that talks over a bidirectional transport refuses
+    /// writes on it.
     ///
     /// Default is `Unsupported`; a backend implements the arms it models. A local
     /// in-process backend has no long-lived reattachable exec sessions, so it
-    /// supports `None` only.
-    async fn attach(&self, _execution_id: Option<&str>) -> BoxliteResult<Execution> {
+    /// supports `main()` only.
+    async fn attach(&self, _options: AttachOptions) -> BoxliteResult<Execution> {
         Err(BoxliteError::Unsupported(
             "this backend does not support attaching to sessions".into(),
         ))

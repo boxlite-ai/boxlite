@@ -30,6 +30,7 @@ Name | Type | Description | Notes
 **volumes** | [**Array&lt;BoxVolume&gt;**](BoxVolume.md) | Array of volumes attached to the box | [optional] [default to undefined]
 **createdAt** | **string** | The creation timestamp of the box | [optional] [default to undefined]
 **updatedAt** | **string** | The last update timestamp of the box | [optional] [default to undefined]
+**lastActivityAt** | **string** | The timestamp of the last recorded activity on the box, absent when no activity has been recorded yet | [optional] [default to undefined]
 **_class** | **string** | The class of the box | [optional] [default to undefined]
 **daemonVersion** | **string** | The version of the daemon running in the box | [optional] [default to undefined]
 **runnerId** | **string** | The runner ID of the box | [optional] [default to undefined]
@@ -66,6 +67,7 @@ const instance: Box = {
     volumes,
     createdAt,
     updatedAt,
+    lastActivityAt,
     _class,
     daemonVersion,
     runnerId,

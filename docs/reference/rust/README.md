@@ -34,6 +34,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [RootfsSpec](#rootfsspec)
   - [VolumeSpec](#volumespec)
   - [NetworkSpec](#networkspec)
+  - [NetworkRateLimit](#networkratelimit)
   - [PortSpec](#portspec)
 - [Security](#security)
   - [SecurityOptions](#securityoptions)
@@ -670,6 +671,7 @@ pub struct AdvancedBoxOptions {
     pub security: SecurityOptions,
     pub isolate_mounts: bool,
     pub health_check: Option<HealthCheckOptions>,
+    pub network_rate_limit: NetworkRateLimit,
 }
 ```
 
@@ -679,6 +681,7 @@ pub struct AdvancedBoxOptions {
 | `security` | `SecurityOptions` | `SecurityOptions::default()` (fully enabled profile; jailer enabled) | Security isolation options (jailer, seccomp, namespaces) |
 | `isolate_mounts` | `bool` | `false` | Enable bind mount isolation (requires CAP_SYS_ADMIN on Linux) |
 | `health_check` | `Option<HealthCheckOptions>` | `None` | Optional guest-agent health monitoring |
+| `network_rate_limit` | `NetworkRateLimit` | Unlimited | Per-direction rate limit for the box's interface, in kilobits/sec. Local runtime only; see [NetworkRateLimit](#networkratelimit) |
 
 ### RootfsSpec
 
@@ -786,6 +789,54 @@ controlled by enabled/disabled alone.
 
 Pre-split code needs no change: `network` keeps its name, type and meaning,
 and box configs persisted without `inbound_network` load with it defaulted.
+
+### NetworkRateLimit
+
+Per-direction rate limit for the box's network interface, in kilobits per
+second. Set through `BoxOptions::advanced`.
+
+```rust
+pub struct NetworkRateLimit {
+    pub tx_kbps: Option<u64>,   // guest -> internet
+    pub rx_kbps: Option<u64>,   // internet -> guest
+}
+```
+
+Directions are named from the box's point of view, matching Firecracker's net
+device: `tx` is what the box sends, `rx` is what reaches it. Which side opened
+the connection does not matter — traffic arriving over an inbound port forward
+is charged to `rx` exactly like a reply to an outbound request. The cap is on
+the interface, not on a connection's direction.
+
+Shaping happens below IP in the gvproxy bridge, so one budget per direction
+covers TCP, UDP, ICMP and ARP together; there is no per-protocol split.
+
+`None` or `0` in a direction leaves that direction uncapped, the convention
+Firecracker, Kata and Cloud Hypervisor share.
+
+```rust
+use boxlite::{AdvancedBoxOptions, BoxOptions, NetworkRateLimit};
+
+let mut advanced = AdvancedBoxOptions::default();
+advanced.network_rate_limit = NetworkRateLimit {
+    tx_kbps: Some(10_000),   // 10 Mbit/s up
+    rx_kbps: Some(100_000),  // 100 Mbit/s down
+};
+let opts = BoxOptions {
+    advanced,
+    ..Default::default()
+};
+```
+
+Local runtime only. A remote server owns its own network policy, so the REST
+wire types carry no field for this and a remote create rejects it. Setting a cap
+while `network` is `Disabled` is also rejected — there is no interface to shape.
+
+**Platform support.** The cap is verified on Linux, where the guest link is a
+SOCK_STREAM socket and declining to read it applies backpressure all the way to
+the guest's virtio queue. macOS uses a SOCK_DGRAM link whose sender behaviour
+under a full receive buffer is not yet verified, so `tx_kbps` there may drop
+frames rather than slow the guest down. `rx_kbps` is paced the same way on both.
 
 ### Secret
 

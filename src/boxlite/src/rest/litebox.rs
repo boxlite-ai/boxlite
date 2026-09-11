@@ -2,19 +2,22 @@
 
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use reqwest::Method;
 use tokio::sync::mpsc;
 
+use boxlite_shared::constants::files::FALLBACK_CAP_BYTES;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use futures::StreamExt;
+use std::io;
 
 use crate::BoxInfo;
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{
-    BoxCommand, BoxTunnel, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution,
+    AttachOptions, BoxCommand, BoxTunnel, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution,
 };
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
@@ -72,11 +75,21 @@ impl RestBox {
     /// Callers open the socket themselves, and do it synchronously, so a
     /// 404/409 surfaces at *their* await point rather than arriving later
     /// as a synthesized `ExecResult`.
-    fn wire_attach(&self, box_id: String, execution_id: String, stream: WsStream) -> Execution {
+    fn wire_attach(
+        &self,
+        box_id: String,
+        execution_id: String,
+        stream: WsStream,
+        wire_stdin: bool,
+    ) -> Execution {
         let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
         let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
-        let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (result_tx, result_rx) = mpsc::unbounded_channel::<ExecResult>();
+        let stdin = wire_stdin.then(mpsc::unbounded_channel::<Vec<u8>>);
+        let (stdin_tx, stdin_rx) = match stdin {
+            Some((tx, rx)) => (Some(tx), Some(rx)),
+            None => (None, None),
+        };
 
         let ws_client = self.client.clone();
         let ws_box_id = box_id.clone();
@@ -100,7 +113,7 @@ impl RestBox {
             execution_id,
             Box::new(control),
             result_rx,
-            Some(ExecStdin::new(stdin_tx)),
+            stdin_tx.map(ExecStdin::new),
             Some(ExecStdout::new(stdout_rx)),
             Some(ExecStderr::new(stderr_rx)),
         )
@@ -115,6 +128,10 @@ impl BoxBackend for RestBox {
 
     fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    fn as_any_arc(self: std::sync::Arc<Self>) -> std::sync::Arc<dyn std::any::Any + Send + Sync> {
+        self
     }
 
     async fn info(&self) -> BoxliteResult<BoxInfo> {
@@ -198,15 +215,24 @@ impl BoxBackend for RestBox {
     /// Either way the returned `Execution` is a fully ordinary one — signal,
     /// resize and kill go out over the same `/executions/{id}/…` routes, and the
     /// pump reconnects through them too.
-    async fn attach(&self, execution_id: Option<&str>) -> BoxliteResult<Execution> {
+    async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution> {
         let box_id = self.box_id_str();
 
         // Open the WebSocket synchronously so a rejection (404 no-such-box /
         // reaped, 409 another client already attached) surfaces here, at the
         // caller's `await box.attach(..)`, not in a later ExecResult from `wait()`.
-        match execution_id {
+        // Read-only is asked for on the wire, not just honored locally: the
+        // socket is bidirectional, so the server has to be the one refusing
+        // writes.
+        let query = if options.wants_stdin() {
+            ""
+        } else {
+            "?stdin=0"
+        };
+
+        match options.execution_id() {
             None => {
-                let path = format!("/boxes/{}/attach", box_id);
+                let path = format!("/boxes/{}/attach{}", box_id, query);
                 let (stream, handshake) = self
                     .client
                     .connect_ws_with_response(&path)
@@ -233,10 +259,13 @@ impl BoxBackend for RestBox {
                     })?
                     .to_string();
 
-                Ok(self.wire_attach(box_id, execution_id, stream))
+                Ok(self.wire_attach(box_id, execution_id, stream, options.wants_stdin()))
             }
             Some(execution_id) => {
-                let path = format!("/boxes/{}/executions/{}/attach", box_id, execution_id);
+                let path = format!(
+                    "/boxes/{}/executions/{}/attach{}",
+                    box_id, execution_id, query
+                );
                 let stream = self.client.connect_ws(&path).await.map_err(|e| match e {
                     BoxliteError::NotFound(msg) => BoxliteError::SessionReaped(format!(
                         "session {} not found — likely reaped after disconnect timeout: {}",
@@ -249,7 +278,12 @@ impl BoxBackend for RestBox {
                     other => other,
                 })?;
 
-                Ok(self.wire_attach(box_id, execution_id.to_string(), stream))
+                Ok(self.wire_attach(
+                    box_id,
+                    execution_id.to_string(),
+                    stream,
+                    options.wants_stdin(),
+                ))
             }
         }
     }
@@ -296,18 +330,30 @@ impl BoxBackend for RestBox {
             ));
         }
 
-        // Create tar archive from host path
-        let tar_bytes = create_tar_from_path(host_src)?;
+        // Stream a tar of the host source straight into the request body.
+        let (source_is_dir, tar) = boxlite_shared::tar::pack_stream(
+            host_src.to_path_buf(),
+            boxlite_shared::tar::PackContext {
+                follow_symlinks: opts.follow_symlinks,
+                include_parent: opts.include_parent,
+            },
+        )
+        .await?;
 
-        // Upload tar to server
+        let body = reqwest::Body::wrap_stream(tar.map(|r| r.map(bytes::Bytes::from)));
+
+        // Upload tar to server, carrying the archive-shape hint.
         let encoded_dst = urlencoding::encode(container_dst);
-        let path = format!("/boxes/{}/files?path={}", box_id, encoded_dst);
+        let path = format!(
+            "/boxes/{}/files?path={}&source_is_dir={}",
+            box_id, encoded_dst, source_is_dir
+        );
         let builder = self
             .client
             .authorized_request(Method::PUT, &path)
             .await?
             .header("Content-Type", "application/x-tar")
-            .body(tar_bytes);
+            .body(body);
 
         let resp = builder.send().await.map_err(transport_error)?;
 
@@ -344,10 +390,64 @@ impl BoxBackend for RestBox {
             return Err(map_http_body(status, &text));
         }
 
-        let tar_bytes = resp.bytes().await.map_err(transport_error)?;
+        // The archive shape is carried on the response header (newer servers);
+        // absence means the peer predates it → capped buffered fallback.
+        let source_is_dir = resp
+            .headers()
+            .get("x-boxlite-source-is-dir")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<bool>().ok());
 
-        // Extract tar to host path
-        extract_tar_to_path(&tar_bytes, host_dst)
+        let Some(source_is_dir) = source_is_dir else {
+            // Legacy peer: without the shape hint we must buffer to detect it.
+            let bytes = read_capped(resp, FALLBACK_CAP_BYTES).await?;
+            return extract_tar_to_path(&bytes, host_dst);
+        };
+        // The header carries the *source* shape; the destination's own
+        // signals — an existing directory, or a trailing slash naming one —
+        // must still win for a single file, matching the legacy
+        // `detect_extraction_mode` and Unix cp semantics.
+        let dest_wants_dir = host_dst.as_os_str().to_string_lossy().ends_with('/');
+        let force_directory = source_is_dir || host_dst.is_dir() || dest_wants_dir;
+
+        // A severed body must stay classified as a transport fault so callers
+        // retry instead of filing a bug. `unpack_stream` flattens the byte
+        // stream's `io::Error` into its own storage message, so park the
+        // classified error in a shared slot and prefer it if the unpack then
+        // fails. A `Mutex` (not `OnceLock` + `Arc::try_unwrap`) because the
+        // forwarding task inside `unpack_stream` may still hold a clone of the
+        // slot when we read it back — we must not depend on Arc drop timing.
+        let transport_fault: Arc<Mutex<Option<BoxliteError>>> = Arc::new(Mutex::new(None));
+        let fault_slot = Arc::clone(&transport_fault);
+        let stream: boxlite_shared::BoxByteStream = Box::pin(resp.bytes_stream().map(move |r| {
+            r.map(|b| b.to_vec()).map_err(|e| {
+                let classified = transport_error(e);
+                let message = classified.to_string();
+                if let Ok(mut slot) = fault_slot.lock() {
+                    *slot = Some(classified);
+                }
+                io::Error::other(message)
+            })
+        }));
+
+        let unpacked = boxlite_shared::tar::unpack_stream(
+            stream,
+            host_dst.to_path_buf(),
+            boxlite_shared::tar::UnpackContext {
+                overwrite: true,
+                mkdir_parents: true,
+                force_directory,
+            },
+        )
+        .await;
+
+        match unpacked {
+            Ok(_) => Ok(()),
+            Err(unpack_err) => {
+                let fault = transport_fault.lock().ok().and_then(|mut s| s.take());
+                Err(fault.unwrap_or(unpack_err))
+            }
+        }
     }
 
     async fn clone_box(
@@ -626,7 +726,9 @@ async fn attach_ws(
         box_id,
         execution_id,
         stream,
-        stdin_rx,
+        // exec() creates the session it attaches to, so it is always writable;
+        // read-only is only reachable through attach().
+        Some(stdin_rx),
         stdout_tx,
         stderr_tx,
         result_tx,
@@ -649,7 +751,8 @@ async fn attach_ws_pump(
     box_id: &str,
     execution_id: &str,
     initial_stream: WsStream,
-    mut stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    // `None` for a read-only attach: there is no writer, so no channel exists.
+    mut stdin_rx: Option<mpsc::UnboundedReceiver<Vec<u8>>>,
     stdout_tx: mpsc::UnboundedSender<String>,
     stderr_tx: mpsc::UnboundedSender<String>,
     result_tx: mpsc::UnboundedSender<ExecResult>,
@@ -658,7 +761,19 @@ async fn attach_ws_pump(
     use std::time::Instant;
     use tokio_tungstenite::tungstenite::Message;
 
-    let path = format!("/boxes/{}/executions/{}/attach", box_id, execution_id);
+    // One source of truth for read-only, so the query and the stdin gates below
+    // cannot drift from whether a channel actually exists.
+    let wire_stdin = stdin_rx.is_some();
+
+    // The query rides every reconnect: a replacement socket opened without it
+    // would be writable, and the server's refusal only binds the socket it was
+    // asked for.
+    let path = format!(
+        "/boxes/{}/executions/{}/attach{}",
+        box_id,
+        execution_id,
+        if wire_stdin { "" } else { "?stdin=0" }
+    );
 
     // State persisted across reconnects:
     //
@@ -693,7 +808,7 @@ async fn attach_ws_pump(
 
         // If the user closed stdin during a previous attach, propagate the
         // EOF to this fresh server-side handler immediately. Best-effort.
-        if user_closed_stdin {
+        if wire_stdin && user_closed_stdin {
             let _ = sink
                 .send(Message::Text(r#"{"type":"stdin_eof"}"#.to_string()))
                 .await;
@@ -711,7 +826,8 @@ async fn attach_ws_pump(
                 // Forward stdin bytes from the SDK consumer to the WS sink.
                 // Disabled once we've observed stdin EOF — the WS reader is
                 // still running so we keep waiting for the exit frame.
-                stdin_msg = stdin_rx.recv(), if !user_closed_stdin => {
+                stdin_msg = async { stdin_rx.as_mut().expect("guarded by wire_stdin").recv().await },
+                    if wire_stdin && !user_closed_stdin => {
                     match stdin_msg {
                         Some(bytes) => {
                             if sink.send(Message::Binary(bytes)).await.is_err() {
@@ -1019,38 +1135,26 @@ async fn emit_or_fallback(
 // Tar Helpers
 // ============================================================================
 
-/// Create a tar archive from a host file or directory.
-fn create_tar_from_path(host_src: &Path) -> BoxliteResult<Vec<u8>> {
-    let mut archive = tar::Builder::new(Vec::new());
-
-    if host_src.is_dir() {
-        archive.append_dir_all(".", host_src).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to create tar from {}: {}",
-                host_src.display(),
-                e
-            ))
-        })?;
-    } else {
-        let file_name = host_src
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "file".to_string());
-        let mut file = std::fs::File::open(host_src).map_err(|e| {
-            BoxliteError::Internal(format!("failed to open {}: {}", host_src.display(), e))
-        })?;
-        archive.append_file(&file_name, &mut file).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to add {} to tar: {}",
-                host_src.display(),
-                e
-            ))
-        })?;
+/// Read a tar response body into memory, enforcing a size cap.
+///
+/// Used only as a fallback when the server predates the `source_is_dir`
+/// hint and therefore cannot stream end-to-end; past the cap we error
+/// instead of buffering unboundedly. Takes the `Response` rather than a
+/// byte stream so a severed body keeps its transport classification.
+async fn read_capped(resp: reqwest::Response, cap: u64) -> BoxliteResult<Vec<u8>> {
+    let mut stream = resp.bytes_stream();
+    let mut out: Vec<u8> = Vec::new();
+    while let Some(item) = stream.next().await {
+        let chunk = item.map_err(transport_error)?;
+        if out.len() as u64 + chunk.len() as u64 > cap {
+            return Err(BoxliteError::Unsupported(format!(
+                "copy_out exceeds {} MiB fallback cap; upgrade the server to stream end-to-end",
+                cap / (1024 * 1024)
+            )));
+        }
+        out.extend_from_slice(&chunk);
     }
-
-    archive
-        .into_inner()
-        .map_err(|e| BoxliteError::Internal(format!("failed to finalize tar archive: {}", e)))
+    Ok(out)
 }
 
 /// Extract a tar archive to a host path.
@@ -1243,6 +1347,8 @@ mod tests {
         status_calls: u32,
         /// Request-line paths the client asked for, in order.
         requested_paths: Vec<String>,
+        /// Text (control) frames the server received from the client.
+        received_text: Vec<String>,
         /// Headers to add to the WS handshake response — how the real
         /// server hands back the main session's execution id.
         ws_response_headers: Vec<(String, String)>,
@@ -1505,6 +1611,179 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// The streaming path (server sends the shape hint) must preserve the same
+    /// transport-fault classification the buffered fallback gives. Exercises the
+    /// shared fault slot, not just `read_capped`.
+    #[tokio::test]
+    async fn copy_out_streaming_truncation_classifies_as_network() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                head.push(socket.read_u8().await.unwrap());
+            }
+            // Streaming peer: carries the shape hint, promises 4 KiB, hangs up.
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\n\
+                      Content-Type: application/x-tar\r\n\
+                      X-Boxlite-Source-Is-Dir: false\r\n\
+                      Content-Length: 4096\r\n\
+                      Connection: close\r\n\r\nhi",
+                )
+                .await
+                .unwrap();
+        });
+
+        let rest_box = rest_box_for(port, "box1");
+        let host_dst = std::env::temp_dir().join("boxlite-copy-out-stream-truncated");
+
+        let error = rest_box
+            .copy_out("/tmp/archive", &host_dst, CopyOptions::default())
+            .await
+            .expect_err("a truncated streaming download must fail");
+
+        assert!(
+            matches!(&error, BoxliteError::Network(_)),
+            "a severed streaming download must classify as transport, got {error:?}"
+        );
+        server.await.unwrap();
+    }
+
+    /// Streaming copy_out must fold the destination's directory-ness back into
+    /// the archive shape: a single-file source whose destination is an existing
+    /// directory lands *inside* it (Unix cp semantics), not at the directory
+    /// path — mirroring `detect_extraction_mode` in the legacy path.
+    #[tokio::test]
+    async fn copy_out_places_single_file_inside_existing_directory() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // A single-file tar: one regular entry "file.txt".
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            let content = b"inside-dir\n";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(content.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "file.txt", &content[..])
+                .unwrap();
+            builder.finish().unwrap();
+        }
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                head.push(socket.read_u8().await.unwrap());
+            }
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\n\
+                         Content-Type: application/x-tar\r\n\
+                         X-Boxlite-Source-Is-Dir: false\r\n\
+                         Content-Length: {}\r\n\
+                         Connection: close\r\n\r\n",
+                        tar_bytes.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            socket.write_all(&tar_bytes).await.unwrap();
+        });
+
+        let rest_box = rest_box_for(port, "box1");
+        let dir = tempfile::tempdir().unwrap();
+
+        rest_box
+            .copy_out("/tmp/file.txt", dir.path(), CopyOptions::default())
+            .await
+            .expect("copy_out into existing directory");
+
+        let landed = dir.path().join("file.txt");
+        assert_eq!(
+            std::fs::read_to_string(&landed).unwrap(),
+            "inside-dir\n",
+            "single file must land inside the destination directory"
+        );
+        server.await.unwrap();
+    }
+
+    /// A destination with a trailing slash names a directory even when it
+    /// does not exist yet: a single-file source must land *inside* it (the
+    /// legacy `detect_extraction_mode` trailing-slash rule), not fail to
+    /// unpack at the directory-designated path.
+    #[tokio::test]
+    async fn copy_out_trailing_slash_forces_directory_mode() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // A single-file tar: one regular entry "file.txt".
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            let content = b"trailing-slash\n";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(content.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "file.txt", &content[..])
+                .unwrap();
+            builder.finish().unwrap();
+        }
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                head.push(socket.read_u8().await.unwrap());
+            }
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\n\
+                         Content-Type: application/x-tar\r\n\
+                         X-Boxlite-Source-Is-Dir: false\r\n\
+                         Content-Length: {}\r\n\
+                         Connection: close\r\n\r\n",
+                        tar_bytes.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            socket.write_all(&tar_bytes).await.unwrap();
+        });
+
+        let rest_box = rest_box_for(port, "box1");
+        let dir = tempfile::tempdir().unwrap();
+
+        // The trailing slash makes this a directory even though it does not
+        // exist yet (mkdir_parents creates it).
+        let dest_with_slash =
+            std::path::PathBuf::from(format!("{}/", dir.path().join("newdir").display()));
+        rest_box
+            .copy_out("/tmp/file.txt", &dest_with_slash, CopyOptions::default())
+            .await
+            .expect("copy_out with trailing-slash destination");
+
+        let landed = dir.path().join("newdir").join("file.txt");
+        assert_eq!(
+            std::fs::read_to_string(&landed).unwrap(),
+            "trailing-slash\n",
+            "single file must land inside the trailing-slash directory"
+        );
+        server.await.unwrap();
+    }
+
     #[tokio::test]
     async fn info_rejects_a_mismatched_remote_box_id() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1728,6 +2007,89 @@ mod tests {
     // The attach must address the container route (exec-attach cannot
     // reach init: the client has no id for it), adopt the execution id the
     // server hands back on the upgrade, and stream init's output and exit code.
+    /// A read-only attach must survive a dropped socket still read-only.
+    ///
+    /// Its stdin sender is dropped by construction, which the pump used to read
+    /// as the consumer closing stdin — so it announced `stdin_eof`, and the
+    /// reconnect rebuilt the URL without the query, giving that EOF a writable
+    /// socket to land on.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn read_only_attach_stays_read_only_across_a_reconnect() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        state.lock().await.ws_response_headers = vec![(
+            "x-boxlite-execution-id".to_string(),
+            "container-1".to_string(),
+        )];
+
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, None, |mut ws, state| async move {
+                // Record whatever the pump volunteers, then drop the socket so
+                // it has to reconnect.
+                let _ = tokio::time::timeout(Duration::from_millis(300), async {
+                    while let Some(Ok(msg)) = ws.next().await {
+                        if let Message::Text(text) = msg {
+                            state.lock().await.received_text.push(text.to_string());
+                        }
+                    }
+                })
+                .await;
+                let _ = ws.close(None).await;
+            })
+            .await;
+        });
+
+        let rest_box = rest_box_for(port, "box1");
+        let _execution = tokio::time::timeout(
+            Duration::from_secs(3),
+            rest_box.attach(AttachOptions::main().read_only()),
+        )
+        .await
+        .expect("attach timed out")
+        .expect("a read-only attach must connect");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        loop {
+            let seen = state
+                .lock()
+                .await
+                .requested_paths
+                .iter()
+                .filter(|p| p.contains("/attach"))
+                .count();
+            if seen >= 2 || std::time::Instant::now() > deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let seen = state.lock().await;
+        let attaches: Vec<&String> = seen
+            .requested_paths
+            .iter()
+            .filter(|p| p.contains("/attach"))
+            .collect();
+        assert!(
+            attaches.len() >= 2,
+            "the pump must reconnect after the drop; saw {attaches:?}"
+        );
+        for path in &attaches {
+            assert!(
+                path.contains("stdin=0"),
+                "every attach of a read-only session must carry the query, got {path:?}"
+            );
+        }
+        assert!(
+            seen.received_text.is_empty(),
+            "a read-only attach has no stdin to close and must never announce one, got {:?}",
+            seen.received_text
+        );
+
+        server.abort();
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn attach_streams_main_session_over_container_route() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1753,10 +2115,13 @@ mod tests {
         });
 
         let rest_box = rest_box_for(port, "box1");
-        let mut execution = tokio::time::timeout(Duration::from_secs(3), rest_box.attach(None))
-            .await
-            .expect("attach timed out")
-            .expect("the REST backend must support attaching to the main command session");
+        let mut execution = tokio::time::timeout(
+            Duration::from_secs(3),
+            rest_box.attach(AttachOptions::main()),
+        )
+        .await
+        .expect("attach timed out")
+        .expect("the REST backend must support attaching to the main command session");
 
         assert_eq!(
             execution.id(),
@@ -1818,11 +2183,13 @@ mod tests {
         });
 
         let rest_box = rest_box_for(port, "box1");
-        let mut execution =
-            tokio::time::timeout(Duration::from_secs(3), rest_box.attach(Some("exec-9")))
-                .await
-                .expect("attach timed out")
-                .expect("the REST backend must support reattaching to an exec by id");
+        let mut execution = tokio::time::timeout(
+            Duration::from_secs(3),
+            rest_box.attach(AttachOptions::execution("exec-9")),
+        )
+        .await
+        .expect("attach timed out")
+        .expect("the REST backend must support reattaching to an exec by id");
 
         assert_eq!(
             execution.id(),
@@ -1875,7 +2242,12 @@ mod tests {
         });
 
         let rest_box = rest_box_for(port, "box1");
-        let err = match tokio::time::timeout(Duration::from_secs(3), rest_box.attach(None)).await {
+        let err = match tokio::time::timeout(
+            Duration::from_secs(3),
+            rest_box.attach(AttachOptions::main()),
+        )
+        .await
+        {
             Ok(Ok(_)) => {
                 panic!("attach(None) must fail when the server names no main session id")
             }
@@ -1913,16 +2285,18 @@ mod tests {
             });
 
             let rest_box = rest_box_for(port, "box1");
-            let err =
-                match tokio::time::timeout(Duration::from_secs(3), rest_box.attach(Some("exec-x")))
-                    .await
-                {
-                    Ok(Ok(_)) => {
-                        panic!("a rejected upgrade ({status}) must not yield an Execution")
-                    }
-                    Ok(Err(e)) => e,
-                    Err(_) => panic!("attach timed out"),
-                };
+            let err = match tokio::time::timeout(
+                Duration::from_secs(3),
+                rest_box.attach(AttachOptions::execution("exec-x")),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {
+                    panic!("a rejected upgrade ({status}) must not yield an Execution")
+                }
+                Ok(Err(e)) => e,
+                Err(_) => panic!("attach timed out"),
+            };
 
             if expect_reaped {
                 assert!(

@@ -333,8 +333,10 @@ export function buildApi(input: ApiInputs) {
         ...(process.env.BILLING_API_URL && {
           BILLING_API_URL: process.env.BILLING_API_URL,
 
-          // Where finalized usage periods are shipped, from the outbox in
-          // apps/api/src/usage/services/usage-export-publisher.service.ts.
+          // Shared service credential for CREATE admission reads and finalized
+          // usage export. Admission calls BILLING_API_URL's plan routes directly;
+          // the usage publisher needs a different base path on the same service.
+          //
           // The same signal and the same service as BILLING_API_URL, but
           // deliberately not the same value: the publisher appends
           // /internal/usage-events, which Commerce serves off its bare origin
@@ -345,7 +347,8 @@ export function buildApi(input: ApiInputs) {
           // pointed somewhere else.
           USAGE_EXPORT_URL: envOr('USAGE_EXPORT_URL', new URL(process.env.BILLING_API_URL).origin),
           USAGE_EXPORT_TOKEN: usageExportToken.value,
-          // Derived from the credential rather than set outright, because
+          // Export enablement is derived from the credential rather than set
+          // outright, because
           // configuration.ts refuses to boot when export is on without a
           // token: a stage pointed at a billing service but never given the
           // shared secret would crash-loop on deploy instead of simply not

@@ -70,6 +70,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
         const responseCode = (exceptionResponse as Record<string, unknown>).code
         code = typeof responseCode === 'string' ? responseCode : undefined
       }
+
+      const retryAfterSeconds = (exception as { retryAfterSeconds?: unknown }).retryAfterSeconds
+      if (typeof retryAfterSeconds === 'number' && Number.isSafeInteger(retryAfterSeconds) && retryAfterSeconds > 0) {
+        response.setHeader('Retry-After', retryAfterSeconds.toString())
+      }
     } else {
       this.logger.error(exception)
       error = STATUS_CODES[HttpStatus.INTERNAL_SERVER_ERROR]

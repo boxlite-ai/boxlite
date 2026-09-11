@@ -148,12 +148,11 @@ class ErrorEnvelopeTests(unittest.TestCase):
     def test_the_envelope_carries_the_machine_code_clients_dispatch_on(self) -> None:
         """`error.code` is the stable snake_case identifier, not the status.
 
-        Clients pattern-match on it (`map_http_error` in
-        src/boxlite/src/rest/error.rs dispatches on nothing else), and
-        box.openapi.yaml types it `string`. Repeating the numeric status there
-        left the body undecodable: the client falls back to reading the status
-        alone, which has no 400 arm, so a refusal this server states plainly
-        still reached the caller as a server fault.
+        The client derives a baseline variant from the HTTP status and lets
+        `code` refine it (src/boxlite/src/rest/error.rs), and box.openapi.yaml
+        types it `string`. Repeating the numeric status there matches no arm,
+        so the specific variant this server named is lost and the caller is
+        left with the status baseline.
         """
         status, error_type, code = ERRORS.classify_error(self.REFUSAL)
         body = ERRORS.error_envelope(self.REFUSAL, error_type, code)
@@ -186,8 +185,8 @@ class ErrorEnvelopeTests(unittest.TestCase):
 
         `test_every_class_is_one_the_spec_declares` covers the table; these are
         the sites that bypass it. A class outside the enums is one the client's
-        `map_http_error` has no arm for, so it falls back to reading the status
-        alone — the same way the numeric `code` used to.
+        code table has no arm for, so the caller is left with the variant the
+        HTTP status implies — the same way a numeric `code` is.
         """
         allowed_types = spec_enum("type")
         allowed_codes = spec_enum("code")

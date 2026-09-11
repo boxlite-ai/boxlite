@@ -245,10 +245,24 @@ Handle to a running or stopped box.
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `exec()` | `(cmd, args, env, tty) -> Execution` | Execute command (async) |
+| `attach()` | `(execution_id=None, stdin=True) -> Execution` | Follow a running session (async) |
 | `stop()` | `() -> None` | Stop the box gracefully (async) |
 | `remove()` | `() -> None` | Delete box and its data (async) |
 | `info()` | `async () -> BoxInfo` | Get box metadata |
 | `metrics()` | `() -> BoxMetrics` | Get resource usage metrics (async) |
+
+`attach()` with no argument follows the box's main command — the container
+init, which is what `run IMAGE COMMAND` starts. Pass `execution_id` to
+reattach to an `exec()` session instead.
+
+`attach(stdin=False)` attaches read-only — docker's `--no-stdin`. The returned
+execution exposes no stdin, and against a remote runtime the server refuses
+stdin, `signal` and `resize` sent over that socket. Use it to follow a box's
+output without a keystroke reaching the workload.
+
+The guarantee is scoped to the attach stream, as it is in docker: holding a box
+handle still lets you `stop()` it, and `Execution.kill()` / `.signal()` /
+`.resize_tty()` go over their own routes rather than this socket.
 
 ---
 
@@ -263,6 +277,7 @@ Metadata about a box.
 | `state` | `BoxStateInfo` | Runtime state with `status`, `running`, and nullable `pid` fields |
 | `created_at` | `str` | ISO 8601 creation timestamp |
 | `started_at` | `str \| None` | Time when the box most recently entered `Running` (RFC 3339); `None` if not recorded or unavailable over REST |
+| `last_activity_at` | `str \| None` | Time the box was last active (RFC 3339), the clock AutoStop measures idleness against; `None` for a local box, which records no activity |
 | `image` | `str` | OCI image used |
 | `cpus` | `int` | Allocated CPU cores |
 | `memory_mib` | `int` | Allocated memory in MiB |

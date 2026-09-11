@@ -577,6 +577,10 @@ message UploadChunk {
   bool mkdir_parents = 4;
   // If true, overwrite existing files (default: true)
   bool overwrite = 5;
+  // Whether the source is a directory (true) or a single file (false).
+  // Set only on the first chunk; unset = unknown (older peer), which makes the
+  // receiver fall back to legacy shape detection.
+  optional bool source_is_dir = 6;
 }
 
 message UploadResponse {
@@ -602,4 +606,8 @@ message DownloadRequest {
 message DownloadChunk {
   // Raw tar archive bytes
   bytes data = 1;
+  // Whether the source is a directory (true) or a single file (false).
+  // Set only on the first chunk; unset = unknown (older peer), which makes the
+  // receiver fall back to legacy shape detection.
+  optional bool source_is_dir = 2;
 }

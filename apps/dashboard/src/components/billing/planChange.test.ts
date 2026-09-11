@@ -4,6 +4,7 @@
  */
 
 import { OrganizationPlan, Plan } from '@/billing-api'
+import { format } from 'date-fns'
 import { describe, expect, it } from 'vitest'
 import { isUpgradeTo, planCardCta, planChangeSummary, queuedChange, scheduledChange } from './planChange'
 
@@ -156,11 +157,19 @@ describe('effect', () => {
     expect(summary.effect).toContain('leave the dashboard')
   })
 
-  it('charges an upgrade on a live subscription immediately and prorated', () => {
+  it('states that an upgrade restarts the cycle rather than charging a price difference', () => {
     const summary = summarize('max', LIVE_PRO)
 
     expect(summary.effect).toContain('immediately')
-    expect(summary.effect).toContain('prorated')
+    expect(summary.effect).toContain('restarts your billing cycle today')
+    expect(summary.effect).toContain('a full period of Max less the unused part of your current cycle')
+    expect(summary.effect).toContain('next renewal is one month from today')
+    expect(summary.effect).not.toContain('prorated')
+    // Read off the fixture so moving it cannot make this pass vacuously. The
+    // old cycle end is the renewal date the upgrade no longer keeps, so the
+    // copy must never print it. (This guard did not discriminate against the
+    // old string either — that carried no date at all.)
+    expect(summary.effect).not.toContain(format(LIVE_PRO.cycleTo, 'MMM d, yyyy'))
   })
 
   it('names the day a downgrade lands and says nothing is charged', () => {
@@ -223,6 +232,29 @@ describe('caveats', () => {
     const canceling: OrganizationPlan = { ...LIVE_PRO, pendingPlanId: 'starter', cancelAtPeriodEnd: true }
 
     expect(summarize('max', canceling).caveats[0].text).toContain('set to end')
+  })
+
+  // A plan change never clears a scheduled cancellation; the upgrade only
+  // moves it onto the period it opens today.
+  it('says an upgrade moves a scheduled cancellation rather than replacing it', () => {
+    const canceling: OrganizationPlan = { ...LIVE_PRO, cancelAtPeriodEnd: true }
+    const caveat = summarize('max', canceling).caveats[0]
+
+    expect(caveat.text).toContain('starts a new billing period today')
+    expect(caveat.text).toContain('the cancellation moves to the end of it')
+    expect(caveat.text).toContain('"Keep Pro"')
+    expect(caveat.text).not.toContain('replaces that with this change')
+  })
+
+  // A downgrade drops the cancellation and takes over at the boundary, so this
+  // branch keeps the wording it always had. Pinned because the upgrade branch
+  // now sits beside it and must not leak into it.
+  it('says a downgrade replaces a scheduled cancellation', () => {
+    const canceling: OrganizationPlan = { ...LIVE_PRO, cancelAtPeriodEnd: true }
+    const caveat = summarize('starter', canceling).caveats[0]
+
+    expect(caveat.text).toContain('Confirming replaces that with this change')
+    expect(caveat.text).not.toContain('new billing period')
   })
 
   it('stays quiet on an ordinary switch', () => {

@@ -602,6 +602,16 @@ impl BoxOptions {
             ));
         }
 
+        let rate_limit = &self.advanced.network_rate_limit;
+        rate_limit.validate()?;
+        if matches!(self.network, NetworkSpec::Disabled) && !rate_limit.is_unlimited() {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                "advanced.network_rate_limit requires network.outbound.mode=\"enabled\" — \
+                 there is no interface to shape when the network is disabled"
+                    .to_string(),
+            ));
+        }
+
         // Wire conversions already reject this (the InboundNetworkConfig
         // TryFrom), but FFI callers (C/Go) set the spec directly — catch
         // them at create. See try_from for the rationale.
@@ -1129,7 +1139,7 @@ mod tests {
     use super::*;
     use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
     use crate::runtime::advanced_options::{
-        ContainerCapabilities, SecurityOptions, SecurityOptionsBuilder,
+        ContainerCapabilities, NetworkRateLimit, SecurityOptions, SecurityOptionsBuilder,
     };
     use crate::runtime::types::Bytes;
 
@@ -1256,6 +1266,128 @@ mod tests {
             !advanced.as_object().unwrap().contains_key("capabilities"),
             "unspecified capabilities must omit the key, not serialize null: {advanced}"
         );
+    }
+
+    fn rate_limited(tx_kbps: Option<u64>, rx_kbps: Option<u64>) -> AdvancedBoxOptions {
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.network_rate_limit = NetworkRateLimit { tx_kbps, rx_kbps };
+        advanced
+    }
+
+    /// Same premise as the capabilities test above: an uncapped box must not
+    /// grow a `network_rate_limit` key inside `advanced`, while a capped one
+    /// must round-trip through the persisted form.
+    #[test]
+    fn box_options_omits_network_rate_limit_key_when_unlimited() {
+        let json = serde_json::to_string(&BoxOptions::default()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let advanced = parsed.get("advanced").unwrap();
+        assert!(
+            !advanced
+                .as_object()
+                .unwrap()
+                .contains_key("network_rate_limit"),
+            "an unlimited rate limit must omit the key: {advanced}"
+        );
+
+        let capped = BoxOptions {
+            advanced: rate_limited(Some(10_000), None),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&capped).unwrap();
+        let back: BoxOptions = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.advanced.network_rate_limit.tx_kbps, Some(10_000));
+        assert_eq!(back.advanced.network_rate_limit.rx_kbps, None);
+    }
+
+    /// There is no interface to shape when the network is off, so the pair must
+    /// be rejected rather than silently ignored — the same rule `ports` follows.
+    #[test]
+    fn box_options_sanitize_rejects_rate_limit_without_a_network() {
+        let mut opts = BoxOptions {
+            network: NetworkSpec::Disabled,
+            advanced: rate_limited(Some(10_000), None),
+            ..Default::default()
+        };
+
+        let error = opts
+            .sanitize()
+            .expect_err("a rate limit with the network disabled must be rejected");
+        assert!(
+            error.to_string().contains("advanced.network_rate_limit"),
+            "error should name the offending option, got: {error}"
+        );
+    }
+
+    /// A zero is the documented spelling of "no cap", so it must not collide
+    /// with `network: Disabled` the way a real cap does.
+    #[test]
+    fn box_options_sanitize_allows_zero_rate_limit_without_a_network() {
+        let mut opts = BoxOptions {
+            network: NetworkSpec::Disabled,
+            advanced: rate_limited(Some(0), Some(0)),
+            ..Default::default()
+        };
+
+        opts.sanitize()
+            .expect("a zero cap is not a cap and must not conflict with a disabled network");
+    }
+
+    /// The common case still has to pass: a cap alongside an enabled network.
+    #[test]
+    fn box_options_sanitize_accepts_rate_limit_with_a_network() {
+        let mut opts = BoxOptions {
+            advanced: rate_limited(Some(10_000), Some(20_000)),
+            ..Default::default()
+        };
+
+        opts.sanitize()
+            .expect("a cap with the default enabled network must be accepted");
+    }
+
+    #[test]
+    fn box_options_sanitize_accepts_rate_limit_up_to_bridge_maximum() {
+        for kbps in [None, Some(0), Some(NetworkRateLimit::MAX_KBPS)] {
+            let mut opts = BoxOptions {
+                advanced: rate_limited(kbps, kbps),
+                ..Default::default()
+            };
+
+            opts.sanitize_common().unwrap();
+            opts.sanitize_persisted().unwrap();
+            opts.sanitize().unwrap();
+        }
+    }
+
+    #[test]
+    fn box_options_sanitize_rejects_rate_limit_above_bridge_maximum() {
+        for field in ["tx_kbps", "rx_kbps"] {
+            for kbps in [NetworkRateLimit::MAX_KBPS + 1, u64::MAX] {
+                let mut opts = BoxOptions {
+                    advanced: rate_limited(
+                        (field == "tx_kbps").then_some(kbps),
+                        (field == "rx_kbps").then_some(kbps),
+                    ),
+                    ..Default::default()
+                };
+
+                for result in [
+                    opts.sanitize_common(),
+                    opts.sanitize_persisted(),
+                    opts.sanitize(),
+                ] {
+                    let error = result.expect_err("oversized rate limit must fail before startup");
+                    assert!(matches!(
+                        error,
+                        boxlite_shared::errors::BoxliteError::InvalidArgument(_)
+                    ));
+                    let message = error.to_string();
+                    assert!(message.contains(&format!("advanced.network_rate_limit.{field}")));
+                    assert!(message.contains(&kbps.to_string()));
+                    assert!(message.contains(&NetworkRateLimit::MAX_KBPS.to_string()));
+                }
+            }
+        }
     }
 
     #[test]

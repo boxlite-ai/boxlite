@@ -29,11 +29,16 @@ pub(crate) struct FlatErrorResponse {
 }
 
 impl FlatErrorResponse {
+    /// A body with no `code` decodes to the empty string, not to a
+    /// synthesized one. Inventing `"internal"` here made every codeless
+    /// refusal — which is every cloud exception that does not set the field —
+    /// arrive as a server fault, and hid the HTTP status from the mapper for
+    /// good: the status-driven fallback was unreachable behind it.
     pub(crate) fn into_error_model(self) -> ErrorModel {
         ErrorModel {
             message: self.message,
             error_type: "HttpError".to_string(),
-            code: self.code.unwrap_or_else(|| "internal".to_string()),
+            code: self.code.unwrap_or_default(),
             request_id: None,
         }
     }
@@ -45,18 +50,25 @@ impl FlatErrorResponse {
 /// - `error_type` — stable PascalCase identifier (K8s `Status.reason`
 ///   style). Mirrors `BoxliteError::http().1` server-side.
 /// - `code` — stable snake_case machine identifier (Stripe `code` style).
-///   The mapper in [`super::error::map_http_error`] dispatches on this
-///   field; `error_type` is kept for diagnostics / logging.
+///   Refines the status-derived baseline in [`super::error`]; an empty
+///   string means the server named no code and that baseline stands.
+///   `error_type` is kept for diagnostics / logging.
 /// - `request_id` — propagated from server's `X-Request-Id` middleware
 ///   when present; absent on older servers (forward-compat).
 #[derive(Debug, Deserialize)]
 pub(crate) struct ErrorModel {
     pub message: String,
-    /// Preserved for diagnostics / log enrichment; dispatch happens on
-    /// `code` (the snake string).
-    #[serde(rename = "type")]
+    /// Preserved for diagnostics / log enrichment; the variant is chosen
+    /// from the status and `code`, never from this field.
+    #[serde(rename = "type", default)]
     #[allow(dead_code)]
     pub error_type: String,
+    /// Absent on any server that does not name a code. Defaulting to the
+    /// empty string keeps such a body a decodable envelope, so the mapper
+    /// classifies it by status and reports the server's own sentence; as a
+    /// required field it made the whole body unparseable and the caller was
+    /// handed the raw JSON instead.
+    #[serde(default)]
     pub code: String,
     #[serde(default)]
     #[allow(dead_code)]
@@ -199,6 +211,12 @@ impl CreateBoxRequest {
             volumes,
             detach: Some(options.detach),
             tty: options.tty.then_some(true),
+            // Only the capability policy crosses the wire. Like `security`,
+            // `advanced.network_rate_limit` is deliberately absent: shaping is
+            // done by the local gvproxy bridge and a remote server enforces its
+            // own network policy, so there is no field for a client to set. The
+            // matching refusal lives in BoxOptions::sanitize_remote.
+            //
             // `Some`, not "non-empty", decides whether this reaches the wire:
             // an explicitly empty policy is still explicit, and collapsing it
             // into the same shape as "never touched" would leave the server
@@ -354,6 +372,10 @@ pub(crate) struct BoxResponse {
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
+    /// Absent when the server recorded no activity for the box, and from any
+    /// server too old to publish it.
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
     pub pid: Option<u32>,
     pub image: String,
     pub cpus: u8,
@@ -399,6 +421,16 @@ impl BoxResponse {
             .map(|dt| dt.with_timezone(&chrono::Utc))
             .unwrap_or_else(|_| chrono::Utc::now());
 
+        // Unlike the two timestamps above, an unparseable value becomes `None`
+        // rather than `now()`: activity dated to this instant would read as a
+        // box that was just used, which is exactly the wrong answer for the
+        // idleness this field describes.
+        let last_activity_at = self
+            .last_activity_at
+            .as_deref()
+            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+
         Ok(crate::BoxInfo {
             id,
             name: self.name.clone(),
@@ -424,6 +456,7 @@ impl BoxResponse {
             // local start timestamp; `None` means "not known here", not
             // "the box never entered Running".
             started_at: None,
+            last_activity_at,
         })
     }
 }
@@ -993,6 +1026,31 @@ mod tests {
         );
     }
 
+    /// Network shaping is done by the local gvproxy bridge, so the wire form
+    /// has no field for it and a local value must not leak into the request.
+    #[test]
+    fn test_create_box_request_never_carries_network_rate_limit() {
+        use crate::runtime::advanced_options::{AdvancedBoxOptions, NetworkRateLimit};
+        use crate::runtime::options::{BoxOptions, RootfsSpec};
+
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.network_rate_limit = NetworkRateLimit {
+            tx_kbps: Some(10_000),
+            rx_kbps: Some(20_000),
+        };
+        let opts = BoxOptions {
+            rootfs: RootfsSpec::Image("alpine:latest".into()),
+            advanced,
+            ..Default::default()
+        };
+        let req = CreateBoxRequest::from_options(&opts, None);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(
+            !json.contains("rate_limit") && !json.contains("kbps"),
+            "wire form must NOT carry a network rate limit; got: {json}"
+        );
+    }
+
     #[test]
     fn test_box_response_deserialization() {
         let json = r#"{
@@ -1025,6 +1083,7 @@ mod tests {
             status: "running".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:01:00Z".to_string(),
+            last_activity_at: None,
             pid: Some(1234),
             image: "python:3.11".to_string(),
             cpus: 2,
@@ -1055,6 +1114,41 @@ mod tests {
     }
 
     #[test]
+    fn box_response_to_box_info_reports_last_activity() {
+        let mut resp = BoxResponse {
+            box_id: "01J0000000000000000000000A".to_string(),
+            name: None,
+            status: "running".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:01:00Z".to_string(),
+            last_activity_at: Some("2024-01-01T00:02:30Z".to_string()),
+            pid: None,
+            image: "python:3.11".to_string(),
+            cpus: 2,
+            memory_mib: 512,
+            labels: HashMap::new(),
+            exit_code: None,
+            auto_stop: 1800,
+            auto_delete: 0,
+            auto_resume: true,
+            advanced: None,
+        };
+
+        let info = resp.to_box_info().expect("valid box_id should parse");
+        assert_eq!(
+            info.last_activity_at.map(|at| at.to_rfc3339()),
+            Some("2024-01-01T00:02:30+00:00".to_string())
+        );
+
+        // An absent value means "no activity recorded", and an unparseable one
+        // must not be rounded up to "active now".
+        resp.last_activity_at = None;
+        assert!(resp.to_box_info().unwrap().last_activity_at.is_none());
+        resp.last_activity_at = Some("yesterday".to_string());
+        assert!(resp.to_box_info().unwrap().last_activity_at.is_none());
+    }
+
+    #[test]
     fn test_box_response_to_box_info_uuid() {
         // Some servers may return UUIDs as box_id (not just 12-char Base62 / 26-char ULID).
         // Verify the SDK accepts them and round-trips the id verbatim.
@@ -1064,6 +1158,7 @@ mod tests {
             status: "running".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:01:00Z".to_string(),
+            last_activity_at: None,
             pid: Some(5678),
             image: "alpine:latest".to_string(),
             cpus: 1,
@@ -1093,6 +1188,7 @@ mod tests {
             status: "running".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:01:00Z".to_string(),
+            last_activity_at: None,
             pid: None,
             image: "alpine:latest".to_string(),
             cpus: 1,
@@ -1166,6 +1262,7 @@ mod tests {
             status: "snapshotting".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:01:00Z".to_string(),
+            last_activity_at: None,
             pid: Some(1234),
             image: "python:3.11".to_string(),
             cpus: 2,

@@ -408,7 +408,7 @@ each stage you run.
 
 | What | Stored in | Set by |
 | --- | --- | --- |
-| App secrets (`OIDC_CLIENT_ID`, Auth0 Management API, Svix, PostHog, `USAGE_EXPORT_TOKEN`) | SST secret store | `npm run bootstrap`; others via `npm run sst -- secret set <NAME> --stage <stage>` reading stdin |
+| App secrets (`OIDC_CLIENT_ID`, Auth0 Management API, Svix, PostHog, `USAGE_EXPORT_TOKEN`) | SST secret store | `npm run bootstrap`; others via `npm run sst -- secret set <NAME> --stage <stage>` reading stdin. `USAGE_EXPORT_TOKEN` also authenticates Commerce plan reads for CREATE BOX admission |
 | SES SMTP credential (`SMTP_USER`, `SMTP_PASSWORD`) | SST secret store | `npm run bootstrap -- --stage <stage> --provision-ses`, which mints the send-only IAM user the deploy role cannot create and derives the SMTP password from its key. Rerunning rotates it |
 | Cloudflare creds (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`) | AWS SSM SecureString for local use; GitHub Environment secrets for CI (which win) | `npm run bootstrap` |
 | Stage config (`STACK_DOMAIN`, `OIDC_*`, toggles) | SST secret store | `npm run bootstrap`, from your local `.env` |

@@ -65,4 +65,24 @@ describe('WalletTransactionsTable PR #829 surface', () => {
     expect(host.textContent).not.toContain('Details')
     expect(host.textContent).not.toContain('Page 1 of 1')
   })
+
+  it('renders a status Commerce added later instead of throwing', () => {
+    // `status` is hand-copied from the service, so an unmapped value reaches
+    // this table before the map knows it and used to hit `undefined.color`.
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+
+    act(() => {
+      root?.render(
+        <WalletTransactionsTable
+          data={[{ ...transaction, status: 'reversed' as WalletTransaction['status'] }]}
+          loading={false}
+        />,
+      )
+    })
+
+    expect(host.querySelector('[data-transaction-status]')?.textContent).toBe('reversed')
+    expect(host.querySelectorAll('[data-transaction-date]')).toHaveLength(1)
+  })
 })

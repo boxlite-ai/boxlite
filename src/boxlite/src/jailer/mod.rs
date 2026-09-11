@@ -351,14 +351,14 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
     paths
 }
 
-fn system_ca_paths() -> [PathBuf; 7] {
+fn system_ca_paths() -> [PathBuf; 5] {
+    // Directory mounts already expose their bundles. Binding those files again
+    // fails with bwrap 0.12+ when the directory supplied a symlink destination.
     [
         PathBuf::from("/etc/ssl/certs"),
         PathBuf::from("/etc/pki/tls/certs"),
         PathBuf::from("/etc/ca-certificates"),
         PathBuf::from("/etc/ssl/cert.pem"),
-        PathBuf::from("/etc/ssl/certs/ca-certificates.crt"),
-        PathBuf::from("/etc/pki/tls/certs/ca-bundle.crt"),
         PathBuf::from("/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"),
     ]
 }
@@ -862,6 +862,107 @@ mod tests {
                 ca_path.display()
             );
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires bwrap 0.12+ in PATH and permission to create user namespaces"]
+    async fn test_system_ca_paths_readable_in_bwrap() {
+        use sandbox::{BwrapSandbox, Sandbox};
+
+        // Arch uses a relative link; RHEL uses an absolute link to the extracted
+        // bundle. Also cover regular files and a symlinked source directory.
+        let mut failures = Vec::new();
+        for layout in ["regular", "arch", "rhel", "directory-link"] {
+            let dir = tempdir().unwrap();
+            let certs = dir.path().join(if layout == "rhel" {
+                "etc/pki/tls/certs"
+            } else {
+                "etc/ssl/certs"
+            });
+            std::fs::create_dir_all(certs.parent().unwrap()).unwrap();
+            if layout == "directory-link" {
+                let store = dir.path().join("var/lib/ca-certificates/pem");
+                std::fs::create_dir_all(&store).unwrap();
+                std::os::unix::fs::symlink(&store, &certs).unwrap();
+            } else {
+                std::fs::create_dir(&certs).unwrap();
+            }
+            let bundle = certs.join(if layout == "rhel" {
+                "ca-bundle.crt"
+            } else {
+                "ca-certificates.crt"
+            });
+            let target = match layout {
+                "arch" => dir
+                    .path()
+                    .join("etc/ca-certificates/extracted/tls-ca-bundle.pem"),
+                "rhel" => dir
+                    .path()
+                    .join("etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"),
+                _ => bundle.clone(),
+            };
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            let pem = rcgen::generate_simple_self_signed(vec!["ca-mount-test.invalid".into()])
+                .unwrap()
+                .cert
+                .pem();
+            std::fs::write(&target, &pem).unwrap();
+            if layout == "arch" {
+                std::os::unix::fs::symlink(
+                    "../../ca-certificates/extracted/tls-ca-bundle.pem",
+                    &bundle,
+                )
+                .unwrap();
+            } else if layout == "rhel" {
+                std::os::unix::fs::symlink(&target, &bundle).unwrap();
+            }
+
+            let limits = crate::runtime::advanced_options::ResourceLimits::default();
+            let ctx = SandboxContext {
+                id: "ca-mount-test",
+                paths: system_ca_paths()
+                    .into_iter()
+                    .map(|path| dir.path().join(path.strip_prefix("/").unwrap()))
+                    .filter(|path| path.exists())
+                    .map(|path| PathAccess {
+                        path,
+                        writable: false,
+                    })
+                    .collect(),
+                unix_sockets: Default::default(),
+                resource_limits: &limits,
+                network_enabled: false,
+                sandbox_profile: None,
+                detached: true,
+            };
+            let mut cmd = std::process::Command::new("/usr/bin/cat");
+            cmd.arg(&bundle);
+            BwrapSandbox::new().apply(&ctx, &mut cmd);
+            let mut cmd = tokio::process::Command::from(cmd);
+            cmd.kill_on_drop(true);
+            let output = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output())
+                .await
+                .expect("bwrap certificate read timed out")
+                .expect("could not start bwrap");
+            if output.status.success() {
+                assert_eq!(
+                    output.stdout,
+                    pem.as_bytes(),
+                    "{layout}: incorrect CA bundle"
+                );
+            } else {
+                failures.push(format!(
+                    "{layout}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "bwrap failed:\n{}",
+            failures.join("\n")
+        );
     }
 
     #[test]

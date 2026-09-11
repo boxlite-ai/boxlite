@@ -532,7 +532,9 @@ Show detailed information for one or more boxes.
 The Go-template engine exposes a `json` function for serializing nested values.
 `State.StartedAt` is when the box most recently entered `Running`, in RFC 3339
 format, or `null` if the start time has not been recorded or is unavailable
-over REST.
+over REST. `State.LastActivityAt` is when the box was last active in RFC 3339
+format — the clock AutoStop measures idleness against — or `null` for a local
+box, which records no activity.
 
 **Examples:**
 
@@ -540,6 +542,7 @@ over REST.
 boxlite inspect mybox
 boxlite inspect --format '{{.State.Status}}' mybox
 boxlite inspect --format '{{.State.StartedAt}}' mybox
+boxlite inspect --format '{{.State.LastActivityAt}}' mybox
 boxlite inspect -l --format yaml
 ```
 
@@ -813,6 +816,18 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 | `--network <enabled\|disabled>` | Outbound mode; default `enabled`. Disabled mode creates no network interface. |
 | `--allow-net HOST` | Restrict TCP/UDP egress to exact hosts, `*.example.com`, IPs, or CIDRs; repeatable, implies enabled networking, and is incompatible with `--network disabled`. Hostname-only rules deny UDP unless an IP/CIDR is also allowed. |
 | `--inbound <enabled\|disabled>` | Inbound mode; default `enabled` (services exposed by the box are reachable). |
+| `--net-tx-kbps KBPS` | Cap what the box sends (guest to internet), in kilobits/sec. `0` or unset leaves it uncapped. |
+| `--net-rx-kbps KBPS` | Cap what reaches the box (internet to guest), in kilobits/sec. `0` or unset leaves it uncapped. |
+
+Bandwidth caps are enforced below IP by the local gvproxy bridge, so a single
+budget per direction covers TCP, UDP, ICMP and ARP together, and inbound
+port-forward traffic counts against the same budget as outbound requests —
+the cap is on the box's interface, not on a connection's direction.
+Directions are named from the box's point of view, matching Firecracker.
+Remote runtimes reject these flags: the server owns its own network policy.
+Verified on Linux; on macOS the guest link is a datagram socket whose sender
+behaviour under backpressure is not yet verified, so `--net-tx-kbps` may drop
+frames there instead of slowing the guest.
 
 ### `ManagementFlags`
 

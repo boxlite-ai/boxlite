@@ -8,6 +8,9 @@ import { BoxliteError } from '@/api/errors'
 import axios, { AxiosInstance } from 'axios'
 import {
   AutomaticTopUp,
+  Invoice,
+  InvoiceTypeFilter,
+  LegacyInvoice,
   OrganizationEmail,
   OrganizationPlan,
   OrganizationWallet,
@@ -22,6 +25,24 @@ import {
   UsagePrices,
   WalletTopUpRequest,
 } from './types'
+
+/**
+ * Fill the three fields a Commerce predating the billing history does not send.
+ * Either side may deploy first, and without this the page throws on
+ * `undefined.toLowerCase()` and prints NaN in the money column.
+ *
+ * The defaults are what the older endpoint's payload means: it served
+ * settlements only, an issued settlement had already been charged, and the
+ * part that reached the card is the total the quota did not absorb.
+ */
+function settlementDefaults(invoice: LegacyInvoice): Invoice {
+  return {
+    ...invoice,
+    type: invoice.type ?? 'advance_charges',
+    paymentStatus: invoice.paymentStatus ?? 'succeeded',
+    totalPaidCents: invoice.totalPaidCents ?? Math.max(0, invoice.totalAmountCents - invoice.quotaCoveredCents),
+  }
+}
 
 export class BillingApiClient {
   private axiosInstance: AxiosInstance
@@ -173,7 +194,18 @@ export class BillingApiClient {
     await this.axiosInstance.post(`/organization/${organizationId}/email/resend`, { email })
   }
 
-  public async listInvoices(organizationId: string, page?: number, perPage?: number): Promise<PaginatedInvoices> {
+  /**
+   * Omitting `type` keeps Commerce's default of settlement invoices only, so
+   * existing callers are unaffected. Pass `'all'` for a billing history: a
+   * document kind added to Commerce later is then included without a dashboard
+   * deploy, where an explicit list would drop it silently.
+   */
+  public async listInvoices(
+    organizationId: string,
+    page?: number,
+    perPage?: number,
+    type?: InvoiceTypeFilter,
+  ): Promise<PaginatedInvoices> {
     const params = new URLSearchParams()
     if (page !== undefined) {
       params.append('page', page.toString())
@@ -181,10 +213,17 @@ export class BillingApiClient {
     if (perPage !== undefined) {
       params.append('perPage', perPage.toString())
     }
+    if (type !== undefined) {
+      // An empty list serialises to an empty name and Commerce answers 400.
+      // That is the intended outcome: asking for no kinds is a caller bug, and
+      // failing loudly beats quietly serving the default set instead.
+      params.append('type', typeof type === 'string' ? type : type.join(','))
+    }
     const queryString = params.toString()
     const url = `/organization/${organizationId}/invoices${queryString ? `?${queryString}` : ''}`
     const response = await this.axiosInstance.get(url)
-    return response.data
+    const body = response.data as { items: LegacyInvoice[]; totalItems: number; totalPages: number }
+    return { ...body, items: body.items.map(settlementDefaults) }
   }
 
   public async listWalletTransactions(

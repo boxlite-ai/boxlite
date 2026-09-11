@@ -24,6 +24,7 @@ export const useTopUpWalletMutation = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.organization.wallet(organizationId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.billing.transactions(organizationId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.billing.invoices(organizationId) }),
       ])
     },
   })

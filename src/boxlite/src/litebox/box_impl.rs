@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
+use super::attach::AttachOptions;
 use super::config::BoxConfig;
 use super::exec::{BoxCommand, ExecStderr, ExecStdin, ExecStdout, Execution};
 use super::state::BoxState;
@@ -24,7 +25,7 @@ use crate::event_listener::EventListener;
 #[cfg(target_os = "linux")]
 use crate::fs::BindMountHandle;
 use crate::litebox::BoxTunnel;
-use crate::litebox::copy::CopyOptions;
+use crate::litebox::copy::{CopyOptions, CopySourceKind};
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::net::NetworkBackend;
@@ -504,7 +505,7 @@ impl BoxImpl {
             components.execution_id,
             Box::new(exec_interface),
             components.result_rx,
-            Some(ExecStdin::new(components.stdin_tx)),
+            components.stdin_tx.map(ExecStdin::new),
             Some(ExecStdout::new(components.stdout_rx)),
             Some(ExecStderr::new(components.stderr_rx)),
         ))
@@ -594,8 +595,8 @@ impl BoxImpl {
     /// then `start()`, so a command that finishes instantly cannot outrun the
     /// stream. Because attaching never runs the user's command, it needs no
     /// re-run guard (unlike `exec`/`cp`, which do start it).
-    pub(crate) async fn attach(&self, execution_id: Option<&str>) -> BoxliteResult<Execution> {
-        if execution_id.is_some() {
+    pub(crate) async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution> {
+        if options.execution_id().is_some() {
             return Err(BoxliteError::Unsupported(
                 "the local backend does not support reattaching to executions by id".into(),
             ));
@@ -626,7 +627,11 @@ impl BoxImpl {
         let live = self.ensure_booted().await?;
         let mut exec_interface = live.guest_session.execution().await?;
         let components = exec_interface
-            .attach_existing(self.container_id(), self.shutdown_token.clone())
+            .attach_existing(
+                self.container_id(),
+                options.wants_stdin(),
+                self.shutdown_token.clone(),
+            )
             .await?;
 
         let result_rx = self.exit_code_from_file_when_portal_has_none(components.result_rx);
@@ -635,7 +640,7 @@ impl BoxImpl {
             components.execution_id,
             Box::new(exec_interface),
             result_rx,
-            Some(ExecStdin::new(components.stdin_tx)),
+            components.stdin_tx.map(ExecStdin::new),
             Some(ExecStdout::new(components.stdout_rx)),
             Some(ExecStderr::new(components.stderr_rx)),
         ))
@@ -984,6 +989,84 @@ impl BoxImpl {
             "copy_out completed"
         );
         Ok(())
+    }
+
+    /// Stream opaque transfer bytes into the guest at `container_dst`.
+    ///
+    /// `source` is the archive shape; [`CopySourceKind::Unknown`] when the
+    /// caller cannot tell — the guest then peeks the archive to decide. This is
+    /// the streaming counterpart to [`Self::copy_into`] — no temp archive file.
+    pub(crate) async fn copy_in_stream<S>(
+        self: std::sync::Arc<Self>,
+        stream: S,
+        container_dst: String,
+        source: CopySourceKind,
+        opts: CopyOptions,
+    ) -> BoxliteResult<()>
+    where
+        S: futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static,
+    {
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+        self.ensure_usable_without_rerunning_main("copy into")?;
+        if container_dst.is_empty() {
+            return Err(BoxliteError::Config(
+                "destination path cannot be empty".into(),
+            ));
+        }
+        // Match the path-based copy_into contract: a directory tree with
+        // recursive=false is rejected before anything is streamed.
+        if source.is_dir() {
+            opts.validate_for_dir()?;
+        }
+        // Materialise borrowed strings before the first await so the future
+        // never holds `&BoxImpl` across an await point (avoids an HRTB `Send`
+        // bound that trips tokio::spawn).
+        let cid = self.container_id().to_string();
+        let live = self.live_state().await?;
+        let mut files_iface = live.guest_session.files().await?;
+        files_iface
+            .upload_stream(
+                stream,
+                &container_dst,
+                Some(&cid),
+                true,
+                opts.overwrite,
+                source,
+            )
+            .await
+    }
+
+    /// Download `container_src` as a byte stream plus its source shape. This is
+    /// the streaming counterpart to [`Self::copy_out`] — no temp archive file.
+    pub(crate) async fn copy_out_stream(
+        self: std::sync::Arc<Self>,
+        container_src: String,
+        opts: CopyOptions,
+    ) -> BoxliteResult<(boxlite_shared::BoxByteStream, CopySourceKind)> {
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+        self.ensure_usable_without_rerunning_main("copy out")?;
+        if container_src.is_empty() {
+            return Err(BoxliteError::Config("source path cannot be empty".into()));
+        }
+        let cid = self.container_id().to_string();
+        let live = self.live_state().await?;
+        let mut files_iface = live.guest_session.files().await?;
+        files_iface
+            .download_stream(
+                &container_src,
+                Some(&cid),
+                opts.include_parent,
+                opts.follow_symlinks,
+            )
+            .await
     }
 
     // ========================================================================
@@ -1431,6 +1514,10 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self.config.name.as_deref()
     }
 
+    fn as_any_arc(self: std::sync::Arc<Self>) -> std::sync::Arc<dyn std::any::Any + Send + Sync> {
+        self
+    }
+
     async fn info(&self) -> BoxliteResult<BoxInfo> {
         Ok(BoxImpl::info(self))
     }
@@ -1443,8 +1530,8 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self.exec(command).await
     }
 
-    async fn attach(&self, execution_id: Option<&str>) -> BoxliteResult<Execution> {
-        self.attach(execution_id).await
+    async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution> {
+        self.attach(options).await
     }
 
     async fn metrics(&self) -> BoxliteResult<BoxMetrics> {

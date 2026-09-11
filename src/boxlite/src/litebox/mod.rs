@@ -3,6 +3,7 @@
 //! Provides lazy initialization and execution capabilities for isolated boxes.
 
 pub(crate) mod archive;
+mod attach;
 pub(crate) mod box_impl;
 mod clone_export;
 pub(crate) mod config;
@@ -19,7 +20,8 @@ pub(crate) mod snapshot_mgr;
 mod state;
 mod watcher;
 
-pub use copy::CopyOptions;
+pub use attach::AttachOptions;
+pub use copy::{CopyOptions, CopySourceKind};
 pub(crate) use crash_report::CrashReport;
 pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
 pub(crate) use manager::BoxManager;
@@ -40,7 +42,7 @@ use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
 use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
 use crate::{BoxID, BoxInfo};
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use config::BoxConfig;
 
 /// LiteBox - Handle to a box.
@@ -110,21 +112,25 @@ impl LiteBox {
 
     /// Attach to a session in the box.
     ///
-    /// - `None` — the box's main command session (`run IMAGE COMMAND` runs
-    ///   COMMAND *as* the container init, docker semantics; the unqualified verb
-    ///   follows the ecosystem convention `docker attach` / `podman attach` /
-    ///   CRI `Attach`). This boots the box but does not run the command — call
-    ///   `start()` after. That is docker's create → attach → start: attach first,
-    ///   so a command that finishes instantly cannot outrun the stream and take
-    ///   its output and exit code with it.
-    /// - `Some(id)` — reattach to a running exec session by id (docker's
-    ///   `ContainerExecAttach`), returning a fresh `Execution` on a new stream;
-    ///   the caller discards any previous handle for the same id. Used after a
-    ///   transient WebSocket drop to resume stdio without restarting the process.
-    ///   `BoxliteError::SessionReaped` if it is no longer attachable. Only the
-    ///   REST backend models these; a local box supports `None` only.
-    pub async fn attach(&self, execution_id: Option<&str>) -> BoxliteResult<Execution> {
-        self.box_backend.attach(execution_id).await
+    /// [`AttachOptions::main`] follows the box's main command session (`run
+    /// IMAGE COMMAND` runs COMMAND *as* the container init, docker semantics;
+    /// the unqualified verb follows `docker attach` / `podman attach` / CRI
+    /// `Attach`). This boots the box but does not run the command — call
+    /// `start()` after. That is docker's create → attach → start: attach first,
+    /// so a command that finishes instantly cannot outrun the stream and take
+    /// its output and exit code with it.
+    ///
+    /// [`AttachOptions::execution`] reattaches to a running exec session by id
+    /// (docker's `ContainerExecAttach`), returning a fresh `Execution` on a new
+    /// stream; the caller discards any previous handle for the same id. Used
+    /// after a transient WebSocket drop to resume stdio without restarting the
+    /// process. `BoxliteError::SessionReaped` if it is no longer attachable.
+    /// Only the REST backend models these; a local box supports `main()` only.
+    ///
+    /// [`AttachOptions::read_only`] attaches without stdin — docker's
+    /// `--no-stdin`. The returned `Execution` has no stdin sender.
+    pub async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution> {
+        self.box_backend.attach(options).await
     }
 
     pub async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
@@ -157,6 +163,63 @@ impl LiteBox {
         self.box_backend
             .copy_out(container_src.as_ref(), host_dst.as_ref(), opts)
             .await
+    }
+
+    /// Stream opaque transfer bytes into the container at `container_dst`.
+    ///
+    /// `source` is the archive shape (directory tree vs single file);
+    /// [`CopySourceKind::Unknown`] when the caller cannot tell — the guest then
+    /// peeks the archive to decide. Only the local backend supports this.
+    ///
+    /// Returns a `BoxFuture` (rather than being an `async fn`) so the future
+    /// owns the downcast backend and never borrows `&self` across an await —
+    /// which avoids an HRTB `Send` bound on `&LiteBox`.
+    pub fn copy_in_stream<S>(
+        &self,
+        stream: S,
+        container_dst: &str,
+        source: copy::CopySourceKind,
+        opts: copy::CopyOptions,
+    ) -> futures::future::BoxFuture<'static, BoxliteResult<()>>
+    where
+        S: futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static,
+    {
+        let backend = self
+            .box_backend
+            .clone()
+            .as_any_arc()
+            .downcast::<box_impl::BoxImpl>();
+        let dst = container_dst.to_string();
+        Box::pin(async move {
+            let backend = backend.map_err(|_| {
+                BoxliteError::Unsupported("streaming copy-in requires the local backend".into())
+            })?;
+            backend.copy_in_stream(stream, dst, source, opts).await
+        })
+    }
+
+    /// Download `container_src` as a byte stream plus its source shape. Only
+    /// the local backend supports this.
+    pub fn copy_out_stream(
+        &self,
+        container_src: &str,
+        opts: copy::CopyOptions,
+    ) -> futures::future::BoxFuture<
+        'static,
+        BoxliteResult<(boxlite_shared::BoxByteStream, copy::CopySourceKind)>,
+    > {
+        let backend = self
+            .box_backend
+            .clone()
+            .as_any_arc()
+            .downcast::<box_impl::BoxImpl>();
+        let src = container_src.to_string();
+        Box::pin(async move {
+            let backend = backend.map_err(|_| {
+                BoxliteError::Unsupported("streaming copy-out requires the local backend".into())
+            })?;
+            backend.copy_out_stream(src, opts).await
+        })
     }
 
     /// Get a network handle for raw tunnel operations.

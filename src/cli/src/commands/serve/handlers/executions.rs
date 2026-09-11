@@ -232,11 +232,72 @@ pub(in crate::commands::serve) async fn resize_tty(
 const ATTACH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const ATTACH_WRITE_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Whether this WebSocket client may write into the session.
+///
+/// A per-socket property, never a session one: the main session's upstream
+/// `Execution` is opened once and shared across attaches, so a read-only
+/// client must not be able to strip stdin from the clients that follow it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StdinPolicy {
+    Allow,
+    Refuse,
+}
+
+#[derive(serde::Deserialize)]
+pub(in crate::commands::serve) struct AttachQuery {
+    stdin: Option<String>,
+}
+
+impl AttachQuery {
+    /// An unrecognized value is rejected rather than defaulting to Allow: a
+    /// typo in the one parameter that withholds write access must not quietly
+    /// grant it.
+    fn policy(&self) -> Result<StdinPolicy, String> {
+        match self.stdin.as_deref() {
+            None | Some("1") | Some("true") => Ok(StdinPolicy::Allow),
+            Some("0") | Some("false") => Ok(StdinPolicy::Refuse),
+            Some(other) => Err(format!(
+                "stdin must be one of 0, 1, false, true; got {other:?}"
+            )),
+        }
+    }
+}
+
+/// What the reader task asks the writer task to emit. `Close` carries the
+/// final error text so the frame is flushed before the close, which a bare
+/// `break` in the reader cannot guarantee.
+enum CtrlOut {
+    Text(String),
+    ClosePolicyViolation(String),
+}
+
+fn read_only_rejection(what: &str) -> String {
+    serde_json::json!({
+        "type": "error",
+        "code": "read_only_attach",
+        "message": format!("read-only attach rejected a write: {what}"),
+    })
+    .to_string()
+}
+
 pub(in crate::commands::serve) async fn attach_execution(
     State(state): State<Arc<AppState>>,
     Path((box_id, exec_id)): Path<(String, String)>,
+    axum::extract::Query(query): axum::extract::Query<AttachQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    let stdin_policy = match query.policy() {
+        Ok(policy) => policy,
+        Err(message) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                message,
+                "InvalidArgumentError",
+                "invalid_argument",
+            );
+        }
+    };
+
     let executions = state.executions.read().await;
     let active = match get_active_for_box(&executions, &exec_id, &box_id) {
         Ok(a) => a,
@@ -255,7 +316,7 @@ pub(in crate::commands::serve) async fn attach_execution(
         );
     }
 
-    upgrade_to_attach_session(ws, active, state)
+    upgrade_to_attach_session(ws, active, state, stdin_policy)
 }
 
 /// Attach to the box's **main command session** — the container's init.
@@ -272,8 +333,21 @@ pub(in crate::commands::serve) async fn attach_execution(
 pub(in crate::commands::serve) async fn attach_box(
     State(state): State<Arc<AppState>>,
     Path(box_id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<AttachQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    let stdin_policy = match query.policy() {
+        Ok(policy) => policy,
+        Err(message) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                message,
+                "InvalidArgumentError",
+                "invalid_argument",
+            );
+        }
+    };
+
     let active = match get_or_attach_main_session(&state, &box_id).await {
         Ok(a) => a,
         Err(resp) => return resp,
@@ -305,7 +379,7 @@ pub(in crate::commands::serve) async fn attach_box(
         }
     };
 
-    let mut response = upgrade_to_attach_session(ws, active, state);
+    let mut response = upgrade_to_attach_session(ws, active, state, stdin_policy);
     response
         .headers_mut()
         .insert(MAIN_SESSION_ID_HEADER, header_value);
@@ -322,6 +396,7 @@ fn upgrade_to_attach_session(
     ws: WebSocketUpgrade,
     active: Arc<ActiveExecution>,
     state: Arc<AppState>,
+    stdin_policy: StdinPolicy,
 ) -> Response {
     let failed_active = Arc::clone(&active);
     ws.on_failed_upgrade(move |_err| {
@@ -330,7 +405,7 @@ fn upgrade_to_attach_session(
         });
     })
     .on_upgrade(move |socket| async move {
-        run_attach_session(socket, active, state).await;
+        run_attach_session(socket, active, state, stdin_policy).await;
     })
 }
 
@@ -345,7 +420,12 @@ fn frame_is_activity(bytes: &[u8]) -> bool {
     !bytes.is_empty()
 }
 
-async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, state: Arc<AppState>) {
+async fn run_attach_session(
+    socket: WebSocket,
+    active: Arc<ActiveExecution>,
+    state: Arc<AppState>,
+    stdin_policy: StdinPolicy,
+) {
     let mut stdout_rx = active.stdout_bus().subscribe();
     let mut stderr_rx = active.stderr_bus().subscribe();
     let mut done_rx = active.done_rx();
@@ -353,14 +433,33 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, sta
 
     // Channel for control-response frames from the reader task back
     // to the writer task (e.g. error frames for rejected signals).
-    let (ctrl_tx, mut ctrl_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (ctrl_tx, mut ctrl_rx) = tokio::sync::mpsc::unbounded_channel::<CtrlOut>();
 
     let reader_active = Arc::clone(&active);
     let reader_state = Arc::clone(&state);
     let mut reader = tokio::spawn(async move {
+        // One rejection per kind: the reader keeps draining so the writer can
+        // flush and close, and a peer that never reads must not be able to
+        // queue a control frame for every frame it sends.
+        let mut refused_stdin = false;
+        let mut refused_eof = false;
+        let mut refused_resize = false;
+        let mut refused_signal = false;
+
         while let Some(msg) = stream.next().await {
             match msg {
                 Ok(Message::Binary(bytes)) => {
+                    // Refused before counted: a rejected frame never reaches the
+                    // workload, so stamping activity here would let a read-only
+                    // peer hold a box open past AutoStop.
+                    if stdin_policy == StdinPolicy::Refuse {
+                        if !refused_stdin {
+                            refused_stdin = true;
+                            let _ = ctrl_tx
+                                .send(CtrlOut::ClosePolicyViolation(read_only_rejection("stdin")));
+                        }
+                        continue;
+                    }
                     // A client data frame is the box being used. The upgrade
                     // alone is stamped once by the request middleware and never
                     // again, and a Main session is excluded from the sweep's
@@ -375,77 +474,102 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, sta
                     if let Some(ref mut stdin) = *guard
                         && let Err(e) = stdin.write_all(&bytes).await
                     {
-                        let _ = ctrl_tx.send(
+                        let _ = ctrl_tx.send(CtrlOut::Text(
                             serde_json::json!({
                                 "type": "error",
                                 "message": format!("stdin write failed: {e}"),
                             })
                             .to_string(),
-                        );
+                        ));
                     }
                 }
                 Ok(Message::Text(text)) => {
                     let v = match serde_json::from_str::<serde_json::Value>(&text) {
                         Ok(v) => v,
                         Err(e) => {
-                            let _ = ctrl_tx.send(
+                            let _ = ctrl_tx.send(CtrlOut::Text(
                                 serde_json::json!({
                                     "type": "error",
                                     "message": format!("invalid control frame: {e}"),
                                 })
                                 .to_string(),
-                            );
+                            ));
                             continue;
                         }
                     };
                     match v.get("type").and_then(|t| t.as_str()) {
                         Some("resize") => {
-                            let rows =
-                                match v.get("rows").and_then(|n| n.as_u64()) {
-                                    Some(r) if r > 0 => r as u32,
-                                    _ => {
-                                        let _ = ctrl_tx.send(serde_json::json!({
-                                        "type": "error",
-                                        "message": "resize: 'rows' must be a positive integer",
-                                    }).to_string());
-                                        continue;
-                                    }
-                                };
-                            let cols =
-                                match v.get("cols").and_then(|n| n.as_u64()) {
-                                    Some(c) if c > 0 => c as u32,
-                                    _ => {
-                                        let _ = ctrl_tx.send(serde_json::json!({
-                                        "type": "error",
-                                        "message": "resize: 'cols' must be a positive integer",
-                                    }).to_string());
-                                        continue;
-                                    }
-                                };
+                            if stdin_policy == StdinPolicy::Refuse {
+                                if !refused_resize {
+                                    refused_resize = true;
+                                    let _ =
+                                        ctrl_tx.send(CtrlOut::Text(read_only_rejection("resize")));
+                                }
+                                continue;
+                            }
+                            let rows = match v.get("rows").and_then(|n| n.as_u64()) {
+                                Some(r) if r > 0 => r as u32,
+                                _ => {
+                                    let _ = ctrl_tx.send(CtrlOut::Text(
+                                        serde_json::json!({
+                                            "type": "error",
+                                            "message":
+                                                "resize: 'rows' must be a positive integer",
+                                        })
+                                        .to_string(),
+                                    ));
+                                    continue;
+                                }
+                            };
+                            let cols = match v.get("cols").and_then(|n| n.as_u64()) {
+                                Some(c) if c > 0 => c as u32,
+                                _ => {
+                                    let _ = ctrl_tx.send(CtrlOut::Text(
+                                        serde_json::json!({
+                                            "type": "error",
+                                            "message":
+                                                "resize: 'cols' must be a positive integer",
+                                        })
+                                        .to_string(),
+                                    ));
+                                    continue;
+                                }
+                            };
                             if let Err(e) = reader_active.execution().resize_tty(rows, cols).await {
-                                let _ = ctrl_tx.send(
+                                let _ = ctrl_tx.send(CtrlOut::Text(
                                     serde_json::json!({
                                         "type": "error",
                                         "message": format!("resize failed: {e}"),
                                     })
                                     .to_string(),
-                                );
+                                ));
                             }
                         }
                         Some("signal") => {
-                            let sig =
-                                match v.get("sig").and_then(|n| n.as_i64()) {
-                                    Some(s) if s > 0 => s as i32,
-                                    _ => {
-                                        let _ = ctrl_tx.send(serde_json::json!({
-                                        "type": "error",
-                                        "message": "signal: 'sig' must be a positive integer",
-                                    }).to_string());
-                                        continue;
-                                    }
-                                };
+                            if stdin_policy == StdinPolicy::Refuse {
+                                if !refused_signal {
+                                    refused_signal = true;
+                                    let _ =
+                                        ctrl_tx.send(CtrlOut::Text(read_only_rejection("signal")));
+                                }
+                                continue;
+                            }
+                            let sig = match v.get("sig").and_then(|n| n.as_i64()) {
+                                Some(s) if s > 0 => s as i32,
+                                _ => {
+                                    let _ = ctrl_tx.send(CtrlOut::Text(
+                                        serde_json::json!({
+                                            "type": "error",
+                                            "message":
+                                                "signal: 'sig' must be a positive integer",
+                                        })
+                                        .to_string(),
+                                    ));
+                                    continue;
+                                }
+                            };
                             if !ALLOWED_SIGNALS.contains(&sig) {
-                                let _ = ctrl_tx.send(
+                                let _ = ctrl_tx.send(CtrlOut::Text(
                                     serde_json::json!({
                                         "type": "error",
                                         "message": format!(
@@ -454,18 +578,26 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, sta
                                         ),
                                     })
                                     .to_string(),
-                                );
+                                ));
                             } else if let Err(e) = reader_active.execution().signal(sig).await {
-                                let _ = ctrl_tx.send(
+                                let _ = ctrl_tx.send(CtrlOut::Text(
                                     serde_json::json!({
                                         "type": "error",
                                         "message": format!("signal {} failed: {e}", sig),
                                     })
                                     .to_string(),
-                                );
+                                ));
                             }
                         }
                         Some("stdin_eof") => {
+                            if stdin_policy == StdinPolicy::Refuse {
+                                if !refused_eof {
+                                    refused_eof = true;
+                                    let _ = ctrl_tx
+                                        .send(CtrlOut::Text(read_only_rejection("stdin_eof")));
+                                }
+                                continue;
+                            }
                             let mut guard = reader_active.stdin().lock().await;
                             if let Some(ref mut stdin) = *guard {
                                 stdin.close();
@@ -473,22 +605,22 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, sta
                             *guard = None;
                         }
                         Some(unknown) => {
-                            let _ = ctrl_tx.send(
+                            let _ = ctrl_tx.send(CtrlOut::Text(
                                 serde_json::json!({
                                     "type": "error",
                                     "message": format!("unknown control type: {unknown}"),
                                 })
                                 .to_string(),
-                            );
+                            ));
                         }
                         None => {
-                            let _ = ctrl_tx.send(
+                            let _ = ctrl_tx.send(CtrlOut::Text(
                                 serde_json::json!({
                                     "type": "error",
                                     "message": "control frame missing 'type' field",
                                 })
                                 .to_string(),
-                            );
+                            ));
                         }
                     }
                 }
@@ -568,10 +700,25 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, sta
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         Err(_) => continue,
                     },
-                    ctrl = ctrl_rx.recv() => if let Some(text) = ctrl
-                        && !ws_send(&mut sink, Message::Text(text.into())).await
-                    {
-                        break;
+                    ctrl = ctrl_rx.recv() => match ctrl {
+                        Some(CtrlOut::Text(text)) => {
+                            if !ws_send(&mut sink, Message::Text(text.into())).await {
+                                break;
+                            }
+                        }
+                        Some(CtrlOut::ClosePolicyViolation(text)) => {
+                            let _ = ws_send(&mut sink, Message::Text(text.into())).await;
+                            let _ = ws_send(
+                                &mut sink,
+                                Message::Close(Some(axum::extract::ws::CloseFrame {
+                                    code: 1008,
+                                    reason: "read-only attach".into(),
+                                })),
+                            )
+                            .await;
+                            break;
+                        }
+                        None => break,
                     },
                     _ = ping_interval.tick() => {
                         if !ws_send(&mut sink, Message::Ping(Vec::<u8>::new().into())).await {
@@ -622,6 +769,8 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, sta
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    use super::StdinPolicy;
 
     use axum::extract::ws::WebSocketUpgrade;
     use axum::routing::get;
@@ -685,7 +834,9 @@ mod tests {
             axum::Router::new().route(
                 "/attach",
                 get(move |ws: WebSocketUpgrade| async move {
-                    ws.on_upgrade(move |socket| run_attach_session(socket, active, state))
+                    ws.on_upgrade(move |socket| {
+                        run_attach_session(socket, active, state, StdinPolicy::Allow)
+                    })
                 }),
             )
         };

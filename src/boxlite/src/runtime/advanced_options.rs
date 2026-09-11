@@ -1,10 +1,10 @@
 //! Advanced options for expert users.
 //!
 //! This module contains [`AdvancedBoxOptions`], [`ContainerCapabilities`],
-//! [`SecurityOptions`], [`ResourceLimits`], and [`SecurityOptionsBuilder`] —
-//! configuration that entry-level users can safely ignore. Defaults prioritize
-//! compatibility. Direct custom-kernel boot is also grouped here because it
-//! changes the VM boot contract.
+//! [`SecurityOptions`], [`ResourceLimits`], [`SecurityOptionsBuilder`], and
+//! [`NetworkRateLimit`] — configuration that entry-level users can safely
+//! ignore. Defaults prioritize compatibility. Direct custom-kernel boot is also
+//! grouped here because it changes the VM boot contract.
 
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::PathBuf;
@@ -706,6 +706,68 @@ fn validate_capability_names(
     Ok(())
 }
 
+// ============================================================================
+// Network Rate Limit
+// ============================================================================
+
+/// Per-direction rate limit for a box's network interface, in kilobits per
+/// second.
+///
+/// Directions are named from the box's point of view, matching Firecracker's
+/// net device: `tx` is what the box sends, `rx` is what reaches it. Which side
+/// opened the connection does not matter — an inbound port forward's traffic is
+/// charged the same as an outbound request's.
+///
+/// Shaping happens below IP in the gvproxy bridge, so one budget per direction
+/// covers TCP, UDP, ICMP and ARP together; there is no per-protocol split.
+///
+/// `None` or `0` in a direction leaves that direction unlimited, the same
+/// convention Firecracker, Kata and Cloud Hypervisor use. Each direction must
+/// fit within the bridge's token bucket limit; larger values are rejected.
+///
+/// Local runtime only: a remote server owns its own network policy, so the REST
+/// wire types carry no field for this and `sanitize_remote` rejects it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkRateLimit {
+    /// Guest to internet, kilobits per second.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_kbps: Option<u64>,
+    /// Internet to guest, kilobits per second.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rx_kbps: Option<u64>,
+}
+
+impl NetworkRateLimit {
+    // The bridge caps bucket size at (1<<62)/1000 bytes. With a 100ms refill,
+    // size = floor(kbps * 125 / 10); this is the largest kbps that fits.
+    pub(crate) const MAX_KBPS: u64 = 368_934_881_474_191;
+
+    pub(crate) fn validate(&self) -> boxlite_shared::errors::BoxliteResult<()> {
+        for (field, kbps) in [("tx_kbps", self.tx_kbps), ("rx_kbps", self.rx_kbps)] {
+            if let Some(kbps) = kbps
+                && kbps > Self::MAX_KBPS
+            {
+                return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                    format!(
+                        "advanced.network_rate_limit.{field} must be at most {} kbps \
+                         (got {kbps})",
+                        Self::MAX_KBPS
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// True when neither direction is capped. A `Some(0)` counts as uncapped,
+    /// so callers that pass a flag through unconditionally do not have to
+    /// special-case zero.
+    pub fn is_unlimited(&self) -> bool {
+        matches!(self.tx_kbps, None | Some(0)) && matches!(self.rx_kbps, None | Some(0))
+    }
+}
+
 /// Advanced options for expert users.
 ///
 /// Entry-level users can ignore this — the defaults are secure and sensible.
@@ -768,6 +830,22 @@ pub struct AdvancedBoxOptions {
     #[serde(default)]
     pub health_check: Option<HealthCheckOptions>,
 
+    /// Per-direction rate limit for the box's network interface.
+    ///
+    /// Grouped with the other local-only knobs (`security`, `isolate_mounts`,
+    /// `privileged`) rather than placed on `BoxOptions` next to `network`: the
+    /// object-shaped `NetworkConfig` types are the REST wire form and deny
+    /// unknown fields, while this never crosses the wire — `sanitize_remote`
+    /// rejects it and `CreateBoxRequest` has no field for it. It is also
+    /// bidirectional, so it belongs to neither the outbound nor the inbound
+    /// half.
+    ///
+    /// Omitted from the serialized form when unlimited, so an ordinary box's
+    /// exported manifest keeps the shape older importers already handle (the
+    /// same premise `capabilities` documents above).
+    #[serde(default, skip_serializing_if = "NetworkRateLimit::is_unlimited")]
+    pub network_rate_limit: NetworkRateLimit,
+
     /// Release-candidate direct Linux boot configuration.
     ///
     /// The runtime must explicitly enable
@@ -823,6 +901,7 @@ impl Clone for AdvancedBoxOptions {
             security: self.security.clone(),
             isolate_mounts: self.isolate_mounts,
             health_check: self.health_check.clone(),
+            network_rate_limit: self.network_rate_limit,
             kernel: self.kernel.clone(),
             nested_virtualization: self.nested_virtualization,
             privileged: self.privileged,

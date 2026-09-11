@@ -91,6 +91,10 @@ const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
 const TERMINAL_PREVIEW_PORT = 22222
 
+export type BoxCreationOptions = {
+  maxCreatedBoxes?: number
+}
+
 @Injectable()
 export class BoxService {
   private readonly logger = new Logger(BoxService.name)
@@ -180,7 +184,11 @@ export class BoxService {
     )
   }
 
-  async create(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
+  async create(
+    createBoxDto: CreateBoxDto,
+    organization: Organization,
+    options: BoxCreationOptions = {},
+  ): Promise<BoxDto> {
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
 
     try {
@@ -241,7 +249,7 @@ export class BoxService {
           })
 
           if (warmPoolBox) {
-            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization)
+            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, options.maxCreatedBoxes)
           }
         }
       }
@@ -307,10 +315,10 @@ export class BoxService {
       // the chosen runner is still fine, it was the name that collided.
       const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, () =>
         createBoxDto.name
-          ? this.boxRepository.insert(box)
+          ? this.boxRepository.insert(box, options.maxCreatedBoxes)
           : persistWithGeneratedBoxName(box.id, (name) => {
               box.name = name
-              return this.boxRepository.insert(box)
+              return this.boxRepository.insert(box, options.maxCreatedBoxes)
             }),
       )
 
@@ -336,6 +344,7 @@ export class BoxService {
     warmPoolBox: Box,
     createBoxDto: CreateBoxDto,
     organization: Organization,
+    maxCreatedBoxes?: number,
   ): Promise<BoxDto> {
     const now = new Date()
     const updateData: Partial<Box> = {
@@ -376,9 +385,13 @@ export class BoxService {
       ? await this.boxRepository.update(warmPoolBox.id, {
           updateData: { ...updateData, name: createBoxDto.name },
           entity: warmPoolBox,
+          maxCreatedBoxes,
         })
       : await persistWithGeneratedBoxName(warmPoolBox.id, (name) =>
-          this.boxRepository.update(warmPoolBox.id, { updateData: { ...updateData, name } }),
+          this.boxRepository.update(warmPoolBox.id, {
+            updateData: { ...updateData, name },
+            maxCreatedBoxes,
+          }),
         )
 
     // Defensive invalidation of orgId cache since the box moved from unassigned to a real organization
@@ -1075,19 +1088,40 @@ export class BoxService {
     return this.resolveToolboxProxyUrl(box.region)
   }
 
+  /**
+   * Last activity is metadata about the box rather than part of it, so the read
+   * degrades to absent instead of failing the conversion: create() has already
+   * persisted the box by the time it converts, and a rejection there would read
+   * to the client as a failed creation and invite a duplicate on retry. The
+   * auto-lifecycle paths keep reading it directly, where the distinction
+   * between "unknown" and "idle" decides whether a box is stopped.
+   */
   async toBoxDto(box: Box): Promise<BoxDto> {
-    const toolboxProxyUrl = await this.resolveToolboxProxyUrl(box.region)
-    return BoxDto.fromBox(box, toolboxProxyUrl)
+    const [toolboxProxyUrl, lastActivityAt] = await Promise.all([
+      this.resolveToolboxProxyUrl(box.region),
+      this.boxActivityService.getLastActivityAt(box.id).catch((err) => {
+        this.logger.warn(`Failed to read last activity for box ${box.id}: ${err}`)
+        return null
+      }),
+    ])
+    return BoxDto.fromBox(box, toolboxProxyUrl, lastActivityAt)
   }
 
+  /** Degrades a failed activity read to absent, as {@link toBoxDto} does. */
   async toBoxDtos(boxes: Box[]): Promise<BoxDto[]> {
-    const urlMap = await this.resolveToolboxProxyUrls(boxes.map((s) => s.region))
+    const [urlMap, activityMap] = await Promise.all([
+      this.resolveToolboxProxyUrls(boxes.map((s) => s.region)),
+      this.boxActivityService.getLastActivityAtMany(boxes.map((s) => s.id)).catch((err) => {
+        this.logger.warn(`Failed to read last activity for ${boxes.length} boxes: ${err}`)
+        return new Map<string, Date>()
+      }),
+    ])
     return boxes.map((s) => {
       const url = urlMap.get(s.region)
       if (!url) {
         throw new NotFoundException(`Toolbox proxy URL not resolved for region ${s.region}`)
       }
-      return BoxDto.fromBox(s, url)
+      return BoxDto.fromBox(s, url, activityMap.get(s.id))
     })
   }
 

@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod serve;
+
 use assert_cmd::Command;
 use boxlite_test_utils::TEST_REGISTRIES;
 use boxlite_test_utils::home::PerTestBoxHome;

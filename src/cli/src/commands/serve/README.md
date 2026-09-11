@@ -237,11 +237,13 @@ switches to live broadcast — no gap, no interleaving. Both the backlog append 
 ```
 GET /v1/boxes/{box_id}/executions/{id}/attach
   │
+  ├─ AttachQuery::policy()                     — stdin=0|false → Refuse, absent|1|true → Allow,
+  │                                              anything else → 400 (never falls open)
   ├─ mark_connected()                          — claim single-attach slot (409 if taken)
   ├─ WebSocketUpgrade → on_upgrade             — HTTP → WS handshake
   │    └─ on_failed_upgrade: mark_disconnected()
   │
-  └─ run_attach_session(socket, active, state)
+  └─ run_attach_session(socket, active, state, stdin_policy)
        │
        ├─ stdout_bus.subscribe()               — BacklogReceiver (replay + live)
        ├─ stderr_bus.subscribe()
@@ -249,17 +251,20 @@ GET /v1/boxes/{box_id}/executions/{id}/attach
        ├─ socket.split() → (sink, stream)
        │
        ├─ tokio::spawn(reader)                 — client → server
-       │    ├─ Binary frames  → stdin.write_all()
-       │    ├─ Text {"type":"resize"}  → execution.resize_tty()
-       │    ├─ Text {"type":"signal"}  → execution.signal()
-       │    └─ Text {"type":"stdin_eof"}  → stdin.close() + drop
+       │    ├─ Binary frames  → Refuse: error frame + Close 1008; else stdin.write_all()
+       │    ├─ Text {"type":"resize"}  → Refuse: error frame; else execution.resize_tty()
+       │    ├─ Text {"type":"signal"}  → Refuse: error frame; else execution.signal()
+       │    └─ Text {"type":"stdin_eof"}  → Refuse: error frame; else stdin.close() + drop
+       │       (Refuse answers each kind once; the reader keeps draining so the
+       │        writer can flush its close — whichever task ends first aborts
+       │        the other.)
        │
        ├─ tokio::spawn(writer)                 — server → client
        │    ├─ if already done → drain backlog only (fast path)
        │    ├─ select! loop:
        │    │    stdout_rx.recv() → Binary [0x01 | data]
        │    │    stderr_rx.recv() → Binary [0x02 | data]
-       │    │    ctrl_rx.recv()   → Text (error frames from reader)
+       │    │    ctrl_rx.recv()   → Text (error frames), or Text + Close 1008
        │    │    ping_interval    → Ping (every 15 s)
        │    │    done_rx.changed()→ drain remaining, break
        │    └─ if done: Text {"type":"exit","exit_code":N} + Close

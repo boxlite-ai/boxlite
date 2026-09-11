@@ -149,6 +149,8 @@ lint\:python: _ensure-python-deps
 	@. .venv/bin/activate && cd sdks/python && python -c "import sys; tomllib = __import__('tomllib') if sys.version_info >= (3, 11) else __import__('tomli'); config=tomllib.load(open('pyproject.toml','rb')); deps=config.get('project',{}).get('dependencies',[]); (print(f'ERROR: pyproject.toml has required dependencies: {deps}') or print('Move dependencies to [project.optional-dependencies] instead.') or sys.exit(1)) if deps else print('✓ No required dependencies')"
 
 lint\:node: _ensure-node-deps
+	@echo "🔍 Checking Node SDK lockfile..."
+	@cd sdks/node && node scripts/check-lockfile.mjs
 	@echo "🔍 Checking Node SDK native import boundary..."
 	@if rg -n "from ['\"]\\.\\./native/|import\\(['\"]\\.\\./native/" \
 		sdks/node/lib --glob '*.ts' --glob '!native.ts'; then \
@@ -188,13 +190,13 @@ lint\:c:
 fmt\:go:
 	@echo "🔧 Formatting Go code..."
 	@cd sdks/go && go fmt ./...
-	@cd src/deps/libgvproxy-sys/gvproxy-bridge && gofmt -w main.go
+	@cd src/deps/libgvproxy-sys/gvproxy-bridge && gofmt -w .
 
 fmt\:check\:go:
 	@echo "🔍 Checking Go formatting..."
 	@cd sdks/go && test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && \
-		test -z "$$(gofmt -l main.go)" || (gofmt -l main.go && exit 1)
+		test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
 
 lint\:go:
 	@echo "🔍 Linting Go code (vet)..."

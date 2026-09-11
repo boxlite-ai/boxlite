@@ -240,6 +240,7 @@ Metadata about a box.
 | `state` | `JsBoxStateInfo` | Runtime state with `status`, `running`, and optional `pid` fields |
 | `createdAt` | `string` | Creation timestamp (ISO 8601) |
 | `startedAt` | `string \| undefined` | Time when the box most recently entered `Running` (RFC 3339); absent if not recorded or unavailable over REST |
+| `lastActivityAt` | `string \| undefined` | Time the box was last active (RFC 3339), the clock AutoStop measures idleness against; absent for a local box, which records no activity |
 | `image` | `string` | OCI image reference or rootfs path |
 | `cpus` | `number` | Allocated CPU count |
 | `memoryMib` | `number` | Allocated memory in MiB |

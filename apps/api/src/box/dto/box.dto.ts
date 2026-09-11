@@ -249,6 +249,15 @@ export class BoxDto {
   updatedAt?: string
 
   @ApiPropertyOptional({
+    description:
+      'The timestamp of the last recorded activity on the box, absent when no activity has been recorded yet',
+    example: '2024-10-01T12:00:00Z',
+    required: false,
+  })
+  @IsOptional()
+  lastActivityAt?: string
+
+  @ApiPropertyOptional({
     description: 'The class of the box',
     enum: BoxClass,
     example: Object.values(BoxClass)[0],
@@ -281,7 +290,12 @@ export class BoxDto {
   })
   toolboxProxyUrl: string
 
-  static fromBox(box: Box, toolboxProxyUrl: string): BoxDto {
+  // `lastActivityAt` is passed in rather than read off the entity: the freshest
+  // value lives in the activity service's Redis buffer, and the entity's
+  // same-named relation is a `BoxLastActivity` row that read paths do not join.
+  // It is reported raw, without the auto-stop sweeper's fallback to
+  // `updatedAt` — that fallback is a stop policy, not recorded activity.
+  static fromBox(box: Box, toolboxProxyUrl: string, lastActivityAt?: Date | null): BoxDto {
     return {
       id: box.id,
       organizationId: box.organizationId,
@@ -309,6 +323,7 @@ export class BoxDto {
       class: box.class,
       createdAt: box.createdAt ? new Date(box.createdAt).toISOString() : undefined,
       updatedAt: box.updatedAt ? new Date(box.updatedAt).toISOString() : undefined,
+      lastActivityAt: lastActivityAt ? new Date(lastActivityAt).toISOString() : undefined,
       daemonVersion: box.daemonVersion,
       runnerId: box.runnerId,
       toolboxProxyUrl,

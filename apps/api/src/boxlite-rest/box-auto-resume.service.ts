@@ -13,7 +13,7 @@ import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { Organization } from '../organization/entities/organization.entity'
 
-const AUTO_RESUME_TIMEOUT_SECONDS = 30
+export const AUTO_RESUME_TIMEOUT_SECONDS = 30
 
 @Injectable()
 export class BoxAutoResumeService {
