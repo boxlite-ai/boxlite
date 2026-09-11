@@ -28,7 +28,12 @@ const render = (overrides: Partial<Parameters<typeof renderRunnerBoot>[0]> = {})
     renderRunnerBoot({
       apiUrl: 'https://api.dev.boxlite.ai/',
       otlpUrl: 'http://collector:4318',
-      binary: { url: 'https://example.invalid/runner.tar.gz', sha256: 'c'.repeat(64) },
+      binary: {
+        tarballUrl: 'https://example.invalid/runner-v0.10.0.tar.gz',
+        checksumUrl: 'https://example.invalid/runner-v0.10.0.tar.gz.sha256',
+        tarballName: 'runner-v0.10.0.tar.gz',
+        transport: 'https',
+      },
       port: 3003,
       environment: { BOXLITE_RUNNER_NAME: 'default' },
       platform: platform(),
@@ -54,7 +59,38 @@ test('a checksum mismatch is fatal, and is checked before the binary is installe
   assert.notEqual(verifies, -1, 'the digest has to be compared, not merely fetched')
   assert.ok(verifies < installs, 'it runs as root; verifying after installing verifies nothing')
   assert.match(script, /exit 1/)
-  assert.match(script, new RegExp(`"${'c'.repeat(64)}" = "\\$ACTUAL"`), 'the expected digest is the one supplied')
+  assert.match(script, /\[ "\$EXPECTED" = "\$ACTUAL" \]/, 'the manifest digest is compared to the bytes')
+})
+
+test('the manifest this host verifies against is the one it fetched beside the tarball', () => {
+  // That the verification *works* is proved by running it — see
+  // `runner-payload.test.ts`, which also covers the wrong-name and
+  // uppercase-digest cases. What matters here is that a boot script renders it
+  // at all, and against the file it just downloaded rather than some other one.
+  const script = render()
+  assert.match(script, /EXPECTED=\$\(awk .* "\/tmp\/boxlite-runner\.sha256"\)/)
+  assert.match(script, /ACTUAL=\$\(sha256sum "\/tmp\/boxlite-runner\.tar\.gz"/)
+})
+
+test('the manifest is fetched beside the tarball, not derived on the host', () => {
+  const script = render()
+  assert.match(script, /runner-v0\.10\.0\.tar\.gz\.sha256/)
+  const fetches = script.indexOf('runner-v0.10.0.tar.gz.sha256')
+  const verifies = script.indexOf('EXPECTED=$(awk')
+  assert.ok(fetches < verifies)
+})
+
+test('an s3 address is read with the host’s own role, and needs a region', () => {
+  // A build-mode binary is staged rather than published, so nothing here is
+  // fetched anonymously — and the region reaches a shell, so it is checked.
+  const staged = {
+    tarballUrl: 's3://boxlite-app-dev-artifacts/runner/abc/runner.tar.gz',
+    checksumUrl: 's3://boxlite-app-dev-artifacts/runner/abc/runner.tar.gz.sha256',
+    tarballName: 'runner.tar.gz',
+    transport: 's3' as const,
+  }
+  assert.match(render({ binary: staged, region: 'ap-southeast-1' }), /aws .*s3 cp --region ap-southeast-1/)
+  assert.throws(() => render({ binary: staged }), /needs the region that bucket lives in/)
 })
 
 test('a host without /dev/kvm refuses to finish rather than registering', () => {

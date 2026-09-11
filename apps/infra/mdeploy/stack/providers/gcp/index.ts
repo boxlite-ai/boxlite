@@ -52,8 +52,12 @@ const placement = (network: Network, role: Parameters<Network['placementFor']>[0
  * a machine family is stocked per zone, and `asia-southeast1-a` refuses an N4
  * with `stockout` while `-b` creates one. A derived-only zone makes that a
  * deploy nothing can fix without editing this file.
+ *
+ * Exported because the roll asks the same question: `runner-update.ts` has to
+ * list and reach the hosts a deploy created, and a second spelling of this
+ * default is how the two come to disagree about where a fleet lives.
  */
-const zoneIn = (region: string, declared: string | null): string => declared ?? `${region}-a`
+export const zoneIn = (region: string, declared: string | null): string => declared ?? `${region}-a`
 
 export const gcpStackProviders = ({
   stage,

@@ -166,6 +166,12 @@ test('nothing a single deploy decides is demanded of the store', () => {
     'BOXLITE_RUNNER_BINARY_URL',
     'BOXLITE_RUNNER_BINARY_SHA256',
     'BOXLITE_RUNNER_BINARY_SOURCE',
+    // The version too, and that is the point rather than an omission: the
+    // runner binary is the commit's, resolved by `stack/runner-binary.ts` from
+    // the workspace version. A store that held it would pin a fleet to whatever
+    // was current the day someone seeded it, and drift from the commit the rest
+    // of the deploy is shipping.
+    'RUNNER_VERSION',
   ]) {
     assert.ok(!named.has(key), `${key} is decided per deploy and cannot live in the store`)
   }

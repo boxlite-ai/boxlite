@@ -22,7 +22,7 @@
 
 import { apiEnvironmentFrom } from './api-environment.ts'
 import { OTEL_GROUP, PROXY_GROUP, RUNNER_GROUP, serviceSecretsFrom, splitServiceChannels, type GroupDeclaration } from './env.ts'
-import type { RunnerBinary, RunnerSlot } from '../stack/runners.ts'
+import type { RunnerSlot } from '../stack/runners.ts'
 import type { MstageConfig } from 'mstage/config'
 
 export class StackEnvError extends Error {
@@ -80,31 +80,6 @@ const fleetFrom = (environment: NodeJS.ProcessEnv): RunnerSlot[] => {
 }
 
 /**
- * What each host installs.
- *
- * Both halves or neither is not enough here — a URL with no checksum is a host
- * that installs whatever answered, which is the one thing a checksum exists to
- * prevent. So both are required, and the failure names the pair rather than
- * whichever was read first.
- */
-const binaryFrom = (environment: NodeJS.ProcessEnv): RunnerBinary => {
-  const url = required(environment, 'BOXLITE_RUNNER_BINARY_URL', 'a host has to be told what to install')
-  const sha256 = required(
-    environment,
-    'BOXLITE_RUNNER_BINARY_SHA256',
-    'a host installs what the checksum proves, not what answered the URL',
-  )
-  if (!/^[0-9a-f]{64}$/.test(sha256)) {
-    throw new StackEnvError('BOXLITE_RUNNER_BINARY_SHA256 must be one lowercase hex SHA-256 digest')
-  }
-  const source = optional(environment, 'BOXLITE_RUNNER_BINARY_SOURCE') ?? 'release'
-  if (source !== 'release' && source !== 'build') {
-    throw new StackEnvError(`BOXLITE_RUNNER_BINARY_SOURCE must be "release" or "build"; got ${JSON.stringify(source)}`)
-  }
-  return { url, sha256, source }
-}
-
-/**
  * A ClickHouse someone else operates, or nothing.
  *
  * All three or none. An endpoint with no credentials is a database this stage
@@ -152,7 +127,6 @@ export type StackEnvironment = {
   /** The verified sender domain, or null for a stage that sends no mail. */
   senderDomain: string | null
   runnerFleet: RunnerSlot[]
-  runnerBinary: RunnerBinary
   /** A ClickHouse someone else operates, for a stage that runs none of its own. */
   managedClickHouse: { url: string; writerSecretArn: string; readerSecretArn: string } | null
   /**
@@ -229,10 +203,13 @@ const channels = ({
  * One deploy's inputs, read and checked before anything is built.
  *
  * What is checked here is the shape of what arrived: every required key is
- * present, the tag is one full commit sha, the fleet is a number this
- * repository will create, and the runner binary came with the checksum that
- * proves it. The failure then names the key rather than the resource that
- * choked on it.
+ * present, the tag is one full commit sha, and the fleet is a number this
+ * repository will create. The failure then names the key rather than the
+ * resource that choked on it.
+ *
+ * The runner binary is deliberately not among them. It is not configuration a
+ * stage supplies — it is the checkout's own version, which
+ * `stack/runner-binary.ts` resolves where the resources are built.
  */
 export const readStackEnvironment = ({
   environment,
@@ -269,7 +246,6 @@ export const readStackEnvironment = ({
     // that holds the key with nothing in it.
     senderDomain: optional(environment, 'MAIL_DOMAIN'),
     runnerFleet: fleetFrom(environment),
-    runnerBinary: binaryFrom(environment),
     managedClickHouse: managedClickHouseFrom(environment),
     dnsZoneId: required(environment, 'CLOUDFLARE_ZONE_ID', 'every public record this stage writes goes into it'),
     mailRelayHost: optional(environment, 'MAIL_RELAY_HOST'),

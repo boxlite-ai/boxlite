@@ -51,7 +51,103 @@ which machine family a host is created from, and on GCP whether nested
 virtualization is available at all.
 
 Neither file holds a secret, and neither holds anything one deploy decides — an
-image tag and a runner binary's checksum come from the invocation.
+image tag comes from the invocation, because it is different every time.
+
+The runner binary is the one case worth spelling out, because it is in neither
+file. Its version belongs to the *commit*: the workspace `Cargo.toml` is what the
+release workflow publishes under, so `mdeploy/stack/runner-binary.ts` reads it
+there and turns it into the two addresses a host installs from. A store value
+would pin a fleet to whatever was current the day someone seeded it, and drift
+from the commit the rest of the deploy is shipping.
+
+```
+VERSION=0.9.5                      install a different published release
+RUNNER_ARTIFACT_SOURCE=build       opt in to a per-commit build instead
+RUNNER_ARTIFACT_REF=<40 hex>       the commit it was staged for
+```
+
+The staging bucket is not a variable: the composition root that knows the cloud
+composes it — `sst.config.ts` from the account id — so a GCP stage has none and
+`build` is refused there rather than resolved into an `s3://` address that would
+fail on the host.
+
+Resolved in the stack, and synchronously, which is why the digest is not part of
+it: both engines evaluate the stack without awaiting anything, so nothing there
+can read a `.sha256`. The host does instead — it fetches the manifest beside the
+tarball and refuses to install unless it names exactly that file. The cost is
+worth stating: the bytes are not pinned in the engine's state, so a republished
+asset under one version is a case no deploy can see. That is the incumbent
+path's exposure too, and the reason `immutableTags` exists for images.
+
+## How a new runner binary reaches a live host
+
+Every provider creates a runner with its boot script and image in
+`ignoreChanges`, and `protect: true` on top: a host holds `/var/lib/boxlite` and
+the libkrun VMs in its memory, so it is never replaced. That means the boot
+script runs exactly once and "installed at boot" is "never" for a host that
+already exists.
+
+So a deploy lands the binary in place. `UpgradeRunnerBinary*` — one command per
+host, chained so the dependency graph sequences them — runs a converge-guarded
+payload on each: leave a host already serving the target alone, leave one that is
+still bootstrapping alone, otherwise fetch the tarball and its manifest, verify,
+swap the binary, restart, and wait for the health route to report the new
+identity before the next host is touched. A failure stops the chain with the
+unvisited hosts still serving. A host running something *newer* than the target is
+refused rather than reverted, so a deliberate hand-install survives an unrelated
+deploy.
+
+Nothing in a deploy can lift that refusal, and that is deliberate: a stored flag
+would be a stage that quietly permits downgrades on every future deploy, which is
+the surprise the guard exists to prevent. Rolling backwards is a decision someone
+makes at a moment, watching the output:
+
+```
+npm run runner:update -- --stage dev --version 0.9.5 --allow-downgrade
+npm run runner:update -- --stage dev --host boxlite-runner-2     # one host
+npm run runner:update -- --stage prod --confirm                  # protected stages
+```
+
+It shares the payload, the transports and the one-host-at-a-time sequencing with
+the deploy rather than reimplementing them — `mdeploy/src/runner-update.ts` only
+answers the two questions a deploy answers structurally: which hosts, and in what
+order. It discovers the fleet from the cloud (`Name=boxlite-runner-*` / the
+instance name) rather than from the engine's state, because it has to work on a
+fleet whose last deploy failed halfway, and it walks the fleet's own order —
+`default`, then `2`, `3`, … — so "which hosts are still serving" means the same
+thing after a failure as it did before. Release targets only: a build is
+addressed by a commit, and installing one is what deploying that commit does.
+
+## Iterating on the runner itself
+
+An unreleased runner change reaches a stage as a per-commit build rather than a
+release. `npm run runner:build -- --stage dev` builds a Linux AMD64 runner from
+this checkout, stamps the commit into the health route's version, and stages it
+under the commit — then prints the deploy that installs it:
+
+```
+RUNNER_ARTIFACT_SOURCE=build RUNNER_ARTIFACT_REF=<ref> npm run mdeploy -- --stage dev
+```
+
+The checkout must be clean, submodules included: a commit-keyed object holding
+uncommitted work would claim bytes that commit does not produce, and nothing
+downstream could tell. Publication is write-once — everything downstream treats
+version+commit as an identity and looks at no content, so changed bytes need a
+new commit rather than a second upload. AWS only, because the staging bucket is
+S3; a GCP stage installs a published release.
+
+The channel differs per cloud and needs one prerequisite each:
+
+| | AWS | GCP |
+|---|---|---|
+| transport | `ssm send-command`, polled to a terminal status | `gcloud compute ssh --tunnel-through-iap` |
+| what admits it | `AmazonSSMManagedInstanceCore` on the runner role | `RunnerIapFirewall`, plus OS Login on the instance |
+| deployer needs | the deploy role's existing SSM grants | `roles/iap.tunnelResourceAccessor`, `roles/compute.osAdminLogin` |
+| CLI on the deployer | `aws` | `gcloud` |
+
+Neither opens a way in for a person: the GCP rule admits Google's IAP forwarding
+range alone, and reaching that tunnel is an IAM question `bootstrap/gcp.ts`
+answers for the deployer and nobody else.
 
 ## Two clouds, one stage at a time
 
@@ -156,7 +252,7 @@ npm run mdeploy -- --stage dev --remove --confirm
 |---|---|
 | mstage — sign-ins, the store, digests, object versions, state repair | 361 tests |
 | mbuild — addresses, the publish sequence, the scan gate, the workflow | 64 tests |
-| mdeploy — the plan, both configs, the environment, the wiring, both bundles | 139 tests |
+| mdeploy — the plan, both configs, the environment, the wiring, both bundles | 211 tests |
 | the incumbent stack and its release guards, plus `bootstrap/gcp.ts` | 533 tests |
 | mstage, mbuild **and mdeploy** typecheck | `tsc` clean, without `sst install` |
 | every GCP provider, applied | `dev2`, in `asia-southeast1` |

@@ -236,7 +236,7 @@ export async function deployStack() {
   //
   // A build with no Api ref means nothing published an Api image for this checkout, so SST
   // builds apps/api/Dockerfile the way it always did. That is a plain local `npm run deploy`,
-  // and also `npm run runner:build-artifact`, which stages a Runner and sets only the Runner's
+  // and also `npm run runner:build-artifact:legacy`, which stages a Runner and sets only the Runner's
   // ref. deploy-infra.yml publishes both and sets the global one.
   //
   // SST hands an image string straight to the task definition (normalizeImage, sst/platform

@@ -184,6 +184,22 @@ const DEPLOYER_ROLES = [
   // The log-based metrics the alert policies are built on, and the policies.
   'roles/logging.configWriter',
   'roles/monitoring.editor',
+  /*
+   * Reaching a live runner to replace its binary in place.
+   *
+   * Two roles for one job, because the tunnel and the login are separate
+   * permissions. `iap.tunnelResourceAccessor` opens IAP's TCP forward to port
+   * 22 — the rule that admits it is `RunnerIapFirewall` in
+   * `mdeploy/stack/providers/gcp/network.ts` — and `compute.osAdminLogin` is
+   * what lets gcloud mint a key for this identity and use sudo once it is in.
+   *
+   * A deploy-time channel, not an operator's back door: a runner's boot script
+   * is ignored after first boot and the instance is never replaced, so a new
+   * binary has no other way onto a host that already exists.
+   * `mdeploy/stack/runner-upgrade.ts` records the rest of the reasoning.
+   */
+  'roles/iap.tunnelResourceAccessor',
+  'roles/compute.osAdminLogin',
 ]
 
 /** The publisher pushes images and reads nothing else. */

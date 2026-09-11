@@ -27,7 +27,7 @@
  *   RUNNER_ARTIFACT_REF       that commit, Runner only — wins over the global
  *
  * A ref is per-component for the same reason a source is: publishing is not atomic across the
- * two. CI publishes both for one commit and sets the global key; `npm run runner:build-artifact`
+ * two. CI publishes both for one commit and sets the global key; `npm run runner:build-artifact:legacy`
  * stages only a Runner, so it sets the Runner key and leaves the Api building from the checkout.
  * A build with no ref at all is a plain local deploy with nothing published for either.
  */
@@ -48,7 +48,7 @@ const GLOBAL_SOURCE_KEY = 'BOXLITE_ARTIFACT_SOURCE'
 const REF_KEY = 'BOXLITE_ARTIFACT_REF'
 // The same component-wins-over-global rule the source keys follow. It exists because the two
 // components' build artifacts are produced by different things: CI publishes both for one commit
-// and sets the global key, while `npm run runner:build-artifact` stages only a Runner and has to
+// and sets the global key, while `npm run runner:build-artifact:legacy` stages only a Runner and has to
 // say so — otherwise the Api would resolve a commit image that local build never pushed.
 const COMPONENT_REF_KEYS = { api: 'API_ARTIFACT_REF', runner: 'RUNNER_ARTIFACT_REF' }
 const ARTIFACT_KINDS = ['release', 'build']

@@ -11,7 +11,10 @@
  * `ignoreChanges` on the image and the boot script stops a monthly Ubuntu
  * release or a version bump from replacing a machine with running boxes on it,
  * and `protect` refuses a delete outright. The version bump still has to reach
- * the fleet; it does so over SSM, one host at a time, outside a deploy.
+ * the fleet, and it does: `UpgradeRunnerBinary*` below replaces the binary in
+ * place over SSM, one host at a time, as part of the same deploy. See
+ * `stack/runner-upgrade.ts` — "installed at boot" would mean "never" for a host
+ * whose boot script is ignored and which is never replaced.
  *
  * A consequence worth stating: because the boot script is ignored after the
  * first boot, its dependencies have to be right the *first* time. The artifact
@@ -38,6 +41,13 @@ import {
   registrationDir,
   registrationPayload,
 } from '../../runner-registration.ts'
+import {
+  UPGRADE_RUNNER_COMMAND,
+  encodeUpgradePayload,
+  upgradeDir,
+  upgradeResourceName,
+  upgradeTrigger,
+} from '../../runner-upgrade.ts'
 
 /** What each requested size answers to. Every one of these can nest. */
 const INSTANCE = { small: 'c8i.large', medium: 'c8i.xlarge', large: 'c8i.2xlarge' } as const
@@ -229,8 +239,6 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
             userDataBase64: $resolve([
               request.apiUrl,
               request.otlpUrl,
-              request.binary.url,
-              request.binary.sha256,
               // Resolved rather than cast, and the secret addresses with them:
               // both are `Input<string>`, and the composition root sets
               // `OTEL_EXPORTER_OTLP_ENDPOINT` from the collector's own URL. An
@@ -240,11 +248,14 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
               $resolve(Object.values(request.environment)),
               $resolve(Object.values(request.secrets)),
               token,
-            ]).apply(([apiUrl, otlpUrl, url, sha256, resolved, addresses, hostToken]) =>
+            ]).apply(([apiUrl, otlpUrl, resolved, addresses, hostToken]) =>
               renderRunnerBoot({
                 apiUrl: apiUrl as string,
                 otlpUrl: otlpUrl as string,
-                binary: { url: url as string, sha256: sha256 as string },
+                // Plain strings: the binary comes from the checkout, not from
+                // another resource, so there is nothing here to resolve.
+                binary: request.binary,
+                region,
                 port: RUNNER_PORT,
                 environment: {
                   ...Object.fromEntries(
@@ -277,6 +288,65 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
           },
         ),
     )
+
+    /*
+     * How a new binary reaches the hosts above, which the boot script cannot.
+     *
+     * `userDataBase64` is ignored after the first boot and the instance is
+     * protected, so a deploy that changes the binary changes nothing on a host
+     * that already exists. These land it in place, over SSM — see
+     * `stack/runner-upgrade.ts` for what the payload does and why.
+     *
+     * One command per host, chained: the dependency graph is what keeps two
+     * hosts from restarting at once, and a failure stops the chain with the
+     * unvisited hosts still serving the old binary. Each waits on its own
+     * instance because a host that does not exist has nothing to upgrade.
+     */
+    let previousUpgrade: any
+    for (const [index, instance] of instances.entries()) {
+      const { slot } = assignments[index]
+      const payload = encodeUpgradePayload({
+        identity: request.binary.identity,
+        binary: request.binary,
+        port: RUNNER_PORT,
+        // Only a build-mode binary needs it, and only because it is read from
+        // S3 with the host's own role rather than fetched publicly.
+        region,
+      })
+      previousUpgrade = new command.local.Command(
+        upgradeResourceName(slot),
+        {
+          // See `runner-registration.ts`: a local command runs from the
+          // engine's own cwd, and `$cli` is a name only SST defines.
+          dir: upgradeDir(),
+          create: UPGRADE_RUNNER_COMMAND,
+          update: UPGRADE_RUNNER_COMMAND,
+          environment: {
+            RUNNER_UPGRADE_CLOUD: 'aws',
+            RUNNER_UPGRADE_TARGET: instance.id,
+            RUNNER_UPGRADE_LABEL: slot.controlPlaneRunnerName,
+            RUNNER_UPGRADE_IDENTITY: request.binary.identity,
+            RUNNER_UPGRADE_PAYLOAD: payload,
+            AWS_REGION: region,
+          },
+          /*
+           * The identity, the address it came from, and the host.
+           *
+           * `triggers` replaces the command rather than updating it, which is
+           * why `create` and `update` run the same script. What is deliberately
+           * not in there is a digest: the stack never reads one — the host does,
+           * from the manifest beside the tarball — so a republished asset under
+           * one version is a change this cannot see. `runner-binary.ts` records
+           * that as the cost of resolving from the checkout.
+           *
+           * Narrow on purpose either way: a payload that re-ran on every deploy
+           * would restart a converged fleet for nothing.
+           */
+          triggers: [upgradeTrigger({ identity: request.binary.identity, binary: request.binary }), instance.id],
+        },
+        { dependsOn: [instance, ...(previousUpgrade ? [previousUpgrade] : [])] },
+      )
+    }
 
     /*
      * The rows the API will not seed.

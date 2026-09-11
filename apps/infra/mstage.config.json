@@ -46,7 +46,6 @@
           "PUBLIC_OIDC_DOMAIN",
           "RUNNERS",
           "RUNNER_PORT",
-          "RUNNER_VERSION",
           "DEFAULT_RUNNER_NAME",
           "DEFAULT_REGION_ID",
           "DEFAULT_TEMPLATE",

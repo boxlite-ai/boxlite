@@ -10,8 +10,8 @@
  * the matching deploy command.
  *
  * Usage:
- *   npm run runner:build-artifact
- *   npm run runner:build-artifact -- --stage dev
+ *   npm run runner:build-artifact:legacy
+ *   npm run runner:build-artifact:legacy -- --stage dev
  *
  * The checkout must be clean and its submodules initialized. Otherwise a commit-keyed object
  * would claim to contain bytes that the named commit does not actually produce.

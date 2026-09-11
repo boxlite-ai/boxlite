@@ -86,6 +86,7 @@ export default $config({
      */
     const { loadDeployConfig } = await import('./src/config.ts')
     const { readStackEnvironment } = await import('./src/stack-env.ts')
+    const { resolveRunnerBinary, runnerArtifactsBucket } = await import('./stack/runner-binary.ts')
     const { deployStack } = await import('./stack/index.ts')
     const { loadConfig: loadStageConfig } = await import('mstage/config')
     const { awsStackProviders } = await import('./stack/providers/aws/index.ts')
@@ -117,6 +118,33 @@ export default $config({
 
     const accountId = await aws.getCallerIdentity({}).then(({ accountId: id }) => id as string)
 
+    /*
+     * The stage bootstrap owns this bucket for the same ordering reason it owns
+     * the image repository: CI stages the object before this stack can consume
+     * one, so the consumer cannot also create its own input.
+     *
+     * Named here rather than inside the provider because two things need the
+     * same answer — the runner's read-only grant, and the address a build-mode
+     * binary is resolved to just below. The rule itself lives beside the
+     * resolver, because `runner:build` uploads to the same name.
+     */
+    const artifactsBucket = runnerArtifactsBucket({ app: $app.name, stage: $app.stage, accountId })
+
+    /*
+     * Which runner binary this deploy installs, from the checkout.
+     *
+     * Resolved here rather than read out of the store: the version is the
+     * commit's, and `stack/runner-binary.ts` says why nothing about it is a
+     * stage's setting. The same function runs on the Pulumi path — one
+     * resolution, so the two clouds cannot install different binaries for one
+     * commit.
+     */
+    const runnerBinary = resolveRunnerBinary({
+      environment: process.env,
+      configRoot: config.root,
+      artifactsBucket,
+    })
+
     return deployStack({
       /*
        * The AWS bundle, and only ever that one.
@@ -132,10 +160,7 @@ export default $config({
         region: AWS_REGION,
         accountId,
         domain: stackEnvironment.domain,
-        // The stage bootstrap owns this bucket for the same ordering reason it
-        // owns the image repository: CI stages the object before this stack can
-        // consume one, so the consumer cannot also create its own input.
-        artifactsBucket: `${$app.name}-app-${$app.stage}-artifacts-${accountId}`,
+        artifactsBucket,
         managedClickHouse: stackEnvironment.managedClickHouse,
       }),
       config,
@@ -151,7 +176,7 @@ export default $config({
         // image pull needs.
         internetEgress: true,
         senderDomain: stackEnvironment.senderDomain,
-        runnerBinary: stackEnvironment.runnerBinary,
+        runnerBinary,
         runnerFleet: stackEnvironment.runnerFleet,
         apiEnvironment: stackEnvironment.apiEnvironment,
         apiSecrets: stackEnvironment.apiSecrets,

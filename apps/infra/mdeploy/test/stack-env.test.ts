@@ -18,8 +18,6 @@ const complete = {
   STACK_DOMAIN: 'dev.boxlite.ai',
   PROXY_DOMAIN: 'box.dev.boxlite.ai',
   CLOUDFLARE_ZONE_ID: 'zone-1',
-  BOXLITE_RUNNER_BINARY_URL: 'https://example.invalid/runner.tar.gz',
-  BOXLITE_RUNNER_BINARY_SHA256: DIGEST,
   OIDC_ISSUER_BASE_URL: 'https://auth.dev.boxlite.ai',
   OIDC_CLIENT_ID: 'client-1',
   PROXY_API_KEY: 'proxy-key',
@@ -37,7 +35,6 @@ test('a complete environment resolves everything one deploy decides', () => {
   assert.deepEqual(resolved.runnerFleet, [
     { resourceName: 'Runner', nameTag: 'boxlite-runner-default', controlPlaneRunnerName: 'default' },
   ])
-  assert.equal(resolved.runnerBinary.source, 'release')
   assert.deepEqual(resolved.proxySecrets, {})
   assert.deepEqual(resolved.proxyEnvironment, { PROXY_API_KEY: 'proxy-key' })
 })
@@ -56,15 +53,17 @@ test('a tag that is not one full commit sha is refused', () => {
   assert.throws(() => read({ ...complete, BOXLITE_IMAGE_TAG: SHA.toUpperCase() }), /lowercase/)
 })
 
-test('a runner binary arrives with the checksum that proves it, or not at all', () => {
-  // A URL with no checksum is a host that installs whatever answered, which is
-  // the one thing a checksum exists to prevent.
-  assert.throws(
-    () => read({ ...complete, BOXLITE_RUNNER_BINARY_SHA256: undefined }),
-    /BOXLITE_RUNNER_BINARY_SHA256 is required/,
-  )
-  assert.throws(() => read({ ...complete, BOXLITE_RUNNER_BINARY_SHA256: 'not-a-digest' }), /lowercase hex SHA-256/)
-  assert.throws(() => read({ ...complete, BOXLITE_RUNNER_BINARY_SOURCE: 'staging' }), /must be "release" or "build"/)
+test('the runner binary is not read from the environment at all', () => {
+  // It used to be: three keys nothing produced, so every deploy that included
+  // the runner module stopped on the first of them. The version is the
+  // checkout's, and `stack/runner-binary.ts` resolves it where the resources
+  // are built — so a stage that exports these names is exporting nothing.
+  const resolved = read({
+    ...complete,
+    BOXLITE_RUNNER_BINARY_URL: 'https://example.invalid/wrong.tar.gz',
+    BOXLITE_RUNNER_BINARY_SHA256: DIGEST,
+  })
+  assert.ok(!('runnerBinary' in resolved), 'a second answer here is a second place to keep in step')
 })
 
 test('the fleet keeps the first host’s resource name, whatever it is called', () => {
@@ -128,6 +127,10 @@ test('both engines read this one function rather than each reading the environme
   )
   for (const source of entries) {
     assert.match(source, /readStackEnvironment\(/, 'an engine that assembled its own would be the drift this prevents')
+    // The runner binary is the same shape of question and the same risk: one
+    // commit must resolve to one binary on both clouds, and an engine that
+    // composed its own release URL would install a different one on one of them.
+    assert.match(source, /resolveRunnerBinary\(/, 'both engines resolve the runner binary through one function')
   }
   // And neither reaches past it for a key the assembly already owns.
   for (const source of entries) {

@@ -36,6 +36,8 @@
  * the wrapper fetches it like any other secret.
  */
 
+import { artifactFetchCommand, verifyAgainstManifest } from './runner-binary.ts'
+
 /** What one cloud contributes to the boot script. */
 export type BootPlatform = {
   /** Shell that sets `HOST_IP` to the address the control plane reaches. */
@@ -68,8 +70,22 @@ export type BootInput = {
   apiUrl: string
   /** Where it ships telemetry. */
   otlpUrl: string
-  /** What to install, and the digest that has to match before it is. */
-  binary: { url: string; sha256: string }
+  /**
+   * What to install: the tarball, and the manifest that has to name it.
+   *
+   * Two addresses rather than a literal digest, because the stack that renders
+   * this is evaluated synchronously and can read neither. See
+   * `runner-binary.ts` — the same pair the in-place upgrade uses, verified by
+   * the same three lines.
+   */
+  binary: {
+    tarballUrl: string
+    checksumUrl: string
+    tarballName: string
+    transport: 'https' | 's3'
+  }
+  /** The region an `s3://` address is read from. Null for a public one. */
+  region?: string | null
   /** The port the runner multiplexes everything onto. */
   port: number
   /** Values the unit carries beyond what this file decides. */
@@ -86,6 +102,16 @@ export type BootInput = {
  */
 export const renderRunnerBoot = (input: BootInput): string => {
   const { platform } = input
+  const region = input.region ?? null
+  const fetch = (url: string, destination: string) =>
+    artifactFetchCommand({ artifact: input.binary, url, destination, region })
+  const fetchTarball = fetch(input.binary.tarballUrl, '/tmp/boxlite-runner.tar.gz')
+  const fetchManifest = fetch(input.binary.checksumUrl, '/tmp/boxlite-runner.sha256')
+  const verify = verifyAgainstManifest({
+    tarballName: input.binary.tarballName,
+    tarball: '/tmp/boxlite-runner.tar.gz',
+    manifest: '/tmp/boxlite-runner.sha256',
+  })
   const execStart = platform.startWrapper ? platform.startWrapper.path : '/usr/local/bin/boxlite-runner'
   const unitEnvironment = {
     BOXLITE_API_URL: `${input.apiUrl.replace(/\/$/, '')}/api`,
@@ -121,16 +147,13 @@ ${platform.prepareKvm}
 [ -e /dev/kvm ] || { echo "FATAL: /dev/kvm is absent; this host cannot run boxes" >&2; exit 1; }
 
 # Fetch the binary and verify it before installing: it runs as root. A mismatch
-# is fatal rather than a warning.
-curl -fsSL "${input.binary.url}" -o /tmp/boxlite-runner.tar.gz
-ACTUAL=$(sha256sum /tmp/boxlite-runner.tar.gz | awk '{print $1}')
-[ "${input.binary.sha256}" = "$ACTUAL" ] || {
-  echo "FATAL: runner checksum mismatch (want ${input.binary.sha256} got $ACTUAL)" >&2
-  exit 1
-}
-echo "runner tarball checksum verified ($ACTUAL)"
+# is fatal rather than a warning. The manifest is fetched beside the tarball and
+# has to name it -- runner-binary.ts says what each check catches.
+${fetchTarball}
+${fetchManifest}
+${verify}
 tar -xzf /tmp/boxlite-runner.tar.gz -C /usr/local/bin/
-rm -f /tmp/boxlite-runner.tar.gz
+rm -f /tmp/boxlite-runner.tar.gz /tmp/boxlite-runner.sha256
 chmod +x /usr/local/bin/boxlite-runner
 
 ${platform.hostAddress}

@@ -23,6 +23,7 @@
  */
 
 import { readStackEnvironment } from '../src/stack-env.ts'
+import { resolveRunnerBinary } from '../stack/runner-binary.ts'
 import type { deployStack } from '../stack/index.ts'
 
 export class PulumiProgramError extends Error {
@@ -213,6 +214,16 @@ export const gcpProgram =
       home: 'gcp',
     })
 
+    /*
+     * Which runner binary this deploy installs, from the checkout.
+     *
+     * The same function `sst.config.ts` calls, so one commit resolves to one
+     * binary on both clouds. No artifacts bucket: a build-mode binary is staged
+     * in S3, which this cloud has none of, and `runner-binary.ts` refuses that
+     * combination rather than composing an address that fails on a host.
+     */
+    const runnerBinary = resolveRunnerBinary({ environment, configRoot: config.root })
+
     const outputs = deployStack({
       providers: gcpStackProviders({
         stage,
@@ -234,7 +245,7 @@ export const gcpProgram =
         proxyTemplateUrl: stackEnvironment.proxyTemplateUrl,
         internetEgress: true,
         senderDomain: stackEnvironment.senderDomain,
-        runnerBinary: stackEnvironment.runnerBinary,
+        runnerBinary,
         runnerFleet: stackEnvironment.runnerFleet,
         apiEnvironment: stackEnvironment.apiEnvironment,
         apiSecrets: stackEnvironment.apiSecrets,

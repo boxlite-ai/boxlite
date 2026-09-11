@@ -197,15 +197,42 @@ test('a service account is granted its roles on the run that created it', async 
    * `create` returns before the account is visible to the IAM policy API, so
    * the grant that follows was refused with `Service account <email> does not
    * exist` — naming as absent the account the line above had just made. A first
-   * bootstrap died there with the deployer created and none of its twelve roles
+   * bootstrap died there with the deployer created and none of its roles
    * attached, and only a second run completed. Reconciling on re-run is not the
    * same as working.
+   *
+   * Every role is named here rather than counted, and none of it is read back
+   * from `gcp.ts`: this is the privilege a CI identity holds over the whole
+   * project, so the declaration and the assertion have to be two independent
+   * statements. A count would accept a role swapped for another, and reading
+   * the list from production would accept anything at all. Adding a privilege
+   * is meant to cost an edit here — that edit is the review. The last two are
+   * this change's, and are the reason the weaker form was not enough.
    */
   const gcloud = recorder({ readsBeforeVisible: 2 })
   const result = await invoke(gcloud.run)
 
   const grants = gcloud.applied('projects add-iam-policy-binding', 'boxlite-gcp-dev-deploy@')
-  assert.equal(grants.length, 12, 'the deployer did not receive every role')
+  assert.deepEqual(
+    grants.map((argv: string[]) => argv.find((arg) => arg.startsWith('--role='))?.slice('--role='.length)).sort(),
+    [
+      'roles/cloudsql.admin',
+      'roles/compute.admin',
+      'roles/compute.osAdminLogin',
+      'roles/iam.serviceAccountAdmin',
+      'roles/iam.serviceAccountUser',
+      'roles/iap.tunnelResourceAccessor',
+      'roles/logging.configWriter',
+      'roles/monitoring.editor',
+      'roles/redis.admin',
+      'roles/resourcemanager.projectIamAdmin',
+      'roles/run.admin',
+      'roles/secretmanager.admin',
+      'roles/servicenetworking.networksAdmin',
+      'roles/storage.admin',
+    ],
+    'the roles the deployer receives are not the roles this repository grants',
+  )
   assert.ok(result.deployerEmail.startsWith('boxlite-gcp-dev-deploy@'))
   // The wait is a read loop, not a blind sleep: it stops as soon as the account
   // answers, so an immediately consistent API costs one extra read and no time.

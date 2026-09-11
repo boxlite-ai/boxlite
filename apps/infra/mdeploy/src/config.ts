@@ -16,8 +16,9 @@
  * nested virtualization is available at all.
  *
  * Neither file holds a secret, and neither holds anything a single deploy
- * decides — an image tag and a runner binary's checksum come from the
- * invocation, because they are different every time.
+ * decides — an image tag comes from the invocation, because it is different
+ * every time, and the runner binary's version comes from the checkout, because
+ * it belongs to the commit rather than to a stage.
  *
  * A stage is written as an override of the defaults rather than as a complete
  * copy. Stages differ in a few deliberate ways and agree on everything else, and

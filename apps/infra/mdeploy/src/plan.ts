@@ -107,7 +107,19 @@ export const PLAN: Record<ModuleName, ModulePlan> = {
     because: 'the proxy resolves a box through the API before it forwards a byte',
   },
   runners: {
-    components: ['Runner', 'RunnerRole', 'RunnerProfile', 'RunnerSecurityGroup'],
+    /*
+     * `UpgradeRunnerBinary` is the first host's in-place upgrade, and it is
+     * named here because a targeted `--module runners` that left it out would
+     * create hosts and never land a new binary on the ones that already exist.
+     *
+     * The first host only. Every later one's command is named after its slot —
+     * `UpgradeRunnerBinary-runner-2` — and a static list cannot name a fleet
+     * whose size is a stage's setting. So a targeted deploy of a multi-host
+     * stage rolls the first host and leaves the rest to a full one. Said out
+     * loud rather than left to be discovered: `RegisterExtraRunners` has the
+     * same shape, for the same reason.
+     */
+    components: ['Runner', 'RunnerRole', 'RunnerProfile', 'RunnerSecurityGroup', 'UpgradeRunnerBinary'],
     needs: ['api'],
     because: 'a runner registers itself with the control plane at first boot',
   },

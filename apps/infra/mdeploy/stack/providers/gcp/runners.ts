@@ -41,6 +41,13 @@ import {
   registrationDir,
   registrationPayload,
 } from '../../runner-registration.ts'
+import {
+  UPGRADE_RUNNER_COMMAND,
+  encodeUpgradePayload,
+  upgradeDir,
+  upgradeResourceName,
+  upgradeTrigger,
+} from '../../runner-upgrade.ts'
 import { splitSecretRef } from './secret-env.ts'
 
 /**
@@ -179,8 +186,6 @@ udevadm trigger --name-match=kvm || true`,
       const userData = $resolve([
         request.apiUrl,
         request.otlpUrl,
-        request.binary.url,
-        request.binary.sha256,
         $resolve(Object.values(request.secrets)),
         // Resolved, not cast. See the note in `renderRunnerBoot`: these values
         // are `Input<string>` and the composition root sets
@@ -189,7 +194,7 @@ udevadm trigger --name-match=kvm || true`,
         // the host ships telemetry to that instead of to the collector.
         $resolve(Object.values(request.environment)),
         token,
-      ]).apply(([apiUrl, otlpUrl, url, sha256, references, resolved, hostToken]) => {
+      ]).apply(([apiUrl, otlpUrl, references, resolved, hostToken]) => {
         const secrets = Object.keys(request.secrets).map((name, index) => ({
           name,
           ...splitSecretRef((references as string[])[index] as string),
@@ -197,7 +202,9 @@ udevadm trigger --name-match=kvm || true`,
         return renderRunnerBoot({
           apiUrl: apiUrl as string,
           otlpUrl: otlpUrl as string,
-          binary: { url: url as string, sha256: sha256 as string },
+          // Plain strings: the binary comes from the checkout, not from another
+          // resource, so there is nothing here to resolve.
+          binary: request.binary,
           port: RUNNER_PORT,
           environment: {
             ...Object.fromEntries(
@@ -244,6 +251,17 @@ udevadm trigger --name-match=kvm || true`,
             },
           ],
           serviceAccount: { email: placement.serviceAccount, scopes: ['cloud-platform'] },
+          /*
+           * OS Login, explicitly, because the in-place binary upgrade signs in.
+           *
+           * Without it gcloud falls back to writing an SSH key into project-wide
+           * metadata, which grants that key every instance in the project and
+           * outlives the deploy that wrote it. With it, access is an IAM
+           * question — `roles/compute.osAdminLogin`, which `bootstrap/gcp.ts`
+           * grants the deployer alone — and the key gcloud mints is scoped to
+           * that identity and expires.
+           */
+          metadata: { 'enable-oslogin': 'TRUE' },
           // The boot script is base64 on AWS and plain text here, which is the
           // one place the two clouds want the same value differently.
           metadataStartupScript: userData.apply((encoded: string) =>
@@ -264,6 +282,65 @@ udevadm trigger --name-match=kvm || true`,
         },
       )
     })
+
+    /*
+     * How a new binary reaches the hosts above, which the boot script cannot.
+     *
+     * `metadataStartupScript` is ignored after the first boot and the instance
+     * is protected, so a deploy that changes the binary changes nothing on a
+     * host that already exists — "at boot" means "never" here. These land it in
+     * place over a tunnelled ssh; `src/upgrade-runners.ts` records why that is
+     * the channel on this cloud, and why the answer differs from the one
+     * `providers/gcp/clickhouse.ts` reached for its own reconcile.
+     *
+     * One command per host, chained, exactly as on AWS: the dependency graph
+     * keeps two hosts from restarting at once, and a failure stops the chain.
+     */
+    let previousUpgrade: any
+    for (const [index, instance] of instances.entries()) {
+      const { slot } = assignments[index]
+      // No region: a GCP stage installs a published release. A build-mode binary
+      // is staged in S3, which this cloud has no bucket for — `runner-binary.ts`
+      // refuses that combination before any of this runs.
+      const payload = encodeUpgradePayload({
+        identity: request.binary.identity,
+        binary: request.binary,
+        port: RUNNER_PORT,
+      })
+      previousUpgrade = new command.local.Command(
+        upgradeResourceName(slot),
+        {
+          // See `runner-registration.ts`: a local command runs from the
+          // engine's own cwd, and `$cli` is a name only SST defines.
+          dir: upgradeDir(),
+          create: UPGRADE_RUNNER_COMMAND,
+          update: UPGRADE_RUNNER_COMMAND,
+          environment: {
+            RUNNER_UPGRADE_CLOUD: 'gcp',
+            // The instance's name, which is what `gcloud compute ssh` takes.
+            RUNNER_UPGRADE_TARGET: slot.nameTag,
+            RUNNER_UPGRADE_LABEL: slot.controlPlaneRunnerName,
+            RUNNER_UPGRADE_IDENTITY: request.binary.identity,
+            RUNNER_UPGRADE_PAYLOAD: payload,
+            GCP_PROJECT: project,
+            GCP_ZONE: zone,
+          },
+          // The identity and the address it came from. See the AWS side's note:
+          // no digest, because the stack never reads one — and re-running on
+          // every deploy would restart a converged fleet for nothing.
+          triggers: [upgradeTrigger({ identity: request.binary.identity, binary: request.binary }), instance.id],
+        },
+        /*
+         * The host, and whatever the caller said has to exist first.
+         *
+         * `dependsOn` carries the network's own rules, `RunnerIapFirewall`
+         * among them — see `stack/index.ts`. Without that rule the tunnel
+         * cannot open at all, and gcloud would spend the whole connect window
+         * failing against a host that is perfectly healthy.
+         */
+        { dependsOn: [instance, ...dependsOn, ...(previousUpgrade ? [previousUpgrade] : [])] },
+      )
+    }
 
     /*
      * The rows the API will not seed.

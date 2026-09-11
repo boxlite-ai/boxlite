@@ -323,7 +323,7 @@ test('SST deploy verifies the selected Runner artifact before invoking SST', () 
   // Runner are addressed by a ref that names a different commit.
   //
   // Both sources, not one: a Runner-only build addresses no Api ref, so passing `apiSource` alone
-  // would skip the check for exactly the deploy `npm run runner:build-artifact` produces.
+  // would skip the check for exactly the deploy `npm run runner:build-artifact:legacy` produces.
   assertLiveLine(source, /requireCheckoutMatchesArtifactRefs\(\[apiSource, runnerSource\]\)/)
   assert.match(source, /verifyRunnerArtifact \} from '\.\.\/artifacts\/runner\.js'/)
   // Resolved only when the scope covers it. Dropping the guard restores the failure this scope

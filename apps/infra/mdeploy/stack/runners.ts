@@ -61,17 +61,40 @@ export type RunnerSlot = {
 export type RunnerAssignment = { slot: RunnerSlot; token: $util.Input<string> }
 
 /**
- * What a host installs, as a URL and the checksum that proves it.
+ * What a host installs: two addresses, and the identity it must then report.
  *
  * One shape for both sources — a published release and a per-commit object —
- * because the host does the same thing with either: fetch, verify, install.
- * Which one this is belongs in the deploy's log, not in the host's user data.
+ * because the host does the same thing with either: fetch the tarball, fetch the
+ * `.sha256` sidecar beside it, refuse to install unless the manifest names
+ * exactly that tarball and its digest matches.
+ *
+ * The digest travels as an address rather than a value because the stack is
+ * evaluated synchronously by both engines: nothing here can read it. That is
+ * also why `identity` is carried separately — the in-place upgrade converges on
+ * what a live host *reports*, and a running runner cannot be asked for a digest.
+ *
+ * Resolved by `runner-binary.ts`, from the checkout, before any machine exists.
+ * Plain strings, every one of them: nothing here comes from another resource, so
+ * a provider renders the boot script and the upgrade payload without resolving
+ * anything — which is also what lets both be tested without an engine.
  */
 export type RunnerBinary = {
-  url: $util.Input<string>
-  sha256: $util.Input<string>
-  /** For the log line. A host never branches on it. */
+  tarballUrl: string
+  /** The `.sha256` manifest beside it, which the host verifies against. */
+  checksumUrl: string
+  /** The filename the manifest must name. Not derivable from the URL on the host. */
+  tarballName: string
+  /** How both addresses are read: public HTTPS, or an object only a role may read. */
+  transport: 'https' | 's3'
+  /** Which source this came from. Decides whether ordering can be guarded. */
   source: 'release' | 'build'
+  /**
+   * What a host serving this binary reports on its health route: `X.Y.Z` for a
+   * release, `X.Y.Z+<commit>` for a build — two builds of one checkout are
+   * otherwise indistinguishable on the wire, and an upgrade that could not tell
+   * them apart would skip every dev deploy after the first.
+   */
+  identity: string
 }
 
 export type RunnerRequest = {

@@ -167,6 +167,32 @@ export const gcpNetworkProvider =
       targetServiceAccounts: [accounts.runner.email],
     })
 
+    /*
+     * The one way into a live runner, opened for one job.
+     *
+     * A host's binary is replaced in place — `stack/runner-upgrade.ts` says why
+     * it has to be — and this cloud has no SSM to do it over, so the deploy
+     * reaches the host through IAP's TCP tunnel instead. IAP proxies from a
+     * fixed Google-owned range, so the source is that range rather than
+     * anything of ours; a narrower one does not exist, and a wider one would be
+     * a real inbound port on a host that runs untrusted code by design.
+     *
+     * Keyed on the runner's own identity and port 22 alone. It is not a way in
+     * for a person: reaching the tunnel needs `roles/iap.tunnelResourceAccessor`
+     * on the project, which `bootstrap/gcp.ts` grants the deployer and nothing
+     * else.
+     */
+    const runnerIap = new gcp.compute.Firewall('RunnerIapFirewall', {
+      name: `${prefix}-runner-iap`,
+      project,
+      network: network.id,
+      direction: 'INGRESS',
+      priority: 1000,
+      allows: [{ protocol: 'tcp', ports: ['22'] }],
+      sourceRanges: ['35.235.240.0/20'],
+      targetServiceAccounts: [accounts.runner.email],
+    })
+
     // And the other direction: a runner registers itself and ships telemetry.
     const runnerEgress = new gcp.compute.Firewall('RunnerToServicesFirewall', {
       name: `${prefix}-runner-to-services`,
@@ -227,6 +253,7 @@ export const gcpNetworkProvider =
         privateServiceAccess,
         internal,
         runnerIngress,
+        runnerIap,
         runnerEgress,
         denied,
         ...(nat ? [nat] : []),
