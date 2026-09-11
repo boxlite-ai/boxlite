@@ -29,6 +29,7 @@
  */
 
 import type { Placement } from './network.ts'
+import { instanceFor } from 'naming'
 
 export type RunnerSize = 'small' | 'medium' | 'large'
 
@@ -139,6 +140,25 @@ export type Runners = {
 export type RunnerProvider = (request: RunnerRequest) => Runners
 
 /** The one port a runner listens on: its API, the box proxy and the ssh gateway. */
+/**
+ * What a host is called, which is also how the fleet is found again.
+ *
+ * `<app>-<stage>-runner`, through the same `instanceFor` every other resource
+ * goes through, rather than a literal. A name without the stage cannot be
+ * deployed twice into one project — a GCE instance name is project-scoped, so
+ * the second stage collides outright — and `runner-update.ts` walks the fleet
+ * by this prefix, so a stage-less name would sweep another stage's hosts into
+ * this stage's roll.
+ *
+ * The first host takes the bare prefix and the rest a number, which is the
+ * order a roll visits them in.
+ */
+export const runnerNamePrefix = ({ app, stage }: { app: string; stage: string }): string =>
+  instanceFor({ app, stage, artifact: 'runner' })
+
+export const runnerNameFor = ({ app, stage, index }: { app: string; stage: string; index: number }): string =>
+  index === 1 ? runnerNamePrefix({ app, stage }) : `${runnerNamePrefix({ app, stage })}-${index}`
+
 export const RUNNER_PORT = 3003
 
 /**

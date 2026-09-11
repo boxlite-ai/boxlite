@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { RunnerUpdateError, compareHosts, updateRunners, type Host } from '../src/runner-update.ts'
+import { RunnerUpdateError, compareHostsIn, updateRunners, type Host } from '../src/runner-update.ts'
 import type { CommandResult, RunCommand } from '../src/upgrade-runners.ts'
 
 const ok = (stdout = ''): CommandResult => ({ ok: true, status: 0, stdout, stderr: '' })
@@ -31,7 +31,7 @@ const awsFleet = (calls: string[][] = []): RunCommand => {
   return (file, args) => {
     calls.push([file, ...args])
     if (args[1] === 'describe-instances') {
-      return ok('i-0002\tboxlite-runner-2\ni-0001\tboxlite-runner-default')
+      return ok('i-0002\tboxlite-app-dev-runner-2\ni-0001\tboxlite-app-dev-runner')
     }
     if (args[1] === 'send-command') return ok('cmd-1')
     if (args.includes('Status')) return ok('Success')
@@ -42,7 +42,7 @@ const awsFleet = (calls: string[][] = []): RunCommand => {
 const gcpFleet = (calls: string[][] = []): RunCommand => {
   return (file, args) => {
     calls.push([file, ...args])
-    if (args[1] === 'instances') return ok('boxlite-runner-default\nboxlite-runner-2')
+    if (args[1] === 'instances') return ok('boxlite-app-dev2-runner\nboxlite-app-dev2-runner-2')
     return ok('new identity: 0.10.0')
   }
 }
@@ -80,19 +80,24 @@ test('the fleet’s order is its own, not the string order of its names', () => 
   // both before `-default`. A roll has to walk the order the deploy's chain
   // walks, or "which hosts are still serving" means something different after a
   // failure than it did before.
-  const host = (label: string): Host => ({ target: `i-${label}`, label: `boxlite-runner-${label}` })
+  const PREFIX = 'boxlite-app-dev-runner'
+  // The first host takes the bare prefix; the rest a number.
+  const host = (label: string): Host => ({
+    target: `i-${label}`,
+    label: label === 'default' ? PREFIX : `${PREFIX}-${label}`,
+  })
   const fleet = [host('10'), host('2'), host('default'), host('3')]
   assert.deepEqual(
-    [...fleet].sort(compareHosts).map((entry) => entry.label),
-    ['boxlite-runner-default', 'boxlite-runner-2', 'boxlite-runner-3', 'boxlite-runner-10'],
+    [...fleet].sort(compareHostsIn(PREFIX)).map((entry) => entry.label),
+    [PREFIX, `${PREFIX}-2`, `${PREFIX}-3`, `${PREFIX}-10`],
   )
 
   // A host neither pattern explains goes last rather than jumping the queue: it
   // was renamed by hand, or belongs to something else entirely.
   const stranger = { target: 'i-x', label: 'someone-elses-box' }
   assert.deepEqual(
-    [stranger, host('2'), host('default')].sort(compareHosts).map((entry) => entry.label),
-    ['boxlite-runner-default', 'boxlite-runner-2', 'someone-elses-box'],
+    [stranger, host('2'), host('default')].sort(compareHostsIn(PREFIX)).map((entry) => entry.label),
+    [PREFIX, `${PREFIX}-2`, 'someone-elses-box'],
   )
 })
 
@@ -135,11 +140,11 @@ test('the downgrade force reaches the payload only when it is asked for', async 
 
 test('a named host has to be one that is running, rather than silently matching nothing', async () => {
   await assert.rejects(
-    () => drive(['--stage', 'dev', '--host', 'boxlite-runner-9'], awsFleet()),
+    () => drive(['--stage', 'dev', '--host', 'boxlite-app-dev-runner-9'], awsFleet()),
     (error: Error) => {
       assert.ok(error instanceof RunnerUpdateError)
-      assert.match(error.message, /boxlite-runner-9 is not a running runner in this stage/)
-      assert.match(error.message, /Found: boxlite-runner-default, boxlite-runner-2/)
+      assert.match(error.message, /boxlite-app-dev-runner-9 is not a running runner in this stage/)
+      assert.match(error.message, /Found: boxlite-app-dev-runner, boxlite-app-dev-runner-2/)
       return true
     },
   )
@@ -147,7 +152,7 @@ test('a named host has to be one that is running, rather than silently matching 
 
 test('naming one host rolls that one and no other', async () => {
   const calls: string[][] = []
-  await drive(['--stage', 'dev', '--host', 'boxlite-runner-2'], awsFleet(calls))
+  await drive(['--stage', 'dev', '--host', 'boxlite-app-dev-runner-2'], awsFleet(calls))
   const sent = calls.filter((call) => call[2] === 'send-command')
   assert.equal(sent.length, 1)
   assert.ok(sent[0]?.includes('i-0002'))
@@ -165,7 +170,7 @@ test('a protected stage is confirmed, exactly as a deploy of it would be', async
 
 test('an empty fleet is a refusal, not a silent success', async () => {
   const empty: RunCommand = (_file, args) => (args[1] === 'describe-instances' ? ok('') : ok(''))
-  await assert.rejects(() => drive(['--stage', 'dev'], empty), /no running runner in boxlite\/dev/)
+  await assert.rejects(() => drive(['--stage', 'dev'], empty), /no running runner in boxlite-app\/dev/)
 })
 
 test('on GCP the fleet is listed by name and reached through the tunnel', async () => {
@@ -174,11 +179,11 @@ test('on GCP the fleet is listed by name and reached through the tunnel', async 
   const calls: string[][] = []
   assert.equal(await drive(['--stage', 'dev2'], gcpFleet(calls), 'gcp'), 0)
   const listed = calls.find((call) => call[2] === 'instances')
-  assert.ok(listed?.some((argument) => argument.startsWith('--filter=name~^boxlite-runner-')))
+  assert.ok(listed?.some((argument) => argument.startsWith('--filter=name~^boxlite-app-dev2-runner')))
   const sessions = calls.filter((call) => call[2] === 'ssh')
   assert.equal(sessions.length, 2)
   assert.ok(sessions[0]?.includes('--tunnel-through-iap'))
-  assert.ok(sessions[0]?.includes('boxlite-runner-default'))
+  assert.ok(sessions[0]?.includes('boxlite-app-dev2-runner'))
 })
 
 test('a stage is required, and mstage says which ones there are', async () => {

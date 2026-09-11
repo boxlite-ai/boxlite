@@ -205,7 +205,9 @@ export const selectRunnerBinary = ({
  *
  * The shape is the incumbent's (`deployment/environment.ts`'s
  * `awsResourceName`), because mdeploy adopts the bucket that path created rather
- * than making a second one beside it.
+ * than making a second one beside it. That path joins `[app, 'app', stage, …]`
+ * with `app` as a literal, and this repository's app already carries it — so the
+ * segment is spelled once, here, rather than twice.
  */
 export const runnerArtifactsBucket = ({
   app,
@@ -216,7 +218,7 @@ export const runnerArtifactsBucket = ({
   stage: string
   /** S3's namespace is global, so the bucket needs a qualifier no other account can claim. */
   accountId: string
-}): string => `${app}-app-${stage}-artifacts-${accountId}`
+}): string => `${app}-${stage}-artifacts-${accountId}`
 
 /**
  * The two addresses one selector resolves to.

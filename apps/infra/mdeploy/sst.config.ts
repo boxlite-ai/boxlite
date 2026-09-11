@@ -43,7 +43,7 @@ const PRODUCTION_STAGE = 'prod'
 export default $config({
   async app(input) {
     return {
-      name: 'boxlite',
+      name: 'boxlite-app',
       removal: input?.stage === PRODUCTION_STAGE ? 'retain' : 'remove',
       protect: input?.stage === PRODUCTION_STAGE,
       home: 'aws',
@@ -111,6 +111,7 @@ export default $config({
         optional: stageConfig.envOptional,
         where: stageConfig.path,
       },
+      app: $app.name,
       stage: $app.stage,
       region: AWS_REGION,
       home: 'aws',

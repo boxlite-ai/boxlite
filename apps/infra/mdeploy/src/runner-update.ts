@@ -37,7 +37,7 @@ import { resolveScope } from 'mstage/scope'
 import { deployRoot } from './config.ts'
 import { sleepSeconds, spawnWith, upgradeOne, type RunCommand, type UpgradeOneRequest } from './upgrade-runners.ts'
 import { encodeUpgradePayload } from '../stack/runner-upgrade.ts'
-import { RUNNER_PORT } from '../stack/runners.ts'
+import { RUNNER_PORT, runnerNamePrefix } from '../stack/runners.ts'
 import { resolveRunnerBinary } from '../stack/runner-binary.ts'
 import { zoneIn } from '../stack/providers/gcp/index.ts'
 
@@ -75,7 +75,9 @@ const OWN_OPTIONS = { flags: ['allow-downgrade'], values: ['host'] }
  * the engine's state — a state file is one deploy's record, and this tool has to
  * work on a fleet whose last deploy failed halfway.
  */
-const NAME_PATTERN = 'boxlite-runner-'
+// The prefix is `<app>-<stage>-runner`, built by the same `runnerNamePrefix`
+// the stack names a host with — one definition, so discovery cannot drift from
+// creation, and a roll in one stage never sees another stage's hosts.
 
 export type Host = { target: string; label: string }
 
@@ -93,14 +95,16 @@ export type Host = { target: string; label: string }
  * `-10` before `-2`. The fleet's own order is: the first host, then the rest by
  * number — the same order the deploy's `dependsOn` chain walks.
  */
-const numbered = (label: string): number | null => {
-  const suffix = label.startsWith(NAME_PATTERN) ? label.slice(NAME_PATTERN.length) : label
-  if (suffix === 'default') return 0
+const numbered = (label: string, prefix: string): number | null => {
+  if (label === prefix) return 0
+  if (!label.startsWith(`${prefix}-`)) return null
+  const suffix = label.slice(prefix.length + 1)
   return /^[0-9]+$/.test(suffix) ? Number(suffix) : null
 }
 
-export const compareHosts = (left: Host, right: Host): number => {
-  const [a, b] = [numbered(left.label), numbered(right.label)]
+/** The comparator for one stage's fleet, which is the only fleet it explains. */
+export const compareHostsIn = (prefix: string) => (left: Host, right: Host): number => {
+  const [a, b] = [numbered(left.label, prefix), numbered(right.label, prefix)]
   // A host neither pattern explains — renamed by hand, or from another fleet —
   // goes last, in its own stable order, rather than jumping the queue.
   if (a === null || b === null) {
@@ -111,14 +115,14 @@ export const compareHosts = (left: Host, right: Host): number => {
 }
 
 /** Every running runner in the stage's region, in a stable order. */
-const awsHosts = (region: string, run: RunCommand): Host[] => {
+const awsHosts = (region: string, run: RunCommand, prefix: string): Host[] => {
   const listed = run('aws', [
     'ec2',
     'describe-instances',
     '--region',
     region,
     '--filters',
-    `Name=tag:Name,Values=${NAME_PATTERN}*`,
+    `Name=tag:Name,Values=${prefix}*`,
     'Name=instance-state-name,Values=running',
     '--query',
     'Reservations[].Instances[].[InstanceId,Tags[?Key==`Name`].Value|[0]]',
@@ -131,17 +135,27 @@ const awsHosts = (region: string, run: RunCommand): Host[] => {
     .map((line) => line.trim().split(/\s+/))
     .filter(([id]) => id && id !== 'None')
     .map(([target, label]) => ({ target: target as string, label: label ?? (target as string) }))
-    .sort(compareHosts)
+    .sort(compareHostsIn(prefix))
 }
 
-const gcpHosts = ({ project, zone, run }: { project: string; zone: string; run: RunCommand }): Host[] => {
+const gcpHosts = ({
+  project,
+  zone,
+  run,
+  prefix,
+}: {
+  project: string
+  zone: string
+  run: RunCommand
+  prefix: string
+}): Host[] => {
   const listed = run('gcloud', [
     'compute',
     'instances',
     'list',
     `--project=${project}`,
     `--zones=${zone}`,
-    `--filter=name~^${NAME_PATTERN} AND status=RUNNING`,
+    `--filter=name~^${prefix} AND status=RUNNING`,
     '--format=value(name)',
   ])
   if (!listed.ok) throw new RunnerUpdateError(`could not list the fleet: ${listed.stderr || '(no stderr)'}`)
@@ -151,7 +165,7 @@ const gcpHosts = ({ project, zone, run }: { project: string; zone: string; run: 
     .filter(Boolean)
     // The name *is* the target on this cloud: `gcloud compute ssh` takes it.
     .map((name) => ({ target: name, label: name }))
-    .sort(compareHosts)
+    .sort(compareHostsIn(prefix))
 }
 
 /** The subset an operator named, or all of them. Naming one that is not there is a mistake, not a filter. */
@@ -244,10 +258,16 @@ export const updateRunners = async ({
   const { env: credentials } = await home.identity.childEnvironment()
   const run = injectedRun ?? spawnWith({ ...environment, ...credentials })
 
+  const prefix = runnerNamePrefix({ app: config.app, stage: scope.stage as string })
   const hosts = selected(
     home.identity.home === 'aws'
-      ? awsHosts(scope.region as string, run)
-      : gcpHosts({ project: scope.project as string, zone: zoneIn(scope.region as string, scope.zone ?? null), run }),
+      ? awsHosts(scope.region as string, run, prefix)
+      : gcpHosts({
+          project: scope.project as string,
+          zone: zoneIn(scope.region as string, scope.zone ?? null),
+          run,
+          prefix,
+        }),
     named,
   )
   if (hosts.length === 0) throw new RunnerUpdateError(`no running runner in ${config.app}/${scope.stage}`)

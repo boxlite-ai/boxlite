@@ -23,6 +23,7 @@
 import { apiEnvironmentFrom } from './api-environment.ts'
 import { OTEL_GROUP, PROXY_GROUP, RUNNER_GROUP, serviceSecretsFrom, splitServiceChannels, type GroupDeclaration } from './env.ts'
 import type { RunnerSlot } from '../stack/runners.ts'
+import { runnerNameFor } from '../stack/runners.ts'
 import type { Cloud } from 'mstage/config'
 
 export class StackEnvError extends Error {
@@ -56,7 +57,15 @@ const RUNNER_NAME = /^[a-zA-Z0-9_.-]{2,255}$/
  * on and what an existing stage's state already calls its first host, so
  * renaming it would replace a machine rather than update one.
  */
-const fleetFrom = (environment: NodeJS.ProcessEnv): RunnerSlot[] => {
+const fleetFrom = ({
+  environment,
+  app,
+  stage,
+}: {
+  environment: NodeJS.ProcessEnv
+  app: string
+  stage: string
+}): RunnerSlot[] => {
   const raw = optional(environment, 'RUNNERS') ?? '1'
   if (!/^[1-9][0-9]*$/.test(raw) || Number(raw) > MAX_RUNNERS) {
     throw new StackEnvError(`RUNNERS must be a whole number from 1 to ${MAX_RUNNERS}; got ${JSON.stringify(raw)}`)
@@ -70,10 +79,10 @@ const fleetFrom = (environment: NodeJS.ProcessEnv): RunnerSlot[] => {
   return Array.from({ length: Number(raw) }, (_, offset) => {
     const index = offset + 1
     return index === 1
-      ? { resourceName: 'Runner', nameTag: 'boxlite-runner-default', controlPlaneRunnerName: defaultName }
+      ? { resourceName: 'Runner', nameTag: runnerNameFor({ app, stage, index }), controlPlaneRunnerName: defaultName }
       : {
           resourceName: `Runner-runner-${index}`,
-          nameTag: `boxlite-runner-${index}`,
+          nameTag: runnerNameFor({ app, stage, index }),
           controlPlaneRunnerName: `runner-${index}`,
         }
   })
@@ -214,6 +223,7 @@ const channels = ({
 export const readStackEnvironment = ({
   environment,
   declaration,
+  app,
   stage,
   region,
   home,
@@ -221,6 +231,8 @@ export const readStackEnvironment = ({
   environment: NodeJS.ProcessEnv
   /** Where `env.selectGroup` is declared: which keys are each service's own. */
   declaration: GroupDeclaration
+  /** The app segment every resource name carries. See `runnerNamePrefix`. */
+  app: string
   stage: string
   region: string
   /** Which cloud's secret store an address in `env.selectGroup.secret` names. */
@@ -245,7 +257,7 @@ export const readStackEnvironment = ({
     // `stack/mail.ts`. An empty string is the same answer, spelled by a store
     // that holds the key with nothing in it.
     senderDomain: optional(environment, 'MAIL_DOMAIN'),
-    runnerFleet: fleetFrom(environment),
+    runnerFleet: fleetFrom({ environment, app, stage }),
     managedClickHouse: managedClickHouseFrom(environment),
     dnsZoneId: required(environment, 'CLOUDFLARE_ZONE_ID', 'every public record this stage writes goes into it'),
     mailRelayHost: optional(environment, 'MAIL_RELAY_HOST'),

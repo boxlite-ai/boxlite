@@ -64,7 +64,7 @@ const inputs = (overrides: Partial<StackInputs> = {}): StackInputs => ({
     source: 'release',
     identity: '0.10.0',
   },
-  runnerFleet: [{ resourceName: 'Runner', nameTag: 'boxlite-runner-default', controlPlaneRunnerName: 'default' }],
+  runnerFleet: [{ resourceName: 'Runner', nameTag: 'boxlite-app-dev-runner', controlPlaneRunnerName: 'default' }],
   apiEnvironment: {},
   apiSecrets: {},
   proxyEnvironment: {},
@@ -89,10 +89,10 @@ const inputs = (overrides: Partial<StackInputs> = {}): StackInputs => ({
 const fleetOf = (...names: string[]) =>
   names.map((controlPlaneRunnerName, index) =>
     index === 0
-      ? { resourceName: 'Runner', nameTag: 'boxlite-runner-default', controlPlaneRunnerName }
+      ? { resourceName: 'Runner', nameTag: 'boxlite-app-dev-runner', controlPlaneRunnerName }
       : {
           resourceName: `Runner-runner-${index + 1}`,
-          nameTag: `boxlite-runner-${index + 1}`,
+          nameTag: `boxlite-app-dev-runner-${index + 1}`,
           controlPlaneRunnerName,
         },
   )

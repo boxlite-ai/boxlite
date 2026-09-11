@@ -209,6 +209,7 @@ export const gcpProgram =
         optional: stageConfig.envOptional,
         where: stageConfig.path,
       },
+      app,
       stage,
       region,
       home: 'gcp',

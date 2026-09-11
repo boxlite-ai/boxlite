@@ -24,7 +24,7 @@ const complete = {
 }
 
 const read = (environment: Record<string, string | undefined>) =>
-  readStackEnvironment({ environment, declaration, stage: 'dev', region: 'ap-southeast-1', home: 'aws' })
+  readStackEnvironment({ environment, declaration, app: 'boxlite-app', stage: 'dev', region: 'ap-southeast-1', home: 'aws' })
 
 test('a complete environment resolves everything one deploy decides', () => {
   const resolved = read(complete)
@@ -33,7 +33,9 @@ test('a complete environment resolves everything one deploy decides', () => {
   assert.equal(resolved.proxyProtocol, 'http', 'a default, because the hop is inside the network')
   assert.equal(resolved.senderDomain, null, 'a stage that names none sends no mail')
   assert.deepEqual(resolved.runnerFleet, [
-    { resourceName: 'Runner', nameTag: 'boxlite-runner-default', controlPlaneRunnerName: 'default' },
+    // `<app>-<stage>-runner`, the same shape every other resource carries: a
+    // name without the stage cannot be deployed twice into one project.
+    { resourceName: 'Runner', nameTag: 'boxlite-app-dev-runner', controlPlaneRunnerName: 'default' },
   ])
   assert.deepEqual(resolved.proxySecrets, {})
   assert.deepEqual(resolved.proxyEnvironment, { PROXY_API_KEY: 'proxy-key' })
