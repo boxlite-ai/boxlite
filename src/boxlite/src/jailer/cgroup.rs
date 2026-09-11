@@ -383,86 +383,21 @@ impl From<&ResourceLimits> for CgroupConfig {
 /// This function is designed to be called from a `pre_exec` hook, which runs
 /// after `fork()` but before `exec()`. Only async-signal-safe operations are
 /// allowed in this context.
+/// Join a process into the box's cgroup by writing its PID to `cgroup.procs`.
 ///
-/// # Safety
-///
-/// This function only uses async-signal-safe syscalls (open, write, close, getpid).
-/// Do NOT add:
-/// - Logging (tracing, println)
-/// - Memory allocation (Box, Vec, String)
-/// - Mutex operations
-///
-/// # Arguments
-/// * `cgroup_procs_path` - Pre-computed path to cgroup.procs file (as null-terminated C string)
-///
-/// # Returns
-/// * `Ok(())` - Process added to cgroup
-/// * `Err(errno)` - Failed to add process
+/// Called from the parent process after `spawn()`, so tracing and allocation
+/// are available. Returns an error if the cgroup directory was not created
+/// (setup failed or cgroup v2 unavailable) or if the write fails.
 #[cfg(target_os = "linux")]
-pub fn add_self_to_cgroup_raw(cgroup_procs_path: &std::ffi::CStr) -> Result<(), i32> {
-    // Get current PID
-    let pid = unsafe { libc::getpid() };
-
-    // Format PID as string (async-signal-safe: stack buffer, no allocation)
-    let mut pid_buf = [0u8; 16];
-    let pid_len = {
-        // Manual formatting to avoid write! which might allocate
-        let mut n = pid as u32;
-        let mut len = 0;
-        let mut temp = [0u8; 16];
-
-        // Convert number to string (reverse order)
-        if n == 0 {
-            temp[0] = b'0';
-            len = 1;
-        } else {
-            while n > 0 {
-                temp[len] = b'0' + (n % 10) as u8;
-                n /= 10;
-                len += 1;
-            }
-        }
-
-        // Reverse into pid_buf
-        for i in 0..len {
-            pid_buf[i] = temp[len - 1 - i];
-        }
-        pid_buf[len] = b'\n';
-        len + 1
-    };
-
-    // Open cgroup.procs file
-    let fd = unsafe { libc::open(cgroup_procs_path.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) };
-
-    if fd < 0 {
-        return Err(common::get_errno());
-    }
-
-    // Write PID to file
-    let result = unsafe { libc::write(fd, pid_buf.as_ptr() as *const libc::c_void, pid_len) };
-
-    // Close file
-    unsafe { libc::close(fd) };
-
-    if result < 0 {
-        return Err(common::get_errno());
-    }
-
-    Ok(())
-}
-
-/// Build the cgroup.procs path for a box.
-///
-/// Returns a CString that can be passed to `add_self_to_cgroup_raw`.
-/// This should be called in the parent process before spawning.
-#[cfg(target_os = "linux")]
-pub fn build_cgroup_procs_path(box_id: &str) -> Option<std::ffi::CString> {
-    if !is_cgroup_v2_available() {
-        return None;
-    }
-
+pub fn join_cgroup(box_id: &str, pid: u32) -> Result<(), std::io::Error> {
     let path = cgroup_path(box_id).join("cgroup.procs");
-    std::ffi::CString::new(path.to_string_lossy().as_bytes()).ok()
+    if !path.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "cgroup directory was not created (setup may have failed)",
+        ));
+    }
+    fs::write(&path, format!("{pid}\n"))
 }
 
 #[cfg(test)]
