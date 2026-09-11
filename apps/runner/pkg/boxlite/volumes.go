@@ -370,6 +370,15 @@ const (
 	volumeBackendGCS = "gcs"
 )
 
+// The permission bits both mounts present. Paired with allow_other, they are
+// what lets a process other than the mounting one use the mount. The two
+// backends carry the same setting, so the literals live here rather than once
+// per backend where they could drift apart.
+const (
+	volumeFileMode = "0666"
+	volumeDirMode  = "0777"
+)
+
 // mountSpec is one backend's mount invocation. Keeping the binary, its argv
 // and its credential environment together is what lets wrapMountCmd stay
 // backend-agnostic.
@@ -390,7 +399,7 @@ func (c *Client) getMountCmd(ctx context.Context, volume string, path string) *e
 // injected only when configured: a runner host sets none of them, so mount-s3
 // falls through to the EC2 instance role.
 func (c *Client) mountS3Spec(bucket string, path string) mountSpec {
-	args := []string{"--allow-other", "--allow-delete", "--allow-overwrite", "--file-mode", "0666", "--dir-mode", "0777"}
+	args := []string{"--allow-other", "--allow-delete", "--allow-overwrite", "--file-mode", volumeFileMode, "--dir-mode", volumeDirMode}
 	args = append(args, bucket, path)
 
 	var envVars []string
@@ -434,8 +443,8 @@ func gcsfuseMountSpec(bucket string, path string) mountSpec {
 		bin: "gcsfuse",
 		args: []string{
 			"-o", "allow_other",
-			"--file-mode", "0666",
-			"--dir-mode", "0777",
+			"--file-mode", volumeFileMode,
+			"--dir-mode", volumeDirMode,
 			"--implicit-dirs",
 			"--metadata-cache-ttl-secs", "0",
 			bucket, path,
