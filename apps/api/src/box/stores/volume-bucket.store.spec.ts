@@ -131,12 +131,19 @@ describe('GCS volume bucket store', () => {
     expect(mockGetAccessToken).toHaveBeenCalled()
   })
 
-  it('creates the bucket in the configured location with uniform access', async () => {
+  // Soft delete is the one that has to be asked for: GCS applies a seven-day
+  // retention to new buckets by default, so omitting the policy leaves a
+  // deleted volume recoverable and billable after the state machine has
+  // reported DELETED. Setting it on the create call is what stops a volume
+  // bucket from ever existing with the default, so the whole argument is
+  // pinned rather than just the location.
+  it('creates the bucket in the configured location, with uniform access and no soft delete', async () => {
     await buildStore(gcsConfig).create('boxlite-volume-abc', {})
 
     expect(mockCreateBucket).toHaveBeenCalledWith('boxlite-volume-abc', {
       location: 'us-central1',
       iamConfiguration: { uniformBucketLevelAccess: { enabled: true } },
+      softDeletePolicy: { retentionDurationSeconds: '0' },
     })
   })
 

@@ -184,6 +184,14 @@ class GcsVolumeBucketStore implements VolumeBucketStore {
       // Volume buckets are private platform storage; uniform access removes
       // per-object ACLs as a way to widen that by accident.
       iamConfiguration: { uniformBucketLevelAccess: { enabled: true } },
+      // GCS soft-deletes buckets and objects for seven days by default, so a
+      // volume the user deleted would stay recoverable and billable long after
+      // the state machine reports DELETED. S3 has no equivalent, and the
+      // deletion a user asks for is meant to be the real one. 0 is the
+      // documented disable value; every other accepted value is 7 to 90 days.
+      // A string because that is the wire form the JSON API documents for this
+      // field, and the client passes bucket metadata through untouched.
+      softDeletePolicy: { retentionDurationSeconds: '0' },
     })
     await this.storage.bucket(bucket).setLabels(toGcsLabels(labels), {})
   }
