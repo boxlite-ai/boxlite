@@ -754,7 +754,7 @@ pub enum NetworkSpec {
 }
 ```
 
-`allow_net` supports exact hosts, wildcard hosts, IPs, and CIDRs, and restricts both TCP and UDP egress. Hostname rules rely on TLS SNI / HTTP Host inspection, which only TCP carries, so an `allow_net` holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP open. `Disabled` removes the guest network interface entirely.
+`allow_net` supports exact hosts, wildcard hosts, IPs, and CIDRs, and restricts both TCP and UDP egress. Hostname rules rely on TLS SNI / HTTP Host inspection, which only TCP carries, so an `allow_net` holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP open. `Disabled` removes the guest network interface entirely. Exact hosts named by a configured secret join a non-empty allowlist automatically, so a credential's host needs no second entry; they do not join an empty one, which already means full access, and a wildcard `Secret.hosts` entry is not merged (its matching is narrower than an allowlist wildcard) so it still needs its own rule. `box.info()` reports the merged result as `network.outbound.effective_allow_net`.
 
 The inbound direction — whether services the box exposes are reachable from
 outside it — is the sibling field `BoxOptions::inbound_network`, which reuses

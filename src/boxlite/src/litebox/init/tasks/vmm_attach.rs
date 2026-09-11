@@ -37,8 +37,10 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
             let ctx = ctx.lock().await;
             // Reattach still owns a control backend for the box's live gvproxy.
             let network = match &ctx.config.options.network {
-                NetworkSpec::Enabled { allow_net } => Some((
-                    allow_net.clone(),
+                // Same effective policy as the spawn path (vmm_spawn.rs): one
+                // rule, computed the same way on both, so the two cannot drift.
+                NetworkSpec::Enabled { .. } => Some((
+                    ctx.config.options.effective_allow_net(),
                     ctx.config.options.secrets.clone(),
                     ctx.config.options.advanced.network_rate_limit,
                 )),

@@ -42,6 +42,12 @@ type PublishedPort struct {
 type OutboundNetworkInfo struct {
 	Mode     NetworkMode
 	AllowNet []string
+	// EffectiveAllowNet is the allowlist actually enforced: AllowNet plus each
+	// exact hostname named by a configured secret. Entries past AllowNet are
+	// the secret-derived ones. Empty means unrestricted, exactly as for
+	// AllowNet. Wildcard and address entries in a secret's Hosts list never
+	// join, so those still need their own rule.
+	EffectiveAllowNet []string
 }
 
 // InboundNetworkInfo is the network configuration for inbound
@@ -234,31 +240,36 @@ func portProtocolFromCValue(protocol uint32) PortProtocol {
 	}
 }
 
-// cOutboundNetworkInfoToGo converts a C outbound network struct to Go.
-func cOutboundNetworkInfoToGo(direction C.COutboundNetworkInfo) OutboundNetworkInfo {
-	allowNet := make([]string, 0, int(direction.allow_net_count))
-	if direction.allow_net != nil && direction.allow_net_count > 0 {
-		for _, host := range unsafe.Slice(direction.allow_net, int(direction.allow_net_count)) {
-			allowNet = append(allowNet, cString(host))
+// cHostListToGo copies a C string array of hostnames into a Go slice. The
+// result is always non-nil so callers can compare it with reflect.DeepEqual
+// against an empty literal.
+func cHostListToGo(hosts **C.char, count C.int) []string {
+	out := make([]string, 0, int(count))
+	if hosts != nil && count > 0 {
+		for _, host := range unsafe.Slice(hosts, int(count)) {
+			out = append(out, cString(host))
 		}
 	}
+	return out
+}
+
+// cOutboundNetworkInfoToGo converts a C outbound network struct to Go.
+func cOutboundNetworkInfoToGo(direction C.COutboundNetworkInfo) OutboundNetworkInfo {
 	return OutboundNetworkInfo{
 		Mode:     networkModeFromCValue(direction.mode),
-		AllowNet: allowNet,
+		AllowNet: cHostListToGo(direction.allow_net, direction.allow_net_count),
+		EffectiveAllowNet: cHostListToGo(
+			direction.effective_allow_net,
+			direction.effective_allow_net_count,
+		),
 	}
 }
 
 // cInboundNetworkInfoToGo converts a C inbound network struct to Go.
 func cInboundNetworkInfoToGo(direction C.CInboundNetworkInfo) InboundNetworkInfo {
-	allowNet := make([]string, 0, int(direction.allow_net_count))
-	if direction.allow_net != nil && direction.allow_net_count > 0 {
-		for _, host := range unsafe.Slice(direction.allow_net, int(direction.allow_net_count)) {
-			allowNet = append(allowNet, cString(host))
-		}
-	}
 	return InboundNetworkInfo{
 		Mode:     networkModeFromCValue(direction.mode),
-		AllowNet: allowNet,
+		AllowNet: cHostListToGo(direction.allow_net, direction.allow_net_count),
 	}
 }
 
