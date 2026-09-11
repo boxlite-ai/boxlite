@@ -65,26 +65,29 @@ function PageBanner({ className, children, ...props }: ComponentProps<'div'>) {
   )
 }
 
-function PageContent({ className, size = 'default', ...props }: ComponentProps<'main'> & { size?: PageSize }) {
+function DashboardBannerSlot() {
   return (
-    <>
-      <PageBanner>
-        <BannerStack bannerClassName={cn({ 'max-w-5xl mx-auto': size === 'default' })} />
-      </PageBanner>
-      <main
-        className={cn(
-          'flex w-full flex-col gap-4 px-4 pb-8 sm:px-5 2xl:px-0',
-          {
-            'mx-auto max-w-[960px]': size === 'default',
-            'mx-auto max-w-[1040px]': size === 'content',
-            'mx-auto max-w-[1440px]': size === 'full',
-          },
-          className,
-        )}
-        {...props}
-      />
-    </>
+    <PageBanner>
+      <BannerStack />
+    </PageBanner>
   )
 }
 
-export { PageContent, PageDescription, PageHeader, PageLayout, PageTitle }
+function PageContent({ className, size = 'default', ...props }: ComponentProps<'main'> & { size?: PageSize }) {
+  return (
+    <main
+      className={cn(
+        'flex w-full flex-col gap-4 px-4 pb-8 sm:px-5 2xl:px-0',
+        {
+          'mx-auto max-w-[960px]': size === 'default',
+          'mx-auto max-w-[1040px]': size === 'content',
+          'mx-auto max-w-[1440px]': size === 'full',
+        },
+        className,
+      )}
+      {...props}
+    />
+  )
+}
+
+export { DashboardBannerSlot, PageContent, PageDescription, PageHeader, PageLayout, PageTitle }

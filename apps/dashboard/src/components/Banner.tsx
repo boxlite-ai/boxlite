@@ -55,6 +55,7 @@ const bannerVariants = cva('relative overflow-hidden backdrop-blur-xl border-y w
 interface BannerAction {
   label: string
   onClick: () => void
+  disabled?: boolean
 }
 
 interface BannerNotification {
@@ -191,6 +192,7 @@ export const Banner = ({
             <button
               type="button"
               onClick={action.onClick}
+              disabled={action.disabled}
               className="text-sm font-medium underline-offset-4 underline row-[2] sm:row-[1] col-[2] sm:col-[3] justify-self-start"
             >
               {action.label}
