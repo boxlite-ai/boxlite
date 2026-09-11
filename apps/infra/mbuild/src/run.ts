@@ -26,7 +26,10 @@ export const run = (
   echoTo: (chunk: string) => void = toStandardError,
 ): Promise<RunResult> =>
   new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+    // `cwd` only where a command has no flag for the directory it reads: npm
+    // takes `--prefix`, yarn takes neither that nor a working `--cwd` under
+    // corepack, and the version it resolves depends on where it is launched.
+    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], ...(options.cwd ? { cwd: options.cwd } : {}) })
     let stdout = ''
     let stderr = ''
     // Decoded per stream rather than per chunk: a docker build writes UTF-8,

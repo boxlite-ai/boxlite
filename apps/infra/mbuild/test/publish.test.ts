@@ -11,6 +11,7 @@ import {
   ScanRefusedError,
   verifyPublished,
   type Run,
+  type RunOptions,
   type RunResult,
 } from '../src/publish.ts'
 
@@ -23,10 +24,19 @@ const ecrStage = (repository: string, scan: unknown = SCAN) => ({
 })
 
 /** Both halves, as `loadBuildConfig` would hand them over. */
-const declare = ({ artifacts, stages }: { artifacts: Record<string, unknown>; stages: Record<string, unknown> }) =>
+const declare = ({
+  artifacts,
+  stages,
+  audit,
+}: {
+  artifacts: Record<string, unknown>
+  stages: Record<string, unknown>
+  /** Omitted by every repository that audits npm at its own root. */
+  audit?: Record<string, unknown>
+}) =>
   parseBuildConfig({
     basePath: '/repo/apps/infra/mstage.env.json',
-    base: JSON.stringify({ root: '../..', artifacts }),
+    base: JSON.stringify({ root: '../..', artifacts, ...(audit ? { audit } : {}) }),
     stagePath: '/repo/apps/infra/.mstage.config.json',
     stages: JSON.stringify({ stages }),
   })
@@ -274,6 +284,38 @@ test('the dependencies that ship are audited once, before anything is built', as
   assert.ok(commands[audit]!.includes('--audit-level=high'), commands[audit])
   assert.ok(commands[audit]!.includes('--omit=dev'), 'a test runner advisory is not in the image')
   assert.ok(commands[audit]!.includes('--prefix /repo'), 'the audit must read the repository, not the cwd')
+})
+
+test('a repository whose lockfile is yarn is audited with yarn, in the directory holding it', async () => {
+  /*
+   * `npm --prefix <root> audit` is only an audit where the root is an npm
+   * workspace. Here it is not — the images build from `apps/`, locked by Yarn 4
+   * — so that command exits ENOLOCK and the gate can never pass, which is the
+   * same as no gate at all once someone works around it.
+   *
+   * yarn takes no directory flag that survives corepack, and corepack resolves
+   * the version from where it is launched, so the directory has to be the
+   * working one rather than an argument.
+   */
+  const yarnConfig = declare({
+    artifacts: { api: ARTIFACTS.api },
+    stages: { dev: ecrStage('boxlite-backoffice-dev') },
+    audit: { directory: 'apps', manager: 'yarn' },
+  })
+  const probe = registryDouble()
+  const seen: { command: string; args: string[]; options?: RunOptions }[] = []
+  const run: Run = async (command, args, options) => {
+    seen.push({ command, args, options })
+    return probe.run(command, args, options)
+  }
+  await publish({ config: yarnConfig, stage: 'dev', registry: dev, tag: SHA, run, log })
+
+  const audits = seen.filter((call) => call.args.includes('audit'))
+  assert.equal(audits.length, 1, `audited ${audits.length} times`)
+  assert.equal(audits[0]!.command, 'corepack', 'the yarn on a PATH ignores the repository’s packageManager pin')
+  assert.deepEqual(audits[0]!.args, ['yarn', 'npm', 'audit', '--severity', 'high', '--environment', 'production'])
+  assert.equal(audits[0]!.options?.cwd, '/repo/apps', 'the audit must read the workspace that ships')
+  assert.ok(!seen.some((call) => call.command === 'npm'), 'npm cannot read a yarn lockfile')
 })
 
 test('an advisory of high severity stops the publish before it builds', async () => {
@@ -830,6 +872,17 @@ test('the base file resolves to Dockerfiles that exist', async () => {
     assert.ok(existsSync(join(real.repository, dockerfile)), `${artifact}: ${dockerfile}`)
     assert.ok(existsSync(join(real.repository, context)), `${artifact} context: ${context}`)
   }
+})
+
+test('the base file points the audit at a lockfile the declared manager can read', async () => {
+  // Not a fixture, for the same reason as the test above: the declared
+  // directory and the declared manager have to agree with what is on disk, or
+  // the gate exits "could not audit" and blocks every publish.
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const real = parseBase(path.pathname, readFileSync(path, 'utf8'))
+  const lockfile = { npm: 'package-lock.json', yarn: 'yarn.lock' }[real.audit.manager]
+  const declared = join(real.audit.directory, lockfile)
+  assert.ok(existsSync(join(real.repository, declared)), `the ${real.audit.manager} audit reads ${declared}`)
 })
 
 test('a config that does not say where the repository is refuses to load', async () => {

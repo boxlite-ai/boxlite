@@ -24,9 +24,9 @@
  * testable without a registry, a daemon or credentials.
  */
 
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import type { BuildConfig, ScanPolicy, ScanSeverity } from './config.ts'
+import type { AuditConfig, BuildConfig, ScanPolicy, ScanSeverity } from './config.ts'
 import { addressFor, assertTag, type Registry } from './address.ts'
 
 export class PublishError extends Error {
@@ -58,7 +58,7 @@ export type RunResult = { code: number; stdout: string; stderr: string }
  * streams output to the log, and is set only for the commands that take
  * minutes — elsewhere the output is a password or a document to parse.
  */
-export type RunOptions = { stdin?: string; echo?: boolean }
+export type RunOptions = { stdin?: string; echo?: boolean; cwd?: string }
 export type Run = (command: string, args: string[], options?: RunOptions) => Promise<RunResult>
 
 /** Time, injected so a test spends a scan's budget without spending the time. */
@@ -489,12 +489,38 @@ const assertNoBlockingFindings = async ({
 }
 
 /**
+ * The audit, spelled the way the declared package manager spells it.
+ *
+ * Two flags and nothing else: production dependencies only — the question is
+ * what ships, not what tested it — and high as the threshold that blocks.
+ *
+ * npm takes the directory as `--prefix`; yarn takes it as the directory it is
+ * launched in, and has to be reached through corepack, because the `yarn` on a
+ * PATH is whatever that host installed once and ignores the repository's own
+ * `packageManager` pin.
+ */
+const auditCommand = ({
+  audit,
+  repository,
+}: {
+  audit: AuditConfig
+  repository: string
+}): { file: string; args: string[]; options: RunOptions } => {
+  const directory = resolve(repository, audit.directory)
+  return audit.manager === 'yarn'
+    ? {
+        file: 'corepack',
+        args: ['yarn', 'npm', 'audit', '--severity', 'high', '--environment', 'production'],
+        options: { cwd: directory },
+      }
+    : { file: 'npm', args: ['--prefix', directory, 'audit', '--audit-level=high', '--omit=dev'], options: {} }
+}
+
+/**
  * What the images are allowed to carry, checked before one is built.
  *
- * `--omit=dev` because the question is what ships. `--audit-level=high` is the
- * threshold `ci.yml` already uses, and this is the second place that needs it:
- * a hand-dispatched publish names its own ref, so passing CI is not something
- * it can assume.
+ * A hand-dispatched publish names its own ref, so passing CI is not something
+ * it can assume — the rule belongs to the tool, and this is where it is applied.
  *
  * Called from inside the build loop, because whether anything needs building is
  * only knowable once the registry has answered `isPublished`. A doomed build
@@ -511,16 +537,16 @@ const assertNoHighSeverityAdvisories = async ({
   log: (line: string) => void
 }): Promise<void> => {
   log('Auditing the dependencies that ship')
-  // `--prefix` rather than a working directory: `RunOptions` carries no cwd.
+  const { file, args, options } = auditCommand({ audit: config.audit, repository: config.repository })
   // Not echoed — that is reserved for the commands that take minutes — so what
-  // npm said travels in the error instead.
-  const audited = await run('npm', ['--prefix', config.repository, 'audit', '--audit-level=high', '--omit=dev'])
+  // the audit said travels in the error instead.
+  const audited = await run(file, args, options)
   if (audited.code === 0) return
-  // Not "advisories were found": a non-zero exit is also how npm reports that
-  // it could not audit at all — no lockfile, no registry — and that arrives on
-  // stderr with stdout empty. Both streams, so the reason is always carried.
+  // Not "advisories were found": a non-zero exit is also how either tool reports
+  // that it could not audit at all — no lockfile, no registry — and that arrives
+  // on stderr with stdout empty. Both streams, so the reason is always carried.
   const said = [audited.stdout.trim(), audited.stderr.trim()].filter((stream) => stream.length > 0).join('\n')
-  throw new PublishError(`npm audit did not pass, so no image was built.\n${said}`)
+  throw new PublishError(`${config.audit.manager} audit did not pass, so no image was built.\n${said}`)
 }
 
 export const publish = async ({

@@ -72,6 +72,27 @@ export type ArtifactConfig = {
   context: string
 }
 
+/**
+ * Where the dependencies that ship are locked, and what locks them.
+ *
+ * Declared rather than assumed, because "the repository root is an npm
+ * workspace" is true of the repository mbuild was written in and false of this
+ * one: the images here build from `apps/`, whose lockfile is a Yarn 4 one, and
+ * the root holds no JavaScript lockfile at all. `npm audit` against it exits
+ * non-zero with ENOLOCK — a gate that can never pass, which is the same as no
+ * gate once someone routes around it.
+ *
+ * Absent means what it has always meant: npm, at the repository root.
+ */
+export type AuditConfig = {
+  /** Repository-relative directory holding the lockfile. */
+  directory: string
+  /** Which tool reads it. Nothing else can read the other's lockfile. */
+  manager: 'npm' | 'yarn'
+}
+
+const AUDIT_MANAGERS: AuditConfig['manager'][] = ['npm', 'yarn']
+
 /** Where one stage's artifacts are uploaded. The kind decides the address shape. */
 export type RegistryConfig = {
   kind: 'ecr' | 'artifact-registry'
@@ -123,6 +144,8 @@ export type BuildConfig = {
   repository: string
   /** The same everywhere: what is built does not depend on where it lands. */
   artifacts: Record<string, ArtifactConfig>
+  /** What the shipped dependency graph is audited with, and where. */
+  audit: AuditConfig
   stages: Record<string, StageConfig>
 }
 
@@ -212,6 +235,21 @@ const parseArtifacts = (raw: unknown, where: string): Record<string, ArtifactCon
     }
   }
   return parsed
+}
+
+const parseAudit = (raw: unknown, where: string): AuditConfig => {
+  // The default is the incumbent behaviour, so a repository that never declared
+  // one keeps auditing exactly as it did.
+  if (raw === undefined) return { directory: '.', manager: 'npm' }
+  const block = assertObject(raw, where)
+  assertKeys(block, ['directory', 'manager'], where)
+  if (!AUDIT_MANAGERS.includes(block.manager as AuditConfig['manager'])) {
+    throw new BuildConfigError(`${where}.manager must be one of ${AUDIT_MANAGERS.join(', ')}`)
+  }
+  return {
+    directory: assertContainedPath(block.directory, `${where}.directory`),
+    manager: block.manager as AuditConfig['manager'],
+  }
 }
 
 const parseRegistry = (raw: unknown, where: string): RegistryConfig => {
@@ -305,12 +343,19 @@ const documentIn = (path: string, contents: string): Record<string, unknown> => 
 export const parseBase = (
   path: string,
   contents: string,
-): Pick<BuildConfig, 'root' | 'repository' | 'artifacts'> => {
+): Pick<BuildConfig, 'root' | 'repository' | 'artifacts' | 'audit'> => {
   const root = documentIn(path, contents)
   // mstage owns the rest of this file, so its keys are borrowed rather than
   // refused — and `root` and `artifacts` are still demanded. `appShort` is
-  // mstage's too: the app abbreviated, for names with a length budget.
-  assertKeys(root, ['root', 'artifacts', 'app', 'appShort', 'env'], path, ['app', 'appShort', 'env'])
+  // mstage's too: the app abbreviated, for names with a length budget. `audit`
+  // is mbuild's own and travels in the same list only because it is optional:
+  // a repository that declares none is audited the way it always was.
+  assertKeys(root, ['root', 'artifacts', 'audit', 'app', 'appShort', 'env'], path, [
+    'audit',
+    'app',
+    'appShort',
+    'env',
+  ])
   if (typeof root.root !== 'string' || root.root.trim() === '') {
     throw new BuildConfigError(`${path}: "root" must name the repository root, relative to this file`)
   }
@@ -318,6 +363,7 @@ export const parseBase = (
     root: dirname(path),
     repository: resolve(dirname(path), root.root),
     artifacts: parseArtifacts(root.artifacts, `${path}: "artifacts"`),
+    audit: parseAudit(root.audit, `${path}: "audit"`),
   }
 }
 
