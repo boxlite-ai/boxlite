@@ -1,7 +1,7 @@
 //! High-level sandbox runtime structures.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crate::experimental::ExperimentalFeatures;
 use crate::litebox::LiteBox;
@@ -26,6 +26,20 @@ use crate::rest::runtime::RestRuntime;
 /// This runtime uses `BoxliteOptions::default()` for configuration.
 /// Most applications should use this instead of creating custom runtimes.
 static DEFAULT_RUNTIME: OnceLock<BoxliteRuntime> = OnceLock::new();
+
+/// Serializes default runtime initialization without caching initialization errors.
+static DEFAULT_RUNTIME_INIT_LOCK: Mutex<()> = Mutex::new(());
+
+/// Acquire exclusive access to default-runtime initialization.
+///
+/// A poisoned lock means an earlier initializer panicked. Its partially created
+/// runtime was never stored in [`DEFAULT_RUNTIME`], so the next caller may safely
+/// take the lock and retry initialization.
+fn lock_default_runtime_init() -> MutexGuard<'static, ()> {
+    DEFAULT_RUNTIME_INIT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// Flag to ensure atexit handler is only registered once.
 static ATEXIT_INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -163,6 +177,37 @@ impl BoxliteRuntime {
         Self::new(BoxliteOptions::default())
     }
 
+    /// Get or initialize the default global runtime without panicking.
+    ///
+    /// The first successful call stores one shared runtime and installs its exit
+    /// cleanup handlers. Initialization errors are returned without populating the
+    /// singleton, so a later caller can retry after correcting the underlying
+    /// condition.
+    pub fn default_runtime_with_result() -> BoxliteResult<&'static Self> {
+        let runtime: &BoxliteRuntime = match DEFAULT_RUNTIME.get() {
+            Some(runtime) => runtime,
+            None => {
+                let _init_lock: MutexGuard<'_, ()> = lock_default_runtime_init();
+
+                if DEFAULT_RUNTIME.get().is_none() {
+                    let runtime = Self::with_defaults()?;
+                    DEFAULT_RUNTIME.set(runtime).map_err(|_| {
+                        BoxliteError::Internal(
+                            "Default runtime was initialized concurrently.".into(),
+                        )
+                    })?;
+                }
+
+                DEFAULT_RUNTIME
+                    .get()
+                    .expect("default runtime must exist after successful initialization")
+            }
+        };
+
+        Self::install_default_runtime_shutdown_handlers(runtime);
+        Ok(runtime)
+    }
+
     /// Get or initialize the default global runtime with automatic signal handling.
     ///
     /// This runtime uses `BoxliteOptions::default()` for configuration.
@@ -192,11 +237,16 @@ impl BoxliteRuntime {
     /// let same_runtime = BoxliteRuntime::default_runtime();
     /// ```
     pub fn default_runtime() -> &'static Self {
-        let rt = DEFAULT_RUNTIME.get_or_init(|| {
-            Self::with_defaults()
-                .unwrap_or_else(|e| panic!("Failed to initialize BoxliteRuntime:\n\n{e}"))
-        });
+        Self::default_runtime_with_result()
+            .unwrap_or_else(|error| panic!("Failed to initialize BoxliteRuntime:\n\n{error}"))
+    }
 
+    /// Install the default runtime's normal-exit and signal cleanup handlers.
+    ///
+    /// The runtime is static and therefore never drops. Registering these handlers
+    /// after successful initialization ensures its boxes are shut down on normal
+    /// process exit, `SIGTERM`, or `SIGINT`.
+    fn install_default_runtime_shutdown_handlers(rt: &'static Self) {
         // Register atexit handler (once) for normal exit cleanup.
         // The default runtime is static (never drops), so Drop won't fire.
         // This covers normal process exit; signal handler covers SIGTERM/SIGINT.
@@ -216,8 +266,6 @@ impl BoxliteRuntime {
         install_signal_handler(move || async move {
             let _ = backend.shutdown(None).await;
         });
-
-        rt
     }
 
     /// Try to get the default runtime if it's been initialized.
@@ -269,6 +317,14 @@ impl BoxliteRuntime {
     /// }
     /// ```
     pub fn init_default_runtime(options: BoxliteOptions) -> BoxliteResult<()> {
+        let _init_lock = lock_default_runtime_init();
+
+        if DEFAULT_RUNTIME.get().is_some() {
+            return Err(BoxliteError::Internal(
+                "Default runtime already initialized. Call init_default_runtime() before any use of default_runtime().".into()
+            ));
+        }
+
         let runtime = Self::new(options)?;
         DEFAULT_RUNTIME
             .set(runtime)
@@ -547,7 +603,14 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
+    use std::process::Command;
     use tempfile::TempDir;
+
+    const DEFAULT_RUNTIME_SCHEMA_MISMATCH_CHILD: &str =
+        "BOXLITE_TEST_DEFAULT_RUNTIME_SCHEMA_MISMATCH_CHILD";
+    const INIT_DEFAULT_RUNTIME_ALREADY_INITIALIZED_CHILD: &str =
+        "BOXLITE_TEST_INIT_DEFAULT_RUNTIME_ALREADY_INITIALIZED_CHILD";
 
     fn local_runtime() -> (BoxliteRuntime, TempDir) {
         let temp_dir = TempDir::new_in("/tmp").expect("temp dir");
@@ -557,6 +620,129 @@ mod tests {
         })
         .expect("local runtime");
         (runtime, temp_dir)
+    }
+
+    #[test]
+    fn default_runtime_schema_mismatch_is_recoverable_and_retriable() {
+        if std::env::var_os(DEFAULT_RUNTIME_SCHEMA_MISMATCH_CHILD).is_some() {
+            let error = match BoxliteRuntime::default_runtime_with_result() {
+                Ok(_) => panic!("newer database schema must return an error"),
+                Err(error) => error,
+            };
+            let message = error.to_string();
+            assert!(
+                message.contains("Schema version mismatch"),
+                "unexpected error: {message}"
+            );
+            assert!(
+                message.contains("Upgrade this SDK to a compatible version"),
+                "unexpected error: {message}"
+            );
+            assert!(
+                message.contains("use a new BOXLITE_HOME"),
+                "unexpected error: {message}"
+            );
+            assert!(
+                message.contains("existing boxes, images, and caches will be unavailable"),
+                "unexpected error: {message}"
+            );
+
+            let home_dir = std::env::var_os("BOXLITE_HOME").expect("test home directory");
+            std::fs::remove_file(std::path::Path::new(&home_dir).join("db/boxlite.db"))
+                .expect("remove incompatible test database");
+            assert!(
+                BoxliteRuntime::default_runtime_with_result().is_ok(),
+                "a failed initialization must not be cached"
+            );
+            return;
+        }
+
+        let temp_dir = TempDir::new_in("/tmp").expect("temp dir");
+        let db_dir = temp_dir.path().join("db");
+        std::fs::create_dir_all(&db_dir).expect("create database directory");
+        let db_path = db_dir.join("boxlite.db");
+        let conn = Connection::open(&db_path).expect("open test database");
+        conn.execute_batch(
+            "
+            CREATE TABLE schema_version (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                version INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            ",
+        )
+        .expect("create schema version table");
+        let updated_at: String = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO schema_version (id, version, updated_at) VALUES (1, ?1, ?2)",
+            rusqlite::params![i32::MAX, updated_at],
+        )
+        .expect("seed newer schema version");
+        drop(conn);
+
+        let status = Command::new(std::env::current_exe().expect("current test executable"))
+            .args([
+                "--exact",
+                "runtime::core::tests::default_runtime_schema_mismatch_is_recoverable_and_retriable",
+                "--nocapture",
+            ])
+            .env(DEFAULT_RUNTIME_SCHEMA_MISMATCH_CHILD, "1")
+            .env("BOXLITE_HOME", temp_dir.path())
+            .status()
+            .expect("run isolated default-runtime test");
+
+        assert!(
+            status.success(),
+            "default runtime initialization must return the schema error instead of panicking"
+        );
+    }
+
+    #[test]
+    fn init_default_runtime_rejects_a_second_configuration_before_initializing_it() {
+        if std::env::var_os(INIT_DEFAULT_RUNTIME_ALREADY_INITIALIZED_CHILD).is_some() {
+            let temp_dir = TempDir::new_in("/tmp").expect("temp dir");
+            let initial_options = BoxliteOptions {
+                home_dir: temp_dir.path().join("initial-runtime"),
+                ..Default::default()
+            };
+            BoxliteRuntime::init_default_runtime(initial_options)
+                .expect("initialize default runtime");
+
+            let invalid_home_dir = temp_dir.path().join("not-a-directory");
+            std::fs::write(&invalid_home_dir, "not a directory")
+                .expect("create invalid runtime home path");
+            let second_options = BoxliteOptions {
+                home_dir: invalid_home_dir,
+                ..Default::default()
+            };
+
+            let error = match BoxliteRuntime::init_default_runtime(second_options) {
+                Ok(()) => panic!("second default runtime configuration must be rejected"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("Default runtime already initialized"),
+                "unexpected error: {error}"
+            );
+            return;
+        }
+
+        let status = Command::new(std::env::current_exe().expect("current test executable"))
+            .args([
+                "--exact",
+                "runtime::core::tests::init_default_runtime_rejects_a_second_configuration_before_initializing_it",
+                "--nocapture",
+            ])
+            .env(INIT_DEFAULT_RUNTIME_ALREADY_INITIALIZED_CHILD, "1")
+            .status()
+            .expect("run isolated init-default-runtime test");
+
+        assert!(
+            status.success(),
+            "second default runtime configuration must be rejected before initialization"
+        );
     }
 
     #[tokio::test]
