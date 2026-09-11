@@ -10,10 +10,13 @@
 //! - Cache lookup logic (ImageManager's responsibility)
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use oci_client::manifest::OciManifest;
 
 use crate::images::archive::LayerExtractor;
+use crate::images::parse_override;
 use crate::runtime::layout::ImageFilesystemLayout;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -283,6 +286,7 @@ impl ImageStorage {
         &self,
         digest: &str,
         expected_size: i64,
+        unsized_budget: UnsizedBlobBudget,
     ) -> BoxliteResult<StagedDownload> {
         // Extract expected hash from digest
         let expected_hash = digest
@@ -311,6 +315,7 @@ impl ImageStorage {
             self.layer_tarball_path(digest),
             expected_hash,
             expected_size,
+            unsized_budget,
             file,
         ))
     }
@@ -372,7 +377,11 @@ impl ImageStorage {
     /// Returns a StagedDownload handle that manages the temp file lifecycle.
     /// Use `staged.file()` to get the file for writing, then `staged.commit()`
     /// to verify and atomically move to final location.
-    pub async fn stage_config_download(&self, digest: &str) -> BoxliteResult<StagedDownload> {
+    pub async fn stage_config_download(
+        &self,
+        digest: &str,
+        unsized_budget: UnsizedBlobBudget,
+    ) -> BoxliteResult<StagedDownload> {
         // Extract expected hash from digest
         let expected_hash = digest
             .strip_prefix("sha256:")
@@ -411,7 +420,8 @@ impl ImageStorage {
             staged_path,
             config_path,
             expected_hash,
-            0, // Config size not tracked; skip size validation
+            0, // Config size not tracked; bounded by the pull's allowance
+            unsized_budget,
             file,
         ))
     }
@@ -457,29 +467,200 @@ impl ImageStorage {
 }
 
 // ============================================================================
+// DOWNLOAD BUDGET
+// ============================================================================
+
+/// Default allowance, per pull, for blobs whose manifest declares no usable
+/// size (`size <= 0`).
+///
+/// A blob with no declared size is anomalous: `size` is required in an OCI
+/// descriptor, and the only descriptor this code builds without one is a
+/// config blob — a few KB of JSON. So this is not a sizing bound for real
+/// content, it is the ceiling on how much a registry that lies about (or
+/// omits) sizes can write. Everything with a declared size is bounded by that
+/// declaration instead, so raising this does not help any legitimate image.
+///
+/// Shared across the blobs of one pull, so `N` unsized layers cannot multiply
+/// it. A bound, not a quota: the claim happens before the inner write is
+/// known to have landed, so a pull may spend slightly less than this and
+/// still be refused. That is the safe direction for a cap on untrusted
+/// input. Override via `BOXLITE_MAX_UNSIZED_BLOB_BYTES`.
+const DEFAULT_MAX_UNSIZED_BLOB_BYTES: u64 = 256 * 1024 * 1024; // 256 MiB
+
+fn max_unsized_blob_bytes() -> u64 {
+    static MAX: OnceLock<u64> = OnceLock::new();
+    *MAX.get_or_init(|| {
+        parse_override(
+            std::env::var("BOXLITE_MAX_UNSIZED_BLOB_BYTES").ok(),
+            DEFAULT_MAX_UNSIZED_BLOB_BYTES,
+        )
+    })
+}
+
+/// One pull's shared allowance for blobs that declare no size.
+///
+/// Cloned into every staged download of a pull, so the bound is on the pull
+/// rather than on each blob — the same scope as the decompression budget one
+/// layer down (`LayerExtractor`'s), and the reason a manifest full of
+/// `size: 0` layers cannot multiply its way past it.
+#[derive(Debug, Clone)]
+pub struct UnsizedBlobBudget {
+    remaining: Arc<AtomicU64>,
+    limit: u64,
+}
+
+impl UnsizedBlobBudget {
+    pub fn new() -> Self {
+        Self::with_limit(max_unsized_blob_bytes())
+    }
+
+    fn with_limit(limit: u64) -> Self {
+        Self {
+            remaining: Arc::new(AtomicU64::new(limit)),
+            limit,
+        }
+    }
+
+    /// Whether `bytes` more would fit.
+    ///
+    /// A read, never a claim. `poll_write` has to ask *before* handing the
+    /// buffer to the inner writer, but that writer may answer `Pending` or a
+    /// short count, and the caller then re-offers the same bytes — so a
+    /// balance debited here would be debited again on every retry, and the
+    /// allowance would run out far short of its stated size.
+    fn admits(&self, bytes: u64) -> bool {
+        self.remaining.load(Ordering::Acquire) >= bytes
+    }
+
+    /// Debit the bytes that actually landed.
+    ///
+    /// Two blobs of one pull can both pass [`Self::admits`] before either
+    /// charges, so the total may overshoot by at most one buffer per
+    /// concurrent writer. That is immaterial against an allowance this size,
+    /// and the alternative — holding the balance across an `await` — would
+    /// serialize the pull.
+    fn charge(&self, bytes: u64) {
+        let _ = self
+            .remaining
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                Some(left.saturating_sub(bytes))
+            });
+    }
+
+    /// What is left, for the tests that pin the accounting.
+    #[cfg(test)]
+    fn remaining(&self) -> u64 {
+        self.remaining.load(Ordering::Acquire)
+    }
+}
+
+impl Default for UnsizedBlobBudget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// How many bytes one staged download may write, and on whose authority —
+/// which decides what the breach error tells the operator.
+#[derive(Debug, Clone)]
+enum DownloadBudget {
+    /// The manifest declared a size. That declaration *is* the bound: going
+    /// past it means the registry is sending more than it described. It is
+    /// deliberately not clamped to any host-wide number — clamping would
+    /// refuse legitimately large layers, and the total a manifest may declare
+    /// is bounded up front instead, before a single layer is fetched
+    /// (`ImageStore::assert_declared_size_fits`).
+    Declared(u64),
+    /// No usable declared size. Bounded by the pull's shared allowance.
+    Unsized(UnsizedBlobBudget),
+}
+
+impl DownloadBudget {
+    /// `expected_size` is the manifest descriptor's size, `<= 0` for unknown.
+    fn for_blob(expected_size: i64, unsized_budget: UnsizedBlobBudget) -> Self {
+        match u64::try_from(expected_size) {
+            Ok(declared) if declared > 0 => Self::Declared(declared),
+            _ => Self::Unsized(unsized_budget),
+        }
+    }
+
+    /// Whether `bytes` more may be written.
+    fn admits(&self, already_written: u64, bytes: u64) -> bool {
+        match self {
+            Self::Declared(declared) => already_written + bytes <= *declared,
+            Self::Unsized(budget) => budget.admits(bytes),
+        }
+    }
+
+    /// Debit what landed. The declared bound needs no state — it compares
+    /// against `bytes_written`, which the writer already tracks.
+    fn charge(&self, bytes: u64) {
+        if let Self::Unsized(budget) = self {
+            budget.charge(bytes);
+        }
+    }
+
+    /// `ResourceExhausted` (HTTP 429), as the decompression cap does: a
+    /// deliberate limit on untrusted input, not a server-side failure.
+    fn breach_error(&self, digest: &str) -> BoxliteError {
+        match self {
+            Self::Declared(bytes) => BoxliteError::ResourceExhausted(format!(
+                "Blob {digest} streamed past the {bytes} bytes its manifest declares; \
+                 the registry is sending more data than it described."
+            )),
+            Self::Unsized(budget) => BoxliteError::ResourceExhausted(format!(
+                "Blob {digest} declares no size, and this pull has spent its \
+                 BOXLITE_MAX_UNSIZED_BLOB_BYTES allowance ({} bytes). A registry that \
+                 omits blob sizes cannot be bounded any other way; if this image is \
+                 legitimate, raise BOXLITE_MAX_UNSIZED_BLOB_BYTES.",
+                budget.limit
+            )),
+        }
+    }
+}
+
+// ============================================================================
 // HASHING WRITER
 // ============================================================================
 
-/// AsyncWrite wrapper that computes SHA256 of all bytes written through it.
+/// AsyncWrite wrapper that computes SHA256 of all bytes written through it
+/// and stops the stream at a byte budget.
 ///
 /// Feeds every successfully written byte through a SHA256 hasher, providing
 /// inline digest verification without requiring a post-download re-read.
+///
+/// The budget is enforced here rather than at `commit()` because `commit()`
+/// runs after the whole blob is already on disk — too late to matter when the
+/// point is to not write it.
 ///
 /// Compatible with `oci-client`'s `pull_blob` which requires `T: AsyncWrite + Unpin`.
 pub struct HashingWriter<W> {
     inner: W,
     hasher: sha2::Sha256,
     bytes_written: u64,
+    budget: DownloadBudget,
+    /// Set when a write was refused for exceeding [`Self::budget`]. The io
+    /// error that refusal returns reaches the caller wrapped in the registry
+    /// client's own error type, so the flag — not the message — is what the
+    /// caller matches on.
+    breached: bool,
 }
 
 impl<W> HashingWriter<W> {
-    pub fn new(inner: W) -> Self {
+    fn new(inner: W, budget: DownloadBudget) -> Self {
         use sha2::Digest;
         Self {
             inner,
             hasher: sha2::Sha256::new(),
             bytes_written: 0,
+            budget,
+            breached: false,
         }
+    }
+
+    /// The breach error for this writer, or `None` if it stayed in budget.
+    fn breach_error(&self, digest: &str) -> Option<BoxliteError> {
+        self.breached.then(|| self.budget.breach_error(digest))
     }
 
     /// Consume the writer and return (inner_writer, hex_hash, bytes_written).
@@ -498,8 +679,21 @@ impl<W: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for HashingWriter<W
     ) -> std::task::Poll<std::io::Result<usize>> {
         use sha2::Digest;
         let this = self.get_mut();
+        // Refuse the whole buffer rather than its fitting prefix: the file
+        // then never exceeds the budget by even a partial write, and the
+        // download is over either way.
+        if !this.budget.admits(this.bytes_written, buf.len() as u64) {
+            this.breached = true;
+            return std::task::Poll::Ready(Err(std::io::Error::other(format!(
+                "write of {} bytes would exceed this download's byte budget",
+                buf.len()
+            ))));
+        }
         match std::pin::Pin::new(&mut this.inner).poll_write(cx, buf) {
             std::task::Poll::Ready(Ok(n)) => {
+                // Charge what landed, not what was offered: `Pending` and
+                // short writes both send the same bytes back around.
+                this.budget.charge(n as u64);
                 // Only hash bytes that were actually written to the inner writer
                 this.hasher.update(&buf[..n]);
                 this.bytes_written += n as u64;
@@ -555,12 +749,16 @@ pub struct StagedDownload {
 }
 
 impl StagedDownload {
-    /// Create a new staged download
+    /// Create a new staged download.
+    ///
+    /// `unsized_budget` bounds the write when `expected_size` doesn't — see
+    /// [`DownloadBudget::for_blob`], the one place that rule lives.
     fn new(
         staged_path: PathBuf,
         final_path: PathBuf,
         expected_hash: String,
         expected_size: i64,
+        unsized_budget: UnsizedBlobBudget,
         file: tokio::fs::File,
     ) -> Self {
         Self {
@@ -568,8 +766,22 @@ impl StagedDownload {
             final_path,
             expected_hash,
             expected_size,
-            writer: Some(HashingWriter::new(file)),
+            writer: Some(HashingWriter::new(
+                file,
+                DownloadBudget::for_blob(expected_size, unsized_budget),
+            )),
         }
+    }
+
+    /// The error for a download that outgrew its byte budget, or `None`.
+    ///
+    /// Call it on the download-failed path *before* `abort()`: a breach is a
+    /// deliberate limit on untrusted input, not a transient fault, so the
+    /// caller must surface it instead of retrying the same bomb.
+    pub fn budget_error(&self) -> Option<BoxliteError> {
+        self.writer
+            .as_ref()?
+            .breach_error(&format!("sha256:{}", self.expected_hash))
     }
 
     /// Get mutable reference to the hashing writer for writing blob data.
@@ -815,7 +1027,7 @@ mod tests {
         let expected_hash = hex::encode(sha2::Sha256::digest(data));
 
         let buf = Vec::new();
-        let mut writer = HashingWriter::new(buf);
+        let mut writer = HashingWriter::new(buf, DownloadBudget::Declared(u64::MAX));
         writer.write_all(data).await.unwrap();
 
         let (inner, hash, bytes_written) = writer.finalize();
@@ -837,7 +1049,7 @@ mod tests {
         let hash = hex::encode(sha2::Sha256::digest(content));
         let digest = format!("sha256:{}", hash);
         let mut staged = store
-            .stage_layer_download(&digest, expected_size)
+            .stage_layer_download(&digest, expected_size, UnsizedBlobBudget::new())
             .await
             .unwrap();
         staged.file().write_all(content).await.unwrap();
@@ -858,17 +1070,21 @@ mod tests {
         );
     }
 
+    /// The *under*-run is what `commit()` still catches: a stream that stops
+    /// short of the declared size. The over-run no longer reaches `commit()`
+    /// at all — the writer refuses it mid-stream, see
+    /// `layer_download_stops_when_the_stream_passes_the_declared_size`.
     #[tokio::test]
-    async fn test_staged_download_commit_wrong_size() {
+    async fn test_staged_download_commit_short_of_declared_size() {
         let temp_dir = tempfile::tempdir().unwrap();
         let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
 
         let content = b"hello world";
-        // Expect 5 bytes but write 11
-        let staged = create_staged_with_content(&store, content, 5).await;
+        // Declare 20 bytes but write 11
+        let staged = create_staged_with_content(&store, content, 20).await;
         assert!(
             !staged.commit().await.unwrap(),
-            "commit should fail with wrong size"
+            "commit should fail when fewer bytes arrived than the manifest declared"
         );
     }
 
@@ -898,6 +1114,267 @@ mod tests {
             staged.commit().await.unwrap(),
             "commit should succeed when size<0 (skip validation)"
         );
+    }
+
+    // ========================================================================
+    // DOWNLOAD BUDGET
+    // ========================================================================
+
+    /// A blob whose manifest declares no usable size (`size: 0`) is bounded by
+    /// the pull's allowance — and bounded *while streaming*, not at
+    /// `commit()`: by then the bytes are already on the shared runner's disk,
+    /// which is the whole failure this bound exists to prevent.
+    #[tokio::test]
+    async fn unsized_blob_download_stops_when_the_allowance_is_spent() {
+        use tokio::io::AsyncWriteExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+
+        let mut staged = store
+            .stage_layer_download("sha256:bomb", 0, UnsizedBlobBudget::with_limit(16))
+            .await
+            .unwrap();
+        let staged_path = staged.staged_path().to_path_buf();
+
+        staged.file().write_all(&[0u8; 16]).await.unwrap();
+        staged.file().flush().await.unwrap();
+        staged
+            .file()
+            .write_all(&[0u8; 1])
+            .await
+            .expect_err("the byte past the allowance must be refused");
+
+        assert_eq!(
+            std::fs::metadata(&staged_path).unwrap().len(),
+            16,
+            "not one byte past the allowance may reach the disk"
+        );
+
+        let err = staged.budget_error().expect("breach must be reported");
+        assert!(
+            matches!(err, BoxliteError::ResourceExhausted(_)),
+            "a budget breach is a deliberate limit, not a storage fault: {err:?}"
+        );
+        assert!(
+            err.to_string().contains("BOXLITE_MAX_UNSIZED_BLOB_BYTES"),
+            "the error must name the override: {err}"
+        );
+
+        staged.abort().await;
+        assert!(
+            !staged_path.exists(),
+            "the partial download must not be left behind"
+        );
+    }
+
+    /// A writer that answers `Pending` once and then writes in short chunks —
+    /// which is what `tokio::fs::File` does: its blocking pool answers
+    /// `Pending` while busy, and it caps a single write at its buffer size.
+    /// `write_all` re-offers the same bytes after both, so an allowance
+    /// debited before the write lands is debited again on every retry.
+    struct ShortWriter {
+        pending_left: usize,
+        chunk: usize,
+        written: usize,
+    }
+
+    impl tokio::io::AsyncWrite for ShortWriter {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            if self.pending_left > 0 {
+                self.pending_left -= 1;
+                cx.waker().wake_by_ref();
+                return std::task::Poll::Pending;
+            }
+            let n = self.chunk.min(buf.len());
+            self.written += n;
+            std::task::Poll::Ready(Ok(n))
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    /// The allowance must be spent by bytes that landed, not by bytes that
+    /// were offered. Otherwise a retried or short write charges the same
+    /// bytes twice and a legitimate unsized blob is refused long before the
+    /// documented limit.
+    #[tokio::test]
+    async fn the_unsized_allowance_is_charged_once_per_byte_that_lands() {
+        use tokio::io::AsyncWriteExt;
+
+        let pull = UnsizedBlobBudget::with_limit(1_000);
+        let payload = vec![7u8; 100];
+        let mut writer = HashingWriter::new(
+            ShortWriter {
+                pending_left: 3,
+                chunk: 7,
+                written: 0,
+            },
+            DownloadBudget::Unsized(pull.clone()),
+        );
+
+        writer
+            .write_all(&payload)
+            .await
+            .expect("100 bytes fit inside a 1000-byte allowance");
+
+        let (inner, _, hashed) = writer.finalize();
+        assert_eq!(inner.written, 100, "every byte reached the inner writer");
+        assert_eq!(hashed, 100, "and every byte was hashed exactly once");
+        assert_eq!(
+            pull.remaining(),
+            900,
+            "the allowance is spent by what landed — 15 short writes and 3 \
+             pending answers must not charge more than the 100 bytes written"
+        );
+    }
+
+    /// The allowance belongs to the *pull*, not to each blob: a manifest full
+    /// of `size: 0` layers must not be able to multiply its way past it.
+    #[tokio::test]
+    async fn the_unsized_allowance_is_shared_across_one_pull() {
+        use tokio::io::AsyncWriteExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let pull = UnsizedBlobBudget::with_limit(16);
+
+        let mut first = store
+            .stage_layer_download("sha256:one", 0, pull.clone())
+            .await
+            .unwrap();
+        first.file().write_all(&[0u8; 12]).await.unwrap();
+
+        let mut second = store
+            .stage_layer_download("sha256:two", 0, pull.clone())
+            .await
+            .unwrap();
+        second
+            .file()
+            .write_all(&[0u8; 8])
+            .await
+            .expect_err("the second blob only has the pull's remainder to spend");
+
+        assert!(
+            second.budget_error().is_some(),
+            "the second blob must report the breach, not silently truncate"
+        );
+        first.abort().await;
+        second.abort().await;
+    }
+
+    /// A registry that streams more than its own manifest declared is stopped
+    /// at the declared size, without waiting for `commit()`'s comparison.
+    #[tokio::test]
+    async fn layer_download_stops_when_the_stream_passes_the_declared_size() {
+        use tokio::io::AsyncWriteExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+
+        let mut staged = store
+            .stage_layer_download("sha256:overrun", 8, UnsizedBlobBudget::new())
+            .await
+            .unwrap();
+        let staged_path = staged.staged_path().to_path_buf();
+
+        staged
+            .file()
+            .write_all(&[0u8; 9])
+            .await
+            .expect_err("a write past the declared size must be refused");
+
+        assert_eq!(
+            std::fs::metadata(&staged_path).unwrap().len(),
+            0,
+            "a buffer that would overshoot is refused whole, not truncated in"
+        );
+
+        let err = staged.budget_error().expect("breach must be reported");
+        assert!(
+            matches!(err, BoxliteError::ResourceExhausted(_)),
+            "expected ResourceExhausted, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("declares"),
+            "an over-run must be reported against the declared size: {err}"
+        );
+    }
+
+    /// A blob that stays inside its budget is untouched by any of this.
+    #[tokio::test]
+    async fn layer_download_within_budget_commits() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+
+        let content = b"a perfectly ordinary layer";
+        let staged = create_staged_with_content(&store, content, content.len() as i64).await;
+        assert!(staged.budget_error().is_none(), "no breach expected");
+        assert!(
+            staged.commit().await.unwrap(),
+            "a blob matching its declared size must still commit"
+        );
+    }
+
+    /// A declared size is the bound, whatever its magnitude: clamping it to a
+    /// host-wide number would refuse legitimately large layers, and the total
+    /// a manifest may declare is bounded up front instead
+    /// (`ImageStore::assert_declared_size_fits`).
+    #[test]
+    fn a_declared_size_bounds_the_blob_and_is_never_clamped() {
+        let pull = UnsizedBlobBudget::with_limit(1_000);
+
+        assert!(matches!(
+            DownloadBudget::for_blob(100, pull.clone()),
+            DownloadBudget::Declared(100)
+        ));
+        assert!(
+            matches!(
+                DownloadBudget::for_blob(50_000_000_000, pull.clone()),
+                DownloadBudget::Declared(50_000_000_000)
+            ),
+            "a large declared size is not clamped to the unsized allowance"
+        );
+        assert!(
+            matches!(
+                DownloadBudget::for_blob(0, pull.clone()),
+                DownloadBudget::Unsized(_)
+            ),
+            "`size: 0` means unknown, so the pull's allowance takes over"
+        );
+        assert!(
+            matches!(
+                DownloadBudget::for_blob(-1, pull),
+                DownloadBudget::Unsized(_)
+            ),
+            "a negative size means unknown too"
+        );
+    }
+
+    /// The env override is read through this helper so it can be exercised
+    /// without mutating the process environment (`set_var` is unsafe in this
+    /// edition, and a process-global `OnceLock` cannot be re-seeded per test).
+    #[test]
+    fn size_override_falls_back_on_absent_or_unparseable_values() {
+        assert_eq!(parse_override(Some("4096".to_string()), 7u64), 4096);
+        assert_eq!(parse_override(None, 7u64), 7);
+        assert_eq!(parse_override(Some("not-a-number".to_string()), 7u64), 7);
     }
 
     #[test]

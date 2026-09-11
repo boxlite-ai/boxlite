@@ -214,7 +214,7 @@ info = await box.info()
 print(f"Status: {info.state.status}")
 
 metrics = await box.metrics()
-print(f"Memory: {metrics.memory_usage_bytes / (1024**2):.2f} MB")
+print(f"Memory: {metrics.memory_bytes / (1024**2):.2f} MB")
 ```
 
 **3. Inspect filesystem:**
@@ -332,7 +332,7 @@ See [Configuring Networking](./guides/README.md#configuring-networking) for deta
 3. **Too many boxes:**
    ```python
    metrics = await runtime.metrics()
-   print(f"Active boxes: {metrics.active_boxes}")
+   print(f"Running boxes: {metrics.num_running_boxes}")
    # Reduce concurrency or increase host resources
    ```
 
@@ -356,7 +356,7 @@ Example:
 
 **Best practices:**
 - Start small (10 boxes) and scale up
-- Monitor metrics: `(await runtime.metrics()).active_boxes`
+- Monitor metrics: `(await runtime.metrics()).num_running_boxes`
 - Use resource pooling (reuse boxes)
 - Test at expected load
 
@@ -691,7 +691,7 @@ chmod 755 /host/path
 2. **Check actual usage:**
    ```python
    metrics = await box.metrics()
-   print(f"Memory: {metrics.memory_usage_bytes / (1024**2):.2f} MB")
+   print(f"Memory: {metrics.memory_bytes / (1024**2):.2f} MB")
    ```
 
 3. **Optimize code:**

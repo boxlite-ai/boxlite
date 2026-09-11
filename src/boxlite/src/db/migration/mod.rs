@@ -4,6 +4,7 @@
 //! [`all_migrations`]. Migrations run sequentially on startup when the
 //! database schema version is older than the current version.
 
+mod v10_to_v11;
 mod v2_to_v3;
 mod v3_to_v4;
 mod v4_to_v5;
@@ -83,5 +84,6 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(v7_to_v8::RenameNetworkSpec),
         Box::new(v8_to_v9::PreservePublishedPorts),
         Box::new(v9_to_v10::DropAmbiguousEmptyCapabilities),
+        Box::new(v10_to_v11::AddImageLastUsedAt),
     ]
 }

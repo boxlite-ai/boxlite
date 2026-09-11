@@ -678,6 +678,48 @@ boxlite.BoxOptions(
 )
 ```
 
+### Disk & Image Cache
+
+BoxLite caches image data under `~/.boxlite/images/`:
+
+| Directory | Holds | Reclaimed automatically |
+|-----------|-------|-------------------------|
+| `layers/`, `extracted/` | Compressed and unpacked layers, shared by every image that uses them | No |
+| `disk-images/` | One ext4 disk per image — the backing file each box boots from | **Yes** |
+
+**Reclaim.** A cached ext4 disk is deleted once nothing can reach it: no cached
+image reference names it *and* no box disk backs onto it. A stopped box still
+counts — its disk file still points at that base. The sweep runs at runtime
+startup, before a new image disk is built, and every 6 hours.
+
+Loading an image from a local OCI bundle now records it in that index too, so
+the disk built from the bundle stays reachable. A side effect: such an image
+now appears in `runtime.images.list()`, where it previously did not.
+
+**Watching it.** Both passes log what they freed, and the periodic one logs
+every tick whether or not it found anything, so a silent timer is visibly a
+dead timer. Those lines go to `$BOXLITE_HOME/logs/boxlite.log`. Two runtime
+metrics count the same events: `image_disks_evicted_total` counts disks given up
+under pressure — collecting unreachable garbage is not an eviction and is not
+counted — and `image_disk_bytes_reclaimed_total` counts allocated bytes freed by either
+pass.
+
+**Eviction.** When the volume holding the cache is nearly full, building a new
+image disk first evicts the least recently used cached disks, and stops as soon
+as usage is back under the low watermark. A box that then needs an evicted disk
+rebuilds it from the layer caches — slower than a cache hit, but with no network
+traffic. A disk some box backs onto is never evicted, however cold.
+
+**Environment overrides** (read once, at first use):
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `BOXLITE_MAX_IMAGE_DOWNLOAD_SIZE` | `21474836480` (20 GiB) | Most an image's layers may **declare** in total. Read from the manifest and refused before any layer is fetched. |
+| `BOXLITE_MAX_UNSIZED_BLOB_BYTES` | `268435456` (256 MiB) | Allowance, shared across one pull, for blobs whose manifest declares no size. A blob that declares a size is bounded by that declaration instead, so raising this does not help a legitimate image. |
+| `BOXLITE_IMAGE_DISK_GC_MIN_INTERVAL_SECS` | `300` | Minimum gap between two reclaim sweeps on the image-disk build path. |
+| `BOXLITE_IMAGE_DISK_EVICT_HIGH_PERCENT` | `85` | Volume usage, as `df` reports it, at which eviction starts. `100` disables eviction. |
+| `BOXLITE_IMAGE_DISK_EVICT_LOW_PERCENT` | `70` | Usage an eviction pass stops at. Keep it below the control plane's disk penalty threshold, or a completed eviction leaves the host still penalised. |
+
 ## Examples Gallery
 
 The [`examples/python/`](../../examples/python/) directory contains categorized examples:
@@ -772,16 +814,19 @@ Get aggregate metrics across all boxes:
 runtime = boxlite.Boxlite.default()
 metrics = await runtime.metrics()
 
-print(f"Boxes created: {metrics.boxes_created}")
-print(f"Boxes destroyed: {metrics.boxes_destroyed}")
-print(f"Total exec calls: {metrics.total_exec_calls}")
+print(f"Boxes created: {metrics.boxes_created_total}")
+print(f"Running boxes: {metrics.num_running_boxes}")
+print(f"Image disks evicted: {metrics.image_disks_evicted_total}")
 ```
 
 **RuntimeMetrics Fields:**
-- `boxes_created: int` - Total boxes created
-- `boxes_destroyed: int` - Total boxes destroyed
-- `total_exec_calls: int` - Total command executions
-- `active_boxes: int` - Currently running boxes
+- `boxes_created_total: int` - Total boxes created
+- `boxes_failed_total: int` - Boxes that failed to start
+- `num_running_boxes: int` - Currently running boxes
+- `total_commands_executed: int` - Total command executions
+- `total_exec_errors: int` - Command executions that returned an error
+- `image_disks_evicted_total: int` - Cached image disks given up under disk pressure
+- `image_disk_bytes_reclaimed_total: int` - Bytes the image disk cache has freed, by either reclaim pass
 
 ### Box Metrics
 
@@ -791,15 +836,15 @@ Get per-box resource usage:
 box = await runtime.create(boxlite.BoxOptions(image="alpine"))
 metrics = await box.metrics()
 
-print(f"CPU time: {metrics.cpu_time_ms}ms")
-print(f"Memory: {metrics.memory_usage_bytes / (1024**2):.2f} MB")
+print(f"CPU: {metrics.cpu_percent}%")
+print(f"Memory: {metrics.memory_bytes / (1024**2):.2f} MB")
 print(f"Network sent: {metrics.network_bytes_sent}")
 print(f"Network received: {metrics.network_bytes_received}")
 ```
 
 **BoxMetrics Fields:**
-- `cpu_time_ms: int` - Total CPU time in milliseconds
-- `memory_usage_bytes: int` - Current memory usage
+- `cpu_percent: float | None` - CPU usage, percent
+- `memory_bytes: int | None` - Current memory usage
 - `network_bytes_sent: int` - Total bytes sent
 - `network_bytes_received: int` - Total bytes received
 
@@ -899,8 +944,8 @@ boxlite.BoxOptions(
 
 # Check metrics
 metrics = await box.metrics()
-print(f"Memory usage: {metrics.memory_usage_bytes / (1024**2):.2f} MB")
-print(f"CPU time: {metrics.cpu_time_ms}ms")
+print(f"Memory usage: {metrics.memory_bytes / (1024**2):.2f} MB")
+print(f"CPU: {metrics.cpu_percent}%")
 ```
 
 ### Debug Logging

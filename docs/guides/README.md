@@ -550,8 +550,8 @@ print(f"Created: {info.created_at}")
 ```python
 metrics = await box.metrics()
 
-print(f"CPU time: {metrics.cpu_time_ms}ms")
-print(f"Memory usage: {metrics.memory_usage_bytes / (1024**2):.2f} MB")
+print(f"CPU: {metrics.cpu_percent}%")
+print(f"Memory usage: {metrics.memory_bytes / (1024**2):.2f} MB")
 print(f"Network sent: {metrics.network_bytes_sent}")
 print(f"Network received: {metrics.network_bytes_received}")
 ```
@@ -627,8 +627,8 @@ for info in boxes:
 1. Check resource usage:
    ```python
    metrics = await box.metrics()
-   print(f"Memory: {metrics.memory_usage_bytes / (1024**2):.2f} MB")
-   print(f"CPU time: {metrics.cpu_time_ms}ms")
+   print(f"Memory: {metrics.memory_bytes / (1024**2):.2f} MB")
+   print(f"CPU: {metrics.cpu_percent}%")
    ```
 
 2. Increase limits:
@@ -642,8 +642,8 @@ for info in boxes:
 3. Monitor runtime metrics:
    ```python
    runtime_metrics = await runtime.metrics()
-   print(f"Active boxes: {runtime_metrics.active_boxes}")
-   print(f"Total exec calls: {runtime_metrics.total_exec_calls}")
+   print(f"Running boxes: {runtime_metrics.num_running_boxes}")
+   print(f"Total commands: {runtime_metrics.total_commands_executed}")
    ```
 
 ### Log Locations
@@ -693,7 +693,7 @@ boxlite.BoxOptions(
 
 ```python
 metrics = await box.metrics()
-print(f"CPU time: {metrics.cpu_time_ms}ms")
+print(f"CPU: {metrics.cpu_percent}%")
 ```
 
 ### Memory Management
@@ -718,7 +718,7 @@ boxlite.BoxOptions(
 
 ```python
 metrics = await box.metrics()
-memory_mb = metrics.memory_usage_bytes / (1024**2)
+memory_mb = metrics.memory_bytes / (1024**2)
 print(f"Memory: {memory_mb:.2f} MB")
 ```
 
@@ -784,7 +784,7 @@ asyncio.run(main())
 **Concurrency Limits:**
 - Limited by host resources (CPU, memory)
 - Each box: minimum 128 MiB + overhead
-- Monitor with `(await runtime.metrics()).active_boxes`
+- Monitor with `(await runtime.metrics()).num_running_boxes`
 
 **Best Practices:**
 - Use asyncio for concurrent execution
@@ -951,7 +951,7 @@ async with boxlite.SimpleBox(image="python:slim") as box:
 
 ```python
 metrics = await box.metrics()
-if metrics.memory_usage_bytes > 0.8 * (1024**3):  # 80% of 1GB
+if metrics.memory_bytes > 0.8 * (1024**3):  # 80% of 1GB
     print("Warning: High memory usage")
     # Consider recreating box or increasing limit
 ```

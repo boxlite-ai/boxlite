@@ -10,11 +10,42 @@ mod store;
 pub(crate) use archive::whiteout;
 pub use archive::{LayerExtractor, OverrideFileType, OverrideStat, SafeRoot};
 pub use config::ContainerImageConfig;
+pub(crate) use image_disk::DiskCacheReclaim;
 pub use image_disk::ImageDiskManager;
 pub use manager::ImageManager;
 pub use object::ImageObject;
 
 use oci_client::Reference;
+
+/// The `image_index` row key for a reference as a caller typed it.
+///
+/// `oci_client` normalizes on parse — `python:alpine` becomes
+/// `docker.io/library/python:alpine` — and the store has always keyed rows and
+/// cache lookups by that normalized form (`ImageStore::pull`). Anything that
+/// starts from a caller-typed string has to go through the same derivation, or
+/// it addresses a row that does not exist: `ImageIndexStore::touch` is a
+/// deliberate no-op for an unknown reference, so the mismatch is silent and
+/// `last_used_at` simply never moves.
+///
+/// Idempotent, so applying it to an already-normalized reference is safe.
+/// Unparseable input is passed through unchanged — the store's own lookups
+/// would fail on it anyway, and inventing a key here would only hide that.
+pub(crate) fn index_key(reference: &str) -> String {
+    reference
+        .parse::<Reference>()
+        .map(|parsed| parsed.whole())
+        .unwrap_or_else(|_| reference.to_string())
+}
+
+/// Read a numeric env override, keeping `default` for absent or unparseable
+/// values.
+///
+/// Split out from the `OnceLock`s that call it so the fallback rule stays
+/// testable: `set_var` is unsafe in this edition, and a process-global
+/// `OnceLock` cannot be re-seeded per test.
+fn parse_override<T: std::str::FromStr>(raw: Option<String>, default: T) -> T {
+    raw.and_then(|s| s.parse().ok()).unwrap_or(default)
+}
 
 // ============================================================================
 // Registry Resolution (Reference Iterator)

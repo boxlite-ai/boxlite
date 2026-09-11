@@ -33,6 +33,13 @@ pub struct CRuntimeMetrics {
     pub num_running_boxes: c_int,
     pub total_commands_executed: c_int,
     pub total_exec_errors: c_int,
+    /// Cached image disks given up under disk pressure. Collecting
+    /// unreachable garbage is not an eviction and is not counted here.
+    pub image_disks_evicted_total: c_int,
+    /// Allocated bytes the image disk cache has freed, by either reclaim
+    /// pass. `i64` rather than `c_int`: a single evicted disk is commonly
+    /// 141 MiB, so a host would overflow a 32-bit counter in a day.
+    pub image_disk_bytes_reclaimed_total: i64,
 }
 
 #[unsafe(no_mangle)]
@@ -128,6 +135,8 @@ unsafe fn runtime_metrics(
                 num_running_boxes: m.num_running_boxes() as c_int,
                 total_commands_executed: m.total_commands_executed() as c_int,
                 total_exec_errors: m.total_exec_errors() as c_int,
+                image_disks_evicted_total: m.image_disks_evicted_total() as c_int,
+                image_disk_bytes_reclaimed_total: m.image_disk_bytes_reclaimed_total() as i64,
             });
             push_event(
                 &queue,

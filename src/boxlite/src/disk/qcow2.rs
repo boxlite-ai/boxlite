@@ -1065,13 +1065,51 @@ pub fn set_backing_file_path(qcow2_path: &Path, new_backing: &Path) -> BoxliteRe
 /// Maximum depth for backing chain walks (prevents infinite loops from circular refs).
 const MAX_BACKING_CHAIN_DEPTH: usize = 8;
 
-/// Walk a qcow2 backing chain, returning all backing file paths.
+/// A backing-chain walk, and whether it saw the whole chain.
 ///
-/// Follows backing references from `path` until: no backing, file missing,
-/// read error, or depth limit. Returns partial results on error.
-/// Does NOT include `path` itself.
+/// The distinction matters to callers that delete: a walk cut short by a read
+/// error looks exactly like a short chain, so a caller treating the result as
+/// authoritative would conclude "nothing backs onto this" and remove a file a
+/// live box depends on.
+pub(crate) struct BackingChain {
+    /// Backing paths, nearest first. Never includes the file walked from.
+    pub(crate) paths: Vec<PathBuf>,
+    /// False when the walk ended on anything other than a genuine end of
+    /// chain — a read error, a backing file that could not be stat'd, or the
+    /// depth cap.
+    pub(crate) complete: bool,
+}
+
+/// Walk a qcow2 backing chain, returning the backing files that are there.
+///
+/// Partial results on error; [`read_backing_chain_checked`] is the variant
+/// that says so. Does NOT include `path` itself.
+///
+/// A backing path that cannot be stat'd is left out, which is what separates
+/// this from the strict variant. Callers here *use* the paths: the jailer
+/// binds every one of them into the sandbox through bwrap's strict
+/// `--ro-bind` (`jailer/sandbox/bwrap.rs`), which fails outright on a source
+/// it cannot find, so handing it a path that is not there would turn a broken
+/// backing file into a box that cannot start at all. The strict variant keeps
+/// such a path for the opposite reason: a caller that *deletes* what is
+/// missing from the set must not act on a partial answer.
 pub fn read_backing_chain(path: &Path) -> Vec<PathBuf> {
-    let mut chain = Vec::new();
+    read_backing_chain_checked(path)
+        .paths
+        .into_iter()
+        .filter(|backing| backing.exists())
+        .collect()
+}
+
+/// [`read_backing_chain`] with the completeness flag a deleting caller needs.
+///
+/// A chain ends genuinely in two ways: the next node is not a qcow2 (a raw
+/// backing file — the normal terminal for an image disk), or the node declares
+/// no backing at all. Everything else — an unreadable header, a backing path
+/// that cannot be stat'd, running out of depth — leaves the walk unable to say
+/// what else was referenced, and reports `complete: false`.
+pub(crate) fn read_backing_chain_checked(path: &Path) -> BackingChain {
+    let mut paths = Vec::new();
     let mut current = path.to_path_buf();
 
     for _ in 0..MAX_BACKING_CHAIN_DEPTH {
@@ -1082,7 +1120,10 @@ pub fn read_backing_chain(path: &Path) -> Vec<PathBuf> {
                     path = %current.display(),
                     "Reached non-qcow2 backing file; ending backing chain"
                 );
-                break;
+                return BackingChain {
+                    paths,
+                    complete: true,
+                };
             }
             Err(e) => {
                 tracing::warn!(
@@ -1090,32 +1131,64 @@ pub fn read_backing_chain(path: &Path) -> Vec<PathBuf> {
                     error = %e,
                     "Failed to inspect qcow2 backing path — returning partial chain"
                 );
-                break;
+                return BackingChain {
+                    paths,
+                    complete: false,
+                };
             }
         }
 
         match read_backing_file_path(&current) {
             Ok(Some(backing)) => {
                 let backing_path = PathBuf::from(backing);
+                // Record it either way: a path in a "referenced" set can only
+                // ever prevent a deletion, so naming one that is absent costs
+                // nothing. But `exists()` is false for a permission or I/O
+                // error too, and that case must not read as "chain ended".
+                paths.push(backing_path.clone());
                 if !backing_path.exists() {
-                    break;
+                    tracing::warn!(
+                        path = %backing_path.display(),
+                        "Backing file could not be stat'd — returning partial chain"
+                    );
+                    return BackingChain {
+                        paths,
+                        complete: false,
+                    };
                 }
-                chain.push(backing_path.clone());
                 current = backing_path;
             }
-            Ok(None) => break,
+            Ok(None) => {
+                return BackingChain {
+                    paths,
+                    complete: true,
+                };
+            }
             Err(e) => {
                 tracing::warn!(
                     path = %current.display(),
                     error = %e,
                     "Failed to read qcow2 backing path — returning partial chain"
                 );
-                break;
+                return BackingChain {
+                    paths,
+                    complete: false,
+                };
             }
         }
     }
 
-    chain
+    // Depth cap reached without a terminal node: whatever lies beyond is
+    // unaccounted for.
+    tracing::warn!(
+        path = %path.display(),
+        depth = MAX_BACKING_CHAIN_DEPTH,
+        "Backing chain hit the depth cap — returning partial chain"
+    );
+    BackingChain {
+        paths,
+        complete: false,
+    }
 }
 
 /// Return true when `path` starts with the QCOW2 magic (`QFI\xfb`).
@@ -1530,6 +1603,131 @@ mod tests {
     fn test_backing_format_as_str() {
         assert_eq!(BackingFormat::Raw.as_str(), "raw");
         assert_eq!(BackingFormat::Qcow2.as_str(), "qcow2");
+    }
+
+    // ── backing chain completeness ─────────────────────────────────────
+
+    /// Reaching a raw backing file is how an image-disk chain *should* end.
+    #[test]
+    fn a_chain_ending_on_a_raw_file_is_complete() {
+        let dir = TempDir::new().unwrap();
+        let base = dir.path().join("base.ext4");
+        std::fs::write(&base, vec![0u8; 1024]).unwrap();
+        let overlay = dir.path().join("overlay.qcow2");
+        write_qcow2_with_backing(&overlay, Some(&base.to_string_lossy()));
+
+        let chain = read_backing_chain_checked(&overlay);
+
+        assert!(chain.complete, "a raw terminal node is a genuine end");
+        assert_eq!(chain.paths, vec![base]);
+    }
+
+    /// The lenient view must not name a backing file that is not there.
+    ///
+    /// Its callers bind what it returns: the jailer hands every path to
+    /// bwrap's strict `--ro-bind` (`jailer/mod.rs` → `jailer/sandbox/bwrap.rs`,
+    /// which keeps a separate `ro_bind_if_exists` for optional sources), so a
+    /// missing path here turns a box with a broken backing file into a box
+    /// that cannot enter its sandbox at all.
+    #[test]
+    fn the_lenient_chain_leaves_out_a_backing_file_that_cannot_be_statd() {
+        let dir = TempDir::new().unwrap();
+        let base = dir.path().join("gone.ext4");
+        std::fs::write(&base, vec![0u8; 1024]).unwrap();
+        let overlay = dir.path().join("overlay.qcow2");
+        write_qcow2_with_backing(&overlay, Some(&base.to_string_lossy()));
+        std::fs::remove_file(&base).unwrap();
+
+        assert!(
+            read_backing_chain(&overlay).is_empty(),
+            "a path bwrap would refuse to bind must not be reported as a backing file"
+        );
+        assert!(
+            read_backing_chain_checked(&overlay).paths.contains(&base),
+            "the strict view still keeps it — it decides deletions, not binds"
+        );
+    }
+
+    /// A backing file that cannot be stat'd is indistinguishable from a
+    /// permission or I/O error, so the walk must not report a short chain as
+    /// the whole truth — a caller that deletes what is not in it would take
+    /// the rest of the chain with it.
+    #[test]
+    fn a_missing_backing_file_reports_incomplete() {
+        let dir = TempDir::new().unwrap();
+        let base = dir.path().join("gone.ext4");
+        std::fs::write(&base, vec![0u8; 1024]).unwrap();
+        let overlay = dir.path().join("overlay.qcow2");
+        write_qcow2_with_backing(&overlay, Some(&base.to_string_lossy()));
+        std::fs::remove_file(&base).unwrap();
+
+        let chain = read_backing_chain_checked(&overlay);
+
+        assert!(!chain.complete, "an unstattable backing file is not an end");
+        assert!(
+            chain.paths.contains(&base),
+            "the path is still recorded: naming it can only prevent a deletion"
+        );
+    }
+
+    /// Past the depth cap the walk stops knowing what else is referenced.
+    #[test]
+    fn a_chain_deeper_than_the_cap_reports_incomplete() {
+        let dir = TempDir::new().unwrap();
+        let base = dir.path().join("base.ext4");
+        std::fs::write(&base, vec![0u8; 1024]).unwrap();
+
+        // One more qcow2 link than the walk is allowed to follow.
+        let mut previous = base;
+        for i in 0..=MAX_BACKING_CHAIN_DEPTH {
+            let link = dir.path().join(format!("layer{i}.qcow2"));
+            write_qcow2_with_backing(&link, Some(&previous.to_string_lossy()));
+            previous = link;
+        }
+
+        let chain = read_backing_chain_checked(&previous);
+
+        assert!(!chain.complete, "the cap truncated the walk");
+        assert_eq!(chain.paths.len(), MAX_BACKING_CHAIN_DEPTH);
+    }
+
+    /// The reclaim guards test set membership between paths read out of qcow2
+    /// headers and paths built from directories that canonicalized at
+    /// construction. That only works because the header side is canonical
+    /// too. If this stops holding, a home reached through a symlink puts the
+    /// two in different shapes, every membership test misses, and eviction
+    /// deletes the backing file under a live box.
+    #[test]
+    fn a_backing_path_is_recorded_canonical_even_when_given_through_a_symlink() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let real = root.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        let linked = root.join("linked");
+        std::os::unix::fs::symlink(&real, &linked).unwrap();
+
+        let base = real.join("base.ext4");
+        std::fs::write(&base, vec![0u8; 1024]).unwrap();
+        let child = real.join("child.qcow2");
+
+        // Handed the symlinked form, the way a caller resolving paths from a
+        // symlinked home would pass it.
+        Qcow2Helper::create_cow_child_disk(
+            &linked.join("base.ext4"),
+            BackingFormat::Raw,
+            &child,
+            4 * 1024 * 1024,
+        )
+        .unwrap()
+        .leak();
+
+        let recorded = read_backing_file_path(&child).unwrap().unwrap();
+
+        assert_eq!(
+            PathBuf::from(recorded),
+            base,
+            "the header must record the resolved path, not the one the caller passed"
+        );
     }
 
     // ── set_backing_file_path tests ────────────────────────────────────

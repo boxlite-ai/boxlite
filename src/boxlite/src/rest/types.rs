@@ -683,6 +683,10 @@ pub(crate) struct RuntimeMetricsResponse {
     pub total_commands_executed: u64,
     #[serde(default)]
     pub total_exec_errors: u64,
+    #[serde(default)]
+    pub image_disks_evicted_total: u64,
+    #[serde(default)]
+    pub image_disk_bytes_reclaimed_total: u64,
 }
 
 #[derive(Debug, Deserialize)]

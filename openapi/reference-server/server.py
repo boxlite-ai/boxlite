@@ -1052,6 +1052,8 @@ async def get_runtime_metrics(
         "num_running_boxes": m.num_running_boxes,
         "total_commands_executed": m.total_commands_executed,
         "total_exec_errors": m.total_exec_errors,
+        "image_disks_evicted_total": m.image_disks_evicted_total,
+        "image_disk_bytes_reclaimed_total": m.image_disk_bytes_reclaimed_total,
     }
 
 

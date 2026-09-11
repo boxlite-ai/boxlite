@@ -16,6 +16,13 @@ type RuntimeMetrics struct {
 	RunningBoxes          int
 	TotalCommandsExecuted int
 	TotalExecErrors       int
+	// ImageDisksEvictedTotal counts cached image disks given up under disk
+	// pressure. Collecting unreachable garbage is not an eviction and is not
+	// counted here.
+	ImageDisksEvictedTotal int
+	// ImageDiskBytesReclaimedTotal is the allocated bytes the image disk cache
+	// has freed, by either reclaim pass.
+	ImageDiskBytesReclaimedTotal int64
 }
 
 // BoxMetrics holds per-box metrics.
@@ -118,5 +125,8 @@ func cRuntimeMetricsToGo(cm *C.CRuntimeMetrics) RuntimeMetrics {
 		RunningBoxes:          int(cm.num_running_boxes),
 		TotalCommandsExecuted: int(cm.total_commands_executed),
 		TotalExecErrors:       int(cm.total_exec_errors),
+
+		ImageDisksEvictedTotal:       int(cm.image_disks_evicted_total),
+		ImageDiskBytesReclaimedTotal: int64(cm.image_disk_bytes_reclaimed_total),
 	}
 }
