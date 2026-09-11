@@ -134,7 +134,7 @@ Configuration options for creating a box.
 | `network` | `NetworkSpec \| None` | `None` | Structured network configuration. Omit for default enabled networking. |
 | `ports` | `List[Tuple \| Dict]` | `[]` | Local TCP forwarding; omit `host_port` in a dict for automatic allocation |
 | `secrets` | `List[Secret]` | `[]` | Outbound HTTP(S) secret substitution rules |
-| `advanced` | `AdvancedBoxOptions \| None` | `None` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
+| `advanced` | `AdvancedBoxOptions \| None` | `None` | Expert-only options, including `capabilities` and `network_rate_limit` |
 | `auto_remove` | `bool` | `True` | Auto cleanup when stopped |
 | `detach` | `bool` | `False` | Survive parent process exit |
 
@@ -150,6 +150,20 @@ options = BoxOptions(
             add=["NET_BIND_SERVICE"],
             drop=["NET_RAW"],
         )
+    ),
+)
+```
+
+A per-direction bandwidth cap lives there too (kilobits per second, from the
+box's point of view; `None` or `0` leaves a direction uncapped):
+
+```python
+from boxlite import AdvancedBoxOptions, BoxOptions, NetworkRateLimit
+
+options = BoxOptions(
+    image="alpine:latest",
+    advanced=AdvancedBoxOptions(
+        network_rate_limit=NetworkRateLimit(tx_kbps=10_000, rx_kbps=100_000),
     ),
 )
 ```

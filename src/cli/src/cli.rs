@@ -1166,16 +1166,14 @@ pub struct NetworkFlags {
     pub inbound: Option<String>,
 
     /// Cap what the box sends, in kilobits/sec (guest to internet). Unset or 0
-    /// leaves it uncapped. Local runtime only. Verified on Linux; on macOS the
-    /// guest link is a datagram socket whose sender behaviour under
-    /// backpressure is unverified, so this may drop frames instead of slowing
-    /// the guest down.
+    /// leaves it uncapped. Verified on Linux; on macOS the guest link is a
+    /// datagram socket whose sender behaviour under backpressure is
+    /// unverified, so this may drop frames instead of slowing the guest down.
     #[arg(long = "net-tx-kbps", value_name = "KBPS")]
     pub net_tx_kbps: Option<u64>,
 
     /// Cap what reaches the box, in kilobits/sec (internet to guest). Unset or
-    /// 0 leaves it uncapped. Local runtime only. Paced the same way on Linux
-    /// and macOS.
+    /// 0 leaves it uncapped. Paced the same way on Linux and macOS.
     #[arg(long = "net-rx-kbps", value_name = "KBPS")]
     pub net_rx_kbps: Option<u64>,
 }

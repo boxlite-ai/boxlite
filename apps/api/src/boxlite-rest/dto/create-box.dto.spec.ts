@@ -416,3 +416,38 @@ describe('CreateBoxDto secrets', () => {
     expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isNotEmpty')
   })
 })
+
+describe('CreateBoxDto network rate limit', () => {
+  it('accepts a per-direction cap under advanced', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, { advanced: { network_rate_limit: { tx_kbps: 10_000, rx_kbps: 0 } } }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it.each([
+    ['tx_kbps', -1, 'min'],
+    ['rx_kbps', 1.5, 'isInt'],
+    ['tx_kbps', 2_147_483_648, 'max'],
+  ])('rejects %s=%s with a %s constraint', async (field, value, constraint) => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, { advanced: { network_rate_limit: { [field]: value } } }),
+    )
+
+    // Nested: advanced -> network_rate_limit -> <field>.
+    const direction = errors
+      .find((error) => error.property === 'advanced')
+      ?.children?.find((error) => error.property === 'network_rate_limit')
+      ?.children?.find((error) => error.property === field)
+    expect(direction?.constraints).toHaveProperty(constraint)
+  })
+
+  // Lifting the blanket `advanced` refusal must not lose the actionable message
+  // for the sub-field the runner still has no path for.
+  it('still refuses advanced.capabilities with an actionable message', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { advanced: { capabilities: { add: ['SYS_ADMIN'] } } }))
+
+    expect(JSON.stringify(errors)).toContain('not supported for cloud')
+  })
+})

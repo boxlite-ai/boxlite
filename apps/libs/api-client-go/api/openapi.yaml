@@ -5671,6 +5671,8 @@ components:
         public: false
         networkBlockAll: false
         networkAllowList: "192.168.1.0/16,10.0.0.0/24"
+        networkTxKbps: 10000
+        networkRxKbps: 100000
         target: local
         image: boxlite/base
         cpu: 2
@@ -5742,6 +5744,16 @@ components:
             the box
           example: "192.168.1.0/16,10.0.0.0/24"
           type: string
+        networkTxKbps:
+          description: "Cap on traffic the box sends, in kilobits per second; absent\
+            \ or 0 is uncapped"
+          example: 10000
+          type: integer
+        networkRxKbps:
+          description: "Cap on traffic reaching the box, in kilobits per second; absent\
+            \ or 0 is uncapped"
+          example: 100000
+          type: integer
         target:
           description: The target environment for the box
           example: local
@@ -5865,6 +5877,8 @@ components:
           public: false
           networkBlockAll: false
           networkAllowList: "192.168.1.0/16,10.0.0.0/24"
+          networkTxKbps: 10000
+          networkRxKbps: 100000
           target: local
           image: boxlite/base
           cpu: 2
@@ -5903,6 +5917,8 @@ components:
           public: false
           networkBlockAll: false
           networkAllowList: "192.168.1.0/16,10.0.0.0/24"
+          networkTxKbps: 10000
+          networkRxKbps: 100000
           target: local
           image: boxlite/base
           cpu: 2

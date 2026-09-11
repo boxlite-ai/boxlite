@@ -7,6 +7,21 @@ import { isIPv4 } from 'net'
 
 export const MAX_NETWORK_ALLOW_LIST_ENTRIES = 10
 
+/**
+ * Ceiling for `networkTxKbps` / `networkRxKbps`: the Box columns are int4, so
+ * this is the largest value they can hold (~2.1 Tbit/s). A storage bound, not
+ * a bandwidth policy — there is no platform cap today.
+ */
+export const MAX_NETWORK_RATE_LIMIT_KBPS = 2_147_483_647
+
+/**
+ * Whether either direction is actually capped. Absent and 0 both mean
+ * "uncapped", the same rule the core's `NetworkRateLimit::is_unlimited` uses.
+ */
+export function isNetworkRateLimited(txKbps?: number, rxKbps?: number): boolean {
+  return (txKbps ?? 0) > 0 || (rxKbps ?? 0) > 0
+}
+
 const IPV4_LIKE_PATTERN = /^(\d{1,3}\.){3}\d{1,3}$/
 const HOSTNAME_LABEL_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/
 

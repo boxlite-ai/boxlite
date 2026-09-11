@@ -138,3 +138,21 @@ describe('BoxLite container process options mapper', () => {
     expect(mapped.cmd).toBeUndefined()
   })
 })
+
+describe('BoxLite network rate limit mapper', () => {
+  it('carries advanced.network_rate_limit into the control-plane DTO', () => {
+    const mapped = createBoxToCreateBox({
+      advanced: { network_rate_limit: { tx_kbps: 10_000, rx_kbps: 100_000 } },
+    })
+
+    expect(mapped.networkTxKbps).toBe(10_000)
+    expect(mapped.networkRxKbps).toBe(100_000)
+  })
+
+  it('leaves both directions undefined when advanced is absent', () => {
+    const mapped = createBoxToCreateBox({ image: 'alpine:latest' })
+
+    expect(mapped.networkTxKbps).toBeUndefined()
+    expect(mapped.networkRxKbps).toBeUndefined()
+  })
+})

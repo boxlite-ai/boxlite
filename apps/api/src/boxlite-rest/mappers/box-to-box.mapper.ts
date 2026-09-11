@@ -68,6 +68,8 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
     hosts: secret.hosts,
     placeholder: secret.placeholder,
   }))
+  createDto.networkTxKbps = dto.advanced?.network_rate_limit?.tx_kbps
+  createDto.networkRxKbps = dto.advanced?.network_rate_limit?.rx_kbps
   if (dto.network) {
     const allowNet = dto.network.outbound?.allow_net?.map((entry) => entry.trim()).filter(Boolean)
     createDto.networkBlockAll = dto.network.outbound?.mode === 'disabled'

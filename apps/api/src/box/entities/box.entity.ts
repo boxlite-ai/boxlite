@@ -138,6 +138,16 @@ export class Box {
   @Column({ nullable: true })
   networkAllowList?: string
 
+  // Per-direction bandwidth cap in kbit/s from the box's point of view (tx =
+  // what the box sends). NULL is "the caller never asked", which the core
+  // treats like 0: uncapped. `int`, not `bigint` — TypeORM maps bigint to a JS
+  // string, and int4's ~2.1 Tbit/s ceiling is far above any real link.
+  @Column({ type: 'int', nullable: true })
+  networkTxKbps?: number
+
+  @Column({ type: 'int', nullable: true })
+  networkRxKbps?: number
+
   @Column('jsonb', { nullable: true })
   labels: { [key: string]: string }
 

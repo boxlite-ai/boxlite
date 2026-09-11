@@ -1,5 +1,5 @@
 use boxlite::runtime::advanced_options::{
-    ContainerCapabilities, HealthCheckOptions, ResourceLimits, SecurityOptions,
+    ContainerCapabilities, HealthCheckOptions, NetworkRateLimit, ResourceLimits, SecurityOptions,
 };
 use pyo3::prelude::*;
 
@@ -293,6 +293,48 @@ impl From<PyContainerCapabilities> for ContainerCapabilities {
     }
 }
 
+/// Per-direction bandwidth cap for the box's network interface, in kilobits
+/// per second, from the box's point of view: `tx_kbps` is what the box sends,
+/// `rx_kbps` what reaches it. `None` or `0` leaves a direction uncapped.
+#[pyclass(name = "NetworkRateLimit")]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PyNetworkRateLimit {
+    /// Guest to internet, kilobits per second.
+    #[pyo3(get, set)]
+    pub tx_kbps: Option<u64>,
+
+    /// Internet to guest, kilobits per second.
+    #[pyo3(get, set)]
+    pub rx_kbps: Option<u64>,
+}
+
+#[pymethods]
+impl PyNetworkRateLimit {
+    #[new]
+    #[pyo3(signature = (tx_kbps=None, rx_kbps=None))]
+    fn new(tx_kbps: Option<u64>, rx_kbps: Option<u64>) -> Self {
+        Self { tx_kbps, rx_kbps }
+    }
+
+    fn __repr__(&self) -> String {
+        let show = |kbps: Option<u64>| kbps.map_or("None".to_string(), |k| k.to_string());
+        format!(
+            "NetworkRateLimit(tx_kbps={}, rx_kbps={})",
+            show(self.tx_kbps),
+            show(self.rx_kbps)
+        )
+    }
+}
+
+impl From<PyNetworkRateLimit> for NetworkRateLimit {
+    fn from(limit: PyNetworkRateLimit) -> Self {
+        Self {
+            tx_kbps: limit.tx_kbps,
+            rx_kbps: limit.rx_kbps,
+        }
+    }
+}
+
 /// Advanced options for expert users.
 ///
 /// Entry-level users can ignore this — defaults are compatibility-focused.
@@ -317,21 +359,27 @@ pub struct PyAdvancedBoxOptions {
     /// capability override.
     #[pyo3(get, set)]
     pub capabilities: Option<PyContainerCapabilities>,
+
+    /// Per-direction network bandwidth cap. `None` leaves the box uncapped.
+    #[pyo3(get, set)]
+    pub network_rate_limit: Option<PyNetworkRateLimit>,
 }
 
 #[pymethods]
 impl PyAdvancedBoxOptions {
     #[new]
-    #[pyo3(signature = (security=None, health_check=None, capabilities=None))]
+    #[pyo3(signature = (security=None, health_check=None, capabilities=None, network_rate_limit=None))]
     fn new(
         security: Option<PySecurityOptions>,
         health_check: Option<PyHealthCheckOptions>,
         capabilities: Option<PyContainerCapabilities>,
+        network_rate_limit: Option<PyNetworkRateLimit>,
     ) -> Self {
         Self {
             security,
             health_check,
             capabilities,
+            network_rate_limit,
         }
     }
 }

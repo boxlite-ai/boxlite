@@ -54,6 +54,22 @@ describe("SimpleBoxOptions", () => {
     ]);
   });
 
+  test("forwards the network rate limit", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const box = new SimpleBox({
+      advanced: {
+        networkRateLimit: { txKbps: 10_000, rxKbps: 100_000 },
+      },
+    });
+    const nativeOptions = (box as any)._boxOpts;
+
+    expect(nativeOptions.advanced.networkRateLimit).toEqual({
+      txKbps: 10_000,
+      rxKbps: 100_000,
+    });
+    expect(nativeOptions.advanced.capabilities).toBeUndefined();
+  });
+
   test("accepts cmd array", () => {
     const opts: SimpleBoxOptions = {
       image: "docker:dind",

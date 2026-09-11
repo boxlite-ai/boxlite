@@ -109,15 +109,6 @@ impl BoxOptions {
             ));
         }
 
-        if !self.advanced.network_rate_limit.is_unlimited() {
-            return Err(BoxliteError::Unsupported(
-                "network rate limits (advanced.network_rate_limit) are enforced by the \
-                 local gvproxy bridge and are local-only for remote runtimes; the remote \
-                 server owns its own network policy."
-                    .to_string(),
-            ));
-        }
-
         if self.advanced.security != SecurityOptions::default() {
             return Err(BoxliteError::Unsupported(
                 "sandbox security (advanced.security) is the remote server's own policy \
@@ -226,6 +217,15 @@ impl RuntimeBackend for RestRuntime {
         // concept at all can't be trusted to preserve that from a no-op value.
         if options.advanced.capabilities().is_some() {
             self.client.require_linux_capabilities_enabled().await?;
+        }
+
+        // A server that does not advertise shaping would accept the request and
+        // drop the field, handing back an unshaped box. `is_unlimited` is the
+        // trigger, not "was the field touched": a zero is the documented
+        // spelling of "no cap" (the CLI assigns it unconditionally), and there
+        // is nothing to negotiate about a cap that does not exist.
+        if !options.advanced.network_rate_limit.is_unlimited() {
+            self.client.require_network_rate_limit_enabled().await?;
         }
 
         let req = CreateBoxRequest::from_options(&options, name);
@@ -399,6 +399,18 @@ mod tests {
                 ..Default::default()
             }))
             .unwrap();
+        BoxOptions {
+            advanced,
+            ..Default::default()
+        }
+    }
+
+    fn rate_limited_options(tx_kbps: u64, rx_kbps: u64) -> BoxOptions {
+        let mut advanced = crate::AdvancedBoxOptions::default();
+        advanced.network_rate_limit = crate::NetworkRateLimit {
+            tx_kbps: Some(tx_kbps),
+            rx_kbps: Some(rx_kbps),
+        };
         BoxOptions {
             advanced,
             ..Default::default()
@@ -769,57 +781,69 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_rejects_network_rate_limit_in_rest_mode() {
-        let options = BoxliteRestOptions::new("http://localhost:1");
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
-        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
-        advanced.network_rate_limit = crate::runtime::advanced_options::NetworkRateLimit {
-            tx_kbps: Some(10_000),
-            rx_kbps: None,
-        };
-        let box_options = BoxOptions {
-            advanced,
-            ..Default::default()
-        };
+    async fn capped_create_requires_server_advertisement() {
+        // A server that does not advertise shaping would accept the request and
+        // drop the field, handing back an unshaped box.
+        let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
 
-        let error = RuntimeBackend::create(&runtime, box_options, None)
-            .await
-            .err()
-            .expect("REST network rate limits must be rejected before network I/O");
-
-        assert!(matches!(error, BoxliteError::Unsupported(_)));
-        assert!(error.to_string().contains("local-only"));
-    }
-
-    /// A zero is the documented way to spell "no cap", so it must reach the same
-    /// point an absent cap does instead of tripping the remote refusal.
-    ///
-    /// The create still fails — nothing is listening on port 1 — but it has to
-    /// fail on the transport, not on `sanitize_remote`, which is what
-    /// distinguishes a zero from a real limit.
-    #[tokio::test]
-    async fn zero_network_rate_limit_passes_the_remote_refusal() {
-        let options = BoxliteRestOptions::new("http://localhost:1");
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
-        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
-        advanced.network_rate_limit = crate::runtime::advanced_options::NetworkRateLimit {
-            tx_kbps: Some(0),
-            rx_kbps: Some(0),
-        };
-        let box_options = BoxOptions {
-            advanced,
-            ..Default::default()
-        };
-
-        let error = RuntimeBackend::create(&runtime, box_options, None)
-            .await
-            .err()
-            .expect("nothing is listening, so the create cannot succeed");
+        let error =
+            match RuntimeBackend::create(&runtime, rate_limited_options(10_000, 0), None).await {
+                Err(error) => error,
+                Ok(_) => panic!("an old server must not silently ignore a network rate limit"),
+            };
 
         assert!(
-            !matches!(error, BoxliteError::Unsupported(_)),
-            "a zero cap must not be refused as a rate limit, got: {error}"
+            matches!(error, BoxliteError::Unsupported(_)),
+            "got: {error}"
         );
+        assert!(
+            error.to_string().contains("network rate limit"),
+            "got: {error}"
+        );
+        // Bounded: a client that refuses before probing never connects, and the
+        // stub would otherwise wait on `accept` forever.
+        let requests = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("the client must probe GET /v1/config before refusing")
+            .unwrap();
+        assert_eq!(requests, ["GET /v1/config HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn advertised_rate_limit_support_creates_on_the_shared_route() {
+        let (port, server) = json_server(vec![
+            r#"{"capabilities":{"network_rate_limit_enabled":true}}"#,
+            BOX_RESPONSE,
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        RuntimeBackend::create(&runtime, rate_limited_options(10_000, 100_000), None)
+            .await
+            .expect("create with a network rate limit");
+
+        assert_eq!(
+            server.await.unwrap(),
+            ["GET /v1/config HTTP/1.1", "POST /v1/boxes HTTP/1.1"]
+        );
+    }
+
+    /// A zero is the documented way to spell "no cap", so it must behave like an
+    /// absent cap: no capability probe, and no `advanced` on the wire.
+    #[tokio::test]
+    async fn zero_network_rate_limit_does_not_probe_server_capabilities() {
+        let (port, server) = json_server(vec![BOX_RESPONSE]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        RuntimeBackend::create(&runtime, rate_limited_options(0, 0), None)
+            .await
+            .expect("a zero cap is no cap and must create like an ordinary box");
+
+        assert_eq!(server.await.unwrap(), ["POST /v1/boxes HTTP/1.1"]);
     }
 
     #[tokio::test]

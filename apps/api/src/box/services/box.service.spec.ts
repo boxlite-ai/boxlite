@@ -281,6 +281,17 @@ describe('BoxService public defaults', () => {
     [{ networkBlockAll: true }, { boxLimitedNetworkEgress: false }, { networkBlockAll: true }],
     [{ networkAllowList: '10.0.0.0/8' }, { boxLimitedNetworkEgress: false }, { networkAllowList: '10.0.0.0/8' }],
     [{}, { boxLimitedNetworkEgress: true }, { networkBlockAll: true }],
+    [
+      { networkTxKbps: 10_000, networkRxKbps: 100_000 },
+      { boxLimitedNetworkEgress: false },
+      { networkTxKbps: 10_000, networkRxKbps: 100_000 },
+    ],
+    // 0 is "no cap" for the core too, so it may ride along with a blocked network.
+    [
+      { networkBlockAll: true, networkTxKbps: 0 },
+      { boxLimitedNetworkEgress: false },
+      { networkBlockAll: true, networkTxKbps: 0 },
+    ],
   ])(
     'creates a fresh box instead of claiming a warm box when network policy is required',
     async (request, org, expected) => {
@@ -293,6 +304,27 @@ describe('BoxService public defaults', () => {
       expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining(expected), undefined)
     },
   )
+
+  // A cap on a box with no outbound network has nothing to shape and the
+  // runner's core refuses the pairing. The organization's limited-egress
+  // default forces networkBlockAll on a caller who never asked for it, so the
+  // check has to run after that resolves — refusing here turns a doomed
+  // CREATE_BOX job into a 400.
+  it.each([
+    [
+      'an explicit networkBlockAll',
+      { networkBlockAll: true, networkTxKbps: 10_000 },
+      { boxLimitedNetworkEgress: false },
+    ],
+    ["the organization's limited-egress default", { networkRxKbps: 100_000 }, { boxLimitedNetworkEgress: true }],
+  ])('rejects a network rate limit on a box whose network is blocked by %s', async (_label, request, org) => {
+    const { service, boxRepository } = makeCreateService()
+
+    await expect(
+      service.create({ name: 'capped-box', image: 'base', ...request } as any, { id: 'org-1', ...org } as any),
+    ).rejects.toThrow(/network rate limit/)
+    expect(boxRepository.insert).not.toHaveBeenCalled()
+  })
 
   it.each([
     [undefined, false],

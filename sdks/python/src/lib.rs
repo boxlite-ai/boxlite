@@ -15,7 +15,8 @@ mod util;
 mod volumes;
 
 use crate::advanced_options::{
-    PyAdvancedBoxOptions, PyContainerCapabilities, PyHealthCheckOptions, PySecurityOptions,
+    PyAdvancedBoxOptions, PyContainerCapabilities, PyHealthCheckOptions, PyNetworkRateLimit,
+    PySecurityOptions,
 };
 use crate::box_handle::PyBox;
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
@@ -51,6 +52,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyHealthCheckOptions>()?;
     m.add_class::<PyAdvancedBoxOptions>()?;
     m.add_class::<PyContainerCapabilities>()?;
+    m.add_class::<PyNetworkRateLimit>()?;
     m.add_class::<PyBoxlite>()?;
     m.add_class::<PyBox>()?;
     m.add_class::<PyExecution>()?;

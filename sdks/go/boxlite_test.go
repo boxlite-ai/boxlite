@@ -337,6 +337,46 @@ func TestAdvancedOptionsSetCapabilitiesDeepCopies(t *testing.T) {
 	}
 }
 
+func TestAdvancedOptionsSetNetworkRateLimitRecordsAndApplies(t *testing.T) {
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatalf("NewAdvancedBoxOptions: %v", err)
+	}
+	defer advanced.Close()
+
+	limit := NetworkRateLimit{TxKbps: 10_000, RxKbps: 100_000}
+	if err := advanced.SetNetworkRateLimit(limit); err != nil {
+		t.Fatalf("SetNetworkRateLimit: %v", err)
+	}
+	if advanced.networkRateLimit != limit {
+		t.Fatalf("advanced.networkRateLimit: got %+v, want %+v", advanced.networkRateLimit, limit)
+	}
+
+	cfg := &boxConfig{}
+	WithAdvancedOptions(advanced)(cfg)
+	if err := buildAndFreeCOptions("alpine:latest", cfg); err != nil {
+		t.Fatalf("rate-limited advanced options must apply cleanly: %v", err)
+	}
+}
+
+func TestSetNetworkRateLimitOnClosedHandleFails(t *testing.T) {
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatalf("NewAdvancedBoxOptions: %v", err)
+	}
+	if err := advanced.SetNetworkRateLimit(NetworkRateLimit{TxKbps: 1}); err != nil {
+		t.Fatalf("SetNetworkRateLimit before Close: %v", err)
+	}
+	advanced.Close()
+
+	if err := advanced.SetNetworkRateLimit(NetworkRateLimit{TxKbps: 1}); err == nil {
+		t.Fatal("a closed handle must refuse a rate limit instead of dropping it")
+	}
+	if advanced.networkRateLimit != (NetworkRateLimit{}) {
+		t.Fatalf("Close must reset the recorded rate limit, got %+v", advanced.networkRateLimit)
+	}
+}
+
 func TestSetCapabilitiesRejectsEmbeddedNUL(t *testing.T) {
 	advanced, err := NewAdvancedBoxOptions()
 	if err != nil {

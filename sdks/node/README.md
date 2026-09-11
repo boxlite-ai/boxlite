@@ -195,6 +195,9 @@ const box = new SimpleBox({
       add: ['NET_ADMIN'],
       drop: ['NET_RAW'],
     },
+    // Per-direction bandwidth cap in kbit/s from the box's point of view;
+    // omitted or 0 leaves a direction uncapped.
+    networkRateLimit: { txKbps: 10_000, rxKbps: 100_000 },
   },
   env: { FOO: 'bar' },
   volumes: [

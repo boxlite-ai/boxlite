@@ -16,6 +16,10 @@ export class BoxliteConfigController {
   getConfig() {
     return {
       capabilities: {
+        // Advertised only because the whole chain honours it: DTO -> Box row
+        // -> runner CreateBoxDTO -> Go SDK -> gvproxy shaper. The Rust client
+        // refuses to send a cap to a server that does not say this.
+        network_rate_limit_enabled: true,
         snapshots_enabled: false,
         clone_enabled: false,
         export_enabled: false,

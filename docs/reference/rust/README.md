@@ -668,7 +668,7 @@ pub struct AdvancedBoxOptions {
 | `security` | `SecurityOptions` | `SecurityOptions::default()` (fully enabled profile; jailer enabled) | Security isolation options (jailer, seccomp, namespaces) |
 | `isolate_mounts` | `bool` | `false` | Enable bind mount isolation (requires CAP_SYS_ADMIN on Linux) |
 | `health_check` | `Option<HealthCheckOptions>` | `None` | Optional guest-agent health monitoring |
-| `network_rate_limit` | `NetworkRateLimit` | Unlimited | Per-direction rate limit for the box's interface, in kilobits/sec. Local runtime only; see [NetworkRateLimit](#networkratelimit) |
+| `network_rate_limit` | `NetworkRateLimit` | Unlimited | Per-direction rate limit for the box's interface, in kilobits/sec; see [NetworkRateLimit](#networkratelimit) |
 
 ### RootfsSpec
 
@@ -815,9 +815,11 @@ let opts = BoxOptions {
 };
 ```
 
-Local runtime only. A remote server owns its own network policy, so the REST
-wire types carry no field for this and a remote create rejects it. Setting a cap
-while `network` is `Disabled` is also rejected — there is no interface to shape.
+Over REST the cap travels as `advanced.network_rate_limit`. A server advertises
+support as `capabilities.network_rate_limit_enabled` on `GET /v1/config`, and
+the client refuses to send a cap to a server that does not, so an older server
+never silently drops it. Setting a cap while `network` is `Disabled` is
+rejected — there is no interface to shape.
 
 **Platform support.** The cap is verified on Linux, where the guest link is a
 SOCK_STREAM socket and declining to read it applies backpressure all the way to

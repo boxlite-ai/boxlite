@@ -70,6 +70,21 @@ describe('BoxliteBoxController request validation', () => {
     expect(dto.tty).toBe(false)
   })
 
+  it('accepts a network rate limit under advanced', async () => {
+    const dto: CreateBoxDto = await pipe!.transform(
+      { image: 'alpine:latest', advanced: { network_rate_limit: { tx_kbps: 10000 } } },
+      meta,
+    )
+
+    expect(dto.advanced?.network_rate_limit?.tx_kbps).toBe(10000)
+  })
+
+  it('rejects an unrecognised field nested inside advanced.network_rate_limit', async () => {
+    await expect(
+      pipe!.transform({ image: 'alpine:latest', advanced: { network_rate_limit: { tx_kbit: 10000 } } }, meta),
+    ).rejects.toThrow()
+  })
+
   it('rejects an unrecognised field nested inside network', async () => {
     await expect(
       pipe!.transform({ image: 'alpine:latest', network: { outbound: { mode: 'enabled' }, bogus: 1 } }, meta),
