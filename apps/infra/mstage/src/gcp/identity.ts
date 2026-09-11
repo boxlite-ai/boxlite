@@ -3,29 +3,23 @@
  *
  * Three differences from AWS, all forced by the platform rather than chosen:
  *
- * Nothing expires on a clock this can read. Application Default Credentials
- * refresh themselves, so `expiresAt` answers null and `assertUsableFor` has
- * nothing to check. That is the honest answer — inventing a deadline would be a
- * guarantee this cannot keep, and reporting one that never arrives would be a
- * guard that never fires.
+ * Nothing expires on a clock this can read: ADC refreshes itself, so
+ * `expiresAt` answers null and `assertUsableFor` has nothing to check.
  *
- * A child inherits a path, not a key. AWS hands three variables that are the
- * credential; Google hands a file the SDK reads and re-reads, so the child gets
- * `GOOGLE_APPLICATION_CREDENTIALS` and the project, and every AWS variable is
- * cleared so a subprocess cannot pick up the other cloud by accident.
+ * A child inherits a path, not a key — the SDK re-reads the file — so it gets
+ * `GOOGLE_APPLICATION_CREDENTIALS` and the project, with every AWS variable
+ * cleared so it cannot pick up the other cloud by accident.
  *
- * The tenant is a project, and the project is a string the caller already knows.
- * There is no `GetCallerIdentity` equivalent worth a network call here, so
- * `whoami` asks the auth library for the project it is pointed at.
+ * The tenant is a project the caller already knows, and there is no
+ * `GetCallerIdentity` worth a network call, so `whoami` asks the auth library.
  */
 
 import type { Caller, Identity } from '../identity.ts'
 import type { Scope } from '../aws/precedence.ts'
 
 /**
- * What Google's auth library answers, in the shape it already has. Structural
- * rather than imported so nothing depends on the package being installed until
- * a GCP stage exists.
+ * What Google's auth library answers. Structural rather than imported, so
+ * nothing needs the package installed until a GCP stage exists.
  */
 export type GoogleAuth = {
   getProjectId: () => Promise<string>
@@ -62,8 +56,7 @@ export const resolveGcpIdentity = ({
     app: scope.app,
     whoami,
 
-    // Application Default Credentials refresh themselves. There is no deadline
-    // to report, and reporting one would be a promise this cannot keep.
+    // ADC refreshes itself: there is no deadline to report.
     async expiresAt() {
       return null
     },
@@ -72,10 +65,9 @@ export const resolveGcpIdentity = ({
     },
 
     /**
-     * A child gets the project and, when one is in use, the path to the
-     * credentials. Every AWS variable is cleared: a subprocess that found a
-     * stale key triple would authenticate to the other cloud and fail somewhere
-     * that mentions neither.
+     * The project, plus the credentials path when one is in use. Every AWS
+     * variable is cleared, or a stale key triple would authenticate to the
+     * other cloud and fail somewhere that mentions neither.
      */
     async childEnvironment(base = environment) {
       const env: NodeJS.ProcessEnv = { ...base }

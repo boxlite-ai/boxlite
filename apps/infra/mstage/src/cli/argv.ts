@@ -1,12 +1,11 @@
 /**
  * Parses `npm run mstage <module> <command> -- [options] [-- <inner command>]`.
  *
- * npm consumes the first `--` and passes everything after it through untouched,
- * so options only survive when they are written to the right of it. Written to
- * the left, npm claims them for itself: `--stage dev` becomes `npm_config_stage=true`
- * plus a stray `dev` in argv, which silently shifts every positional after it.
- * That failure is invisible without this check, so the parser reports it instead
- * of acting on a command the caller never typed.
+ * npm consumes the first `--` and passes the rest through untouched, so options
+ * survive only to the right of it. To the left, `--stage dev` becomes
+ * `npm_config_stage=true` plus a stray `dev`, silently shifting every
+ * positional after it. Invisible without this check, so it is reported rather
+ * than acted on.
  */
 
 const USAGE = 'npm run mstage <module> <command> -- [--stage <stage>] [options] [-- <inner command>]'
@@ -31,9 +30,8 @@ export type Invocation = {
   /** Bare tokens, with option parsing continuing around them. `env set KEY=V`. */
   positionals: string[]
   /**
-   * Everything from the first bare token onward, verbatim. npm eats the caller's
-   * `--` before an inner command, so `aws exec` cannot rely on a separator being
-   * there; it takes the remainder as written instead.
+   * Everything from the first bare token onward, verbatim. npm eats the `--`
+   * before an inner command, so `aws exec` takes the remainder as written.
    */
   inner: string[] | null
 }
@@ -55,11 +53,9 @@ const parseFlagValue = (option: string, raw: string | undefined): boolean => {
 }
 
 /**
- * Options a caller adds for itself.
- *
- * mdeploy parses with mstage's parser so both tools read a command line the same
- * way, but its own switches have no business in `mstage --help`. Passing them per
- * call keeps each tool's surface its own.
+ * Options a caller adds for itself. mdeploy shares this parser so both tools
+ * read a command line alike, but its switches have no business in
+ * `mstage --help` — passing them per call keeps each surface its own.
  */
 export type ExtraOptions = { flags?: string[]; values?: string[] }
 

@@ -1,44 +1,32 @@
 /*
  * Two ways an image reaches a stage's registry: built there, or promoted there.
  *
- * `publish` builds every artifact at one commit and uploads it. The order is
- * deliberate and each step exists because of a specific failure:
+ * `publish` builds every artifact at one commit and uploads it, in this order:
+ *   ensure repository   a first publish into a fresh account fails on push otherwise
+ *   already published?  immutable tags make a re-push fail, so a re-run of a
+ *                       green build is recognised before anything is built
+ *   audit               nothing ships carrying a high-severity advisory. Runs
+ *                       inside the loop so a re-publish that builds nothing is
+ *                       not audited, and `promote` has no such step at all
+ *   build, push         the commit is passed in as REVISION so the image can
+ *                       name itself
+ *   scan gate           better a published image nobody may deploy than a
+ *                       deployed image nobody scanned
  *
- *   ensure repository   a first publish into a fresh account would otherwise
- *                       fail on push, after paying for the build
- *   already published?  tags are immutable, so re-pushing a commit fails with
- *                       "cannot be overwritten". Re-running a green build is
- *                       not a failure, so it is checked first — and checked
- *                       *before* building, because building to then discover
- *                       the answer is wasted work
- *   build, push         the configured context; the commit is passed in as
- *                       REVISION so the image can name itself
- *   scan gate           a published image that nobody may deploy is better
- *                       than a deployed image nobody scanned. ECR registers
- *                       the scan after the push returns, so this waits for an
- *                       answer rather than reading whatever is there a second
- *                       later, which is either no scan or an unfinished one
+ * `promote` moves an already-built commit between registries. It never builds:
+ * the bytes that ran in dev are the bytes that run in prod. ECR shares no
+ * layers between repositories, so it is a pull, a re-tag and a push.
  *
- * `promote` moves an already-built commit from one stage's registry to
- * another's. It never builds: the bytes that ran in dev are the bytes that run
- * in prod, and rebuilding from the same commit would only reintroduce the
- * chance that they differ. Layers are not shared between ECR repositories, so
- * this is a pull, a re-tag and a push rather than a manifest copy.
+ * `verifyPublished` only asks whether a registry holds every artifact at a
+ * commit, and reports it. A deploy asks before it applies anything.
  *
- * `verifyPublished` asks the question both of them ask first — does this
- * registry hold every artifact at this commit — and does nothing with the
- * answer but report it. A deploy asks it before it applies anything: the
- * addresses it resolves are the ones a runtime pulls minutes later, and a
- * commit still being built surfaces there as a container that cannot start,
- * after an apply has already created resources.
- *
- * Every external call goes through `run`, injected, so the whole sequence is
+ * Every external call goes through the injected `run`, so the whole sequence is
  * testable without a registry, a daemon or credentials.
  */
 
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import type { BuildConfig, ScanSeverity } from './config.ts'
+import type { BuildConfig, ScanPolicy, ScanSeverity } from './config.ts'
 import { addressFor, assertTag, type Registry } from './address.ts'
 
 export class PublishError extends Error {
@@ -49,17 +37,12 @@ export class PublishError extends Error {
 }
 
 /**
- * The scan gate's refusal, told apart from every other failure.
+ * The scan gate's refusal, which a caller must not retry.
  *
- * A separate class because a caller retries a publish and must not retry this
- * one. Everything else `PublishError` reports is a push, a token endpoint or a
- * registry API — all of which fail transiently, which is why the retry exists.
- * A scan finding is an answer about the image's own contents, and asking again
- * returns it again: the calling workflow spent three attempts and ninety
- * seconds of backoff re-reading the same four findings before reporting them.
- *
- * The distinction is carried out to the process's exit code
- * (`bin/mbuild.ts`), because the caller that has to stop retrying is a shell.
+ * Every other `PublishError` is a push, a token endpoint or a registry API, all
+ * of which fail transiently. A scan finding is about the image's own contents,
+ * so asking again returns it again. Carried out to the exit code in
+ * `bin/mbuild.ts`, because the caller that has to stop retrying is a shell.
  */
 export class ScanRefusedError extends PublishError {
   constructor(message: string) {
@@ -71,27 +54,42 @@ export class ScanRefusedError extends PublishError {
 /** One external command. Non-zero exit is reported, never thrown away. */
 export type RunResult = { code: number; stdout: string; stderr: string }
 /**
- * `stdin` is how a secret reaches a command without passing through argv.
- *
- * `echo` sends a command's output on to the log as it arrives, and is set for
- * the commands that take minutes — a build that prints nothing until it
- * finishes cannot be told from a build that has hung. It stays off for the
- * rest, because their output is a registry password or a document to parse,
- * and neither belongs in a log.
+ * `stdin` passes a secret to a command without putting it in argv. `echo`
+ * streams output to the log, and is set only for the commands that take
+ * minutes — elsewhere the output is a password or a document to parse.
  */
 export type RunOptions = { stdin?: string; echo?: boolean }
 export type Run = (command: string, args: string[], options?: RunOptions) => Promise<RunResult>
 
-/**
- * Time, injected for the same reason `run` is: a test spends a scan's whole
- * budget without spending the time. Both halves together, because a deadline
- * that reads the real clock and sleeps a fake one measures nothing.
- */
+/** Time, injected so a test spends a scan's budget without spending the time. */
 export type Clock = { now: () => number; wait: (milliseconds: number) => Promise<unknown> }
 const systemClock: Clock = { now: Date.now, wait: sleep }
 
-/** How often a scan that has not answered yet is asked again; `aws ecr wait` polls at this cadence. */
+/** How often an unanswered scan is asked again; `aws ecr wait` polls at this cadence. */
 const SCAN_POLL_SECONDS = 5
+
+/**
+ * The architecture every runtime this publishes for runs on.
+ *
+ * Pinned rather than left to the builder's host, and it is the host that makes
+ * this necessary: `docker build` targets the machine it runs on, which is
+ * amd64 on a CI runner and arm64 on an Apple Silicon workstation. Cloud Run
+ * runs amd64 only, and an ECS task definition that declares no
+ * `runtimePlatform` gets Fargate's x86_64 default — an arm64 image satisfies
+ * neither.
+ *
+ * Measured, which is why this is a constant rather than a note: a local
+ * publish from an arm64 workstation pushed an arm64 image, the tag was
+ * accepted, and the revision built from it died at `failed to load
+ * /usr/local/bin/docker-entrypoint.sh: exec format error`, with nothing before
+ * that point naming an architecture. Immutability then cut both ways — the
+ * wrong bytes took that commit's tag permanently, and the property that made
+ * it permanent also refused the cleanup: `images delete --delete-tags` answers
+ * `FAILED_PRECONDITION: ... the repository has enabled tag immutability`, and
+ * without that flag `cannot delete image ... because it is tagged`. A burned
+ * tag is not removable while immutability is on; the remedy is a new commit.
+ */
+const RUNTIME_PLATFORM = 'linux/amd64'
 
 export type PublishOutcome = {
   artifact: string
@@ -101,13 +99,9 @@ export type PublishOutcome = {
 }
 
 /**
- * What a registry says about one image's scan right now.
- *
- * `pending` is the state that has to exist. A scan is registered after the push
- * that triggers it returns, so the first read of a just-pushed image finds no
- * scan at all, and the read after that finds one still running. Neither is an
- * answer, and neither is a failure — which is what separates them from
- * `failed`, an image this registry will never produce counts for.
+ * What a registry says about one image's scan right now. `pending` covers both
+ * "no scan registered yet" and "still running" — a scan is registered only
+ * after the push returns. Neither is a failure; `failed` is.
  */
 type ScanReport =
   | { state: 'pending'; detail: string }
@@ -122,17 +116,10 @@ type Registrar = {
 }
 
 /*
- * "The registry does not hold this" and "the registry did not answer" are
- * different facts, and only the first belongs in a boolean.
- *
- * The read runs as whoever asks, and the two callers are not the same identity:
- * `publish` asks as the publisher, while a deploy's preflight asks as the
- * deploy. So a grant one of them lacks arrives here as a failed read — and
- * answered with `false` it becomes "the stage does not hold this commit's
- * images", which sends the reader to publish images that are already there.
- *
- * How absence is spelled differs per registry and stays with each registrar;
- * what they share is the refusal, carrying the registry's own words.
+ * "Does not hold this" and "did not answer" are different facts, and only the
+ * first belongs in a boolean. `publish` and a deploy's preflight read as
+ * different identities, so a missing grant arrives here as a failed read;
+ * answered `false` it would send the reader off to republish existing images.
  */
 const ECR_IMAGE_ABSENT = /ImageNotFoundException/
 
@@ -160,8 +147,8 @@ const ecrRegistrar = ({
     async ensureRepository() {
       const existing = await aws(['ecr', 'describe-repositories', '--repository-names', registry.repository])
       if (existing.code === 0) return
-      // Immutable tags are what make a published commit mean exact bytes; scan
-      // on push is what gives the gate below something to read.
+      // Immutable tags make a published commit mean exact bytes; scan on push
+      // gives the gate below something to read.
       const created = await aws([
         'ecr',
         'create-repository',
@@ -192,9 +179,8 @@ const ecrRegistrar = ({
     async login() {
       const password = await aws(['ecr', 'get-login-password'])
       if (password.code !== 0) throw new PublishError(`Could not obtain a registry password: ${password.stderr.trim()}`)
-      // Fed through stdin, never argv, which the process table exposes. An
-      // unfed `--password-stdin` is worse than insecure: docker prompts
-      // instead, and fails on the absent terminal rather than on the password.
+      // Through stdin, never argv, which the process table exposes. An unfed
+      // `--password-stdin` makes docker prompt and fail on the absent terminal.
       const login = await run('docker', ['login', '--username', 'AWS', '--password-stdin', registry.host], {
         stdin: password.stdout.trim(),
       })
@@ -208,21 +194,17 @@ const ecrRegistrar = ({
         registry.repository,
         '--image-id',
         `imageTag=${tag}-${artifact}`,
-        // The status travels with the counts because neither can be read alone:
-        // absent counts mean "found nothing" once the scan is COMPLETE and
-        // "has not looked yet" until then, and those are opposite answers.
+        // Status and counts together: absent counts mean "found nothing" once
+        // COMPLETE and "has not looked yet" until then — opposite answers.
         '--query',
         '{status: imageScanStatus.status, detail: imageScanStatus.description, counts: imageScanFindings.findingSeverityCounts}',
-        // JSON rather than text, for the state this is waiting through: a
-        // response for a scan still running carries no `imageScanFindings`, and
-        // the CLI's text formatter writes this paginated operation's result keys
-        // into the null it stored for that field and dies on the assignment.
+        // JSON, not text: a still-running scan carries no `imageScanFindings`,
+        // and the CLI's text formatter dies assigning result keys into that null.
         '--output',
         'json',
       ])
       if (answer.code !== 0) {
-        // The image exists before its scan does: the push registers the scan on
-        // its way out, and this read can arrive first.
+        // The image exists before its scan does; this read can arrive first.
         if (answer.stderr.includes('ScanNotFoundException')) return { state: 'pending', detail: 'not registered yet' }
         throw new PublishError(`Could not read scan findings: ${answer.stderr.trim()}`)
       }
@@ -234,10 +216,8 @@ const ecrRegistrar = ({
       }
       const status = described.status ?? 'UNKNOWN'
       switch (status) {
-        // COMPLETE is what a scan on push reports; ACTIVE is what continuous
-        // scanning reports for an image whose findings are current. Enhanced
-        // scanning is a registry-wide setting, so the same repository can start
-        // answering the second without this config changing.
+        // COMPLETE from a scan on push, ACTIVE from continuous scanning.
+        // Enhanced scanning is registry-wide, so either can arrive unannounced.
         case 'COMPLETE':
         case 'ACTIVE':
           return { state: 'complete', counts: described.counts ?? {} }
@@ -245,9 +225,8 @@ const ecrRegistrar = ({
         case 'PENDING':
           return { state: 'pending', detail: status }
         default:
-          // Everything else is terminal — an unsupported image is the one that
-          // happens — and waiting out the budget would only replace the reason
-          // ECR gave with a timeout.
+          // Terminal — usually an unsupported image. Waiting out the budget
+          // would only replace ECR's reason with a timeout.
           return { state: 'failed', detail: described.detail ? `${status}: ${described.detail}` : status }
       }
     },
@@ -257,18 +236,14 @@ const ecrRegistrar = ({
 /**
  * Artifact Registry, which answers the same four questions differently.
  *
- * Two differences are worth naming. A repository holds one artifact per name
- * rather than one repository holding every artifact under a compound tag, so
- * the address puts the artifact in the path and the tag is just the commit —
- * `address.ts` already writes both shapes.
+ * One repository per artifact, so the address carries the artifact in the path
+ * and the tag is just the commit (`address.ts` writes both shapes).
  *
- * And scanning is not part of a push. Artifact Analysis scans continuously and
- * answers per occurrence, so the gate reads occurrences rather than waiting for
- * a scan to attach to the image, and never reports one as pending. When
- * analysis is not enabled the query returns nothing, which reads as no
- * findings, so `scanOnPush` in the config is what keeps this gate honest. ECR
- * answers a missing scan differently: it reads as pending there, and the
- * publish fails on a spent budget rather than on an empty answer.
+ * Scanning is not part of a push: Artifact Analysis scans continuously and
+ * answers per occurrence, so the gate reads occurrences and never reports
+ * pending. With analysis disabled the query returns nothing, which reads as no
+ * findings — `scanOnPush` is what keeps this gate honest. ECR instead reads a
+ * missing scan as pending and fails on a spent budget.
  */
 const artifactRegistryRegistrar = ({
   run,
@@ -288,12 +263,10 @@ const artifactRegistryRegistrar = ({
   const path = `${registry.host}/${registry.project}/${registry.repository}`
   return {
     async ensureRepository() {
-      // The describe answers both questions at once: whether it is there, and
-      // whether it matches what the stage declared. Tag immutability is fixed at
-      // creation, so a repository that predates the declaration cannot be
-      // brought to it — and publishing into it anyway would mean the config
-      // claims exact bytes for a tag that can still be moved. The field is
-      // absent rather than false when unset.
+      // Answers both questions at once: is it there, and does it match what
+      // the stage declared. Tag immutability is fixed at creation, so a
+      // repository predating the declaration cannot be brought to it. The
+      // field is absent rather than false when unset.
       const existing = await gcloud([
         'artifacts',
         'repositories',
@@ -321,10 +294,8 @@ const artifactRegistryRegistrar = ({
         region,
         '--repository-format',
         'docker',
-        // The same declaration ECR reads as IMMUTABLE. Nothing here addresses an
-        // image by digest, so this is the only thing making a deployed commit
-        // tag mean exact bytes; a repository created without it silently drops
-        // that guarantee while the config still claims it.
+        // The same declaration ECR reads as IMMUTABLE. Nothing here addresses
+        // an image by digest, so this alone makes a commit tag mean exact bytes.
         ...(declared.immutableTags ? ['--immutable-tags'] : []),
       ])
       if (created.code !== 0) {
@@ -332,19 +303,12 @@ const artifactRegistryRegistrar = ({
       }
     },
     /*
-     * `list`, not `describe`. For a pkg.dev repository `describe` reaches
-     * Container Analysis unconditionally — `DescribeDockerImage` calls
-     * `GetImageSummaryMetadata` and `GetContainerAnalysisMetadata` whenever the
-     * repo is not an unredirected gcr.io one (google-cloud-sdk's
-     * `command_lib/artifacts/docker_util.py`) — so asking "does this repository
-     * hold this tag" through it makes every caller need read on vulnerability
-     * metadata as well. A deploy has no business holding that: the question is
-     * Artifact Registry's alone, and `list` asks only Artifact Registry.
+     * `list`, not `describe`. On a pkg.dev repository `describe` always reaches
+     * Container Analysis (google-cloud-sdk `command_lib/artifacts/docker_util.py`),
+     * so it would make every caller need read on vulnerability metadata too.
      *
-     * It also answers absence with an empty page rather than with an error,
-     * which is the difference between "not there" and "could not tell" without
-     * matching on message text. A missing repository still fails the read,
-     * which is the honest answer: nothing was looked in.
+     * It also spells absence as an empty page rather than an error, separating
+     * "not there" from "could not tell" without matching on message text.
      */
     async isPublished(artifact, tag) {
       const found = await gcloud([
@@ -360,13 +324,12 @@ const artifactRegistryRegistrar = ({
       if (found.code !== 0) {
         throw unreadable({ result: found, address: addressFor({ config, registry, artifact, tag }) })
       }
-      // The banner and any warning go to stderr, so an empty page is empty here.
+      // Banner and warnings go to stderr, so an empty page is empty here.
       return found.stdout.trim() !== ''
     },
     async login() {
-      // No password to fetch: the Docker credential helper reads the ambient
-      // Application Default Credentials every time, so there is nothing here
-      // that expires between this call and the push.
+      // No password to fetch: the credential helper reads ambient ADC each
+      // time, so nothing here expires between this call and the push.
       const configured = await run('gcloud', ['auth', 'configure-docker', registry.host, '--quiet'])
       if (configured.code !== 0) {
         throw new PublishError(`Could not log in to ${registry.host}: ${configured.stderr.trim()}`)
@@ -390,11 +353,9 @@ const artifactRegistryRegistrar = ({
       } catch {
         throw new PublishError('Scan findings were not valid JSON')
       }
-      // Artifact Analysis reports one entry per occurrence; the gate counts by
-      // severity, so they are counted here rather than everywhere they are read.
+      // One entry per occurrence; the gate counts by severity, so tally here.
       const vulnerabilities = described.package_vulnerability_summary?.vulnerabilities ?? {}
-      // Never pending: this reads the occurrences that exist now rather than a
-      // scan attached to the push, so there is nothing here to wait for.
+      // Never pending: these are the occurrences that exist now.
       return {
         state: 'complete',
         counts: Object.fromEntries(
@@ -429,9 +390,7 @@ const blockingFindings = (counts: Record<string, number>, blockOn: ScanSeverity[
 
 /**
  * The artifacts a registry does not hold at one commit, in declared order.
- *
- * The names rather than a yes or no: both callers report which artifact is
- * missing, and a boolean would leave each of them to find out again.
+ * Names rather than a boolean, because both callers report which one is missing.
  */
 const missingFrom = async ({
   registrar,
@@ -452,12 +411,9 @@ const missingFrom = async ({
 /**
  * One image's severity counts, waited for.
  *
- * A registry that has not answered yet is not an image with nothing found, and
- * reading it as one lets an unscanned image through the gate that exists to
- * scan it. Reading it as a failure is the opposite mistake: it fails a publish
- * whose image is fine, seconds before the answer would have arrived. So a
- * pending report is asked again, and `scan.timeoutSeconds` is how long that is
- * worth doing before no answer is itself the answer.
+ * An unanswered registry is not an image with nothing found — reading it as one
+ * lets an unscanned image through. Reading it as a failure is the opposite
+ * mistake. So pending is asked again, for `scan.timeoutSeconds`.
  */
 const awaitScanCounts = async ({
   registrar,
@@ -476,11 +432,9 @@ const awaitScanCounts = async ({
   clock: Clock
   log: (line: string) => void
 }): Promise<Record<string, number>> => {
-  // A deadline rather than a count of polls: the reads themselves take time, so
-  // a budget spent in fixed steps is not the budget the config declared, and
-  // the failure would name a duration that never elapsed. The last wait is
-  // whatever is left of it, so a budget shorter than one interval still buys a
-  // second read rather than none.
+  // A deadline, not a poll count: the reads take time, so fixed steps would
+  // not spend the budget the config declared. The last wait is whatever is
+  // left, so a budget under one interval still buys a second read.
   const deadline = clock.now() + timeoutSeconds * 1_000
   let announced = false
   for (;;) {
@@ -489,9 +443,7 @@ const awaitScanCounts = async ({
     if (report.state === 'failed') throw new PublishError(`${address} was not scanned: ${report.detail}`)
     const remaining = deadline - clock.now()
     if (remaining <= 0) throw new PublishError(`${address} had no scan result after ${timeoutSeconds}s`)
-    // Once, not per poll: a minute of the same sentence is no more informative
-    // than one line of it, and a step that says nothing at all for as long as
-    // this waits cannot be told from a hung one.
+    // Once, not per poll — but at least once, or the wait looks like a hang.
     if (!announced) {
       log(`Waiting up to ${timeoutSeconds}s for the scan of ${address} (${report.detail})`)
       announced = true
@@ -500,16 +452,22 @@ const awaitScanCounts = async ({
   }
 }
 
+/**
+ * The receiving stage's policy, not the repository's: what a stage refuses is
+ * declared beside the registry it publishes into, so prod can be stricter than
+ * dev. On a promotion this is the destination's, because the destination is
+ * what has to run the image.
+ */
 const assertNoBlockingFindings = async ({
   registrar,
-  config,
+  scan,
   outcomes,
   tag,
   clock,
   log,
 }: {
   registrar: Registrar
-  config: BuildConfig
+  scan: ScanPolicy
   outcomes: PublishOutcome[]
   tag: string
   clock: Clock
@@ -521,13 +479,48 @@ const assertNoBlockingFindings = async ({
       artifact,
       address,
       tag,
-      timeoutSeconds: config.scan.timeoutSeconds,
+      timeoutSeconds: scan.timeoutSeconds,
       clock,
       log,
     })
-    const blocking = blockingFindings(counts, config.scan.blockOn)
+    const blocking = blockingFindings(counts, scan.blockOn)
     if (blocking.length > 0) throw new ScanRefusedError(`${address} has ${blocking.join(' and ')} findings`)
   }
+}
+
+/**
+ * What the images are allowed to carry, checked before one is built.
+ *
+ * `--omit=dev` because the question is what ships. `--audit-level=high` is the
+ * threshold `ci.yml` already uses, and this is the second place that needs it:
+ * a hand-dispatched publish names its own ref, so passing CI is not something
+ * it can assume.
+ *
+ * Called from inside the build loop, because whether anything needs building is
+ * only knowable once the registry has answered `isPublished`. A doomed build
+ * therefore costs a repository and a login first; what that buys is that a
+ * re-publish with nothing to build is not audited at all.
+ */
+const assertNoHighSeverityAdvisories = async ({
+  config,
+  run,
+  log,
+}: {
+  config: BuildConfig
+  run: Run
+  log: (line: string) => void
+}): Promise<void> => {
+  log('Auditing the dependencies that ship')
+  // `--prefix` rather than a working directory: `RunOptions` carries no cwd.
+  // Not echoed — that is reserved for the commands that take minutes — so what
+  // npm said travels in the error instead.
+  const audited = await run('npm', ['--prefix', config.repository, 'audit', '--audit-level=high', '--omit=dev'])
+  if (audited.code === 0) return
+  // Not "advisories were found": a non-zero exit is also how npm reports that
+  // it could not audit at all — no lockfile, no registry — and that arrives on
+  // stderr with stdout empty. Both streams, so the reason is always carried.
+  const said = [audited.stdout.trim(), audited.stderr.trim()].filter((stream) => stream.length > 0).join('\n')
+  throw new PublishError(`npm audit did not pass, so no image was built.\n${said}`)
 }
 
 export const publish = async ({
@@ -548,6 +541,18 @@ export const publish = async ({
   clock?: Clock
 }): Promise<PublishOutcome[]> => {
   assertTag(tag)
+  /*
+   * Audited once, the first time a build is actually going to happen. Not up
+   * front: a re-publish whose artifacts are all present builds nothing, and
+   * gating that on today's advisories would hold an old image against a new
+   * answer — the same reason `promote` does not audit at all.
+   */
+  let audited = false
+  const auditOnce = async (): Promise<void> => {
+    if (audited) return
+    await assertNoHighSeverityAdvisories({ config, run, log })
+    audited = true
+  }
   const registrar = registrarFor({ run, config, stage, registry })
   await registrar.ensureRepository()
   await registrar.login()
@@ -564,17 +569,16 @@ export const publish = async ({
       outcomes.push({ artifact, address, built: false })
       continue
     }
-    // Named before it starts, and echoed while it runs. The two long commands
-    // in a publish are these, so a step that says nothing here says nothing at
-    // all for as long as the build takes.
+    await auditOnce()
+    // Named before it starts and echoed while it runs: these are the two long
+    // commands, so silence here is silence for as long as the build takes.
     log(`Building ${artifact} from ${dockerfile} as ${address}`)
     const built = await run(
       'docker',
-      ['build', '--build-arg', `REVISION=${tag}`, '-f', dockerfile, '-t', address, context],
+      ['build', '--platform', RUNTIME_PLATFORM, '--build-arg', `REVISION=${tag}`, '-f', dockerfile, '-t', address, context],
       { echo: true },
     )
-    // The exit code, not the captured output: docker has already written the
-    // reason to the log above, and repeating it here would print it twice.
+    // The exit code, not the output: docker already wrote the reason above.
     if (built.code !== 0) throw new PublishError(`Could not build ${artifact}: docker build exited ${built.code}`)
     log(`Pushing ${address}`)
     const pushed = await run('docker', ['push', address], { echo: true })
@@ -583,7 +587,7 @@ export const publish = async ({
     outcomes.push({ artifact, address, built: true })
   }
 
-  await assertNoBlockingFindings({ registrar, config, outcomes, tag, clock, log })
+  await assertNoBlockingFindings({ registrar, scan: config.stages[stage]!.scan, outcomes, tag, clock, log })
   return outcomes
 }
 
@@ -591,17 +595,13 @@ export const publish = async ({
 export type PublishedImage = { artifact: string; address: string }
 
 /**
- * Refuse unless a stage's registry already holds every artifact at one commit,
- * and report where they sit.
+ * Refuse unless a stage's registry holds every artifact at one commit, and
+ * report where they sit.
  *
- * A read: nothing is created, nothing is logged in to, nothing is built. That
- * is what makes it cheap enough to run before a deploy has committed to
- * anything, which is the point — the alternative is an apply that creates half
- * a stack and then fails on a task that cannot pull.
- *
- * The addresses come from `addressFor`, the same function the deploy resolves
- * its images through. A caller that composed its own string could check one
- * address and deploy another.
+ * A pure read — nothing created, logged in to or built — so it is cheap enough
+ * to run before a deploy commits to anything. The addresses come from
+ * `addressFor`, the same function the deploy resolves through, or this could
+ * check one address and deploy another.
  */
 export const verifyPublished = async ({
   config,
@@ -621,9 +621,8 @@ export const verifyPublished = async ({
   const artifacts = Object.keys(config.artifacts)
   const missing = await missingFrom({ registrar, artifacts, tag })
   if (missing.length > 0) {
-    // The address, not the artifact name: it names the repository and the tag
-    // that were looked for, which is what a person compares against the
-    // publish that was supposed to have written them.
+    // The address, not the artifact name: it carries the repository and tag a
+    // person compares against the publish that should have written them.
     const addresses = missing.map((artifact) => addressFor({ config, registry, artifact, tag }))
     throw new PublishError(`${stage} does not hold ${addresses.join(', ')}`)
   }
@@ -635,10 +634,8 @@ export type PromoteOutcome = PublishOutcome & { from: string }
 /**
  * Move a commit from one stage's registry to another's.
  *
- * The source must already hold every artifact: promoting half a release would
- * leave the destination with a version that cannot start. That is checked
- * before anything is pulled, so a missing artifact fails without having moved
- * the others.
+ * The source must hold every artifact — half a release is a version that cannot
+ * start — and that is checked before anything is pulled.
  */
 export const promote = async ({
   config,
@@ -682,11 +679,18 @@ export const promote = async ({
       outcomes.push({ artifact, address, from: sourceAddress, built: false })
       continue
     }
-    // Pull, re-tag, push. ECR does not share layers between repositories, so
-    // there is no manifest-only copy that would work here. The two transfers
-    // are echoed for the same reason a build is: they move whole images.
+    /*
+     * Pull, re-tag, push: ECR shares no layers between repositories, so there
+     * is no manifest-only copy. Echoed, because they move whole images.
+     *
+     * The pull names the architecture for the reason the build does, and this
+     * is the worse place to miss it: `docker pull` of a multi-arch address
+     * resolves to the *host's* variant, so a promotion from an arm64
+     * workstation would carry that variant into the receiving stage — which is
+     * the one thing promoting rather than rebuilding exists to prevent.
+     */
     log(`Pulling ${sourceAddress}`)
-    const pulled = await run('docker', ['pull', sourceAddress], { echo: true })
+    const pulled = await run('docker', ['pull', '--platform', RUNTIME_PLATFORM, sourceAddress], { echo: true })
     if (pulled.code !== 0) throw new PublishError(`Could not pull ${sourceAddress}: docker pull exited ${pulled.code}`)
     const tagged = await run('docker', ['tag', sourceAddress, address])
     if (tagged.code !== 0) throw new PublishError(`Could not tag ${address}: ${tagged.stderr.trim()}`)
@@ -697,8 +701,14 @@ export const promote = async ({
     outcomes.push({ artifact, address, from: sourceAddress, built: true })
   }
 
-  // The destination scans on push too, and its threshold is the one that
-  // decides whether the receiving stage may run this.
-  await assertNoBlockingFindings({ registrar: destination, config, outcomes, tag, clock, log })
+  // The destination's threshold decides whether the receiving stage may run it.
+  await assertNoBlockingFindings({
+    registrar: destination,
+    scan: config.stages[to.stage]!.scan,
+    outcomes,
+    tag,
+    clock,
+    log,
+  })
   return outcomes
 }

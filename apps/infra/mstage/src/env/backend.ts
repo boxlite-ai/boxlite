@@ -1,21 +1,16 @@
 /*
  * What a cloud has to answer for mstage to keep a stage's configuration in it.
  *
- * Five questions, and none of them mentions a bucket, a parameter or a secret
- * version. That is the whole point: the layout is the backend's business, and
- * the two backends do not share one. On AWS the layout is SST's, because the
- * same objects are read and written by `sst deploy` and diverging from it would
- * mean two stores; anywhere else mstage is free to choose, and does.
+ * Five questions, none mentioning a bucket, a parameter or a secret version:
+ * the layout is the backend's business. On AWS it is SST's, because `sst
+ * deploy` reads and writes the same objects; elsewhere mstage chooses.
  *
- * A backend answers for two more objects, `StateObjects` below, in whatever
- * layout the engine that deploys into its home uses. Grouped rather than asked
- * as two more questions, because they belong to that engine and the five above
- * belong to mstage.
+ * `StateObjects` below adds the two objects the deploying engine keeps, grouped
+ * separately because they belong to that engine rather than to mstage.
  *
- * The encryption is not a backend's business either. Values are sealed before
- * they reach one and opened after they leave it, so a backend never holds a
- * readable secret and a second backend cannot get the format subtly wrong. What
- * a backend stores is opaque bytes it must return unchanged.
+ * Encryption is not a backend's business either: values are sealed before they
+ * arrive and opened after they leave, so a backend holds only opaque bytes it
+ * must return unchanged.
  */
 
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
@@ -42,24 +37,18 @@ export type StoredVersion = {
 }
 
 /**
- * The two things an engine keeps for a stage beside the store: a checkpoint,
- * and whatever it holds while rewriting one.
+ * The two things a deploying engine keeps for a stage beside the store: a
+ * checkpoint, and whatever it holds while rewriting one.
  *
- * Both exist only because something deploys. mstage does not, so it writes no
- * checkpoint of its own and takes no lock — it offers the two repairs a deploy
- * cannot make for itself, because both are needed exactly when a deploy stopped
- * halfway: dropping a lock the process did not live to release, and editing a
- * checkpoint whose pending operations refuse the next deploy.
+ * mstage does not deploy, so it writes neither — it offers only the two repairs
+ * a stopped deploy cannot make for itself: dropping a lock the process never
+ * released, and editing a checkpoint whose pending operations refuse the next
+ * deploy.
  *
- * Deliberately says nothing about where either lives. The two engines disagree:
- * SST keeps `app/<app>/<stage>.json` with one `lock/…` object beside it, and
- * Pulumi keeps everything under `.pulumi/` with a *directory* of lock files.
- * Each backend answers for its own layout, and a caller works in checkpoints and
- * locks rather than keys.
- *
- * Neither object is sealed. Whatever is secret inside the checkpoint was
- * encrypted by Pulumi before it was stored, so these are bytes to carry
- * unchanged rather than something to open.
+ * Says nothing about where either lives, because the engines disagree: SST
+ * keeps `app/<app>/<stage>.json` with a `lock/…` object beside it, Pulumi keeps
+ * a `.pulumi/` tree with a *directory* of locks. Neither object is sealed here
+ * — Pulumi already encrypted what is secret inside the checkpoint.
  */
 export type StateObjects = {
   readCheckpoint: (input: { app: string; stage: string }) => Promise<Buffer | null>
@@ -71,10 +60,9 @@ export type StateObjects = {
 /**
  * A place to keep one stage's sealed configuration.
  *
- * `read` returns null when the stage was never written — an empty stage is an
- * answer, not a failure. It throws when a named version is gone, because a
- * caller that asked for a specific revision and silently got the newest is the
- * drift that pinning exists to prevent.
+ * `read` returns null for a stage never written — an empty stage is an answer,
+ * not a failure — and throws when a named version is gone, because silently
+ * returning the newest is the drift pinning exists to prevent.
  */
 export type StoreBackend = {
   /** Names the cloud this backend keeps configuration in. */
@@ -95,10 +83,9 @@ export type StoreBackend = {
 }
 
 /**
- * Go writes `nonce || ciphertext || tag`, and picks the cipher from the key's
- * length exactly as `aes.NewCipher` does. Kept identical on both backends so a
- * store written by one is readable by the other — which is what makes moving a
- * stage between clouds a copy rather than a re-entry.
+ * Go writes `nonce || ciphertext || tag` and picks the cipher from the key
+ * length, as `aes.NewCipher` does. Identical on both backends, so a store
+ * written by one opens with the other and moving a stage is a copy.
  */
 const cipherFor = (key: Buffer, where: string): string => {
   const algorithm = { 16: 'aes-128-gcm', 24: 'aes-192-gcm', 32: 'aes-256-gcm' }[key.length]

@@ -8,20 +8,20 @@ import { run } from '../src/cli/run.ts'
 
 const configRoot = (login: Record<string, { required?: boolean }>) => {
   const root = mkdtempSync(join(tmpdir(), 'mstage-logout-'))
+  // Two files, as a real checkout has: what the repository is, and the stage
+  // that says which cloud it lives in and what reaching it costs.
+  writeFileSync(join(root, 'mstage.env.json'), JSON.stringify({ app: 'a' }))
   writeFileSync(
-    join(root, 'mstage.config.json'),
-    JSON.stringify({ app: 'a', home: 'aws', login, stages: { dev: { region: 'ap-southeast-1' } } }),
+    join(root, '.mstage.config.json'),
+    JSON.stringify({ stages: { dev: { home: 'aws', region: 'ap-southeast-1', login } } }),
   )
   return root
 }
 
 test('each provider knows the command that ends its session', () => {
-  // A sequence per provider, because a provider can keep a session in more than
-  // one place. gcloud is the one that does: `auth revoke` removes the local
-  // account and leaves the ADC file, and `application-default revoke` does the
-  // reverse — either alone ends half a session.
   assert.deepEqual(SIGN_OUT_COMMANDS, {
     aws: [['aws', 'logout']],
+    // Two, because one sign-in wrote two credentials.
     gcp: [
       ['gcloud', 'auth', 'revoke'],
       ['gcloud', 'auth', 'application-default', 'revoke'],
@@ -29,6 +29,31 @@ test('each provider knows the command that ends its session', () => {
     github: [['gh', 'auth', 'logout']],
     auth0: [['auth0', 'logout']],
   })
+})
+
+test('a GCP sign-out ends both credentials the sign-in wrote', () => {
+  // `auth revoke` alone leaves the ADC file on the machine and
+  // `application-default revoke` alone leaves the account signed in, so either
+  // on its own reports an ended session over one that half survives.
+  const calls: string[] = []
+  const runCommand = (command: string, args: string[]) => {
+    calls.push([command, ...args].join(' '))
+    return { status: 0 }
+  }
+  assert.deepEqual(signOut('gcp', runCommand as any), { ok: true })
+  assert.deepEqual(calls, ['gcloud auth revoke', 'gcloud auth application-default revoke'])
+})
+
+test('a failed step does not spare the credential the next one ends', () => {
+  // Revoking with no active account fails the first step while ADC is still on
+  // disk. Stopping there would report the failure and leave the credential.
+  const calls: string[] = []
+  const runCommand = (command: string, args: string[]) => {
+    calls.push([command, ...args].join(' '))
+    return { status: args[1] === 'revoke' ? 1 : 0 }
+  }
+  assert.deepEqual(signOut('gcp', runCommand as any), { ok: false, detail: 'gcloud auth revoke exited with 1' })
+  assert.deepEqual(calls, ['gcloud auth revoke', 'gcloud auth application-default revoke'])
 })
 
 test('a sign-out inherits the terminal, because gh asks which account', () => {
@@ -45,34 +70,6 @@ test('a failed sign-out names the command that failed', () => {
   assert.deepEqual(signOut('auth0', (() => ({ status: 1 })) as any), {
     ok: false,
     detail: 'auth0 logout exited with 1',
-  })
-})
-
-test('a gcp sign-out runs its second step even when the first fails', () => {
-  /*
-   * The step that fails is not the only one that matters. Stopping there would
-   * leave the credential the next step revokes still on the machine, so the
-   * session an operator asked to end is half open — and `mstage login` would
-   * report gcp ready immediately after a sign-out that reported an error.
-   */
-  const ran: string[][] = []
-  const runCommand = (command: string, args: string[]) => {
-    ran.push([command, ...args])
-    return { status: ran.length === 1 ? 1 : 0 }
-  }
-  assert.deepEqual(signOut('gcp', runCommand as any), { ok: false, detail: 'gcloud auth revoke exited with 1' })
-  assert.deepEqual(ran, [
-    ['gcloud', 'auth', 'revoke'],
-    ['gcloud', 'auth', 'application-default', 'revoke'],
-  ])
-})
-
-test('a gcp sign-out that fails at both steps names both', () => {
-  // One of the two is a different fix from the other, so a detail naming only
-  // the first sends someone to re-run a command that already worked.
-  assert.deepEqual(signOut('gcp', (() => ({ status: 1 })) as any), {
-    ok: false,
-    detail: 'gcloud auth revoke exited with 1; gcloud auth application-default revoke exited with 1',
   })
 })
 
@@ -109,6 +106,7 @@ const invoke = async ({
     },
     checks: {
       aws: async () => status('aws'),
+      gcp: async () => status('gcp'),
       github: async () => status('github'),
       auth0: async () => status('auth0'),
     },
@@ -125,6 +123,11 @@ test('--logout ends only the named provider and announces the command', async ()
   const { signedOut, text } = await invoke({ argv: ['login', 'github', '--logout'] })
   assert.deepEqual(signedOut, ['github'])
   assert.match(text, /github {2}signing out: gh auth logout/)
+})
+
+test('a two-command sign-out announces both, in the order they run', async () => {
+  const { text } = await invoke({ argv: ['login', 'gcp', '--logout'], login: { gcp: { required: true } } })
+  assert.match(text, /gcp {5}signing out: gcloud auth revoke then gcloud auth application-default revoke/)
 })
 
 test('--logout without a provider ends every one this repository declares', async () => {

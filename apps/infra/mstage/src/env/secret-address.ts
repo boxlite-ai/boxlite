@@ -8,31 +8,26 @@
  * a task definition, a revision that keeps its own copy forever, or the deploy
  * that arranged it.
  *
- * `env.selectGroup.secret` is what says which keys are addresses. Nothing about
- * a value's text can be trusted to say it: an ARN is a perfectly usable
- * plaintext secret, and a plaintext secret that happens to begin with `arn:`
- * would be handed to a container as if it were an address. One declaration
- * decides, reviewed where every other group is.
+ * `env.selectGroup.secret` says which keys are addresses. A value's text
+ * cannot: an ARN is a usable plaintext secret, and a plaintext secret starting
+ * with `arn:` would be handed to a container as an address.
  *
- * The address format is the cloud's, so `home` decides which one is accepted.
- * Both AWS forms are, because both are what that reference channel resolves and
- * this platform's existing secrets live in Secrets Manager
- * (`apps/infra/README.md`); which of the two services holds a secret is not a
- * question the store has any business answering.
+ * `home` decides which format is accepted. Both AWS forms are, because both
+ * resolve through that reference channel; which service holds a secret is not
+ * the store's question.
  *
- * No message here ever quotes a value. The one mistake this module exists to
- * catch is a plaintext secret written where an address belongs, and a refusal
- * that echoed it would put it in the terminal the write was trying to keep it
- * out of.
+ * No message here quotes a value. The mistake this catches is a plaintext
+ * secret written where an address belongs, and echoing it would put it in the
+ * terminal the write was trying to keep it out of.
  */
 
 import { EnvError } from './backend.ts'
-import type { MstageConfig } from '../config/load.ts'
+import type { Cloud } from '../config/load.ts'
 
 /**
- * The one group whose values are addresses. Named here because this is the
- * module that gives the name its meaning; `config/load.ts` reads it to refuse a
- * key that some other group also names.
+ * The one group whose values are addresses, named here because this module
+ * gives the name its meaning. `config/load.ts` reads it to refuse a key some
+ * other group also names.
  */
 export const SECRET_GROUP = 'secret'
 
@@ -44,14 +39,12 @@ type AddressForm = { pattern: RegExp; describe: string }
 /**
  * What each cloud's reference channel can resolve.
  *
- * A full ARN rather than a bare parameter name: ECS accepts a bare name only
- * for a parameter in the task's own region and account, and an ARN is the form
- * a reviewer can read the region and the account out of. Likewise the Secret
- * Manager form is the resource name and not a version — Cloud Run takes the
- * version as its own field, so an address carrying one would be declaring it
- * twice.
+ * A full ARN, not a bare parameter name: ECS accepts a bare name only within
+ * the task's own region and account, and an ARN shows both. The Secret Manager
+ * form is the resource name without a version — Cloud Run takes the version as
+ * its own field, so an address carrying one declares it twice.
  */
-const ADDRESS_FORMS: Record<MstageConfig['home'], AddressForm> = {
+const ADDRESS_FORMS: Record<Cloud, AddressForm> = {
   aws: {
     pattern: /^arn:aws[a-z0-9-]*:(?:ssm:[a-z0-9-]+:\d{12}:parameter\/|secretsmanager:[a-z0-9-]+:\d{12}:secret:)\S+$/,
     describe:
@@ -65,9 +58,8 @@ const ADDRESS_FORMS: Record<MstageConfig['home'], AddressForm> = {
 }
 
 /** The address one stored value holds, or an error naming the key and the form. */
-const addressOf = ({ key, value, home }: { key: string; value: string; home: MstageConfig['home'] }): string => {
-  // Every home has an entry: `config/load.ts` refuses a `home` that is not one
-  // of these two, so there is no third case to answer for here.
+const addressOf = ({ key, value, home }: { key: string; value: string; home: Cloud }): string => {
+  // Every home has an entry: `config/load.ts` refuses any other value.
   const form = ADDRESS_FORMS[home]
   const expected = `a key in env.selectGroup.${SECRET_GROUP} holds {"${ADDRESS_FIELD}": …}, naming ${form.describe}`
 
@@ -75,8 +67,8 @@ const addressOf = ({ key, value, home }: { key: string; value: string; home: Mst
   try {
     parsed = JSON.parse(value)
   } catch {
-    // Deliberately without the parser's own message: Node quotes the input in
-    // it, which for this key is the thing that must not be quoted.
+    // Without the parser's message: Node quotes the input, which is exactly
+    // what must not be quoted for this key.
     throw new EnvError(`${key} does not hold JSON, and ${expected}`)
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -97,14 +89,11 @@ const addressOf = ({ key, value, home }: { key: string; value: string; home: Mst
 }
 
 /**
- * Refuses a value a key in the secret group cannot hold, before anything is
- * written.
+ * Refuses a value a key in the secret group cannot hold, before it is written.
  *
- * The mistake worth stopping here is writing the secret itself where its
- * address belongs: the store would take it, the deploy would hand it to a
- * container as an address, and every task would fail to start for a reason that
- * names neither the key nor the write. Keys outside the group are not checked,
- * and a repository that declares no such group has nothing to check.
+ * The mistake worth stopping is the secret itself written where its address
+ * belongs: the store takes it, the deploy hands it over as an address, and
+ * every task fails to start for a reason naming neither the key nor the write.
  */
 export const assertSecretAddresses = ({
   entries,
@@ -113,7 +102,7 @@ export const assertSecretAddresses = ({
 }: {
   entries: readonly [string, string][]
   groups: Record<string, string[]>
-  home: MstageConfig['home']
+  home: Cloud
 }): void => {
   const declared = groups[SECRET_GROUP]
   if (!declared) return
@@ -133,6 +122,6 @@ export const secretAddressesOf = ({
   home,
 }: {
   values: Record<string, string>
-  home: MstageConfig['home']
+  home: Cloud
 }): Record<string, string> =>
   Object.fromEntries(Object.entries(values).map(([key, value]) => [key, addressOf({ key, value, home })]))

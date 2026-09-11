@@ -1,17 +1,11 @@
 /*
  * A group whose declaration has an optional half, read by every command.
  *
- * `env.selectGroup` may be written as `{ required, optional }`, and the whole
- * point of the optional half is that a stage which never configured a feature
- * still has a complete group. Only `selectGroup` — the programmatic read a
- * deploy makes — was taught that. The three commands went on demanding every
- * name, so a stage that had configured none of the optional features could not
- * be listed, could not be fingerprinted, and could not have its fingerprint
- * checked. All three refused with the same sentence, naming as missing the keys
- * the file had just said were allowed to be.
- *
- * BoxLite's own deploy group is thirty-three optional names to eight required
- * ones, so this is not an edge: a new stage hit it on its first write.
+ * The point of the optional half is that a stage which never configured a
+ * feature still has a complete group. Teaching only `selectGroup` — the
+ * programmatic read a deploy makes — left the three commands demanding every
+ * name, so such a stage could not be listed, fingerprinted, or checked. All
+ * three refused by naming as missing the keys the file had just allowed to be.
  */
 
 import assert from 'node:assert/strict'
@@ -39,12 +33,11 @@ const opened = (payload: Buffer): Record<string, string> => {
 const notFound = (name: string) => Object.assign(new Error(name), { name })
 
 /**
- * A deploy group of two required names, two optional ones and its digest — and
- * a store holding only the required half, which is a stage that configured no
- * optional feature.
+ * Two required names, two optional ones and a digest — against a store holding
+ * only the required half, which is a stage that configured nothing optional.
  */
 const CONFIG = {
-  path: '/repo/mstage.config.json',
+  path: '/repo/.mstage.config.json',
   envSelectGroup: { deploy: ['DOMAIN', 'ZONE', 'MAIL_RELAY_HOST', 'POSTHOG_HOST', 'DIGEST'] },
   envOptional: { deploy: ['MAIL_RELAY_HOST', 'POSTHOG_HOST'] },
   envDigest: { key: 'DIGEST', group: 'deploy' },
@@ -97,11 +90,11 @@ const harness = (stored: Record<string, string>) => {
   }
 }
 
-const CONFIGURED = { DOMAIN: 'dev2.boxlite.ai', ZONE: 'c65b', DIGEST: 'stale' }
+const CONFIGURED = { DOMAIN: 'dev.boxlite.ai', ZONE: 'c65b', DIGEST: 'stale' }
 
 test('a fingerprint can be written for a stage that configured no optional feature', async () => {
-  // What a new stage hits on its very first write: the store holds every
-  // required name, and the command refuses it for the optional ones.
+  // What a new stage hits on its first write: the store holds every required
+  // name, and the command refuses it over the optional ones.
   const probe = harness(CONFIGURED)
   assert.equal(await probe.setDigest(), 0, probe.lines.join('\n'))
   const written = probe.written()
@@ -110,9 +103,8 @@ test('a fingerprint can be written for a stage that configured no optional featu
 })
 
 test('and the check agrees with the write, over the same set', async () => {
-  // These two must compute over identical sets. A check demanding more than the
-  // write can supply reports every stage as broken — and this one *is* the
-  // check, so it is believed.
+  // These must compute over identical sets. A check demanding more than the
+  // write can supply reports every stage as broken, and is believed.
   const probe = harness(CONFIGURED)
   await probe.setDigest()
   const fingerprint = probe.written()!.DIGEST as string
@@ -123,7 +115,7 @@ test('and the check agrees with the write, over the same set', async () => {
 })
 
 test('an optional name that is present still moves the fingerprint', async () => {
-  // Optional means the store need not hold it, never that its value is ignored:
+  // Optional means the store need not hold it, not that its value is ignored:
   // a relay host nobody notices changing is a stage silently sending elsewhere.
   const without = harness(CONFIGURED)
   await without.setDigest()
@@ -141,8 +133,8 @@ test('listing a group does not demand what the declaration called optional', asy
 })
 
 test('a required name that is genuinely missing is still refused', async () => {
-  // The other half. Making the optional list work by accepting every absence
-  // would remove the one failure this whole mechanism exists to produce.
-  const probe = harness({ DOMAIN: 'dev2.boxlite.ai', DIGEST: 'stale' })
+  // The other half: accepting every absence would remove the one failure this
+  // mechanism exists to produce.
+  const probe = harness({ DOMAIN: 'dev.boxlite.ai', DIGEST: 'stale' })
   await assert.rejects(() => probe.setDigest(), /ZONE/)
 })

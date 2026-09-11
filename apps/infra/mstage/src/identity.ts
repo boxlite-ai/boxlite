@@ -8,15 +8,12 @@
  *   assertUsableFor   will this still be valid when a long thing finishes
  *   childEnvironment  what a subprocess needs to inherit to be this identity
  *
- * The last one is where the clouds differ most and why this interface exists at
- * all. AWS hands a child three variables and they do not refresh, so a deploy
- * has to check the clock before it starts. Google hands a child a path to
- * credentials that refresh themselves, so the same check has almost nothing to
- * say — and pretending otherwise would mean either a false guarantee on one
- * cloud or a missing one on the other.
+ * The last is why this interface exists. AWS hands a child three variables
+ * that do not refresh, so a deploy checks the clock first; Google hands it a
+ * path to credentials that refresh themselves, so the same check says nothing.
  *
- * `tenant` is the word for the thing an identity belongs to: an account id on
- * AWS, a project on GCP. Naming it neither keeps `whoami` readable on both.
+ * `tenant` names what an identity belongs to — an account on AWS, a project on
+ * GCP — so `whoami` reads the same on both.
  */
 
 /** What a caller can say about the identity it is running as. */
@@ -36,16 +33,15 @@ export type Identity = {
   whoami: () => Promise<Caller>
   /**
    * When these credentials stop working, or null when they refresh themselves.
-   * Null is an answer, not a gap: it means the clock is not a risk here.
+   * Null is an answer, not a gap: the clock is not a risk here.
    */
   expiresAt: () => Promise<Date | null>
   /** Refuses to start long work that would outlive the credentials. */
   assertUsableFor: (seconds: number, now?: () => Date) => Promise<void>
   /**
    * The environment a subprocess inherits so it is this identity and nothing
-   * else. Built from `base` with every competing variable removed, because a
-   * leftover profile or a stale key is how a deploy silently runs as someone
-   * else.
+   * else: `base` with every competing variable removed, since a leftover
+   * profile or stale key is how a deploy silently runs as someone else.
    */
   childEnvironment: (base?: NodeJS.ProcessEnv) => Promise<{ env: NodeJS.ProcessEnv; expiresAt: Date | null }>
 }

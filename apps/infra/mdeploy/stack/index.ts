@@ -42,7 +42,7 @@ import type { RunnerAssignment, RunnerProvider, RunnerSlot, Runners } from './ru
 import { API_RUNNER_TOKEN_VARIABLE } from './runners.ts'
 import type { Storage, StorageProvider } from './storage.ts'
 import type { DeployConfig } from '../src/config.ts'
-import { alarmsFor, cacheFor, clickHouseFor, databaseFor, runnersFor, storageFor } from '../src/config.ts'
+
 
 /** The containerised workloads. The runner is a machine and is placed directly. */
 const CONTAINER_ROLES = ['api', 'proxy', 'otel-collector'] as const
@@ -211,11 +211,11 @@ export const deployStack = ({
   const images = providers.images({ tag: inputs.tag })
 
   const network = providers.network({ internetEgress: inputs.internetEgress })
-  const storage: Storage = providers.storage(storageFor(config, inputs.stage))
+  const storage: Storage = providers.storage(config.storage)
   const cluster: Cluster = providers.cluster({ network })({ roles: CONTAINER_ROLES })
-  const database: Database = providers.database({ network })(databaseFor(config, inputs.stage))
-  const cache: Cache = providers.cache({ network })(cacheFor(config, inputs.stage))
-  const clickhouse: ClickHouse = providers.clickhouse({ network })(clickHouseFor(config, inputs.stage))
+  const database: Database = providers.database({ network })(config.database)
+  const cache: Cache = providers.cache({ network })(config.cache)
+  const clickhouse: ClickHouse = providers.clickhouse({ network })(config.clickhouse)
 
   /*
    * The network's own rules, which reach every workload through the cluster.
@@ -439,7 +439,7 @@ export const deployStack = ({
     // control plane has to be answering before one exists.
     dependsOn: [...api.ready],
   })({
-    ...runnersFor(config, inputs.stage),
+    ...config.runners,
     nestedVirtualization: true,
     fleet,
     binary: inputs.runnerBinary,
@@ -451,7 +451,7 @@ export const deployStack = ({
 
   // Alarms watch what is already serving, so nothing waits on them: one that
   // cannot be created must not roll back a service that is answering.
-  providers.alarms({ subjects: { api, edge, runners } })(alarmsFor(config, inputs.stage))
+  providers.alarms({ subjects: { api, edge, runners } })(config.alarms)
 
   return {
     apiUrl: api.url,

@@ -10,10 +10,21 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { RunnerUpdateError, compareHosts, updateRunners, type Host } from '../src/runner-update.ts'
 import type { CommandResult, RunCommand } from '../src/upgrade-runners.ts'
 
 const ok = (stdout = ''): CommandResult => ({ ok: true, status: 0, stdout, stderr: '' })
+
+/**
+ * The committed example, not this machine's stage file.
+ *
+ * These drive the real `--stage` resolution, so the stages they name have to be
+ * declared somewhere — and `.mstage.config.json` is not committed, so on a
+ * runner there is nothing to declare them. Reading the example also keeps it
+ * from going stale: a stage dropped from it fails here.
+ */
+const EXAMPLE = fileURLToPath(new URL('../../.mstage.config.example.json', import.meta.url))
 
 /** A fleet of two on AWS, and an SSM command that succeeds. */
 const awsFleet = (calls: string[][] = []): RunCommand => {
@@ -39,7 +50,7 @@ const gcpFleet = (calls: string[][] = []): RunCommand => {
 const drive = (argv: string[], run: RunCommand, home: 'aws' | 'gcp' = 'aws') =>
   updateRunners({
     argv,
-    environment: {},
+    environment: { MSTAGE_CONFIG: EXAMPLE },
     cwd: new URL('../..', import.meta.url).pathname,
     log: () => {},
     checkLogin: async () => 0,

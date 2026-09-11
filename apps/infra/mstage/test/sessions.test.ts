@@ -133,8 +133,9 @@ test('an optional provider that is not signed in does not fail the command', asy
 
 // ── gcp ─────────────────────────────────────────────────────────────────────
 
-const CLI = 'auth print-access-token'
 const ADC = 'auth application-default print-access-token'
+/** The other store: what a plain `gcloud` subcommand authenticates from. */
+const USER_SESSION = 'auth print-access-token'
 
 /** Answers per command line, because this check asks gcloud more than one thing. */
 const gcloud = (answers: Record<string, any>) => {
@@ -148,15 +149,15 @@ const gcloud = (answers: Record<string, any>) => {
   }
 }
 
-test('both credentials that mint a token are signed in, whatever gcloud is pointed at', async () => {
+test('both credentials minting a token is a signed-in stage, whatever gcloud is pointed at', async () => {
   // The credentials are the whole question here. Which project a stage lives in
-  // comes from mstage.config.json and is handed to every client explicitly
+  // comes from .mstage.config.json and is handed to every client explicitly
   // (`home.ts`), so a machine that never ran `gcloud config set project` still
   // has a session mstage can use — reporting that as "not signed in" is a
   // false statement about the world, and it blocked a working setup.
   const { runCommand } = gcloud({
-    [CLI]: { stdout: 'ya29.cli\n' },
     [ADC]: { stdout: 'ya29.a0AdMD6Eg\n' },
+    [USER_SESSION]: { stdout: 'ya29.a0AdMD6Eg\n' },
     'config get-value project': { stdout: '' },
   })
   assert.deepEqual(await checkGcp({ runCommand }), {
@@ -183,33 +184,43 @@ test('the check never asks gcloud which project is configured', async () => {
   )
 })
 
-test('credentials that cannot mint a token are not signed in, and say which half is stale', async () => {
-  /*
-   * Named, because the two fail in completely different places and only one
-   * command fixes each. Proving ADC alone once reported a ready session while
-   * the next plain `gcloud` call died on `Reauthentication failed. cannot
-   * prompt during non-interactive execution` — the CLI's own account was the
-   * stale half, and nothing said so.
-   */
-  const stale = gcloud({
-    [CLI]: { status: 1, stderr: 'ERROR: (gcloud.auth.print-access-token) Reauthentication failed.' },
-    [ADC]: { stdout: 'ya29.adc\n' },
+test('a stale gcloud user session is not a signed-in GCP stage, however healthy ADC is', async () => {
+  // Both stores are read here and neither says anything about the other, so
+  // proving only ADC reported a ready session and the bootstrap that ran next
+  // died on its first `gcloud projects describe`.
+  const { runCommand } = gcloud({
+    [ADC]: { stdout: 'ya29.a0AdMD6Eg\n' },
+    [USER_SESSION]: {
+      status: 1,
+      stderr:
+        'ERROR: (gcloud.auth.print-access-token) There was a problem refreshing your current auth tokens: Reauthentication failed.',
+    },
   })
-  const cli = await checkGcp({ runCommand: stale.runCommand })
-  assert.equal(cli.state, 'not signed in')
-  assert.match(cli.detail, /the gcloud CLI: /)
-  assert.match(cli.detail, /Reauthentication failed\./)
-  // Both steps, because either one alone leaves the store this just refused.
-  assert.match(cli.detail, /Sign in with: gcloud auth login then gcloud auth application-default login/)
+  const status = await checkGcp({ runCommand })
+  assert.equal(status.state, 'not signed in')
+  assert.match(status.detail, /Reauthentication failed/)
+})
 
-  const noAdc = gcloud({
-    [CLI]: { stdout: 'ya29.cli\n' },
+test('credentials that cannot mint a token are not signed in, and say how to get them', async () => {
+  const { runCommand } = gcloud({
     [ADC]: { status: 1, stderr: 'ERROR: (gcloud.auth.application-default.print-access-token) Your default credentials were not found.' },
   })
-  const adc = await checkGcp({ runCommand: noAdc.runCommand })
-  assert.equal(adc.state, 'not signed in')
-  assert.match(adc.detail, /application default credentials: /)
-  assert.match(adc.detail, /Your default credentials were not found\./)
+  const status = await checkGcp({ runCommand })
+  assert.equal(status.state, 'not signed in')
+  assert.match(status.detail, /Your default credentials were not found\./)
+  // The advice has to repair both halves, and names both commands because
+  // either alone leaves the other exactly as stale as it was — which is the
+  // defect this check exists to catch.
+  assert.match(status.detail, /Sign in with: gcloud auth login then gcloud auth application-default login/)
+})
+
+test('a failure names which of the two credentials is stale', async () => {
+  // One command repairs either half, but they fail in completely different
+  // places, so an operator reading only the advice cannot tell which broke.
+  const { runCommand } = gcloud({
+    [USER_SESSION]: { status: 1, stderr: 'Reauthentication failed.' },
+  })
+  assert.match((await checkGcp({ runCommand })).detail, /^the gcloud CLI:/)
 })
 
 test('an absent gcloud says how to install it, with the name Homebrew answers to', async () => {

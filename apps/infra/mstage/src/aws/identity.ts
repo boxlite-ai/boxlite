@@ -1,17 +1,15 @@
 /**
  * The AWS identity a command acts under.
  *
- * Whatever `aws login` (or CI, or a container role) left on the machine is what
- * gets used: this is the SDK's default credential chain and nothing else. mstage
- * adds no selection of its own, does not translate the SDK's errors, and has no
- * opinion about which account the chain reaches. A caller that needs to name the
- * account — an ARN in an IAM document, an ECR host — asks `whoami` for it.
+ * The SDK's default credential chain and nothing else: whatever `aws login`,
+ * CI or a container role left behind. mstage adds no selection, translates no
+ * error, and has no opinion about which account is reached — a caller needing
+ * the account asks `whoami`.
  *
- * The credential *provider* is passed through rather than a resolved key triple,
- * so short-lived sources keep refreshing. SST freezes its resolved triple into
- * `SST_AWS_ACCESS_KEY_ID` at startup (pkg/project/provider/aws.go:48-62) and the
- * platform then uses it with no refresh path
- * (platform/src/components/aws/helpers/client.ts:31).
+ * The credential *provider* is passed through rather than a resolved triple, so
+ * short-lived sources keep refreshing. SST instead freezes its triple into
+ * `SST_AWS_ACCESS_KEY_ID` at startup (pkg/project/provider/aws.go:48-62) and
+ * uses it with no refresh path.
  */
 
 import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts'
@@ -23,10 +21,7 @@ import { childEnvironment } from './child-env.ts'
 
 export type Caller = { accountId?: string; arn?: string; userId?: string }
 
-/**
- * The AWS identity: the shared `Identity` plus the one thing only this cloud
- * has. `credentials` is the SDK provider every AWS client is built from.
- */
+/** The shared `Identity`, plus the SDK provider every AWS client is built from. */
 export type AwsIdentity = Identity & {
   readonly home: 'aws'
   /** Kept for the SDK clients. Nothing outside the AWS backend should read it. */
@@ -93,8 +88,8 @@ export const resolveIdentity = ({
         )
       }
     },
-    // Three variables and every competing one cleared. They do not refresh,
-    // which is why `assertUsableFor` has something to say on this cloud.
+    // Three variables, every competing one cleared. They do not refresh, which
+    // is why `assertUsableFor` has something to say on this cloud.
     childEnvironment: (base) => childEnvironment({ scope, identity, ...(base ? { base } : {}) }),
   }
   return identity

@@ -47,7 +47,7 @@ import { loadConfig } from 'mstage/config'
 import { resolveHome } from 'mstage/home'
 import { run as mstage } from 'mstage/run'
 import { resolveScope } from 'mstage/scope'
-import { loadDeployConfig } from './config.ts'
+import { deployRoot } from './config.ts'
 import { spawnWith, type RunCommand } from './upgrade-runners.ts'
 import { readWorkspaceVersion, runnerArtifactsBucket } from '../stack/runner-binary.ts'
 
@@ -72,7 +72,7 @@ const COMMIT = /^[0-9a-f]{40}$/
  * Checkout-relative, and joined to the checkout root before docker sees it.
  *
  * Docker resolves a relative `--file` against its client's own directory, which
- * is neither the build context nor the root: `loadDeployConfig` finds the config
+ * is neither the build context nor the root: `deployRoot` finds the committed file
  * by walking up, so this runs from `apps/infra` or below. Left relative here
  * because that is how the path reads in the tree and in the error below.
  */
@@ -103,7 +103,7 @@ const must = (run: RunCommand, file: string, args: string[], what: string): stri
 /**
  * The checkout this build is of, asked once and used for everything anchored.
  *
- * Not `loadDeployConfig`'s `root`, which is the directory holding
+ * Not `deployRoot`, which is the directory holding
  * `mstage.config.json` — `apps/infra` — while everything the Dockerfile copies
  * (`Cargo.toml`, `src/`, `sdks/`, `apps/go.work`) is above it. Asked from that
  * directory rather than from the process's cwd so a nested repository below
@@ -215,7 +215,7 @@ export const buildRunner = async ({
   const { env: credentials } = await home.identity.childEnvironment()
   const run = injectedRun ?? spawnWith({ ...environment, ...credentials })
 
-  const repository = checkoutRoot({ configuration: loadDeployConfig({ cwd, environment }).root, run })
+  const repository = checkoutRoot({ configuration: deployRoot({ cwd, environment }), run })
   const { ref, version } = inspectCheckout({ root: repository, run })
   const archive = `boxlite-runner-v${version}-${ref}-linux-amd64.tar.gz`
   const names = [archive, `${archive}.sha256`]

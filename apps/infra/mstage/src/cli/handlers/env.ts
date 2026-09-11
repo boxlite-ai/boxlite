@@ -1,15 +1,12 @@
 /**
  * `mstage env` — what a stage's environment holds, and what may leave it.
  *
- * The commands. What a group is and what may leave the store through one lives
- * in `env/select-group.ts`, which every consumer calls — these commands included.
+ * The commands. What a group is, and what may leave the store through one,
+ * lives in `env/select-group.ts` — which every consumer calls, these included.
  *
  * Without a group, `list` prints names only. `sst secret list` prints every
- * value with sst's stdio inherited, which was already more than "lists what is
- * set" and became far more once the store started holding whole stage
- * configurations: one command drops every token and private key into scrollback.
- * boxlite replaced that command for the same reason
- * (apps/infra/deployment/secret-names.ts). mstage does not repeat it.
+ * value, which drops every token and private key into scrollback once the
+ * store holds whole stage configurations. mstage does not repeat it.
  */
 
 import {
@@ -85,9 +82,9 @@ export const list = async ({
       group,
       groups: config.envSelectGroup,
       values,
-      where: config.path,
-      // What the declaration said may be absent. Without it, listing a group
-      // refuses every stage that simply never configured an optional feature.
+      where: config.basePath,
+      // Without it, listing a group refuses every stage that simply never
+      // configured an optional feature.
       optional: config.envOptional[group] ?? [],
     })
     // --select-group narrows; it does not reveal. A group can hold a live credential, so
@@ -126,11 +123,9 @@ const splitAssignment = (assignment: string): [string, string] => {
 /**
  * `KEY=VALUE`, where the value is a line of text.
  *
- * Escapes are expanded because a shell has no way to put a newline in an
- * argument without them, and the same sequences SST's own file loader accepts
- * (cmd/sst/secret.go:199-207) are the ones expanded here. A value that needs a
- * literal backslash-n writes `\\n`; a value too awkward for either goes through
- * stdin instead.
+ * Escapes are expanded because a shell cannot put a newline in an argument
+ * otherwise, and the sequences are SST's own (cmd/sst/secret.go:199-207). A
+ * literal backslash-n writes `\\n`; anything more awkward goes through stdin.
  */
 export const parseAssignment = (assignment: string): [string, string] => {
   const [name, value] = splitAssignment(assignment)
@@ -140,21 +135,16 @@ export const parseAssignment = (assignment: string): [string, string] => {
 /**
  * `KEY=VALUE`, where the value is a JSON document. The `--json` form.
  *
- * Asked for rather than detected. A value that begins with `{` is far more
- * often a document than not, but "far more often" is the wrong footing for a
- * store this one writes to: it would make `KEY={VALUE}` a refusal instead of the
- * two words it says, and the caller who meant a document is the one who can say
- * so in a word.
+ * Asked for rather than detected: guessing from a leading `{` would make
+ * `KEY={VALUE}` a refusal instead of the two words it says, and the caller who
+ * meant a document can say so in a word.
  *
- * What the flag buys is the parse. The document is refused if it does not parse
- * — a mistyped one lands nowhere rather than being found later by whatever reads
- * the key — and it is stored as JSON writes it rather than as the shell typed
- * it, so one value is one stored string: re-typing the same object with other
- * spacing is not a change and does not move a group's digest.
+ * The flag buys the parse. A document that does not parse lands nowhere rather
+ * than being found later, and it is stored as JSON writes it — so re-typing the
+ * same object with other spacing does not move a group's digest.
  *
- * The expansion above does not run on it, because a document carries its own
- * escapes: `{"pem":"a\nb"}` already means a newline, and expanding it first
- * would leave a raw newline inside a JSON string, which is not JSON at all.
+ * The expansion above does not run on it: `{"pem":"a\nb"}` already means a
+ * newline, and expanding first would leave a raw newline inside a JSON string.
  */
 export const parseJsonAssignment = (assignment: string): [string, string] => {
   const [name, value] = splitAssignment(assignment)
@@ -162,11 +152,9 @@ export const parseJsonAssignment = (assignment: string): [string, string] => {
 }
 
 /**
- * One JSON document, as JSON writes it.
- *
- * The parser's own message is not repeated: Node quotes the offending input in
- * it, and the input here is a value that was typed into a store because it does
- * not belong in a terminal.
+ * One JSON document, as JSON writes it. The parser's message is not repeated:
+ * Node quotes the input, which here is a value put in a store precisely
+ * because it does not belong in a terminal.
  */
 const jsonDocument = (name: string, value: string): string => {
   let parsed: unknown
@@ -182,18 +170,16 @@ const jsonDocument = (name: string, value: string): string => {
 }
 
 /**
- * What one parsed JSON value is stored as.
+ * What one parsed JSON value is stored as, shared by both ways a document
+ * arrives.
  *
- * Shared by both ways a document arrives, because they are the same document. A
- * top-level string is stored as parsed rather than with its quotes, so `--json
- * KEY='"a"'` and a piped `{"KEY": "a"}` put the same three characters in the
- * store; anything else is stored as JSON writes it. `null` is refused either
- * way, for the same reason: a key whose stored value is the text `null` is
- * nobody's intention, and a key that should not be there at all is `env del`.
+ * A top-level string is stored unquoted, so `--json KEY='"a"'` and a piped
+ * `{"KEY": "a"}` store the same three characters; anything else is stored as
+ * JSON writes it. `null` is refused either way — a key holding the text `null`
+ * is nobody's intention, and removing a key is `env del`.
  *
- * Written once because the alternative was two rules that agreed for objects
- * and disagreed for a string — the shape most likely to be typed by hand and
- * least likely to be noticed when it comes back quoted.
+ * One rule, because two would have agreed for objects and disagreed for a
+ * string: the shape most likely typed by hand, least likely noticed quoted.
  */
 const storedFrom = (name: string, parsed: unknown): string => {
   if (parsed === null) throw new Error(`${name} is null; remove a key with env del, or give it a value`)
@@ -208,27 +194,20 @@ export const unescape = (value: string): string =>
 /**
  * A whole store's worth of assignments, read as JSON.
  *
- * Each value goes through `storedFrom`, which is also what `--json` puts one
- * value on a command line through, so a document says the same thing whichever
- * way it arrives and a nested object needs no escaping to survive being written
- * into a file. `{"K": {"a": "b"}}` stores `{"a":"b"}`; `{"K": ["a", "b"]}`
- * stores `["a","b"]`, verbatim rather than joined on a separator its own
- * elements may contain; `{"K": 8080}` stores `8080`; `{"K": null}` is refused.
+ * Every value goes through `storedFrom`, the same path `--json` takes, so a
+ * document means the same thing whichever way it arrives. `{"K": {"a": "b"}}`
+ * stores `{"a":"b"}`; `{"K": ["a","b"]}` stores the array verbatim rather than
+ * joined on a separator its elements may contain; `{"K": null}` is refused.
  *
- * What `env list --json` prints is still what loads back in unedited: it prints
- * every value as the string it is, and a string is what this stores. A document
- * written by the *older* `env list --json` is the case worth naming, and the
- * second return value names it: that version split a value holding a comma into
- * an array, so an array here may be a list somebody meant or the pieces of a
- * value that never was one. Both store as the text of the array, and silence
- * about it is what turned the tool's own documented round trip into a quiet
- * rewrite. An object or a number is not named — no version of `env list --json`
- * ever produced one, so it can only be what its author wrote.
+ * `env list --json` still round-trips, because it prints every value as the
+ * string it is. The second return value names the one hazard: an *older*
+ * `env list --json` split a comma-bearing value into an array, so an array here
+ * may be a list somebody meant or the pieces of a value that never was one.
+ * Objects and numbers are not named — no version ever produced them.
  *
- * JSON is the only accepted document format because it is the only one that
- * carries a newline without an escape convention to learn — and for that reason
- * values are used exactly as JSON parsed them, with no second pass of
- * `unescape`.
+ * JSON only, because it is the one format carrying a newline without an escape
+ * convention to learn — and so values are used exactly as parsed, with no
+ * second pass of `unescape`.
  */
 export const parseBatch = (text: string): { entries: [string, string][]; converted: string[] } => {
   let parsed: unknown
@@ -251,17 +230,13 @@ export const parseBatch = (text: string): { entries: [string, string][]; convert
 }
 
 /**
- * Sets keys. No value is ever echoed: the whole point of the store is that these
- * do not belong in a terminal, and a confirmation that repeats what was just
- * typed puts it in scrollback anyway. What is reported is names and what
+ * Sets keys. No value is echoed: these do not belong in a terminal, and a
+ * confirmation repeating one puts it in scrollback anyway. Names, and what
  * happened to them.
  *
- * Three ways to say what to set, because they answer different problems: `KEY=V`
- * arguments for a value that fits on a line, a lone `KEY` for one that has to
- * come off a file, and a piped JSON object for a whole stage at once. `--json`
- * says the value is a JSON document — for an argument and for the file the lone
- * `KEY` form reads alike, which is the form a document too large for a command
- * line arrives in.
+ * Three ways to say what to set: `KEY=V` for a value that fits on a line, a
+ * lone `KEY` for one read off a file, and a piped JSON object for a whole stage.
+ * `--json` marks the value a document, for an argument and for the file alike.
  */
 export const set = async ({
   config,
@@ -292,20 +267,15 @@ export const set = async ({
   // has to survive a shell's quoting. Only alone: with several arguments there is
   // one stdin and no way to say which of them it belongs to.
   const fromStdin = positionals.length === 1 && !positionals[0]!.includes('=')
-  // With no arguments at all, stdin is a whole document rather than one value.
-  // An empty read means nothing was piped, which leaves --digest as the only
-  // thing this invocation could have meant.
+  // With no arguments, stdin is a whole document rather than one value; an
+  // empty read means nothing was piped, leaving --digest as the only reading.
   //
-  // Except when --digest was asked for: that is already a complete request, so
-  // nothing waits on stdin for it. A pipe nobody writes to never closes, and a
-  // step that recomputes a fingerprint would hang rather than finish — which is
-  // exactly what `env set --digest` did the first time it ran in a shell whose
-  // stdin was inherited.
+  // Except under --digest, which is already a complete request: a pipe nobody
+  // writes to never closes, and waiting on one is how `env set --digest` hung
+  // the first time it ran in a shell with inherited stdin.
   //
-  // It also keeps one invocation from both rewriting a value and certifying the
-  // rewrite: a document's lists become the text of a list, and the fingerprint
-  // that would vouch for them is never computed in the same breath. Doing both
-  // takes two commands, deliberately.
+  // It also stops one invocation both rewriting a value and certifying the
+  // rewrite. Doing both takes two commands, deliberately.
   const expectsBatch = positionals.length === 0 && options.digest !== true
   const batch = expectsBatch ? (await readBatch()).trim() : ''
 
@@ -333,7 +303,7 @@ export const set = async ({
     // `--digest` on its own rewrites the fingerprint over the store as it already
     // stands, which is how a group edited by other means gets certified again.
     if (!digest) {
-      throw new Error(`${config.path} declares no env.digest, so --digest alone would write nothing`)
+      throw new Error(`${config.basePath} declares no env.digest, so --digest alone would write nothing`)
     }
   }
 
@@ -361,7 +331,7 @@ export const set = async ({
   // lands. What it drops is named, because a key that vanishes silently looks
   // like a key that was written.
   const group = options['select-group'] as string | undefined
-  const wanted = group === undefined ? null : groupKeys({ group, groups: config.envSelectGroup, where: config.path })
+  const wanted = group === undefined ? null : groupKeys({ group, groups: config.envSelectGroup, where: config.basePath })
   const entries = wanted === null ? given : given.filter(([name]) => wanted.includes(name))
   const ignored = wanted === null ? [] : given.filter(([name]) => !wanted.includes(name))
   if (ignored.length > 0)
@@ -387,14 +357,14 @@ export const set = async ({
   // A key in the secret group holds an address, so the secret itself is refused
   // there: the store would take it, and every task would then fail to start
   // trying to resolve a secret as if it were the name of one.
-  assertSecretAddresses({ entries, groups: config.envSelectGroup, home: config.home })
+  assertSecretAddresses({ entries, groups: config.envSelectGroup, home: scope.home })
 
   if (scope.protect && options.confirm !== true) {
     throw new Error(`Stage "${scope.stage}" is protected; add --confirm to write to it`)
   }
 
   if (options.digest === true && !digest) {
-    log(`# ${config.path} declares no env.digest; nothing to recompute`)
+    log(`# ${config.basePath} declares no env.digest; nothing to recompute`)
   }
 
   const app = scope.app as string
@@ -416,12 +386,11 @@ export const set = async ({
                   group: digest.group,
                   groups: config.envSelectGroup,
                   values,
-                  where: config.path,
-                  // The group's own optional half, plus the one member this
-                  // write is producing — so a store that has never held a
-                  // digest can still be given its first one, and a stage that
-                  // configured none of the optional features can still be
-                  // fingerprinted at all.
+                  where: config.basePath,
+                  // The group's optional half, plus the member this write is
+                  // producing: a store that never held a digest can be given
+                  // its first, and a stage with no optional features set can
+                  // be fingerprinted at all.
                   optional: [...(config.envOptional[digest.group] ?? []), digest.key],
                 }),
                 digestKey: digest.key,
@@ -460,11 +429,9 @@ export const formatVersions = (versions: StoredVersion[]): string[] => {
 }
 
 /**
- * `mstage env versions` — what the store has held for this stage.
- *
- * The version ids here are what `--version` reads and what a deploy pins, so
- * this is how you find the one a running service was built against, and what
- * changed since.
+ * `mstage env versions` — what the store has held for this stage. These ids are
+ * what `--version` reads and what a deploy pins, so this is how to find the one
+ * a running service was built against.
  */
 export const versions = async ({
   scope,
@@ -509,7 +476,7 @@ export const digest = async ({
   backend: StoreBackend | Clients
 }): Promise<number> => {
   const declared = config.envDigest
-  if (!declared) throw new ExportError(`${config.path} declares no env.digest`)
+  if (!declared) throw new ExportError(`${config.basePath} declares no env.digest`)
 
   const values = await readEnvironment({
     clients: backend,
@@ -520,10 +487,10 @@ export const digest = async ({
     group: declared.group,
     groups: config.envSelectGroup,
     values,
-    where: config.path,
-    // The same set `env set --digest` fingerprinted. A check that demanded more
-    // than the write could supply would report every stage as broken — and this
-    // one *is* the check, so it would be believed.
+    where: config.basePath,
+    // The same set `env set --digest` fingerprinted. A check demanding more
+    // than the write can supply reports every stage as broken — and this one
+    // *is* the check, so it would be believed.
     optional: [...(config.envOptional[declared.group] ?? []), declared.key],
   })
   const comparison = compareDigest({ values: group, digestKey: declared.key })
@@ -536,22 +503,17 @@ export const digest = async ({
 }
 
 /**
- * Removes keys. One that was not there is reported and not an error: the store
- * ends up in the state that was asked for either way, and a caller cleaning up
- * after a rename should not have to know which half already ran.
+ * Removes keys. One that was not there is reported, not an error: the store
+ * ends up as asked either way, and a caller cleaning up after a rename should
+ * not have to know which half already ran.
  *
- * Several names land in one write, for the reason `set` does: the store is a
- * single object, so removing them one at a time would cost a round trip each and
- * widen the window in which a concurrent writer loses somebody's change. A name
- * repeated on the line is refused rather than reported twice for one removal —
- * in a list of keys long enough to want this command, a repeat is a slip worth
- * naming.
+ * Several names land in one write, for the reason `set` does. A repeated name
+ * is refused rather than reported twice — in a list long enough to want this
+ * command, a repeat is a slip worth naming.
  *
- * `--digest` keeps the fingerprint true, which for a removal means refusing one
- * that would falsify it. A group member that goes takes the truth of the stored
- * digest with it, and no recomputation makes it true again while the group still
- * names that member — so the flag checks rather than writes, and says what it
- * checked. `set --digest` is the half that writes.
+ * `--digest` here checks rather than writes: a group member that goes takes the
+ * truth of the stored digest with it, and no recomputation restores it while
+ * the group still names that member. `set --digest` is the half that writes.
  */
 export const del = async ({
   config,
@@ -590,10 +552,10 @@ export const del = async ({
   // skipped quietly, because the caller asked for it.
   const fingerprint = options.digest === true ? config.envDigest : null
   if (options.digest === true && !fingerprint) {
-    log(`# ${config.path} declares no env.digest; there is no fingerprint to keep true`)
+    log(`# ${config.basePath} declares no env.digest; there is no fingerprint to keep true`)
   }
   if (fingerprint) {
-    const certified = groupKeys({ group: fingerprint.group, groups: config.envSelectGroup, where: config.path })
+    const certified = groupKeys({ group: fingerprint.group, groups: config.envSelectGroup, where: config.basePath })
     const inside = positionals.filter((name) => certified.includes(name))
     if (inside.length > 0) {
       throw new Error(

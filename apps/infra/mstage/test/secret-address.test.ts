@@ -3,8 +3,8 @@ import test from 'node:test'
 import { EnvError } from '../src/env/backend.ts'
 import { SECRET_GROUP, assertSecretAddresses, secretAddressesOf } from '../src/env/secret-address.ts'
 
-const PARAMETER = 'arn:aws:ssm:ap-southeast-1:123456789012:parameter/boxlite/dev/oidc-client-secret'
-const SECRETS_MANAGER = 'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:boxlite/dev/key-AbCdEf'
+const PARAMETER = 'arn:aws:ssm:ap-southeast-1:123456789012:parameter/boxlite-backoffice/dev/oidc-client-secret'
+const SECRETS_MANAGER = 'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:boxlite-backoffice/dev/key-AbCdEf'
 const SECRET_MANAGER = 'projects/boxlite-dev/secrets/oidc-client-secret'
 
 const held = (address: string) => JSON.stringify({ address })
@@ -42,7 +42,7 @@ test('an address for the other cloud is refused, so a store cannot point nowhere
 
 test('a bare parameter name is not an address; an ARN is what names the region and the account', () => {
   assert.throws(
-    () => secretAddressesOf({ values: { KEY: held('/boxlite/dev/oidc-client-secret') }, home: 'aws' }),
+    () => secretAddressesOf({ values: { KEY: held('/boxlite-backoffice/dev/oidc-client-secret') }, home: 'aws' }),
     /KEY does not name a Parameter Store parameter ARN/,
   )
 })

@@ -1,23 +1,18 @@
 /*
  * Which cloud a stage lives in, resolved once.
  *
- * `mstage.config.json` declares `home` — for the repository, and per stage
- * where one differs — and `homeFor` composes those two into the single answer
- * that reaches this file on the scope. This is the only place that answer turns
- * into an identity, a store backend and the bucket both of them sit in.
- * Everything above it — every `env` command, every caller that asks who it is
- * running as — works against those interfaces and never learns which cloud
- * answered.
+ * Each stage in `.mstage.config.json` declares its own `home`, and that answer
+ * arrives here on the scope. This is the only place it becomes an identity, a
+ * store backend and a bucket. Everything above works against those interfaces
+ * and never learns which cloud answered.
  *
- * The mirror of mdeploy's per-cloud provider bundles: one file per repository
- * where the cloud is chosen, rather than a branch at every call site. What the
- * stage contributes is the coordinates that cloud needs — its region, and the
- * account or project it is pinned to.
+ * The mirror of mdeploy's per-cloud provider bundles: one file where the cloud
+ * is chosen, rather than a branch at every call site. The stage contributes the
+ * coordinates — its region, and the account or project it is pinned to.
  *
- * Google's SDKs are imported lazily and only when a GCP stage is what was
- * asked for. A repository whose stages all live in AWS therefore never has to
- * have them installed — and in a repository like this one, where only some
- * stages are on GCP, an AWS deploy never pays for them either.
+ * Google's SDKs are imported lazily, only for a GCP stage: an AWS-only
+ * repository never installs them, and in a mixed one an AWS deploy never pays
+ * for them either.
  */
 
 import { awsBackend, clientsFor, readStateBucket as awsStateBucket } from './env/aws-backend.ts'
@@ -38,43 +33,34 @@ export class HomeError extends Error {
 type Access = {
   backend: StoreBackend
   /**
-   * The bucket this stage's state sits in — the store on both clouds, and on
-   * GCP the Pulumi backend as well, because a stage that keeps its state in the
-   * project it deploys into keeps both in one place.
-   *
-   * A function rather than a value: reading it costs a lookup against the
-   * bootstrap record, and most commands never ask.
+   * The bucket this stage's state sits in — the store on both clouds, and the
+   * Pulumi backend too on GCP. A function rather than a value, because reading
+   * it costs a lookup and most commands never ask.
    */
   stateBucket: () => Promise<string>
 }
 
 /**
- * One resolved cloud: who you are, where the configuration is, where the state is.
+ * One resolved cloud: who you are, where the configuration is, where the state
+ * is.
  *
- * A union rather than one shape holding an `Identity`, so a caller can narrow on
- * `identity.home` and have the half that cloud actually offers. SST needs a
- * resolved AWS key triple and nothing else can produce one; a caller that had to
- * take the narrow interface and check at runtime for methods that are always
- * there would be re-deciding, by hand, the question this file already answered.
+ * A union rather than one shape, so a caller narrowing on `identity.home` gets
+ * the half that cloud offers. SST needs a resolved AWS key triple and nothing
+ * else produces one; checking for it at runtime would re-decide by hand the
+ * question this file already answered.
  */
 export type Home = (Access & { identity: AwsIdentity }) | (Access & { identity: GcpIdentity })
 
 /**
- * The Google clients, loaded only when a GCP stage asks for them.
- *
- * Injectable so a test can exercise the dispatch without the packages, which is
- * the same reason the backend describes their shape structurally instead of
- * importing their types.
+ * The Google clients, loaded only when a GCP stage asks for them. Injectable so
+ * a test can exercise the dispatch without the packages installed.
  */
 export type GoogleFactory = (input: { project: string }) => Promise<{ clients: GcpClients; auth: GoogleAuth }>
 
 /*
- * The specifiers are constants rather than literals on purpose.
- *
- * mstage is shared by repositories that have never seen GCP, and a literal
- * would make `tsc -p mstage/tsconfig.build.json` require all three packages to
- * be installed in every one of them. Resolving them at runtime, in the only
- * repository that has adopted GCP, does not.
+ * Constants rather than literals on purpose: a literal would make
+ * `tsc -p mstage/tsconfig.build.json` require all three packages in every
+ * repository sharing mstage, including those that have never seen GCP.
  */
 const STORAGE = '@google-cloud/storage'
 const SECRET_MANAGER = '@google-cloud/secret-manager'
@@ -106,20 +92,16 @@ const loadGoogle: GoogleFactory = async ({ project }) => {
     )
   }
   /*
-   * Cast at the seam, deliberately. `GcpClients` is mstage's own description of
-   * the slice of these SDKs it uses (`env/gcp-backend.ts:29-49`), written
-   * structurally so nothing above depends on the packages' types. This function
-   * is the one place the real objects meet that description, so it is the one
-   * place the assertion belongs.
+   * Cast at the seam, deliberately. `GcpClients` describes structurally the
+   * slice of these SDKs mstage uses, and this is the one place the real objects
+   * meet that description.
    */
   return { clients: { storage, secrets } as GcpClients, auth: auth as GoogleAuth }
 }
 
 /**
- * The project a GCP stage lives in.
- *
- * Declared rather than discovered, unlike the AWS account: the Storage and
- * Secret Manager clients below cannot be built without a project, so there is
+ * The project a GCP stage lives in. Declared rather than discovered, unlike the
+ * AWS account: the clients below cannot be built without one, so there is
  * nothing to ask before it is known.
  */
 const projectOf = (scope: Scope): string => {
@@ -130,9 +112,9 @@ const projectOf = (scope: Scope): string => {
 }
 
 export const resolveHome = async ({ scope, google = loadGoogle }: { scope: Scope; google?: GoogleFactory }): Promise<Home> => {
-  // The scope's, not the config's: `resolveScope` has already folded the stage's
-  // own declaration over the repository's default, and asking the file a second
-  // time here is what would let one stage's home differ from the other's answer.
+  // The scope's, not the config's: the stage is the only thing that declares
+  // a cloud — there is no repository default to fold over — and `resolveScope`
+  // already read it. Reading it again here is what would let the two differ.
   switch (scope.home) {
     case 'aws': {
       const identity = resolveIdentity({ scope })

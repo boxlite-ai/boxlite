@@ -1,22 +1,17 @@
 /*
  * What a stopped deploy leaves behind, and the two things that can be done to it.
  *
- * A deploy takes a lock, rewrites the checkpoint as it goes, and drops the lock
- * on its way out. A deploy that is killed — a cancelled workflow, a closed
- * laptop — never reaches the last step, so the lock stays and the operations it
- * was in the middle of stay recorded as pending. The next deploy then refuses:
- * once because the stage looks busy, and once because Pulumi will not plan over
- * operations whose outcome nobody observed.
+ * A deploy takes a lock, rewrites the checkpoint, and drops the lock on its way
+ * out. A killed deploy never reaches the last step, so the lock stays and its
+ * operations stay pending — and the next deploy refuses twice: the stage looks
+ * busy, and Pulumi will not plan over operations nobody observed.
  *
- * Both are repairs to objects rather than to infrastructure, which is why they
- * live here and not in whatever deploys. mstage already reads and writes this
- * bucket for the stage environment; these are two more keys in it.
+ * Both are repairs to objects rather than infrastructure, which is why they
+ * live here: mstage already reads this bucket for the stage environment.
  *
- * Removing a pending operation is not the same as knowing what happened to the
- * resource it names. The operation was interrupted, so the cloud may hold a
- * resource the checkpoint does not, or the reverse. Editing the record is how a
- * stage becomes deployable again; a refresh is how it becomes accurate, and the
- * order is that one first.
+ * Removing a pending operation is not knowing what happened to the resource it
+ * names. Editing the record makes a stage deployable again; a refresh makes it
+ * accurate, in that order.
  */
 
 import { createHash } from 'node:crypto'
@@ -30,11 +25,9 @@ export class StateError extends Error {
 }
 
 /**
- * Whoever holds the lock, as much of it as the engine that took it recorded.
- *
- * Two disjoint sets, because the two engines record different things and this
- * has to render either. Neither is a superset of the other: SST says what was
- * running and Pulumi says who ran it, and a lock carries one set or the other.
+ * Whoever holds the lock, as much as the engine that took it recorded. Two
+ * disjoint sets: SST says what was running, Pulumi says who ran it, and a lock
+ * carries one or the other.
  */
 export type StageLock = {
   /** SST's (`lockData`, pkg/project/provider/provider.go). */
@@ -48,12 +41,9 @@ export type StageLock = {
   pid: number | null
   timestamp: string | null
   /**
-   * What tells one lock from another, whatever engine wrote it.
-   *
-   * Neither field set can do this: an engine this does not recognise leaves all
-   * of them null, so comparing them made any two such locks equal and turned
-   * "the lock being dropped is the lock that was named" into a check that could
-   * not fail. A digest of the bytes is the one identity every engine has.
+   * What tells one lock from another, whatever engine wrote it. Neither field
+   * set can: an unrecognised engine leaves them all null, making any two such
+   * locks equal. A digest of the bytes is the identity every engine has.
    */
   identity: string
 }
@@ -63,12 +53,9 @@ type Stage = { backend: StoreBackend; app: string; stage: string }
 const text = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null)
 
 /**
- * Who holds the lock, or null when nobody does.
- *
- * A lock that does not parse is still a lock, and the whole reason to look at
- * one is usually that it should not be there — so the fields are best effort and
- * an unreadable one comes back with all of them empty rather than as a failure
- * that would also block removing it.
+ * Who holds the lock, or null when nobody does. A lock that does not parse is
+ * still a lock, so the fields are best effort: an unreadable one comes back
+ * empty rather than as a failure that would also block removing it.
  */
 export const readLock = async ({ backend, app, stage }: Stage): Promise<StageLock | null> => {
   const payload = await backend.state.readLock({ app, stage })
@@ -94,13 +81,9 @@ export const readLock = async ({ backend, app, stage }: Stage): Promise<StageLoc
 }
 
 /**
- * Who is being interrupted. A lock a deploy still holds is not a stale one, and
- * this line is the whole basis for telling those apart.
- *
- * Reads both field sets, because a renderer that knew only one would answer "an
- * unrecorded command" for every lock the other engine took — throwing away the
- * user, host and time that were sitting in the file, on exactly the stage where
- * the operator has least context.
+ * Who is being interrupted — the whole basis for telling a stale lock from a
+ * live one. Reads both field sets, or every lock the other engine took would
+ * render as "an unrecorded command".
  */
 export const describeLock = ({ app, stage, lock }: { app: string; stage: string; lock: StageLock }): string =>
   [
@@ -124,11 +107,9 @@ const sameLock = (left: StageLock, right: StageLock): boolean => left.identity =
 /**
  * Removes the lock that was named, and only that one.
  *
- * Naming a lock and dropping it are two calls, and a deploy can take the lock in
- * between — which would report a lock from last week and delete a live one. So
- * the lock is read again and compared, the same way a checkpoint write compares
- * before it lands. Returns whether there was still one to remove: a lock that
- * went on its own leaves the stage in the state the caller asked for.
+ * Naming and dropping are two calls, and a deploy can take the lock in between
+ * — reporting last week's lock and deleting a live one. So it is read again and
+ * compared. Returns whether there was still one to remove.
  */
 export const clearLock = async ({
   backend,
@@ -163,26 +144,19 @@ type VersionedCheckpoint = { checkpoint?: { latest?: { pending_operations?: unkn
 /**
  * The version both engines write today, and the only one this opens.
  *
- * `apitype.DeploymentSchemaVersionCurrent` is 3 "when not using features that
- * require v4"; a stack that uses one gets a `version: 4` wrapper with a
- * `features` list beside it. Such a checkpoint is refused here rather than
- * edited, which is the safe direction — this reads `pending_operations` and
- * writes the whole file back, so opening a shape it does not understand is how
- * a stage loses everything it had. Raising this means reading what v4 changed,
- * not widening the comparison.
+ * `apitype.DeploymentSchemaVersionCurrent` is 3 unless a stack uses a v4
+ * feature. A v4 checkpoint is refused rather than edited: this writes the whole
+ * file back, so opening a shape it does not understand is how a stage loses
+ * everything. Raising this means reading what v4 changed.
  */
 const CHECKPOINT_VERSION = 3
 
 const isObject = (value: unknown): boolean => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 
 /**
- * The whole wrapper, or nothing.
- *
- * Both fields are checked because both are load-bearing: the version is what
- * says which reader opens it, and a `checkpoint` that is null, a string or
- * absent describes a stage with no resources rather than a stage as it is.
- * Accepting any of those would store a file that parses and still loses
- * everything the stage had.
+ * The whole wrapper, or nothing. The version says which reader opens it, and a
+ * `checkpoint` that is null, a string or absent describes an empty stage —
+ * accepting either would store a file that parses and loses everything.
  */
 const parse = (checkpoint: Buffer): VersionedCheckpoint | null => {
   let parsed: unknown
@@ -198,10 +172,8 @@ const parse = (checkpoint: Buffer): VersionedCheckpoint | null => {
 }
 
 /**
- * How many operations were in flight when the deploy that wrote this stopped,
- * or null when these bytes are not a checkpoint at all.
- *
- * Null is worth telling apart from zero: a stage whose state no longer parses is
+ * How many operations were in flight when the deploy stopped, or null when
+ * these bytes are not a checkpoint — a stage whose state no longer parses is
  * stuck for a different reason and needs a different edit.
  */
 export const pendingOperations = (checkpoint: Buffer): number | null => {
@@ -212,19 +184,16 @@ export const pendingOperations = (checkpoint: Buffer): number | null => {
 }
 
 /**
- * Replaces the checkpoint, once it still is one and once nothing else has moved.
+ * Replaces the checkpoint, once it still is one and nothing else has moved.
  *
- * Three refusals, because a write here has no undo. The next deploy is what
- * reads these bytes back, so a file that stopped parsing or lost its wrapper to
- * a stray keystroke would leave a stage that neither a deploy nor a second edit
- * can open. And an edit is a read-modify-write held open for as long as someone
- * leaves an editor sitting there, so `replacing` — the bytes that editor was
- * given — is compared against what is stored now: a deploy that took the lock,
- * or wrote at all, in the meantime would otherwise be overwritten by a file
- * that predates it.
+ * Three refusals, because this write has no undo: a file that stopped parsing
+ * or lost its wrapper leaves a stage neither a deploy nor a second edit can
+ * open. And since an edit stays open as long as the editor does, `replacing` is
+ * compared against what is stored now, or a deploy that landed meanwhile would
+ * be overwritten by a file that predates it.
  *
- * The comparison is not atomic and does not pretend to be. It closes the window
- * that is minutes long and leaves the one that is milliseconds long.
+ * Not atomic, and does not pretend to be: it closes the window that is minutes
+ * long and leaves the one that is milliseconds long.
  */
 export const writeCheckpoint = async ({
   backend,

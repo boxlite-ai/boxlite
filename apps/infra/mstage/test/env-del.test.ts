@@ -140,7 +140,7 @@ test('a stage that was never written has nothing to remove', async () => {
 
 /** A repository that fingerprints `deploy`, whose digest key is a member of it. */
 const CONFIG = {
-  path: '/repo/mstage.config.json',
+  path: '/repo/.mstage.config.json',
   envSelectGroup: { deploy: ['KEPT', 'DIGEST'] },
   envOptional: {},
   envDigest: { key: 'DIGEST', group: 'deploy' },

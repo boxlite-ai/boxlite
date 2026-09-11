@@ -34,7 +34,7 @@ import { loadConfig } from 'mstage/config'
 import { resolveHome } from 'mstage/home'
 import { run as mstage } from 'mstage/run'
 import { resolveScope } from 'mstage/scope'
-import { loadDeployConfig } from './config.ts'
+import { deployRoot } from './config.ts'
 import { sleepSeconds, spawnWith, upgradeOne, type RunCommand, type UpgradeOneRequest } from './upgrade-runners.ts'
 import { encodeUpgradePayload } from '../stack/runner-upgrade.ts'
 import { RUNNER_PORT } from '../stack/runners.ts'
@@ -237,7 +237,7 @@ export const updateRunners = async ({
       RUNNER_ARTIFACT_SOURCE: 'release',
       BOXLITE_ARTIFACT_SOURCE: 'release',
     },
-    configRoot: loadDeployConfig({ cwd, environment }).root,
+    configRoot: deployRoot({ cwd, environment }),
   })
 
   const home = await resolveHomeWith({ scope })

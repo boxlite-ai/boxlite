@@ -1,22 +1,18 @@
 /**
  * Builds the environment a child process inherits so it sees exactly one AWS identity.
  *
- * mstage resolves the credential itself and hands the child a plain key triple,
- * with every other AWS variable cleared. That matters beyond tidiness on this
- * platform: `aws login` writes `login_session`, which the AWS CLI and the JS SDK
- * understand but the Go SDK behind SST and Pulumi does not — a Go tool started
- * from such a shell falls through to IMDS and finds nothing. Resolving in JS and
- * passing the result down removes the need for a bridge profile entirely.
+ * mstage resolves the credential and hands the child a plain key triple, every
+ * other AWS variable cleared. `aws login` writes `login_session`, which the AWS
+ * CLI and JS SDK understand but the Go SDK behind SST and Pulumi does not — a
+ * Go tool started from such a shell falls through to IMDS and finds nothing.
+ * Resolving in JS removes the need for a bridge profile.
  *
- * A profile name is never forwarded alongside the triple. The AWS SDK warns
- * about that combination — "Multiple credential sources detected: Both
- * AWS_PROFILE and the pair AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY static
- * credentials are set" — and SST produces it by exporting `AWS_PROFILE` next to
- * its own snapshot (pkg/project/provider/aws.go:54-60), then patches it back out
- * for one command only (cmd/sst/shell.go:125-140).
+ * A profile name is never forwarded alongside the triple: the SDK warns about
+ * "Multiple credential sources detected", which SST produces by exporting
+ * `AWS_PROFILE` next to its own snapshot.
  *
  * The triple does not refresh, so its expiry is returned for the caller to
- * report or to guard on before starting long work.
+ * report or guard on before starting long work.
  */
 
 import type { AwsIdentity } from './identity.ts'

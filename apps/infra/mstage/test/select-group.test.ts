@@ -16,7 +16,7 @@ const sealed = (value: unknown): Buffer => {
 const notFound = (name: string) => Object.assign(new Error(name), { name })
 
 /** Objects keyed by version; 'current' is what S3 answers without a VersionId. */
-const clients = (versions: Record<string, Record<string, string>>, key = 'secret/boxlite/dev.json') => {
+const clients = (versions: Record<string, Record<string, string>>, key = 'secret/boxlite-backoffice/dev.json') => {
   const reads: Record<string, unknown>[] = []
   return {
     reads,
@@ -38,15 +38,15 @@ const clients = (versions: Record<string, Record<string, string>>, key = 'secret
   }
 }
 
-const config = parseConfig(
-  '/repo/mstage.config.json',
-  JSON.stringify({
-    app: 'boxlite',
-    home: 'aws',
+const config = parseConfig({
+  basePath: '/repo/mstage.env.json',
+  base: JSON.stringify({
+    app: 'boxlite-backoffice',
     env: { selectGroup: { server: ['OIDC_CLIENT_SECRET', 'ADMIN_API_KEY'] } },
-    stages: { dev: { region: 'ap-southeast-1' } },
   }),
-)
+  stagePath: '/repo/.mstage.config.json',
+  stages: JSON.stringify({ stages: { dev: { home: 'aws', region: 'ap-southeast-1' } } }),
+})
 
 const STORED = { OIDC_CLIENT_SECRET: 'from-store', ADMIN_API_KEY: 'also', NOT_IN_THE_GROUP: 'stays home' }
 
@@ -61,7 +61,7 @@ test('a group answers with its own keys, and with nothing else the store holds',
 test('the app comes from the config, so a consumer names only the stage', async () => {
   const fake = clients({ current: STORED })
   await selectGroup({ group: 'server', stage: 'dev', clients: fake as any, config })
-  assert.equal(fake.reads.at(-1)?.Key, 'secret/boxlite/dev.json')
+  assert.equal(fake.reads.at(-1)?.Key, 'secret/boxlite-backoffice/dev.json')
 })
 
 test('a key the group names but the store does not hold is refused, not omitted', async () => {

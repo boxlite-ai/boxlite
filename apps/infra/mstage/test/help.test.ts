@@ -44,13 +44,13 @@ test('options shared by every command are listed once, not per command', async (
 })
 
 test('login lists every provider mstage can check, not only the enabled ones', async () => {
-  // mstage.config.json selects which a repository requires; it does not define the
+  // .mstage.config.json selects which a repository requires; it does not define the
   // set, so a provider this repository has not enabled is still documented.
   const { text } = await helpFor('login')
   for (const provider of ['aws', 'github', 'auth0']) {
     assert.match(text, new RegExp(`^ {2}${provider}\\s{2,}\\S`, 'm'), `${provider} is missing from login help`)
   }
-  assert.match(text, /omit the command to act on every provider mstage\.config\.json enables/)
+  assert.match(text, /omit the command to act on every provider any stage declares/)
 })
 
 test('a command list is described after it, where the note can qualify it', async () => {
@@ -59,10 +59,9 @@ test('a command list is described after it, where the note can qualify it', asyn
 })
 
 test("the example is the module's own, not a generic one that would be wrong", async () => {
-  // An example is the one line a reader copies, so a generic one is worse than
-  // none. `login` does take `--stage` now — it narrows which cloud is required
-  // to the one that stage lives in — but its example is about a provider, and
-  // showing a stage there would teach the wrong thing about what login answers.
+  // `login` does take `--stage` now — it narrows which cloud is required to
+  // the one that stage lives in — but its example is about a provider, and a
+  // stage there would teach the wrong thing about what login answers.
   const login = await helpFor('login')
   assert.match(login.text, /example: npm run mstage login github -- --force/)
   assert.ok(
@@ -85,7 +84,7 @@ test('every usage line names the separator npm would otherwise eat', async () =>
 })
 
 test('help for an unknown module lists the real ones', async () => {
-  await assert.rejects(() => helpFor('nope'), /Known modules: login, aws, env, state$/)
+  await assert.rejects(() => helpFor('nope'), /Known modules: login, aws, config, env, state$/)
 })
 
 test('the rendered width adapts to the longest option, so nothing collides', () => {

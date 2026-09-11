@@ -9,29 +9,24 @@
  *   GCS             secret/<app>/<stage>.json          the sealed map
  *   Secret Manager  mstage-passphrase-<app>-<stage>    the key
  *
- * The deployment objects below `state` are not mstage's to choose. Pulumi
- * deploys a GCP stage (`mdeploy/src/pulumi.ts`) and keeps its checkpoint and
- * locks in this bucket, so those keys are its layout and are read exactly as it
- * writes them — the same relationship the AWS backend has with SST, against a
- * different engine.
+ * The objects below `state` are not mstage's to choose: Pulumi deploys a GCP
+ * stage and keeps its checkpoint and locks in this bucket, so those keys are
+ * read exactly as it writes them — the relationship the AWS backend has with
+ * SST, against a different engine.
  *
- * The bucket is discovered rather than passed, the same way AWS reads
- * `/sst/bootstrap`. Not for obscurity — IAM is the boundary either way — but so
- * that moving the store to another bucket is one edit to one record instead of
- * an edit everywhere a caller constructs a backend. The record has the same
- * shape on both clouds, `{"state": "<bucket>"}`, so the two lookups read alike.
+ * The bucket is discovered rather than passed, as AWS reads `/sst/bootstrap`,
+ * so moving the store is one edit to one record. The record has the same shape
+ * on both clouds, `{"state": "<bucket>"}`.
  *
- * Object versions are generation numbers, which GCS returns as integers. They
- * are carried as strings so a pinned version means the same thing to a caller on
- * either cloud.
+ * Object versions are GCS generation numbers, carried as strings so a pinned
+ * version means the same thing on either cloud.
  */
 
 import { EnvError, objectKey, type StoreBackend, type StoredVersion } from './backend.ts'
 
 /**
- * The two Google clients this needs, in the shape their SDKs already have.
- * Structural rather than imported so nothing here depends on the packages
- * being installed until a GCP stage actually exists.
+ * The two Google clients, in the shape their SDKs already have. Structural
+ * rather than imported, so the packages are only needed once a GCP stage is.
  */
 export type GcpClients = {
   storage: {
@@ -70,22 +65,18 @@ const BOOTSTRAP_SECRET = 'mstage-bootstrap'
  * Where the engine keeps this stage's deployment state, which is not where SST
  * keeps it.
  *
- * On AWS the engine is SST and writes `app/<app>/<stage>.json` with a single
- * `lock/<app>/<stage>.json` beside it. On GCP the engine is Pulumi itself
- * (`mdeploy/src/pulumi.ts`), and its own backend keeps everything under
- * `.pulumi/` — so the same bucket holds the store and the checkpoint, which is
- * the whole reason a GCP stage needs no second cloud to deploy.
+ * On AWS the engine is SST, writing `app/<app>/<stage>.json` with one
+ * `lock/…` object beside it. On GCP the engine is Pulumi, whose backend keeps
+ * everything under `.pulumi/` — so one bucket holds both the store and the
+ * checkpoint, which is why a GCP stage needs no second cloud to deploy.
  *
- * Two differences are worth naming rather than smoothing over. The stack path
- * is scoped by project, which is what Pulumi writes into a new or empty backend
- * from 3.61.0 on and therefore what the bucket `iam/src/gcp.ts` creates gets; a
- * backend upgraded from the older flat layout is not read here, because nothing
- * in this repository makes one. And a lock is a *directory* — Pulumi writes one
- * file per operation holding the stage, named by a unique id — where SST has a
- * single object.
+ * Two differences matter. The stack path is scoped by project, which is what
+ * Pulumi writes into a new backend from 3.61.0 on; the older flat layout is not
+ * read here because nothing makes one. And a lock is a *directory*, one file
+ * per operation holding the stage, where SST has a single object.
  *
- * `app` is the Pulumi project: mdeploy passes the app name as `projectName` and
- * the stage as `stackName`, so the two halves line up with SST's keys.
+ * `app` is the Pulumi project: mdeploy passes the app as `projectName` and the
+ * stage as `stackName`, so the halves line up with SST's keys.
  */
 const PULUMI = '.pulumi'
 
@@ -97,26 +88,18 @@ const PULUMI = '.pulumi'
 const checkpointKey = (app: string, stage: string): string => `${PULUMI}/stacks/${app}/${stage}.json`
 
 /**
- * `.pulumi/locks/organization/<project>/<stack>/` — and the extra segment is not
- * a typo.
- *
- * Locks are keyed by `FullyQualifiedName()`, which renders a project-scoped
- * reference as `organization/<project>/<stack>` (`pkg/backend/diy/backend.go`),
- * and `lockPath` joins that under the locks directory
- * (`pkg/backend/diy/lock.go`). Stacks are keyed by the store instead, which
- * omits it. The two paths really are asymmetric; Pulumi's own DIY-backend
- * documentation describes the lock path without the segment, so reading the
- * docs rather than the source is how this gets written wrong — and wrong here
- * means listing an empty prefix and reporting a locked stage as free.
+ * `.pulumi/locks/organization/<project>/<stack>/` — the extra segment is not a
+ * typo. Locks are keyed by `FullyQualifiedName()` (`pkg/backend/diy/backend.go`)
+ * while stacks are keyed by the store, which omits it. Pulumi's own docs
+ * describe the lock path without the segment; getting it wrong means listing an
+ * empty prefix and reporting a locked stage as free.
  */
 const lockPrefix = (app: string, stage: string): string => `${PULUMI}/locks/organization/${app}/${stage}/`
 
 /**
- * The lock files this stage currently has, by key.
- *
- * Listed rather than addressed: the name of each is a unique id the engine
- * chose, so there is nothing to construct. Distinct keys, not one object's
- * history, which is why `versions` is left off.
+ * The lock files this stage currently has, by key. Listed rather than
+ * addressed, because each name is a unique id the engine chose. Distinct keys,
+ * not one object's history, which is why `versions` is left off.
  */
 const lockFiles = async (clients: GcpClients, project: string, app: string, stage: string): Promise<string[]> => {
   const bucket = await readStateBucket(clients, project)
@@ -139,11 +122,8 @@ const secretValue = async (clients: GcpClients, name: string): Promise<string> =
 }
 
 /**
- * Which bucket holds the store, for this project.
- *
- * The GCP counterpart of `/sst/bootstrap`. One record, read once per call, so
- * pointing the store at a different bucket is an edit to that record and
- * nothing else.
+ * Which bucket holds the store, for this project — the GCP counterpart of
+ * `/sst/bootstrap`. One record, so repointing the store is one edit.
  */
 export const readStateBucket = async (clients: GcpClients, project: string): Promise<string> => {
   const name = `projects/${project}/secrets/${BOOTSTRAP_SECRET}/versions/latest`
@@ -261,12 +241,10 @@ export const gcpBackend = ({ clients, project }: { clients: GcpClients; project:
       const held = await lockFiles(clients, project, app, stage)
       if (held.length === 0) return null
       /*
-       * Refused rather than half-answered. Each file is one operation holding
-       * the stage, so two files are two holders, and reporting one of them
-       * would name a holder nobody asked about — and would quietly break the
-       * check in `state/store.ts` that the lock being dropped is the lock that
-       * was named. The names are not printed: the caller is told how many, and
-       * `unlock` removes them all once it knows.
+       * Refused rather than half-answered: each file is one operation holding
+       * the stage, so reporting one of two would name a holder nobody asked
+       * about and break `state/store.ts`'s check that the lock being dropped is
+       * the one that was named. The caller is told how many, not which.
        */
       if (held.length > 1) {
         throw new EnvError(
@@ -280,9 +258,8 @@ export const gcpBackend = ({ clients, project }: { clients: GcpClients; project:
         return payload.length === 0 ? null : payload
       } catch (error) {
         // Released between the listing and this read: no lock, which is the
-        // answer the caller wanted. Guarded like the two reads either side of
-        // it — an unguarded 404 leaves here as a GCS message naming the bucket,
-        // and `bin/mstage.ts` prints what reaches it.
+        // answer the caller wanted. Guarded like the reads either side — an
+        // unguarded 404 leaves here as a GCS message naming the bucket.
         if (isNotFound(error)) return null
         throw error
       }

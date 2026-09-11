@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { compareDigest, digestOf, digestOfGroup } from '../src/env/digest.ts'
 import { parseAssignment, unescape } from '../src/cli/handlers/env.ts'
-import { ConfigError, parseConfig } from '../src/config/load.ts'
+import { ConfigError, parseBase } from '../src/config/load.ts'
 
 /**
  * The formula `apps/api/src/sst-environment.store.ts:49-57` already uses. Both
@@ -61,11 +61,7 @@ test('an unset digest key compares as absent rather than as empty', () => {
   assert.equal(comparison.matches, false)
 })
 
-const config = (env: unknown) =>
-  parseConfig(
-    '/repo/mstage.config.json',
-    JSON.stringify({ app: 'a', home: 'aws', env, stages: { dev: { region: 'ap-southeast-1' } } }),
-  )
+const config = (env: unknown) => parseBase('/repo/mstage.env.json', JSON.stringify({ app: 'a', env }))
 
 test('env.digest names a key that its group must carry', () => {
   const parsed = config({ selectGroup: { deploy: ['A', 'D'] }, digest: { key: 'D', group: 'deploy' } })

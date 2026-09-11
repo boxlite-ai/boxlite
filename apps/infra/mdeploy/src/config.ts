@@ -1,12 +1,13 @@
 /*
- * Reads `mdeploy.config.json`, the shape this repository deploys into.
+ * Reads one stage's `deploy` block — the shape that stage is deployed into.
  *
- * It sits beside `mstage.config.json` and deliberately holds the other half.
- * mstage's file says which stages exist, where they live and what the store may
- * hand out; this one says how big the database is, how long its backups are
- * kept, and whether a stage refuses deletion. A value belongs here when
- * changing it changes the infrastructure, and in mstage's file when changing it
- * changes what configuration a running thing reads.
+ * The block lives in `.mstage.config.json`, inside the stage it belongs to, and
+ * mstage hands it over without reading inside it. That is the division: mstage
+ * says which stages exist, where they live and what the store may hand out, and
+ * the keys below say how big the database is, how long its backups are kept,
+ * and whether the stage refuses deletion. A value belongs here when changing it
+ * changes the infrastructure, and in mstage's own keys when changing it changes
+ * what configuration a running thing reads.
  *
  * That line is worth stating for the two BoxLite values that look like they
  * could go either way. `STACK_DOMAIN` is in mstage's file: it is the hostname a
@@ -20,21 +21,20 @@
  * every time, and the runner binary's version comes from the checkout, because
  * it belongs to the commit rather than to a stage.
  *
- * A stage is written as an override of the defaults rather than as a complete
- * copy. Stages differ in a few deliberate ways and agree on everything else, and
- * a full copy per stage hides which of the differences were meant.
+ * Each stage carries a complete block rather than an override of shared
+ * defaults. A stage is declared once and `mstage config put` sends the whole of
+ * it to a runner, so a block that meant nothing without defaults kept somewhere
+ * else would arrive there incomplete.
  */
 
-import { readFileSync } from 'node:fs'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname } from 'node:path'
+import { loadConfig as loadMstageConfig, stageIn } from 'mstage/config'
 import type { AlarmRequest, AlarmThreshold } from '../stack/alarms.ts'
 import type { CacheRequest, CacheSize } from '../stack/cache.ts'
 import type { ClickHouseMode, ClickHouseRequest } from '../stack/clickhouse.ts'
 import type { DatabaseRequest, DatabaseSize } from '../stack/database.ts'
 import type { RunnerRequest, RunnerSize } from '../stack/runners.ts'
 import type { StorageRequest } from '../stack/storage.ts'
-
-export const CONFIG_FILENAME = 'mdeploy.config.json'
 
 export class DeployConfigError extends Error {
   constructor(message: string) {
@@ -46,33 +46,20 @@ export class DeployConfigError extends Error {
 /** The runner settings a config file decides. The fleet and the binary do not. */
 export type RunnerSettings = Pick<RunnerRequest, 'size' | 'rootDiskGb'>
 
-/** What one stage overrides. Every section is optional, and so is every key in it. */
-export type StageOverride = {
-  database: Partial<DatabaseRequest>
-  cache: Partial<CacheRequest>
-  storage: Partial<StorageRequest>
-  clickhouse: Partial<ClickHouseRequest>
-  runners: Partial<RunnerSettings>
-  alarms: Partial<AlarmRequest>
-}
-
 export type DeployConfig = {
+  /** The stage file the block was read out of. */
   path: string
+  /** The directory holding the committed base file, which is mstage's answer. */
   root: string
-  /** The defaults, before any stage has been named. */
   database: DatabaseRequest
   cache: CacheRequest
   storage: StorageRequest
   clickhouse: ClickHouseRequest
   runners: RunnerSettings
   alarms: AlarmRequest
-  stages: Record<string, StageOverride>
 }
 
 const SECTIONS = ['database', 'cache', 'storage', 'clickhouse', 'runners', 'alarms'] as const
-
-/** SST's own constraint on a stage name (pkg/project/project.go:115). */
-const STAGE_NAME = /^[a-zA-Z0-9-]+$/
 
 /** What PostgreSQL and ClickHouse both accept unquoted, which is the only form worth using. */
 const UNQUOTED_NAME = /^[a-z][a-z0-9_]*$/
@@ -98,21 +85,6 @@ const MAX_BACKUP_RETENTION_DAYS = 35
 const DISK_BOUNDS = { min: 20, max: 4_000 }
 
 const ALARM_NAMES: (keyof AlarmRequest)[] = ['apiServerErrors', 'proxyUnhealthyTargets', 'runnersUnreachable']
-
-const findUp = (from: string, filename: string): string | null => {
-  let directory = resolve(from)
-  for (;;) {
-    const candidate = join(directory, filename)
-    try {
-      readFileSync(candidate)
-      return candidate
-    } catch {
-      const parent = dirname(directory)
-      if (parent === directory) return null
-      directory = parent
-    }
-  }
-}
 
 const assertObject = (value: unknown, where: string): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -286,80 +258,47 @@ export const parseDeployConfig = (path: string, contents: string): DeployConfig 
     throw new DeployConfigError(`${path} is not valid JSON: ${(error as Error).message}`)
   }
   const root = assertObject(raw, path)
-  assertKeys(root, [...SECTIONS, 'stages'], path, { partial: true })
+  assertKeys(root, [...SECTIONS], path, { partial: true })
   const defaults = Object.fromEntries(
     SECTIONS.map((section) => [section, PARSERS[section](root[section], `${path}: "${section}"`, { partial: false })]),
   ) as Pick<DeployConfig, (typeof SECTIONS)[number]>
 
-  const stages: DeployConfig['stages'] = {}
-  if ('stages' in root) {
-    const declared = assertObject(root.stages, `${path}: "stages"`)
-    for (const [name, value] of Object.entries(declared)) {
-      if (!STAGE_NAME.test(name)) {
-        throw new DeployConfigError(`${path}: stage "${name}" may only contain letters, digits and "-"`)
-      }
-      const where = `${path}: "stages.${name}`
-      const block = assertObject(value, `${where}"`)
-      assertKeys(block, SECTIONS, `${where}"`, { partial: true })
-      stages[name] = Object.fromEntries(
-        SECTIONS.map((section) => [
-          section,
-          PARSERS[section](block[section] ?? {}, `${where}.${section}"`, { partial: true }),
-        ]),
-      ) as StageOverride
-    }
-  }
-  return { path, root: dirname(path), ...defaults, stages }
+  return { path, root: dirname(path), ...defaults }
 }
 
 /**
- * What one stage deploys into: the defaults with that stage's overrides on top.
- * A stage this file never mentions is not an error — it simply changes nothing,
- * which is what "the same as everywhere else" should look like.
+ * Where the committed files sit, for a caller that wants only that.
+ *
+ * Its own function because the two questions are different: this one is
+ * answerable without naming a stage, and the tools that ask it — the runner
+ * build and the roll — want a directory to anchor a path against, not a
+ * database size.
  */
-export const databaseFor = (config: DeployConfig, stage: string): DatabaseRequest => ({
-  ...config.database,
-  ...config.stages[stage]?.database,
-})
+export const deployRoot = ({
+  cwd = process.cwd(),
+  environment = process.env,
+}: { cwd?: string; environment?: NodeJS.ProcessEnv } = {}): string => loadMstageConfig({ cwd, environment }).root
 
-export const cacheFor = (config: DeployConfig, stage: string): CacheRequest => ({
-  ...config.cache,
-  ...config.stages[stage]?.cache,
-})
-
-export const storageFor = (config: DeployConfig, stage: string): StorageRequest => ({
-  ...config.storage,
-  ...config.stages[stage]?.storage,
-})
-
-export const clickHouseFor = (config: DeployConfig, stage: string): ClickHouseRequest => ({
-  ...config.clickhouse,
-  ...config.stages[stage]?.clickhouse,
-})
-
-export const runnersFor = (config: DeployConfig, stage: string): RunnerSettings => ({
-  ...config.runners,
-  ...config.stages[stage]?.runners,
-})
-
-/** Alarms merge alarm by alarm; a stage that retunes one keeps the others. */
-export const alarmsFor = (config: DeployConfig, stage: string): AlarmRequest => ({
-  ...config.alarms,
-  ...config.stages[stage]?.alarms,
-})
-
+/**
+ * One stage's deploy block, parsed.
+ *
+ * The stage is required and not defaulted: every section below decides a
+ * resource, and there is no repository-wide answer to fall back on now that a
+ * block is complete. A stage mstage does not declare is refused by mstage.
+ */
 export const loadDeployConfig = ({
   cwd = process.cwd(),
   environment = process.env,
-}: { cwd?: string; environment?: NodeJS.ProcessEnv } = {}): DeployConfig => {
-  const override = environment.MDEPLOY_CONFIG
-  const path = override ? (isAbsolute(override) ? override : resolve(cwd, override)) : findUp(cwd, CONFIG_FILENAME)
-  if (!path) throw new DeployConfigError(`Could not find ${CONFIG_FILENAME} in ${cwd} or any parent directory`)
-  let contents: string
-  try {
-    contents = readFileSync(path, 'utf8')
-  } catch (error) {
-    throw new DeployConfigError(`Could not read ${path}: ${(error as Error).message}`)
+  stage,
+}: { cwd?: string; environment?: NodeJS.ProcessEnv; stage: string }): DeployConfig => {
+  const mstage = loadMstageConfig({ cwd, environment })
+  const declared = stageIn(mstage, stage)
+  const where = `${mstage.path}: stage "${stage}" deploy`
+  if (Object.keys(declared.deploy).length === 0) {
+    throw new DeployConfigError(
+      `${where} is empty. Every resource this stage creates is sized here, and there are no ` +
+        'repository-wide defaults to fall back on — copy the block from .mstage.config.example.json',
+    )
   }
-  return parseDeployConfig(path, contents)
+  return { ...parseDeployConfig(where, JSON.stringify(declared.deploy)), path: mstage.path, root: mstage.root }
 }

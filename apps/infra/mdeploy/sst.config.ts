@@ -91,7 +91,7 @@ export default $config({
     const { loadConfig: loadStageConfig } = await import('mstage/config')
     const { awsStackProviders } = await import('./stack/providers/aws/index.ts')
 
-    const config = loadDeployConfig()
+    const config = loadDeployConfig({ stage: $app.stage })
     const stageConfig = loadStageConfig()
 
     /*

@@ -23,7 +23,7 @@
 import { API_GROUP, serviceSecretsFrom, splitServiceChannels, type Environment, type GroupDeclaration } from './env.ts'
 import { API_PORT } from '../stack/api.ts'
 import { SECRET_GROUP } from 'mstage/secret-address'
-import type { MstageConfig } from 'mstage/config'
+import type { Cloud } from 'mstage/config'
 
 export class ApiEnvironmentError extends Error {
   constructor(message: string) {
@@ -237,7 +237,7 @@ export const apiEnvironmentFrom = ({
   declaration: GroupDeclaration
   region: string
   stage: string
-  home: MstageConfig['home']
+  home: Cloud
 }): { environment: Record<string, string>; secrets: Record<string, string> } => {
   const domain = optional(environment, 'STACK_DOMAIN')
   if (!domain) throw new ApiEnvironmentError('STACK_DOMAIN is required — every URL the API composes starts with it')

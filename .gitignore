@@ -240,3 +240,7 @@ test-*.png
 .venv-infra/
 .venv-infra.partial.*/
 target/
+
+# Stage coordinates name somebody's cloud account, so they are per checkout.
+# The committed half is mstage.env.json; .mstage.config.example.json is the template.
+.mstage.config.json

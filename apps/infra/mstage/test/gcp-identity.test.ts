@@ -18,7 +18,7 @@ const scope = (overrides: Partial<Scope> = {}): Scope =>
     stage: 'dev',
     protect: false,
     project: 'boxlite-dev',
-    app: 'boxlite',
+    app: 'boxlite-backoffice',
     region: 'asia-southeast1',
     regionSource: 'test',
     roleArn: null,

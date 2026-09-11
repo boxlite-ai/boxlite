@@ -22,7 +22,7 @@ const opened = (payload: Buffer): Record<string, string> => {
 
 const notFound = (name: string) => Object.assign(new Error(name), { name })
 
-const ARN = 'arn:aws:ssm:ap-southeast-1:123456789012:parameter/boxlite/dev/oidc-client-secret'
+const ARN = 'arn:aws:ssm:ap-southeast-1:123456789012:parameter/boxlite-backoffice/dev/oidc-client-secret'
 const SECRET_NAME = 'projects/boxlite-dev/secrets/oidc-client-secret'
 
 const JSON_FLAG = { json: true }
@@ -53,8 +53,15 @@ const harness = ({
     written: () => (puts.length > 0 ? opened(puts[puts.length - 1].Body) : null),
     run: (positionals: string[] = [], options: Record<string, string | boolean> = {}) =>
       set({
-        config: { path: '/repo/mstage.config.json', home, envSelectGroup: groups, envOptional: {}, envDigest: digest } as any,
-        scope: { app: 'a', stage: 'dev', protect: false } as any,
+        // The cloud is the stage's, which is what decides an address's form.
+        config: {
+          path: '/repo/.mstage.config.json',
+          basePath: '/repo/mstage.env.json',
+          envSelectGroup: groups,
+          envOptional: {},
+          envDigest: digest,
+        } as any,
+        scope: { app: 'a', stage: 'dev', protect: false, home } as any,
         positionals,
         options,
         log: (line: string) => lines.push(line),

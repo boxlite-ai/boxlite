@@ -1,11 +1,9 @@
 /**
  * Asking the operator a yes/no question.
  *
- * Every sign-in mstage can start opens a browser and waits for a callback, so it
- * cannot complete unattended. Guiding someone through one is therefore only
- * offered where there is someone to guide: CI supplies credentials through OIDC
- * and job environment instead, and a prompt there would hang the job rather
- * than fail it.
+ * Every sign-in mstage can start opens a browser, so it cannot complete
+ * unattended and is offered only where there is someone to guide. CI supplies
+ * credentials through OIDC instead, and a prompt there hangs the job.
  */
 
 import { createInterface } from 'node:readline/promises'
@@ -27,9 +25,8 @@ export const confirm: Confirm = async (question) => {
  * The value for `env set KEY=` when the assignment leaves it empty.
  *
  * Matches `sst secret set` (cmd/sst/secret.go:335-362): a terminal is prompted
- * for one line with its newline stripped, and a redirect is read whole. A file's
- * trailing newline is kept because that is what SST stores, and the two write to
- * the same object — the same PEM must not differ depending on which tool set it.
+ * for one line with its newline stripped, a redirect is read whole. The file's
+ * trailing newline is kept because SST keeps it, and both write one object.
  */
 export const readValue = async (stream: NodeJS.ReadStream = process.stdin): Promise<string> => {
   if (stream.isTTY) {
@@ -46,12 +43,9 @@ export const readValue = async (stream: NodeJS.ReadStream = process.stdin): Prom
 }
 
 /**
- * Whatever a redirect carries, or nothing when there is no redirect.
- *
- * `readValue` prompts a terminal because it knows a value is wanted. A batch is
- * different: `env set` reads one only when a document was piped in, so a
- * terminal must answer "nothing" rather than sit waiting for a JSON object the
- * caller never meant to type.
+ * Whatever a redirect carries, or nothing when there is no redirect. Unlike
+ * `readValue`, a terminal must answer "nothing" rather than wait for a JSON
+ * object the caller never meant to type.
  */
 export const readRedirect = async (stream: NodeJS.ReadStream = process.stdin): Promise<string> => {
   if (stream.isTTY) return ''

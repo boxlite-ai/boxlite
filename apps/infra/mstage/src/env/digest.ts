@@ -1,11 +1,10 @@
 /**
  * A fingerprint of the configuration a deploy will run with.
  *
- * The point is to catch a store that changed after something was built against
- * it: whoever consumes the configuration recomputes this and compares. That only
- * works if both sides compute it identically, so the formula is copied from the
- * one already in use — `apps/api/src/sst-environment.store.ts:49-57` — and must
- * not be "improved" independently of it.
+ * Catches a store that changed after something was built against it: the
+ * consumer recomputes and compares. Both sides must compute it identically, so
+ * the formula is copied from `apps/api/src/sst-environment.store.ts:49-57` and
+ * must not be "improved" independently of it.
  *
  * Each entry contributes `<len>:<key>=<len>:<value>\n` over keys in sorted
  * order. The lengths are what stop `A=1,B=` and `A=1,B` from colliding.

@@ -12,16 +12,13 @@
  *   S3   app/<app>/<stage>.json            → the deployment checkpoint
  *   S3   lock/<app>/<stage>.json           → the lock a deploy holds on it
  *
- * The last two are what a stopped deploy leaves behind. SST names every one of
- * these objects `<kind>/<app>/<stage>.json` through the same `pathForData`, and
- * picks the kind at the call site — `app` in `PullState` and `PushPartialState`,
- * `lock` in `Lock` and `Unlock` (`pkg/project/provider/provider.go`).
+ * The last two are what a stopped deploy leaves behind. SST names all of them
+ * `<kind>/<app>/<stage>.json` through one `pathForData` and picks the kind at
+ * the call site (`pkg/project/provider/provider.go`).
  *
  * The bucket's name ends in twelve characters chosen at bootstrap, so nothing
- * but that first parameter knows it. It is never logged, on success or in an
- * error: a log is read by more people than an account is, and one line of
- * scrollback would hand over the name that guesswork cannot reach. Objects are
- * named by their key instead, which the app and stage already gave.
+ * but that first parameter knows it, and it is never logged — a log is read by
+ * more people than an account is. Objects are named by their key instead.
  */
 
 import {
@@ -112,10 +109,9 @@ export const awsBackend = (clients: AwsClients): StoreBackend => ({
       answer = await clients.s3.send(new GetObjectCommand({ Bucket: bucket, Key: key, VersionId: versionId }))
     } catch (error) {
       if (!isNotFound(error)) throw error
-      // A stage nobody has written yet is empty rather than an error, which is
-      // what SST reports too. A *pinned* version that has gone is not the same
-      // thing: answering empty there would start a caller with no configuration
-      // at exactly the moment it asked for a specific one.
+      // An unwritten stage is empty rather than an error, as SST reports it. A
+      // *pinned* version that has gone is not: answering empty there starts a
+      // caller with nothing at the moment it asked for something specific.
       if (versionId) throw new EnvError(`${key} has no version ${versionId}; it was deleted or expired`)
       return null
     }

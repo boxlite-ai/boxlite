@@ -1,40 +1,54 @@
 /*
- * Reads `mbuild.config.json`: how a repository is built, and where its
+ * Reads the two files that say how a repository is built, and where its
  * artifacts are uploaded.
  *
- * mbuild is shared, like mstage. Nothing in this module knows what a backoffice
- * or a commerce is — a repository declares its own artifacts and its own
- * registry here, and the same code publishes any of them. Three files now, and
- * the split between them is by *when* a value is decided rather than by what it
- * describes:
+ * mbuild is shared, like mstage: a repository declares its own artifacts and
+ * registry here, and the same code publishes any of them. Split by *when* a
+ * value is decided rather than by what it describes:
  *
- *   mstage.config.json     which stages exist, and what the store may hand out
- *   mbuild.config.json   what is built, and where it is uploaded         ← here
- *   mdeploy.config.json  what shape the stage is deployed into
+ *   mstage.env.json      what is built, and what the store may hand out  ← here
+ *   .mstage.config.json  which stages exist, and where each uploads       ← here
  *
- * A build happens on a push to main and knows nothing about which stage will
- * run it; a deploy happens later and names a commit. The registries live here
- * rather than in mdeploy's file so the two cannot drift: the publishing
- * workflow and the deploy both read this one.
+ * A third tool reads the same stage block: `deploy` is mdeploy's declaration of
+ * what shape the stage is deployed into, tolerated below and never read.
  *
- * Registries are per stage because they differ per stage — a repository whose
- * name says which stage may pull from it. What is built is not: the same
- * Dockerfiles produce the same artifacts wherever they end up, and an artifact
- * that existed in one stage but not another would make a promotion mean
- * something different depending on where it landed.
+ * A build names a commit rather than a moment and knows nothing about which
+ * stage will run it; a deploy happens later and names the same commit. The
+ * registries live here rather than in mdeploy's file so the publishing workflow
+ * and the deploy read one declaration.
  *
- * The region is deliberately absent. mstage already declares where each stage
- * lives, and a second copy here would be one more thing to keep in step for no
- * benefit — a caller resolves it from mstage and passes it in.
+ * Registries are per stage, because a repository's name may say which stage may
+ * pull from it. What is built is not: an artifact present in one stage and not
+ * another would make a promotion mean different things depending on where it
+ * landed.
  *
- * The tag is not here. It is the commit being built, which is different every
- * time and therefore an argument.
+ * The region is absent — mstage declares it, and a caller passes it in. So is
+ * the tag: it is the commit being built, and therefore an argument.
  */
 
 import { readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 
-export const CONFIG_FILENAME = 'mbuild.config.json'
+/** Committed: what is built, which does not depend on any account. */
+export const ENV_FILENAME = 'mstage.env.json'
+/** Not committed, and shared with mstage: where each stage uploads. */
+export const STAGE_FILENAME = '.mstage.config.json'
+
+/**
+ * The fields the stage file holds for somebody other than mbuild.
+ *
+ * Three tools read one stage block, so each has to tolerate the others' keys
+ * while still refusing a typo in its own. Named rather than skipping the check
+ * altogether, because `registy` silently ignored is a stage that publishes
+ * nowhere.
+ *
+ * Listed per owner, so adding a key names the tool that reads it: mstage
+ * resolves the stage's coordinates and sign-in, and mdeploy takes `deploy` —
+ * what shape the stage is deployed into, which no build has an opinion about.
+ */
+const MSTAGE_STAGE_KEYS = ['home', 'region', 'project', 'zone', 'roleArn', 'protect', 'login']
+const MDEPLOY_STAGE_KEYS = ['deploy']
+const BORROWED_STAGE_KEYS = [...MSTAGE_STAGE_KEYS, ...MDEPLOY_STAGE_KEYS]
 
 export class BuildConfigError extends Error {
   constructor(message: string) {
@@ -47,11 +61,9 @@ export class BuildConfigError extends Error {
 export type ScanSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFORMATIONAL' | 'UNDEFINED'
 
 /**
- * How one artifact is built.
- *
- * Both paths are relative to `repository`, not to this file and not to whatever
- * directory a caller happens to be in. `mbuild publish` run from apps/infra and
- * the same command run from a workflow have to build the same bytes.
+ * How one artifact is built. Both paths are relative to `repository`, not to
+ * this file or the caller's cwd, so a publish from apps/infra and one from a
+ * workflow build the same bytes.
  */
 export type ArtifactConfig = {
   /** Repository-relative path to the Dockerfile. */
@@ -71,27 +83,46 @@ export type RegistryConfig = {
 }
 
 export type StageConfig = {
+  /**
+   * Where the stage lives, read from the same block rather than from a copy.
+   * mbuild used to load mstage's config for these; one shared file makes that
+   * a second parse of the same bytes.
+   */
+  home: 'aws' | 'gcp'
+  region: string | null
+  /** The project an Artifact Registry address is built from. Null on AWS. */
+  project: string | null
   registry: RegistryConfig
+  /**
+   * What this stage refuses to receive, and how long it waits to find out.
+   *
+   * Per stage, like the registry it reads: `scanOnPush` is already a property
+   * of the repository a stage publishes into, and a threshold that could not
+   * differ would make prod no stricter than dev.
+   */
+  scan: ScanPolicy
+}
+
+export type ScanPolicy = {
+  blockOn: ScanSeverity[]
+  /** How long to wait for a scan to report before giving up on it. */
+  timeoutSeconds: number
 }
 
 export type BuildConfig = {
+  /** The stage file. Every refusal about a stage names this. */
   path: string
-  /** The directory this file is in. */
+  /** The base file. Artifacts and the repository root name this. */
+  basePath: string
+  /** The directory the base file is in. */
   root: string
   /**
-   * The repository root, resolved. Every artifact path is relative to this
-   * rather than to the config file, because the Dockerfiles belong to the
-   * repository and this file happens to live one directory down from it.
-   * Resolved once here so nothing downstream depends on a working directory.
+   * The repository root, resolved once here so nothing downstream depends on a
+   * working directory. Artifact paths are relative to this, not to this file.
    */
   repository: string
   /** The same everywhere: what is built does not depend on where it lands. */
   artifacts: Record<string, ArtifactConfig>
-  scan: {
-    blockOn: ScanSeverity[]
-    /** How long to wait for a scan to report before giving up on it. */
-    timeoutSeconds: number
-  }
   stages: Record<string, StageConfig>
 }
 
@@ -100,9 +131,8 @@ const REGISTRY_KINDS: RegistryConfig['kind'][] = ['ecr', 'artifact-registry']
 const SEVERITIES: ScanSeverity[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFORMATIONAL', 'UNDEFINED']
 
 /**
- * ECR allows letters, digits and `_ - . /`, starting with a letter or digit.
- * Artifact Registry is stricter — letters, digits and `-` — so this takes the
- * intersection, which is what a name usable on both looks like.
+ * The intersection of both registries' rules: ECR allows `_ - . /`, Artifact
+ * Registry only `-`, so this is what a name usable on both looks like.
  */
 const REPOSITORY_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/
 
@@ -134,12 +164,23 @@ const assertObject = (value: unknown, where: string): Record<string, unknown> =>
   return value as Record<string, unknown>
 }
 
-const assertKeys = (block: Record<string, unknown>, known: string[], where: string): void => {
+/**
+ * Every key accounted for, and every required one present.
+ *
+ * `borrowed` names keys this parser accepts but does not own — the stage file
+ * is shared with mstage — so they are allowed without being demanded.
+ */
+const assertKeys = (
+  block: Record<string, unknown>,
+  known: string[],
+  where: string,
+  borrowed: string[] = [],
+): void => {
   const unknown = Object.keys(block).filter((key) => !known.includes(key))
   if (unknown.length > 0) {
     throw new BuildConfigError(`${where} does not take ${unknown.join(', ')}. It takes ${known.join(', ')}`)
   }
-  const missing = known.filter((key) => !(key in block))
+  const missing = known.filter((key) => !borrowed.includes(key) && !(key in block))
   if (missing.length > 0) throw new BuildConfigError(`${where} must set ${missing.join(', ')}`)
 }
 
@@ -204,13 +245,34 @@ const parseStages = (raw: unknown, where: string): Record<string, StageConfig> =
       throw new BuildConfigError(`${where}: stage "${name}" may only contain letters, digits and "-"`)
     }
     const stage = assertObject(block[name], `${where}.${name}`)
-    assertKeys(stage, ['registry'], `${where}.${name}`)
-    parsed[name] = { registry: parseRegistry(stage.registry, `${where}.${name}.registry`) }
+    assertKeys(stage, ['registry', 'scan', ...BORROWED_STAGE_KEYS], `${where}.${name}`, BORROWED_STAGE_KEYS)
+    const registry = parseRegistry(stage.registry, `${where}.${name}.registry`)
+    // The cloud a stage lives in and the registry it publishes to are one
+    // decision spelled twice in the same block. An `ecr` repository on a stage
+    // whose workloads are Cloud Run services is an address nothing in that
+    // project can pull, and the deploy that finds out has already built a
+    // network.
+    if (stage.home !== 'aws' && stage.home !== 'gcp') {
+      throw new BuildConfigError(`${where}.${name} must declare home as "aws" or "gcp"`)
+    }
+    const expected = stage.home === 'gcp' ? 'artifact-registry' : 'ecr'
+    if (registry.kind !== expected) {
+      throw new BuildConfigError(
+        `${where}.${name} lives in ${stage.home} and must publish to ${expected}, not ${registry.kind}`,
+      )
+    }
+    parsed[name] = {
+      home: stage.home,
+      region: (stage.region as string) ?? null,
+      project: (stage.project as string) ?? null,
+      registry,
+      scan: parseScan(stage.scan, `${where}.${name}.scan`),
+    }
   }
   return parsed
 }
 
-const parseScan = (raw: unknown, where: string): BuildConfig['scan'] => {
+const parseScan = (raw: unknown, where: string): ScanPolicy => {
   const block = assertObject(raw, where)
   assertKeys(block, ['blockOn', 'timeoutSeconds'], where)
   if (!Array.isArray(block.blockOn) || block.blockOn.length === 0) {
@@ -228,55 +290,117 @@ const parseScan = (raw: unknown, where: string): BuildConfig['scan'] => {
   return { blockOn: block.blockOn as ScanSeverity[], timeoutSeconds: timeout }
 }
 
-export const parseBuildConfig = (path: string, contents: string): BuildConfig => {
+/** One object out of a file, or the refusal naming that file. */
+const documentIn = (path: string, contents: string): Record<string, unknown> => {
   let raw: unknown
   try {
     raw = JSON.parse(contents)
   } catch (error) {
     throw new BuildConfigError(`${path} is not valid JSON: ${(error as Error).message}`)
   }
-  const root = assertObject(raw, path)
-  assertKeys(root, ['root', 'artifacts', 'scan', 'stages'], path)
+  return assertObject(raw, path)
+}
+
+/** The committed half: what is built, and the tree it is built from. */
+export const parseBase = (
+  path: string,
+  contents: string,
+): Pick<BuildConfig, 'root' | 'repository' | 'artifacts'> => {
+  const root = documentIn(path, contents)
+  // mstage owns the rest of this file, so its keys are borrowed rather than
+  // refused — and `root` and `artifacts` are still demanded. `appShort` is
+  // mstage's too: the app abbreviated, for names with a length budget.
+  assertKeys(root, ['root', 'artifacts', 'app', 'appShort', 'env'], path, ['app', 'appShort', 'env'])
   if (typeof root.root !== 'string' || root.root.trim() === '') {
     throw new BuildConfigError(`${path}: "root" must name the repository root, relative to this file`)
   }
   return {
-    path,
     root: dirname(path),
     repository: resolve(dirname(path), root.root),
     artifacts: parseArtifacts(root.artifacts, `${path}: "artifacts"`),
-    scan: parseScan(root.scan, `${path}: "scan"`),
-    stages: parseStages(root.stages, `${path}: "stages"`),
   }
 }
 
+/** The uncommitted half: where each stage uploads, and what it refuses. */
+export const parseBuildStages = (path: string, contents: string): Record<string, StageConfig> =>
+  parseStages(documentIn(path, contents).stages, `${path}: "stages"`)
+
+/**
+ * Both halves, as one answer. Kept separate as far as here so a refusal names
+ * the file that has to be edited.
+ */
+export const parseBuildConfig = ({
+  basePath,
+  base,
+  stagePath,
+  stages,
+}: {
+  basePath: string
+  base: string
+  stagePath: string
+  stages: string
+}): BuildConfig => ({
+  path: stagePath,
+  basePath,
+  ...parseBase(basePath, base),
+  stages: parseBuildStages(stagePath, stages),
+})
+
+/** One file, named outright or found by walking up. */
+const locate = ({
+  cwd,
+  override,
+  filename,
+}: {
+  cwd: string
+  override: string | undefined
+  filename: string
+}): { path: string; contents: string } => {
+  const path = override ? (isAbsolute(override) ? override : resolve(cwd, override)) : findUp(cwd, filename)
+  if (!path) throw new BuildConfigError(`Could not find ${filename} in ${cwd} or any parent directory`)
+  try {
+    return { path, contents: readFileSync(path, 'utf8') }
+  } catch (error) {
+    throw new BuildConfigError(`Could not read ${path}: ${(error as Error).message}`)
+  }
+}
+
+/** Both files. The same two mstage reads, and the stage file is literally the same one. */
 export const loadBuildConfig = ({
   cwd = process.cwd(),
   environment = process.env,
 }: { cwd?: string; environment?: NodeJS.ProcessEnv } = {}): BuildConfig => {
-  const override = environment.MBUILD_CONFIG
-  const path = override ? (isAbsolute(override) ? override : resolve(cwd, override)) : findUp(cwd, CONFIG_FILENAME)
-  if (!path) throw new BuildConfigError(`Could not find ${CONFIG_FILENAME} in ${cwd} or any parent directory`)
-  let contents: string
-  try {
-    contents = readFileSync(path, 'utf8')
-  } catch (error) {
-    throw new BuildConfigError(`Could not read ${path}: ${(error as Error).message}`)
-  }
-  return parseBuildConfig(path, contents)
+  const base = locate({ cwd, override: environment.MSTAGE_ENV_CONFIG, filename: ENV_FILENAME })
+  const stages = locate({ cwd, override: environment.MSTAGE_CONFIG, filename: STAGE_FILENAME })
+  return parseBuildConfig({
+    basePath: base.path,
+    base: base.contents,
+    stagePath: stages.path,
+    stages: stages.contents,
+  })
 }
 
 /**
- * One stage's registry. A stage this file does not declare is a typo rather
- * than a new environment — publishing into an undeclared repository would
- * create it, and nothing would ever pull from it.
+ * One declared stage, or the refusal naming the file that would declare it. An
+ * undeclared stage is a typo, not a new environment: publishing into it would
+ * create a repository nothing ever pulls from.
  */
-export const registryFor = (config: BuildConfig, stage: string): RegistryConfig => {
+export const stageIn = (config: BuildConfig, stage: string): StageConfig => {
   const declared = config.stages[stage]
   if (!declared) {
     throw new BuildConfigError(
       `${config.path} declares no stage "${stage}". Declared: ${Object.keys(config.stages).join(', ')}`,
     )
   }
-  return declared.registry
+  return declared
+}
+
+/** One stage's registry. */
+export const registryFor = (config: BuildConfig, stage: string): RegistryConfig => stageIn(config, stage).registry
+
+/** The region a stage's registry is addressed in, which every address needs. */
+export const regionFor = (config: BuildConfig, stage: string): string => {
+  const { region } = stageIn(config, stage)
+  if (!region) throw new BuildConfigError(`${config.path} gives stage "${stage}" no region`)
+  return region
 }

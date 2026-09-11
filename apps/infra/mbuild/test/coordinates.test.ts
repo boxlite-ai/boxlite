@@ -39,7 +39,7 @@ test('Artifact Registry is addressed by the project the stage declares', async (
 test('a stage that publishes to Artifact Registry and declares no project is refused', async () => {
   await assert.rejects(
     () => coordinatesOf({ stage: 'dev', kind: 'artifact-registry', project: null, accountId: never }),
-    (error) => error instanceof CoordinatesError && /gives stage "dev" no project/.test(error.message),
+    (error) => error instanceof CoordinatesError && /stage "dev" declares no project/.test(error.message),
   )
 })
 

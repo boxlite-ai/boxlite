@@ -1,21 +1,17 @@
 /**
  * One place that decides which stage and region a command acts on.
  *
- * Which credentials answer for that account is deliberately not decided here.
- * The AWS SDK's own chain already reads `AWS_PROFILE`, `login_session`, SSO
- * caches, `credential_process`, container credentials and IMDS, in an order the
- * whole ecosystem agrees on. mstage adding a competing opinion is what produced
- * SST's bug, where `providers.aws.profile` loses to an ambient `AWS_PROFILE`
- * (pkg/project/provider/aws.go:76) and needs `SST_AWS_NO_PROFILE` as a third
- * knob. mstage does not choose credentials, and it does not second-guess which
- * account they reach: the account is whatever the chain resolves to.
+ * Which credentials answer is deliberately not decided here: the AWS SDK's
+ * chain already reads `AWS_PROFILE`, `login_session`, SSO caches,
+ * `credential_process`, container credentials and IMDS in an agreed order. A
+ * competing opinion is what produced SST's bug, where `providers.aws.profile`
+ * loses to an ambient `AWS_PROFILE` and needs a third knob to fix.
  *
- * Region is different, and is decided here: a missing one silently becomes
- * us-east-1 in SST (aws.go:88, aws.go:108), which reads an empty bucket in the
- * wrong region rather than failing.
+ * Region is decided here: a missing one silently becomes us-east-1 in SST,
+ * which reads an empty bucket in the wrong region rather than failing.
  */
 
-import { ConfigError, homeFor, type Cloud, type MstageConfig, type StageConfig } from '../config/load.ts'
+import { ConfigError, STAGE_FILENAME, type Cloud, type MstageConfig, type StageConfig } from '../config/load.ts'
 import type { Options } from '../cli/argv.ts'
 
 export type Scope = {
@@ -23,10 +19,8 @@ export type Scope = {
   stageSource?: string
   protect: boolean
   /**
-   * Which cloud this stage lives in, resolved from the stage's declaration or
-   * the repository's default. Carried on the scope rather than looked up again
-   * because every consumer — the store, the identity, the engine, the registry
-   * — needs the same answer, and a second lookup is a second chance to differ.
+   * Which cloud this stage lives in. Carried on the scope rather than looked
+   * up again, because a second lookup is a second chance to differ.
    */
   home: Cloud
   /** The GCP project the stage declares. Null on AWS, which has no use for it. */
@@ -82,14 +76,14 @@ const resolveRegion = (
   // exports AWS_REGION for one stage must not quietly retarget another.
   const chosen = first([
     ['--region', options.region],
-    [`${stage.name} in mstage.config.json`, stage.region],
+    [`${stage.name} in ${STAGE_FILENAME}`, stage.region],
     ['AWS_REGION', environment.AWS_REGION],
     ['AWS_DEFAULT_REGION', environment.AWS_DEFAULT_REGION],
   ])
   if (chosen) return { value: chosen[1] as string, source: chosen[0] }
   throw new ScopeError(
     `Could not determine an AWS region for stage "${stage.name}". ` +
-      `Declare it as stages.${stage.name}.region in mstage.config.json, or pass --region.`,
+      `Declare it as stages.${stage.name}.region in ${STAGE_FILENAME}, or pass --region.`,
   )
 }
 
@@ -101,7 +95,7 @@ const resolveRole = (
   const chosen = first([
     ['--role-arn', options['role-arn']],
     ['MSTAGE_AWS_ROLE_ARN', environment.MSTAGE_AWS_ROLE_ARN],
-    [`${stage.name} in mstage.config.json`, stage.roleArn],
+    [`${stage.name} in ${STAGE_FILENAME}`, stage.roleArn],
   ])
   if (!chosen) return { arn: null, source: null, sessionName: null }
   return {
@@ -115,9 +109,9 @@ const resolveApp = (options: Options, config: MstageConfig, environment: NodeJS.
   const chosen = first([
     ['--app', options.app],
     ['MSTAGE_APP', environment.MSTAGE_APP],
-    [config.path, config.app],
+    [config.basePath, config.app],
   ])
-  if (!chosen) throw new ConfigError(`${config.path} declares no "app" and none was given with --app`)
+  if (!chosen) throw new ConfigError(`${config.basePath} declares no "app" and none was given with --app`)
   return { value: chosen[1] as string, source: chosen[0] }
 }
 
@@ -138,7 +132,7 @@ export const resolveScope = ({
     stage: stage.name,
     stageSource: stage.source,
     protect: stage.protect,
-    home: homeFor(config, stage.name),
+    home: stage.home,
     project: stage.project,
     zone: stage.zone,
     app: app.value,

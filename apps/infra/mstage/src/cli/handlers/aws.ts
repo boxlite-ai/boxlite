@@ -7,12 +7,10 @@
  * resolution. Which tools a repository runs through it is that repository's
  * decision — mstage obtains access and never names what it is spent on.
  *
- * Nothing here is cloud-specific any more, and the name is now only the
- * command's. `resolveHome` picks the cloud once and answers with an `Identity`;
- * asking again down here — for an AWS key triple, or for labels only an account
- * has — is one call site re-deciding a question already settled, and on a GCP
- * stage it produced `identity.credentials is not a function` before the child
- * was ever started.
+ * Nothing here is AWS-specific any more; the name is only the command's.
+ * `resolveHome` picks the cloud once and answers with an `Identity`, and asking
+ * again down here re-decides a settled question — on a GCP stage that produced
+ * `identity.credentials is not a function` and an `arn` of `undefined`.
  */
 
 import { spawn } from 'node:child_process'
@@ -33,13 +31,10 @@ export const printScope = (scope: Scope, log: Log): void => {
 
 /**
  * What each cloud calls the two halves of a `Caller`, and what "no deadline"
- * means there.
- *
- * `identity.ts` names them `tenant` and `principal` precisely so this command
- * reads on either cloud. Printing `account` and `arn` regardless threw that
- * away: a GCP project came out labelled as an AWS account. The last field is
- * the same distinction — a null expiry is static credentials on one cloud and
- * self-refreshing ones on the other, and "long-lived" is only true of the first.
+ * means there. `identity.ts` names them `tenant` and `principal` so this reads
+ * on either cloud; printing `account` and `arn` regardless labelled a GCP
+ * project as an AWS account. A null expiry is likewise static credentials on
+ * one cloud and self-refreshing ones on the other.
  */
 const LABELS: Record<string, { tenant: string; principal: string; noExpiry: string }> = {
   aws: { tenant: 'account', principal: 'arn', noExpiry: 'never (long-lived credentials)' },
@@ -47,9 +42,9 @@ const LABELS: Record<string, { tenant: string; principal: string; noExpiry: stri
 }
 
 /**
- * Refused rather than given generic words, the same way `resolveHome` refuses a
- * cloud it has no backend for. A neutral fallback would be a third vocabulary
- * kept alive for a cloud that does not exist.
+ * Refused rather than given generic words, as `resolveHome` refuses a cloud it
+ * has no backend for: a neutral fallback is a third vocabulary for a cloud that
+ * does not exist.
  */
 const labelsFor = (home: string) => {
   const labels = LABELS[home]

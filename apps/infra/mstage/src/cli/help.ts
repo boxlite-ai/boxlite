@@ -1,25 +1,22 @@
 /**
- * What each module and command accepts.
- *
- * Kept beside the registry rather than in a README because the shape of an
- * invocation is the one thing a caller cannot guess: npm eats options written
- * left of the `--`, so a usage line that omits the separator produces a command
- * nobody typed. Every line printed here is copy-pasteable as written.
+ * What each module and command accepts. Beside the registry rather than in a
+ * README, because npm eats options left of the `--` and a usage line missing
+ * the separator produces a command nobody typed. Every line is copy-pasteable.
  */
 
 import { FLAG_OPTIONS, SHORT_ALIASES } from './argv.ts'
 
 export const OPTION_HELP: Record<string, string> = {
-  stage: 'which stage to act on; must be declared in mstage.config.json',
-  app: 'which app owns the store, when it is not the one mstage.config.json names',
+  stage: 'which stage to act on; .mstage.config.json is what declares one',
+  app: 'which app owns the store, when it is not the one mstage.env.json names',
   region: 'the AWS region to act in, overriding whatever else resolves it',
   'role-arn': 'assume this role on top of the resolved credentials',
   'role-session-name': 'name that session in CloudTrail (default: mstage)',
-  confirm: 'proceed on a stage mstage.config.json marks protected',
+  confirm: 'proceed on a stage .mstage.config.json marks protected',
   force: 'sign in again first, instead of only reporting the current session',
   logout: 'end the current session instead of checking it',
   values: 'print values, not only names',
-  'select-group': 'one env.selectGroup from mstage.config.json: list exports it, set writes only its keys',
+  'select-group': 'one env.selectGroup from mstage.env.json: list exports it, set writes only its keys',
   json: 'JSON: list emits a group as JSON for another tool; set reads the value it is given as a JSON document',
   version: 'read the object version a deploy pinned, instead of the current one',
   digest: 'keep env.digest.key true: set writes it, del refuses a removal that would falsify it',
@@ -36,8 +33,8 @@ export type CommandSpec = {
   inner?: 'required'
   /**
    * A positional the command takes, such as `env set KEY=VALUE`. `optional`
-   * states when it may be left out, for a command that can be given its work
-   * some other way; the dispatcher then leaves the check to the command.
+   * says when it may be left out — for a command that can be given its work
+   * another way — and the dispatcher then leaves the check to the command.
    */
   argument?: { form: string; description: string; optional?: string }
   requires?: string[]
@@ -46,7 +43,8 @@ export type CommandSpec = {
 
 export type ModuleSpec = {
   summary: string
-  scope: 'login' | 'stage'
+  /** `declaration` resolves a stage name and nothing else: no config, no cloud. */
+  scope: 'login' | 'stage' | 'declaration'
   commands?: Record<string, CommandSpec>
   /** Said after the command list, where what the list means needs qualifying. */
   commandNote?: string

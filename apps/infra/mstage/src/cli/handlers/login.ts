@@ -1,8 +1,11 @@
 /**
- * `mstage login` — can mstage reach AWS with whatever is already signed in.
+ * `mstage login` — can each provider this repository declares be reached with
+ * whatever is already signed in.
  *
- * It does not sign anyone in and does not translate the SDK's failure. Sign in
- * with `aws login` (or whatever this machine uses); mstage picks up the result.
+ * It signs nobody in and translates nobody's failure. Sign in however this
+ * machine does — `aws login`, `gcloud auth login --update-adc`, `gh auth login`
+ * — and mstage picks up the result. The check below is AWS's; the others live
+ * in `auth/sessions.ts`.
  */
 
 import type { AwsIdentity } from '../../aws/identity.ts'
@@ -35,9 +38,9 @@ export const checkAws = async ({ identity }: { identity: AwsIdentity }): Promise
 }
 
 /**
- * An optional provider that is not signed in is reported and then forgiven.
- * boxlite-commerce never provisions Auth0 and boxlite-backoffice only does so by
- * hand, so failing the command over it would train people to ignore the output.
+ * An optional provider that is not signed in is reported and then forgiven:
+ * failing the command over one nobody provisions trains people to ignore the
+ * output.
  */
 export const report = async ({
   statuses,

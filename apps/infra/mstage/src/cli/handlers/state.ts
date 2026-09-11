@@ -1,23 +1,18 @@
 /**
  * `mstage state` — the two repairs a stage needs after a deploy stops halfway.
  *
- * Both are the engine's own — `sst unlock` and `sst state edit` on AWS, and the
- * equivalent repairs to Pulumi's checkpoint and locks on GCP — done against the
- * bucket directly rather than through either CLI. That is deliberate: both have
- * to load a stack config to run them, and which stack this repository deploys is
- * mdeploy's business, not mstage's. The objects, on the other hand, are in the
- * bucket mstage already reads for the stage environment.
+ * Both are the engine's own — `sst unlock` and `sst state edit` on AWS, the
+ * equivalent Pulumi repairs on GCP — done against the bucket rather than
+ * through either CLI, because both CLIs need a stack config and which stack
+ * this repository deploys is mdeploy's business.
  *
- * What mstage adds around them is the rest of a stage: the region it resolves to,
- * the credentials the chain answers with, and the refusal to touch a protected
- * stage without --confirm.
+ * mstage adds the rest of a stage around them: the region, the credentials, and
+ * the refusal to touch a protected stage without --confirm.
  *
- * What it does not add is a lock of its own. mstage does not deploy, so `edit`
- * is for a stage nothing is deploying into: it refuses to open while a lock is
- * held, and refuses to write if a lock was taken or the checkpoint moved while
- * the editor was open. That is narrower than holding the lock — the write is not
- * atomic — but it covers the window that is minutes long rather than the one
- * that is milliseconds long.
+ * It adds no lock of its own. `edit` is for a stage nothing is deploying into:
+ * it refuses to open while a lock is held, and refuses to write if a lock was
+ * taken or the checkpoint moved meanwhile. Narrower than holding the lock, but
+ * it covers the window that is minutes long.
  */
 
 import { spawn } from 'node:child_process'
@@ -56,11 +51,10 @@ const refuseProtected = (scope: Scope, options: Input['options'], what: string):
 /**
  * `mstage state unlock` — drops the lock a deploy did not live to release.
  *
- * What held it is printed before it goes, because the one thing this command
- * cannot tell is whether that deploy is still running somewhere. A lock removed
- * out from under a live deploy lets a second one start against the same
- * checkpoint, so the operator gets whatever the engine recorded — the command
- * and run id from SST, the user, host and pid from Pulumi — and makes that call.
+ * What held it is printed first, because this cannot tell whether that deploy
+ * is still running, and a lock removed under a live one lets a second start
+ * against the same checkpoint. The operator gets what the engine recorded and
+ * makes that call.
  */
 export const unlock = async ({ scope, options, log, backend }: Input): Promise<number> => {
   refuseProtected(scope, options, 'drop its lock')
@@ -80,11 +74,9 @@ export const unlock = async ({ scope, options, log, backend }: Input): Promise<n
 }
 
 /**
- * What opens the file.
- *
- * `EDITOR` is a command line rather than a program name — `code -w` and `subl -w`
- * are how a windowed editor is made to wait — so it is split the way a shell
- * would split it. The fallback is vim, which is SST's (cmd/sst/state.go).
+ * What opens the file. `EDITOR` is a command line rather than a program name —
+ * `code -w`, `subl -w` — so it is split the way a shell would. The fallback is
+ * vim, which is SST's (cmd/sst/state.go).
  */
 export const editorCommand = (environment: NodeJS.ProcessEnv): [string, ...string[]] => {
   const [program, ...arguments_] = (environment.EDITOR ?? '').trim().split(/\s+/).filter(Boolean)
@@ -94,15 +86,13 @@ export const editorCommand = (environment: NodeJS.ProcessEnv): [string, ...strin
 /**
  * `mstage state edit` — the checkpoint itself, in an editor.
  *
- * The escape hatch for a state no deploy will accept, and pending operations are
- * the usual reason: deleting them from `checkpoint.latest.pending_operations` is
- * what lets the next deploy plan again. How many there are is printed first, so
- * the reason for opening a file this size is visible before the editor is.
+ * The escape hatch for a state no deploy will accept; pending operations are
+ * the usual reason, and deleting them from `checkpoint.latest.pending_operations`
+ * lets the next deploy plan again. How many there are is printed first.
  *
- * The copy is written to a private temporary directory and removed once the
- * write it was made for has landed. A write that is refused keeps it, and says
- * where: the edit is the operator's work and that copy is the only place it
- * exists.
+ * The copy goes to a private temporary directory and is removed once the write
+ * lands. A refused write keeps it and says where — that copy is the only place
+ * the operator's edit exists.
  */
 export const edit = async ({
   scope,

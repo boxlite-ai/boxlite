@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { parseConfig } from 'mstage/config'
+import { parseBase } from 'mstage/config'
 import { ApiEnvironmentError, BILLING_KEYS, STATUS_SYNC_KEYS, apiEnvironmentFrom } from '../src/api-environment.ts'
 import type { GroupDeclaration } from '../src/env.ts'
 
@@ -145,11 +145,11 @@ test('every key these gates expect is one the store is declared to fetch', () =>
   // Read through mstage's own parser rather than off the raw JSON: a group may
   // be written as a bare array or as required/optional, and a test that
   // flattened only one shape would silently stop checking the other.
-  const path = new URL('../../mstage.config.json', import.meta.url)
-  const declared = parseConfig(path.pathname, readFileSync(path, 'utf8'))
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
   const fetched = new Set(Object.values(declared.envSelectGroup).flat())
   for (const key of [...BILLING_KEYS, ...STATUS_SYNC_KEYS]) {
-    assert.ok(fetched.has(key), `${key} is read by api-environment.ts but no group in mstage.config.json fetches it`)
+    assert.ok(fetched.has(key), `${key} is read by api-environment.ts but no group in mstage.env.json fetches it`)
   }
 })
 
@@ -158,8 +158,8 @@ test('nothing a single deploy decides is demanded of the store', () => {
   // a store can never hold them: naming them in a group makes every deploy fail
   // on a key nobody could have seeded. They reach both engines through the
   // process environment, which is where the workflow puts them.
-  const path = new URL('../../mstage.config.json', import.meta.url)
-  const declared = parseConfig(path.pathname, readFileSync(path, 'utf8'))
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
   const named = new Set(Object.values(declared.envSelectGroup).flat())
   for (const key of [
     'BOXLITE_IMAGE_TAG',
@@ -181,8 +181,8 @@ test('the deploy group demands only what a deploy cannot run without', () => {
   // The rest is optional, and that split is the whole point: a required list
   // that swept in every feature flag would force a stage to seed forty empty
   // strings to say nothing at all.
-  const path = new URL('../../mstage.config.json', import.meta.url)
-  const declared = parseConfig(path.pathname, readFileSync(path, 'utf8'))
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
   assert.deepEqual(
     declared.envSelectGroup.deploy!.filter((key) => !declared.envOptional.deploy!.includes(key)).sort(),
     [

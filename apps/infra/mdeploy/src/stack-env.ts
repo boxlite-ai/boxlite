@@ -23,7 +23,7 @@
 import { apiEnvironmentFrom } from './api-environment.ts'
 import { OTEL_GROUP, PROXY_GROUP, RUNNER_GROUP, serviceSecretsFrom, splitServiceChannels, type GroupDeclaration } from './env.ts'
 import type { RunnerSlot } from '../stack/runners.ts'
-import type { MstageConfig } from 'mstage/config'
+import type { Cloud } from 'mstage/config'
 
 export class StackEnvError extends Error {
   constructor(message: string) {
@@ -175,7 +175,7 @@ const channels = ({
   declaration: GroupDeclaration
   region: string
   stage: string
-  home: MstageConfig['home']
+  home: Cloud
 }) => {
   const api = apiEnvironmentFrom({ environment, declaration, region, stage, home })
   const split = (group: string) =>
@@ -224,7 +224,7 @@ export const readStackEnvironment = ({
   stage: string
   region: string
   /** Which cloud's secret store an address in `env.selectGroup.secret` names. */
-  home: MstageConfig['home']
+  home: Cloud
 }): StackEnvironment => {
   const tag = required(environment, 'BOXLITE_IMAGE_TAG', 'a deploy names the exact commit it ships')
   if (!/^[0-9a-f]{40}$/.test(tag)) throw new StackEnvError('BOXLITE_IMAGE_TAG must be one full lowercase commit SHA')

@@ -1,19 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { ExportError, valuesOfGroup } from '../src/env/select-group.ts'
-import { ConfigError, parseConfig } from '../src/config/load.ts'
+import { ConfigError, parseBase } from '../src/config/load.ts'
 
-const config = (env: unknown) =>
-  parseConfig(
-    '/repo/mstage.config.json',
-    JSON.stringify({ app: 'a', home: 'aws', env, stages: { dev: { region: 'ap-southeast-1' } } }),
-  )
+const config = (env: unknown) => parseBase('/repo/mstage.env.json', JSON.stringify({ app: 'a', env }))
 
 test('groups are read from env.selectGroup, and an absent block is simply no groups', () => {
   const parsed = config({ selectGroup: { deploy: ['DOMAIN', 'IMAGE_TAG'], server: ['SMTP_USER'] } })
   assert.deepEqual(parsed.envSelectGroup, { deploy: ['DOMAIN', 'IMAGE_TAG'], server: ['SMTP_USER'] })
   assert.deepEqual(
-    parseConfig('/repo/mstage.config.json', JSON.stringify({ app: 'a', home: 'aws', stages: { dev: {} } })).envSelectGroup,
+    parseBase('/repo/mstage.env.json', JSON.stringify({ app: 'a' })).envSelectGroup,
     {},
   )
 })
@@ -86,7 +82,7 @@ test('a group selects exactly its keys, in the order it declares them', () => {
     group: 'deploy',
     groups: { deploy: ['DOMAIN', 'IMAGE_TAG'] },
     values: { IMAGE_TAG: 'sha', DOMAIN: 'example.com', SMTP_PASSWORD: 'secret' },
-    where: '/repo/mstage.config.json',
+    where: '/repo/.mstage.config.json',
   })
   assert.deepEqual(Object.keys(selected), ['DOMAIN', 'IMAGE_TAG'], 'declaration order, not store order')
   assert.ok(!('SMTP_PASSWORD' in selected), 'a key outside the group must not leave the store')
@@ -101,7 +97,7 @@ test('a key the group names but the store lacks fails rather than exporting shor
         group: 'deploy',
         groups: { deploy: ['DOMAIN', 'MISSING_ONE', 'ALSO_MISSING'] },
         values: { DOMAIN: 'example.com' },
-        where: '/repo/mstage.config.json',
+        where: '/repo/.mstage.config.json',
       }),
     /store is missing MISSING_ONE, ALSO_MISSING, which env\.selectGroup\.deploy names/,
   )

@@ -199,7 +199,7 @@ export const gcpProgram =
     const deployStack = deployStackWith ?? realDeployStack
     const { gcpStackProviders } = await import('../stack/providers/gcp/index.ts')
 
-    const config = loadDeployConfig({ cwd })
+    const config = loadDeployConfig({ cwd, stage })
     const stageConfig = loadStageConfig({ cwd })
     const stackEnvironment = readStackEnvironment({
       environment,

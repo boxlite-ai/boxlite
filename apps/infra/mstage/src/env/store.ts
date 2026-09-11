@@ -1,16 +1,11 @@
 /*
  * A stage's configuration, whichever cloud keeps it.
  *
- * Everything below this comment is the same on every cloud: how a value is
- * sealed, what a name may be, that a write is one read-modify-write, that a
- * missing key is reported rather than raised. Where the bytes actually live is
- * a `StoreBackend`, and this module never learns which one it was handed.
- *
- * The split is not speculative. mstage is meant to serve three repositories,
- * and the platform intends to be able to leave a cloud without rewriting how
- * configuration works — so the part that would have to be rewritten is the part
- * that is behind an interface. Before it, `sst secret`'s S3 and SSM layout was
- * the only thing this module knew how to talk to.
+ * Everything here is the same on every cloud: how a value is sealed, what a
+ * name may be, that a write is one read-modify-write, that a missing key is
+ * reported rather than raised. Where the bytes live is a `StoreBackend`, and
+ * this module never learns which one it was handed — so leaving a cloud does
+ * not mean rewriting how configuration works.
  */
 
 import { EnvError, objectKey, open, seal, type StoreBackend, type StoredVersion } from './backend.ts'
@@ -20,19 +15,14 @@ import type { AwsIdentity } from '../aws/identity.ts'
 export { EnvError, type StoreBackend, type StoredVersion }
 export { readStateBucket } from './aws-backend.ts'
 
-/**
- * The AWS clients, kept exported under their old names because every caller in
- * this repository builds them. A caller that wants another cloud builds that
- * cloud's backend instead and passes it directly.
- */
+/** The AWS clients, under their old names because every caller builds them. */
 export type Clients = ReturnType<typeof awsClientsFor>
 export const clientsFor = (identity: Pick<AwsIdentity, 'credentials' | 'region'>): Clients => awsClientsFor(identity)
 export const ambientClients = (region: string): Clients => awsAmbientClients(region)
 
 /**
- * Callers still hand over AWS clients, so this is where they become a backend.
- * The overload keeps every existing call site unchanged while letting a GCP
- * caller pass a backend it built itself.
+ * Where AWS clients become a backend. The overload leaves existing call sites
+ * unchanged while letting a GCP caller pass a backend it built itself.
  */
 const backendFrom = (source: Clients | StoreBackend): StoreBackend =>
   'home' in source ? source : awsBackend(source)
@@ -62,11 +52,9 @@ export const readEnvironment = async ({
 }
 
 /**
- * Which version of a stage's object is current.
- *
- * A deploy records this and hands it to what it deploys, so a task that starts
- * again hours later reads the configuration the deploy was built against.
- * Without it a restart is a silent second deploy of someone else's edit.
+ * Which version of a stage's object is current. A deploy records it, so a task
+ * restarting hours later reads the configuration the deploy was built against
+ * rather than someone else's later edit.
  */
 export const currentVersion = async ({
   clients,
@@ -79,11 +67,8 @@ export const currentVersion = async ({
 }): Promise<string | null> => backendFrom(clients).currentVersion({ app, stage })
 
 /**
- * Every version of a stage's object, newest first.
- *
- * Delete markers are listed with the versions rather than filtered out: a stage
- * that reads as empty is usually explained by one, and hiding it would leave
- * that unexplained.
+ * Every version of a stage's object, newest first. Delete markers are listed
+ * rather than filtered: a stage that reads as empty is usually explained by one.
  */
 export const listVersions = async ({
   clients,
@@ -119,15 +104,13 @@ export const SECRET_NAME = /^[A-Z][a-zA-Z0-9_]*$/
 export type WriteOutcome = { name: string; existed: boolean; unchanged: boolean }
 
 /**
- * Sets one or more keys in a single read-modify-write.
- *
- * One write rather than one per key: the store is a single object, so writing
- * per key would cost a round trip each and widen the window in which a
- * concurrent writer loses somebody's change.
+ * Sets one or more keys in a single read-modify-write. The store is one object,
+ * so writing per key would cost a round trip each and widen the window in which
+ * a concurrent writer loses somebody's change.
  *
  * `derive` runs after the assignments and before the write, for a value that
- * depends on the others — a digest over the result cannot be computed until the
- * result exists, and must not need a second write to land.
+ * depends on the others — a digest cannot be computed until the result exists,
+ * and must not need a second write to land.
  */
 export const setValues = async ({
   clients,
@@ -168,21 +151,15 @@ export const setValues = async ({
 export type DeleteOutcome = { name: string; existed: boolean }
 
 /**
- * Removes keys, however many, in a single read-modify-write.
+ * Removes keys in a single read-modify-write, for the same reason `setValues`
+ * makes one write.
  *
- * One write rather than one per key, for the same reason `setValues` makes one:
- * the store is a single object, so removing them one at a time would cost a
- * round trip each and widen the window in which a concurrent writer loses
- * somebody's change.
+ * A key that was not there is reported rather than failed: the caller asked for
+ * it to be gone, and it is. When none was there the object is not resealed.
  *
- * A key that was not there is reported rather than treated as a failure: the
- * caller asked for it to be gone, and it is. When none of the names was there
- * the object is not resealed at all.
- *
- * Nothing is derived here, unlike `setValues`. A digest describes the keys of
- * one group, and a removal either leaves that group alone — in which case the
- * stored fingerprint still describes it — or takes a member out of it, which no
- * recomputation can make true again while the group still names that member.
+ * Nothing is derived here. A removal either leaves a group alone, so its stored
+ * fingerprint still describes it, or takes a member out of it — which no
+ * recomputation can make true while the group still names that member.
  */
 export const deleteValues = async ({
   clients,

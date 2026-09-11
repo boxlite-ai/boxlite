@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "Shared BoxLite sign-in, stage configuration and AWS identity. No repository-specific deployment lives here",
+  "description": "Shared BoxLite sign-in, stage configuration and cloud identity. No repository-specific deployment lives here",
   "bin": {
     "mstage": "bin/mstage.ts"
   },

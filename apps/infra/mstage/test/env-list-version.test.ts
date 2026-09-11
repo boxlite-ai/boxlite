@@ -19,7 +19,7 @@ const shown = async (options: Record<string, string | boolean>, versions: Record
   const lines: string[] = []
   const asked: Record<string, unknown>[] = []
   await list({
-    config: { path: '/repo/mstage.config.json', envSelectGroup: { deploy: ['A'] }, envOptional: {} } as any,
+    config: { path: '/repo/.mstage.config.json', envSelectGroup: { deploy: ['A'] }, envOptional: {} } as any,
     scope: { app: 'a', stage: 'dev' } as any,
     options,
     log: (line: string) => lines.push(line),

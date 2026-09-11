@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import test from 'node:test'
 import { join } from 'node:path'
-import { parseBuildConfig } from '../src/config.ts'
+import { parseBase, parseBuildConfig } from '../src/config.ts'
 import { resolveRegistry } from '../src/address.ts'
 import {
   promote,
@@ -14,56 +14,42 @@ import {
   type RunResult,
 } from '../src/publish.ts'
 
-const config = parseBuildConfig(
-  '/repo/apps/infra/mbuild.config.json',
-  JSON.stringify({
-    root: '../..',
-    artifacts: {
-      console: { dockerfile: 'apps/console/Dockerfile', context: '.' },
-      api: { dockerfile: 'apps/api/Dockerfile', context: '.' },
-    },
-    scan: { blockOn: ['CRITICAL', 'HIGH'], timeoutSeconds: 300 },
-    stages: {
-      dev: {
-        registry: {
-          kind: 'ecr',
-          repository: 'boxlite-app-dev',
-          immutableTags: true,
-          scanOnPush: true,
-        },
-      },
-      prod: {
-        registry: {
-          kind: 'ecr',
-          repository: 'boxlite-app-prod',
-          immutableTags: true,
-          scanOnPush: true,
-        },
-      },
-    },
-  }),
-)
+const SCAN = { blockOn: ['CRITICAL', 'HIGH'], timeoutSeconds: 300 }
+
+const ecrStage = (repository: string, scan: unknown = SCAN) => ({
+  home: 'aws',
+  registry: { kind: 'ecr', repository, immutableTags: true, scanOnPush: true },
+  scan,
+})
+
+/** Both halves, as `loadBuildConfig` would hand them over. */
+const declare = ({ artifacts, stages }: { artifacts: Record<string, unknown>; stages: Record<string, unknown> }) =>
+  parseBuildConfig({
+    basePath: '/repo/apps/infra/mstage.env.json',
+    base: JSON.stringify({ root: '../..', artifacts }),
+    stagePath: '/repo/apps/infra/.mstage.config.json',
+    stages: JSON.stringify({ stages }),
+  })
+
+const ARTIFACTS = {
+  console: { dockerfile: 'apps/console/Dockerfile', context: '.' },
+  api: { dockerfile: 'apps/api/Dockerfile', context: '.' },
+}
+
+const config = declare({
+  artifacts: ARTIFACTS,
+  stages: {
+    dev: ecrStage('boxlite-backoffice-dev'),
+    prod: ecrStage('boxlite-backoffice-prod'),
+  },
+})
 
 /** The same dev registry with one artifact, and a scan budget short enough for a test to spend. */
 const withScanBudget = (timeoutSeconds: number) =>
-  parseBuildConfig(
-    '/repo/apps/infra/mbuild.config.json',
-    JSON.stringify({
-      root: '../..',
-      artifacts: { api: { dockerfile: 'apps/api/Dockerfile', context: '.' } },
-      scan: { blockOn: ['CRITICAL', 'HIGH'], timeoutSeconds },
-      stages: {
-        dev: {
-          registry: {
-            kind: 'ecr',
-            repository: 'boxlite-app-dev',
-            immutableTags: true,
-            scanOnPush: true,
-          },
-        },
-      },
-    }),
-  )
+  declare({
+    artifacts: { api: ARTIFACTS.api },
+    stages: { dev: ecrStage('boxlite-backoffice-dev', { blockOn: ['CRITICAL', 'HIGH'], timeoutSeconds }) },
+  })
 
 const briefBudget = withScanBudget(10)
 
@@ -106,7 +92,7 @@ const fail = (stderr: string): RunResult => ({ code: 1, stdout: '', stderr })
  */
 const registryDouble = ({
   published = new Set<string>(),
-  repositories = new Set(['boxlite-app-dev', 'boxlite-app-prod']),
+  repositories = new Set(['boxlite-backoffice-dev', 'boxlite-backoffice-prod']),
   findings = {},
   scan = {},
   pushFails,
@@ -199,7 +185,7 @@ test('the registry password reaches docker through stdin, not through argv', asy
 test('a commit already published is not rebuilt, and is not an error', async () => {
   // Immutable tags make re-pushing fail, so a re-run of a green build has to be
   // recognised rather than attempted.
-  const probe = registryDouble({ published: both('boxlite-app-dev') })
+  const probe = registryDouble({ published: both('boxlite-backoffice-dev') })
   const outcomes = await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
   assert.deepEqual(
     outcomes.map((outcome) => outcome.built),
@@ -209,7 +195,7 @@ test('a commit already published is not rebuilt, and is not an error', async () 
 })
 
 test('only the missing artifact is built, from the context its config names', async () => {
-  const probe = registryDouble({ published: new Set([`boxlite-app-dev:${SHA}-console`]) })
+  const probe = registryDouble({ published: new Set([`boxlite-backoffice-dev:${SHA}-console`]) })
   const outcomes = await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
   assert.deepEqual(
     outcomes.map((outcome) => [outcome.artifact, outcome.built]),
@@ -222,6 +208,135 @@ test('only the missing artifact is built, from the context its config names', as
   assert.equal(builds.length, 1)
   assert.ok(builds[0]!.includes('/repo/apps/api/Dockerfile'), builds[0]!.join(' '))
   assert.ok(builds[0]!.includes(`REVISION=${SHA}`), 'the commit reaches the image as a build argument')
+})
+
+test('every image that moves names the architecture the runtimes actually run', async () => {
+  /*
+   * `docker build` targets the host otherwise — amd64 on a CI runner, arm64 on
+   * an Apple Silicon workstation — and neither runtime this publishes for
+   * takes the second. Cloud Run runs amd64 only, and an ECS task definition
+   * declaring no `runtimePlatform` gets Fargate's x86_64 default.
+   *
+   * The failure it prevents is far from its cause: a revision built from an
+   * arm64 image dies at `exec format error`, and because tags are immutable
+   * the wrong bytes hold that commit's tag for good. `promote` pins it too,
+   * and that is the worse one to miss — a multi-arch address resolves to the
+   * host's variant, so a promotion from an arm64 workstation would carry that
+   * variant into the receiving stage, which is the one thing promoting rather
+   * than rebuilding exists to prevent.
+   *
+   * The flag and its value are asserted as an adjacent pair, so one cannot
+   * drift away from the other.
+   */
+  const built = registryDouble()
+  await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: built.run, log })
+  const moved = registryDouble({ published: both('boxlite-backoffice-dev') })
+  await promote({
+    config,
+    tag: SHA,
+    from: { stage: 'dev', registry: dev },
+    to: { stage: 'prod', registry: prod },
+    run: moved.run,
+    log,
+  })
+
+  const commands = [
+    ...built.ran((call) => call[1] === 'build'),
+    ...moved.ran((call) => call[0] === 'docker' && call[1] === 'pull'),
+  ]
+  assert.ok(commands.length > 0, 'nothing was built or pulled, so this asserted nothing')
+  for (const command of commands) {
+    const at = command.indexOf('--platform')
+    assert.notEqual(at, -1, `no --platform in: ${command.join(' ')}`)
+    assert.equal(command[at + 1], 'linux/amd64')
+  }
+})
+
+test('the dependencies that ship are audited once, before anything is built', async () => {
+  /*
+   * The check also runs in `ci.yml`, which does not reach this path: a
+   * hand-dispatched publish names its own ref, so passing CI is not something it
+   * can assume. Here the rule belongs to the tool, so a local publish is held to
+   * it too — audited inside the build loop, once, however many artifacts follow.
+   */
+  const probe = registryDouble()
+  await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
+
+  const commands = probe.ran(() => true).map((call) => `${call[0]} ${call.slice(1).join(' ')}`)
+  const isAudit = (command: string) => command.startsWith('npm ') && command.includes(' audit ')
+  const isBuild = (command: string) => command.startsWith('docker build')
+  const audit = commands.findIndex(isAudit)
+  // Two artifacts, one audit: the flag `auditOnce` closes over is the only
+  // thing that keeps the second build from paying for it again.
+  assert.equal(commands.filter(isBuild).length, 2, `both artifacts must build: ${commands.join(' | ')}`)
+  assert.equal(commands.filter(isAudit).length, 1, `audited ${commands.filter(isAudit).length} times`)
+  assert.ok(audit < commands.findIndex(isBuild), 'the audit must precede the first build')
+  assert.ok(commands[audit]!.includes('--audit-level=high'), commands[audit])
+  assert.ok(commands[audit]!.includes('--omit=dev'), 'a test runner advisory is not in the image')
+  assert.ok(commands[audit]!.includes('--prefix /repo'), 'the audit must read the repository, not the cwd')
+})
+
+test('an advisory of high severity stops the publish before it builds', async () => {
+  // Failing closed is the whole point: the previous behaviour was no check at
+  // all on this path, and a check that only warned would be the same thing.
+  const probe = registryDouble()
+  // Wrapped rather than a new option on the shared double: only this test cares
+  // what a failing audit does, and the double is every other test's.
+  const run: typeof probe.run = async (command, args, options) =>
+    command === 'npm' && args.includes('audit')
+      ? { code: 1, stdout: 'high severity advisory in a shipped dependency', stderr: '' }
+      : probe.run(command, args, options)
+  await assert.rejects(
+    () => publish({ config, stage: 'dev', registry: dev, tag: SHA, run, log }),
+    /npm audit did not pass/,
+  )
+  assert.equal(probe.ran((call) => call[1] === 'build').length, 0, 'nothing may be built after a failed audit')
+})
+
+test('a failed audit reports what npm said, from whichever stream carried it', async () => {
+  // A non-zero exit is also how npm says it could not audit at all — no
+  // lockfile, no registry — and that answer arrives on stderr with stdout
+  // empty. Blocking with an empty body would name the wrong cause and show
+  // nothing.
+  const probe = registryDouble()
+  const run: typeof probe.run = async (command, args, options) =>
+    command === 'npm' && args.includes('audit')
+      ? { code: 1, stdout: '', stderr: 'npm error code ENOLOCK' }
+      : probe.run(command, args, options)
+  await assert.rejects(
+    () => publish({ config, stage: 'dev', registry: dev, tag: SHA, run, log }),
+    /ENOLOCK/,
+  )
+})
+
+test('a re-publish that builds nothing is not gated by the audit', async () => {
+  /*
+   * `publish` calls a re-run of a green build "not a failure", and the audit
+   * must not turn it into one: an old commit whose artifacts are all present
+   * would otherwise be held against today's advisories, which is the reason
+   * `promote` has no gate either.
+   */
+  const probe = registryDouble({
+    published: new Set([`boxlite-backoffice-dev:${SHA}-console`, `boxlite-backoffice-dev:${SHA}-api`]),
+  })
+  // Counted here rather than through `probe.ran`: this wrapper answers npm
+  // itself and never delegates, so the double never sees an audit and a count
+  // taken from it could not fail.
+  const audits: string[][] = []
+  const run: typeof probe.run = async (command, args, options) => {
+    if (command === 'npm' && args.includes('audit')) {
+      audits.push([command, ...args])
+      return { code: 1, stdout: 'high severity advisory in a shipped dependency', stderr: '' }
+    }
+    return probe.run(command, args, options)
+  }
+
+  const outcomes = await publish({ config, stage: 'dev', registry: dev, tag: SHA, run, log })
+  assert.deepEqual(
+    outcomes.map((outcome) => outcome.built),
+    [false, false],
+  )
+  assert.deepEqual(audits, [], 'no build, no audit')
 })
 
 test('the commands that take minutes are echoed to the log, and nothing else is', async () => {
@@ -249,7 +364,7 @@ test('the log names each artifact as its build starts, not only once it is pushe
 test('a publish addresses the stage it was given, not a default one', async () => {
   const probe = registryDouble()
   const outcomes = await publish({ config, stage: 'prod', registry: prod, tag: SHA, run: probe.run, log })
-  assert.ok(outcomes.every((outcome) => outcome.address.includes('.ecr.us-east-1.') && outcome.address.includes('/boxlite-app-prod:')))
+  assert.ok(outcomes.every((outcome) => outcome.address.includes('.ecr.us-east-1.') && outcome.address.includes('/boxlite-backoffice-prod:')))
 })
 
 test('a repository that does not exist yet is created immutable and scanning', async () => {
@@ -270,19 +385,18 @@ test('a blocking finding fails, naming what it found', async () => {
 })
 
 test('a scan refusal is told apart from a transient failure, so a caller stops retrying', async () => {
-  // The distinction is the whole point: a push and a token endpoint fail
-  // transiently and are worth a second attempt, and this is not — the answer is
-  // about the image's own contents and a second ask returns it again. The
-  // workflow reads it as an exit code (`bin/mbuild.ts`); this is the type it
-  // reads it from.
+  // The distinction is the point: a push and a token endpoint fail transiently
+  // and are worth another attempt; this is not, because the answer is about
+  // the image's own contents. The workflow reads it as an exit code
+  // (`bin/mbuild.ts`); this is the type it reads it from.
   const refused = registryDouble({ findings: { CRITICAL: 1 } })
   await assert.rejects(
     () => publish({ config, stage: 'dev', registry: dev, tag: SHA, run: refused.run, log }),
     (error) => error instanceof ScanRefusedError,
   )
 
-  // And a genuinely transient one is not: a failed push has to stay retryable,
-  // or the distinction would have made everything unretryable instead.
+  // And a genuinely transient one is not, or the distinction would have made
+  // everything unretryable instead.
   const broken = registryDouble({ pushFails: 'connection reset by peer' })
   await assert.rejects(
     () => publish({ config, stage: 'dev', registry: dev, tag: SHA, run: broken.run, log }),
@@ -326,7 +440,7 @@ test('a scan still running is not read as a clean image', async () => {
   assert.equal(probe.ran((call) => call[2] === 'describe-image-scan-findings').length, 3, 'one read per interval')
   assert.deepEqual(
     said.filter((line) => line.startsWith('Waiting')),
-    [`Waiting up to 10s for the scan of ${dev.host}/boxlite-app-dev:${SHA}-api (IN_PROGRESS)`],
+    [`Waiting up to 10s for the scan of ${dev.host}/boxlite-backoffice-dev:${SHA}-api (IN_PROGRESS)`],
     'the wait is announced once, not once per poll',
   )
 })
@@ -394,7 +508,7 @@ test('the scan gate runs after every push, not between them', async () => {
 })
 
 test('promote moves the built bytes rather than building them again', async () => {
-  const probe = registryDouble({ published: both('boxlite-app-dev') })
+  const probe = registryDouble({ published: both('boxlite-backoffice-dev') })
   const outcomes = await promote({
     config,
     tag: SHA,
@@ -409,8 +523,8 @@ test('promote moves the built bytes rather than building them again', async () =
     ['console', 'api'],
   )
   const api = outcomes.find((outcome) => outcome.artifact === 'api')!
-  assert.ok(api.from.includes('.ecr.ap-southeast-1.') && api.from.includes('/boxlite-app-dev:'))
-  assert.ok(api.address.includes('.ecr.us-east-1.') && api.address.includes('/boxlite-app-prod:'))
+  assert.ok(api.from.includes('.ecr.ap-southeast-1.') && api.from.includes('/boxlite-backoffice-dev:'))
+  assert.ok(api.address.includes('.ecr.us-east-1.') && api.address.includes('/boxlite-backoffice-prod:'))
   // Pull, re-tag, push: ECR shares no layers between repositories.
   assert.deepEqual(
     probe.ran((call) => call[0] === 'docker' && ['pull', 'tag', 'push'].includes(call[1]!)).map((call) => call[1]),
@@ -419,7 +533,7 @@ test('promote moves the built bytes rather than building them again', async () =
 })
 
 test('a promotion echoes its transfers, which are the part that moves whole images', async () => {
-  const probe = registryDouble({ published: both('boxlite-app-dev') })
+  const probe = registryDouble({ published: both('boxlite-backoffice-dev') })
   await promote({
     config,
     tag: SHA,
@@ -437,7 +551,7 @@ test('a promotion echoes its transfers, which are the part that moves whole imag
 
 test('a source missing any artifact promotes nothing at all', async () => {
   // Half a release in prod is a version that cannot start.
-  const probe = registryDouble({ published: new Set([`boxlite-app-dev:${SHA}-console`]) })
+  const probe = registryDouble({ published: new Set([`boxlite-backoffice-dev:${SHA}-console`]) })
   await assert.rejects(
     () =>
       promote({
@@ -455,7 +569,7 @@ test('a source missing any artifact promotes nothing at all', async () => {
 
 test('an artifact already in the destination is not moved twice', async () => {
   const probe = registryDouble({
-    published: new Set([...both('boxlite-app-dev'), `boxlite-app-prod:${SHA}-console`]),
+    published: new Set([...both('boxlite-backoffice-dev'), `boxlite-backoffice-prod:${SHA}-console`]),
   })
   const outcomes = await promote({
     config,
@@ -491,7 +605,7 @@ test('promoting a stage to itself is refused rather than quietly doing nothing',
 })
 
 test("the destination's scan decides whether the receiving stage may run it", async () => {
-  const probe = registryDouble({ published: both('boxlite-app-dev'), findings: { CRITICAL: 1 } })
+  const probe = registryDouble({ published: both('boxlite-backoffice-dev'), findings: { CRITICAL: 1 } })
   await assert.rejects(
     () =>
       promote({
@@ -516,7 +630,7 @@ test('a failed build stops the publish rather than pushing nothing', async () =>
 /** A registry that answers like Artifact Registry, keyed by what is published. */
 const googleDouble = ({
   published = new Set<string>(),
-  repositories = new Set(['boxlite']),
+  repositories = new Set(['boxlite-backoffice']),
   vulnerabilities = {} as Record<string, unknown[]>,
   /**
    * What an existing repository reports for `dockerConfig.immutableTags`. The
@@ -585,27 +699,17 @@ const googleDouble = ({
   return { calls, run, ran: (predicate: (call: string[]) => boolean) => calls.filter(predicate) }
 }
 
-const gcpConfig = parseBuildConfig(
-  '/repo/apps/infra/mbuild.config.json',
-  JSON.stringify({
-    root: '../..',
-    artifacts: { api: { dockerfile: 'apps/api/Dockerfile', context: '.' } },
-    scan: { blockOn: ['CRITICAL'], timeoutSeconds: 300 },
-    stages: {
-      dev: {
-        registry: {
-          kind: 'artifact-registry',
-          repository: 'boxlite',
-          immutableTags: true,
-          scanOnPush: true,
-        },
-      },
-    },
-  }),
-)
+const garStage = (immutableTags = true) => ({
+  home: 'gcp',
+  project: 'boxlite',
+  registry: { kind: 'artifact-registry', repository: 'boxlite-backoffice', immutableTags, scanOnPush: true },
+  scan: { blockOn: ['CRITICAL'], timeoutSeconds: 300 },
+})
+
+const gcpConfig = declare({ artifacts: { api: ARTIFACTS.api }, stages: { dev: garStage() } })
 
 const gar = resolveRegistry({ config: gcpConfig, stage: 'dev', region: 'asia-southeast1', project: 'boxlite' })
-const GAR_IMAGE = `asia-southeast1-docker.pkg.dev/boxlite/boxlite/api:${SHA}`
+const GAR_IMAGE = `asia-southeast1-docker.pkg.dev/boxlite/boxlite-backoffice/api:${SHA}`
 
 test('a commit publishes to Artifact Registry, at the address that cloud uses', async () => {
   // One repository per artifact and the commit as the tag, rather than one
@@ -656,24 +760,7 @@ test('the declared tag immutability reaches Artifact Registry, as it reaches ECR
 test('a stage that declares mutable tags does not get an immutable repository', async () => {
   // The flag is the declaration's, not this function's: asking for one and
   // getting the other is the same defect in the other direction.
-  const mutable = parseBuildConfig(
-    '/repo/apps/infra/mbuild.config.json',
-    JSON.stringify({
-      root: '../..',
-      artifacts: { api: { dockerfile: 'apps/api/Dockerfile', context: '.' } },
-      scan: { blockOn: ['CRITICAL'], timeoutSeconds: 300 },
-      stages: {
-        dev: {
-          registry: {
-            kind: 'artifact-registry',
-            repository: 'boxlite',
-            immutableTags: false,
-            scanOnPush: true,
-          },
-        },
-      },
-    }),
-  )
+  const mutable = declare({ artifacts: { api: ARTIFACTS.api }, stages: { dev: garStage(false) } })
   const registry = resolveRegistry({ config: mutable, stage: 'dev', region: 'asia-southeast1', project: 'boxlite' })
   const probe = googleDouble({ repositories: new Set() })
   await publish({ config: mutable, stage: 'dev', registry, tag: SHA, run: probe.run, log })
@@ -722,9 +809,9 @@ test('a clean image passes the same gate', async () => {
 })
 
 test('a build is given paths resolved from the repository, not from the working directory', async () => {
-  // mbuild.config.json lives beside mstage.config.json in apps/infra, while the
-  // Dockerfiles it names live at the repository root. Handing docker the
-  // declared strings makes `apps/console/Dockerfile` mean
+  // mstage.env.json lives in apps/infra beside .mstage.config.json, while the
+  // Dockerfiles its `artifacts` name live at the repository root. Handing
+  // docker the declared strings makes `apps/console/Dockerfile` mean
   // `apps/infra/apps/console/Dockerfile`, which is nothing.
   const probe = registryDouble()
   await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
@@ -733,12 +820,12 @@ test('a build is given paths resolved from the repository, not from the working 
   assert.equal(build.at(-1), '/repo', 'the context is the repository root, not "."')
 })
 
-test('the repository file resolves to Dockerfiles that exist', async () => {
-  // Not a fixture: the real mbuild.config.json, so a `root` that stops pointing
+test('the base file resolves to Dockerfiles that exist', async () => {
+  // Not a fixture: the real mstage.env.json, so a `root` that stops pointing
   // at the repository is caught here rather than by a build that cannot find
   // its own Dockerfile.
-  const path = new URL('../../mbuild.config.json', import.meta.url)
-  const real = parseBuildConfig(path.pathname, readFileSync(path, 'utf8'))
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const real = parseBase(path.pathname, readFileSync(path, 'utf8'))
   for (const [artifact, { dockerfile, context }] of Object.entries(real.artifacts)) {
     assert.ok(existsSync(join(real.repository, dockerfile)), `${artifact}: ${dockerfile}`)
     assert.ok(existsSync(join(real.repository, context)), `${artifact} context: ${context}`)
@@ -749,11 +836,7 @@ test('a config that does not say where the repository is refuses to load', async
   // Guessing would mean guessing wrong once, silently, in whichever direction
   // the caller happened to be standing.
   assert.throws(
-    () =>
-      parseBuildConfig(
-        '/repo/apps/infra/mbuild.config.json',
-        JSON.stringify({ artifacts: {}, scan: { blockOn: [], timeoutSeconds: 1 }, stages: {} }),
-      ),
+    () => parseBase('/repo/apps/infra/mstage.env.json', JSON.stringify({ artifacts: {} })),
     /must set root/,
   )
 })
@@ -805,7 +888,7 @@ test('the same on ECR, whose answer for absence is its own exception', async () 
   const probe = registryDouble({ deniedReads: true })
   await assert.rejects(
     () => verifyPublished({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run }),
-    /Could not tell whether \S+\/boxlite-app-dev:\S+ is published: .*AccessDeniedException/,
+    /Could not tell whether \S+\/boxlite-backoffice-dev:\S+ is published: .*AccessDeniedException/,
   )
 })
 
@@ -813,10 +896,10 @@ test('a stage missing any image is refused, named by the address that was looked
   // The address rather than the artifact name: it carries the repository and
   // the tag, which is what a person compares against the publish that was
   // supposed to have written them.
-  const probe = registryDouble({ published: new Set([`boxlite-app-dev:${SHA}-console`]) })
+  const probe = registryDouble({ published: new Set([`boxlite-backoffice-dev:${SHA}-console`]) })
   await assert.rejects(
     () => verifyPublished({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run }),
-    new RegExp(`dev does not hold \\S+/boxlite-app-dev:${SHA}-api$`),
+    new RegExp(`dev does not hold \\S+/boxlite-backoffice-dev:${SHA}-api$`),
   )
 })
 
@@ -836,12 +919,12 @@ test('verifying reports the address a runtime pulls, for every declared artifact
   // The strings the deploy resolves through the same function. A check that
   // agreed on the answer but not on the address would pass against an image
   // nothing pulls.
-  const probe = registryDouble({ published: both('boxlite-app-dev') })
+  const probe = registryDouble({ published: both('boxlite-backoffice-dev') })
   assert.deepEqual(await verifyPublished({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run }), [
     {
       artifact: 'console',
-      address: `${ACCOUNT}.dkr.ecr.ap-southeast-1.amazonaws.com/boxlite-app-dev:${SHA}-console`,
+      address: `${ACCOUNT}.dkr.ecr.ap-southeast-1.amazonaws.com/boxlite-backoffice-dev:${SHA}-console`,
     },
-    { artifact: 'api', address: `${ACCOUNT}.dkr.ecr.ap-southeast-1.amazonaws.com/boxlite-app-dev:${SHA}-api` },
+    { artifact: 'api', address: `${ACCOUNT}.dkr.ecr.ap-southeast-1.amazonaws.com/boxlite-backoffice-dev:${SHA}-api` },
   ])
 })

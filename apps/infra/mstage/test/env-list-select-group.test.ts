@@ -20,7 +20,7 @@ const shown = async (options: Record<string, string | boolean>): Promise<string[
   const token = comma === true ? 'A,B,C,D' : SECRET
   const lines: string[] = []
   await list({
-    config: { path: '/repo/mstage.config.json', envSelectGroup: { deploy: ['DOMAIN', 'TOKEN'] }, envOptional: {} } as any,
+    config: { path: '/repo/.mstage.config.json', envSelectGroup: { deploy: ['DOMAIN', 'TOKEN'] }, envOptional: {} } as any,
     scope: { app: 'a', stage: 'dev' } as any,
     options: passed,
     log: (line: string) => lines.push(line),

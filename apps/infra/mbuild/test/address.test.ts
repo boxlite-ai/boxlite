@@ -12,39 +12,45 @@ import {
 } from '../src/address.ts'
 import { BuildConfigError, parseBuildConfig, registryFor } from '../src/config.ts'
 
+const SCAN = { blockOn: ['CRITICAL', 'HIGH'], timeoutSeconds: 300 }
+
 const declare = (stages: Record<string, unknown>) =>
-  parseBuildConfig(
-    '/repo/apps/infra/mbuild.config.json',
-    JSON.stringify({
+  parseBuildConfig({
+    basePath: '/repo/apps/infra/mstage.env.json',
+    base: JSON.stringify({
       root: '../..',
       artifacts: {
         console: { dockerfile: 'apps/console/Dockerfile', context: '.' },
         api: { dockerfile: 'apps/api/Dockerfile', context: '.' },
       },
-      scan: { blockOn: ['CRITICAL', 'HIGH'], timeoutSeconds: 300 },
-      stages,
     }),
-  )
+    stagePath: '/repo/apps/infra/.mstage.config.json',
+    stages: JSON.stringify({ stages }),
+  })
 
 const ecrStage = (repository: string) => ({
+  home: 'aws',
   registry: { kind: 'ecr', repository, immutableTags: true, scanOnPush: true },
+  scan: SCAN,
 })
 
 const onArtifactRegistry = () =>
   declare({
     dev: {
+      home: 'gcp',
       registry: {
         kind: 'artifact-registry',
-        repository: 'boxlite',
+        repository: 'boxlite-backoffice',
         immutableTags: true,
         scanOnPush: true,
       },
+      scan: SCAN,
     },
   })
 
 const config = declare({
-  dev: ecrStage('boxlite-app-dev'),
-  prod: ecrStage('boxlite-app-prod'),
+  dev: ecrStage('boxlite-backoffice-dev'),
+  prod: ecrStage('boxlite-backoffice-prod'),
 })
 
 /** What mstage declares. mbuild's own file deliberately does not repeat it. */
@@ -60,11 +66,11 @@ test('the repository comes from mbuild and the region from mstage', () => {
   const prod = resolveRegistry({ config, stage: 'prod', region: REGION.prod, accountId: ACCOUNT })
   assert.equal(
     addressFor({ config, registry: dev, artifact: 'api', tag: SHA }),
-    `000000000000.dkr.ecr.ap-southeast-1.amazonaws.com/boxlite-app-dev:${SHA}-api`,
+    `000000000000.dkr.ecr.ap-southeast-1.amazonaws.com/boxlite-backoffice-dev:${SHA}-api`,
   )
   assert.equal(
     addressFor({ config, registry: prod, artifact: 'api', tag: SHA }),
-    `000000000000.dkr.ecr.us-east-1.amazonaws.com/boxlite-app-prod:${SHA}-api`,
+    `000000000000.dkr.ecr.us-east-1.amazonaws.com/boxlite-backoffice-prod:${SHA}-api`,
   )
 })
 
@@ -75,7 +81,7 @@ test('the two registry kinds put the artifact in different halves of the address
   const registry = resolveRegistry({ config: gcp, stage: 'dev', region: 'asia-southeast1', project: 'boxlite' })
   assert.equal(
     addressFor({ config: gcp, registry, artifact: 'api', tag: SHA }),
-    `asia-southeast1-docker.pkg.dev/boxlite/boxlite/api:${SHA}`,
+    `asia-southeast1-docker.pkg.dev/boxlite/boxlite-backoffice/api:${SHA}`,
   )
 })
 
@@ -134,55 +140,92 @@ test('the hosts are built here, not at the call sites that used to', () => {
   assert.equal(artifactRegistryHost('asia-southeast1'), 'asia-southeast1-docker.pkg.dev')
 })
 
-test('the repository file declares the artifacts that are actually built', () => {
-  // Not a fixture: the real file, so an artifact added to one without the other
-  // is caught here rather than at the first deploy that cannot find its image.
-  const path = new URL('../../mbuild.config.json', import.meta.url)
-  const real = parseBuildConfig(path.pathname, readFileSync(path, 'utf8'))
-  assert.deepEqual(Object.keys(real.artifacts).sort(), ['api', 'otel-collector', 'proxy'])
-  assert.equal(real.artifacts.api!.dockerfile, 'apps/api/Dockerfile')
-  assert.equal(real.artifacts.proxy!.dockerfile, 'apps/proxy/Dockerfile')
-  assert.equal(real.artifacts['otel-collector']!.dockerfile, 'apps/otel-collector/Dockerfile')
-  assert.deepEqual(real.scan.blockOn, ['CRITICAL', 'HIGH'])
-  // Every stage is publishable, or a promotion has nowhere to go.
-  assert.deepEqual(Object.keys(real.stages).sort(), ['dev', 'dev2', 'prod'])
-  // And no stage repeats what mstage already declares.
-  assert.equal('region' in registryFor(real, 'dev'), false, 'the region belongs to mstage.config.json')
-  assert.notEqual(
-    registryFor(real, 'dev').repository,
-    registryFor(real, 'prod').repository,
-    'one repository for two stages would make promoting a no-op',
+test('the committed files declare the artifacts that are actually built', () => {
+  // Not a fixture: the real base file, so an artifact added to one without the
+  // other is caught here rather than at the first deploy that cannot find its
+  // image. Paired with the committed example of the stage file, which is what
+  // a new checkout copies — an example that no longer parses is worse than
+  // none, because it is copied before it is read.
+  const basePath = new URL('../../mstage.env.json', import.meta.url)
+  const stagePath = new URL('../../.mstage.config.example.json', import.meta.url)
+  const real = parseBuildConfig({
+    basePath: basePath.pathname,
+    base: readFileSync(basePath, 'utf8'),
+    stagePath: stagePath.pathname,
+    stages: readFileSync(stagePath, 'utf8'),
+  })
+  // What is built belongs to each repository, so this asserts the rule rather
+  // than a pair of names: something is built, and every declared artifact gets
+  // exactly one composed address. `publish.test.ts` is where those Dockerfiles
+  // are checked to exist; here the question is only that the two halves of the
+  // committed pair agree with each other.
+  const artifacts = Object.keys(real.artifacts).sort()
+  assert.ok(artifacts.length > 0, 'mstage.env.json declares nothing to build')
+  /*
+   * Both coordinates, because which one `dev` needs depends on the cloud it
+   * lives in and that is each repository's own choice — `resolveRegistry` reads
+   * the one its declared kind calls for and ignores the other. They are
+   * placeholders: nothing below asserts the composed host, only that every
+   * declared artifact got exactly one address.
+   */
+  const registry = resolveRegistry({
+    config: real,
+    stage: 'dev',
+    region: 'ap-southeast-1',
+    accountId: '123456789012',
+    project: 'p',
+  })
+  assert.deepEqual(Object.keys(addressesFor({ config: real, registry, tag: SHA })).sort(), artifacts)
+  // `dev` by name, because that is the stage the workflows name and every
+  // checkout declares. How many others there are is not this test's to know —
+  // the example belongs to each repository — so the rule below is checked over
+  // whatever is declared rather than over a pair written in here: one stage has
+  // nowhere to promote to, and two must not point at the same repository.
+  const stages = Object.keys(real.stages)
+  assert.ok(stages.includes('dev'), `.mstage.config.example.json must declare dev; declares ${stages.join(', ')}`)
+  assert.deepEqual(real.stages.dev!.scan.blockOn, ['CRITICAL', 'HIGH'])
+  const repositories = stages.map((stage) => registryFor(real, stage).repository)
+  assert.equal(
+    new Set(repositories).size,
+    repositories.length,
+    'two stages sharing one repository would make promoting between them a no-op',
   )
 })
 
-test('every stage a stage-config file declares can be published into', () => {
-  // The two files are read by different tools and neither validates the other,
-  // so a stage added to mstage's file alone deploys and then cannot pull: the
-  // failure lands on a task that has already been created. Held together here.
-  const buildPath = new URL('../../mbuild.config.json', import.meta.url)
-  const stagePath = new URL('../../mstage.config.json', import.meta.url)
-  const built = parseBuildConfig(buildPath.pathname, readFileSync(buildPath, 'utf8'))
-  const staged = JSON.parse(readFileSync(stagePath, 'utf8')) as { stages: Record<string, unknown> }
-  assert.deepEqual(Object.keys(built.stages).sort(), Object.keys(staged.stages).sort())
+test('a stage that lives in GCP cannot declare an ECR repository', () => {
+  // One decision spelled twice in one block, so the parser is where it is
+  // held. An `ecr` repository on a stage whose workloads are Cloud Run
+  // services is an address nothing in that project can pull, and the deploy
+  // that finds out has already built a network.
+  assert.throws(
+    () => declare({ dev: { home: 'gcp', project: 'p', registry: ecrStage('r').registry, scan: SCAN } }),
+    /lives in gcp and must publish to artifact-registry, not ecr/,
+  )
+  assert.throws(
+    () => declare({ dev: { home: 'aws', registry: onArtifactRegistry().stages.dev!.registry, scan: SCAN } }),
+    /lives in aws and must publish to ecr, not artifact-registry/,
+  )
 })
 
-test('a stage that lives in GCP publishes to a GCP registry', () => {
-  // The two are one decision. An `ecr` repository declared for a stage whose
-  // workloads are Cloud Run services is an address nothing in that project can
-  // pull, and the deploy that finds out has already built a network.
-  const buildPath = new URL('../../mbuild.config.json', import.meta.url)
-  const stagePath = new URL('../../mstage.config.json', import.meta.url)
-  const built = parseBuildConfig(buildPath.pathname, readFileSync(buildPath, 'utf8'))
-  const staged = JSON.parse(readFileSync(stagePath, 'utf8')) as {
-    home: string
-    stages: Record<string, { home?: string }>
-  }
-  const expected: Record<string, string> = { aws: 'ecr', gcp: 'artifact-registry' }
-  for (const [name, stage] of Object.entries(staged.stages)) {
-    assert.equal(
-      registryFor(built, name).kind,
-      expected[stage.home ?? staged.home],
-      `stage ${name} publishes to the wrong kind of registry for the cloud it lives in`,
-    )
-  }
+test("mdeploy's half of the block is carried past mbuild, and a typo in mbuild's own is not", () => {
+  // Three tools read one stage block. `deploy` is mdeploy's — refused here it
+  // would make a stage undeployable and unpublishable at once — while `registy`
+  // silently ignored is a stage that publishes nowhere.
+  const withDeploy = declare({
+    dev: { ...ecrStage('boxlite-backoffice-dev'), deploy: { service: 'console', cpu: '1' } },
+  })
+  assert.equal(registryFor(withDeploy, 'dev').repository, 'boxlite-backoffice-dev')
+  assert.equal(
+    (withDeploy.stages.dev as Record<string, unknown>).deploy,
+    undefined,
+    'tolerated is not the same as read: mbuild keeps nothing it has no use for',
+  )
+  assert.throws(() => declare({ dev: { ...ecrStage('r'), registy: {} } }), /does not take registy/)
+})
+
+test('a stage mstage declares but nothing publishes into is refused at load', () => {
+  // The two tools read one block, so a stage that says where it lives without
+  // saying where it uploads used to deploy and then fail to pull. It now fails
+  // to parse instead, which is before anything has been created.
+  assert.throws(() => declare({ dev: { home: 'aws', region: 'ap-southeast-1' } }), /must set registry, scan/)
 })

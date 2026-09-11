@@ -24,15 +24,15 @@ import type { Scope } from '../src/aws/precedence.ts'
 
 const scope = (overrides: Partial<Scope> = {}): Scope =>
   ({
-    stage: 'dev2',
+    stage: 'dev',
     stageSource: '--stage',
     protect: false,
     home: 'gcp',
-    project: 'boxlite-gcp-dev',
-    app: 'boxlite',
-    appSource: 'mstage.config.json',
+    project: 'boxlite-dev',
+    app: 'boxlite-backoffice',
+    appSource: 'mstage.env.json',
     region: 'asia-southeast1',
-    regionSource: 'dev2 in mstage.config.json',
+    regionSource: 'dev in .mstage.config.json',
     roleArn: null,
     roleArnSource: null,
     roleSessionName: null,
@@ -41,7 +41,7 @@ const scope = (overrides: Partial<Scope> = {}): Scope =>
 
 const googleAuth = (credentials: { client_email?: string } = {}): GoogleAuth => ({
   async getProjectId() {
-    return 'boxlite-gcp-dev'
+    return 'boxlite-dev'
   },
   async getCredentials() {
     return credentials
@@ -111,7 +111,7 @@ test('exec hands the child what the resolved cloud says an identity is', async (
   const child = spawned()
   const { log } = record()
   const code = await exec({
-    identity: onGcp({ client_email: 'deploy@boxlite-gcp-dev.iam.gserviceaccount.com' }),
+    identity: onGcp({ client_email: 'deploy@boxlite-dev.iam.gserviceaccount.com' }),
     inner: ['echo', 'hi'],
     log,
     spawnProcess: child.spawnProcess,
@@ -120,9 +120,9 @@ test('exec hands the child what the resolved cloud says an identity is', async (
   assert.equal(code, 0)
   assert.equal(child.calls.length, 1)
   const { env } = child.calls[0]!
-  assert.equal(env.GOOGLE_CLOUD_PROJECT, 'boxlite-gcp-dev')
+  assert.equal(env.GOOGLE_CLOUD_PROJECT, 'boxlite-dev')
   // gcloud and the Pulumi provider read this one rather than the above.
-  assert.equal(env.CLOUDSDK_CORE_PROJECT, 'boxlite-gcp-dev')
+  assert.equal(env.CLOUDSDK_CORE_PROJECT, 'boxlite-dev')
   assert.equal(env.CLOUDSDK_COMPUTE_REGION, 'asia-southeast1')
   // The ambient AWS identity is cleared rather than carried, which is the whole
   // point of letting the identity build the environment rather than the command.
@@ -155,13 +155,13 @@ test('whoami names what this cloud calls a tenant, and never the other cloud’s
   const printed = record()
   await whoami({
     scope: scope(),
-    identity: onGcp({ client_email: 'deploy@boxlite-gcp-dev.iam.gserviceaccount.com' }),
+    identity: onGcp({ client_email: 'deploy@boxlite-dev.iam.gserviceaccount.com' }),
     log: printed.log,
   })
   const output = printed.lines.join('\n')
 
-  assert.match(output, /^project: *boxlite-gcp-dev$/m)
-  assert.match(output, /^principal: *deploy@boxlite-gcp-dev\.iam\.gserviceaccount\.com$/m)
+  assert.match(output, /^project: *boxlite-dev$/m)
+  assert.match(output, /^principal: *deploy@boxlite-dev\.iam\.gserviceaccount\.com$/m)
   // An account and an ARN are AWS's words. A project reported under them is a
   // reader being told the wrong thing about which cloud they are looking at.
   assert.doesNotMatch(output, /^account:/m)

@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "Shared BoxLite image build and publish. What is built, and where it is uploaded, comes from each repository's mbuild.config.json",
+  "description": "Shared BoxLite image build and publish. What is built, and where it is uploaded, comes from each repository's mstage.env.json and .mstage.config.json",
   "bin": {
     "mbuild": "bin/mbuild.ts"
   },

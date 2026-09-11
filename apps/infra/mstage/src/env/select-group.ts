@@ -1,14 +1,10 @@
 /**
  * What may leave a stage's store, and the one way to ask for it.
  *
- * `mstage.config.json` declares named groups under `env.selectGroup`; a consumer names a
- * group and gets exactly what that group holds. It never carries a list of its
- * own: two declarations of one set drift silently — a key added to the group
- * would never be read, and one added to the copy would never be exported — and
- * the drift is only ever found by a test written to look for it.
- *
- * That makes adding a key to an export a reviewable edit to one file, which is
- * the only reason exporting is safe at all.
+ * `mstage.env.json` declares named groups under `env.selectGroup`, and a
+ * consumer names one rather than carrying its own list. Two declarations of one
+ * set drift silently, and only a test written to look for it ever finds the
+ * drift — so adding a key to an export stays one reviewable edit to one file.
  */
 
 import { loadConfig, type MstageConfig } from '../config/load.ts'
@@ -76,15 +72,11 @@ export const valuesOfGroup = ({
 /**
  * One group's keys and values, read from a stage's store.
  *
- * This is what a server or a deploy calls. It hands back the values and does
- * nothing with them: whether they belong in `process.env`, in a child process,
- * or in a file is the caller's decision, and mstage has no business making it
- * from inside a library.
+ * What a server or a deploy calls. It hands the values back and does nothing
+ * with them — where they belong is the caller's decision, not a library's.
  *
- * `versionId` reads the object as some earlier moment saw it. A deploy records
- * the version it shipped and passes it here, so a task that starts again hours
- * later reads the configuration the deploy was built against rather than
- * whatever the store holds by then.
+ * `versionId` reads the object as an earlier moment saw it, so a task starting
+ * again hours later reads what the deploy was built against.
  */
 export const selectGroup = async ({
   group,
@@ -101,10 +93,9 @@ export const selectGroup = async ({
   app?: string
   versionId?: string
   /**
-   * A caller that already built AWS clients passes those; one on another cloud
-   * passes the backend it built. `readEnvironment` has taken either since the
-   * store stopped knowing which cloud it was reading, and narrowing it here to
-   * only the AWS half is what kept a GCP stage from reaching this at all.
+   * AWS clients from a caller that already built them, or a backend from one on
+   * another cloud. `readEnvironment` takes either; narrowing this to the AWS
+   * half is what once kept a GCP stage from reaching it at all.
    */
   clients?: Clients | StoreBackend
   config?: MstageConfig
@@ -122,10 +113,9 @@ export const selectGroup = async ({
     group,
     groups: config.envSelectGroup,
     values,
-    where: config.path,
-    // What the declaration said may be absent. Read from the config rather than
-    // taken as an argument: a caller that supplied its own list would be a
-    // second answer to a question this file already asked.
+    where: config.basePath,
+    // Read from the config rather than taken as an argument: a caller with
+    // its own list would be a second answer to a question already asked.
     optional: config.envOptional[group] ?? [],
   })
 }

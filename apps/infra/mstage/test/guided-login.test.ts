@@ -7,9 +7,12 @@ import { run } from '../src/cli/run.ts'
 
 const configRoot = (login: Record<string, { required?: boolean }>) => {
   const root = mkdtempSync(join(tmpdir(), 'mstage-guided-'))
+  // Two files, as a real checkout has: what the repository is, and the stage
+  // that says which cloud it lives in and what reaching it costs.
+  writeFileSync(join(root, 'mstage.env.json'), JSON.stringify({ app: 'a' }))
   writeFileSync(
-    join(root, 'mstage.config.json'),
-    JSON.stringify({ app: 'a', home: 'aws', login, stages: { dev: { region: 'ap-southeast-1' } } }),
+    join(root, '.mstage.config.json'),
+    JSON.stringify({ stages: { dev: { home: 'aws', region: 'ap-southeast-1', login } } }),
   )
   return root
 }

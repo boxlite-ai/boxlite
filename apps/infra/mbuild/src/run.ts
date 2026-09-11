@@ -1,14 +1,12 @@
 /*
  * One external command, plus whatever it reads on stdin.
  *
- * stdin is always a pipe and always closed, rather than piped only when there
- * is something to send: a literal stdio tuple is what lets `spawn` type stdout
- * and stderr as streams instead of `null`, and a command with nothing to read
- * sees the same end of input either way.
+ * stdin is always a pipe and always closed: a literal stdio tuple is what lets
+ * `spawn` type stdout and stderr as streams rather than `null`, and a command
+ * with nothing to read sees the same end of input either way.
  *
- * `options.echo` decides when a command's output becomes visible, never whether
- * it is returned: the result carries stdout and stderr either way, so a caller
- * that echoes a command can still read what it printed.
+ * `options.echo` decides when output becomes visible, never whether it is
+ * returned — the result carries both streams regardless.
  */
 
 import { spawn } from 'node:child_process'

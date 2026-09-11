@@ -158,7 +158,7 @@ differs:
 "stages": {
   "dev":     { "region": "ap-southeast-1" },
   "prod":    { "region": "ap-southeast-1", "protect": true },
-  "dev2":    { "home": "gcp", "region": "asia-southeast1", "project": "avid-vine-500315-u4",
+  "dev2":    { "home": "gcp", "region": "asia-southeast1", "project": "your-first-project",
              "zone": "asia-southeast1-b" }
 }
 ```

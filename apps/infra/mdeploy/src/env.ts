@@ -14,7 +14,7 @@
 import { readEnvironment } from 'mstage/env'
 import { SECRET_GROUP, secretAddressesOf } from 'mstage/secret-address'
 import { groupKeys, valuesOfGroup } from 'mstage/select-group'
-import type { MstageConfig } from 'mstage/config'
+import type { Cloud, MstageConfig } from 'mstage/config'
 import type { StoreBackend } from 'mstage/env'
 import type { Scope } from 'mstage/scope'
 
@@ -216,7 +216,7 @@ export const splitServiceChannels = ({
 }: {
   delivered: Record<string, string>
   declaration: GroupDeclaration
-  home: MstageConfig['home']
+  home: Cloud
 }): { values: Record<string, string>; addresses: Record<string, string> } => {
   const marked = new Set(declaration.groups[SECRET_GROUP] ?? [])
   const entries = Object.entries(delivered)

@@ -11,19 +11,22 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { parseConfig } from 'mstage/config'
+import { parseBase } from 'mstage/config'
 import { valuesOfGroup } from 'mstage/select-group'
 import { serviceSecretsFrom, splitServiceChannels, type GroupDeclaration } from '../src/env.ts'
 
-const config = (() => {
-  const path = new URL('../../mstage.config.json', import.meta.url)
-  return parseConfig(path.pathname, readFileSync(path, 'utf8'))
-})()
+/**
+ * The committed half alone: this asks what the repository declares, not where
+ * anybody's stages live. `parseBase` is what reads it, and it returns no path
+ * because it was handed one — so the path is kept here for the messages.
+ */
+const CONFIG_PATH = new URL('../../mstage.env.json', import.meta.url).pathname
+const config = parseBase(CONFIG_PATH, readFileSync(CONFIG_PATH, 'utf8'))
 
 const declaration: GroupDeclaration = {
   groups: config.envSelectGroup,
   optional: config.envOptional,
-  where: config.path,
+  where: CONFIG_PATH,
 }
 
 /** A store holding the deploy group's required keys and nothing else. */
@@ -43,7 +46,7 @@ const narrow = (group: string, values: Record<string, string>) =>
     group,
     groups: config.envSelectGroup,
     values,
-    where: config.path,
+    where: CONFIG_PATH,
     optional: config.envOptional[group] ?? [],
   })
 

@@ -3,19 +3,19 @@ import test from 'node:test'
 import { parseConfig } from '../src/config/load.ts'
 import { ScopeError, resolveScope } from '../src/aws/precedence.ts'
 
-const config = parseConfig(
-  '/repo/mstage.config.json',
-  JSON.stringify({
-    app: 'boxlite',
-    home: 'aws',
+const config = parseConfig({
+  basePath: '/repo/mstage.env.json',
+  base: JSON.stringify({ app: 'boxlite-backoffice' }),
+  stagePath: '/repo/.mstage.config.json',
+  stages: JSON.stringify({
     stages: {
-      dev: { region: 'ap-southeast-1' },
-      prod: { region: 'us-east-1', project: 'boxlite-prod', protect: true },
-      'gcp-dev': { region: 'asia-southeast1', home: 'gcp', project: 'boxlite-gcp-dev' },
-      unbound: {},
+      dev: { home: 'aws', region: 'ap-southeast-1' },
+      prod: { home: 'aws', region: 'us-east-1', project: 'boxlite-prod', protect: true },
+      'gcp-dev': { home: 'gcp', region: 'asia-southeast1', project: 'boxlite-gcp-dev' },
+      unbound: { home: 'aws' },
     },
   }),
-)
+})
 
 const scope = (options: any, environment: any = {}) => resolveScope({ options, config, environment })
 
@@ -24,7 +24,7 @@ test('a declared stage carries its project, protection and app through', () => {
   assert.equal(resolved.stage, 'dev')
   assert.equal(resolved.project, null)
   assert.equal(resolved.protect, false)
-  assert.equal(resolved.app, 'boxlite')
+  assert.equal(resolved.app, 'boxlite-backoffice')
   assert.equal(scope({ stage: 'prod' }).protect, true)
   assert.equal(scope({ stage: 'prod' }).project, 'boxlite-prod')
 })
@@ -49,7 +49,7 @@ test('a missing stage is an error, never a default', () => {
 test("the stage's declared region outranks an ambient AWS_REGION", () => {
   const resolved = scope({ stage: 'prod' }, { AWS_REGION: 'ap-southeast-1' })
   assert.equal(resolved.region, 'us-east-1')
-  assert.equal(resolved.regionSource, 'prod in mstage.config.json')
+  assert.equal(resolved.regionSource, 'prod in .mstage.config.json')
 })
 
 test('--region is the only thing that overrides a declared region', () => {
@@ -80,7 +80,8 @@ test('a role is only assumed when one is named, and carries a session name', asy
 test('--app overrides the config, and MSTAGE_APP sits between them', async () => {
   assert.equal(scope({ stage: 'dev', app: 'boxlite' }).app, 'boxlite')
   assert.equal(scope({ stage: 'dev' }, { MSTAGE_APP: 'boxlite' }).app, 'boxlite')
-  assert.equal(scope({ stage: 'dev' }).appSource, '/repo/mstage.config.json')
+  // The app is mstage.env.json's, so its provenance names that file.
+  assert.equal(scope({ stage: 'dev' }).appSource, '/repo/mstage.env.json')
 })
 
 test('the scope has no opinion about which credentials to use', async () => {

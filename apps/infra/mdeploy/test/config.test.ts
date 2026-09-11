@@ -1,16 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import {
-  DeployConfigError,
-  alarmsFor,
-  cacheFor,
-  clickHouseFor,
-  databaseFor,
-  parseDeployConfig,
-  runnersFor,
-  storageFor,
-} from '../src/config.ts'
+import { DeployConfigError, parseDeployConfig } from '../src/config.ts'
 
 const valid = {
   database: { name: 'boxlite', size: 'small', highlyAvailable: false, backupRetentionDays: 7, protected: false },
@@ -47,22 +38,6 @@ test('the defaults have to be complete, because nothing else supplies them', () 
   assert.throws(() => parse({ runners: { size: 'large' } }), /"runners" must set rootDiskGb/)
 })
 
-test('a stage is an override, not a copy', () => {
-  const config = parse({ stages: { prod: { database: { protected: true, backupRetentionDays: 30 } } } })
-  const prod = databaseFor(config, 'prod')
-  assert.equal(prod.protected, true)
-  assert.equal(prod.backupRetentionDays, 30)
-  assert.equal(prod.name, 'boxlite', 'everything it did not mention comes from the defaults')
-  assert.equal(databaseFor(config, 'dev').protected, false, 'and a stage it never named changes nothing')
-})
-
-test('alarms merge alarm by alarm, so retuning one keeps the others', () => {
-  const config = parse({ stages: { prod: { alarms: { apiServerErrors: { threshold: 5, periods: 2 } } } } })
-  const alarms = alarmsFor(config, 'prod')
-  assert.deepEqual(alarms.apiServerErrors, { threshold: 5, periods: 2 })
-  assert.deepEqual(alarms.runnersUnreachable, { threshold: 1, periods: 3 })
-})
-
 test('an unencrypted cache is refused rather than accepted and overridden', () => {
   // Accepting it and quietly turning encryption on would read as if the setting
   // worked. The cache carries sessions and box credentials across a network
@@ -93,7 +68,15 @@ test('a size no provider answers to is refused here rather than at the apply', (
 
 test('a key nothing reads is refused, so a typo is not silently inert', () => {
   assert.throws(() => parse({ database: { ...valid.database, retention: 7 } }), /does not take retention/)
-  assert.throws(() => parse({ stages: { dev: { databse: {} } } }), /does not take databse/)
+  assert.throws(() => parse({ databse: {} }), /does not take databse/)
+  /*
+   * `stages` is the old shape: defaults at the top level and per-stage
+   * overrides beneath them, in a file of mdeploy's own. A block pasted from one
+   * would parse as the defaults and drop every per-stage value silently, so the
+   * key is refused rather than ignored — the stage a block belongs to is now
+   * the stage it is written inside.
+   */
+  assert.throws(() => parse({ stages: { dev: {} } }), /does not take stages/)
 })
 
 test('DeployConfigError is the single failure type callers can catch', () => {
@@ -103,31 +86,51 @@ test('DeployConfigError is the single failure type callers can catch', () => {
   )
 })
 
-test('the repository’s own file parses, and every stage it names is deployable', () => {
-  // Not a fixture: the real file, so a value added to one and not validated by
-  // the other is caught here rather than at the first deploy that reads it.
-  const path = new URL('../../mdeploy.config.json', import.meta.url)
-  const real = parseDeployConfig(path.pathname, readFileSync(path, 'utf8'))
-  assert.equal(real.database.name, 'boxlite')
-  assert.equal(real.runners.size, 'large', 'a runner has to be a machine family that can nest')
-  assert.equal(databaseFor(real, 'prod').protected, true, 'production refuses deletion')
-  assert.equal(databaseFor(real, 'prod').highlyAvailable, true)
-  assert.equal(cacheFor(real, 'prod').size, 'medium')
-  assert.equal(clickHouseFor(real, 'dev2').mode, 'disabled')
-  assert.equal(runnersFor(real, 'dev2').size, 'small', 'the GCP stage runs a smaller fleet than AWS dev')
-  assert.equal(storageFor(real, 'dev').versioning, true)
-  assert.equal(runnersFor(real, 'dev').rootDiskGb, 100)
+/**
+ * Every stage's block, read out of the committed example.
+ *
+ * `.mstage.config.example.json` rather than `.mstage.config.json`: the real one
+ * names somebody's cloud account and is not committed, so this is the only copy
+ * a fresh checkout and CI have. Reading it here is also what keeps it usable —
+ * it is copied before it is read, so an example that no longer parses is worse
+ * than none.
+ */
+const declared = (() => {
+  const path = new URL('../../.mstage.config.example.json', import.meta.url)
+  const raw = JSON.parse(readFileSync(path, 'utf8')) as { stages: Record<string, { deploy?: unknown }> }
+  return { path: path.pathname, stages: raw.stages }
+})()
+
+const blockFor = (stage: string) =>
+  parseDeployConfig(`${declared.path}: stage "${stage}" deploy`, JSON.stringify(declared.stages[stage]?.deploy ?? {}))
+
+test('every stage this repository declares carries a complete, parseable block', () => {
+  /*
+   * The property that replaced "a stage is an override": there are no
+   * repository-wide defaults any more, so a stage added without a block is not
+   * a stage that deploys the usual shape — it is a stage that cannot deploy.
+   * The failure without this is a parse error at the apply, after the stage was
+   * already reachable from CI.
+   */
+  const stages = Object.keys(declared.stages)
+  assert.ok(stages.length > 0, `${declared.path} declares no stage`)
+  for (const stage of stages) {
+    const block = blockFor(stage)
+    assert.equal(block.database.name, 'boxlite', `${stage} names another database`)
+    assert.ok(block.runners.rootDiskGb > 0, `${stage} sizes no runner disk`)
+  }
 })
 
-test('every stage mdeploy names is a stage mstage declares', () => {
-  // The two files are read by different tools and neither validates the other,
-  // so a stage overridden here but never declared there is an override that
-  // silently applies to nothing.
-  const deployPath = new URL('../../mdeploy.config.json', import.meta.url)
-  const stagePath = new URL('../../mstage.config.json', import.meta.url)
-  const deploy = parseDeployConfig(deployPath.pathname, readFileSync(deployPath, 'utf8'))
-  const staged = JSON.parse(readFileSync(stagePath, 'utf8')) as { stages: Record<string, unknown> }
-  for (const stage of Object.keys(deploy.stages)) {
-    assert.ok(stage in staged.stages, `mdeploy.config.json overrides "${stage}", which mstage.config.json never names`)
-  }
+test('the stages differ where they are meant to, and each says so in full', () => {
+  // Read from the blocks rather than from a diff against defaults, because
+  // there are none: what makes prod prod is written in prod.
+  assert.equal(blockFor('prod').database.protected, true, 'production refuses deletion')
+  assert.equal(blockFor('prod').database.highlyAvailable, true)
+  assert.equal(blockFor('prod').cache.size, 'medium')
+  assert.equal(blockFor('dev').database.protected, false, 'dev is deletable')
+  assert.equal(blockFor('dev2').clickhouse.mode, 'disabled')
+  assert.equal(blockFor('dev2').runners.size, 'small', 'the GCP stage runs a smaller fleet than AWS dev')
+  assert.equal(blockFor('dev').storage.versioning, true)
+  assert.equal(blockFor('dev').runners.rootDiskGb, 100)
+  assert.equal(blockFor('dev').runners.size, 'large', 'a runner has to be a machine family that can nest')
 })

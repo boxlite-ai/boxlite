@@ -4,7 +4,7 @@ import { resolveIdentity } from '../src/aws/identity.ts'
 
 const baseScope = {
   stage: 'dev',
-  app: 'boxlite',
+  app: 'boxlite-backoffice',
   region: 'ap-southeast-1',
   roleArn: null,
   roleSessionName: 'mstage',

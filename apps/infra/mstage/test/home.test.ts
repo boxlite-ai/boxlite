@@ -2,7 +2,7 @@
  * The one place a cloud is chosen.
  *
  * What is worth checking without either cloud: that the declaration in
- * `mstage.config.json` is what decides, that an AWS repository never loads
+ * `.mstage.config.json` is what decides, that an AWS repository never loads
  * Google's SDKs, and that a GCP stage missing the project it is pinned to is
  * refused before anything is reached for.
  *
@@ -22,7 +22,7 @@ const scope = (overrides: Partial<Scope> = {}): Scope =>
     protect: false,
     home: 'aws',
     project: null,
-    app: 'boxlite',
+    app: 'boxlite-backoffice',
     region: 'ap-southeast-1',
     regionSource: 'test',
     roleArn: null,

@@ -25,12 +25,13 @@ written there becomes `npm_config_stage=true` plus a stray `dev` positional,
 silently shifting the command. mstage detects that and refuses rather than acting
 on an invocation nobody typed.
 
-| Module  | Commands                                  | Needs `--stage` |
-| ------- | ----------------------------------------- | --------------- |
-| `login` | `aws`, `github`, `auth0`, or none for all | no              |
-| `aws`   | `whoami`, `region`, `exec`                | yes             |
-| `env`   | `list`, `set`, `digest`, `del`            | yes             |
-| `state` | `unlock`, `edit`                          | yes             |
+| Module   | Commands                                 | Needs `--stage` |
+| -------- | ---------------------------------------- | --------------- |
+| `login`  | `aws`, `gcp`, `github`, `auth0`, or none | optional        |
+| `config` | `put`, `get`                             | yes             |
+| `aws`    | `whoami`, `region`, `exec`               | yes             |
+| `env`    | `list`, `set`, `digest`, `del`           | yes             |
+| `state`  | `unlock`, `edit`                         | yes             |
 
 `npm run mstage <module> -- --help` lists what that module accepts, generated from
 the same table the dispatcher runs on, so it cannot describe a command that is
@@ -40,8 +41,10 @@ not there.
 npm run mstage login
 npm run mstage login github
 npm run mstage login -- -f            # sign in again first, then report
+npm run mstage config put -- --stage dev
+npm run mstage config get -- --stage dev
 npm run mstage aws whoami -- --stage dev
-npm run mstage aws exec -- --stage dev -- aws s3 ls
+npm run mstage aws exec -- --stage dev -- gcloud storage ls
 npm run mstage env list -- --stage dev
 npm run mstage env set -- PORT=8080 TIMEOUT=30 --stage dev
 npm run mstage env set -- SHAPE='{"a":"b", "c":"d"}' --stage dev --json
@@ -56,9 +59,10 @@ npm run mstage state edit -- --stage dev
 
 ## What is here, and what is not
 
-Everything in mstage is shared: sign-in, stage configuration, the AWS identity a
-stage resolves to, and that stage's environment in the SST state bucket. mstage
-obtains access, checks it, and reads and writes what a stage is configured with.
+Everything in mstage is shared: sign-in, stage configuration, the identity a
+stage resolves to, and that stage's environment in the state bucket of whichever
+cloud `home` names. mstage obtains access, checks it, and reads and writes what a
+stage is configured with.
 
 Spending that access is not here, and neither is any account of how it gets
 spent. Deployment differs per repository — machine shapes, images, rollout
@@ -76,67 +80,169 @@ caller passes the options it owns (`mdeploy` has `--local-env`) and mstage parse
 them for that call without listing them in `mstage --help`. Two tools then read
 one command line the same way, and neither advertises the other's switches.
 
-## mstage.config.json
+## The two config files
 
-Lives in `apps/infra`, beside the `sst.config.ts` it describes, and is what
-makes a stage name mean something. It is found by walking up from the working
-directory, or named outright with `MSTAGE_CONFIG`.
+mstage reads two, split by whether a value names somebody's account.
+
+| File                  | Committed | Holds                                        | Found by                           |
+| --------------------- | --------- | -------------------------------------------- | ---------------------------------- |
+| `mstage.env.json`     | yes       | the app, and what the store may hand out     | walking up, or `MSTAGE_ENV_CONFIG` |
+| `.mstage.config.json` | no        | the stages, and what reaching each one costs | walking up, or `MSTAGE_CONFIG`     |
+
+Both live in `apps/infra`, beside the `sst.config.ts` they describe. mbuild
+reads the same two — `artifacts` out of the base file, and `registry` and
+`scan` out of the very same stage block — so a stage is declared once and both
+tools agree about it by construction rather than by a test.
+
+`.mstage.config.json` is gitignored because a stage names a cloud, a project
+and a region: one account's coordinates, which differ per checkout and are
+nobody else's to inherit. `.mstage.config.example.json` is the committed copy —
+it is what a new checkout copies, and what the tests read, so it cannot rot
+without something failing.
 
 ```json
+// mstage.env.json — committed
 {
   "app": "boxlite-backoffice",
-  "home": "aws",
-  "login": {
-    "aws": { "required": true },
-    "github": { "required": true },
-    "auth0": { "required": false }
+  "root": "../..",
+  "artifacts": {
+    "api": { "dockerfile": "apps/api/Dockerfile", "context": "." }
   },
   "env": {
     "selectGroup": {
-      "deploy": ["BACKOFFICE_DOMAIN", "BACKOFFICE_BOXLITE_ADMIN_BASE_URL", "BACKOFFICE_STAGE_CONFIG_DIGEST"]
+      "deploy": {
+        "required": ["BACKOFFICE_DOMAIN", "BACKOFFICE_STAGE_CONFIG_DIGEST"],
+        "optional": ["BACKOFFICE_MAIL_RELAY_HOST"]
+      },
+      "api": ["BACKOFFICE_OIDC_CLIENT_SECRET"]
     },
     "digest": { "key": "BACKOFFICE_STAGE_CONFIG_DIGEST", "group": "deploy" }
-  },
-  "stages": {
-    "dev": { "region": "ap-southeast-1" },
-    "prod": { "region": "ap-southeast-1", "protect": true }
   }
 }
 ```
 
-`login` names which sign-ins this repository needs. mstage knows how to check and
-obtain a session for each; only the repository knows which it cannot work
-without — boxlite-commerce needs AWS alone. An optional provider is still
-checked and reported, but does not fail the command.
+```json
+// .mstage.config.json — not committed
+{
+  "stages": {
+    "dev": {
+      "home": "gcp",
+      "region": "asia-southeast1",
+      "project": "your-first-project",
+      "login": {
+        "gcp": { "required": true },
+        "github": { "required": true },
+        "auth0": { "required": false }
+      },
+      "registry": {
+        "kind": "artifact-registry",
+        "repository": "boxlite-app-dev-backoffice",
+        "immutableTags": true,
+        "scanOnPush": true
+      },
+      "scan": { "blockOn": ["CRITICAL", "HIGH"], "timeoutSeconds": 300 },
+      "deploy": {}
+    }
+  }
+}
+```
 
-`env.selectGroup` declares the named subsets of the store that may leave it, and
-`env.digest` names the key that fingerprints one of them. Both are described
-below; `env.digest.key` must be a member of the group it describes, so the
-fingerprint travels with what it fingerprints.
+### A stage decides
 
-One group name means more than the others. `env.selectGroup.secret` marks the
-keys whose value is the _address_ of a secret rather than the secret, which is
-what lets a workload be handed one by reference; see "Secrets by reference"
-below. It names no consumer of its own: it says how a key travels, and whichever
-group also names that key is what says who reads it. The two are orthogonal, so
-a marked key appears in both — and one that no other group names is refused,
-because a mark on a key nobody receives is a mark on nothing.
+Everything a stage needs is in its own block, and nothing is inherited from
+above it. `home` says which cloud it lives in — declared, never defaulted,
+because a repository with stages in two clouds has no one answer. `login` says
+what has to be signed in to reach it, and a stage in one cloud names no
+credential for the other: read repository-wide, an expired AWS session refused
+a GCP deploy on a machine that needed no AWS credential to perform it.
+`registry` and `scan` are mbuild's half of the same decision — where the images
+go, and what that stage refuses to receive, so prod can be stricter than dev.
+`deploy` is mdeploy's half: what shape the stage is deployed into. mstage
+checks that it is an object and carries it; every key inside it is mdeploy's to
+name and to refuse, and an empty block is the ordinary state of a stage mdeploy
+has not been pointed at yet.
 
-A stage that is not declared here is a typo, not a new environment. Stage names
-follow SST's own constraint (`[a-zA-Z0-9-]+`) because mstage reads and writes the
-same S3 keys. `region`, `project`, `roleArn` and `protect` are each optional:
-`roleArn` is assumed on top of the resolved credentials; `protect: true` requires
-`--confirm`; `project` is where a GCP stage names the project it lives in, which
-is declared because Google's clients cannot be opened without one.
+The two halves are checked against each other where they are read: a stage
+whose `home` is `gcp` must declare a `project`, because Google's clients cannot
+be built without one, and must publish to `artifact-registry`, because an ECR
+address is one nothing in that project can pull.
+
+`mstage login` without `--stage` merges every stage's `login`, with required
+winning over optional: the question there is whether this checkout can work at
+all. With `--stage`, only that stage's block answers.
+
+A stage that is not declared is a typo, not a new environment. Stage names
+follow SST's own constraint (`[a-zA-Z0-9-]+`) because mstage reads and writes
+the same S3 keys. `region`, `project`, `zone`, `roleArn`, `protect`, `login`
+and `deploy` are each optional; `home` is not.
+
+`zone` names the zone inside the region a stage's machines are created in, or
+is left out for the region's first. It is declarable because that default is
+not always available: machine families are stocked per zone, and a region's
+first zone answering `stockout` for the family a runner needs is ordinary.
+Nothing on AWS reads it, where a subnet carries the zone.
 
 No stage declares an AWS account. The account is whichever one the resolved
-credentials belong to, and a caller that has to name it in an ARN — `bootstrap`
-rendering an IAM document, `mbuild` naming an ECR host — reads it back from
-`whoami`. Declaring it as well would be a second copy of something already
+credentials belong to, and a caller that has to name it in an ARN reads it back
+from `whoami`. Declaring it as well would be a second copy of something already
 known, kept in step by hand.
 
-`dev` and `prod` are declared, both in one region. `prod` is protected because a
-write there is live.
+### Carrying a stage to a runner
+
+`.mstage.config.json` is not committed, so a runner has no copy of it. `mstage
+config` is the two ends of getting one stage through the GitHub environment of
+the same name:
+
+```
+npm run mstage config put -- --stage=dev              # from .mstage.config.json
+npm run mstage config put -- --stage=dev < other.json # or from a document piped in
+npm run mstage config get -- --stage=dev              # prints {"dev": {…}}
+```
+
+`put` sends that stage's block to `BOXLITE_MSTAGE_<APP>_CONFIG` on the GitHub
+environment named for the stage, where `<APP>` is `mstage.env.json`'s `app`
+upper-cased. It goes through `gh`, which is already how mstage signs in to
+GitHub, so there is no second notion of a token here and the repository is
+`gh`'s to work out from the checkout. The value travels on `gh`'s stdin rather
+than in an argument, because argv is visible in the process table.
+
+`get` prints the same block, reading the variable first and
+`.mstage.config.json` second. That order is what lets one command work in both
+places: on a runner the variable is the only copy, and on a workstation the
+file is. An empty variable counts as absent, because that is what an unset
+GitHub variable expands to in a shell. Output is one line of JSON on stdout and
+nothing else, so `$(npm run --silent mstage config get -- --stage=dev)` is the
+whole value.
+
+The block keeps its own stage name — `{"dev": {…}}`, not `{…}` — so a variable
+read out of the wrong environment is a named refusal rather than a stage that
+silently has the wrong region in it.
+
+Neither command resolves a cloud. Reading a declaration needs no credential,
+and demanding one would defeat the case this exists for.
+
+### What mstage.env.json holds
+
+`env.selectGroup` declares the named subsets of the store that may leave it,
+and `env.digest` names the key that fingerprints one of them. `env.digest.key`
+must be a member of the group it describes, so the fingerprint travels with
+what it fingerprints, and it cannot be optional — a fingerprint nobody had to
+write is one the check would pass on every stage.
+
+A group is either an array of key names, where the store must hold every one,
+or `{ "required": [...], "optional": [...] }`. The two say different things: a
+missing required key is the silently short environment mstage refuses on
+purpose, while a missing optional one is a feature this stage never configured
+and the consumer already has an answer for. Without the distinction, saying
+nothing costs a row of empty strings per stage. Every command reads it the same
+way — `env list --select-group`, `env set --digest` and `env digest` all compute
+over the same set, so a check cannot demand more than a write can supply.
+
+One group name means more than the others. `env.selectGroup.secret` marks the
+keys whose value is the _address_ of a secret rather than the secret; see
+"Secrets by reference" below. It names no consumer of its own, so a marked key
+that no other group names is refused — a mark on a key nobody receives is a
+mark on nothing.
 
 How a stage deploys is deliberately absent — that belongs to `mdeploy`.
 
@@ -146,13 +252,22 @@ How a stage deploys is deliberately absent — that belongs to `mdeploy`.
 holds a stage's whole configuration. Four calls, and no project init:
 
 ```
-SSM  /sst/bootstrap                 → the state bucket's name
-S3   secret/<app>/<stage>.json      → the encrypted map
-SSM  /sst/passphrase/<app>/<stage>  → the key
-AES-256-GCM                         → the map
+aws   SSM  /sst/bootstrap                 → the state bucket's name
+      S3   secret/<app>/<stage>.json      → the encrypted map
+      SSM  /sst/passphrase/<app>/<stage>  → the key
+      AES-256-GCM                         → the map
+
+gcp   SM   mstage-bootstrap                → the state bucket's name
+      GCS  secret/<app>/<stage>.json       → the encrypted map
+      SM   mstage-passphrase-<app>-<stage> → the key
+      AES-256-GCM                          → the map
 ```
 
-Those paths are SST v3.19.3's own (`pkg/project/provider/aws.go:541` and `:545`),
+The object key and the cipher are the same on both, deliberately: a store sealed
+by one backend opens with the other, which is what makes moving a stage between
+clouds a copy rather than a re-entry. Only where the three inputs live differs.
+
+The AWS paths are SST v3.19.3's own (`pkg/project/provider/aws.go:541` and `:545`),
 because these objects are shared with it: a deploy still writes what this reads,
 and on a stage SST has already written, `sst secret set` and `mstage env set` are
 interchangeable. On one it has not, `mstage env set` refuses: the passphrase is
@@ -183,7 +298,7 @@ An empty store is a failure rather than an empty answer, which is what SST
 reports too: a caller that cannot tell the two apart would deploy with no
 configuration at all.
 
-A group is `env.selectGroup.<name>` in `mstage.config.json`, so adding a key to an export
+A group is `env.selectGroup.<name>` in `mstage.env.json`, so adding a key to an export
 is a reviewable edit to a file rather than a longer command line — which is the
 only reason exporting is safe at all. A group naming a key the store does not
 hold is an error, not a short answer: a deploy handed a silently incomplete
@@ -348,14 +463,14 @@ to whoever owns the cloud; a deploy tool reads the group and hands each address
 to the platform — in this repository `mdeploy` does, through
 `env.selectGroup.secret` and nothing else. Adopting it for a key already in the
 store is three steps in order: put the secret in Parameter Store or Secret
-Manager, add the key to `env.selectGroup.secret` in `mstage.config.json` —
+Manager, add the key to `env.selectGroup.secret` in `mstage.env.json` —
 leaving it in the service group that delivers it, which is what still says who
 reads it — then `env set` its address. The middle step alone leaves the next
 deploy refusing, by name, a key that still holds a value.
 
 ### The fingerprint
 
-`env.digest` in `mstage.config.json` names a key and one `env.selectGroup`:
+`env.digest` in `mstage.env.json` names a key and one `env.selectGroup`:
 
 ```json
 "env": { "digest": { "key": "BACKOFFICE_STAGE_CONFIG_DIGEST", "group": "deploy" } }
@@ -393,7 +508,7 @@ member of that group, so the stored fingerprint still describes it, and a
 removal it refuses could not be mended by recomputing while the group still
 names what went. `set --digest` is the half that writes. Removing a group member
 is still allowed without the flag, which is how a group shrinks: the next deploy
-then refuses by name until `mstage.config.json` catches up.
+then refuses by name until `mstage.env.json` catches up.
 
 A name being written must match SST's own rule for one it can set,
 `[A-Z][a-zA-Z0-9_]*` (`cmd/sst/secret.go:363`), because a name SST cannot set is
@@ -520,7 +635,7 @@ a refresh is what makes it accurate, and it belongs before the next deploy.
 Sign in however this machine signs in — `aws login`, `aws sso login`, whatever —
 and mstage picks up the result. It resolves through the AWS SDK's default
 credential chain and nothing else: no `--profile`, no `MSTAGE_AWS_PROFILE`, no
-profile field in `mstage.config.json`, and no translation of the SDK's errors. A
+profile field in any config, and no translation of the SDK's errors. A
 failure surfaces exactly as the SDK reported it.
 
 mstage does not second-guess which tenant the chain reaches. `aws whoami`
@@ -532,18 +647,45 @@ region` calls nothing at all, resolving the region locally from the table below.
 `gh auth login` and `auth0 login` left behind, and repeats those CLIs' own
 message when there isn't one. All three providers are documented in `--help`
 whether or not this repository declares them, because mstage is shared and does
-not define the set; naming one `mstage.config.json` does not declare is refused,
+not define the set; naming one no stage declares is refused,
 and a missing session for a declared, required provider is what fails the
 command.
 
 It signs nobody in unless asked. `-f` / `--force` runs a full sign-in first —
-`aws login`, `gh auth login`, `auth0 login` — for whichever provider was named,
-or for all three when none was, and then reports the session that now exists.
-`--logout` ends a session instead of checking it; asking for both at once is
-refused. Those commands prompt or open a browser, so they inherit the terminal:
-where there is a terminal and a required provider is not ready, mstage offers to
-run the sign-in and re-checks the result rather than trusting the exit status.
-Where there is none — CI — it reports and exits.
+`aws login`, `gcloud auth login --update-adc`, `gh auth login`, `auth0 login` —
+for whichever provider was named, or for every one this repository declares when
+none was, and then reports the session that now exists. `--logout` ends a session
+instead of checking it; asking for both at once is refused. Those commands prompt
+or open a browser, so they inherit the terminal: where there is a terminal and a
+required provider is not ready, mstage offers to run the sign-in and re-checks
+the result rather than trusting the exit status. Where there is none — CI — it
+reports and exits.
+
+`--stage` narrows what is required to the cloud that stage lives in. Without it
+every declared provider is required, because `mstage login` on its own asks
+whether this checkout can work at all. With it, a cloud that is not that stage's
+`home` is still checked and reported but no longer fails the command: a
+repository with stages in both clouds declares both, and reading that
+repository-wide is what let an expired AWS session refuse a GCP deploy on a
+machine that needed no AWS credential to perform it. Only the clouds narrow —
+GitHub and Auth0 are nobody's home, and stay required wherever they are
+declared.
+
+GCP's `--update-adc` is load-bearing rather than decorative. gcloud keeps two
+credentials and this repository authenticates from both: the CLI's own session,
+which every plain `gcloud` subcommand uses — `iam/bootstrap` and mbuild's
+Artifact Registry calls spawn those — and Application Default Credentials, which
+the Google SDKs and the Pulumi provider resolve. One flag writes both, and
+`mstage login` proves both can mint a token, naming whichever one is stale.
+Signing in with `gcloud auth application-default login` alone leaves the CLI's
+session at whatever it was, which reported a ready session and then failed the
+first `gcloud projects describe` a bootstrap ran.
+
+`--logout` runs two commands there for the same reason: `gcloud auth revoke`
+revokes the account and leaves the ADC file behind, `gcloud auth
+application-default revoke` deletes that file and leaves the account. Both run
+even if the first fails, because a sign-out that ends one of two credentials is
+the state this pair exists to avoid.
 
 Where a person cannot answer a prompt, `signInWithClientCredentials` signs in as
 an application instead. The Auth0 CLI supports both modes and behaves the same
@@ -576,7 +718,7 @@ passing the result down is what lets `sst deploy` run at all.
 | Value          | Precedence                                                                             |
 | -------------- | -------------------------------------------------------------------------------------- |
 | `stage`        | `--stage` › `MSTAGE_STAGE` › error                                                     |
-| `app`          | `--app` › `MSTAGE_APP` › `mstage.config.json`                                          |
+| `app`          | `--app` › `MSTAGE_APP` › `mstage.env.json`                                             |
 | `region`       | `--region` › the stage's declared region › `AWS_REGION` › `AWS_DEFAULT_REGION` › error |
 | `role`         | `--role-arn` › `MSTAGE_AWS_ROLE_ARN` › the stage's declared role                       |
 | `session name` | `--role-session-name` › `MSTAGE_AWS_ROLE_SESSION_NAME` › `mstage`                      |

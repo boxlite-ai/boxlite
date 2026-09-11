@@ -13,10 +13,21 @@
 import assert from 'node:assert/strict'
 import { isAbsolute } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { RunnerBuildError, buildRunner, inspectCheckout } from '../src/runner-build.ts'
 import type { CommandResult, RunCommand } from '../src/upgrade-runners.ts'
 
 const REF = 'a'.repeat(40)
+
+/**
+ * The committed example, not this machine's stage file.
+ *
+ * These drive the real `--stage` resolution, so the stages they name have to be
+ * declared somewhere — and `.mstage.config.json` is not committed, so on a
+ * runner there is nothing to declare them. Reading the example also keeps it
+ * from going stale: a stage dropped from it fails here.
+ */
+const EXAMPLE = fileURLToPath(new URL('../../.mstage.config.example.json', import.meta.url))
 /**
  * What `rev-parse --show-toplevel` answers, and this checkout really — because
  * `inspectCheckout` reads the workspace Cargo.toml off disk, so a made-up root
@@ -46,7 +57,7 @@ const happy = (calls: string[][] = [], overrides: Record<string, CommandResult> 
 const drive = (run: RunCommand, argv = ['--stage', 'dev'], log: string[] = []) =>
   buildRunner({
     argv,
-    environment: {},
+    environment: { MSTAGE_CONFIG: EXAMPLE },
     cwd: new URL('../..', import.meta.url).pathname,
     log: (line) => log.push(line),
     checkLogin: async () => 0,
@@ -193,7 +204,7 @@ test('a GCP stage is refused, because the staging bucket is S3', async () => {
     () =>
       buildRunner({
         argv: ['--stage', 'dev2'],
-        environment: {},
+        environment: { MSTAGE_CONFIG: EXAMPLE },
         cwd: new URL('../..', import.meta.url).pathname,
         log: () => {},
         checkLogin: async () => 0,
@@ -212,7 +223,7 @@ test('a build that produced nothing is named, rather than uploading an absent fi
     () =>
       buildRunner({
         argv: ['--stage', 'dev'],
-        environment: {},
+        environment: { MSTAGE_CONFIG: EXAMPLE },
         cwd: new URL('../..', import.meta.url).pathname,
         log: () => {},
         checkLogin: async () => 0,
