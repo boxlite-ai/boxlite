@@ -43,9 +43,15 @@ describe('requiresFreshBox', () => {
     expect(requiresFreshBox(dto, NO_ORG_EGRESS_LIMIT)).toBe(true)
   })
 
-  // Same rule as networkBlockAll: false — `0` is a value the caller supplied.
-  it('treats an explicit networkTxKbps: 0 as a policy override', () => {
-    expect(requiresFreshBox({ networkTxKbps: 0 }, NO_ORG_EGRESS_LIMIT)).toBe(true)
+  // Unlike networkBlockAll: false, an explicit 0 overrides nothing: there is no
+  // organization default for the cap, and a warm box is already uncapped, so
+  // claiming one hands the caller exactly the box they asked for.
+  it.each([
+    ['networkTxKbps', { networkTxKbps: 0 }],
+    ['networkRxKbps', { networkRxKbps: 0 }],
+    ['both directions', { networkTxKbps: 0, networkRxKbps: 0 }],
+  ])('lets an explicit %s of 0 claim a warm-pool box', (_label, dto) => {
+    expect(requiresFreshBox(dto, NO_ORG_EGRESS_LIMIT)).toBe(false)
   })
 
   it('forces a fresh box when the organization limits egress', () => {

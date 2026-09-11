@@ -4,6 +4,7 @@
  */
 
 import { CreateBoxDto } from '../dto/create-box.dto'
+import { isNetworkRateLimited } from './network-validation.util'
 
 /**
  * Whether this request must get a freshly-created box instead of claiming a
@@ -37,11 +38,12 @@ export function requiresFreshBox(
 ): boolean {
   // Network policy, the bandwidth cap included, is applied to the box at
   // create time on the runner (the cap lives in the gvproxy bridge config).
+  // An explicit 0 is not a cap: unlike `networkBlockAll: false` it overrides
+  // no organization default, and a warm box is already uncapped.
   const overridesNetworkPolicy =
     createBoxDto.networkBlockAll !== undefined ||
     createBoxDto.networkAllowList !== undefined ||
-    createBoxDto.networkTxKbps !== undefined ||
-    createBoxDto.networkRxKbps !== undefined ||
+    isNetworkRateLimited(createBoxDto.networkTxKbps, createBoxDto.networkRxKbps) ||
     Boolean(organization.boxLimitedNetworkEgress)
 
   // entrypoint, cmd, working_dir and the process user are all decided when the
