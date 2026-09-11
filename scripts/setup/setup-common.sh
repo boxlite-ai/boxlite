@@ -529,7 +529,11 @@ install_git_hooks_best_effort() {
     # redirect first and prek installs nothing, so the gate chains into a file
     # that does not exist and lint-fix and the test matrix silently stop running.
     # Clearing up front also makes a re-run of `make setup` idempotent.
-    (cd "$root_dir" && git config --unset core.hooksPath) 2>/dev/null || true
+    # Linked worktrees with extensions.worktreeConfig=true store core.hooksPath
+    # in worktree-local config; --local alone leaves that value in place and
+    # prek still refuses to install (#1482).
+    (cd "$root_dir" && git config --local --unset-all core.hooksPath) 2>/dev/null || true
+    (cd "$root_dir" && git config --worktree --unset-all core.hooksPath) 2>/dev/null || true
 
     if [ ! -f "$config_path" ]; then
         print_warning ".pre-commit-config.yaml not found at $config_path; skipping hook installation"
