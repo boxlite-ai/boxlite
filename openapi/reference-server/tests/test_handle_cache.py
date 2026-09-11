@@ -336,6 +336,35 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValidationError):
                 SERVER.CreateBoxRequest.model_validate(body)
 
+    def test_create_request_rejects_rate_limit_above_sdk_integer_range(self) -> None:
+        for direction in ("tx_kbps", "rx_kbps"):
+            for kbps in (2**64, 2**128):
+                with self.subTest(direction=direction, kbps=kbps):
+                    with self.assertRaises(ValidationError) as ctx:
+                        SERVER.CreateBoxRequest.model_validate(
+                            {"advanced": {"network_rate_limit": {direction: kbps}}}
+                        )
+
+                    self.assertEqual(
+                        ctx.exception.errors()[0]["loc"],
+                        ("advanced", "network_rate_limit", direction),
+                    )
+
+    def test_build_box_options_preserves_representable_rate_limit_values(self) -> None:
+        # The SDK's integer range is distinct from the shaper's smaller limit,
+        # which remains the core runtime's responsibility at create time.
+        for direction in ("tx_kbps", "rx_kbps"):
+            for kbps in (None, 0, 1, 2**64 - 1):
+                with self.subTest(direction=direction, kbps=kbps):
+                    request = SERVER.CreateBoxRequest.model_validate(
+                        {"advanced": {"network_rate_limit": {direction: kbps}}}
+                    )
+
+                    options = SERVER.build_box_options(request)
+
+                    limit = options.kwargs["advanced"].kwargs["network_rate_limit"]
+                    self.assertEqual(limit.kwargs[direction], kbps)
+
     async def test_config_advertises_network_rate_limit_support(self) -> None:
         # The Rust client refuses to send a cap to a server that does not
         # advertise this key, so the reference server must say so explicitly.

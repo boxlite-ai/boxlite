@@ -40,7 +40,7 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
 import hmac
 
@@ -151,13 +151,18 @@ class ContainerCapabilities(BaseModel):
         return capabilities
 
 
+# PyO3 extracts these values as u64 before the core validates the shaper's
+# smaller limit. Reject unrepresentable integers before SDK conversion.
+_NetworkRateKbps = Annotated[int, Field(ge=0, le=(1 << 64) - 1)]
+
+
 class NetworkRateLimit(BaseModel):
     """Per-direction cap in kbit/s from the box's point of view; None or 0 is uncapped."""
 
     model_config = ConfigDict(extra="forbid")
 
-    tx_kbps: Optional[int] = Field(default=None, ge=0)
-    rx_kbps: Optional[int] = Field(default=None, ge=0)
+    tx_kbps: Optional[_NetworkRateKbps] = None
+    rx_kbps: Optional[_NetworkRateKbps] = None
 
 
 class CreateBoxAdvancedOptions(BaseModel):
