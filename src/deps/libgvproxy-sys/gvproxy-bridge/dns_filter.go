@@ -9,6 +9,7 @@ import (
 	"context"
 	"net"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
@@ -48,6 +49,12 @@ func buildAllowNetWithResolver(allowNet []string, lookup func(context.Context, s
 	zoneRecords := make(map[string][]types.Record)
 	exactIPs := make(map[string][]net.IP)
 	suffixIPs := make(map[string][]net.IP)
+	// One resolution per canonical hostname. Two rules naming the same host
+	// ("x.com:443" beside "x.com", say) would otherwise be looked up twice: both answers become zone records,
+	// the resolver serves the first, and the pin map keeps only the last — so a
+	// round-robin host resolves to an address AllowHostToIP rejects. That is
+	// the coupling contract this type documents.
+	resolved := make(map[string]bool)
 
 	for _, rule := range allowNet {
 		rule = strings.TrimSpace(rule)
@@ -72,22 +79,103 @@ func buildAllowNetWithResolver(allowNet []string, lookup func(context.Context, s
 		// Wildcard: *.example.com — pinned to the base domain's resolution.
 		if strings.HasPrefix(host, "*.") {
 			domain := host[2:]
+			if resolved["*."+domain] {
+				continue
+			}
+			resolved["*."+domain] = true
 			zoneName := domain + "."
-			zoneRecords[zoneName] = append(zoneRecords[zoneName], types.Record{
-				Regexp: regexp.MustCompile(".*"),
-			})
-			suffixIPs["."+strings.ToLower(domain)] = resolveAndAddRecords(domain, zoneName, zoneRecords, lookup)
+			ips := resolveAndAddRecords(domain, zoneName, zoneRecords, lookup)
+			suffix := "." + strings.ToLower(domain)
+			// Union, not overwrite: a second spelling of this domain resolves
+			// separately, and DNS may serve either answer, so the pin has to
+			// permit both or AllowHostToIP blocks the address it served.
+			suffixIPs[suffix] = append(suffixIPs[suffix], ips...)
+			// The catch-all answers with the base domain's own addresses, the
+			// same set AllowHostToIP pins this wildcard to. Adding it without an
+			// IP (as this did) matched every subdomain and answered with none,
+			// so a wildcard rule resolved to nothing at all.
+			for _, ip := range ips {
+				zoneRecords[zoneName] = append(zoneRecords[zoneName], types.Record{
+					Regexp: regexp.MustCompile(".*"),
+					IP:     ip,
+				})
+			}
 			continue
 		}
 
 		// Exact hostname: api.openai.com
+		if resolved[host] {
+			continue
+		}
+		resolved[host] = true
 		parts := strings.SplitN(host, ".", 2)
 		if len(parts) == 2 {
 			zoneName := parts[1] + "."
-			exactIPs[strings.ToLower(host)] = resolveAndAddRecords(host, zoneName, zoneRecords, lookup)
+			key := strings.ToLower(host)
+			exactIPs[key] = append(exactIPs[key], resolveAndAddRecords(host, zoneName, zoneRecords, lookup)...)
 		} else {
-			exactIPs[strings.ToLower(host)] = resolveAndAddRecords(host, host+".", zoneRecords, lookup)
+			key := strings.ToLower(host)
+			exactIPs[key] = append(exactIPs[key], resolveAndAddRecords(host, host+".", zoneRecords, lookup)...)
 		}
+	}
+
+	// Coverage a zone inherits from a wider wildcard. An exact rule creates a
+	// zone at its parent's depth ("api.team.x.test" -> zone "team.x.test."),
+	// and the resolver answers from the first matching zone alone — so that new
+	// zone would sinkhole "other.team.x.test" even while "*.x.test" allows it.
+	// The egress filter already treats those siblings as allowed
+	// (MatchesHostname suffix-matches at any depth); this keeps DNS from
+	// disagreeing with it.
+	wildcardSuffixes := make([]string, 0, len(suffixIPs))
+	for suffix := range suffixIPs {
+		wildcardSuffixes = append(wildcardSuffixes, suffix)
+	}
+	sort.Slice(wildcardSuffixes, func(i, j int) bool {
+		if len(wildcardSuffixes[i]) != len(wildcardSuffixes[j]) {
+			return len(wildcardSuffixes[i]) > len(wildcardSuffixes[j])
+		}
+		return wildcardSuffixes[i] < wildcardSuffixes[j]
+	})
+	for zoneName, records := range zoneRecords {
+		if hasCatchAll(records) {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSuffix(zoneName, "."))
+		// Most specific covering wildcard wins, and only it contributes:
+		// suffixIPs is a map, so taking every match in range order would let
+		// the answer for an existing host change from one run to the next.
+		for _, suffix := range wildcardSuffixes {
+			if !strings.HasSuffix(name, suffix) {
+				continue
+			}
+			// A wildcard whose own lookup failed has no address to inherit;
+			// fall through to a broader one that resolved rather than leaving
+			// the zone with a bare sinkhole.
+			ips := suffixIPs[suffix]
+			if len(ips) == 0 {
+				continue
+			}
+			for _, ip := range ips {
+				records = append(records, types.Record{
+					Regexp: regexp.MustCompile(".*"),
+					IP:     ip,
+				})
+			}
+			break
+		}
+		zoneRecords[zoneName] = records
+	}
+
+	// Exact records before the catch-all, within every zone. The resolver
+	// returns the first matching record, and a wildcard's `.*` matches any
+	// subdomain — including one an exact rule also names, whose own resolution
+	// is what the egress pin holds. Rule order in allow_net must not decide
+	// which of the two answers.
+	for zoneName, records := range zoneRecords {
+		sort.SliceStable(records, func(i, j int) bool {
+			return records[i].Regexp == nil && records[j].Regexp != nil
+		})
+		zoneRecords[zoneName] = records
 	}
 
 	var zones []types.Zone
@@ -103,6 +191,22 @@ func buildAllowNetWithResolver(allowNet []string, lookup func(context.Context, s
 		}).Debug("allowNet: added DNS zone")
 	}
 
+	// Most specific zone first. The resolver takes the FIRST zone whose suffix
+	// matches and answers from that zone alone — with its sinkhole DefaultIP
+	// when no record inside it matches (gvisor-tap-vsock dns.go). So when one
+	// zone name is a suffix of another ("com." and "example.com.", which the
+	// rules "example.com" and "api.example.com" produce), visiting the shorter
+	// one first sinkholes a host the longer one explicitly allows. zoneRecords
+	// is a map, so without this the order — and the outcome — is random.
+	// A longer name is never less specific, so descending length is enough;
+	// the name tiebreak only keeps the result stable.
+	sort.Slice(zones, func(i, j int) bool {
+		if len(zones[i].Name) != len(zones[j].Name) {
+			return len(zones[i].Name) > len(zones[j].Name)
+		}
+		return zones[i].Name < zones[j].Name
+	})
+
 	// Catch-all root zone: sinkhole everything not explicitly allowed
 	zones = append(zones, types.Zone{
 		Name:      "",
@@ -115,6 +219,17 @@ func buildAllowNetWithResolver(allowNet []string, lookup func(context.Context, s
 	}).Info("allowNet: DNS sinkhole configured")
 
 	return allowNetResolution{zones: zones, exactIPs: exactIPs, suffixIPs: suffixIPs}
+}
+
+// hasCatchAll reports whether a zone already answers for names no exact record
+// in it names.
+func hasCatchAll(records []types.Record) bool {
+	for _, record := range records {
+		if record.Regexp != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // buildAllowNetDNSZones creates DNS zones that implement allowlist filtering.
