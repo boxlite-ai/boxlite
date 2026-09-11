@@ -185,6 +185,11 @@ const DEPLOYER_ROLES = [
   // The log-based metrics the alert policies are built on, and the policies.
   'roles/logging.configWriter',
   'roles/monitoring.editor',
+  // The proxy's certificate: a DNS authorization, a managed certificate, and
+  // the map the load balancer resolves a hostname through. `compute.admin`
+  // does not reach any of them — Certificate Manager is its own service, and
+  // the apply dies at `ProxyDnsAuthorization` without this.
+  'roles/certificatemanager.owner',
   /*
    * Reaching a live runner to replace its binary in place.
    *
