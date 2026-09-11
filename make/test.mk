@@ -542,6 +542,11 @@ test\:apps: _ensure-apps-deps dev\:go
 	@$(MAKE) test:apps:infra
 	@cd apps && GOFLAGS=-tags=boxlite_dev yarn nx run-many --target=test --all --parallel=$$(getconf _NPROCESSORS_ONLN) $(if $(FILTER),-- --testNamePattern '$(FILTER)',)
 
+# Focused runner checks use the same local SDK linkage as test:apps.
+RUNNER_TEST_PACKAGES ?= ./...
+test\:apps\:runner: dev\:go
+	@cd apps/runner && go test -tags boxlite_dev -race -count=1 $(GOTEST_FILTER) $(RUNNER_TEST_PACKAGES)
+
 test\:rest\:inventory: _ensure-apps-deps
 	@cd apps && yarn node ../scripts/test/rest/inventory.mjs
 

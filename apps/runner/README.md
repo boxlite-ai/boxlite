@@ -490,7 +490,13 @@ long-polls `JobsAPI.PollJobs` with `(timeout, limit)`. HTTP `408`
 returns are treated as "no work yet" (normal long-poll behavior); any
 other error backs off 5 s and retries.
 
-Each job is dispatched to a goroutine and handled in
+`POLL_LIMIT` (default 10) caps each batch; `MAX_CONCURRENT_JOBS` (default 10,
+positive integer) caps unfinished job executions in this runner process.
+Recovered and newly polled jobs share that capacity. The poller requests at
+most the available slots and waits when full, keeping pending work in the API.
+A slot is released after execution and the completion-status report return.
+
+Each admitted job is dispatched to a goroutine and handled in
 [`pkg/runner/v2/executor/executor.go`](pkg/runner/v2/executor/executor.go).
 Supported job types:
 
