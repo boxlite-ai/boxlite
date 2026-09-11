@@ -218,8 +218,14 @@ export function AsciiChip({
       type="button"
       className={cn(
         'border px-4 py-2 font-mono text-[13px] tabular-nums transition-colors',
+        // Brand border + tint, not a solid `foreground` fill: filled-foreground is
+        // what the primary action button renders as, so a selected option was
+        // byte-for-byte identical to "Create Box" / "Add funds" sitting beside it.
+        // Same pairing as the segmented tabs, so a chosen option looks the same
+        // everywhere. The label stays `foreground` — `--brand` as text measures
+        // ~2.1:1 on the light theme's white surface, well under AA.
         selected
-          ? 'border-foreground bg-foreground text-background'
+          ? 'border-brand bg-[hsl(var(--brand)/0.12)] font-semibold text-foreground'
           : 'border-border text-foreground hover:border-brand',
         className,
       )}

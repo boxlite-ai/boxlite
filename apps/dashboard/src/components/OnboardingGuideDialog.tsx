@@ -8,7 +8,18 @@ import goIcon from '@/assets/go.svg'
 import pythonIcon from '@/assets/python.svg'
 import { RustIcon } from '@/assets/RustIcon'
 import typescriptIcon from '@/assets/typescript.svg'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { QuickstartAgentHandoff } from '@/components/QuickstartAgentHandoff'
+import { CODING_AGENT_MARKS } from '@/assets/AgentLogos'
+import { QuickstartCopyButton } from '@/components/QuickstartCopyButton'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogOverlay,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { FileText, KeyRound, Server, Terminal } from '@/components/ui/icon'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
@@ -30,7 +41,7 @@ import {
   OrganizationRolePermissionsEnum,
   type ApiKeyResponse,
 } from '@boxlite-ai/api-client'
-import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useState, type ReactElement } from 'react'
 import { toast } from 'sonner'
 
 // Lazy so prism-react-renderer (syntax highlighting, ~130KB) stays out of the
@@ -51,19 +62,182 @@ const STAGES = [
   { tag: 'STEP 03', label: 'Execute code in box' },
 ] as const
 
-// Quickstart scenarios. Today there is one; future scenarios slot in here and route to
-// their own guided flow. (For now every scenario uses the SDK 3-step flow below.)
+// The two jobs an account arrives with, carried as equals. `publish` hands the
+// work to the user's own coding agent; `untrusted-code` is the SDK walkthrough
+// that has always lived here, unchanged.
 const SCENARIOS = [
   {
+    id: 'publish',
+    tab: 'Build an app online',
+    promise: 'Get a public URL',
+    title: 'Hand the job to your coding agent.',
+    sub: 'One prompt. Your agent builds it, BoxLite puts it online.',
+  },
+  {
     id: 'untrusted-code',
-    tag: 'Box',
-    title: 'Box as your untrusted code container',
-    description:
-      'Run AI-generated or untrusted code in an isolated, disposable Box. Create a key, choose an interface, then execute code safely inside a box.',
+    tab: 'Run untrusted code',
+    promise: 'A sandbox for your code',
+    title: 'Run untrusted code in a box.',
+    sub: 'A key, an SDK, and a box that runs whatever you give it.',
   },
 ] as const
 
 type ScenarioId = (typeof SCENARIOS)[number]['id']
+
+// Line drawings in the console's own register — one stroke weight, dotted
+// bars where the dashboard uses dot-matrix, `currentColor` so they take the
+// card's state — and each is its job reduced to a silhouette that reads before
+// the label does: a window an arrow is *leaving*, versus frames nested *inside*
+// a dashed boundary. Brand is spent on exactly one element per drawing.
+const ART_BOX = 'h-[84px] w-full'
+const ART_STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.5 } as const
+const BRAND_STROKE = { fill: 'none', stroke: 'hsl(var(--brand))', strokeWidth: 1.75 } as const
+
+// Layers are solid, not outlined: a window in front of a box only reads as
+// depth if the front one hides the back one, the way stacked paper does.
+const LAYER_FILL = 'hsl(var(--background))'
+
+function PublishArt() {
+  return (
+    <svg viewBox="24 0 232 96" className={ART_BOX} aria-hidden>
+      {/* the box behind, up and to the right */}
+      <rect x="56" y="10" width="166" height="70" {...ART_STROKE} opacity={0.5} />
+      {/* the window in front */}
+      <rect x="40" y="22" width="168" height="68" fill={LAYER_FILL} stroke="currentColor" strokeWidth={1.5} />
+      <path d="M40 40h168" {...ART_STROKE} />
+      <circle cx="50" cy="31" r="2" fill="currentColor" />
+      <circle cx="58" cy="31" r="2" fill="currentColor" />
+      <circle cx="66" cy="31" r="2" fill="currentColor" />
+      <rect x="80" y="27" width="96" height="8" {...ART_STROKE} strokeWidth={1} opacity={0.6} />
+      {/* content, as the dashboard draws numbers: dots */}
+      <path d="M54 54h110M54 64h72M54 74h92" {...ART_STROKE} strokeWidth={3} strokeDasharray="3 3" opacity={0.55} />
+      {/* going public: leaves the window through its edge, then the box's, and
+          touches no corner on the way out */}
+      <path d="M188 44L244 4M228 4h16v16" {...BRAND_STROKE} />
+    </svg>
+  )
+}
+
+function SandboxArt() {
+  return (
+    <svg viewBox="24 0 232 96" className={ART_BOX} aria-hidden>
+      {/* the isolation boundary */}
+      <rect x="44" y="4" width="192" height="88" {...ART_STROKE} strokeDasharray="4 4" opacity={0.5} />
+      {/* the terminal inside it */}
+      <rect x="64" y="18" width="152" height="60" fill={LAYER_FILL} stroke="currentColor" strokeWidth={1.5} />
+      <path d="M64 32h152" {...ART_STROKE} />
+      <circle cx="74" cy="25" r="2" fill="currentColor" />
+      <circle cx="82" cy="25" r="2" fill="currentColor" />
+      <circle cx="90" cy="25" r="2" fill="currentColor" />
+      <path d="M76 41l4 3-4 3" {...ART_STROKE} />
+      <path d="M88 44h62M88 54h82M88 64h52" {...ART_STROKE} strokeWidth={3} strokeDasharray="3 3" opacity={0.55} />
+      {/* the cursor: the only thing alive in there */}
+      <rect
+        x="146"
+        y="60"
+        width="6"
+        height="8"
+        fill="hsl(var(--brand))"
+        style={{ animation: 'blink 1.1s steps(1) infinite' }}
+      />
+    </svg>
+  )
+}
+
+const SCENARIO_ART: Record<ScenarioId, () => ReactElement> = {
+  publish: PublishArt,
+  'untrusted-code': SandboxArt,
+}
+
+/**
+ * The chosen job is the headline, so the biggest text on the screen is the
+ * user's own decision; the two cards beneath stay equal peers. Radix Tabs
+ * underneath, so keyboard and screen-reader behaviour is the console's own.
+ */
+function ScenarioHeader({
+  scenario,
+  onSelect,
+  compact = false,
+  onExpand,
+}: {
+  scenario: ScenarioId
+  onSelect: (id: ScenarioId) => void
+  /** Once a step is underway the cards have done their job; a full header
+   *  would push the step's own content — the code — below the fold. */
+  compact?: boolean
+  onExpand?: () => void
+}) {
+  const current = SCENARIOS.find((sc) => sc.id === scenario) ?? SCENARIOS[0]
+  if (compact) {
+    return (
+      <div className="flex shrink-0 items-baseline gap-3 px-8 pt-7">
+        <DialogHeader className="space-y-0 text-left">
+          <DialogTitle className="text-[15px] font-semibold text-foreground">{current.title}</DialogTitle>
+          <DialogDescription className="sr-only">{current.sub}</DialogDescription>
+        </DialogHeader>
+        <button
+          type="button"
+          onClick={onExpand}
+          className="text-[11.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        >
+          Change
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div className="shrink-0 px-8 pt-8">
+      <DialogHeader className="space-y-0 text-left">
+        <DialogTitle className="text-[26px] font-semibold leading-[1.2] tracking-[-0.01em] text-foreground">
+          {current.title}
+        </DialogTitle>
+        <DialogDescription className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+          {current.sub}
+        </DialogDescription>
+      </DialogHeader>
+
+      {/* Compatibility stated in one glance instead of a sentence: the agents
+          the prompt is written for, or the interfaces the walkthrough covers. */}
+      <div className="mt-5 flex h-[22px] items-center gap-6 text-foreground/70">
+        {scenario === 'publish'
+          ? CODING_AGENT_MARKS.map(({ label, Mark }) => <Mark key={label} className="size-[22px]" />)
+          : QUICKSTART_INTERFACES.map((item) => (
+              <QuickstartInterfaceIcon key={item.id} item={item} className="size-[22px] grayscale" />
+            ))}
+      </div>
+
+      <Tabs value={scenario} onValueChange={(v) => onSelect(v as ScenarioId)} className="mt-6">
+        <TabsList variant="segmented" className="grid h-auto w-full grid-cols-2 gap-4 border-0">
+          {SCENARIOS.map((sc) => {
+            const Art = SCENARIO_ART[sc.id]
+            return (
+              <TabsTrigger
+                key={sc.id}
+                value={sc.id}
+                className="h-auto flex-col items-stretch gap-0 overflow-hidden border border-border p-0 text-left last:border-r hover:border-brand/60 hover:bg-transparent data-[state=active]:border-brand data-[state=active]:bg-transparent"
+              >
+                {/* Thumbnail on a dotted field, flush to the card's edges — the
+                    drawing is the card's first line, not an icon beside its title. */}
+                <span
+                  className={cn(
+                    'block border-b border-border/60 bg-[hsl(var(--brand)/0.04)] px-4 pb-0.5 pt-2',
+                    sc.id === scenario ? 'text-foreground' : 'text-muted-foreground',
+                  )}
+                >
+                  <Art />
+                </span>
+                <span className="flex flex-col gap-1 px-5 pb-3.5 pt-3">
+                  <span className="text-[13px] font-semibold">{sc.tab}</span>
+                  <span className="text-[11.5px] font-normal text-muted-foreground">{sc.promise}</span>
+                </span>
+              </TabsTrigger>
+            )
+          })}
+        </TabsList>
+      </Tabs>
+    </div>
+  )
+}
 
 const QUICKSTART_INTERFACES = getOnboardingInterfaces()
 const DEFAULT_INTERFACE = QUICKSTART_INTERFACES[0]?.id ?? 'python'
@@ -86,13 +260,19 @@ const GROUPS: ReadonlyArray<{ id: QuickstartGroup; label: string }> = [
   { id: 'direct', label: 'Direct' },
 ]
 
-function QuickstartInterfaceIcon({ item }: { item: QuickstartInterfaceDefinition }) {
+function QuickstartInterfaceIcon({
+  item,
+  className = 'size-3.5',
+}: {
+  item: QuickstartInterfaceDefinition
+  className?: string
+}) {
   const iconSrc = ICON_ASSETS[item.icon]
   if (iconSrc) {
-    return <img src={iconSrc} alt="" className="size-3.5" />
+    return <img src={iconSrc} alt="" className={className} />
   }
   const Icon = ICON_COMPONENTS[item.icon]
-  return Icon ? <Icon className="size-3.5" /> : null
+  return Icon ? <Icon className={className} /> : null
 }
 
 /**
@@ -127,7 +307,7 @@ function InterfacePicker({
                     className={cn(
                       'flex min-h-[34px] items-center justify-center gap-2 border px-[12px] py-[7px] text-[12px] transition-colors',
                       on
-                        ? 'border-brand bg-[hsl(var(--brand)/0.12)] font-semibold text-brand'
+                        ? 'border-brand bg-[hsl(var(--brand)/0.12)] font-semibold text-foreground'
                         : 'border-border text-muted-foreground hover:border-brand/70 hover:text-foreground',
                     )}
                   >
@@ -156,35 +336,6 @@ function PrimaryBtn({ children, onClick }: { children: React.ReactNode; onClick:
   )
 }
 
-function QuickstartCopyButton({
-  copied,
-  onClick,
-  className,
-}: {
-  copied: boolean
-  onClick: () => void
-  className?: string
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        boxShadow: copied ? '3px 3px 0 hsl(var(--success) / 0.35)' : '3px 3px 0 hsl(var(--border))',
-      }}
-      className={cn(
-        'flex h-7 min-w-[76px] flex-none items-center justify-center border-2 bg-[hsl(var(--code-background))] px-[10px] text-[10px] font-semibold uppercase tracking-[1px] transition-[color,border-color,background-color,transform,box-shadow] active:translate-x-px active:translate-y-px active:shadow-none',
-        copied
-          ? 'border-success bg-[hsl(var(--success)/0.14)] text-success'
-          : 'border-border text-muted-foreground hover:border-brand hover:text-foreground',
-        className,
-      )}
-    >
-      {copied ? '✓ Copied' : 'Copy'}
-    </button>
-  )
-}
-
 type CopyTarget = 'api-key' | 'install' | 'code'
 
 export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: OnboardingGuideDialogProps) {
@@ -194,7 +345,9 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
   const canCreateApiKey = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
 
-  const [scenario, setScenario] = useState<ScenarioId | null>(null)
+  // The two jobs are peers, but one of them has to be showing on open: a new
+  // account has nothing to base the choice on, so it lands on the guided one.
+  const [scenario, setScenario] = useState<ScenarioId>('publish')
   const [step, setStep] = useState(0)
   const [done, setDone] = useState<[boolean, boolean, boolean]>([false, false, false])
   const [language, setLanguage] = useState<OnboardingInterface>(DEFAULT_INTERFACE)
@@ -221,7 +374,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
 
   useEffect(() => {
     if (open) {
-      setScenario(null)
+      setScenario('publish')
       setStep(0)
       setDone([false, false, false])
       setCreatedKey(null)
@@ -230,7 +383,6 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
     }
   }, [open])
 
-  const activeScenario = SCENARIOS.find((s) => s.id === scenario)
   const enterScenario = (id: ScenarioId) => {
     setScenario(id)
     setStep(0)
@@ -238,13 +390,6 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
     setCreatedKey(null)
     setKeyName('')
     setCopiedTarget(null)
-  }
-  const backToScenarios = () => {
-    setScenario(null)
-    setStep(0)
-    setDone([false, false, false])
-    setCreatedKey(null)
-    setKeyName('')
   }
 
   const finished = done.every(Boolean)
@@ -296,56 +441,23 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        // The page behind is a live inventory — pulsing counts, a refreshing
+        // table. Dimming alone leaves it legible, and an onboarding screen
+        // should not compete with the thing it is onboarding you into.
+        overlay={<DialogOverlay className="bg-background/70 backdrop-blur-md" />}
         className={cn(
-          'flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 font-mono sm:max-w-[860px]',
-          scenario !== null && step === 2 && 'h-[88vh]',
+          'flex max-h-[92vh] flex-col gap-0 overflow-hidden p-0 font-mono sm:max-w-[720px]',
+          scenario === 'untrusted-code' && step === 2 && 'h-[92vh]',
         )}
       >
-        {scenario === null ? (
+        {scenario === 'publish' ? (
           <>
-            <DialogHeader className="shrink-0 px-5 pb-2 pt-[18px]">
-              <DialogTitle className="text-[18px] font-bold tracking-[-0.3px]">Quickstart</DialogTitle>
-              <DialogDescription className="font-mono text-[11px] uppercase tracking-[1.5px] text-muted-foreground">
-                {SCENARIOS.length} scenario{SCENARIOS.length === 1 ? '' : 's'} available
-              </DialogDescription>
-            </DialogHeader>
-            <div className="scrollbar-elevated min-h-0 flex-1 overflow-y-auto border-t border-border px-5 pb-3 pt-[24px]">
-              <div className="grid grid-cols-2 gap-[20px]">
-                {SCENARIOS.map((sc) => (
-                  <button
-                    key={sc.id}
-                    type="button"
-                    onClick={() => enterScenario(sc.id)}
-                    className="group relative flex min-h-[168px] flex-col border border-dashed border-border bg-[hsl(var(--code-background))] p-[16px] text-left transition-colors hover:border-brand"
-                  >
-                    <div className="text-[13px] font-semibold leading-snug">{sc.title}</div>
-                    <div className="mt-[6px] font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
-                      3 steps · sdk/api
-                    </div>
-                    <div className="mt-auto flex items-center gap-[7px] pt-4 font-mono text-[11px] uppercase tracking-[1.5px]">
-                      Start
-                      <span className="transition-transform group-hover:translate-x-1">▸</span>
-                      <span
-                        className="inline-block h-[12px] w-[7px] bg-brand opacity-0 transition-opacity group-hover:opacity-100"
-                        style={{ animation: 'blink 1s steps(1) infinite' }}
-                      />
-                    </div>
-                  </button>
-                ))}
+            <ScenarioHeader scenario={scenario} onSelect={enterScenario} />
 
-                {/* coming-soon tile — keeps the grid alive + hints extensibility (ASCII shimmer) */}
-                <div className="relative flex min-h-[168px] flex-col border border-dashed border-border/60 p-[16px] opacity-70">
-                  <div className="text-[13px] font-semibold leading-snug text-muted-foreground">
-                    Box as your agent security runtime
-                  </div>
-                  <div className="mt-[6px] font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground/70">
-                    coming soon
-                  </div>
-                  <div className="halftone-brand mt-auto h-[34px] w-full opacity-60" />
-                </div>
-              </div>
+            <div className="scrollbar-elevated min-h-0 flex-1 overflow-y-auto">
+              <QuickstartAgentHandoff restApiUrl={restApiUrl} onProgressChange={onProgressChange} />
             </div>
-            <div className="flex shrink-0 items-center justify-between border-t border-border px-5 py-[14px]">
+            <div className="flex shrink-0 items-center border-t border-border px-8 py-4">
               <button
                 type="button"
                 onClick={() => onOpenChange(false)}
@@ -357,24 +469,15 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
           </>
         ) : (
           <>
-            <DialogHeader className="shrink-0 px-5 pb-4 pt-[18px]">
-              <button
-                type="button"
-                onClick={backToScenarios}
-                className="mb-[6px] flex w-fit items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-              >
-                ‹ Quickstart
-              </button>
-              <DialogTitle className="text-[15px] font-bold leading-snug tracking-[-0.3px]">
-                {activeScenario?.title}
-              </DialogTitle>
-              <DialogDescription className="text-[11.5px] text-muted-foreground">
-                Three steps, straight from code.
-              </DialogDescription>
-            </DialogHeader>
+            <ScenarioHeader
+              scenario={scenario}
+              onSelect={enterScenario}
+              compact={step > 0}
+              onExpand={() => setStep(0)}
+            />
 
             {/* stage rail */}
-            <div className="flex shrink-0 items-center px-5 pb-4">
+            <div className="flex shrink-0 items-center px-8 pb-4 pt-6">
               {STAGES.map((s, i) => {
                 const isDone = done[i]
                 const active = step === i
@@ -420,7 +523,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
 
             {/* interface picker — spans steps 2 and 3, so it lives outside the step body */}
             {step > 0 && (
-              <div className="shrink-0 border-t border-border px-5 py-[14px]">
+              <div className="shrink-0 border-t border-border px-8 py-4">
                 <InterfacePicker selected={language} onSelect={setLanguage} />
               </div>
             )}
@@ -433,7 +536,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
               )}
             >
               {step === 0 && (
-                <div className="px-5 py-[18px]" style={{ animation: 'stat-in .25s ease' }}>
+                <div className="px-8 py-6" style={{ animation: 'stat-in .25s ease' }}>
                   <div className="mb-[9px] text-[9px] uppercase tracking-[1.5px] text-muted-foreground">
                     {createdKey ? 'Your API key' : 'Key name'}
                   </div>
@@ -504,7 +607,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
               )}
 
               {step === 1 && (
-                <div className="px-5 py-[18px]" style={{ animation: 'stat-in .25s ease' }}>
+                <div className="px-8 py-6" style={{ animation: 'stat-in .25s ease' }}>
                   <div className="mb-[9px] text-[9px] uppercase tracking-[1.5px] text-muted-foreground">
                     {activeExample.setupLabel ?? 'Run in your local terminal'}
                   </div>
@@ -539,7 +642,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
               )}
 
               {step === 2 && (
-                <div className="flex h-full min-h-0 flex-col px-5 py-[18px]" style={{ animation: 'stat-in .25s ease' }}>
+                <div className="flex h-full min-h-0 flex-col px-8 py-6" style={{ animation: 'stat-in .25s ease' }}>
                   <div className="mb-[9px] text-[9px] uppercase tracking-[1.5px] text-muted-foreground">
                     Run this from your local machine
                   </div>
@@ -580,7 +683,7 @@ export function OnboardingGuideDialog({ open, onOpenChange, onProgressChange }: 
             </div>
 
             {/* footer */}
-            <div className="flex shrink-0 items-center justify-between border-t border-border px-5 py-[14px]">
+            <div className="flex shrink-0 items-center justify-between border-t border-border px-8 py-4">
               <button
                 type="button"
                 onClick={() => onOpenChange(false)}

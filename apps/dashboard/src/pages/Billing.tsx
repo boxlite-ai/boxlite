@@ -17,12 +17,7 @@ import { Clock, Cpu, Database, MemoryStick, type LucideIcon } from '@/components
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
-// Verbatim from the design: square segments, right-divided, accent fill when active.
-const TAB_TRIGGER =
-  'h-full gap-1.5 rounded-none border-0 border-r border-border px-5 text-xs text-muted-foreground transition-colors hover:text-foreground data-[state=active]:bg-accent data-[state=active]:font-semibold data-[state=active]:text-foreground data-[state=active]:shadow-none'
 const TAB_PANE = 'py-6'
-const TAB_TRIGGER_LAST =
-  'h-full gap-1.5 rounded-none border-0 px-5 text-xs text-muted-foreground transition-colors hover:text-foreground data-[state=active]:bg-accent data-[state=active]:font-semibold data-[state=active]:text-foreground data-[state=active]:shadow-none'
 
 const DIMENSIONS: { icon: LucideIcon; name: string; unit: string }[] = [
   { icon: Cpu, name: 'CPU', unit: 'per vCPU·hr' },
@@ -103,16 +98,10 @@ function Billing() {
           <div className="mt-4 w-full empty:hidden">
             <BalanceLowBanner onGoToWallet={() => setTab('wallet')} />
           </div>
-          <TabsList className="mt-5 h-9 gap-0 rounded-none border border-border bg-transparent p-0">
-            <TabsTrigger value="overview" className={TAB_TRIGGER}>
-              Overview
-            </TabsTrigger>
-            <TabsTrigger value="usage" className={TAB_TRIGGER}>
-              Usage
-            </TabsTrigger>
-            <TabsTrigger value="wallet" className={TAB_TRIGGER_LAST}>
-              Wallet
-            </TabsTrigger>
+          <TabsList variant="segmented" className="mt-5">
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="usage">Usage</TabsTrigger>
+            <TabsTrigger value="wallet">Wallet</TabsTrigger>
           </TabsList>
         </div>
         <TabsContent value="overview">
