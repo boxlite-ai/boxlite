@@ -47,6 +47,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
+import { identityFor, poolFor } from 'naming'
 
 export class GcpBootstrapError extends Error {
   constructor(message: string) {
@@ -70,7 +71,7 @@ export type Run = (command: string, args: string[], options?: RunOptions) => Pro
 /** Where every workload identity pool in this file lives. Pools are not regional. */
 const POOL_LOCATION = 'global'
 
-/** One pool per project, holding the one provider that trusts GitHub. Named after `app`. */
+/** One pool per project, holding the one provider that trusts GitHub. `naming` names the pool. */
 const POOL_PROVIDER = 'github'
 
 /** The record mstage reads to find the store, and the key inside it. */
@@ -714,7 +715,15 @@ export type GcpBootstrapInput = {
   project: string
   /** Where the stage lives, which is also where its bucket and repository go. */
   region: string
+  /**
+   * The app in full, and the only thing it names here: the passphrase secret,
+   * whose spelling is mstage's — `gcp-backend.ts` composes
+   * `mstage-passphrase-<app>-<stage>` to read the store back. Every identity
+   * below takes `appShort` instead, because those have a length budget.
+   */
   app: string
+  /** The app abbreviated: what `naming` names the pool and the identities from. */
+  appShort: string
   stage: string
   /** Which docker repository this stage publishes into, from `mbuild.config.json`. */
   repository: string
@@ -751,6 +760,7 @@ export const bootstrapGcp = async ({
   project,
   region,
   app,
+  appShort,
   stage,
   repository,
   immutableTags,
@@ -779,14 +789,14 @@ export const bootstrapGcp = async ({
     )
   }
 
-  const pool = app
+  const pool = poolFor({ appShort })
 
   await ensureServices({ gcloud, log })
   await ensureStateBucket({ gcloud, region, log })
   await ensurePassphrase({ gcloud, app, stage, log })
   await ensurePool({ gcloud, pool, github, log })
 
-  const deployer = `boxlite-${stage}-deploy`
+  const deployer = identityFor({ appShort, stage, action: 'deploy' })
   const deployerEmail = serviceAccountEmail(deployer, project)
   log(`==> ${deployer}`)
   await ensureServiceAccount({
@@ -802,7 +812,7 @@ export const bootstrapGcp = async ({
   await allowImpersonation({ gcloud, email: deployerEmail, projectNumber, pool, attribute: 'environment', value: stage })
   log(`    environment ${stage} may act as it`)
 
-  const publisher = 'boxlite-mbuild'
+  const publisher = identityFor({ appShort, action: 'publish' })
   const publisherEmail = serviceAccountEmail(publisher, project)
   log(`==> ${publisher}`)
   await ensureServiceAccount({

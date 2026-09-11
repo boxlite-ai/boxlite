@@ -40,6 +40,7 @@ const gcpBundle = () =>
     stage: 'dev2',
     region: 'asia-southeast1',
     project: 'boxlite-dev2',
+    appShort: 'bl-app',
     domain: 'dev2.boxlite.ai',
     zoneId: 'zone-1',
   })

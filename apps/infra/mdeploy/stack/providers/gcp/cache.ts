@@ -15,6 +15,7 @@
 
 import type { Cache, CacheProvider, CacheRequest } from '../../cache.ts'
 import type { NetworkBinding } from '../../network.ts'
+import { instanceFor } from 'naming'
 
 /** What each requested size answers to, in gigabytes. */
 const MEMORY_GB = { small: 1, medium: 5 } as const
@@ -36,12 +37,10 @@ export const gcpCacheProvider =
     dependsOn: any[]
   }): CacheProvider =>
   (request: CacheRequest): Cache => {
-    const prefix = `${$app.name}-${$app.stage}`
-
     const instance = new gcp.redis.Instance(
       'Cache',
       {
-        name: `${prefix}-cache`,
+        name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'cache' }),
         project,
         region,
         memorySizeGb: MEMORY_GB[request.size],
@@ -64,7 +63,7 @@ export const gcpCacheProvider =
 
     const secret = new gcp.secretmanager.Secret('CachePasswordSecret', {
       project,
-      secretId: `${prefix}-cache-password`,
+      secretId: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'cache-password' }),
       replication: { auto: {} },
     })
     const version = new gcp.secretmanager.SecretVersion('CachePasswordValue', {
@@ -83,7 +82,7 @@ export const gcpCacheProvider =
      */
     const ca = new gcp.secretmanager.Secret('CacheCaSecret', {
       project,
-      secretId: `${prefix}-cache-ca`,
+      secretId: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'cache-ca' }),
       replication: { auto: {} },
     })
     const caVersion = new gcp.secretmanager.SecretVersion('CacheCaValue', {

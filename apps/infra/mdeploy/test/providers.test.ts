@@ -46,6 +46,7 @@ const gcp = () =>
     stage: 'gcp-dev',
     region: 'asia-southeast1',
     project: 'boxlite-gcp-dev',
+    appShort: 'bl-app',
     domain: 'gcp-dev.boxlite.ai',
     zoneId: 'zone-1',
   })

@@ -23,6 +23,7 @@
 
 import type { Database, DatabaseProvider, DatabaseRequest } from '../../database.ts'
 import type { NetworkBinding } from '../../network.ts'
+import { instanceFor } from 'naming'
 
 /** What each requested size answers to. Grown as a stage needs one. */
 const INSTANCE = { small: 't4g.micro', medium: 'm7g.large' } as const
@@ -50,7 +51,8 @@ export const awsDatabaseProvider =
           args.deletionProtection = request.protected
           args.skipFinalSnapshot = !request.protected
           if (snapshotSuffix) {
-            args.finalSnapshotIdentifier = $interpolate`${$app.name}-${$app.stage}-db-final-${snapshotSuffix.hex}`
+            const final = instanceFor({ app: $app.name, stage: $app.stage, artifact: 'db-final' })
+            args.finalSnapshotIdentifier = $interpolate`${final}-${snapshotSuffix.hex}`
           }
         },
       },
@@ -65,7 +67,7 @@ export const awsDatabaseProvider =
      * every task definition.
      */
     const secret = new aws.secretsmanager.Secret('DatabasePassword', {
-      namePrefix: `${$app.name}-${$app.stage}-db-password-`,
+      namePrefix: `${instanceFor({ app: $app.name, stage: $app.stage, artifact: 'db-password' })}-`,
       recoveryWindowInDays: 7,
     })
     const version = new aws.secretsmanager.SecretVersion('DatabasePasswordValue', {

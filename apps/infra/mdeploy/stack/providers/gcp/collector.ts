@@ -26,6 +26,7 @@ import type { Collector, CollectorProvider, CollectorRequest } from '../../colle
 import { OTLP_HTTP_PORT } from '../../collector.ts'
 import type { Placement } from '../../network.ts'
 import { containerEnvironment, secretIdOf } from './secret-env.ts'
+import { instanceFor } from 'naming'
 
 export const gcpCollectorProvider =
   ({
@@ -49,8 +50,7 @@ export const gcpCollectorProvider =
     dependsOn: any[]
   }): CollectorProvider =>
   (request: CollectorRequest): Collector => {
-    const prefix = `${$app.name}-${$app.stage}`
-    const name = `${prefix}-otel`
+    const name = instanceFor({ app: $app.name, stage: $app.stage, artifact: 'otel-collector' })
 
     /*
      * Every name handed over by reference, and the grants derived from it.

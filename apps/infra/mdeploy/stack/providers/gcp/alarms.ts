@@ -19,6 +19,7 @@
  */
 
 import type { AlarmProvider, AlarmRequest, AlarmSubjects, AlarmThreshold } from '../../alarms.ts'
+import { instanceFor } from 'naming'
 
 /** One minute, matching the AWS side's period. */
 const PERIOD = '60s'
@@ -137,12 +138,10 @@ export const gcpAlarmProvider =
     notificationChannels?: string[]
   }): AlarmProvider =>
   (request: AlarmRequest): void => {
-    const prefix = `${$app.name}-${$app.stage}`
-
     watch({
       resourceName: 'ApiServerErrorAlarm',
       project,
-      metricName: `${prefix}-api-5xx`,
+      metricName: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api-5xx' }),
       resourceType: CLOUD_RUN,
       filter: subjects.api.metricTarget.apply(
         (service: string) =>
@@ -156,7 +155,7 @@ export const gcpAlarmProvider =
     watch({
       resourceName: 'ProxyUnhealthyTargetAlarm',
       project,
-      metricName: `${prefix}-proxy-unhealthy`,
+      metricName: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy-unhealthy' }),
       // The group's own autohealer logs a repair when a host stops answering,
       // which is the closest thing this cloud has to AWS's UnHealthyHostCount.
       resourceType: INSTANCE_GROUP,
@@ -173,7 +172,7 @@ export const gcpAlarmProvider =
     watch({
       resourceName: 'RunnerUnreachableAlarm',
       project,
-      metricName: `${prefix}-runner-unreachable`,
+      metricName: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'runner-unreachable' }),
       // Emitted by the control plane, not by the runner: a host that has gone
       // silent cannot report that it has.
       resourceType: CLOUD_RUN,

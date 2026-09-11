@@ -97,6 +97,7 @@ const invoke = (run: Run) =>
     project: 'boxlite-gcp-dev',
     region: 'asia-southeast1',
     app: 'boxlite',
+    appShort: 'bl-app',
     stage: 'gcp-dev',
     repository: 'boxlite-app-gcp-dev',
     immutableTags: true,
@@ -121,8 +122,8 @@ test('a fresh project gets every prerequisite mdeploy and mbuild cannot create f
   )
   assert.equal(gcloud.applied('workload-identity-pools create').length, 1, 'no pool for CI to federate into')
   assert.equal(gcloud.applied('providers create-oidc').length, 1, 'no provider trusting GitHub')
-  assert.equal(gcloud.applied('service-accounts create', 'boxlite-gcp-dev-deploy').length, 1, 'no deployer')
-  assert.equal(gcloud.applied('service-accounts create', 'boxlite-mbuild').length, 1, 'no image publisher')
+  assert.equal(gcloud.applied('service-accounts create', 'bl-app-gcp-dev-deploy').length, 1, 'no deployer')
+  assert.equal(gcloud.applied('service-accounts create', 'bl-app-publish').length, 1, 'no image publisher')
   assert.equal(gcloud.applied('artifacts repositories create', 'boxlite-app-gcp-dev').length, 1, 'no docker repository')
   /*
    * The declaration mbuild reads, honoured at the one moment it can be: tag
@@ -135,9 +136,9 @@ test('a fresh project gets every prerequisite mdeploy and mbuild cannot create f
     'the repository was created with movable tags',
   )
 
-  assert.equal(result.deployerEmail, 'boxlite-gcp-dev-deploy@boxlite-gcp-dev.iam.gserviceaccount.com')
-  assert.equal(result.publisherEmail, 'boxlite-mbuild@boxlite-gcp-dev.iam.gserviceaccount.com')
-  assert.match(result.workloadIdentityProvider, /^projects\/999999999999\/.*\/workloadIdentityPools\/boxlite\/providers\/github$/)
+  assert.equal(result.deployerEmail, 'bl-app-gcp-dev-deploy@boxlite-gcp-dev.iam.gserviceaccount.com')
+  assert.equal(result.publisherEmail, 'bl-app-publish@boxlite-gcp-dev.iam.gserviceaccount.com')
+  assert.match(result.workloadIdentityProvider, /^projects\/999999999999\/.*\/workloadIdentityPools\/bl-app\/providers\/github$/)
 })
 
 test('re-running reconciles what is there instead of creating it again', async () => {
@@ -170,11 +171,11 @@ test('the deployer may act as the stage environment, and the publisher as main a
   await invoke(gcloud.run)
 
   const deployerGrant = gcloud
-    .applied('service-accounts add-iam-policy-binding', 'boxlite-gcp-dev-deploy@')[0]!
+    .applied('service-accounts add-iam-policy-binding', 'bl-app-gcp-dev-deploy@')[0]!
     .join(' ')
   assert.match(deployerGrant, /attribute\.environment\/gcp-dev/)
 
-  const publisherGrants = gcloud.applied('service-accounts add-iam-policy-binding', 'boxlite-mbuild@')
+  const publisherGrants = gcloud.applied('service-accounts add-iam-policy-binding', 'bl-app-publish@')
   assert.equal(publisherGrants.length, 2, 'the publisher needs both claim shapes')
   assert.ok(publisherGrants.some((call) => call.join(' ').includes('attribute.ref/refs/heads/main')))
   assert.ok(publisherGrants.some((call) => call.join(' ').includes('attribute.environment/gcp-dev')))
@@ -212,7 +213,7 @@ test('a service account is granted its roles on the run that created it', async 
   const gcloud = recorder({ readsBeforeVisible: 2 })
   const result = await invoke(gcloud.run)
 
-  const grants = gcloud.applied('projects add-iam-policy-binding', 'boxlite-gcp-dev-deploy@')
+  const grants = gcloud.applied('projects add-iam-policy-binding', 'bl-app-gcp-dev-deploy@')
   assert.deepEqual(
     grants.map((argv: string[]) => argv.find((arg) => arg.startsWith('--role='))?.slice('--role='.length)).sort(),
     [
@@ -233,10 +234,10 @@ test('a service account is granted its roles on the run that created it', async 
     ],
     'the roles the deployer receives are not the roles this repository grants',
   )
-  assert.ok(result.deployerEmail.startsWith('boxlite-gcp-dev-deploy@'))
+  assert.ok(result.deployerEmail.startsWith('bl-app-gcp-dev-deploy@'))
   // The wait is a read loop, not a blind sleep: it stops as soon as the account
   // answers, so an immediately consistent API costs one extra read and no time.
-  const probes = gcloud.applied('service-accounts describe', 'boxlite-gcp-dev-deploy@')
+  const probes = gcloud.applied('service-accounts describe', 'bl-app-gcp-dev-deploy@')
   assert.equal(probes.length, 4, `expected one absent probe, two retries and the answer: ${probes.length}`)
 })
 
@@ -244,7 +245,7 @@ test('an account that never becomes visible is reported rather than waited on fo
   // The budget is finite: the grant below reports its own refusal, which names
   // the role it was attaching and says more than a timeout here would.
   const gcloud = recorder({ readsBeforeVisible: 99 })
-  await assert.rejects(() => invoke(gcloud.run), /Could not grant \S+ to boxlite-gcp-dev-deploy@/)
+  await assert.rejects(() => invoke(gcloud.run), /Could not grant \S+ to bl-app-gcp-dev-deploy@/)
 })
 
 test('neither secret reaches the process table', async () => {
@@ -267,6 +268,7 @@ test('the state bucket never reaches the log', async () => {
     project: 'boxlite-gcp-dev',
     region: 'asia-southeast1',
     app: 'boxlite',
+    appShort: 'bl-app',
     stage: 'gcp-dev',
     repository: 'boxlite-app-gcp-dev',
     immutableTags: true,
@@ -292,6 +294,7 @@ const invokeWith = (run: Run) =>
     project: 'boxlite-gcp-dev',
     region: 'asia-southeast1',
     app: 'boxlite',
+    appShort: 'bl-app',
     stage: 'gcp-dev',
     repository: 'boxlite-app-gcp-dev',
     immutableTags: true,

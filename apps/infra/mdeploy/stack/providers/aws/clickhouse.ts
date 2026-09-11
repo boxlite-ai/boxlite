@@ -30,6 +30,7 @@ import {
 } from '../../../../scripts/clickhouse-host.js'
 import type { ClickHouse, ClickHouseProvider, ClickHouseRequest } from '../../clickhouse.ts'
 import type { NetworkBinding } from '../../network.ts'
+import { instanceFor } from 'naming'
 
 /** What each requested size answers to. */
 const INSTANCE = { small: 'm6a.large', medium: 'm6a.xlarge' } as const
@@ -46,7 +47,7 @@ type ManagedSecret = { resource: CloudResource; version: CloudResource }
 const clickHouseSecret = (resourceName: string, name: string): ManagedSecret => {
   const password = new random.RandomPassword(`${resourceName}Password`, { length: 32, special: false })
   const resource = new aws.secretsmanager.Secret(resourceName, {
-    namePrefix: `${$app.name}-${$app.stage}-${name}-`,
+    namePrefix: `${instanceFor({ app: $app.name, stage: $app.stage, artifact: name })}-`,
     recoveryWindowInDays: 7,
   })
   const version = new aws.secretsmanager.SecretVersion(`${resourceName}Value`, {
@@ -122,6 +123,16 @@ export const awsClickHouseProvider =
     const writer = clickHouseSecret('ClickHouseWriterSecret', 'clickhouse-writer')
     const reader = clickHouseSecret('ClickHouseReaderSecret', 'clickhouse-reader')
 
+    /*
+     * An IAM role name, written out rather than taken from `naming`.
+     *
+     * `identityFor` would spell it from `appShort` and rename it, and AWS has
+     * no rename: the role would be deleted and recreated, taking the instance
+     * profile and the host attached to it. dev and prod run on this account
+     * today, so the name is held — argued here rather than left as a literal
+     * somebody tidies away. The same exception as `storage.ts`'s vending role
+     * and as `bootstrap/environment.ts`'s deploy role.
+     */
     const role = new aws.iam.Role('ClickHouseRole', {
       name: `${$app.name}-${$app.stage}-clickhouse-instance`,
       assumeRolePolicy: JSON.stringify({
@@ -144,6 +155,9 @@ export const awsClickHouseProvider =
         }),
       ),
     })
+    // The role's own name, for the same reason it is written out above: the
+    // profile is what the instance carries, so the two rename together or not
+    // at all.
     const profile = new aws.iam.InstanceProfile('ClickHouseProfile', {
       name: `${$app.name}-${$app.stage}-clickhouse-instance`,
       role: role.name,
@@ -164,7 +178,7 @@ export const awsClickHouseProvider =
         size: request.dataGb,
         type: 'gp3',
         encrypted: true,
-        tags: { Name: `${$app.name}-${$app.stage}-clickhouse-data` },
+        tags: { Name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'clickhouse-data' }) },
       },
       // Retained on purpose: the instance is replaced whenever its user data
       // changes, and the history must not go with it.
@@ -197,7 +211,7 @@ export const awsClickHouseProvider =
         userDataBase64: userData,
         userDataReplaceOnChange: true,
         rootBlockDevice: { encrypted: true, volumeType: 'gp3', volumeSize: 20 },
-        tags: { Name: `${$app.name}-${$app.stage}-clickhouse` },
+        tags: { Name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'clickhouse' }) },
       },
       {
         // A newer Ubuntu image must not replace a running telemetry host on

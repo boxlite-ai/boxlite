@@ -31,6 +31,7 @@ import { OTLP_HTTP_PORT } from '../../collector.ts'
 import { PROXY_PORT } from '../../edge.ts'
 import type { Network, NetworkProvider, NetworkRequest, Placement, WorkloadRole } from '../../network.ts'
 import { RUNNER_PORT } from '../../runners.ts'
+import { identityFor, instanceFor } from 'naming'
 
 /** Every port one workload in this network opens to another. */
 const INTERNAL_PORTS = [API_PORT, PROXY_PORT, RUNNER_PORT, OTLP_HTTP_PORT].map(String)
@@ -47,21 +48,27 @@ const SUBNET_CIDR = '10.20.0.0/20'
  */
 const SERVICE_RANGE_PREFIX = 16
 
-/** The four identities, one per role. A grant names one of these and never a range. */
+/**
+ * The four identities, one per role, and the name Pulumi files each under. A
+ * grant names one of these and never a range.
+ *
+ * A `Record` so a role added to `WorkloadRole` cannot silently go without an
+ * identity. The Pulumi name is written out rather than derived from the role,
+ * because it is part of the state's addressing: deriving it would move an
+ * existing account the day a role is respelled. The cloud name is `naming`'s.
+ */
 const ACCOUNTS: Record<WorkloadRole, string> = {
-  api: 'api',
-  proxy: 'proxy',
-  'otel-collector': 'otel',
-  runner: 'runner',
+  api: 'ApiServiceAccount',
+  proxy: 'ProxyServiceAccount',
+  'otel-collector': 'OtelServiceAccount',
+  runner: 'RunnerServiceAccount',
 }
 
 export const gcpNetworkProvider =
-  ({ project, region }: { project: string; region: string }): NetworkProvider =>
+  ({ project, region, appShort }: { project: string; region: string; appShort: string }): NetworkProvider =>
   (request: NetworkRequest): Network => {
-    const prefix = `${$app.name}-${$app.stage}`
-
     const network = new gcp.compute.Network('Network', {
-      name: prefix,
+      name: instanceFor({ app: $app.name, stage: $app.stage }),
       project,
       // Subnets are declared rather than generated: one per stage, in one
       // region, is the whole topology — and an auto-created subnet in every
@@ -70,7 +77,7 @@ export const gcpNetworkProvider =
     })
 
     const subnetwork = new gcp.compute.Subnetwork('Subnetwork', {
-      name: prefix,
+      name: instanceFor({ app: $app.name, stage: $app.stage }),
       project,
       region,
       network: network.id,
@@ -89,11 +96,16 @@ export const gcpNetworkProvider =
      * workloads cannot pull an image — supported, and named rather than assumed.
      */
     const router = request.internetEgress
-      ? new gcp.compute.Router('Router', { name: prefix, project, region, network: network.id })
+      ? new gcp.compute.Router('Router', {
+          name: instanceFor({ app: $app.name, stage: $app.stage }),
+          project,
+          region,
+          network: network.id,
+        })
       : null
     const nat = router
       ? new gcp.compute.RouterNat('Nat', {
-          name: prefix,
+          name: instanceFor({ app: $app.name, stage: $app.stage }),
           project,
           region,
           router: router.name,
@@ -111,7 +123,7 @@ export const gcpNetworkProvider =
      * order, or Cloud SQL refuses a private IP with an error about the service.
      */
     const serviceRange = new gcp.compute.GlobalAddress('PrivateServiceRange', {
-      name: `${prefix}-psa`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'psa' }),
       project,
       purpose: 'VPC_PEERING',
       addressType: 'INTERNAL',
@@ -125,11 +137,11 @@ export const gcpNetworkProvider =
     })
 
     const accounts = Object.fromEntries(
-      Object.entries(ACCOUNTS).map(([role, id]) => [
+      Object.entries(ACCOUNTS).map(([role, resource]) => [
         role,
-        new gcp.serviceaccount.Account(`${id.charAt(0).toUpperCase()}${id.slice(1)}ServiceAccount`, {
+        new gcp.serviceaccount.Account(resource, {
           project,
-          accountId: `${prefix}-${id}`.slice(0, 30),
+          accountId: identityFor({ appShort, stage: $app.stage, artifact: role, action: 'run' }),
           displayName: `BoxLite ${role} (${$app.stage})`,
         }),
       ]),
@@ -145,7 +157,7 @@ export const gcpNetworkProvider =
      */
     const serviceIdentities = [accounts.api, accounts.proxy, accounts['otel-collector']].map((account) => account.email)
     const internal = new gcp.compute.Firewall('InternalFirewall', {
-      name: `${prefix}-internal`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'internal' }),
       project,
       network: network.id,
       direction: 'INGRESS',
@@ -157,7 +169,7 @@ export const gcpNetworkProvider =
 
     // The runner answers the API and the proxy, and nothing else reaches it.
     const runnerIngress = new gcp.compute.Firewall('RunnerFirewall', {
-      name: `${prefix}-runner`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'runner' }),
       project,
       network: network.id,
       direction: 'INGRESS',
@@ -183,7 +195,7 @@ export const gcpNetworkProvider =
      * else.
      */
     const runnerIap = new gcp.compute.Firewall('RunnerIapFirewall', {
-      name: `${prefix}-runner-iap`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'runner-iap' }),
       project,
       network: network.id,
       direction: 'INGRESS',
@@ -195,7 +207,7 @@ export const gcpNetworkProvider =
 
     // And the other direction: a runner registers itself and ships telemetry.
     const runnerEgress = new gcp.compute.Firewall('RunnerToServicesFirewall', {
-      name: `${prefix}-runner-to-services`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'runner-to-services' }),
       project,
       network: network.id,
       direction: 'INGRESS',
@@ -214,7 +226,7 @@ export const gcpNetworkProvider =
      * neighbourhood rather than an invisible widening.
      */
     const denied = new gcp.compute.Firewall('DenyIngressFirewall', {
-      name: `${prefix}-deny-ingress`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'deny-ingress' }),
       project,
       network: network.id,
       direction: 'INGRESS',

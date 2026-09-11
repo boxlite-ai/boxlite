@@ -1087,6 +1087,7 @@ async function bootstrapGcpStage({
     project: declared.project,
     region: declared.region,
     app: config.app,
+    appShort: config.appShort,
     stage,
     repository: registry.repository,
     // The same declaration mbuild reads. It can only be honoured at creation,

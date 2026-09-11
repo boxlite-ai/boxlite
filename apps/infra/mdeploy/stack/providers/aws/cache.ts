@@ -14,6 +14,7 @@
 
 import type { Cache, CacheProvider, CacheRequest } from '../../cache.ts'
 import type { NetworkBinding } from '../../network.ts'
+import { instanceFor } from 'naming'
 
 const INSTANCE = { small: 'cache.t4g.micro', medium: 'cache.m7g.large' } as const
 
@@ -39,7 +40,7 @@ export const awsCacheProvider =
     })
 
     const secret = new aws.secretsmanager.Secret('CachePassword', {
-      namePrefix: `${$app.name}-${$app.stage}-cache-password-`,
+      namePrefix: `${instanceFor({ app: $app.name, stage: $app.stage, artifact: 'cache-password' })}-`,
       recoveryWindowInDays: 7,
     })
     const version = new aws.secretsmanager.SecretVersion('CachePasswordValue', {

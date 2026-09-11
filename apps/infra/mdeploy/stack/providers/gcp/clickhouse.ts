@@ -22,6 +22,7 @@
 
 import type { ClickHouse, ClickHouseProvider, ClickHouseRequest } from '../../clickhouse.ts'
 import type { NetworkBinding, WorkloadRole } from '../../network.ts'
+import { identityFor, instanceFor } from 'naming'
 
 /**
  * What each requested size answers to.
@@ -85,6 +86,7 @@ export const gcpClickHouseProvider =
     network,
     project,
     zone,
+    appShort,
     callers,
     managed,
     dependsOn,
@@ -96,6 +98,8 @@ export const gcpClickHouseProvider =
      * and the region itself is not needed here — the zone already names it.
      */
     zone: string
+    /** The app abbreviated: what the host's own identity is named from. */
+    appShort: string
     /**
      * The identities admitted to the HTTP port, one entry per caller. See
      * `CLICKHOUSE_CALLERS`: this is not the identity the host runs as, which is
@@ -145,14 +149,25 @@ export const gcpClickHouseProvider =
       }
     }
 
-    const prefix = `${$app.name}-${$app.stage}`
-    const admin = clickHouseSecret('ClickHouseAdminSecret', project, `${prefix}-clickhouse-admin`)
-    const writer = clickHouseSecret('ClickHouseWriterSecret', project, `${prefix}-clickhouse-writer`)
-    const reader = clickHouseSecret('ClickHouseReaderSecret', project, `${prefix}-clickhouse-reader`)
+    const admin = clickHouseSecret(
+      'ClickHouseAdminSecret',
+      project,
+      instanceFor({ app: $app.name, stage: $app.stage, artifact: 'clickhouse-admin' }),
+    )
+    const writer = clickHouseSecret(
+      'ClickHouseWriterSecret',
+      project,
+      instanceFor({ app: $app.name, stage: $app.stage, artifact: 'clickhouse-writer' }),
+    )
+    const reader = clickHouseSecret(
+      'ClickHouseReaderSecret',
+      project,
+      instanceFor({ app: $app.name, stage: $app.stage, artifact: 'clickhouse-reader' }),
+    )
 
     const host = new gcp.serviceaccount.Account('ClickHouseServiceAccount', {
       project,
-      accountId: `${prefix}-clickhouse`.slice(0, 30),
+      accountId: identityFor({ appShort, stage: $app.stage, artifact: 'clickhouse', action: 'run' }),
       displayName: `BoxLite ClickHouse (${$app.stage})`,
     })
     // Each secret named individually rather than a project-wide accessor role:
@@ -177,7 +192,13 @@ export const gcpClickHouseProvider =
      */
     const disk = new gcp.compute.Disk(
       'ClickHouseData',
-      { name: `${prefix}-clickhouse-data`, project, zone, size: request.dataGb, type: DISK_TYPE },
+      {
+        name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'clickhouse-data' }),
+        project,
+        zone,
+        size: request.dataGb,
+        type: DISK_TYPE,
+      },
       { retainOnDelete: true },
     )
 
@@ -231,7 +252,7 @@ echo "clickhouse setup complete"
     const instance = new gcp.compute.Instance(
       'ClickHouse',
       {
-        name: `${prefix}-clickhouse`,
+        name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'clickhouse' }),
         project,
         zone,
         machineType: MACHINE[request.instanceSize],
@@ -254,7 +275,7 @@ echo "clickhouse setup complete"
     )
 
     const firewall = new gcp.compute.Firewall('ClickHouseFirewall', {
-      name: `${prefix}-clickhouse`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'clickhouse' }),
       project,
       network: network.network,
       direction: 'INGRESS',

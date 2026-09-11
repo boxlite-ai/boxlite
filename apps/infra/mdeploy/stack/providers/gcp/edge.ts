@@ -43,6 +43,7 @@ import type { Edge, EdgeProvider, EdgeRequest } from '../../edge.ts'
 import { PROXY_PORT } from '../../edge.ts'
 import type { Placement } from '../../network.ts'
 import { splitSecretRef } from './secret-env.ts'
+import { instanceFor } from 'naming'
 
 /**
  * Container-Optimized OS, which ships Docker and a credential helper for
@@ -218,8 +219,6 @@ export const gcpEdgeProvider =
     dependsOn: any[]
   }): EdgeProvider =>
   (request: EdgeRequest): Edge => {
-    const prefix = `${$app.name}-${$app.stage}`
-
     /*
      * The whole boot: the environment file, then the container.
      *
@@ -307,7 +306,7 @@ export const gcpEdgeProvider =
     })
 
     const template = new gcp.compute.InstanceTemplate('ProxyTemplate', {
-      namePrefix: `${prefix}-proxy-`,
+      namePrefix: `${instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' })}-`,
       project,
       region,
       machineType: MACHINE_TYPE,
@@ -373,7 +372,7 @@ export const gcpEdgeProvider =
      * call a host healthy while the container behind it was still starting.
      */
     const health = new gcp.compute.HealthCheck('ProxyHealthCheck', {
-      name: `${prefix}-proxy`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
       project,
       httpHealthCheck: { requestPath: '/health', port: PROXY_PORT },
       checkIntervalSec: 30,
@@ -385,10 +384,10 @@ export const gcpEdgeProvider =
     const group = new gcp.compute.RegionInstanceGroupManager(
       'Proxy',
       {
-        name: `${prefix}-proxy`,
+        name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
         project,
         region,
-        baseInstanceName: `${prefix}-proxy`,
+        baseInstanceName: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
         versions: [{ instanceTemplate: template.selfLinkUnique }],
         targetSize: 2,
         // One zone, the stage's own. See the note on `zone` above: the rolling
@@ -415,7 +414,7 @@ export const gcpEdgeProvider =
     )
 
     const backend = new gcp.compute.BackendService('ProxyBackend', {
-      name: `${prefix}-proxy`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
       project,
       // A proxy balancer: it terminates the client's TLS and opens its own
       // plaintext connection to the group, which is what the AWS NLB's
@@ -443,7 +442,7 @@ export const gcpEdgeProvider =
      * answers for `<domain>` and `*.<domain>` alike.
      */
     const authorization = new gcp.certificatemanager.DnsAuthorization('ProxyDnsAuthorization', {
-      name: `${prefix}-proxy`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
       project,
       domain: request.domain,
     })
@@ -458,18 +457,18 @@ export const gcpEdgeProvider =
       ttl: 60,
     })
     const certificate = new gcp.certificatemanager.Certificate('ProxyCertificate', {
-      name: `${prefix}-proxy`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
       project,
       // Both names, as the AWS side's `domain` plus `aliases` are: the apex is
       // the proxy itself and the wildcard is every box that will ever exist.
       managed: { domains: [request.domain, `*.${request.domain}`], dnsAuthorizations: [authorization.id] },
     })
     const certificates = new gcp.certificatemanager.CertificateMap('ProxyCertificateMap', {
-      name: `${prefix}-proxy`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
       project,
     })
     const entry = new gcp.certificatemanager.CertificateMapEntry('ProxyCertificateEntry', {
-      name: `${prefix}-proxy`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
       project,
       map: certificates.name,
       certificates: [certificate.id],
@@ -478,15 +477,18 @@ export const gcpEdgeProvider =
       matcher: 'PRIMARY',
     })
 
-    const address = new gcp.compute.GlobalAddress('ProxyAddress', { name: `${prefix}-proxy`, project })
+    const address = new gcp.compute.GlobalAddress('ProxyAddress', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
+      project,
+    })
     const sslProxy = new gcp.compute.TargetSSLProxy('ProxyTargetSslProxy', {
-      name: `${prefix}-proxy`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
       project,
       backendService: backend.id,
       certificateMap: certificates.id.apply((id: string) => `//certificatemanager.googleapis.com/${id}`),
     })
     const forwarding = new gcp.compute.GlobalForwardingRule('ProxyForwardingRule', {
-      name: `${prefix}-proxy`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
       project,
       loadBalancingScheme: 'EXTERNAL_MANAGED',
       ipProtocol: 'TCP',
@@ -504,7 +506,7 @@ export const gcpEdgeProvider =
      * needed. The same ranges carry the health checks.
      */
     const firewall = new gcp.compute.Firewall('ProxyFirewall', {
-      name: `${prefix}-proxy`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
       project,
       network,
       direction: 'INGRESS',

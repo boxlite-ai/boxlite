@@ -229,6 +229,9 @@ export const gcpProgram =
         stage,
         region,
         project,
+        // The declaration, not `app` shortened here: a service account id takes
+        // 30 characters and `mstage.env.json` is where that abbreviation lives.
+        appShort: stageConfig.appShort,
         zone,
         domain: stackEnvironment.domain,
         zoneId: stackEnvironment.dnsZoneId,

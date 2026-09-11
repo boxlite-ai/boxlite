@@ -54,6 +54,10 @@ const VOLUME_OBJECT_ACTIONS = [
  * because its trust policy has to name the API's task role — which exists only
  * once the API does. Declaring the name first is what breaks that cycle, and
  * putting it in this module is what keeps the two halves of one idea together.
+ *
+ * An IAM role name, so it is written out rather than taken from `naming`:
+ * `identityFor` would rename it, AWS has no rename, and dev and prod run on
+ * this account today. The same exception as `clickhouse.ts`'s instance role.
  */
 export const volumeAccessRoleName = (): string => `${$app.name}-${$app.stage}-s3-access`
 

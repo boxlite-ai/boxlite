@@ -21,6 +21,7 @@
 
 import type { Database, DatabaseProvider, DatabaseRequest } from '../../database.ts'
 import type { NetworkBinding } from '../../network.ts'
+import { instanceFor } from 'naming'
 
 /**
  * What each requested size answers to, and the edition that tier is legal in.
@@ -65,12 +66,10 @@ export const gcpDatabaseProvider =
     dependsOn: any[]
   }): DatabaseProvider =>
   (request: DatabaseRequest): Database => {
-    const prefix = `${$app.name}-${$app.stage}`
-
     const instance = new gcp.sql.DatabaseInstance(
       'Database',
       {
-        name: `${prefix}-db`,
+        name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'db' }),
         project,
         region,
         databaseVersion: 'POSTGRES_16',
@@ -147,7 +146,7 @@ export const gcpDatabaseProvider =
     const password = new random.RandomPassword('DatabasePassword', { length: 32, special: false })
     const secret = new gcp.secretmanager.Secret('DatabasePasswordSecret', {
       project,
-      secretId: `${prefix}-db-password`,
+      secretId: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'db-password' }),
       replication: { auto: {} },
     })
     const version = new gcp.secretmanager.SecretVersion('DatabasePasswordValue', {

@@ -18,6 +18,7 @@
  */
 
 import type { Storage, StorageProvider, StorageRequest } from '../../storage.ts'
+import { identityFor, instanceFor } from 'naming'
 
 /** What the API calls against a volume bucket. The mirror of the AWS list. */
 const VOLUME_ROLE = 'roles/storage.admin'
@@ -42,12 +43,10 @@ export const VOLUME_OBJECT_ACCESS_ROLE = 'roles/storage.objectAdmin'
  * *name* is declared here — the two halves of one idea belong together.
  */
 export const gcpStorageProvider =
-  ({ project, region }: { project: string; region: string }): StorageProvider =>
+  ({ project, region, appShort }: { project: string; region: string; appShort: string }): StorageProvider =>
   (request: StorageRequest): Storage => {
-    const prefix = `${$app.name}-${$app.stage}`
-
     const bucket = new gcp.storage.Bucket('Storage', {
-      name: `${prefix}-storage`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'storage' }),
       project,
       location: region.toUpperCase(),
       uniformBucketLevelAccess: true,
@@ -62,7 +61,7 @@ export const gcpStorageProvider =
 
     const vending = new gcp.serviceaccount.Account('VolumeAccessAccount', {
       project,
-      accountId: `${prefix}-volume`.slice(0, 30),
+      accountId: identityFor({ appShort, stage: $app.stage, artifact: 'volume', action: 'access' }),
       displayName: `BoxLite volume access (${$app.stage})`,
     })
 

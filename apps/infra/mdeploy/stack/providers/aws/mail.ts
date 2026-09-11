@@ -20,6 +20,7 @@
  */
 
 import type { Mail, MailProvider, MailRequest } from '../../mail.ts'
+import { instanceFor } from 'naming'
 
 /** SES's regional SMTP endpoint. The one place the backend is named. */
 const smtpHost = (region: string): string => `email-smtp.${region}.amazonaws.com`
@@ -38,7 +39,7 @@ export const awsMailProvider =
         // leaving the grant resting on a prefix applied elsewhere — and it is
         // what an operator reading a bounce metric sees.
         configurationSet: (args: any) => {
-          args.configurationSetName = `${$app.name}-${$app.stage}-mail`
+          args.configurationSetName = instanceFor({ app: $app.name, stage: $app.stage, artifact: 'mail' })
         },
       },
     })

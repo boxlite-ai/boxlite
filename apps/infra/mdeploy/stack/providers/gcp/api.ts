@@ -34,6 +34,7 @@ import type { Placement } from '../../network.ts'
 import type { StorageBinding } from '../../storage.ts'
 import { containerEnvironment, secretIdOf } from './secret-env.ts'
 import { VOLUME_OBJECT_ACCESS_ROLE } from './storage.ts'
+import { instanceFor } from 'naming'
 
 const onGcp = (storage: { binding: StorageBinding }): Extract<StorageBinding, { cloud: 'gcp' }> => {
   if (storage.binding.cloud !== 'gcp') throw new Error(`The GCP API was handed ${storage.binding.cloud} storage`)
@@ -159,7 +160,6 @@ export const gcpApiProvider =
     zoneId: string
   }): ApiProvider =>
   (request: ApiRequest): Api => {
-    const prefix = `${$app.name}-${$app.stage}`
     const placement = dependencies.placement as Extract<Placement, { cloud: 'gcp' }>
     const storage = onGcp(dependencies.storage)
     /*
@@ -222,7 +222,7 @@ export const gcpApiProvider =
     const service = new gcp.cloudrunv2.Service(
       'Api',
       {
-        name: `${prefix}-api`,
+        name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
         project,
         location: region,
         /*
@@ -365,14 +365,14 @@ export const gcpApiProvider =
      * this cloud spells it.
      */
     const endpointGroup = new gcp.compute.RegionNetworkEndpointGroup('ApiEndpointGroup', {
-      name: `${prefix}-api-neg`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api-neg' }),
       project,
       region,
       networkEndpointType: 'SERVERLESS',
       cloudRun: { service: service.name },
     })
     const backend = new gcp.compute.BackendService('ApiBackend', {
-      name: `${prefix}-api`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
       project,
       loadBalancingScheme: 'EXTERNAL_MANAGED',
       protocol: 'HTTPS',
@@ -387,26 +387,29 @@ export const gcpApiProvider =
        */
     })
     const urlMap = new gcp.compute.URLMap('ApiUrlMap', {
-      name: `${prefix}-api`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
       project,
       defaultService: backend.id,
     })
     const certificate = new gcp.compute.ManagedSslCertificate('ApiCertificate', {
-      name: `${prefix}-api`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
       project,
       // Both names this balancer answers on. A certificate covering only one of
       // them fails the handshake for the other, which is the half every SDK uses.
       managed: { domains: [domain, apiHost] },
     })
     const proxy = new gcp.compute.TargetHttpsProxy('ApiHttpsProxy', {
-      name: `${prefix}-api`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
       project,
       urlMap: urlMap.id,
       sslCertificates: [certificate.id],
     })
-    const address = new gcp.compute.GlobalAddress('ApiAddress', { name: `${prefix}-api`, project })
+    const address = new gcp.compute.GlobalAddress('ApiAddress', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
+      project,
+    })
     const forwarding = new gcp.compute.GlobalForwardingRule('ApiForwardingRule', {
-      name: `${prefix}-api`,
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
       project,
       target: proxy.id,
       portRange: '443',

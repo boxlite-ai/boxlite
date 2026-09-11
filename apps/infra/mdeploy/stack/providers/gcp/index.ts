@@ -63,6 +63,7 @@ export const gcpStackProviders = ({
   stage,
   region,
   project,
+  appShort,
   zone: declaredZone = null,
   domain,
   zoneId,
@@ -73,6 +74,12 @@ export const gcpStackProviders = ({
   stage: string
   region: string
   project: string
+  /**
+   * The app abbreviated, which is what every service account below is named
+   * from. `mstage.env.json` declares it and `naming` holds it to the 30
+   * characters a GCP service account id takes.
+   */
+  appShort: string
   /** The zone machines are created in, or null for the region's first. */
   zone?: string | null
   /** The hostname the dashboard and the SDKs reach the control plane on. */
@@ -88,8 +95,8 @@ export const gcpStackProviders = ({
 
   return {
     images: gcpImages({ stage, region, project }),
-    network: gcpNetworkProvider({ project, region }),
-    storage: gcpStorageProvider({ project, region }),
+    network: gcpNetworkProvider({ project, region, appShort }),
+    storage: gcpStorageProvider({ project, region, appShort }),
     // Builds nothing: Cloud Run has no cluster. It still carries the network's
     // rules, which every workload waits on.
     cluster: ({ network }) => gcpClusterProvider({ region, network }),
@@ -114,6 +121,7 @@ export const gcpStackProviders = ({
         network: binding(network),
         project,
         zone,
+        appShort,
         // The collector writes and the API reads; both carry an account, and
         // the firewall admits those two and nothing else. The roles come from
         // the module that owns the rule, so this cannot hand over one identity

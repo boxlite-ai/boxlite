@@ -27,6 +27,7 @@ import { API_PORT } from '../../api.ts'
 import { PROXY_PORT } from '../../edge.ts'
 import { RUNNER_PORT } from '../../runners.ts'
 import { OTLP_HTTP_PORT } from '../../collector.ts'
+import { instanceFor } from 'naming'
 
 /** Every port one workload in this network opens to another. */
 const INTERNAL_PORTS = [API_PORT, PROXY_PORT, RUNNER_PORT, OTLP_HTTP_PORT]
@@ -45,17 +46,16 @@ export const awsNetworkProvider =
         natInstance: (args: any, _opts: any, resourceName: any) => {
           const index = resourceName.match(/\d+$/)?.[0] ?? ''
           const availabilityZone = aws.ec2.getSubnetOutput({ id: args.subnetId }).availabilityZone
-          args.tags = {
-            ...args.tags,
-            Name: $interpolate`${$app.name}-${$app.stage}-nat-${index}-${availabilityZone}`,
-          }
+          const nat = instanceFor({ app: $app.name, stage: $app.stage, artifact: `nat-${index}` })
+          args.tags = { ...args.tags, Name: $interpolate`${nat}-${availabilityZone}` }
         },
         elasticIp: (args: any, _opts: any, resourceName: any) => {
           const index = resourceName.match(/\d+$/)?.[0] ?? ''
-          args.tags = { ...args.tags, Name: `${$app.name}-${$app.stage}-nat-eip-${index}` }
+          const eip = instanceFor({ app: $app.name, stage: $app.stage, artifact: `nat-eip-${index}` })
+          args.tags = { ...args.tags, Name: eip }
         },
         natSecurityGroup: (args: any) => {
-          args.tags = { ...args.tags, Name: `${$app.name}-${$app.stage}-nat-sg` }
+          args.tags = { ...args.tags, Name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'nat-sg' }) }
         },
       },
     })
@@ -97,7 +97,7 @@ export const awsNetworkProvider =
         },
       ],
       egress: [{ protocol: '-1', fromPort: 0, toPort: 0, cidrBlocks: ['0.0.0.0/0'] }],
-      tags: { Name: `${$app.name}-${$app.stage}-runner-sg` },
+      tags: { Name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'runner-sg' }) },
     })
 
     /*
@@ -113,7 +113,7 @@ export const awsNetworkProvider =
       vpcId: vpc.nodes.vpc.id,
       description: 'BoxLite services: each other on their own ports, and outbound HTTPS',
       egress: [{ protocol: '-1', fromPort: 0, toPort: 0, cidrBlocks: ['0.0.0.0/0'] }],
-      tags: { Name: `${$app.name}-${$app.stage}-service-sg` },
+      tags: { Name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'service-sg' }) },
     })
     const placed = INTERNAL_PORTS.map(
       (port) =>
