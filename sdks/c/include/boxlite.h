@@ -325,10 +325,20 @@ typedef struct CPublishedPortList {
 // Outbound (guest → internet) network mode and allowlist.
 // `allow_net` points to `allow_net_count` owned strings, owned by the
 // enclosing [`CNetworkInfo`].
+//
+// `effective_allow_net` is the allowlist actually enforced: `allow_net` plus
+// each exact hostname named by a configured secret (wildcard and address
+// entries in a secret's hosts list never join). It owns its own strings — never
+// an alias of `allow_net`, even when the two lists are equal, so
+// `free_network_info` cannot double-free. It is appended last so the
+// preceding fields keep their offsets; `CNetworkInfo.inbound` moves, which
+// post-split callers pick up on recompile.
 typedef struct COutboundNetworkInfo {
   enum BoxliteNetworkMode mode;
   char **allow_net;
   int allow_net_count;
+  char **effective_allow_net;
+  int effective_allow_net_count;
 } COutboundNetworkInfo;
 
 // Inbound (internet → guest) network mode and allowlist.

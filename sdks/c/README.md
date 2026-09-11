@@ -911,6 +911,13 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
   the struct layout. Recompile any consumer that reads it; the field is a
   heap-owned string released by the existing
   `boxlite_free_volume_info` / `boxlite_free_volume_info_list`.
+- `COutboundNetworkInfo` gains `effective_allow_net` and
+  `effective_allow_net_count`, appended after `allow_net_count`. The preceding
+  fields keep their offsets, but the struct grows, so `CNetworkInfo.inbound`
+  — the only field declared after `outbound` — moves: recompile any consumer
+  that reads it. The new list is the allowlist actually enforced — `allow_net` plus each
+  exact hostname named by a configured secret — and owns its own strings, never
+  aliasing `allow_net`'s; the existing `boxlite_free_box_info` releases both.
 - `boxlite_options_add_port` signature changed. Parameters are now host-first
   (matching `PortSpec`, the other SDKs, and Docker's `host:guest` convention),
   ports are `uint16_t`, the new `BoxlitePortProtocol` enum and a nullable

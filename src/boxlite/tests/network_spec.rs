@@ -2,8 +2,17 @@
 
 mod common;
 
+/// Host used only through `Secret.hosts`, never listed in `allow_net`. It is
+/// the same echo service the SDK secret-substitution suites use, so the MITM
+/// path over it is already known to work.
+const SECRET_ONLY_HOST: &str = "httpbingo.org";
+
+/// Host listed in `allow_net` alongside the secret, to prove the two sources
+/// are unioned rather than swapped. Mirrors POL-483's own example.
+const LISTED_HOST: &str = "pypi.org";
+
 use boxlite::net::constants::{HOST_HOSTNAME, HOST_IP};
-use boxlite::runtime::options::{BoxOptions, BoxliteOptions, NetworkSpec};
+use boxlite::runtime::options::{BoxOptions, BoxliteOptions, NetworkSpec, Secret};
 use boxlite::{BoxCommand, BoxliteRuntime};
 use futures::StreamExt;
 use std::io::{Read, Write};
@@ -830,5 +839,246 @@ async fn disabled_network_cannot_reach_host_virtual_ip() {
 
     let _ = stop_server.send(());
     server.join().unwrap();
+    litebox.stop().await.unwrap();
+}
+
+/// The A-record addresses in a busybox `nslookup` answer.
+///
+/// The answer lines read `Address: 1.2.3.4`; the server header line above them
+/// reads `Address:\t192.168.127.1:53`, so splitting on the space-separated form
+/// and dropping anything with a port keeps only answers. Returning the list
+/// lets a caller assert that a lookup actually answered — checking only for the
+/// absence of the sinkhole IP would also pass for empty or failed output.
+fn nslookup_answers(out: &str) -> Vec<&str> {
+    out.lines()
+        .filter_map(|line| line.strip_prefix("Address: "))
+        .map(str::trim)
+        .filter(|addr| !addr.is_empty() && !addr.contains(':'))
+        .collect()
+}
+
+/// Assert the gateway resolved `host` to a real address rather than the
+/// allow_net sinkhole.
+fn assert_resolves(out: &str, host: &str, context: &str) {
+    let answers = nslookup_answers(out);
+    assert!(
+        !answers.is_empty(),
+        "{context}: nslookup {host} returned no answer at all, got: {out:?}"
+    );
+    assert!(
+        !answers.contains(&"0.0.0.0"),
+        "{context}: {host} was sinkholed to 0.0.0.0, got answers {answers:?}"
+    );
+}
+
+/// The secret host a box declares must be reachable without the caller
+/// repeating it in `allow_net` (POL-483).
+///
+/// Reproducer: before the merge, `allow_net` alone drives the gateway DNS
+/// zones, so a host named only by `Secret.hosts` falls to the catch-all
+/// sinkhole and resolves to `0.0.0.0`. The guest's only resolver is that
+/// gateway (`/etc/resolv.conf` is written with `nameserver 192.168.127.1`),
+/// so it never reaches the TCP path where the MITM branch would have
+/// forwarded it.
+///
+/// `LISTED_HOST` stays in `allow_net` to prove the two sources are unioned,
+/// not swapped: a merge that replaced `allow_net` would pass the secret-host
+/// assertions and silently break every other rule the caller wrote.
+#[tokio::test]
+#[ignore = "requires VM runtime; no make target enables ignored tests, run: \
+           cargo nextest run -p boxlite --features krun,gvproxy --test network_spec \
+           --profile vm --run-ignored all"]
+async fn secret_hosts_join_a_restrictive_allowlist() {
+    let Some(_) = host_routable_ipv4() else {
+        skip_missing_egress(
+            "secret_hosts_join_a_restrictive_allowlist",
+            "no routable IPv4 on this host",
+        );
+        return;
+    };
+
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let opts = BoxOptions {
+        network: NetworkSpec::Enabled {
+            allow_net: vec![LISTED_HOST.into()],
+        },
+        secrets: vec![Secret {
+            name: "testkey".into(),
+            hosts: vec![SECRET_ONLY_HOST.into()],
+            placeholder: "<BOXLITE_SECRET:testkey>".into(),
+            value: "sk-test-real-key-12345".into(),
+        }],
+        ..common::alpine_opts()
+    };
+
+    let litebox = runtime.create(opts, None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    let secret_host = run_stdout(&litebox, "nslookup", &[SECRET_ONLY_HOST]).await;
+    assert_resolves(
+        &secret_host,
+        SECRET_ONLY_HOST,
+        "a host named by Secret.hosts must resolve without being repeated in allow_net",
+    );
+
+    let body = run_stdout(
+        &litebox,
+        "wget",
+        &[
+            "-q",
+            "-O-",
+            "--timeout=10",
+            &format!("https://{SECRET_ONLY_HOST}/headers"),
+        ],
+    )
+    .await;
+    assert!(
+        !body.is_empty(),
+        "HTTPS to the secret host should succeed once its host is merged into \
+         the allowlist, got empty output"
+    );
+
+    let listed = run_stdout(&litebox, "nslookup", &[LISTED_HOST]).await;
+    assert_resolves(
+        &listed,
+        LISTED_HOST,
+        "merging secret hosts must union with allow_net, not replace it",
+    );
+
+    litebox.stop().await.unwrap();
+}
+
+/// Anti-regression: merging secret hosts must not open anything else. Passes
+/// before and after the merge — it guards the boundary, it is not a
+/// reproducer.
+#[tokio::test]
+#[ignore = "requires VM runtime; no make target enables ignored tests, run: \
+           cargo nextest run -p boxlite --features krun,gvproxy --test network_spec \
+           --profile vm --run-ignored all"]
+async fn unlisted_host_stays_blocked_when_secret_hosts_are_merged() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let opts = BoxOptions {
+        network: NetworkSpec::Enabled {
+            allow_net: vec![LISTED_HOST.into()],
+        },
+        secrets: vec![Secret {
+            name: "testkey".into(),
+            hosts: vec![SECRET_ONLY_HOST.into()],
+            placeholder: "<BOXLITE_SECRET:testkey>".into(),
+            value: "sk-test-real-key-12345".into(),
+        }],
+        ..common::alpine_opts()
+    };
+
+    let litebox = runtime.create(opts, None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    let out = run_stdout(&litebox, "nslookup", &["evil.com"]).await;
+    assert!(
+        out.contains("0.0.0.0") || out.contains("NXDOMAIN") || out.contains("server can't find"),
+        "a host named by neither allow_net nor Secret.hosts must stay blocked, got: {out}"
+    );
+
+    litebox.stop().await.unwrap();
+}
+
+/// Anti-regression for the option-C gate: an empty `allow_net` means
+/// unrestricted egress, so adding a secret must not turn the box into a
+/// restricted one. This is what fails if someone later "simplifies" the
+/// emptiness check out of `effective_allow_net`.
+#[tokio::test]
+#[ignore = "requires VM runtime; no make target enables ignored tests, run: \
+           cargo nextest run -p boxlite --features krun,gvproxy --test network_spec \
+           --profile vm --run-ignored all"]
+async fn empty_allowlist_with_secrets_stays_unrestricted() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let opts = BoxOptions {
+        network: NetworkSpec::Enabled { allow_net: vec![] },
+        secrets: vec![Secret {
+            name: "testkey".into(),
+            hosts: vec![SECRET_ONLY_HOST.into()],
+            placeholder: "<BOXLITE_SECRET:testkey>".into(),
+            value: "sk-test-real-key-12345".into(),
+        }],
+        ..common::alpine_opts()
+    };
+
+    let litebox = runtime.create(opts, None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    let out = run_stdout(&litebox, "nslookup", &[LISTED_HOST]).await;
+    assert_resolves(
+        &out,
+        LISTED_HOST,
+        "a secret must not narrow an unrestricted box",
+    );
+
+    litebox.stop().await.unwrap();
+}
+
+/// POL-483 acceptance criterion 4: the merge is implicit, so `info()` must
+/// show what is actually enforced and where it came from. Without this, a
+/// blocked host is harder to diagnose after the change than before it.
+#[tokio::test]
+#[ignore = "requires VM runtime; no make target enables ignored tests, run: \
+           cargo nextest run -p boxlite --features krun,gvproxy --test network_spec \
+           --profile vm --run-ignored all"]
+async fn info_reports_the_effective_allowlist() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let opts = BoxOptions {
+        network: NetworkSpec::Enabled {
+            allow_net: vec![LISTED_HOST.into()],
+        },
+        secrets: vec![Secret {
+            name: "testkey".into(),
+            hosts: vec![SECRET_ONLY_HOST.into()],
+            placeholder: "<BOXLITE_SECRET:testkey>".into(),
+            value: "sk-test-real-key-12345".into(),
+        }],
+        ..common::alpine_opts()
+    };
+
+    let litebox = runtime.create(opts, None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    let info = litebox.info().await.unwrap();
+    let outbound = &info.network.as_ref().expect("network metadata").outbound;
+
+    assert_eq!(
+        outbound.allow_net,
+        vec![LISTED_HOST.to_string()],
+        "the configured list keeps reporting what the caller asked for"
+    );
+    assert_eq!(
+        outbound.effective_allow_net,
+        vec![LISTED_HOST.to_string(), SECRET_ONLY_HOST.to_string()],
+        "the enforced list must show the secret-derived host; the difference \
+         between the two lists is its provenance"
+    );
+
     litebox.stop().await.unwrap();
 }

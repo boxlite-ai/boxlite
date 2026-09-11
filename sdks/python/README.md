@@ -290,7 +290,10 @@ options = boxlite.BoxOptions(
     network=boxlite.NetworkSpec(
         outbound=boxlite.OutboundNetworkSpec(
             mode="enabled",
-            allow_net=["api.openai.com"],
+            # api.openai.com is allowed automatically: an exact Secret.hosts
+            # entry joins a non-empty allow_net. List the hosts that need no
+            # credential here (wildcard secret hosts still need their own rule).
+            allow_net=["pypi.org"],
         ),
         inbound=boxlite.InboundNetworkSpec(mode="disabled"),
     ),
