@@ -20,6 +20,7 @@ import { AddBoxUsageExportOutbox1786100000000 } from '../../migrations/pre-deplo
 import { AddUsageConcurrencyIndexes1786340000000 } from '../../migrations/pre-deploy/1786340000000-add-usage-concurrency-indexes-migration'
 import { AddBoxContainerProcessOptions1786400000000 } from '../../migrations/pre-deploy/1786400000000-add-box-container-process-options-migration'
 import { AddBoxSecrets1787000000000 } from '../../migrations/pre-deploy/1787000000000-add-box-secrets-migration'
+import { AddBoxNetworkRateLimit1787100000000 } from '../../migrations/pre-deploy/1787100000000-add-box-network-rate-limit-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
@@ -255,6 +256,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       // silently finds no boxes.
       await new AddBoxContainerProcessOptions1786400000000().up(queryRunner)
       await new AddBoxSecrets1787000000000().up(queryRunner)
+      await new AddBoxNetworkRateLimit1787100000000().up(queryRunner)
       ownsTables = true
     } finally {
       await queryRunner.release()

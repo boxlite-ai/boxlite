@@ -501,18 +501,27 @@ fn network_rate_limit_defaults_unlimited_and_preserves_custom_values() {
         BoxliteErrorCode::Ok
     );
 
-    unsafe {
-        assert!((*advanced).options.network_rate_limit.is_unlimited());
+    // `as_ref` rather than `*ptr`: the handle was just allocated above, but a
+    // checked conversion keeps the test itself free of possibly-null derefs.
+    let advanced_handle = unsafe { advanced.as_ref() }.expect("advanced handle allocated");
+    assert!(advanced_handle.options.network_rate_limit.is_unlimited());
 
+    unsafe {
         assert_eq!(
             boxlite_advanced_options_set_network_rate_limit(advanced, 10_000, 100_000),
             BoxliteErrorCode::Ok
         );
         boxlite_options_set_advanced(opts, advanced);
+    }
 
-        let limit = (*opts).options.advanced.network_rate_limit;
-        assert_eq!(limit.tx_kbps, Some(10_000));
-        assert_eq!(limit.rx_kbps, Some(100_000));
+    let limit = unsafe { opts.as_ref() }
+        .expect("box options allocated")
+        .options
+        .advanced
+        .network_rate_limit;
+    assert_eq!(limit.tx_kbps, Some(10_000));
+    assert_eq!(limit.rx_kbps, Some(100_000));
+    unsafe {
         boxlite_advanced_options_free(advanced);
         boxlite_options_free(opts);
     }
@@ -527,17 +536,16 @@ fn zero_network_rate_limit_leaves_both_directions_uncapped() {
         BoxliteErrorCode::Ok
     );
 
-    unsafe {
-        assert_eq!(
-            boxlite_advanced_options_set_network_rate_limit(advanced, 0, 0),
-            BoxliteErrorCode::Ok
-        );
-        assert!(
-            (*advanced).options.network_rate_limit.is_unlimited(),
-            "0 is the C spelling of \"no cap\", like `--net-tx-kbps 0`"
-        );
-        boxlite_advanced_options_free(advanced);
-    }
+    assert_eq!(
+        unsafe { boxlite_advanced_options_set_network_rate_limit(advanced, 0, 0) },
+        BoxliteErrorCode::Ok
+    );
+    let advanced_handle = unsafe { advanced.as_ref() }.expect("advanced handle allocated");
+    assert!(
+        advanced_handle.options.network_rate_limit.is_unlimited(),
+        "0 is the C spelling of \"no cap\", like `--net-tx-kbps 0`"
+    );
+    unsafe { boxlite_advanced_options_free(advanced) };
 }
 
 #[test]
