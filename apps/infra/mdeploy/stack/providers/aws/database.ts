@@ -51,7 +51,7 @@ export const awsDatabaseProvider =
           args.deletionProtection = request.protected
           args.skipFinalSnapshot = !request.protected
           if (snapshotSuffix) {
-            const final = instanceFor({ app: $app.name, stage: $app.stage, artifact: 'db-final' })
+            const final = instanceFor({ app: $app.name, stage: $app.stage, artifact: 'database-final' })
             args.finalSnapshotIdentifier = $interpolate`${final}-${snapshotSuffix.hex}`
           }
         },
@@ -67,7 +67,7 @@ export const awsDatabaseProvider =
      * every task definition.
      */
     const secret = new aws.secretsmanager.Secret('DatabasePassword', {
-      namePrefix: `${instanceFor({ app: $app.name, stage: $app.stage, artifact: 'db-password' })}-`,
+      namePrefix: `${instanceFor({ app: $app.name, stage: $app.stage, artifact: 'database-password' })}-`,
       recoveryWindowInDays: 7,
     })
     const version = new aws.secretsmanager.SecretVersion('DatabasePasswordValue', {

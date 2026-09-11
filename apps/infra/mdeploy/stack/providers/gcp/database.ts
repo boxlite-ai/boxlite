@@ -69,7 +69,11 @@ export const gcpDatabaseProvider =
     const instance = new gcp.sql.DatabaseInstance(
       'Database',
       {
-        name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'db' }),
+        // `database`, not `db`, because the other BoxLite apps sharing this
+        // project already spell it that way and the console lists them side by
+        // side. Changing it replaces the instance — Cloud SQL has no rename —
+        // and the old name is then unusable for up to a week.
+        name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'database' }),
         project,
         region,
         databaseVersion: 'POSTGRES_16',
@@ -146,7 +150,10 @@ export const gcpDatabaseProvider =
     const password = new random.RandomPassword('DatabasePassword', { length: 32, special: false })
     const secret = new gcp.secretmanager.Secret('DatabasePasswordSecret', {
       project,
-      secretId: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'db-password' }),
+      // `database-password`, tracking the instance's own `database` artifact —
+      // the two are read side by side in the console, and the sibling apps in
+      // this project already spell both that way.
+      secretId: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'database-password' }),
       replication: { auto: {} },
     })
     const version = new gcp.secretmanager.SecretVersion('DatabasePasswordValue', {
