@@ -4,12 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { CODING_AGENT_MARKS } from '@/assets/AgentLogos'
 import { QuickstartCopyButton } from '@/components/QuickstartCopyButton'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { createApiKeyWithFallbackName } from '@/lib/quickstart-api-key'
 import { cn } from '@/lib/utils'
+import { RoutePath } from '@/enums/RoutePath'
+import { ArrowUpRight } from '@/components/ui/icon'
 import type { OnboardingProgress } from '@/lib/onboarding-progress'
 import {
   CreateApiKeyPermissionsEnum,
@@ -19,6 +20,7 @@ import {
 import { useQuery } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
+import { Link, generatePath } from 'react-router-dom'
 
 const AGENT_GUIDE_URL = 'https://boxlite.ai/agent.md'
 
@@ -382,27 +384,38 @@ export function QuickstartAgentHandoff({
 
   if (permissionsKnown && !canCreateApiKey) {
     return (
-      <p className="px-5 py-[22px] text-[12.5px] leading-relaxed text-muted-foreground">
+      <p className="px-8 py-8 text-[12.5px] leading-relaxed text-muted-foreground">
         Your role cannot create API keys, so this path needs an organization owner to start it.
       </p>
     )
   }
 
+  // Three stages, one row each, and nothing else moves: the card is the only
+  // thing on this screen that changes after the copy, so it is where the eye
+  // should be able to rest.
+  const stage: 'waiting' | 'building' | 'live' = reached ? 'live' : agentBox ? 'building' : 'waiting'
+  const shownBox = finishedBox ?? agentBox
+
   return (
-    <div className="px-5 py-[18px]">
-      <div className="mb-[10px] flex items-center justify-between gap-4">
-        <div className="text-[9px] uppercase tracking-[1.5px] text-muted-foreground">Copy the prompt to your agent</div>
-        {/* Compatibility stated in one glance instead of a sentence: these are
-            the agents the prompt is written for. */}
-        <div className="flex flex-none items-center gap-[13px]">
-          {CODING_AGENT_MARKS.map(({ label, Mark }) => (
-            <Mark key={label} className="size-[15px] text-foreground/80" />
-          ))}
+    <div className="px-8 pb-6 pt-6">
+      <div className="mb-2 flex items-center justify-between gap-4">
+        <div className="min-w-0 truncate font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+          <span className="text-brand">▸</span> Prompt
+          {handoff && (
+            <>
+              <span className="mx-[7px] text-border">·</span>
+              key <span className="text-foreground">{handoff.keyName}</span>
+              <span className="mx-[7px] text-border">·</span>
+              boxes only
+              <span className="mx-[7px] text-border">·</span>
+              {KEY_LIFETIME_DAYS}d
+            </>
+          )}
         </div>
       </div>
 
       <div className="flex items-start gap-3 border border-border bg-[hsl(var(--code-background))] px-[14px] py-3">
-        <pre className="scrollbar-elevated min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-words text-[12.5px] leading-[1.85] text-foreground">
+        <pre className="scrollbar-elevated min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-words text-[12.5px] leading-[1.7] text-foreground">
           {handoff ? shownPrompt : 'Preparing your key…'}
         </pre>
         <QuickstartCopyButton
@@ -412,49 +425,57 @@ export function QuickstartAgentHandoff({
         />
       </div>
 
-      <div className="mt-[11px] text-[11.5px] leading-relaxed text-muted-foreground">
-        {failed || permissionsTimedOut ? (
+      {(failed || permissionsTimedOut) && (
+        <div className="mt-3 text-[11.5px] leading-relaxed">
           <button type="button" onClick={retry} className="text-destructive underline underline-offset-2">
             {permissionsTimedOut && !failed ? 'Could not confirm your permissions.' : 'Could not create a key.'} Try
             again
           </button>
-        ) : handoff ? (
-          <>
-            Key <span className="text-foreground">{handoff.keyName}</span> · boxes only · expires in {KEY_LIFETIME_DAYS}{' '}
-            days
-          </>
-        ) : (
-          <>&nbsp;</>
-        )}
-      </div>
-
-      <div className="mt-[18px] border-t border-border pt-[14px]">
-        <div className="flex items-center gap-[10px] py-[6px] text-[12px]">
-          <span
-            className={cn(
-              'inline-block size-[7px] flex-none rounded-full',
-              reached ? 'bg-brand' : 'bg-muted-foreground/40',
-            )}
-            style={reached ? undefined : { animation: 'qs-pulse 2s infinite' }}
-          />
-          <span className={reached ? 'text-foreground' : 'text-muted-foreground'}>
-            {reached ? (
-              <>
-                Online — reachable from anywhere —{' '}
-                <span className="text-foreground">{finishedBox?.name ?? finishedBox?.id}</span>
-              </>
-            ) : (
-              'Waiting for your agent to put it online…'
-            )}
-          </span>
         </div>
+      )}
 
-        {reached && (
-          <p className="mt-[8px] text-[11.5px] leading-relaxed text-muted-foreground">
-            Your agent prints the URL when it finishes. Anyone who has it can reach the box without signing in, and the
-            box sleeps once idle — a visitor arriving later waits for it to wake.
-          </p>
+      {/* The outcome, drawn before it exists. A ghost row says "a box will
+          appear here" more plainly than a sentence about waiting does, and the
+          same row then fills in, so nothing jumps when the agent delivers. */}
+      <div className="mt-6 font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+        <span className="text-brand">▸</span> Your app
+      </div>
+      <div
+        className={cn(
+          'mt-2 flex items-center gap-3 border px-4 py-3 transition-colors',
+          stage === 'live' ? 'border-brand bg-[hsl(var(--brand)/0.06)]' : 'border-border',
         )}
+      >
+        <span
+          className={cn(
+            'inline-block size-[8px] flex-none rounded-full',
+            stage === 'waiting' ? 'bg-muted-foreground/40' : 'bg-brand',
+          )}
+          style={
+            stage === 'live'
+              ? undefined
+              : { animation: `${stage === 'waiting' ? 'qs-pulse' : 'live-pulse'} 2s infinite` }
+          }
+        />
+        <div className="min-w-0 flex-1 font-mono text-[12.5px] leading-none">
+          {stage === 'waiting' ? (
+            <span className="halftone-brand block h-[10px] w-[220px] max-w-full" aria-hidden />
+          ) : (
+            <span className="truncate text-foreground">{shownBox?.name ?? shownBox?.id}</span>
+          )}
+        </div>
+        <span className="flex-none text-[11px] text-muted-foreground">
+          {stage === 'waiting' && 'waiting for your agent'}
+          {stage === 'building' && 'building…'}
+          {stage === 'live' && shownBox && (
+            <Link
+              to={generatePath(RoutePath.BOX_DETAILS, { boxId: shownBox.id })}
+              className="inline-flex items-center gap-1 text-foreground hover:text-brand"
+            >
+              online · open <ArrowUpRight className="size-[11px]" />
+            </Link>
+          )}
+        </span>
       </div>
     </div>
   )
