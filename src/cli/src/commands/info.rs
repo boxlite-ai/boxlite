@@ -1,5 +1,6 @@
 use crate::cli::GlobalFlags;
 use crate::formatter;
+use crate::query::QueryRuntime;
 use boxlite::BoxStatus;
 use clap::Args;
 use clap::ValueEnum;
@@ -40,7 +41,7 @@ pub async fn execute(args: InfoArgs, global: &GlobalFlags) -> anyhow::Result<()>
     let options = global.resolve_runtime_options()?;
     let home_dir = options.home_dir.to_string_lossy().to_string();
 
-    let rt = global.create_runtime_with_options(options)?;
+    let rt = QueryRuntime::from_runtime(global.create_runtime_with_options(options))?;
     let version = boxlite::VERSION.to_string();
     let virtualization = boxlite::system_check::SystemCheck::run()
         .map(|_| "available".to_string())
@@ -48,7 +49,7 @@ pub async fn execute(args: InfoArgs, global: &GlobalFlags) -> anyhow::Result<()>
     let os = std::env::consts::OS.to_string();
     let arch = std::env::consts::ARCH.to_string();
 
-    let boxes_list = rt.list_info().await?;
+    let (boxes_list, images_count) = rt.info().await?;
     let boxes_total = boxes_list.len() as u32;
     let boxes_running = boxes_list.iter().filter(|b| b.status.is_active()).count() as u32;
     let boxes_stopped = boxes_list
@@ -60,7 +61,7 @@ pub async fn execute(args: InfoArgs, global: &GlobalFlags) -> anyhow::Result<()>
         .filter(|b| b.status == BoxStatus::Configured)
         .count() as u32;
 
-    let images_count = rt.images()?.list().await?.len() as u32;
+    let images_count = images_count as u32;
 
     let info = SystemInfo {
         version,

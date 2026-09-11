@@ -90,7 +90,7 @@ impl Default for FFIError {
 /// Map BoxliteError to BoxliteErrorCode
 pub fn error_to_code(err: &BoxliteError) -> BoxliteErrorCode {
     match err {
-        BoxliteError::Internal(_) => BoxliteErrorCode::Internal,
+        BoxliteError::Internal(_) | BoxliteError::RuntimeInUse { .. } => BoxliteErrorCode::Internal,
         BoxliteError::NotFound(_) => BoxliteErrorCode::NotFound,
         BoxliteError::AlreadyExists(_) => BoxliteErrorCode::AlreadyExists,
         BoxliteError::InvalidState(_) => BoxliteErrorCode::InvalidState,
