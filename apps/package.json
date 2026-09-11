@@ -56,6 +56,7 @@
     "@clickhouse/client": "^1.16.0",
     "@dotenvx/dotenvx": "^1.25.1",
     "@esm2cjs/cacheable-lookup": "^7.0.0",
+    "@google-cloud/storage": "^8.0.1",
     "@iarna/toml": "^2.2.5",
     "@iconify-json/pixelarticons": "^1.2.6",
     "@iconify/react": "^6.0.2",

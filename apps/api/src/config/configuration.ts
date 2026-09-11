@@ -437,6 +437,18 @@ const configuration = {
     accountId: process.env.S3_ACCOUNT_ID,
     roleName: process.env.S3_ROLE_NAME,
   },
+  volume: {
+    // Which object store backs volume buckets. Must match the runner's
+    // VOLUME_STORAGE_BACKEND: the API creates the bucket the runner mounts.
+    storageBackend: process.env.VOLUME_STORAGE_BACKEND || 's3',
+  },
+  gcs: {
+    // Credentials come from Application Default Credentials, never a key file,
+    // so only placement is configured here. Keep the location co-located with
+    // the runner fleet: cross-region reads are billed and slower.
+    location: process.env.GCS_LOCATION?.trim(),
+    projectId: process.env.GCS_PROJECT_ID?.trim(),
+  },
   notificationGatewayDisabled: process.env.NOTIFICATION_GATEWAY_DISABLED === 'true',
   skipConnections: process.env.SKIP_CONNECTIONS === 'true',
   maintananceMode: process.env.MAINTENANCE_MODE === 'true',

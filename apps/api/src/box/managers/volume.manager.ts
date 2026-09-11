@@ -10,12 +10,11 @@ import { Repository, In } from 'typeorm'
 import { Volume } from '../entities/volume.entity'
 import { VolumeState } from '../enums/volume-state.enum'
 import { Cron, CronExpression, SchedulerRegistry } from '@nestjs/schedule'
-import { S3Client, CreateBucketCommand, ListObjectsV2Command, PutBucketTaggingCommand } from '@aws-sdk/client-s3'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { TypedConfigService } from '../../config/typed-config.service'
-import { deleteS3Bucket } from '../../common/utils/delete-s3-bucket'
+import { createVolumeBucketStore, VolumeBucketNotEmptyError, VolumeBucketStore } from '../stores/volume-bucket.store'
 
 import { TrackableJobExecutions } from '../../common/interfaces/trackable-job-executions'
 import { TrackJobExecution } from '../../common/decorators/track-job-execution.decorator'
@@ -34,7 +33,7 @@ export class VolumeManager
   private readonly logger = new Logger(VolumeManager.name)
   private processingVolumes: Set<string> = new Set()
   private skipTestConnection = false
-  private s3Client: S3Client | null = null
+  private bucketStore: VolumeBucketStore | null = null
 
   constructor(
     @InjectRepository(Volume)
@@ -44,44 +43,17 @@ export class VolumeManager
     private readonly redisLockProvider: RedisLockProvider,
     private readonly schedulerRegistry: SchedulerRegistry,
   ) {
-    if (!this.configService.get('s3.endpoint')) {
-      return
-    }
-
-    const endpoint = this.configService.getOrThrow('s3.endpoint')
-    const region = this.configService.getOrThrow('s3.region')
-    const accessKeyId = this.configService.get('s3.accessKey')
-    const secretAccessKey = this.configService.get('s3.secretKey')
     this.skipTestConnection = this.configService.get('skipConnections')
-
-    // Both-or-neither: a lone key is a typo'd pair, and silently falling back
-    // to the SDK default chain would mask the misconfig.
-    if ((accessKeyId && !secretAccessKey) || (!accessKeyId && secretAccessKey)) {
-      throw new Error('S3_ACCESS_KEY and S3_SECRET_KEY must be set together')
-    }
-    // MinIO cannot use the SDK default chain — fail fast at boot with a clear
-    // message instead of a generic auth error from the connection probe.
-    if (endpoint.includes('minio') && !accessKeyId) {
-      throw new Error('MinIO requires S3_ACCESS_KEY and S3_SECRET_KEY to be configured')
-    }
-
-    this.s3Client = new S3Client({
-      endpoint: endpoint.startsWith('http') ? endpoint : `http://${endpoint}`,
-      region,
-      // Static keys for S3-compatible deployments (MinIO); unset on AWS,
-      // where the SDK default chain supplies the ECS task-role credentials.
-      ...(accessKeyId && secretAccessKey ? { credentials: { accessKeyId, secretAccessKey } } : {}),
-      forcePathStyle: true,
-    })
+    this.bucketStore = createVolumeBucketStore(this.configService)
   }
 
   async onModuleInit() {
-    if (!this.s3Client) {
+    if (!this.bucketStore) {
       return
     }
 
     if (this.skipTestConnection) {
-      this.logger.debug('Skipping S3 connection test')
+      this.logger.debug('Skipping volume bucket store connection test')
       return
     }
 
@@ -89,7 +61,7 @@ export class VolumeManager
   }
 
   onApplicationBootstrap() {
-    if (!this.s3Client) {
+    if (!this.bucketStore) {
       return
     }
 
@@ -105,21 +77,11 @@ export class VolumeManager
   }
 
   private async testConnection() {
-    // Probe a bucket we already know instead of ListBuckets: same
-    // connectivity+auth signal, but needs no account-wide
-    // s3:ListAllMyBuckets grant on the task role.
-    const bucket = this.configService.get('s3.defaultBucket')
-    if (!bucket) {
-      this.logger.debug('No default bucket configured; skipping S3 connection test')
-      return
-    }
-
     try {
-      const command = new ListObjectsV2Command({ Bucket: bucket, MaxKeys: 1 })
-      await this.s3Client.send(command)
-      this.logger.debug('Successfully connected to S3')
+      await this.bucketStore.probe()
+      this.logger.debug('Successfully connected to the volume bucket store')
     } catch (error) {
-      this.logger.error('Failed to connect to S3:', error)
+      this.logger.error('Failed to connect to the volume bucket store:', error)
       throw error
     }
   }
@@ -129,7 +91,7 @@ export class VolumeManager
   @LogExecution('process-pending-volumes')
   @WithInstrumentation()
   async processPendingVolumes() {
-    if (!this.s3Client) {
+    if (!this.bucketStore) {
       return
     }
 
@@ -207,37 +169,14 @@ export class VolumeManager
         state: VolumeState.CREATING,
       })
 
-      // Refresh lock before S3 operation
+      // Refresh lock before the object-store operation
       await this.redis.setex(lockKey, 30, '1')
 
-      // Create bucket in Minio/S3
-      const createBucketCommand = new CreateBucketCommand({
-        Bucket: volume.getBucketName(),
+      await this.bucketStore.create(volume.getBucketName(), {
+        VolumeId: volume.id,
+        OrganizationId: volume.organizationId,
+        Environment: this.configService.get('environment'),
       })
-
-      await this.s3Client.send(createBucketCommand)
-
-      await this.s3Client.send(
-        new PutBucketTaggingCommand({
-          Bucket: volume.getBucketName(),
-          Tagging: {
-            TagSet: [
-              {
-                Key: 'VolumeId',
-                Value: volume.id,
-              },
-              {
-                Key: 'OrganizationId',
-                Value: volume.organizationId,
-              },
-              {
-                Key: 'Environment',
-                Value: this.configService.get('environment'),
-              },
-            ],
-          },
-        }),
-      )
 
       // Refresh lock before final state update
       await this.redis.setex(lockKey, 30, '1')
@@ -269,20 +208,17 @@ export class VolumeManager
         state: VolumeState.DELETING,
       })
 
-      // Refresh lock before S3 operation
+      // Refresh lock before the object-store operation
       await this.redis.setex(lockKey, 30, '1')
 
-      // Delete bucket from Minio/S3
+      // A bucket that is already gone is absorbed by the store as success.
       try {
-        await deleteS3Bucket(this.s3Client, volume.getBucketName())
+        await this.bucketStore.destroy(volume.getBucketName())
       } catch (error) {
-        if (error.name === 'NoSuchBucket') {
-          this.logger.warn(`Bucket for volume ${volume.id} does not exist, treating as already deleted`)
-        } else if (error.name === 'BucketNotEmpty') {
+        if (error instanceof VolumeBucketNotEmptyError) {
           throw new Error('Volume deletion failed because the bucket is not empty. You may retry deletion.')
-        } else {
-          throw error
         }
+        throw error
       }
 
       // Refresh lock before final state update
