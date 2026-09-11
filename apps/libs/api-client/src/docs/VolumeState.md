@@ -8,13 +8,9 @@ Volume state
 
 * `READY` (value: `'ready'`)
 
-* `PENDING_CREATE` (value: `'pending_create'`)
+* `DESTROYING` (value: `'destroying'`)
 
-* `PENDING_DELETE` (value: `'pending_delete'`)
-
-* `DELETING` (value: `'deleting'`)
-
-* `DELETED` (value: `'deleted'`)
+* `DESTROYED` (value: `'destroyed'`)
 
 * `ERROR` (value: `'error'`)
 

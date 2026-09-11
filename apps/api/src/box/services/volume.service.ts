@@ -67,7 +67,7 @@ export class VolumeService {
       where: {
         organizationId: organization.id,
         name: volume.name,
-        state: Not(VolumeState.DELETED),
+        state: Not(VolumeState.DESTROYED),
       },
     })
 
@@ -76,7 +76,7 @@ export class VolumeService {
     }
 
     volume.organizationId = organization.id
-    volume.state = VolumeState.PENDING_CREATE
+    volume.state = VolumeState.CREATING
 
     const savedVolume = await this.volumeRepository.save(volume)
     this.logger.debug(`Created volume ${savedVolume.id} for organization ${organization.id}`)
@@ -120,7 +120,7 @@ export class VolumeService {
       throw new NotFoundException(`Volume with ID ${volumeId} not found`)
     }
 
-    if (force && [VolumeState.PENDING_DELETE, VolumeState.DELETING, VolumeState.DELETED].includes(volume.state)) {
+    if (force && [VolumeState.DESTROYING, VolumeState.DESTROYED].includes(volume.state)) {
       return
     }
 
@@ -152,7 +152,7 @@ export class VolumeService {
     }
 
     // Update state to mark as deleting
-    volume.state = VolumeState.PENDING_DELETE
+    volume.state = VolumeState.DESTROYING
     await this.volumeRepository.save(volume)
     this.logger.debug(`Marked volume ${volumeId} for deletion`)
   }
@@ -173,7 +173,7 @@ export class VolumeService {
     return this.volumeRepository.find({
       where: {
         organizationId,
-        ...(includeDeleted ? {} : { state: Not(VolumeState.DELETED) }),
+        ...(includeDeleted ? {} : { state: Not(VolumeState.DESTROYED) }),
       },
       order: {
         lastUsedAt: {
@@ -190,7 +190,7 @@ export class VolumeService {
       where: {
         organizationId,
         name,
-        state: Not(VolumeState.DELETED),
+        state: Not(VolumeState.DESTROYED),
       },
     })
 
@@ -224,10 +224,10 @@ export class VolumeService {
     const uuidShaped = volumeIdOrNames.filter((selector) => UUID_PATTERN.test(selector))
 
     const where: FindOptionsWhere<Volume>[] = [
-      { name: In(volumeIdOrNames), organizationId, state: Not(VolumeState.DELETED) },
+      { name: In(volumeIdOrNames), organizationId, state: Not(VolumeState.DESTROYED) },
     ]
     if (uuidShaped.length) {
-      where.push({ id: In(uuidShaped), organizationId, state: Not(VolumeState.DELETED) })
+      where.push({ id: In(uuidShaped), organizationId, state: Not(VolumeState.DESTROYED) })
     }
 
     const volumes = await this.volumeRepository.find({ where })

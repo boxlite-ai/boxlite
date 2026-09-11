@@ -106,8 +106,7 @@ export function VolumeTable({
     return (
       isVolumeDeletable(volume) &&
       !processingVolumeAction[volume.id] &&
-      volume.state !== VolumeState.PENDING_DELETE &&
-      volume.state !== VolumeState.DELETING
+      volume.state !== VolumeState.DESTROYING
     )
   }).length
   const bulkActionCounts = useMemo(() => getVolumeBulkActionCounts(selectedVolumes), [selectedVolumes])
@@ -118,8 +117,7 @@ export function VolumeTable({
       if (selected) {
         for (const row of table.getRowModel().rows) {
           const isProcessing = processingVolumeAction[row.original.id]
-          const isDeleting =
-            row.original.state === VolumeState.PENDING_DELETE || row.original.state === VolumeState.DELETING
+          const isDeleting = row.original.state === VolumeState.DESTROYING
 
           if (!isProcessing && !isDeleting && isVolumeDeletable(row.original)) {
             row.toggleSelected(true)
@@ -192,7 +190,7 @@ export function VolumeTable({
                 <TableRow
                   key={row.id}
                   data-state={row.getIsSelected() && 'selected'}
-                  className={`${processingVolumeAction[row.original.id] || row.original.state === VolumeState.PENDING_DELETE || row.original.state === VolumeState.DELETING ? 'opacity-50 pointer-events-none' : ''}`}
+                  className={`${processingVolumeAction[row.original.id] || row.original.state === VolumeState.DESTROYING ? 'opacity-50 pointer-events-none' : ''}`}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell className="px-2" key={cell.id}>
@@ -284,10 +282,8 @@ const getStateLabel = (state: VolumeState) => {
 const statuses: FacetedFilterOption[] = [
   { label: getStateLabel(VolumeState.CREATING), value: VolumeState.CREATING, icon: Timer },
   { label: getStateLabel(VolumeState.READY), value: VolumeState.READY, icon: CheckCircle },
-  { label: getStateLabel(VolumeState.PENDING_CREATE), value: VolumeState.PENDING_CREATE, icon: Timer },
-  { label: getStateLabel(VolumeState.PENDING_DELETE), value: VolumeState.PENDING_DELETE, icon: Timer },
-  { label: getStateLabel(VolumeState.DELETING), value: VolumeState.DELETING, icon: Timer },
-  { label: getStateLabel(VolumeState.DELETED), value: VolumeState.DELETED, icon: Timer },
+  { label: getStateLabel(VolumeState.DESTROYING), value: VolumeState.DESTROYING, icon: Timer },
+  { label: getStateLabel(VolumeState.DESTROYED), value: VolumeState.DESTROYED, icon: Timer },
   { label: getStateLabel(VolumeState.ERROR), value: VolumeState.ERROR, icon: AlertTriangle },
 ]
 
@@ -311,8 +307,7 @@ const getColumns = ({
           onCheckedChange={(value) => {
             for (const row of table.getRowModel().rows) {
               const isProcessing = processingVolumeAction[row.original.id]
-              const isDeleting =
-                row.original.state === VolumeState.PENDING_DELETE || row.original.state === VolumeState.DELETING
+              const isDeleting = row.original.state === VolumeState.DESTROYING
               const isDeletable = isVolumeDeletable(row.original)
 
               if (isProcessing || isDeleting || !isDeletable) {

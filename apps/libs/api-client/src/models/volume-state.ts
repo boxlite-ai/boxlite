@@ -21,10 +21,8 @@
 export const VolumeState = {
     CREATING: 'creating',
     READY: 'ready',
-    PENDING_CREATE: 'pending_create',
-    PENDING_DELETE: 'pending_delete',
-    DELETING: 'deleting',
-    DELETED: 'deleted',
+    DESTROYING: 'destroying',
+    DESTROYED: 'destroyed',
     ERROR: 'error',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
