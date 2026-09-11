@@ -37,6 +37,11 @@ export interface CreateBoxDTO {
     'metadata'?: { [key: string]: string; };
     'networkAllowList'?: string;
     'networkBlockAll'?: boolean;
+    'networkRxKbps'?: number;
+    /**
+     * Per-direction bandwidth cap in kbit/s from the box\'s point of view (tx = what the box sends). Zero is uncapped on both sides of the wire, so an API that never sends the field needs no special case.
+     */
+    'networkTxKbps'?: number;
     /**
      * Nullable for backward compatibility
      */

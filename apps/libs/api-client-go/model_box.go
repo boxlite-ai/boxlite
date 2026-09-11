@@ -39,6 +39,10 @@ type Box struct {
 	NetworkBlockAll bool `json:"networkBlockAll"`
 	// Comma-separated list of allowed CIDR network addresses for the box
 	NetworkAllowList *string `json:"networkAllowList,omitempty"`
+	// Cap on traffic the box sends, in kilobits per second; absent or 0 is uncapped
+	NetworkTxKbps *int32 `json:"networkTxKbps,omitempty"`
+	// Cap on traffic reaching the box, in kilobits per second; absent or 0 is uncapped
+	NetworkRxKbps *int32 `json:"networkRxKbps,omitempty"`
 	// The target environment for the box
 	Target string `json:"target"`
 	// The image used for the box
@@ -340,6 +344,70 @@ func (o *Box) HasNetworkAllowList() bool {
 // SetNetworkAllowList gets a reference to the given string and assigns it to the NetworkAllowList field.
 func (o *Box) SetNetworkAllowList(v string) {
 	o.NetworkAllowList = &v
+}
+
+// GetNetworkTxKbps returns the NetworkTxKbps field value if set, zero value otherwise.
+func (o *Box) GetNetworkTxKbps() int32 {
+	if o == nil || IsNil(o.NetworkTxKbps) {
+		var ret int32
+		return ret
+	}
+	return *o.NetworkTxKbps
+}
+
+// GetNetworkTxKbpsOk returns a tuple with the NetworkTxKbps field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *Box) GetNetworkTxKbpsOk() (*int32, bool) {
+	if o == nil || IsNil(o.NetworkTxKbps) {
+		return nil, false
+	}
+	return o.NetworkTxKbps, true
+}
+
+// HasNetworkTxKbps returns a boolean if a field has been set.
+func (o *Box) HasNetworkTxKbps() bool {
+	if o != nil && !IsNil(o.NetworkTxKbps) {
+		return true
+	}
+
+	return false
+}
+
+// SetNetworkTxKbps gets a reference to the given int32 and assigns it to the NetworkTxKbps field.
+func (o *Box) SetNetworkTxKbps(v int32) {
+	o.NetworkTxKbps = &v
+}
+
+// GetNetworkRxKbps returns the NetworkRxKbps field value if set, zero value otherwise.
+func (o *Box) GetNetworkRxKbps() int32 {
+	if o == nil || IsNil(o.NetworkRxKbps) {
+		var ret int32
+		return ret
+	}
+	return *o.NetworkRxKbps
+}
+
+// GetNetworkRxKbpsOk returns a tuple with the NetworkRxKbps field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *Box) GetNetworkRxKbpsOk() (*int32, bool) {
+	if o == nil || IsNil(o.NetworkRxKbps) {
+		return nil, false
+	}
+	return o.NetworkRxKbps, true
+}
+
+// HasNetworkRxKbps returns a boolean if a field has been set.
+func (o *Box) HasNetworkRxKbps() bool {
+	if o != nil && !IsNil(o.NetworkRxKbps) {
+		return true
+	}
+
+	return false
+}
+
+// SetNetworkRxKbps gets a reference to the given int32 and assigns it to the NetworkRxKbps field.
+func (o *Box) SetNetworkRxKbps(v int32) {
+	o.NetworkRxKbps = &v
 }
 
 // GetTarget returns the Target field value
@@ -990,6 +1058,12 @@ func (o Box) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.NetworkAllowList) {
 		toSerialize["networkAllowList"] = o.NetworkAllowList
 	}
+	if !IsNil(o.NetworkTxKbps) {
+		toSerialize["networkTxKbps"] = o.NetworkTxKbps
+	}
+	if !IsNil(o.NetworkRxKbps) {
+		toSerialize["networkRxKbps"] = o.NetworkRxKbps
+	}
 	toSerialize["target"] = o.Target
 	if !IsNil(o.Image) {
 		toSerialize["image"] = o.Image
@@ -1106,6 +1180,8 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "public")
 		delete(additionalProperties, "networkBlockAll")
 		delete(additionalProperties, "networkAllowList")
+		delete(additionalProperties, "networkTxKbps")
+		delete(additionalProperties, "networkRxKbps")
 		delete(additionalProperties, "target")
 		delete(additionalProperties, "image")
 		delete(additionalProperties, "cpu")

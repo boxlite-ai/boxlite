@@ -1,7 +1,8 @@
 //! C ABI for `boxlite::runtime::advanced_options::AdvancedBoxOptions`.
 //!
 //! Mirrors the core model: advanced knobs (capabilities, security, mount
-//! isolation, health check) live under `BoxOptions.advanced`, never directly on the box. Build a
+//! isolation, health check, network rate limit) live under
+//! `BoxOptions.advanced`, never directly on the box. Build a
 //! `CAdvancedBoxOptions` handle via `boxlite_advanced_options_new`, toggle the
 //! sandbox with `boxlite_advanced_options_set_security_enabled`, then apply it
 //! to a `CBoxliteOptions` via `boxlite_options_set_advanced`.
@@ -9,7 +10,7 @@
 use std::os::raw::{c_char, c_int};
 
 use boxlite::runtime::advanced_options::{
-    AdvancedBoxOptions, ContainerCapabilities, SecurityOptions,
+    AdvancedBoxOptions, ContainerCapabilities, NetworkRateLimit, SecurityOptions,
 };
 
 use crate::CAdvancedBoxOptions;
@@ -109,6 +110,30 @@ pub unsafe extern "C" fn boxlite_advanced_options_set_capabilities_drop(
     set_capability_list(opts, capabilities, count, |caps, values| {
         caps.drop = values;
     })
+}
+
+/// Cap the box's network bandwidth per direction, in kilobits per second,
+/// from the box's point of view: `tx_kbps` is what the box sends, `rx_kbps`
+/// what reaches it. `0` leaves a direction uncapped, so a caller can forward a
+/// flag unconditionally — the convention `--net-tx-kbps` / `--net-rx-kbps` use.
+///
+/// Unlike `boxlite_advanced_options_set_security_enabled`, a null handle is an
+/// `InvalidArgument`, not a no-op: a cap the caller believes is in force but
+/// that never landed is a fail-open, so the failure has to be visible.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_advanced_options_set_network_rate_limit(
+    opts: *mut CAdvancedBoxOptions,
+    tx_kbps: u64,
+    rx_kbps: u64,
+) -> BoxliteErrorCode {
+    let Some(handle) = (unsafe { opts.as_mut() }) else {
+        return BoxliteErrorCode::InvalidArgument;
+    };
+    handle.options.network_rate_limit = NetworkRateLimit {
+        tx_kbps: Some(tx_kbps),
+        rx_kbps: Some(rx_kbps),
+    };
+    BoxliteErrorCode::Ok
 }
 
 const INVALID_CAPABILITY_INPUT: &str = "<invalid C capability input>";

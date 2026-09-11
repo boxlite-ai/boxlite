@@ -169,8 +169,14 @@ export interface JsContainerCapabilities {
   drop?: string[];
 }
 
+export interface JsNetworkRateLimit {
+  txKbps?: number;
+  rxKbps?: number;
+}
+
 export interface JsAdvancedBoxOptions {
   capabilities?: JsContainerCapabilities;
+  networkRateLimit?: JsNetworkRateLimit;
 }
 
 export interface JsBoxOptions {

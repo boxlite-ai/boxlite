@@ -65,6 +65,28 @@ class TestBoxOptionsDefaults:
         assert not hasattr(opts, "cap_add")
         assert not hasattr(opts, "cap_drop")
 
+    def test_network_rate_limit_defaults_to_unspecified(self):
+        """An AdvancedBoxOptions that never mentions a rate limit leaves it
+        None, so the core default (uncapped) applies."""
+        advanced = boxlite.AdvancedBoxOptions()
+        assert advanced.network_rate_limit is None
+
+    def test_network_rate_limit_is_preserved(self):
+        """TX/RX caps ride under advanced, named like the CLI flags."""
+        limit = boxlite.NetworkRateLimit(tx_kbps=10_000, rx_kbps=100_000)
+        opts = boxlite.BoxOptions(
+            image="alpine:latest",
+            advanced=boxlite.AdvancedBoxOptions(network_rate_limit=limit),
+        )
+        assert opts.advanced.network_rate_limit.tx_kbps == 10_000
+        assert opts.advanced.network_rate_limit.rx_kbps == 100_000
+
+    def test_network_rate_limit_directions_are_independent(self):
+        """Each direction is optional on its own; an omitted one stays uncapped."""
+        limit = boxlite.NetworkRateLimit(tx_kbps=10_000)
+        assert limit.tx_kbps == 10_000
+        assert limit.rx_kbps is None
+
     def test_explicit_auto_remove_true(self):
         """Test setting auto_remove=True explicitly."""
         opts = boxlite.BoxOptions(image="alpine:latest", auto_remove=True)

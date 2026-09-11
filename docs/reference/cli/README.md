@@ -824,7 +824,10 @@ budget per direction covers TCP, UDP, ICMP and ARP together, and inbound
 port-forward traffic counts against the same budget as outbound requests —
 the cap is on the box's interface, not on a connection's direction.
 Directions are named from the box's point of view, matching Firecracker.
-Remote runtimes reject these flags: the server owns its own network policy.
+Against a remote server the cap travels as `advanced.network_rate_limit`. The
+client first checks that `GET /v1/config` advertises
+`capabilities.network_rate_limit_enabled` and refuses to send a cap to a server
+that does not, so an older server never silently ignores it.
 Verified on Linux; on macOS the guest link is a datagram socket whose sender
 behaviour under backpressure is not yet verified, so `--net-tx-kbps` may drop
 frames there instead of slowing the guest.

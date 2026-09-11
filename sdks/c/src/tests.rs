@@ -487,6 +487,68 @@ fn capability_lists_default_empty_and_preserve_custom_values() {
 }
 
 #[test]
+fn network_rate_limit_defaults_unlimited_and_preserves_custom_values() {
+    let image = CString::new("alpine:latest").expect("image cstring");
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut advanced: *mut CAdvancedBoxOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+    assert_eq!(
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts, &mut error) },
+        BoxliteErrorCode::Ok
+    );
+    assert_eq!(
+        unsafe { boxlite_advanced_options_new(&mut advanced, &mut error) },
+        BoxliteErrorCode::Ok
+    );
+
+    unsafe {
+        assert!((*advanced).options.network_rate_limit.is_unlimited());
+
+        assert_eq!(
+            boxlite_advanced_options_set_network_rate_limit(advanced, 10_000, 100_000),
+            BoxliteErrorCode::Ok
+        );
+        boxlite_options_set_advanced(opts, advanced);
+
+        let limit = (*opts).options.advanced.network_rate_limit;
+        assert_eq!(limit.tx_kbps, Some(10_000));
+        assert_eq!(limit.rx_kbps, Some(100_000));
+        boxlite_advanced_options_free(advanced);
+        boxlite_options_free(opts);
+    }
+}
+
+#[test]
+fn zero_network_rate_limit_leaves_both_directions_uncapped() {
+    let mut advanced: *mut CAdvancedBoxOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+    assert_eq!(
+        unsafe { boxlite_advanced_options_new(&mut advanced, &mut error) },
+        BoxliteErrorCode::Ok
+    );
+
+    unsafe {
+        assert_eq!(
+            boxlite_advanced_options_set_network_rate_limit(advanced, 0, 0),
+            BoxliteErrorCode::Ok
+        );
+        assert!(
+            (*advanced).options.network_rate_limit.is_unlimited(),
+            "0 is the C spelling of \"no cap\", like `--net-tx-kbps 0`"
+        );
+        boxlite_advanced_options_free(advanced);
+    }
+}
+
+#[test]
+fn null_advanced_handle_rejects_network_rate_limit() {
+    assert_eq!(
+        unsafe { boxlite_advanced_options_set_network_rate_limit(ptr::null_mut(), 10_000, 0) },
+        BoxliteErrorCode::InvalidArgument
+    );
+}
+
+#[test]
 fn null_capability_element_cannot_weaken_policy() {
     let image = CString::new("alpine:latest").unwrap();
     let mut opts: *mut CBoxliteOptions = ptr::null_mut();

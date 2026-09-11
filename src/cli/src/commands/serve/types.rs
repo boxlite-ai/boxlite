@@ -93,6 +93,10 @@ pub(super) struct CreateBoxAdvancedOptions {
     /// explicit empty policy conflicts with `privileged`, an unspecified one
     /// doesn't, and `archive_version_for_options` keys off which one this is.
     pub capabilities: Option<ContainerCapabilitiesRequest>,
+    /// Not `Option`, unlike `capabilities`: an absent cap and an all-zero one
+    /// are the same state (`NetworkRateLimit::is_unlimited`), so there is no
+    /// unspecified-vs-explicit distinction to preserve.
+    pub network_rate_limit: NetworkRateLimitRequest,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -100,6 +104,15 @@ pub(super) struct CreateBoxAdvancedOptions {
 pub(super) struct ContainerCapabilitiesRequest {
     pub add: Vec<String>,
     pub drop: Vec<String>,
+}
+
+/// Per-direction bandwidth cap in kbit/s, named from the box's point of view.
+/// A missing or zero direction stays uncapped.
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct NetworkRateLimitRequest {
+    pub tx_kbps: Option<u64>,
+    pub rx_kbps: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -251,6 +264,7 @@ pub(super) struct ServerConfig {
 #[derive(Serialize)]
 pub(super) struct ServerCapabilities {
     pub linux_capabilities_enabled: bool,
+    pub network_rate_limit_enabled: bool,
     pub snapshots_enabled: bool,
     pub clone_enabled: bool,
     pub export_enabled: bool,

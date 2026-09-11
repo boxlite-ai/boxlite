@@ -751,6 +751,9 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
             if let Some(capabilities) = advanced.capabilities {
                 opts.advanced.set_capabilities(Some(capabilities.into()))?;
             }
+            if let Some(network_rate_limit) = advanced.network_rate_limit {
+                opts.advanced.network_rate_limit = network_rate_limit.into();
+            }
         }
 
         // Convert Python secrets to Rust secrets
@@ -1181,7 +1184,7 @@ impl From<PyBoxliteRestOptions> for BoxliteRestOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::advanced_options::{PyContainerCapabilities, PySecurityOptions};
+    use crate::advanced_options::{PyContainerCapabilities, PyNetworkRateLimit, PySecurityOptions};
 
     /// Builds a `PyBoxOptions` with everything at its "untouched" default
     /// except `advanced`, so the conversion under test is exercised without
@@ -1270,6 +1273,7 @@ mod tests {
             security: Some(default_py_security()),
             health_check: None,
             capabilities: None,
+            network_rate_limit: None,
         };
 
         let opts = BoxOptions::try_from(py_box_options_with_advanced(advanced))
@@ -1293,6 +1297,7 @@ mod tests {
                 add: vec!["SYS_ADMIN".to_string()],
                 drop: vec![],
             }),
+            network_rate_limit: None,
         };
 
         let opts = BoxOptions::try_from(py_box_options_with_advanced(advanced))
@@ -1303,6 +1308,44 @@ mod tests {
             .capabilities()
             .expect("capabilities should be set");
         assert_eq!(capabilities.add, ["SYS_ADMIN"]);
+    }
+
+    /// A rate limit set on the Python side must land on the core field with
+    /// each direction intact — `None` stays `None`, it is not turned into 0.
+    #[test]
+    fn network_rate_limit_converts_per_direction() {
+        let advanced = PyAdvancedBoxOptions {
+            security: None,
+            health_check: None,
+            capabilities: None,
+            network_rate_limit: Some(PyNetworkRateLimit {
+                tx_kbps: Some(10_000),
+                rx_kbps: None,
+            }),
+        };
+
+        let opts = BoxOptions::try_from(py_box_options_with_advanced(advanced))
+            .expect("rate-limited options should convert");
+
+        assert_eq!(opts.advanced.network_rate_limit.tx_kbps, Some(10_000));
+        assert_eq!(opts.advanced.network_rate_limit.rx_kbps, None);
+    }
+
+    /// Leaving the rate limit out keeps the core default, so an unrelated
+    /// advanced option never implies a cap.
+    #[test]
+    fn omitted_network_rate_limit_stays_unlimited() {
+        let advanced = PyAdvancedBoxOptions {
+            security: Some(default_py_security()),
+            health_check: None,
+            capabilities: None,
+            network_rate_limit: None,
+        };
+
+        let opts = BoxOptions::try_from(py_box_options_with_advanced(advanced))
+            .expect("security-only options should convert");
+
+        assert!(opts.advanced.network_rate_limit.is_unlimited());
     }
 
     /// A managed volume is taken verbatim — by id or by name alike. The server

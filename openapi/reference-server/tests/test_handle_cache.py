@@ -72,10 +72,34 @@ def _install_boxlite_stub() -> None:
                 )
             self.kwargs = kwargs
 
+    # Same rule for the nested advanced types: PyAdvancedBoxOptions and
+    # PyNetworkRateLimit enumerate their keywords too (sdks/python/src/
+    # advanced_options.rs), so a name forwarded here that the SDK does not
+    # declare must be a TypeError, not an ignored kwarg.
+    class _KwargsRecorder:
+        _ACCEPTED: frozenset[str] = frozenset()
+
+        def __init__(self, **kwargs):
+            unknown = sorted(set(kwargs) - self._ACCEPTED)
+            if unknown:
+                raise TypeError(
+                    f"{type(self).__name__}() got an unexpected keyword argument {unknown[0]!r}"
+                )
+            self.kwargs = kwargs
+
+    class _AdvancedBoxOptions(_KwargsRecorder):
+        _ACCEPTED = frozenset(
+            {"security", "health_check", "capabilities", "network_rate_limit"}
+        )
+
+    class _NetworkRateLimit(_KwargsRecorder):
+        _ACCEPTED = frozenset({"tx_kbps", "rx_kbps"})
+
     module.Boxlite = _Noop
     module.Options = _Noop
     module.BoxOptions = _BoxOptions
-    module.AdvancedBoxOptions = _Noop
+    module.AdvancedBoxOptions = _AdvancedBoxOptions
+    module.NetworkRateLimit = _NetworkRateLimit
     module.ContainerCapabilities = _Noop
     module.CloneOptions = _Noop
     module.ExportOptions = _Noop
@@ -274,6 +298,50 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
             advanced=advanced,
             detach=False,
         )
+
+    def test_build_box_options_forwards_network_rate_limit(self) -> None:
+        request = SERVER.CreateBoxRequest.model_validate(
+            {
+                "image": "alpine:latest",
+                "advanced": {"network_rate_limit": {"tx_kbps": 10000, "rx_kbps": 20000}},
+            }
+        )
+
+        # No patching: the stubs reject a keyword the real PyAdvancedBoxOptions
+        # / PyNetworkRateLimit do not declare, so this crosses the boundary
+        # that decides whether a capped create works or raises TypeError.
+        options = SERVER.build_box_options(request)
+
+        advanced = options.kwargs["advanced"]
+        self.assertNotIn("capabilities", advanced.kwargs)
+        self.assertEqual(
+            advanced.kwargs["network_rate_limit"].kwargs,
+            {"tx_kbps": 10000, "rx_kbps": 20000},
+        )
+
+    def test_build_box_options_omits_advanced_without_a_rate_limit_or_policy(self) -> None:
+        request = SERVER.CreateBoxRequest.model_validate(
+            {"image": "alpine:latest", "advanced": {}}
+        )
+
+        options = SERVER.build_box_options(request)
+
+        self.assertNotIn("advanced", options.kwargs)
+
+    def test_create_request_rejects_negative_or_unknown_rate_limit_fields(self) -> None:
+        for body in (
+            {"advanced": {"network_rate_limit": {"tx_kbps": -1}}},
+            {"advanced": {"network_rate_limit": {"tx_kbit": 10000}}},
+        ):
+            with self.assertRaises(ValidationError):
+                SERVER.CreateBoxRequest.model_validate(body)
+
+    async def test_config_advertises_network_rate_limit_support(self) -> None:
+        # The Rust client refuses to send a cap to a server that does not
+        # advertise this key, so the reference server must say so explicitly.
+        config = await SERVER.get_config()
+
+        self.assertIs(config["capabilities"]["network_rate_limit_enabled"], True)
 
     def test_create_box_rejects_malformed_capability_policy(self) -> None:
         for capability in ("NET-ADMIN", "123", "ß"):

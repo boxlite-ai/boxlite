@@ -1,8 +1,8 @@
-// AdvancedBoxOptions groups box-level capability and security knobs under one
-// handle, mirroring core `BoxOptions.advanced`.
+// AdvancedBoxOptions groups box-level capability, security and network
+// rate-limit knobs under one handle, mirroring core `BoxOptions.advanced`.
 //
-// Build it via `NewAdvancedBoxOptions`, configure capabilities or security,
-// and pass it to `runtime.Create(..., WithAdvancedOptions(adv))`.
+// Build it via `NewAdvancedBoxOptions`, configure capabilities, security or a
+// rate limit, and pass it to `runtime.Create(..., WithAdvancedOptions(adv))`.
 //
 //	adv, _ := boxlite.NewAdvancedBoxOptions()
 //	defer adv.Close()
@@ -28,12 +28,21 @@ type ContainerCapabilities struct {
 	Drop []string
 }
 
+// NetworkRateLimit caps the box's network bandwidth per direction, in
+// kilobits per second, from the box's point of view: TxKbps is what the box
+// sends, RxKbps what reaches it. 0 leaves a direction uncapped.
+type NetworkRateLimit struct {
+	TxKbps uint64
+	RxKbps uint64
+}
+
 // AdvancedBoxOptions is the Go-side handle for a `CAdvancedBoxOptions`.
 // Construct via `NewAdvancedBoxOptions`; release via `Close` once it has
 // been attached to a box (or you no longer need it).
 type AdvancedBoxOptions struct {
-	handle       *C.CAdvancedBoxOptions
-	capabilities ContainerCapabilities
+	handle           *C.CAdvancedBoxOptions
+	capabilities     ContainerCapabilities
+	networkRateLimit NetworkRateLimit
 }
 
 // NewAdvancedBoxOptions allocates an advanced-options handle initialized to
@@ -96,6 +105,22 @@ func (a *AdvancedBoxOptions) SetCapabilities(capabilities ContainerCapabilities)
 	return nil
 }
 
+// SetNetworkRateLimit caps advanced.network_rate_limit for subsequently
+// created boxes. A zero direction stays uncapped, so a caller can forward a
+// flag unconditionally — the convention `--net-tx-kbps` / `--net-rx-kbps` use.
+func (a *AdvancedBoxOptions) SetNetworkRateLimit(limit NetworkRateLimit) error {
+	if a == nil || a.handle == nil {
+		return fmt.Errorf("boxlite: advanced options handle is closed")
+	}
+	code := C.boxlite_advanced_options_set_network_rate_limit(
+		a.handle, C.uint64_t(limit.TxKbps), C.uint64_t(limit.RxKbps))
+	if code != C.Ok {
+		return fmt.Errorf("boxlite: invalid advanced.network_rate_limit")
+	}
+	a.networkRateLimit = limit
+	return nil
+}
+
 // Close releases the underlying CAdvancedBoxOptions. Idempotent.
 func (a *AdvancedBoxOptions) Close() {
 	if a == nil || a.handle == nil {
@@ -104,5 +129,6 @@ func (a *AdvancedBoxOptions) Close() {
 	C.boxlite_advanced_options_free(a.handle)
 	a.handle = nil
 	a.capabilities = ContainerCapabilities{}
+	a.networkRateLimit = NetworkRateLimit{}
 	runtime.SetFinalizer(a, nil)
 }

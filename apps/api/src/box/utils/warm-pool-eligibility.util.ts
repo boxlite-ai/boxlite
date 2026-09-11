@@ -23,14 +23,25 @@ import { CreateBoxDto } from '../dto/create-box.dto'
 export function requiresFreshBox(
   createBoxDto: Pick<
     CreateBoxDto,
-    'networkBlockAll' | 'networkAllowList' | 'runAsUser' | 'workingDir' | 'entrypoint' | 'cmd' | 'secrets'
+    | 'networkBlockAll'
+    | 'networkAllowList'
+    | 'networkTxKbps'
+    | 'networkRxKbps'
+    | 'runAsUser'
+    | 'workingDir'
+    | 'entrypoint'
+    | 'cmd'
+    | 'secrets'
   >,
   organization: { boxLimitedNetworkEgress?: boolean },
 ): boolean {
-  // Network policy is applied to the box at create time on the runner.
+  // Network policy, the bandwidth cap included, is applied to the box at
+  // create time on the runner (the cap lives in the gvproxy bridge config).
   const overridesNetworkPolicy =
     createBoxDto.networkBlockAll !== undefined ||
     createBoxDto.networkAllowList !== undefined ||
+    createBoxDto.networkTxKbps !== undefined ||
+    createBoxDto.networkRxKbps !== undefined ||
     Boolean(organization.boxLimitedNetworkEgress)
 
   // entrypoint, cmd, working_dir and the process user are all decided when the

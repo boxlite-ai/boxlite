@@ -40,6 +40,8 @@ func recoverCreateDto(boxId string, recoverDto dto.RecoverBoxDTO) dto.CreateBoxD
 		Secrets:          recoverDto.Secrets,
 		NetworkBlockAll:  recoverDto.NetworkBlockAll,
 		NetworkAllowList: recoverDto.NetworkAllowList,
+		NetworkTxKbps:    recoverDto.NetworkTxKbps,
+		NetworkRxKbps:    recoverDto.NetworkRxKbps,
 		FromVolumeId:     recoverDto.FromVolumeId,
 	}
 }

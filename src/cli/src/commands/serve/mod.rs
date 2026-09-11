@@ -27,7 +27,7 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 use boxlite::runtime::options::{InboundNetworkConfig, NetworkMode, OutboundNetworkConfig};
 use boxlite::{
     BoxCommand, BoxInfo, BoxOptions, BoxStatus, BoxliteRuntime, ExecStdin, Execution, LiteBox,
-    NetworkSpec, RootfsSpec,
+    NetworkRateLimit, NetworkSpec, RootfsSpec,
 };
 
 use crate::cli::GlobalFlags;
@@ -1260,6 +1260,14 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                 }
             });
             advanced.set_capabilities(capabilities)?;
+            // Assigned unconditionally, like `NetworkFlags::apply_to`: a missing
+            // object is `None`/`None`, which is already "uncapped". Range and
+            // the disabled-network rule are `sanitize_common`'s job at
+            // `runtime.create`, where they map to a 400.
+            advanced.network_rate_limit = NetworkRateLimit {
+                tx_kbps: req.advanced.network_rate_limit.tx_kbps,
+                rx_kbps: req.advanced.network_rate_limit.rx_kbps,
+            };
             advanced
         },
         // Neither deadline is forwarded; `serve` holds both and sweeps them.
@@ -2121,6 +2129,48 @@ mod tests {
         assert!(
             opts.advanced.capabilities().is_none(),
             "omitting capabilities on the wire must not become an explicit empty policy"
+        );
+    }
+
+    #[test]
+    fn build_box_options_carries_the_network_rate_limit_from_the_wire() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","advanced":{"network_rate_limit":{"tx_kbps":10000,"rx_kbps":100000}}}"#,
+        )
+        .expect("rate-limited request must deserialize");
+
+        let opts = build_box_options(&req).expect("build rate-limited options");
+        assert_eq!(opts.advanced.network_rate_limit.tx_kbps, Some(10_000));
+        assert_eq!(opts.advanced.network_rate_limit.rx_kbps, Some(100_000));
+        assert!(
+            opts.advanced.capabilities().is_none(),
+            "a cap must not conjure an explicit capability policy"
+        );
+    }
+
+    #[test]
+    fn build_box_options_leaves_the_rate_limit_uncapped_when_the_wire_omits_it() {
+        let req: super::types::CreateBoxRequest =
+            serde_json::from_str(r#"{"image":"alpine:latest","advanced":{}}"#)
+                .expect("empty advanced must deserialize");
+
+        let opts = build_box_options(&req).expect("build ordinary options");
+        assert!(opts.advanced.network_rate_limit.is_unlimited());
+    }
+
+    /// `deny_unknown_fields` on the nested type: a misspelled direction is a
+    /// 400, not a silently uncapped box.
+    #[test]
+    fn create_box_request_rejects_an_unknown_rate_limit_field() {
+        let json =
+            r#"{"image":"alpine:latest","advanced":{"network_rate_limit":{"tx_kbit":10000}}}"#;
+        let msg = match serde_json::from_str::<super::types::CreateBoxRequest>(json) {
+            Ok(_) => panic!("an unknown rate-limit field must be rejected at deserialize"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("unknown field") && msg.contains("tx_kbit"),
+            "expected deny-unknown-fields rejection naming `tx_kbit`; got {msg}"
         );
     }
 

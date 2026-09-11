@@ -1,4 +1,7 @@
-use boxlite::runtime::advanced_options::{ContainerCapabilities, ResourceLimits, SecurityOptions};
+use boxlite::runtime::advanced_options::{
+    ContainerCapabilities, NetworkRateLimit, ResourceLimits, SecurityOptions,
+};
+use boxlite_shared::errors::BoxliteError;
 use napi_derive::napi;
 
 // ============================================================================
@@ -109,12 +112,50 @@ impl From<JsContainerCapabilities> for ContainerCapabilities {
     }
 }
 
+/// Per-direction bandwidth cap for the box's network interface, in kilobits
+/// per second, from the box's point of view: `txKbps` is what the box sends,
+/// `rxKbps` what reaches it. Omitting a direction, or `0`, leaves it uncapped.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsNetworkRateLimit {
+    pub tx_kbps: Option<f64>,
+    pub rx_kbps: Option<f64>,
+}
+
+impl TryFrom<JsNetworkRateLimit> for NetworkRateLimit {
+    type Error = BoxliteError;
+
+    fn try_from(limit: JsNetworkRateLimit) -> Result<Self, BoxliteError> {
+        Ok(Self {
+            tx_kbps: kbps_from_js("networkRateLimit.txKbps", limit.tx_kbps)?,
+            rx_kbps: kbps_from_js("networkRateLimit.rxKbps", limit.rx_kbps)?,
+        })
+    }
+}
+
+/// Unlike the security resource limits above, a value that does not fit a
+/// `u64` is an error rather than `None`: coercing a bad cap to "unset" would
+/// hand back an uncapped box, fail-open on the one thing the caller asked to
+/// constrain.
+fn kbps_from_js(field: &str, value: Option<f64>) -> Result<Option<u64>, BoxliteError> {
+    let Some(number) = value else {
+        return Ok(None);
+    };
+    coerce_u64_limit(number).map(Some).ok_or_else(|| {
+        BoxliteError::InvalidArgument(format!(
+            "{field} must be a non-negative safe integer in kbit/s (got {number})"
+        ))
+    })
+}
+
 /// Expert-only box options. Released top-level security and health-check
-/// fields remain on `JsBoxOptions`; new capability policy is nested here.
+/// fields remain on `JsBoxOptions`; capability policy and the network rate
+/// limit are nested here.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsAdvancedBoxOptions {
     pub capabilities: Option<JsContainerCapabilities>,
+    pub network_rate_limit: Option<JsNetworkRateLimit>,
 }
 
 #[cfg(test)]

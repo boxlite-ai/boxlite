@@ -18,12 +18,15 @@ Name | Type | Description | Notes
 **metadata** | **{ [key: string]: string; }** |  | [optional] [default to undefined]
 **networkAllowList** | **string** |  | [optional] [default to undefined]
 **networkBlockAll** | **boolean** |  | [optional] [default to undefined]
+**networkRxKbps** | **number** |  | [optional] [default to undefined]
+**networkTxKbps** | **number** | Per-direction bandwidth cap in kbit/s from the box\&#39;s point of view (tx &#x3D; what the box sends). Zero is uncapped on both sides of the wire, so an API that never sends the field needs no special case. | [optional] [default to undefined]
 **organizationId** | **string** | Nullable for backward compatibility | [optional] [default to undefined]
 **osUser** | **string** |  | [default to undefined]
 **otelEndpoint** | **string** |  | [optional] [default to undefined]
 **regionId** | **string** |  | [optional] [default to undefined]
 **registry** | [**RegistryDTO**](RegistryDTO.md) |  | [optional] [default to undefined]
 **runAsUser** | **string** |  | [optional] [default to undefined]
+**secrets** | [**Array&lt;DtoSecretDTO&gt;**](DtoSecretDTO.md) |  | [optional] [default to undefined]
 **skipStart** | **boolean** |  | [optional] [default to undefined]
 **storageQuota** | **number** |  | [optional] [default to undefined]
 **volumes** | [**Array&lt;DtoVolumeDTO&gt;**](DtoVolumeDTO.md) |  | [optional] [default to undefined]
@@ -48,12 +51,15 @@ const instance: CreateBoxDTO = {
     metadata,
     networkAllowList,
     networkBlockAll,
+    networkRxKbps,
+    networkTxKbps,
     organizationId,
     osUser,
     otelEndpoint,
     regionId,
     registry,
     runAsUser,
+    secrets,
     skipStart,
     storageQuota,
     volumes,

@@ -33,6 +33,21 @@ describe('requiresFreshBox', () => {
     expect(requiresFreshBox(dto, NO_ORG_EGRESS_LIMIT)).toBe(true)
   })
 
+  // A cap is applied to the gvproxy bridge when the runner creates the box; a
+  // warm box is already booted and the pool key carries no bandwidth, so
+  // claiming one would be a 201 plus a box that ignored the cap.
+  it.each([
+    ['networkTxKbps', { networkTxKbps: 10_000 }],
+    ['networkRxKbps', { networkRxKbps: 100_000 }],
+  ])('forces a fresh box when %s is requested', (_label, dto) => {
+    expect(requiresFreshBox(dto, NO_ORG_EGRESS_LIMIT)).toBe(true)
+  })
+
+  // Same rule as networkBlockAll: false — `0` is a value the caller supplied.
+  it('treats an explicit networkTxKbps: 0 as a policy override', () => {
+    expect(requiresFreshBox({ networkTxKbps: 0 }, NO_ORG_EGRESS_LIMIT)).toBe(true)
+  })
+
   it('forces a fresh box when the organization limits egress', () => {
     expect(requiresFreshBox({}, { boxLimitedNetworkEgress: true })).toBe(true)
   })
