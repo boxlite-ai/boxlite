@@ -97,6 +97,21 @@ describe('BoxLite lifecycle policy mapper', () => {
 
     expect(response.auto_resume).toBe(true)
   })
+
+  it('reports the effective cloud policy needed for named-box reuse', () => {
+    const response = boxToBoxResponse({
+      id: 'box-1',
+      name: 'demo',
+      state: BoxState.STARTED,
+      labels: {},
+    } as any)
+
+    expect(response.advanced).toEqual({
+      capabilities: { add: [], drop: [] },
+      privileged: false,
+      nested_virtualization: false,
+    })
+  })
 })
 
 // These four validated, were audit-logged, and were then dropped on the floor

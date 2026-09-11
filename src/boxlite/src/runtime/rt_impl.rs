@@ -537,45 +537,10 @@ impl RuntimeImpl {
         actual: &BoxConfig,
     ) -> BoxliteResult<()> {
         let box_name = actual.name.as_deref().unwrap_or_else(|| actual.id.as_str());
-
-        // One-way: a nested-capable box satisfies any request, but a plain box
-        // cannot satisfy one that needs /dev/kvm. Reusing it would look like a
-        // success and defer the failure into the guest.
-        if requested.advanced.nested_virtualization
-            && !actual.options.advanced.nested_virtualization
-        {
-            return Err(BoxliteError::Unsupported(format!(
-                "box '{box_name}' was created without nested virtualization and cannot satisfy a required nested virtualization request; use a different name or recreate the box"
-            )));
-        }
-        if requested.advanced.privileged && !actual.options.advanced.privileged {
-            return Err(BoxliteError::Unsupported(format!(
-                "box '{box_name}' was created without privileged support and cannot satisfy a required privileged request; use a different name or recreate the box"
-            )));
-        }
-        // The mirror case: privileged governs mount hardening (readonly
-        // paths, /sys write access) as well as capabilities, so a privileged
-        // box can look capability-compatible with a non-privileged request
-        // (e.g. one that explicitly asks for `capabilities.add = ["ALL"]`)
-        // while still granting more than that request asked for. Reject
-        // instead of silently upgrading it.
-        if !requested.advanced.privileged && actual.options.advanced.privileged {
-            return Err(BoxliteError::Unsupported(format!(
-                "box '{box_name}' was created with privileged mode and would grant more than the requested non-privileged security policy; use a different name or recreate the box"
-            )));
-        }
-
-        // Compare effective capabilities, not the raw field: a privileged
-        // box persisted by an earlier version of this option has `add=["ALL"]`
-        // mutated into its stored capabilities, while a new privileged
-        // request idiomatically leaves capabilities empty — both resolve to
-        // the same thing.
+        let actual_advanced = (&actual.options.advanced).into();
         requested
             .advanced
-            .effective_capabilities()
-            .check_compatibility(&actual.options.advanced.effective_capabilities(), box_name)?;
-
-        Ok(())
+            .check_reuse_compatibility(&actual_advanced, box_name)
     }
 
     /// Get a handle to an existing box by ID or name.

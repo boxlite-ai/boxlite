@@ -1111,6 +1111,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         image: info.image.clone(),
         cpus: info.cpus,
         memory_mib: info.memory_mib,
+        advanced: info.advanced.clone(),
         labels: info.labels.clone(),
         auto_stop: info.auto_stop,
         auto_delete: info.auto_delete,
@@ -1957,6 +1958,30 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"abcd"));
         assert!(constant_time_eq(b"", b""));
+    }
+
+    #[tokio::test]
+    async fn box_response_reports_the_policy_needed_for_safe_reuse() {
+        let mut info = info_as_the_runtime_reports_it("configured");
+        info.advanced = Some(boxlite::AdvancedBoxInfo {
+            capabilities: boxlite::ContainerCapabilities {
+                add: vec!["SYS_ADMIN".to_string()],
+                drop: Vec::new(),
+            },
+            privileged: false,
+            nested_virtualization: false,
+        });
+
+        let response = lifecycle_state().box_response(&info).await;
+        assert_eq!(response.advanced, info.advanced);
+        assert_eq!(
+            serde_json::to_value(response).unwrap()["advanced"],
+            serde_json::json!({
+                "capabilities": {"add": ["SYS_ADMIN"], "drop": []},
+                "privileged": false,
+                "nested_virtualization": false,
+            })
+        );
     }
 
     #[test]

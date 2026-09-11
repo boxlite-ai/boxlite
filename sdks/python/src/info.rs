@@ -1,9 +1,11 @@
 use boxlite::runtime::options::PortProtocol;
 use boxlite::{
-    BoxInfo, BoxStateInfo, BoxStatus, HealthState as CoreHealthState, NetworkInfo, NetworkMode,
-    OutboundNetworkInfo, PublishedPort,
+    AdvancedBoxInfo, BoxInfo, BoxStateInfo, BoxStatus, HealthState as CoreHealthState,
+    InboundNetworkInfo, NetworkInfo, NetworkMode, OutboundNetworkInfo, PublishedPort,
 };
 use pyo3::prelude::*;
+
+use crate::advanced_options::PyContainerCapabilities;
 
 fn port_protocol_to_string(protocol: PortProtocol) -> String {
     match protocol {
@@ -67,6 +69,10 @@ impl PyPublishedPort {
     }
 }
 
+/// Outbound network policy for traffic from the guest to external hosts.
+///
+/// With `mode` set to `enabled`, `allow_net` lists permitted destinations.
+/// An empty list permits unrestricted outbound access.
 #[pyclass(name = "OutboundNetworkInfo")]
 #[derive(Clone, Debug)]
 pub(crate) struct PyOutboundNetworkInfo {
@@ -101,6 +107,10 @@ impl PyOutboundNetworkInfo {
     }
 }
 
+/// Inbound reachability policy for exposed guest ports and previews.
+///
+/// `mode` records whether these endpoints are publicly reachable.
+/// `allow_net` is reserved for inbound filtering and is currently empty.
 #[pyclass(name = "InboundNetworkInfo")]
 #[derive(Clone, Debug)]
 pub(crate) struct PyInboundNetworkInfo {
@@ -357,6 +367,32 @@ impl From<BoxStateInfo> for PyBoxStateInfo {
 // BoxInfo - Container info with nested state
 // ============================================================================
 
+/// Effective advanced policy reported for an existing box.
+///
+/// `capabilities.add` and `capabilities.drop` describe the Linux capability
+/// policy after privileged-mode resolution. `privileged` and
+/// `nested_virtualization` report the modes selected when the box was created.
+#[pyclass(name = "AdvancedBoxInfo")]
+#[derive(Clone)]
+pub(crate) struct PyAdvancedBoxInfo {
+    #[pyo3(get)]
+    pub(crate) capabilities: PyContainerCapabilities,
+    #[pyo3(get)]
+    pub(crate) privileged: bool,
+    #[pyo3(get)]
+    pub(crate) nested_virtualization: bool,
+}
+
+impl From<AdvancedBoxInfo> for PyAdvancedBoxInfo {
+    fn from(info: AdvancedBoxInfo) -> Self {
+        Self {
+            capabilities: info.capabilities.into(),
+            privileged: info.privileged,
+            nested_virtualization: info.nested_virtualization,
+        }
+    }
+}
+
 #[pyclass(name = "BoxInfo")]
 #[derive(Clone)]
 pub(crate) struct PyBoxInfo {
@@ -379,6 +415,8 @@ pub(crate) struct PyBoxInfo {
     #[pyo3(get)]
     pub(crate) memory_mib: u32,
     #[pyo3(get)]
+    pub(crate) advanced: Option<PyAdvancedBoxInfo>,
+    #[pyo3(get)]
     pub(crate) network: Option<PyNetworkInfo>,
     #[pyo3(get)]
     pub(crate) auto_stop: u32,
@@ -394,6 +432,16 @@ pub(crate) struct PyBoxInfo {
 impl PyBoxInfo {
     fn __repr__(&self) -> String {
         let network = self.network.as_ref().map(PyNetworkInfo::json_value);
+        let advanced = self.advanced.as_ref().map(|advanced| {
+            serde_json::json!({
+                "capabilities": {
+                    "add": advanced.capabilities.add,
+                    "drop": advanced.capabilities.drop,
+                },
+                "privileged": advanced.privileged,
+                "nested_virtualization": advanced.nested_virtualization,
+            })
+        });
         serde_json::to_string_pretty(&serde_json::json!({
             "id": self.id,
             "name": self.name,
@@ -405,6 +453,7 @@ impl PyBoxInfo {
             "image": self.image,
             "cpus": self.cpus,
             "memory_mib": self.memory_mib,
+            "advanced": advanced,
             "network": network,
             "auto_stop": self.auto_stop,
             "auto_delete": self.auto_delete,
@@ -441,6 +490,7 @@ impl From<BoxInfo> for PyBoxInfo {
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
+            advanced: info.advanced.map(PyAdvancedBoxInfo::from),
             network: info.network.map(PyNetworkInfo::from),
             auto_stop: info.auto_stop,
             auto_delete: info.auto_delete,
@@ -457,8 +507,8 @@ mod tests {
 
     use boxlite::runtime::options::PortProtocol;
     use boxlite::{
-        BoxID, BoxInfo, BoxStatus, HealthStatus, InboundNetworkInfo, NetworkInfo, NetworkMode,
-        OutboundNetworkInfo, PublishedPort,
+        AdvancedBoxInfo, BoxID, BoxInfo, BoxStatus, ContainerCapabilities, HealthStatus,
+        InboundNetworkInfo, NetworkInfo, NetworkMode, OutboundNetworkInfo, PublishedPort,
     };
 
     use super::PyBoxInfo;
@@ -474,6 +524,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 2,
             memory_mib: 512,
+            advanced: None,
             network,
             labels: HashMap::new(),
             auto_stop: 0,
@@ -556,6 +607,25 @@ mod tests {
         );
 
         assert!(PyBoxInfo::from(core_info(None)).network.is_none());
+    }
+
+    #[test]
+    fn box_info_conversion_preserves_the_reuse_policy() {
+        let mut info = core_info(None);
+        info.advanced = Some(AdvancedBoxInfo {
+            capabilities: ContainerCapabilities {
+                add: vec!["SYS_ADMIN".to_string()],
+                drop: vec!["NET_RAW".to_string()],
+            },
+            privileged: false,
+            nested_virtualization: true,
+        });
+
+        let advanced = PyBoxInfo::from(info).advanced.expect("advanced metadata");
+        assert_eq!(advanced.capabilities.add, vec!["SYS_ADMIN"]);
+        assert_eq!(advanced.capabilities.drop, vec!["NET_RAW"]);
+        assert!(!advanced.privileged);
+        assert!(advanced.nested_virtualization);
     }
 
     #[test]
