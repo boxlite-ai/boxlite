@@ -44,6 +44,7 @@ import { PROXY_PORT } from '../../edge.ts'
 import type { Placement } from '../../network.ts'
 import { splitSecretRef } from './secret-env.ts'
 import { instanceFor } from 'naming'
+import { certificateNameFor } from './certificate-name.ts'
 
 /**
  * Container-Optimized OS, which ships Docker and a credential helper for
@@ -456,13 +457,22 @@ export const gcpEdgeProvider =
       proxied: false,
       ttl: 60,
     })
-    const certificate = new gcp.certificatemanager.Certificate('ProxyCertificate', {
-      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
-      project,
-      // Both names, as the AWS side's `domain` plus `aliases` are: the apex is
-      // the proxy itself and the wildcard is every box that will ever exist.
-      managed: { domains: [request.domain, `*.${request.domain}`], dnsAuthorizations: [authorization.id] },
-    })
+    // The name is keyed to the domains and the delete comes last; see
+    // `certificate-name.ts` for what goes wrong under a fixed name.
+    const certificate = new gcp.certificatemanager.Certificate(
+      'ProxyCertificate',
+      {
+        name: certificateNameFor({
+          domain: request.domain,
+          base: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
+        }),
+        project,
+        // Both names, as the AWS side's `domain` plus `aliases` are: the apex is
+        // the proxy itself and the wildcard is every box that will ever exist.
+        managed: { domains: [request.domain, `*.${request.domain}`], dnsAuthorizations: [authorization.id] },
+      },
+      { deleteBeforeReplace: false },
+    )
     const certificates = new gcp.certificatemanager.CertificateMap('ProxyCertificateMap', {
       name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
       project,

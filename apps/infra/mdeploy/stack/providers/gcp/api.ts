@@ -35,6 +35,7 @@ import type { StorageBinding } from '../../storage.ts'
 import { containerEnvironment, secretIdOf } from './secret-env.ts'
 import { VOLUME_OBJECT_ACCESS_ROLE } from './storage.ts'
 import { instanceFor } from 'naming'
+import { certificateNameFor } from './certificate-name.ts'
 
 const onGcp = (storage: { binding: StorageBinding }): Extract<StorageBinding, { cloud: 'gcp' }> => {
   if (storage.binding.cloud !== 'gcp') throw new Error(`The GCP API was handed ${storage.binding.cloud} storage`)
@@ -391,13 +392,27 @@ export const gcpApiProvider =
       project,
       defaultService: backend.id,
     })
-    const certificate = new gcp.compute.ManagedSslCertificate('ApiCertificate', {
-      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
-      project,
-      // Both names this balancer answers on. A certificate covering only one of
-      // them fails the handshake for the other, which is the half every SDK uses.
-      managed: { domains: [domain, apiHost] },
-    })
+    /*
+     * The name carries the domains, and the replacement is a create first.
+     *
+     * A managed certificate's domains are immutable, so changing one replaces
+     * the certificate — and this provider deletes before it creates. The target
+     * proxy below still references the old one at that moment, so the delete is
+     * refused and the stage is left with a certificate it cannot remove and a
+     * replacement it cannot create. Naming it after its domains lets both exist
+     * at once, and `deleteBeforeReplace: false` is what puts the delete last.
+     */
+    const certificate = new gcp.compute.ManagedSslCertificate(
+      'ApiCertificate',
+      {
+        name: certificateNameFor({ domain, base: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }) }),
+        project,
+        // Both names this balancer answers on. A certificate covering only one of
+        // them fails the handshake for the other, which is the half every SDK uses.
+        managed: { domains: [domain, apiHost] },
+      },
+      { deleteBeforeReplace: false },
+    )
     const proxy = new gcp.compute.TargetHttpsProxy('ApiHttpsProxy', {
       name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
       project,
