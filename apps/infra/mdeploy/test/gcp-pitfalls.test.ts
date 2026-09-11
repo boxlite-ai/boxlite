@@ -27,6 +27,18 @@ import { gcpStackProviders } from '../stack/providers/gcp/index.ts'
 import { BOOT_DISK_TYPE, MACHINE as RUNNER_MACHINE } from '../stack/providers/gcp/runners.ts'
 import { PROXY_ENV_FILE, proxyEnvLine, startProxy } from '../stack/providers/gcp/edge.ts'
 
+/*
+ * The committed example, not this machine's stage file.
+ *
+ * Building a bundle resolves every image address, and `awsImages`/`gcpImages`
+ * default to `loadBuildConfig()`, which reads `.mstage.config.json` — a file
+ * a fresh checkout and every runner are without. Assigned rather than passed
+ * because the bundle factories take no environment: they are the deploy's own
+ * composition, and a stage file is what a deploy has. `??=` so a caller that
+ * already named one still wins.
+ */
+process.env.MSTAGE_CONFIG ??= fileURLToPath(new URL('../../.mstage.config.example.json', import.meta.url))
+
 const sourceOf = (module: string): string =>
   readFileSync(fileURLToPath(new URL(`../stack/providers/gcp/${module}.ts`, import.meta.url)), 'utf8')
 
