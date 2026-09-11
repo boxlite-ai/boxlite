@@ -153,7 +153,7 @@ boxlite.BoxOptions(
 
 # Check metrics
 metrics = await box.metrics()
-print(f"Memory: {metrics.memory_usage_bytes / (1024**2):.2f} MB")
+print(f"Memory: {metrics.memory_bytes / (1024**2):.2f} MB")
 ```
 
 For more troubleshooting help, see [FAQ & Troubleshooting](../faq.md).

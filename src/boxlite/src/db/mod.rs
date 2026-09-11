@@ -200,6 +200,26 @@ mod tests {
         assert!(tables.contains(&"snapshot".to_string()));
     }
 
+    /// `image_index` as it looked before v11 added `last_used_at`.
+    ///
+    /// A migration fixture has to build the *old* shape. Seeding it from
+    /// today's [`schema::IMAGE_INDEX_TABLE`] would hand the v10→v11 migration
+    /// a table that already carries the column it adds — a state no real
+    /// database can be in, and one that makes the fixture fail as soon as any
+    /// migration touches that table.
+    const IMAGE_INDEX_TABLE_V10: &str = r#"
+CREATE TABLE IF NOT EXISTS image_index (
+    reference TEXT PRIMARY KEY NOT NULL,
+    manifest_digest TEXT NOT NULL,
+    config_digest TEXT NOT NULL,
+    layers TEXT NOT NULL,
+    cached_at TEXT NOT NULL,
+    complete INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_image_index_manifest_digest ON image_index(manifest_digest);
+"#;
+
     #[test]
     fn test_db_migration_v4_to_v7() {
         let temp_dir = TempDir::new().unwrap();
@@ -212,7 +232,7 @@ mod tests {
             conn.execute_batch(schema::BOX_CONFIG_TABLE).unwrap();
             conn.execute_batch(schema::BOX_STATE_TABLE).unwrap();
             conn.execute_batch(schema::ALIVE_TABLE).unwrap();
-            conn.execute_batch(schema::IMAGE_INDEX_TABLE).unwrap();
+            conn.execute_batch(IMAGE_INDEX_TABLE_V10).unwrap();
 
             let now = Utc::now().to_rfc3339();
             conn.execute(
@@ -235,6 +255,19 @@ mod tests {
             )
             .unwrap();
         assert_eq!(version, schema::SCHEMA_VERSION);
+
+        // v11 added the image disk cache's eviction signal.
+        let has_last_used_at: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('image_index') WHERE name = 'last_used_at'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            has_last_used_at,
+            "image_index.last_used_at should exist after migration"
+        );
 
         // Verify v7 tables exist
         for table in ["base_disk", "base_disk_ref", "snapshot"] {
@@ -274,7 +307,7 @@ mod tests {
             conn.execute_batch(schema::BOX_CONFIG_TABLE).unwrap();
             conn.execute_batch(schema::BOX_STATE_TABLE).unwrap();
             conn.execute_batch(schema::ALIVE_TABLE).unwrap();
-            conn.execute_batch(schema::IMAGE_INDEX_TABLE).unwrap();
+            conn.execute_batch(IMAGE_INDEX_TABLE_V10).unwrap();
             conn.execute_batch(
                 r#"
                 CREATE TABLE IF NOT EXISTS snapshots (

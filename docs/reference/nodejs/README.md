@@ -835,6 +835,8 @@ Runtime-wide metrics.
 | `numRunningBoxes` | `number` | Currently running boxes |
 | `totalCommandsExecuted` | `number` | Total commands executed |
 | `totalExecErrors` | `number` | Total execution errors |
+| `imageDisksEvictedTotal` | `number` | Cached image disks given up under disk pressure |
+| `imageDiskBytesReclaimedTotal` | `number` | Bytes the image disk cache has freed, by either reclaim pass |
 
 ```typescript
 const metrics = await runtime.metrics();

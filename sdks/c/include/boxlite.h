@@ -427,6 +427,13 @@ typedef struct CRuntimeMetrics {
   int num_running_boxes;
   int total_commands_executed;
   int total_exec_errors;
+  // Cached image disks given up under disk pressure. Collecting
+  // unreachable garbage is not an eviction and is not counted here.
+  int image_disks_evicted_total;
+  // Allocated bytes the image disk cache has freed, by either reclaim
+  // pass. `i64` rather than `c_int`: a single evicted disk is commonly
+  // 141 MiB, so a host would overflow a 32-bit counter in a day.
+  int64_t image_disk_bytes_reclaimed_total;
 } CRuntimeMetrics;
 
 // Runtime metrics completion.

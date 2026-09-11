@@ -522,6 +522,48 @@ The SDK uses a dual-layer architecture:
 - Concurrent boxes: Limited by system resources
 - Memory footprint: ~50-100MB per box (depends on image)
 
+## Disk & Image Cache
+
+BoxLite caches image data under `~/.boxlite/images/`:
+
+| Directory | Holds | Reclaimed automatically |
+|-----------|-------|-------------------------|
+| `layers/`, `extracted/` | Compressed and unpacked layers, shared by every image that uses them | No |
+| `disk-images/` | One ext4 disk per image — the backing file each box boots from | **Yes** |
+
+**Reclaim.** A cached ext4 disk is deleted once nothing can reach it: no cached
+image reference names it *and* no box disk backs onto it. A stopped box still
+counts — its disk file still points at that base. The sweep runs at runtime
+startup, before a new image disk is built, and every 6 hours.
+
+Loading an image from a local OCI bundle now records it in that index too, so
+the disk built from the bundle stays reachable. A side effect: such an image
+now appears in `runtime.images.list()`, where it previously did not.
+
+**Watching it.** Both passes log what they freed, and the periodic one logs
+every tick whether or not it found anything, so a silent timer is visibly a
+dead timer. Those lines go to `$BOXLITE_HOME/logs/boxlite.log`. Two runtime
+metrics count the same events: `imageDisksEvictedTotal` counts disks given up
+under pressure — collecting unreachable garbage is not an eviction and is not
+counted — and `imageDiskBytesReclaimedTotal` counts allocated bytes freed by either
+pass.
+
+**Eviction.** When the volume holding the cache is nearly full, building a new
+image disk first evicts the least recently used cached disks, and stops as soon
+as usage is back under the low watermark. A box that then needs an evicted disk
+rebuilds it from the layer caches — slower than a cache hit, but with no network
+traffic. A disk some box backs onto is never evicted, however cold.
+
+**Environment overrides** (read once, at first use):
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `BOXLITE_MAX_IMAGE_DOWNLOAD_SIZE` | `21474836480` (20 GiB) | Most an image's layers may **declare** in total. Read from the manifest and refused before any layer is fetched. |
+| `BOXLITE_MAX_UNSIZED_BLOB_BYTES` | `268435456` (256 MiB) | Allowance, shared across one pull, for blobs whose manifest declares no size. A blob that declares a size is bounded by that declaration instead, so raising this does not help a legitimate image. |
+| `BOXLITE_IMAGE_DISK_GC_MIN_INTERVAL_SECS` | `300` | Minimum gap between two reclaim sweeps on the image-disk build path. |
+| `BOXLITE_IMAGE_DISK_EVICT_HIGH_PERCENT` | `85` | Volume usage, as `df` reports it, at which eviction starts. `100` disables eviction. |
+| `BOXLITE_IMAGE_DISK_EVICT_LOW_PERCENT` | `70` | Usage an eviction pass stops at. Keep it below the control plane's disk penalty threshold, or a completed eviction leaves the host still penalised. |
+
 ## Troubleshooting
 
 **"BoxLite native extension not found"**

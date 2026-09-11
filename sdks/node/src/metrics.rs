@@ -18,6 +18,10 @@ pub struct JsRuntimeMetrics {
     pub total_commands_executed: f64,
     /// Total command execution errors across all boxes
     pub total_exec_errors: f64,
+    /// Cached image disks given up under disk pressure
+    pub image_disks_evicted_total: f64,
+    /// Bytes the image disk cache has freed, by either reclaim pass
+    pub image_disk_bytes_reclaimed_total: f64,
 }
 
 impl From<RuntimeMetrics> for JsRuntimeMetrics {
@@ -28,6 +32,8 @@ impl From<RuntimeMetrics> for JsRuntimeMetrics {
             num_running_boxes: m.num_running_boxes() as f64,
             total_commands_executed: m.total_commands_executed() as f64,
             total_exec_errors: m.total_exec_errors() as f64,
+            image_disks_evicted_total: m.image_disks_evicted_total() as f64,
+            image_disk_bytes_reclaimed_total: m.image_disk_bytes_reclaimed_total() as f64,
         }
     }
 }

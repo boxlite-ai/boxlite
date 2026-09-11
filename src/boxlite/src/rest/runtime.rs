@@ -350,6 +350,12 @@ fn runtime_metrics_from_response(resp: &RuntimeMetricsResponse) -> RuntimeMetric
     storage
         .total_exec_errors
         .store(resp.total_exec_errors, Ordering::Relaxed);
+    storage
+        .image_disks_evicted
+        .store(resp.image_disks_evicted_total, Ordering::Relaxed);
+    storage
+        .image_disk_bytes_reclaimed
+        .store(resp.image_disk_bytes_reclaimed_total, Ordering::Relaxed);
 
     RuntimeMetrics::new(storage)
 }

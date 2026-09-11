@@ -187,7 +187,7 @@ impl ImageManager {
         path: std::path::PathBuf,
         reference: String,
     ) -> BoxliteResult<ImageObject> {
-        let manifest = self.store.load_from_local(path.clone()).await?;
+        let manifest = self.store.load_from_local(path.clone(), &reference).await?;
 
         // Let store compute cache dir (layout owns directory structure decisions)
         // Cache dir includes manifest digest for automatic invalidation when bundle changes

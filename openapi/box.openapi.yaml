@@ -2390,6 +2390,17 @@ components:
         total_exec_errors:
           type: integer
           description: Total execution errors across all boxes (monotonic)
+        image_disks_evicted_total:
+          type: integer
+          description: >-
+            Cached image disks given up under disk pressure (monotonic).
+            Collecting unreachable garbage is not an eviction and is not
+            counted here.
+        image_disk_bytes_reclaimed_total:
+          type: integer
+          description: >-
+            Allocated bytes the image disk cache has freed, by either reclaim
+            pass (monotonic).
 
     BoxMetrics:
       type: object

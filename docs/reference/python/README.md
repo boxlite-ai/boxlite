@@ -921,17 +921,20 @@ Aggregate metrics across all boxes.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `boxes_created` | `int` | Total boxes created |
-| `boxes_destroyed` | `int` | Total boxes destroyed |
-| `total_exec_calls` | `int` | Total command executions |
-| `active_boxes` | `int` | Currently running boxes |
+| `boxes_created_total` | `int` | Total boxes created |
+| `boxes_failed_total` | `int` | Boxes that failed to start |
+| `num_running_boxes` | `int` | Currently running boxes |
+| `total_commands_executed` | `int` | Total command executions |
+| `total_exec_errors` | `int` | Command executions that returned an error |
+| `image_disks_evicted_total` | `int` | Cached image disks given up under disk pressure |
+| `image_disk_bytes_reclaimed_total` | `int` | Bytes the image disk cache has freed, by either reclaim pass |
 
 ```python
 runtime = Boxlite.default()
 metrics = await runtime.metrics()
 
-print(f"Boxes created: {metrics.boxes_created}")
-print(f"Active boxes: {metrics.active_boxes}")
+print(f"Boxes created: {metrics.boxes_created_total}")
+print(f"Running boxes: {metrics.num_running_boxes}")
 ```
 
 ---
@@ -942,16 +945,16 @@ Per-box resource usage metrics.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `cpu_time_ms` | `int` | Total CPU time in milliseconds |
-| `memory_usage_bytes` | `int` | Current memory usage in bytes |
+| `cpu_percent` | `float \| None` | CPU usage, percent |
+| `memory_bytes` | `int \| None` | Current memory usage in bytes |
 | `network_bytes_sent` | `int` | Total bytes sent |
 | `network_bytes_received` | `int` | Total bytes received |
 
 ```python
 metrics = await box.metrics()
 
-print(f"CPU time: {metrics.cpu_time_ms}ms")
-print(f"Memory: {metrics.memory_usage_bytes / (1024**2):.2f} MB")
+print(f"CPU: {metrics.cpu_percent}%")
+print(f"Memory: {metrics.memory_bytes / (1024**2):.2f} MB")
 ```
 
 ---

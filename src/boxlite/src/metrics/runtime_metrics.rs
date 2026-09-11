@@ -19,12 +19,30 @@ pub struct RuntimeMetricsStorage {
     pub(crate) total_commands: Arc<AtomicU64>,
     /// Total command execution errors across all boxes
     pub(crate) total_exec_errors: Arc<AtomicU64>,
+    /// Cached image disks given up under space pressure
+    pub(crate) image_disks_evicted: Arc<AtomicU64>,
+    /// Bytes the image disk cache has freed, by either reclaim pass
+    pub(crate) image_disk_bytes_reclaimed: Arc<AtomicU64>,
 }
 
 impl RuntimeMetricsStorage {
     /// Create new runtime metrics storage.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Record an eviction pass that gave up `disks` cached image disks.
+    ///
+    /// Methods rather than public fields: the image disk cache needs to add to
+    /// two counters, not to know the shape of the other five.
+    pub(crate) fn record_image_disks_evicted(&self, disks: u64) {
+        self.image_disks_evicted.fetch_add(disks, Ordering::Relaxed);
+    }
+
+    /// Record `bytes` freed by a reclaim pass, whichever one it was.
+    pub(crate) fn record_image_disk_bytes_reclaimed(&self, bytes: u64) {
+        self.image_disk_bytes_reclaimed
+            .fetch_add(bytes, Ordering::Relaxed);
     }
 }
 
@@ -91,6 +109,28 @@ impl RuntimeMetrics {
     /// Never decreases (monotonic counter).
     pub fn total_exec_errors(&self) -> u64 {
         self.storage.total_exec_errors.load(Ordering::Relaxed)
+    }
+
+    /// Cached image disks given up under disk pressure.
+    ///
+    /// Counts the eviction pass only — disks that were still reachable cache
+    /// and were surrendered to make room. Garbage the reclaim pass removes is
+    /// not an eviction and is not counted here, because the two mean opposite
+    /// things about a host: one is tidy, the other is short of space.
+    /// Never decreases (monotonic counter).
+    pub fn image_disks_evicted_total(&self) -> u64 {
+        self.storage.image_disks_evicted.load(Ordering::Relaxed)
+    }
+
+    /// Bytes the image disk cache has freed, by either reclaim pass.
+    ///
+    /// Allocated bytes (`st_blocks * 512`), not apparent size: image disks are
+    /// sparse, so file length would overreport by several times.
+    /// Never decreases (monotonic counter).
+    pub fn image_disk_bytes_reclaimed_total(&self) -> u64 {
+        self.storage
+            .image_disk_bytes_reclaimed
+            .load(Ordering::Relaxed)
     }
 }
 
