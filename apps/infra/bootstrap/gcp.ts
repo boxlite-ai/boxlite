@@ -190,6 +190,11 @@ const DEPLOYER_ROLES = [
   // does not reach any of them — Certificate Manager is its own service, and
   // the apply dies at `ProxyDnsAuthorization` without this.
   'roles/certificatemanager.owner',
+  // The private zone that answers for `api.<domain>` inside the network, and
+  // the record in it. Cloud DNS is its own service too — `compute.admin` does
+  // not reach a managed zone, and the apply dies at `ApiInternalZone` with a
+  // bare `403: Forbidden` that names neither the permission nor the role.
+  'roles/dns.admin',
   /*
    * Reaching a live runner to replace its binary in place.
    *

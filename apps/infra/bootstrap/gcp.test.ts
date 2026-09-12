@@ -244,6 +244,7 @@ test('a service account is granted its roles on the run that created it', async 
       'roles/cloudsql.admin',
       'roles/compute.admin',
       'roles/compute.osAdminLogin',
+      'roles/dns.admin',
       'roles/iam.serviceAccountAdmin',
       'roles/iam.serviceAccountUser',
       'roles/iap.tunnelResourceAccessor',
@@ -290,7 +291,7 @@ test('a policy write that lost the read-modify-write race is retried, not report
   const roles = new Set(
     grants.map((argv: string[]) => argv.find((arg) => arg.startsWith('--role='))?.slice('--role='.length)),
   )
-  assert.equal(roles.size, 15, 'every role has to land, whichever attempt lands it')
+  assert.equal(roles.size, 16, 'every role has to land, whichever attempt lands it')
   // Three conflicts, three retries: the attempts exceed the roles by exactly
   // what was refused, so nothing was skipped and nothing retried blindly.
   assert.equal(grants.length, roles.size + 3, `attempts: ${grants.length}`)
