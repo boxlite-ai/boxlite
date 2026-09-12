@@ -80,13 +80,14 @@ const recorder = ({ existing = false, readsBeforeVisible = 0, etagConflicts = 0 
       }
       if (conflictsLeft > 0) {
         conflictsLeft -= 1
-        // gcloud's own words, from the run that hit this.
+        // gcloud's own words, from the run that hit this, with this fixture's own
+        // project in place of the one that ran.
         return {
           code: 1,
           stdout: '',
           stderr:
             'ERROR: (gcloud.projects.add-iam-policy-binding) Resource in projects ' +
-            '[boxlite-dev-project:setIamPolicy] is the subject of a conflict: There were concurrent ' +
+            '[boxlite-gcp-dev:setIamPolicy] is the subject of a conflict: There were concurrent ' +
             "policy changes. Please retry the whole read-modify-write with exponential backoff. The request's " +
             "ETag '\\007\\006[/\\320T\\264\\254' did not match the current policy's ETag '\\007\\006[/\\320\\201\\033h'.",
         }
