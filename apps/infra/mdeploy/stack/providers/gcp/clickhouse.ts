@@ -20,6 +20,7 @@
  * touches a machine.
  */
 
+import { renderClickHouseSchema } from '../../../../scripts/clickhouse-host.js'
 import type { ClickHouse, ClickHouseProvider, ClickHouseRequest } from '../../clickhouse.ts'
 import type { NetworkBinding, WorkloadRole } from '../../network.ts'
 import { identityFor, instanceFor } from 'naming'
@@ -38,10 +39,10 @@ export const MACHINE = { small: 'n4-standard-2', medium: 'n4-standard-4' } as co
  * The only disk type N4 attaches, for the boot disk and the data disk alike.
  *
  * The family takes no Persistent Disk at all, so a `pd-balanced` data disk is
- * refused at create time rather than silently downgraded. No GCP stage holds a
- * ClickHouse disk today — every one of them disables the module — so this is a
- * type chosen rather than a type migrated; an existing disk could not be
- * converted in place, and the retained one would have to be replaced by hand.
+ * refused at create time rather than silently downgraded. A type chosen rather
+ * than a type migrated: `dev` is the first GCP stage to hold a ClickHouse disk,
+ * and a disk already created could not be converted in place — the retained one
+ * would have to be replaced by hand, taking the history with it.
  */
 export const DISK_TYPE = 'hyperdisk-balanced'
 
@@ -80,6 +81,147 @@ const clickHouseSecret = (resourceName: string, project: string, secretId: strin
   })
   return { secret, version }
 }
+
+/**
+ * The OTLP schema, base64 so that one quoting problem cannot become two.
+ *
+ * The same vendored file the AWS side applies over SSM: seven tables and their
+ * retention, defined once and applied from both clouds. The collector creates
+ * none of it — `create_schema` is false in `apps/otel-collector/config.yaml` —
+ * so a host that skipped this answers every insert with `UNKNOWN_TABLE` while
+ * the instance, the firewall and the deploy all look healthy.
+ */
+const SCHEMA_BASE64 = Buffer.from(renderClickHouseSchema()).toString('base64')
+
+/**
+ * What the host does at every boot: mount its disk, install the server, then
+ * reconcile the schema, the two accounts and their grants.
+ *
+ * A pure function rather than a template inside the provider, so the half that
+ * decides SQL can be read back by a test; the provider only resolves the three
+ * secret versions into it.
+ */
+export const clickHouseStartupScript = ({
+  database,
+  writerUsername,
+  readerUsername,
+  adminRef,
+  writerRef,
+  readerRef,
+}: {
+  database: string
+  writerUsername: string
+  readerUsername: string
+  /** Secret Manager version names — `projects/…/secrets/…/versions/…`. */
+  adminRef: string
+  writerRef: string
+  readerRef: string
+}): string => `#!/bin/bash
+set -euo pipefail
+# The console as well as the file. Nobody can SSH to this host — OS Login
+# refuses an account outside the instance's organization — so a failure whose
+# only record is /var/log/clickhouse-setup.log is a failure nobody can read.
+# Never add \`set -x\`: the two account passwords below are arguments to
+# clickhouse-client, and this console is readable by anyone who can call
+# compute.instances.getSerialPortOutput.
+exec > >(tee /var/log/clickhouse-setup.log) 2>&1
+
+# The data disk, formatted once and mounted every boot.
+DEVICE=/dev/disk/by-id/google-clickhouse-data
+if ! blkid "$DEVICE" >/dev/null 2>&1; then mkfs.ext4 -m 0 -F "$DEVICE"; fi
+mkdir -p /var/lib/clickhouse
+grep -q "$DEVICE" /etc/fstab || echo "$DEVICE /var/lib/clickhouse ext4 defaults,nofail 0 2" >> /etc/fstab
+mount -a
+
+# A package manager still holding the lock from the image's own first boot, as
+# the runner's boot script and the AWS host's user data both wait out.
+while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
+
+# The repository's signing key, from the path ClickHouse actually publishes it
+# on: \`deb/pubkey.gpg\` answers 404 and has for years, and a 404 piped into gpg
+# is \`exit status 2\` — the whole of what the first host on this stage reported.
+# Retried and overwritable: the fetch is the first thing on this host to leave
+# the network, and \`--yes\` is what makes the second boot behave like the first,
+# since gpg refuses an existing keyring with that same status.
+curl -fsSL --retry 5 --retry-all-errors --connect-timeout 10 --max-time 120 https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key | gpg --dearmor --yes -o /usr/share/keyrings/clickhouse.gpg
+echo "deb [signed-by=/usr/share/keyrings/clickhouse.gpg] https://packages.clickhouse.com/deb stable main" > /etc/apt/sources.list.d/clickhouse.list
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y clickhouse-server clickhouse-client
+
+read_secret() { gcloud secrets versions access "$1" --format='get(payload.data)' | base64 -d; }
+ADMIN=$(read_secret "${adminRef}")
+WRITER=$(read_secret "${writerRef}")
+READER=$(read_secret "${readerRef}")
+
+# Hashes, not passwords, from here on. ClickHouse echoes the statement it failed
+# on — to this console, now — so a password that reaches SQL text or a command
+# line is a password in a log anyone with the serial port can read.
+hash_of() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
+ADMIN_HASH=$(hash_of "$ADMIN")
+WRITER_HASH=$(hash_of "$WRITER")
+READER_HASH=$(hash_of "$READER")
+
+# Listen on the private address only. The firewall says who may reach it; this
+# says it will not answer anywhere else even if that changes.
+cat > /etc/clickhouse-server/config.d/boxlite.xml << 'CONFIG'
+<clickhouse>
+  <listen_host>0.0.0.0</listen_host>
+  <http_port>${HTTP_PORT}</http_port>
+</clickhouse>
+CONFIG
+
+# The default account's password, in the file that owns it rather than in SQL:
+# \`default\` comes from users.xml, and that storage is read-only — an
+# \`ALTER USER default\` is refused with ACCESS_STORAGE_READONLY no matter who
+# asks. Written before the first start so the account never exists unprotected.
+cat > /etc/clickhouse-server/users.d/boxlite-default.xml << CONFIG
+<clickhouse>
+  <users>
+    <default>
+      <!-- The empty one users.xml ships. Removed rather than shadowed: two ways
+           to authenticate one account is a config the server refuses to load. -->
+      <password remove="remove"/>
+      <password_sha256_hex>$ADMIN_HASH</password_sha256_hex>
+    </default>
+  </users>
+</clickhouse>
+CONFIG
+chown root:clickhouse /etc/clickhouse-server/users.d/boxlite-default.xml
+chmod 640 /etc/clickhouse-server/users.d/boxlite-default.xml
+
+# What the server itself said, on the way out. systemd reports only that the
+# unit did not come up, and its own log is on a host nobody can open.
+dump_server_log() { tail -n 40 /var/log/clickhouse-server/clickhouse-server.err.log 2>/dev/null || true; }
+trap dump_server_log ERR
+
+systemctl enable clickhouse-server
+systemctl restart clickhouse-server
+# Every client call below authenticates as default, which now has a password.
+# Through the environment rather than \`--password\`, which would put it in argv
+# for every process on the host to read.
+export CLICKHOUSE_PASSWORD="$ADMIN"
+until clickhouse-client --query 'SELECT 1' >/dev/null 2>&1; do sleep 2; done
+
+# The schema and the two accounts, applied at boot. See this file's own note:
+# there is no SSM here, so this is where the reconcile lives. The tables come
+# first because the grants below name them.
+mkdir -p /opt/boxlite-clickhouse
+printf '%s' '${SCHEMA_BASE64}' | base64 -d > /opt/boxlite-clickhouse/otel-schema.sql
+clickhouse-client --multiquery < /opt/boxlite-clickhouse/otel-schema.sql
+
+clickhouse-client --query "CREATE DATABASE IF NOT EXISTS ${database}"
+# OR REPLACE rather than IF NOT EXISTS: a rotated password has to reach the
+# account, and the grants below are reissued on every boot anyway.
+clickhouse-client --query "CREATE USER OR REPLACE ${writerUsername} IDENTIFIED WITH sha256_hash BY '$WRITER_HASH'"
+clickhouse-client --query "CREATE USER OR REPLACE ${readerUsername} IDENTIFIED WITH sha256_hash BY '$READER_HASH'"
+# SHOW COLUMNS is not decoration, and neither is the absence of CREATE: the
+# exporter describes a table before its first insert and creates none of them,
+# so a writer without it fails on a database that is plainly there. The same
+# grants the AWS reconcile makes.
+clickhouse-client --query "GRANT SELECT, INSERT, SHOW COLUMNS ON ${database}.* TO ${writerUsername}"
+clickhouse-client --query "GRANT SELECT, SHOW COLUMNS ON ${database}.* TO ${readerUsername}"
+echo "clickhouse setup complete"
+`
 
 export const gcpClickHouseProvider =
   ({
@@ -203,50 +345,15 @@ export const gcpClickHouseProvider =
     )
 
     const startupScript = $resolve([admin.version.name, writer.version.name, reader.version.name]).apply(
-      ([adminRef, writerRef, readerRef]) => `#!/bin/bash
-set -euo pipefail
-exec > /var/log/clickhouse-setup.log 2>&1
-
-# The data disk, formatted once and mounted every boot.
-DEVICE=/dev/disk/by-id/google-clickhouse-data
-if ! blkid "$DEVICE" >/dev/null 2>&1; then mkfs.ext4 -m 0 -F "$DEVICE"; fi
-mkdir -p /var/lib/clickhouse
-grep -q "$DEVICE" /etc/fstab || echo "$DEVICE /var/lib/clickhouse ext4 defaults,nofail 0 2" >> /etc/fstab
-mount -a
-
-curl -fsSL https://packages.clickhouse.com/deb/pubkey.gpg | gpg --dearmor -o /usr/share/keyrings/clickhouse.gpg
-echo "deb [signed-by=/usr/share/keyrings/clickhouse.gpg] https://packages.clickhouse.com/deb stable main" > /etc/apt/sources.list.d/clickhouse.list
-apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y clickhouse-server clickhouse-client
-
-read_secret() { gcloud secrets versions access "$1" --format='get(payload.data)' | base64 -d; }
-ADMIN=$(read_secret "${adminRef}")
-WRITER=$(read_secret "${writerRef}")
-READER=$(read_secret "${readerRef}")
-
-# Listen on the private address only. The firewall says who may reach it; this
-# says it will not answer anywhere else even if that changes.
-cat > /etc/clickhouse-server/config.d/boxlite.xml << 'CONFIG'
-<clickhouse>
-  <listen_host>0.0.0.0</listen_host>
-  <http_port>${HTTP_PORT}</http_port>
-</clickhouse>
-CONFIG
-
-systemctl enable clickhouse-server
-systemctl restart clickhouse-server
-until clickhouse-client --query 'SELECT 1' >/dev/null 2>&1; do sleep 2; done
-
-# The schema and the two accounts, applied at boot. See this file's own note:
-# there is no SSM here, so this is where the reconcile lives.
-clickhouse-client --query "CREATE DATABASE IF NOT EXISTS ${request.database}"
-clickhouse-client --query "CREATE USER IF NOT EXISTS ${request.writerUsername} IDENTIFIED BY '$WRITER'"
-clickhouse-client --query "CREATE USER IF NOT EXISTS ${request.readerUsername} IDENTIFIED BY '$READER'"
-clickhouse-client --query "GRANT INSERT, SELECT, CREATE, ALTER ON ${request.database}.* TO ${request.writerUsername}"
-clickhouse-client --query "GRANT SELECT ON ${request.database}.* TO ${request.readerUsername}"
-clickhouse-client --query "ALTER USER default IDENTIFIED BY '$ADMIN'"
-echo "clickhouse setup complete"
-`,
+      ([adminRef, writerRef, readerRef]) =>
+        clickHouseStartupScript({
+          database: request.database,
+          writerUsername: request.writerUsername,
+          readerUsername: request.readerUsername,
+          adminRef,
+          writerRef,
+          readerRef,
+        }),
     )
 
     const instance = new gcp.compute.Instance(

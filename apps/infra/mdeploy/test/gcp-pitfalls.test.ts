@@ -21,7 +21,12 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { apiEnvironmentFrom } from '../src/api-environment.ts'
 import { alertPolicyFilter } from '../stack/providers/gcp/alarms.ts'
-import { DISK_TYPE as CLICKHOUSE_DISK, MACHINE as CLICKHOUSE_MACHINE } from '../stack/providers/gcp/clickhouse.ts'
+import { renderClickHouseSchema } from '../../scripts/clickhouse-host.js'
+import {
+  DISK_TYPE as CLICKHOUSE_DISK,
+  MACHINE as CLICKHOUSE_MACHINE,
+  clickHouseStartupScript,
+} from '../stack/providers/gcp/clickhouse.ts'
 import { MACHINE as DATABASE_MACHINE } from '../stack/providers/gcp/database.ts'
 import { gcpStackProviders } from '../stack/providers/gcp/index.ts'
 import { MANAGED_PROXY_CIDR, SUBNET_CIDR } from '../stack/providers/gcp/network.ts'
@@ -181,6 +186,92 @@ test('the telemetry database admits every identity that speaks to it, not just t
   assert.deepEqual([...asked].sort(), ['api', 'otel-collector'])
   // And the rule is keyed on the whole list it was handed rather than one of it.
   assert.match(sourceOf('clickhouse'), /sourceServiceAccounts: callers/)
+})
+
+/** The script as a host gets it, with three secret versions already resolved. */
+const startupScript = () =>
+  clickHouseStartupScript({
+    database: 'otel',
+    writerUsername: 'otel_writer',
+    readerUsername: 'otel_reader',
+    adminRef: 'projects/p/secrets/admin/versions/1',
+    writerRef: 'projects/p/secrets/writer/versions/1',
+    readerRef: 'projects/p/secrets/reader/versions/1',
+  })
+
+test('the host creates the tables, because the exporter creates none', () => {
+  /*
+   * `create_schema` is false in `apps/otel-collector/config.yaml`, and the AWS
+   * side applies `clickhouse/otel-schema-v0.144.0.sql` over SSM. A GCP host that
+   * created only the database and the two accounts answers every insert with
+   * `UNKNOWN_TABLE`, while the instance, the firewall and the deploy all look
+   * healthy and the collector retries the same batch forever.
+   */
+  const script = startupScript()
+  const embedded = /printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d/.exec(script)
+  assert.ok(embedded, 'the startup script carries no schema at all')
+  assert.equal(Buffer.from(embedded[1], 'base64').toString('utf8'), renderClickHouseSchema())
+  assert.ok(
+    script.indexOf('otel-schema.sql') < script.indexOf('GRANT SELECT, INSERT'),
+    'the grants name tables the host has not created yet',
+  )
+})
+
+test('the writer is granted SHOW COLUMNS, which the exporter needs before its first insert', () => {
+  /*
+   * The exporter describes a table before writing to it, so a writer with
+   * INSERT alone fails against a database that is plainly there — which is why
+   * the AWS reconcile grants this and then checks the grant. `CREATE` is the
+   * other half: the host owns the schema now, so nothing else is given it.
+   */
+  const script = startupScript()
+  assert.match(script, /GRANT SELECT, INSERT, SHOW COLUMNS ON otel\.\* TO otel_writer/)
+  assert.match(script, /GRANT SELECT, SHOW COLUMNS ON otel\.\* TO otel_reader/)
+  assert.equal(/GRANT[^\n]*\bCREATE\b/.test(script), false, 'a writer that creates nothing needs no CREATE')
+})
+
+test('the boot script survives a second boot, and reports where someone can read it', () => {
+  /*
+   * The first host on this stage died two seconds in with `exit status 2`, and
+   * the reason was unreadable: every line went to a file on a host nobody can
+   * open — OS Login refuses accounts outside the instance's organization, which
+   * is the same refusal that stops `UpgradeRunnerBinary`. `gpg` answers an
+   * existing keyring with that same status, so a reset would have reproduced it
+   * forever; the dpkg lock the image holds on its own first boot is the other
+   * thing both the runner's boot script and the AWS host's user data wait out.
+   */
+  const script = startupScript()
+  assert.match(script, /exec > >\(tee \/var\/log\/clickhouse-setup\.log\) 2>&1/)
+  assert.match(script, /while fuser \/var\/lib\/dpkg\/lock-frontend/)
+  assert.match(script, /gpg --dearmor --yes/)
+  assert.match(script, /curl -fsSL --retry 5 --retry-all-errors/)
+  // The key's real address. `deb/pubkey.gpg` answers 404, and `curl -f` piping
+  // nothing into gpg is exactly the `exit status 2` the first host reported.
+  assert.match(script, /https:\/\/packages\.clickhouse\.com\/rpm\/lts\/repodata\/repomd\.xml\.key/)
+  assert.equal(/curl[^\n]*deb\/pubkey\.gpg/.test(script), false, 'the dead key path is fetched again')
+  // The console it now writes to is readable by anyone who can fetch the serial
+  // port, and two account passwords pass through clickhouse-client's argv.
+  assert.equal(/^set -x/m.test(script), false, 'tracing this script publishes both passwords')
+})
+
+test('no password reaches a statement, because the console now reads every failed one', () => {
+  /*
+   * Two failures, one shape. `ALTER USER default` is refused outright — that
+   * account lives in users.xml, whose storage is read-only — and ClickHouse
+   * reports the refusal by echoing the statement, password and all, onto the
+   * serial console this script now writes to. So the default account's password
+   * goes into users.d as a hash before the first start, the two SQL accounts are
+   * identified by hash, and the admin password reaches the client through the
+   * environment rather than argv.
+   */
+  const script = startupScript()
+  assert.match(script, /<password_sha256_hex>\$ADMIN_HASH<\/password_sha256_hex>/)
+  assert.match(script, /IDENTIFIED WITH sha256_hash BY '\$WRITER_HASH'/)
+  assert.match(script, /export CLICKHOUSE_PASSWORD="\$ADMIN"/)
+  // Commands only: the comments above each of these name what they avoid.
+  assert.equal(/^[^#\n]*IDENTIFIED BY '/m.test(script), false, 'a password in a statement that gets echoed')
+  assert.equal(/^[^#\n]*ALTER USER default/m.test(script), false, 'users_xml refuses this, every time')
+  assert.equal(/^[^#\n]*--password/m.test(script), false, 'argv is readable by every process on the host')
 })
 
 // ── the database's machine ──────────────────────────────────────────────────
