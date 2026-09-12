@@ -158,9 +158,7 @@ impl Zygote {
         send_request(fd, &ZygoteRequest::Build(spec), fds)?;
         match recv_response(fd)? {
             ZygoteResponse::Build(BuildResult::Spawned { pid }) => Ok(Pid::from_raw(pid)),
-            ZygoteResponse::Build(BuildResult::Failed { error }) => {
-                Err(BoxliteError::Internal(error))
-            }
+            ZygoteResponse::Build(BuildResult::Failed { error }) => Err(build_failure(error)),
             other => Err(BoxliteError::Internal(format!(
                 "zygote protocol violation: Build answered with {other:?}"
             ))),
@@ -199,6 +197,16 @@ impl Zygote {
                 "zygote protocol violation: environment probe answered with {other:?}"
             ))),
         }
+    }
+}
+
+/// Youki stringifies payload-exec failures before they reach us; the pinned
+/// rev's marker keeps caller-caused exec failures out of `Internal`.
+fn build_failure(error: String) -> BoxliteError {
+    if error.contains("exec process failed with error") {
+        BoxliteError::Execution(error)
+    } else {
+        BoxliteError::Internal(error)
     }
 }
 
@@ -682,6 +690,28 @@ mod tests {
         let json = serde_json::to_vec(&result).unwrap();
         let decoded: BuildResult = serde_json::from_slice(&json).unwrap();
         assert_eq!(result, decoded);
+    }
+
+    /// Pins both sides of the marker `build_failure` matches on. The guest
+    /// answers `Internal` — and so a bare 500 — whenever youki's wording
+    /// changes, so the strings below are taken from the pinned rev's own
+    /// sources rather than from a guess about what a failure looks like.
+    #[test]
+    fn build_failure_classifies_the_youki_exec_marker() {
+        // channel.rs wraps ExecError as "exec process failed with error {0}"
+        // around the missing-path text workload/default.rs builds.
+        let missing_binary = "build failed: exec process failed with error executable \
+                              '/nonexistent/binary' not found in $PATH";
+        match build_failure(missing_binary.to_string()) {
+            BoxliteError::Execution(message) => assert_eq!(message, missing_binary),
+            other => panic!("a youki payload failure must be Execution, got {other:?}"),
+        }
+
+        let runtime_fault = "build failed: failed to set container root path: Permission denied";
+        match build_failure(runtime_fault.to_string()) {
+            BoxliteError::Internal(message) => assert_eq!(message, runtime_fault),
+            other => panic!("a build fault must stay Internal, got {other:?}"),
+        }
     }
 
     // --- ZygoteRequest/ZygoteResponse tagged enum serde tests ---
