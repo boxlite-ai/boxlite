@@ -400,6 +400,23 @@ test('a stage with no telemetry runs the BoxLite exporter alone', () => {
   assert.equal(read(on.seen.collector.request.environment.CLICKHOUSE_USERNAME), 'otel_writer')
 })
 
+test('each consumer is told the endpoint under the name it actually reads', () => {
+  /*
+   * Two programs, two contracts: the collector's ClickHouse exporter reads
+   * `CLICKHOUSE_ENDPOINT` and the API reads `CLICKHOUSE_URL`. One name for both
+   * is not a container that fails to start — the collector falls back to its own
+   * `clickhouse-disabled.invalid` default and retries every batch forever, with
+   * the database running and the deploy green.
+   */
+  const { providers, seen } = bundle()
+  deployStack({ providers, config, inputs: inputs() })
+
+  assert.equal(read(seen.collector.request.environment.CLICKHOUSE_ENDPOINT), 'http://10.0.0.9:8123')
+  assert.equal(seen.collector.request.environment.CLICKHOUSE_URL, undefined, 'the collector reads no such name')
+  assert.equal(read(seen.api.request.environment.CLICKHOUSE_URL), 'http://10.0.0.9:8123')
+  assert.equal(seen.api.request.environment.CLICKHOUSE_ENDPOINT, undefined, 'nor does the API read the other')
+})
+
 test('a stage that sends no mail carries no SMTP host, which is what disables it', () => {
   const { providers, seen } = bundle()
   deployStack({ providers, config, inputs: inputs({ senderDomain: null }) })

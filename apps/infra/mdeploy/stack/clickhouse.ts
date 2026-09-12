@@ -79,6 +79,22 @@ export type ClickHouseProvider = (request: ClickHouseRequest) => ClickHouse
 export const CLICKHOUSE_PASSWORD_VARIABLE = 'CLICKHOUSE_PASSWORD'
 
 /**
+ * The variable each consumer reads the endpoint under.
+ *
+ * Two names for one value, because the two programs reading it are unrelated
+ * and each already had its own contract: the collector's ClickHouse exporter
+ * takes `CLICKHOUSE_ENDPOINT` (`apps/otel-collector/config.yaml`) and the API
+ * takes `CLICKHOUSE_URL` (`apps/api/src/config/configuration.ts`). Sending one
+ * name to both leaves the other on its own default, and the collector's default
+ * is `clickhouse-disabled.invalid` — every batch retried forever against a host
+ * that does not exist, with nothing in the deploy having failed.
+ *
+ * Keyed on the account because in this stack the writer is the collector and
+ * the reader is the API; a third consumer arrives with an account of its own.
+ */
+const ENDPOINT_VARIABLE = { writer: 'CLICKHOUSE_ENDPOINT', reader: 'CLICKHOUSE_URL' } as const
+
+/**
  * What one account needs in a container's plain environment.
  *
  * The password is deliberately absent — it arrives by reference under
@@ -92,7 +108,7 @@ export const clickHouseEnvironment = (
 ): Record<string, $util.Output<string> | string> =>
   clickhouse.active
     ? {
-        CLICKHOUSE_URL: clickhouse.url,
+        [ENDPOINT_VARIABLE[account]]: clickhouse.url,
         CLICKHOUSE_DATABASE: clickhouse.database,
         CLICKHOUSE_USERNAME: clickhouse[account].username,
         CLICKHOUSE_CREDENTIAL_VERSION: clickhouse[account].credentialVersion,
