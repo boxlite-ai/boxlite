@@ -156,6 +156,11 @@ export const gcpStackProviders = ({
         // it. Cloud Run admits named invokers and nobody else.
         callers: [placement(network, 'proxy').serviceAccount, placement(network, 'runner').serviceAccount],
         zoneId,
+        // The network itself and the runner's identity, for the internal
+        // balancer and for the rule that keeps a runner off the public one. A
+        // placement carries neither; see `api.ts`.
+        network: binding(network).network,
+        runnerAccount: placement(network, 'runner').serviceAccount,
       }),
     // Not a Cloud Run service: Cloud Run cannot be a backend of the balancer
     // this needs, so the proxy runs on VMs. See `edge.ts`.

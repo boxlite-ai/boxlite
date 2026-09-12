@@ -24,6 +24,7 @@ import { alertPolicyFilter } from '../stack/providers/gcp/alarms.ts'
 import { DISK_TYPE as CLICKHOUSE_DISK, MACHINE as CLICKHOUSE_MACHINE } from '../stack/providers/gcp/clickhouse.ts'
 import { MACHINE as DATABASE_MACHINE } from '../stack/providers/gcp/database.ts'
 import { gcpStackProviders } from '../stack/providers/gcp/index.ts'
+import { MANAGED_PROXY_CIDR, SUBNET_CIDR } from '../stack/providers/gcp/network.ts'
 import { BOOT_DISK_TYPE, MACHINE as RUNNER_MACHINE } from '../stack/providers/gcp/runners.ts'
 import { PROXY_ENV_FILE, proxyEnvLine, startProxy } from '../stack/providers/gcp/edge.ts'
 
@@ -539,4 +540,102 @@ test('a value cannot end its own quoting or its own line', () => {
   assert.match(proxyEnvLine('K', "a'b"), /'a'\\''b'/)
   assert.throws(() => proxyEnvLine('K', 'a\nb'), /contains a newline/)
   assert.throws(() => proxyEnvLine('K', 'a\rb'), /contains a newline/)
+})
+
+
+/** A CIDR as the two numbers that decide whether two of them can overlap. */
+const rangeOf = (cidr: string): { first: number; last: number } => {
+  const [address, width] = cidr.split('/')
+  const first = address.split('.').reduce((value, octet) => value * 256 + Number(octet), 0)
+  return { first, last: first + 2 ** (32 - Number(width)) - 1 }
+}
+
+test('the proxy-only subnet cannot collide with the range Google picks for Private Service Access', () => {
+  /*
+   * The internal balancer's Envoys need a subnet of their own, and the range it
+   * takes is the one thing about it nobody can see fail in review: the Private
+   * Service Access range beside it is a `/16` *Google* allocates, with no
+   * address written down anywhere in this repository.
+   *
+   * What makes a fixed range safe is not luck. Service networking cannot hand
+   * out a range overlapping a subnet of the network it peers with, so the only
+   * `/16` it can never pick is the one the workload subnet already sits in —
+   * and a proxy range inside that `/16` is therefore unreachable by the
+   * allocator. Moving either constant out of that `/16`, or letting the two
+   * subnets overlap, breaks the argument silently and the deploy months later.
+   */
+  const workload = rangeOf(SUBNET_CIDR)
+  const managed = rangeOf(MANAGED_PROXY_CIDR)
+  assert.ok(workload.last < managed.first || managed.last < workload.first, 'the two subnets overlap')
+  const slash16 = (cidr: string) => Math.floor(rangeOf(cidr).first / 2 ** 16)
+  assert.equal(
+    slash16(MANAGED_PROXY_CIDR),
+    slash16(SUBNET_CIDR),
+    'the proxy subnet sits in a /16 the workload subnet does not block, so the allocator may take it',
+  )
+})
+
+test('the runner still reaches the control plane by a name this stack owns', () => {
+  /*
+   * `address` is what a runner is handed, and it becomes `BOXLITE_API_URL` in a
+   * systemd unit written at first boot. `runner-update.ts` replaces the binary
+   * and nothing else, so that value is frozen for the life of the host.
+   *
+   * This is the guard on the whole internal-balancer design. The shorter way to
+   * keep a runner off the public path is to hand it Cloud Run's own `run.app`
+   * address, and it works — until the service is renamed, at which point Google
+   * derives a different hostname and every host already running is left calling
+   * a name that answers nothing, with no mechanism to be told otherwise. The
+   * internal balancer exists so the name can stay ours.
+   */
+  assert.match(sourceOf('api'), /address: \$util\.output\(`https:\/\/\$\{apiHost\}`\)/)
+})
+
+test('the private zone shadows the API hostname and nothing else', () => {
+  /*
+   * A zone is authoritative for everything at and below its name, and the
+   * obvious spelling — one zone for `<domain>` — would make this network's
+   * resolver authoritative for the dashboard and every box hostname too. Both
+   * are served from balancers with no internal address at all, so the records
+   * that answer for them today would simply stop being seen in here.
+   */
+  const source = sourceOf('api')
+  assert.match(source, /visibility: 'private'/)
+  assert.match(source, /dnsName: `\$\{apiHost\}\.`/)
+  assert.equal(/dnsName: `\$\{domain\}\.`/.test(source), false, 'the zone covers the whole stack domain')
+})
+
+test('the internal balancer is internal, and carries a certificate a regional proxy can hold', () => {
+  /*
+   * Two values that fail apart from each other. A regional target proxy refuses
+   * the global `ManagedSslCertificate` the public path uses — it takes a
+   * Certificate Manager certificate created in the same region — and that
+   * certificate has to prove the domain through DNS, because the reachability
+   * check the public one passes cannot be run against a balancer nothing
+   * outside the network can reach.
+   */
+  const source = sourceOf('api')
+  assert.match(source, /new gcp\.compute\.RegionTargetHttpsProxy\(/)
+  assert.match(source, /loadBalancingScheme: 'INTERNAL_MANAGED'/)
+  assert.match(source, /certificateManagerCertificates: \[/)
+  assert.match(source, /location: region,\n\s+managed: \{ domains: \[apiHost\], dnsAuthorizations:/)
+})
+
+test('the runner is fenced off one address, not off the internet, and only once the internal path serves', () => {
+  /*
+   * The fence is what turns "resolves internally" into "cannot do otherwise",
+   * and it has two ways to be wrong that an apply reports as success.
+   *
+   * Too wide is a host that never boots: a runner downloads its own binary and
+   * pulls every image over the same NAT, so an egress deny on the internet
+   * strands it before it registers. Too early is the same outage from the other
+   * side — a fence that lands before the internal balancer and its record are
+   * serving closes the only route the fleet still has.
+   */
+  const source = sourceOf('api')
+  assert.match(source, /direction: 'EGRESS'/)
+  assert.match(source, /destinationRanges: \[address\.address\.apply\(/)
+  assert.match(source, /targetServiceAccounts: \[runnerAccount\]/)
+  assert.equal(/destinationRanges: \['0\.0\.0\.0\/0'\]/.test(source), false, 'the deny covers the internet')
+  assert.match(source, /\{ dependsOn: \[internalForwarding, internalRecord\] \}/)
 })

@@ -37,7 +37,25 @@ import { identityFor, instanceFor } from 'naming'
 const INTERNAL_PORTS = [API_PORT, PROXY_PORT, RUNNER_PORT, OTLP_HTTP_PORT].map(String)
 
 /** The subnet workloads sit in. Private Service Access gets its own below. */
-const SUBNET_CIDR = '10.20.0.0/20'
+export const SUBNET_CIDR = '10.20.0.0/20'
+
+/**
+ * The subnet the region's Envoy load balancers put their own proxies in.
+ *
+ * It holds no workload and is not a placement: `REGIONAL_MANAGED_PROXY` is
+ * where Google runs the proxies of every regional Envoy balancer in this
+ * network and region, and there may be exactly one active. So it belongs to the
+ * network rather than to the balancer that needs it — `api.ts` builds the
+ * internal balancer that uses it, and a second such balancer would find this
+ * already here rather than colliding with its own copy.
+ *
+ * Adjacent to the workload range rather than carved out of it, and safe against
+ * the Private Service Access range below even though that one is allocated by
+ * Google: the only `/16` containing `10.20.16.0/24` is `10.20.0.0/16`, which
+ * overlaps `SUBNET_CIDR`, and service networking cannot hand out a range that
+ * overlaps a subnet of the network it peers with.
+ */
+export const MANAGED_PROXY_CIDR = '10.20.16.0/24'
 
 /**
  * The range reserved for Google's own managed services.
@@ -85,6 +103,18 @@ export const gcpNetworkProvider =
       // Cloud Run reaches this subnet through a connector or direct VPC egress;
       // both require Google's own access to the range.
       privateIpGoogleAccess: true,
+    })
+
+    const managedProxy = new gcp.compute.Subnetwork('ManagedProxySubnetwork', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'managed-proxy' }),
+      project,
+      region,
+      network: network.id,
+      ipCidrRange: MANAGED_PROXY_CIDR,
+      // `ACTIVE` is the one that serves. A subnet reserved this way takes no
+      // instance and no placement; see the note on `MANAGED_PROXY_CIDR`.
+      purpose: 'REGIONAL_MANAGED_PROXY',
+      role: 'ACTIVE',
     })
 
     /*
@@ -263,6 +293,7 @@ export const gcpNetworkProvider =
       placementFor,
       ready: [
         privateServiceAccess,
+        managedProxy,
         internal,
         runnerIngress,
         runnerIap,

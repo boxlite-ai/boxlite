@@ -1,5 +1,12 @@
 /*
- * The control plane as a Cloud Run service, behind a global load balancer.
+ * The control plane as a Cloud Run service, behind two load balancers.
+ *
+ * A global one for the internet and a regional internal one for this network,
+ * both in front of the same service and both answering `api.<domain>`. The
+ * second exists because the first is the only way in that ever existed, and a
+ * runner sitting one subnet away was taking it — out through Cloud NAT to an
+ * anycast address and back. The note above `ApiInternalEndpointGroup` says how
+ * the name comes to mean two different addresses depending on who asks.
  *
  * The load balancer is what makes the two front doors of the AWS side one door
  * here. There, a CDN serves the dashboard's assets at the root domain and a
@@ -149,6 +156,8 @@ export const gcpApiProvider =
     domain,
     callers,
     zoneId,
+    network,
+    runnerAccount,
   }: {
     dependencies: ApiDependencies
     project: string
@@ -159,6 +168,15 @@ export const gcpApiProvider =
     callers: $util.Output<string>[]
     /** The Cloudflare zone the record is written into. */
     zoneId: string
+    /**
+     * The network itself, for the two resources below that name one: the
+     * internal balancer's forwarding rule and the runner's egress rule. A
+     * placement carries only a subnetwork, and neither is derivable from the
+     * other by string surgery — the same reason `edge.ts` is handed it.
+     */
+    network: $util.Output<string>
+    /** The runner's identity, which the egress rule below is keyed on. */
+    runnerAccount: $util.Output<string>
   }): ApiProvider =>
   (request: ApiRequest): Api => {
     const placement = dependencies.placement as Extract<Placement, { cloud: 'gcp' }>
@@ -460,6 +478,206 @@ export const gcpApiProvider =
       ttl: 60,
     })
 
+    /*
+     * The same control plane, reached without leaving the network.
+     *
+     * Everything above is the public front door: a global balancer on an
+     * anycast address, and two Cloudflare records pointing at it. A runner is a
+     * VM in this VPC with no address of its own, so `api.<domain>` sends its
+     * registration and every poll out through Cloud NAT to that public address
+     * and back in — for two workloads a subnet apart.
+     *
+     * A regional internal balancer in front of the same service, and a private
+     * zone that answers for `api.<domain>` inside this network alone, keeps the
+     * call on the wire it never had to leave. The hostname does not change, and
+     * that is the whole reason it is built this way rather than by handing the
+     * runner Cloud Run's own `run.app` address: `BOXLITE_API_URL` is written
+     * into a host's systemd unit at first boot and `runner-update.ts` replaces
+     * only the binary, so a name this stack does not own becomes a name no
+     * existing host can be told about. Keeping the name means every host —
+     * including one created before any of this existed — resolves it to the
+     * address below the moment the zone is there.
+     */
+    const internalEndpointGroup = new gcp.compute.RegionNetworkEndpointGroup('ApiInternalEndpointGroup', {
+      // Its own group rather than the public balancer's. A serverless group
+      // costs nothing, and one shared between an `EXTERNAL_MANAGED` and an
+      // `INTERNAL_MANAGED` backend ties the internal path's lifecycle to the
+      // public one's for no gain.
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api-internal-neg' }),
+      project,
+      region,
+      networkEndpointType: 'SERVERLESS',
+      cloudRun: { service: service.name },
+    })
+    const internalBackend = new gcp.compute.RegionBackendService('ApiInternalBackend', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api-internal' }),
+      project,
+      region,
+      loadBalancingScheme: 'INTERNAL_MANAGED',
+      protocol: 'HTTPS',
+      backends: [{ group: internalEndpointGroup.id }],
+      // No `timeoutSec`, for the reason the public backend gives above: a
+      // serverless group's request deadline is Cloud Run's own.
+    })
+    const internalUrlMap = new gcp.compute.RegionUrlMap('ApiInternalUrlMap', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api-internal' }),
+      project,
+      region,
+      defaultService: internalBackend.id,
+    })
+
+    /*
+     * A certificate for the same name, issued a second time and a different way.
+     *
+     * The `ManagedSslCertificate` above is a global resource and a regional
+     * target proxy will not take one, so this path needs its own — and
+     * Certificate Manager is the only issuer with a regional form. It proves
+     * the domain through DNS rather than by being reached, which is what makes
+     * it possible at all: nothing on the internet can reach this balancer, so
+     * the reachability check the public certificate passes could never pass
+     * here.
+     *
+     * The challenge record is published first. A certificate that starts
+     * proving before the record exists does not fail, it waits out Google's
+     * retry — which is a deploy that sits in `PROVISIONING` for no reason
+     * anybody watching it can see.
+     */
+    const internalAuthorization = new gcp.certificatemanager.DnsAuthorization('ApiInternalDnsAuthorization', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api-internal' }),
+      project,
+      location: region,
+      domain: apiHost,
+    })
+    const internalChallenge = new cloudflare.Record('ApiInternalDnsAuthorizationRecord', {
+      zoneId,
+      name: internalAuthorization.dnsResourceRecords[0].name,
+      type: internalAuthorization.dnsResourceRecords[0].type,
+      content: internalAuthorization.dnsResourceRecords[0].data,
+      proxied: false,
+      ttl: 60,
+    })
+    // The name carries the domain and the delete comes last, for the reason
+    // `certificate-name.ts` gives for the two certificates that already do it.
+    const internalCertificate = new gcp.certificatemanager.Certificate(
+      'ApiInternalCertificate',
+      {
+        name: certificateNameFor({
+          domain: apiHost,
+          base: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api-internal' }),
+        }),
+        project,
+        location: region,
+        managed: { domains: [apiHost], dnsAuthorizations: [internalAuthorization.id] },
+      },
+      { deleteBeforeReplace: false, dependsOn: [internalChallenge] },
+    )
+    const internalProxy = new gcp.compute.RegionTargetHttpsProxy('ApiInternalHttpsProxy', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api-internal' }),
+      project,
+      region,
+      urlMap: internalUrlMap.id,
+      // A Certificate Manager certificate attaches by resource path, where the
+      // load balancer's own kind attaches by id under `sslCertificates`. A
+      // regional proxy takes one spelling or the other and refuses both.
+      certificateManagerCertificates: [
+        internalCertificate.id.apply((id: string) => `//certificatemanager.googleapis.com/${id}`),
+      ],
+    })
+    /*
+     * The address, out of the one subnet this network has — which is also where
+     * every client of it sits. Reserved rather than left ephemeral for the same
+     * reason the public one is: it is what a DNS record points at.
+     */
+    const internalAddress = new gcp.compute.Address('ApiInternalAddress', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api-internal' }),
+      project,
+      region,
+      addressType: 'INTERNAL',
+      subnetwork: placement.subnetwork,
+    })
+    const internalForwarding = new gcp.compute.ForwardingRule('ApiInternalForwardingRule', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api-internal' }),
+      project,
+      region,
+      target: internalProxy.id,
+      portRange: '443',
+      ipAddress: internalAddress.address,
+      loadBalancingScheme: 'INTERNAL_MANAGED',
+      // The Envoys this rule runs on live in the network's `REGIONAL_MANAGED_PROXY`
+      // subnet, which `network.ts` owns and every workload already waits on.
+      network,
+      subnetwork: placement.subnetwork,
+    })
+
+    /*
+     * The private zone: the half that changes nothing and decides everything.
+     *
+     * `api.<domain>` keeps answering publicly — the Cloudflare record above is
+     * untouched, and the dashboard and every SDK still reach the global
+     * balancer. This zone is visible to this network and nowhere else, and
+     * inside it the same name resolves to the internal address instead. A VM
+     * resolves through the metadata server, which is authoritative for a bound
+     * private zone and forwards nothing upstream, so the public record is not
+     * queried at all rather than queried and overridden.
+     *
+     * Scoped to the one hostname rather than to `<domain>`: a zone for the
+     * whole stack domain would shadow the dashboard and the box proxy in here
+     * too, and neither has anything internal to be pointed at.
+     */
+    const internalZone = new gcp.dns.ManagedZone('ApiInternalZone', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api-internal' }),
+      project,
+      dnsName: `${apiHost}.`,
+      description: `${apiHost}, as reached from inside the network`,
+      visibility: 'private',
+      privateVisibilityConfig: { networks: [{ networkUrl: network }] },
+    })
+    const internalRecord = new gcp.dns.RecordSet('ApiInternalRecord', {
+      project,
+      managedZone: internalZone.name,
+      name: `${apiHost}.`,
+      type: 'A',
+      ttl: 60,
+      rrdatas: [internalAddress.address],
+    })
+
+    /*
+     * And the fence: with the name resolving internally, the public address is
+     * no longer a path a runner may take.
+     *
+     * Without this the internal route is a default rather than a guarantee.
+     * Anything on the host that resolves through something other than the
+     * metadata server — a container handed its own `--dns`, an address written
+     * down somewhere — goes straight back out through Cloud NAT to the public
+     * balancer, works perfectly, and says nothing. Denying the one destination
+     * turns that into a refused connection at the host instead of a silent
+     * hairpin through the internet.
+     *
+     * Scoped to this address alone, and not to the internet: a runner still
+     * pulls images and downloads its own binary over that NAT, so a wider deny
+     * is a host that cannot boot. And it is ordered after the internal path is
+     * serving, or an update lands the fence while the only route still open is
+     * the one it closes.
+     *
+     * It lives here rather than beside the runner's other rules in `network.ts`
+     * because the address it names is created here — the same reason `edge.ts`
+     * owns the rule that admits the balancer to the proxy hosts.
+     */
+    const runnerPublicDeny = new gcp.compute.Firewall(
+      'RunnerDenyPublicApiFirewall',
+      {
+        name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'runner-deny-public-api' }),
+        project,
+        network,
+        direction: 'EGRESS',
+        priority: 1000,
+        denies: [{ protocol: 'tcp', ports: ['443'] }],
+        destinationRanges: [address.address.apply((ip: string) => `${ip}/32`)],
+        targetServiceAccounts: [runnerAccount],
+      },
+      { dependsOn: [internalForwarding, internalRecord] },
+    )
+
     return {
       // The same two things they mean on AWS: where the dashboard is served
       // from, and where the control plane is called.
@@ -469,6 +687,21 @@ export const gcpApiProvider =
       // A log-based metric filters on the service's own name, which is what
       // this cloud's monitoring knows it by.
       metricTarget: service.name,
-      ready: [service, ...invokers, publicInvoker, ...readable, ...granted, vendingCeiling, forwarding, record, apiRecord],
+      ready: [
+        service,
+        ...invokers,
+        publicInvoker,
+        ...readable,
+        ...granted,
+        vendingCeiling,
+        forwarding,
+        record,
+        apiRecord,
+        // The internal path, which a runner created by this same deploy has to
+        // find already serving: it registers itself at first boot.
+        internalForwarding,
+        internalRecord,
+        runnerPublicDeny,
+      ],
     }
   }
