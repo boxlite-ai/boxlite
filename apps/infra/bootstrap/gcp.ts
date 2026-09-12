@@ -47,6 +47,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
+import { gcpRunnerArtifactsBucket } from '../mdeploy/stack/runner-binary.ts'
 import { identityFor, poolFor } from 'naming'
 
 export class GcpBootstrapError extends Error {
@@ -767,6 +768,48 @@ const ensureRepository = async ({
   log(`    created${immutableTags ? ' with immutable tags' : ''}`)
 }
 
+/**
+ * The bucket a build-mode runner binary is staged in.
+ *
+ * The bootstrap owns it for the ordering reason it owns the image repository:
+ * `runner:build` puts an object there before any stack could consume one, so the
+ * consumer cannot also create its own input. The name is composed rather than
+ * recorded — `mdeploy/stack/runner-binary.ts` spells the same rule for the
+ * address the hosts fetch and for the read grant they are given.
+ *
+ * Uniform access and public-access prevention for the same reason the state
+ * bucket has them: the only way in is this project's IAM, and a binary every
+ * host installs as root is not an object to leave one mis-set ACL away from
+ * public.
+ */
+const ensureArtifactsBucket = async ({
+  gcloud,
+  bucket,
+  region,
+  log,
+}: {
+  gcloud: Gcloud
+  bucket: string
+  region: string
+  log: (line: string) => void
+}): Promise<void> => {
+  log(`==> ${bucket}`)
+  if (await gcloud.present(['storage', 'buckets', 'describe', `gs://${bucket}`])) {
+    log('    already exists')
+    return
+  }
+  await gcloud.apply('Could not create the runner artifacts bucket', [
+    'storage',
+    'buckets',
+    'create',
+    `gs://${bucket}`,
+    `--location=${region}`,
+    '--uniform-bucket-level-access',
+    '--public-access-prevention',
+  ])
+  log('    created')
+}
+
 export type GcpBootstrapInput = {
   run: Run
   /** The project this stage lives in, from `mstage.config.json`. */
@@ -894,6 +937,12 @@ export const bootstrapGcp = async ({
   log(`    refs/heads/main and environment ${stage} may act as it`)
 
   await ensureRepository({ gcloud, repository, region, immutableTags, log })
+  await ensureArtifactsBucket({
+    gcloud,
+    bucket: gcpRunnerArtifactsBucket({ app, stage, project }),
+    region,
+    log,
+  })
 
   log('')
   log('The state bucket is deliberately not returned; mstage reads it from')

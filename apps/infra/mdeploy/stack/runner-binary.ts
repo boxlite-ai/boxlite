@@ -8,8 +8,8 @@
  * Two sources, one shape:
  *
  *   release → the assets published for a stable X.Y.Z, over public HTTPS
- *   build   → an object staged for one commit, read with the host's own role
- *             rather than published; AWS only, because the staging bucket is S3
+ *   build   → an object staged for one commit, read with the host's own identity
+ *             rather than published; S3 on AWS, Cloud Storage on GCP, one key
  *
  * The version is the *checkout's*, not a stage's setting: the workspace
  * `Cargo.toml` is what the release workflow publishes under, and `VERSION`
@@ -68,9 +68,20 @@ export type RunnerArtifact = {
   tarballName: string
   tarballUrl: string
   checksumUrl: string
-  /** Public HTTPS, or an object only a role may read. */
-  transport: 'https' | 's3'
+  /** Public HTTPS, or an object only this stage's own identity may read. */
+  transport: 'https' | 's3' | 'gcs'
 }
+
+/**
+ * Where a build-mode object is staged, and which CLI reads it back.
+ *
+ * The cloud is carried rather than inferred from the bucket: `s3://` and
+ * `gs://` are two transports on the host — one `aws s3 cp`, one `gcloud storage
+ * cp` — and a name alone says nothing about which. Both halves come from the
+ * composition root, which is the only place that knows the cloud it is
+ * deploying into.
+ */
+export type ArtifactStaging = { cloud: 'aws' | 'gcp'; bucket: string }
 
 /** What the stack installs, and what a live host must report once it has. */
 export type ResolvedRunnerBinary = RunnerArtifact & {
@@ -221,6 +232,26 @@ export const runnerArtifactsBucket = ({
 }): string => `${app}-${stage}-artifacts-${accountId}`
 
 /**
+ * The same rule on Google, qualified by the project instead of the account.
+ *
+ * Cloud Storage shares one global namespace with every other project, so the
+ * name needs a qualifier nobody else can claim; the project id is that, and it
+ * is the one the deploy already carries. Composed rather than recorded for the
+ * same reason as the AWS name: the grant, the address and `runner:build`'s
+ * destination all have to agree, and a name three places spell is a name that
+ * drifts.
+ */
+export const gcpRunnerArtifactsBucket = ({
+  app,
+  stage,
+  project,
+}: {
+  app: string
+  stage: string
+  project: string
+}): string => `${app}-${stage}-artifacts-${project}`
+
+/**
  * The two addresses one selector resolves to.
  *
  * The names are the publisher's, not this file's choice: `build-runner-binary
@@ -229,11 +260,11 @@ export const runnerArtifactsBucket = ({
  */
 export const runnerArtifactFor = ({
   selector,
-  artifactsBucket = null,
+  staging = null,
 }: {
   selector: RunnerBinarySelector
-  /** Where a build-mode object is staged. The provider knows it; a release needs none. */
-  artifactsBucket?: string | null
+  /** Where a build-mode object is staged. The root knows it; a release needs none. */
+  staging?: ArtifactStaging | null
 }): RunnerArtifact => {
   if (selector.kind === 'release') {
     const tarballName = `boxlite-runner-v${selector.version}-linux-amd64.tar.gz`
@@ -245,23 +276,27 @@ export const runnerArtifactFor = ({
       transport: 'https',
     }
   }
-  const bucket = artifactsBucket?.trim()
-  if (!bucket) {
+  const bucket = staging?.bucket.trim()
+  if (!staging || !bucket) {
     throw new RunnerBinaryError(
-      'a build-mode runner binary is staged in a bucket, and this stage has none. Only an AWS stage ' +
-        'stages one, so a GCP stage installs a published release',
+      'a build-mode runner binary is staged in this stage’s artifacts bucket, and this deploy was handed ' +
+        'none. Run `npm run bootstrap -- --stage <stage>` to create it, or install a published release',
     )
   }
   if (!BUCKET_NAME.test(bucket)) {
-    throw new RunnerBinaryError(`the artifacts bucket ${JSON.stringify(bucket)} is not a valid S3 bucket name`)
+    throw new RunnerBinaryError(`the artifacts bucket ${JSON.stringify(bucket)} is not a valid bucket name`)
   }
   const tarballName = `boxlite-runner-v${selector.version}-${selector.ref}-linux-amd64.tar.gz`
   const key = `runner/${selector.ref}/${tarballName}`
+  // One key on both clouds, because `runner:build` composes it from the same
+  // rule: a stage that changed clouds would otherwise stage under one name and
+  // read under another.
+  const scheme = staging.cloud === 'aws' ? 's3' : 'gs'
   return {
     tarballName,
-    tarballUrl: `s3://${bucket}/${key}`,
-    checksumUrl: `s3://${bucket}/${key}.sha256`,
-    transport: 's3',
+    tarballUrl: `${scheme}://${bucket}/${key}`,
+    checksumUrl: `${scheme}://${bucket}/${key}.sha256`,
+    transport: staging.cloud === 'aws' ? 's3' : 'gcs',
   }
 }
 
@@ -293,6 +328,13 @@ export const artifactFetchCommand = ({
       `--connect-timeout 10 --max-time 300 --retry 5 --retry-delay 2 --retry-connrefused ` +
       `--retry-max-time 300 "${url}" -o "${destination}"`
     )
+  }
+  if (artifact.transport === 'gcs') {
+    // The same CLI the host already reads its secrets with, so nothing new is
+    // installed for this. Its own retries cover a transient 5xx, and the bucket
+    // is reached with the host's own service account rather than a credential
+    // this script would have to carry.
+    return `gcloud storage cp "${url}" "${destination}"`
   }
   if (!AWS_REGION_NAME.test(region ?? '')) {
     throw new RunnerBinaryError(`reading ${url} needs the region that bucket lives in, got ${JSON.stringify(region ?? '')}`)
@@ -352,19 +394,19 @@ echo "runner tarball checksum verified ($ACTUAL)"`
 export const resolveRunnerBinary = ({
   environment,
   configRoot,
-  artifactsBucket = null,
+  staging = null,
   readVersion = readWorkspaceVersion,
 }: {
   environment: NodeJS.ProcessEnv
   /** Where `mdeploy.config.json` was found; the workspace is at or above it. */
   configRoot: string
-  artifactsBucket?: string | null
+  staging?: ArtifactStaging | null
   /** Injected so the resolution is provable without a checkout. */
   readVersion?: typeof readWorkspaceVersion
 }): ResolvedRunnerBinary => {
   const selector = selectRunnerBinary({ environment, workspaceVersion: readVersion({ from: configRoot }) })
   return {
-    ...runnerArtifactFor({ selector, artifactsBucket }),
+    ...runnerArtifactFor({ selector, staging }),
     source: selector.kind,
     version: selector.version,
     identity: selector.kind === 'build' ? `${selector.version}+${selector.ref}` : selector.version,

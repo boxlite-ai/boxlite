@@ -25,9 +25,12 @@ import {
 const REF = 'b'.repeat(40)
 const BUCKET = 'boxlite-app-dev-artifacts-123456789012'
 
+const GCS_BUCKET = 'boxlite-app-dev-artifacts-your-first-project'
+
 const readVersion = () => '0.10.0'
-const resolve = (environment: NodeJS.ProcessEnv, artifactsBucket: string | null = null) =>
-  resolveRunnerBinary({ environment, configRoot: '/repo/apps/infra', artifactsBucket, readVersion })
+const staged = (bucket: string | null, cloud: 'aws' | 'gcp' = 'aws') => (bucket ? { cloud, bucket } : null)
+const resolve = (environment: NodeJS.ProcessEnv, bucket: string | null = null, cloud: 'aws' | 'gcp' = 'aws') =>
+  resolveRunnerBinary({ environment, configRoot: '/repo/apps/infra', staging: staged(bucket, cloud), readVersion })
 
 test('the version is the checkout’s, and VERSION names a different published release', () => {
   // The incumbent path's own rule: the workspace version is what every published
@@ -101,7 +104,7 @@ test('a release resolves to the assets the publisher actually uploads', () => {
 test('a build is addressed by the commit it was produced from, under the staging prefix', () => {
   const artifact = runnerArtifactFor({
     selector: { kind: 'build', version: '0.10.0', ref: REF },
-    artifactsBucket: BUCKET,
+    staging: { cloud: 'aws', bucket: BUCKET },
   })
   assert.equal(artifact.tarballName, `boxlite-runner-v0.10.0-${REF}-linux-amd64.tar.gz`)
   assert.equal(artifact.tarballUrl, `s3://${BUCKET}/runner/${REF}/${artifact.tarballName}`)
@@ -132,17 +135,42 @@ test('a build with no commit, or an abbreviated one, is refused rather than comp
   )
 })
 
-test('a build on a cloud with no staging bucket is refused before a host is created', () => {
-  // A GCP stage installs a published release: there is no S3 to stage into, and
-  // composing an s3:// address anyway would fail on the host at first boot,
-  // permanently, because the boot script never runs again.
+test('the same commit is staged under one key on either cloud, read by that cloud’s CLI', () => {
+  /*
+   * One key, two schemes. `runner:build` composes the destination from the same
+   * rule, so a stage that moved clouds would otherwise stage under one name and
+   * read under another — and the host would 404 at first boot, permanently,
+   * because the boot script never runs again.
+   */
+  const google = runnerArtifactFor({
+    selector: { kind: 'build', version: '0.10.0', ref: REF },
+    staging: { cloud: 'gcp', bucket: GCS_BUCKET },
+  })
+  assert.equal(google.tarballUrl, `gs://${GCS_BUCKET}/runner/${REF}/${google.tarballName}`)
+  assert.equal(google.checksumUrl, `${google.tarballUrl}.sha256`)
+  assert.equal(google.transport, 'gcs')
+
+  const amazon = runnerArtifactFor({
+    selector: { kind: 'build', version: '0.10.0', ref: REF },
+    staging: { cloud: 'aws', bucket: BUCKET },
+  })
+  assert.equal(
+    amazon.tarballUrl.replace(`s3://${BUCKET}`, ''),
+    google.tarballUrl.replace(`gs://${GCS_BUCKET}`, ''),
+    'the two clouds disagree about where one commit lives',
+  )
+})
+
+test('a build with nowhere staged is refused before a host is created', () => {
+  // Composing an address anyway would fail on the host at first boot, and that
+  // boot never happens again.
   assert.throws(
     () => resolve({ RUNNER_ARTIFACT_SOURCE: 'build', RUNNER_ARTIFACT_REF: REF }, null),
-    /staged in a bucket, and this stage has none/,
+    /staged in this stage’s artifacts bucket, and this deploy was handed none/,
   )
   assert.throws(
-    () => resolve({ RUNNER_ARTIFACT_SOURCE: 'build', RUNNER_ARTIFACT_REF: REF }, 'Not_A_Bucket'),
-    /is not a valid S3 bucket name/,
+    () => resolve({ RUNNER_ARTIFACT_SOURCE: 'build', RUNNER_ARTIFACT_REF: REF }, 'Not_A_Bucket', 'gcp'),
+    /is not a valid bucket name/,
   )
 })
 
@@ -171,6 +199,15 @@ test('the fetch is bounded, and an s3 address needs the region it lives in', () 
   assert.match(artifactFetchCommand({ ...staged, region: 'ap-southeast-1' }), /s3 cp --region ap-southeast-1/)
   assert.throws(() => artifactFetchCommand(staged), /needs the region that bucket lives in/)
   assert.throws(() => artifactFetchCommand({ ...staged, region: 'ap southeast 1' }), /needs the region/)
+
+  /*
+   * Google's own CLI, which the host already reads its secrets with, and which
+   * authenticates as the instance rather than from a credential this script
+   * would have to carry. No region: a bucket is global there, and demanding one
+   * would refuse an address that is perfectly readable.
+   */
+  const object = artifactFetchCommand({ artifact: { transport: 'gcs' }, url: 'gs://b/k', destination: '/tmp/r' })
+  assert.equal(object, 'gcloud storage cp "gs://b/k" "/tmp/r"')
 })
 
 test('the manifest is verified before the bytes are trusted', () => {

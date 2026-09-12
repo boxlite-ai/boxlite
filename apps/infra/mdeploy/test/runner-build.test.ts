@@ -197,25 +197,58 @@ test('an unclean checkout is refused, submodules included', () => {
   )
 })
 
-test('a GCP stage is refused, because the staging bucket is S3', async () => {
-  // Not a limitation to work around: a GCP stage installs a published release,
-  // and `stack/runner-binary.ts` refuses build mode there for the same reason.
-  await assert.rejects(
-    () =>
-      buildRunner({
-        argv: ['--stage', 'dev2'],
-        environment: { MSTAGE_CONFIG: EXAMPLE },
-        cwd: new URL('../..', import.meta.url).pathname,
-        log: () => {},
-        checkLogin: async () => 0,
-        resolveHomeWith: (async () => ({
-          identity: { home: 'gcp', childEnvironment: async () => ({ env: {}, expiresAt: null }) },
-          backend: {},
-        })) as never,
-        run: happy(),
-      }),
-    /lives in gcp, which stages no runner artifact/,
+test('a GCP stage stages into Cloud Storage, under the same key and written once', async () => {
+  /*
+   * The other half of one rule. `stack/runner-binary.ts` composes
+   * `runner/<commit>/<name>` for the deploy on both clouds, so this uploads to
+   * exactly that — and refuses to overwrite, because everything downstream
+   * treats version+commit as an identity and looks at no content.
+   */
+  const calls: string[][] = []
+  const log: string[] = []
+  const run: RunCommand = (file, args) => {
+    calls.push([file, ...args])
+    const asked = args.join(' ')
+    if (file === 'git' && asked.includes('rev-parse --show-toplevel')) return ok(CHECKOUT)
+    if (file === 'git' && asked.includes('rev-parse HEAD')) return ok(REF)
+    if (file === 'git' && asked.includes('status --porcelain')) return ok('')
+    if (file === 'git' && asked.includes('submodule status')) return ok(' abc123 src/vendor (v1)')
+    // An empty prefix is an error with a message, not an empty listing.
+    if (asked.includes('storage ls')) return failed('matched no objects')
+    return ok('')
+  }
+  const code = await buildRunner({
+    argv: ['--stage', 'dev2'],
+    environment: { MSTAGE_CONFIG: EXAMPLE },
+    cwd: new URL('../..', import.meta.url).pathname,
+    log: (line) => log.push(line),
+    checkLogin: async () => 0,
+    resolveHomeWith: (async () => ({
+      identity: { home: 'gcp', childEnvironment: async () => ({ env: {}, expiresAt: null }) },
+      backend: {},
+    })) as never,
+    run,
+    makeWorkDirectory: () => '/tmp/work',
+    removeWorkDirectory: () => {},
+    fileExists: () => true,
+  })
+  assert.equal(code, 0)
+
+  const bucket = 'boxlite-app-dev2-artifacts-your-gcp-project-id'
+  const uploads = calls.filter(([file, , verb]) => file === 'gcloud' && verb === 'cp')
+  assert.equal(uploads.length, 2, 'the tarball and its manifest are both staged')
+  for (const upload of uploads) {
+    assert.ok(
+      upload.some((argument) => argument.startsWith(`gs://${bucket}/runner/${REF}/`)),
+      `uploaded to ${upload.join(' ')}`,
+    )
+    assert.ok(upload.includes('--if-generation-match=0'), 'a second publication under one key must be refused')
+  }
+  assert.ok(
+    calls.some(([file, ...rest]) => file === 'gcloud' && rest.join(' ') === `storage buckets describe gs://${bucket}`),
+    'the bucket is proved to exist before libkrun is compiled',
   )
+  assert.ok(log.some((line) => line.includes(`gs://${bucket}/runner/${REF}/`)))
 })
 
 test('a build that produced nothing is named, rather than uploading an absent file', async () => {

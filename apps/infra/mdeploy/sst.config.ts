@@ -143,7 +143,7 @@ export default $config({
     const runnerBinary = resolveRunnerBinary({
       environment: process.env,
       configRoot: config.root,
-      artifactsBucket,
+      staging: { cloud: 'aws', bucket: artifactsBucket },
     })
 
     return deployStack({

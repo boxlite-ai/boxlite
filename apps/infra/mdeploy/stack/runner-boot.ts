@@ -36,7 +36,7 @@
  * the wrapper fetches it like any other secret.
  */
 
-import { artifactFetchCommand, verifyAgainstManifest } from './runner-binary.ts'
+import { artifactFetchCommand, verifyAgainstManifest, type RunnerArtifact } from './runner-binary.ts'
 
 /** What one cloud contributes to the boot script. */
 export type BootPlatform = {
@@ -82,7 +82,7 @@ export type BootInput = {
     tarballUrl: string
     checksumUrl: string
     tarballName: string
-    transport: 'https' | 's3'
+    transport: RunnerArtifact['transport']
   }
   /** The region an `s3://` address is read from. Null for a public one. */
   region?: string | null

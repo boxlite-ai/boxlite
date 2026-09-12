@@ -61,6 +61,7 @@ const gcpBundle = () =>
     appShort: 'bl-app',
     domain: 'dev2.boxlite.ai',
     zoneId: 'zone-1',
+    artifactsBucket: 'boxlite-app-dev2-artifacts-boxlite-dev2',
   })
 
 // ── the container's port ────────────────────────────────────────────────────
@@ -272,6 +273,28 @@ test('no password reaches a statement, because the console now reads every faile
   assert.equal(/^[^#\n]*IDENTIFIED BY '/m.test(script), false, 'a password in a statement that gets echoed')
   assert.equal(/^[^#\n]*ALTER USER default/m.test(script), false, 'users_xml refuses this, every time')
   assert.equal(/^[^#\n]*--password/m.test(script), false, 'argv is readable by every process on the host')
+})
+
+test('the hosts may read the staged binary, and only while one is being installed', () => {
+  /*
+   * A release comes over public HTTPS and needs no grant; a staged object is
+   * read with the host's own service account, so a deploy that installs one has
+   * to bind it. Scoped to the prefix for the same reason the AWS policy names
+   * `<bucket>/runner/*` rather than the bucket: that bucket is not the runner's
+   * to read the rest of.
+   *
+   * Read out of the source because building the provider would create
+   * resources. What has to stay paired is the guard and the binding beside it —
+   * a binding attached unconditionally would fail the apply of every stage that
+   * has never staged an object, since the bucket it names may not exist yet.
+   */
+  const source = sourceOf('runners')
+  assert.match(source, /request\.binary\.transport === 'gcs'/)
+  assert.match(source, /role: 'roles\/storage\.objectViewer'/)
+  assert.match(source, /resource\.name\.startsWith\("projects\/_\/buckets\/\$\{artifactsBucket\}\/objects\/runner\/"\)/)
+  // And the host waits for it: a boot script that fetched before the binding
+  // existed would download nothing, and that boot never happens again.
+  assert.match(source, /dependsOn: \[\.\.\.dependsOn, \.\.\.staged\]/)
 })
 
 // ── the database's machine ──────────────────────────────────────────────────

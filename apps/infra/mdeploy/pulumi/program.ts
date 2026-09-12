@@ -23,7 +23,7 @@
  */
 
 import { readStackEnvironment } from '../src/stack-env.ts'
-import { resolveRunnerBinary } from '../stack/runner-binary.ts'
+import { gcpRunnerArtifactsBucket, resolveRunnerBinary } from '../stack/runner-binary.ts'
 import type { deployStack } from '../stack/index.ts'
 
 export class PulumiProgramError extends Error {
@@ -216,14 +216,25 @@ export const gcpProgram =
     })
 
     /*
+     * Where a build-mode binary is staged, named once for the two things that
+     * need the same answer: the address resolved just below, and the read-only
+     * grant the runner hosts get. The rule lives beside the resolver because
+     * `runner:build` uploads to it.
+     */
+    const artifactsBucket = gcpRunnerArtifactsBucket({ app, stage, project })
+
+    /*
      * Which runner binary this deploy installs, from the checkout.
      *
      * The same function `sst.config.ts` calls, so one commit resolves to one
-     * binary on both clouds. No artifacts bucket: a build-mode binary is staged
-     * in S3, which this cloud has none of, and `runner-binary.ts` refuses that
-     * combination rather than composing an address that fails on a host.
+     * binary on both clouds — a release over public HTTPS, or the object this
+     * stage staged for one commit, which is `gs://` here and `s3://` there.
      */
-    const runnerBinary = resolveRunnerBinary({ environment, configRoot: config.root })
+    const runnerBinary = resolveRunnerBinary({
+      environment,
+      configRoot: config.root,
+      staging: { cloud: 'gcp', bucket: artifactsBucket },
+    })
 
     const outputs = deployStack({
       providers: gcpStackProviders({
@@ -237,6 +248,7 @@ export const gcpProgram =
         domain: stackEnvironment.domain,
         zoneId: stackEnvironment.dnsZoneId,
         relayHost: stackEnvironment.mailRelayHost,
+        artifactsBucket,
         managedClickHouse: stackEnvironment.managedClickHouse,
       }),
       config,

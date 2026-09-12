@@ -62,6 +62,7 @@ const gcp = () =>
     appShort: 'bl-app',
     domain: 'gcp-dev.boxlite.ai',
     zoneId: 'zone-1',
+    artifactsBucket: 'boxlite-app-gcp-dev-artifacts-boxlite-gcp-dev',
   })
 
 test('both clouds answer every module the stack asks about', () => {

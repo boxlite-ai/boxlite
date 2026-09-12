@@ -119,6 +119,7 @@ export const gcpRunnerProvider =
     project,
     zone,
     placement,
+    artifactsBucket,
     adminApiKey,
     regionId,
     dependsOn,
@@ -127,6 +128,8 @@ export const gcpRunnerProvider =
     /** A zone. An instance is zonal even where its subnet is not. */
     zone: string
     placement: Extract<Placement, { cloud: 'gcp' }>
+    /** Where a build-mode binary is staged. Read-only, and only under `runner/`. */
+    artifactsBucket: string
     /** What registers the hosts the API does not seed. See `runner-registration.ts`. */
     adminApiKey: $util.Input<string>
     /** The region those rows go in — the same one the API seeded its own into. */
@@ -179,6 +182,32 @@ udevadm trigger --name-match=kvm || true`,
         OTEL_EXPORTER_OTLP_GOOGLE_ID_TOKEN: 'true',
       },
     }
+
+    /*
+     * The staged binary, readable by the hosts and by nothing else of theirs.
+     *
+     * Only when this deploy installs one: a release comes over public HTTPS and
+     * needs no grant, and a stage that has never staged an object has no bucket
+     * for a binding to attach to — which fails the apply rather than the
+     * download. The condition is the GCS answer to the AWS policy's
+     * `arn:…:::<bucket>/runner/*`: object viewer on this bucket, under that one
+     * prefix.
+     */
+    const staged =
+      request.binary.transport === 'gcs'
+        ? [
+            new gcp.storage.BucketIAMMember('RunnerArtifactsRead', {
+              bucket: artifactsBucket,
+              role: 'roles/storage.objectViewer',
+              member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
+              condition: {
+                title: 'runner-artifacts-only',
+                description: 'Only the staged runner binaries, not the rest of the bucket',
+                expression: `resource.name.startsWith("projects/_/buckets/${artifactsBucket}/objects/runner/")`,
+              },
+            }),
+          ]
+        : []
 
     const assignments = request.fleet
 
@@ -278,7 +307,10 @@ udevadm trigger --name-match=kvm || true`,
           // landed on a live host out of band, one at a time.
           ignoreChanges: ['bootDisk', 'metadataStartupScript'],
           protect: true,
-          dependsOn,
+          // The read grant among them: a host whose boot script fetches the
+          // staged object before the binding exists downloads nothing, and
+          // that boot never happens again.
+          dependsOn: [...dependsOn, ...staged],
         },
       )
     })

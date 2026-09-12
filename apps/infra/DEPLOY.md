@@ -133,8 +133,11 @@ The checkout must be clean, submodules included: a commit-keyed object holding
 uncommitted work would claim bytes that commit does not produce, and nothing
 downstream could tell. Publication is write-once — everything downstream treats
 version+commit as an identity and looks at no content, so changed bytes need a
-new commit rather than a second upload. AWS only, because the staging bucket is
-S3; a GCP stage installs a published release.
+new commit rather than a second upload. Either cloud stages it, into that
+stage's own artifacts bucket — S3 on AWS, Cloud Storage on GCP — under the one
+key `runner/<commit>/`, which is also the address the deploy resolves and the
+only prefix the hosts are let read. `npm run bootstrap -- --stage <stage>`
+creates the bucket; a stage without one installs a published release.
 
 The channel differs per cloud and needs one prerequisite each:
 

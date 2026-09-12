@@ -135,7 +135,18 @@ test('a fresh project gets every prerequisite mdeploy and mbuild cannot create f
   const result = await invoke(gcloud.run)
 
   assert.equal(gcloud.applied('services enable').length, 1, 'no APIs were enabled')
-  assert.equal(gcloud.applied('storage buckets create').length, 1, 'no state bucket')
+  assert.equal(gcloud.applied('storage buckets create').length, 2, 'the state and artifacts buckets')
+  /*
+   * The runner's staging bucket, named by the rule `mdeploy/stack/runner-binary
+   * .ts` resolves addresses from. Created here for the ordering reason the image
+   * repository is: `runner:build` stages an object before any stack could
+   * consume one, so the consumer cannot create its own input.
+   */
+  assert.equal(
+    gcloud.applied('storage buckets create', 'gs://boxlite-gcp-dev-artifacts-boxlite-gcp-dev').length,
+    1,
+    'no bucket for a build-mode runner binary',
+  )
   assert.equal(gcloud.applied('storage buckets update', '--versioning').length, 1, 'the bucket is unversioned')
   assert.equal(gcloud.applied('secrets create', 'mstage-bootstrap').length, 1, 'nothing names the bucket')
   assert.equal(

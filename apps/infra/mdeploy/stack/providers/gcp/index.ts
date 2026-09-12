@@ -68,6 +68,7 @@ export const gcpStackProviders = ({
   domain,
   zoneId,
   relayHost = null,
+  artifactsBucket,
   managedClickHouse = null,
   notificationChannels = [],
 }: {
@@ -88,6 +89,8 @@ export const gcpStackProviders = ({
   zoneId: string
   /** The SMTP relay a GCP stage sends through. Google provides none. */
   relayHost?: string | null
+  /** Where a build-mode runner binary is staged, which the hosts are let read. */
+  artifactsBucket: string
   managedClickHouse?: { url: string; writerSecretArn: string; readerSecretArn: string } | null
   notificationChannels?: string[]
 }): StackProviders => {
@@ -186,6 +189,7 @@ export const gcpStackProviders = ({
         project,
         zone,
         placement: placement(network, 'runner'),
+        artifactsBucket,
         adminApiKey,
         regionId,
         dependsOn,

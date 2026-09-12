@@ -34,9 +34,10 @@
  * would describe bytes that are not the ones stored, and every host would then
  * fail its digest check.
  *
- * AWS only, because the staging bucket is S3. A GCP stage installs a published
- * release; `stack/runner-binary.ts` refuses build mode there rather than
- * composing an address that would fail on a host.
+ * Either cloud stages it, under one key: `runner/<commit>/<name>` in the
+ * stage's own artifacts bucket, which is S3 on AWS and Cloud Storage on GCP.
+ * `stack/runner-binary.ts` composes the same key for the deploy, so the object
+ * this uploads is the object a host is told to fetch.
  */
 
 import { mkdtempSync, rmSync, statSync } from 'node:fs'
@@ -49,7 +50,7 @@ import { run as mstage } from 'mstage/run'
 import { resolveScope } from 'mstage/scope'
 import { deployRoot } from './config.ts'
 import { spawnWith, type RunCommand } from './upgrade-runners.ts'
-import { readWorkspaceVersion, runnerArtifactsBucket } from '../stack/runner-binary.ts'
+import { gcpRunnerArtifactsBucket, readWorkspaceVersion, runnerArtifactsBucket } from '../stack/runner-binary.ts'
 
 export class RunnerBuildError extends Error {
   constructor(message: string) {
@@ -141,6 +142,32 @@ export const inspectCheckout = ({ root, run }: { root: string; run: RunCommand }
   return { ref, version: readWorkspaceVersion({ from: root }) }
 }
 
+/**
+ * What a listing means, once each cloud has produced one.
+ *
+ * Shared because the rule is: all of it, none of it, or a refusal. A rebuild is
+ * not byte-identical — gzip alone stamps an mtime — so completing a partial
+ * publication would store a manifest describing bytes that are not the ones
+ * beside it, and every host would then fail its digest check.
+ */
+const classifyStaged = ({
+  staged,
+  names,
+  prefix,
+}: {
+  staged: Set<string>
+  names: string[]
+  prefix: string
+}): 'complete' | 'absent' => {
+  const present = names.filter((name) => staged.has(`${prefix}/${name}`))
+  if (present.length === 0) return 'absent'
+  if (present.length === names.length) return 'complete'
+  throw new RunnerBuildError(
+    `${prefix}/ is partially published (${present.join(', ')} present). A rebuild is not byte-identical, ` +
+      `so completing it here would publish a checksum for different bytes. Delete the objects under ${prefix}/ and rerun.`,
+  )
+}
+
 /** What is already there, so a rerun is free and a half-publication is refused. */
 const publishedAlready = ({
   run,
@@ -163,13 +190,164 @@ const publishedAlready = ({
     `listing what is staged under ${prefix}/`,
   )
   const staged = new Set(listed.split(/\s+/).filter((key) => key && key !== 'None'))
-  const present = names.filter((name) => staged.has(`${prefix}/${name}`))
-  if (present.length === 0) return 'absent'
-  if (present.length === names.length) return 'complete'
-  throw new RunnerBuildError(
-    `${prefix}/ is partially published (${present.join(', ')} present). A rebuild is not byte-identical, ` +
-      `so completing it here would publish a checksum for different bytes. Delete the objects under ${prefix}/ and rerun.`,
+  return classifyStaged({ staged, names, prefix })
+}
+
+/**
+ * The same question on Cloud Storage.
+ *
+ * `ls` over the prefix rather than a stat per object: one call, and a prefix
+ * that holds nothing exits non-zero with `matched no objects`, which is the
+ * answer rather than a failure.
+ */
+const gcpPublishedAlready = ({
+  run,
+  bucket,
+  prefix,
+  names,
+}: {
+  run: RunCommand
+  bucket: string
+  prefix: string
+  names: string[]
+}): 'complete' | 'absent' => {
+  const listed = run('gcloud', ['storage', 'ls', `gs://${bucket}/${prefix}/`])
+  if (!listed.ok) {
+    if (/matched no objects|not found|404/i.test(`${listed.stderr}${listed.stdout}`)) return 'absent'
+    throw new RunnerBuildError(`listing what is staged under ${prefix}/ failed: ${listed.stderr || listed.stdout}`)
+  }
+  const staged = new Set(
+    listed.stdout
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((line) => line.replace(`gs://${bucket}/`, '')),
   )
+  return classifyStaged({ staged, names, prefix })
+}
+
+/**
+ * One cloud's staging bucket, as the three things this command does to it.
+ *
+ * A shape rather than a branch at each call site: the build in between is
+ * identical, and the differences are exactly these three — how the bucket is
+ * proved to exist, how it is listed, and what makes a write refuse to overwrite.
+ */
+type Destination = {
+  /** How the prefix reads in a message and in the line printed at the end. */
+  address: string
+  /** Proved before the build, because compiling libkrun takes minutes. */
+  assertReachable: () => void
+  publishedAlready: () => 'complete' | 'absent'
+  put: (name: string, file: string) => void
+}
+
+const awsDestination = ({
+  run,
+  app,
+  stage,
+  region,
+  prefix,
+  names,
+}: {
+  run: RunCommand
+  app: string
+  stage: string
+  region: string
+  prefix: string
+  names: string[]
+}): Destination => {
+  const accountId = must(
+    run,
+    'aws',
+    ['sts', 'get-caller-identity', '--query', 'Account', '--output', 'text'],
+    'reading the AWS account id',
+  )
+  if (!/^[0-9]{12}$/.test(accountId)) {
+    throw new RunnerBuildError(`could not read the AWS account id (got ${JSON.stringify(accountId)})`)
+  }
+  const bucket = runnerArtifactsBucket({ app, stage, accountId })
+  return {
+    address: `s3://${bucket}/${prefix}`,
+    assertReachable: () => {
+      must(run, 'aws', ['s3api', 'head-bucket', '--region', region, '--bucket', bucket], `finding the bucket ${bucket}`)
+    },
+    publishedAlready: () => publishedAlready({ run, region, bucket, prefix, names }),
+    put: (name, file) => {
+      must(
+        run,
+        'aws',
+        [
+          's3api',
+          'put-object',
+          '--region',
+          region,
+          '--bucket',
+          bucket,
+          '--key',
+          `${prefix}/${name}`,
+          '--body',
+          file,
+          // Write-once. See this file's own note: a second publication under one
+          // identity is the failure nothing downstream could detect.
+          '--if-none-match',
+          '*',
+        ],
+        `uploading ${name}`,
+      )
+    },
+  }
+}
+
+const gcpDestination = ({
+  run,
+  app,
+  stage,
+  project,
+  prefix,
+  names,
+}: {
+  run: RunCommand
+  app: string
+  stage: string
+  project: string
+  prefix: string
+  names: string[]
+}): Destination => {
+  const bucket = gcpRunnerArtifactsBucket({ app, stage, project })
+  return {
+    address: `gs://${bucket}/${prefix}`,
+    assertReachable: () => {
+      must(run, 'gcloud', ['storage', 'buckets', 'describe', `gs://${bucket}`], `finding the bucket ${bucket}`)
+    },
+    publishedAlready: () => gcpPublishedAlready({ run, bucket, prefix, names }),
+    put: (name, file) => {
+      must(
+        run,
+        'gcloud',
+        [
+          'storage',
+          'cp',
+          file,
+          `gs://${bucket}/${prefix}/${name}`,
+          // Generation 0 is "this object does not exist", which is Cloud
+          // Storage's spelling of S3's `--if-none-match '*'`: the same
+          // write-once rule, refused by the service rather than by a check that
+          // could straddle another upload.
+          '--if-generation-match=0',
+        ],
+        `uploading ${name}`,
+      )
+    },
+  }
+}
+
+/** The project a GCP stage declares. The bucket name carries it, so it is not optional. */
+const projectOf = (scope: { project?: string | null }, stage: string): string => {
+  const project = scope.project?.trim()
+  if (!project) {
+    throw new RunnerBuildError(`stage "${stage}" declares no project, and a Cloud Storage bucket is named after one`)
+  }
+  return project
 }
 
 export const buildRunner = async ({
@@ -206,12 +384,7 @@ export const buildRunner = async ({
   if (signedIn !== 0) throw new RunnerBuildError('Required sign-ins are missing; run `npm run mstage login -- -f` first')
 
   const home = await resolveHomeWith({ scope })
-  if (home.identity.home !== 'aws') {
-    throw new RunnerBuildError(
-      `stage "${stage}" lives in ${home.identity.home}, which stages no runner artifact: the bucket is S3. ` +
-        'A GCP stage installs a published release',
-    )
-  }
+  const cloud = home.identity.home
   const { env: credentials } = await home.identity.childEnvironment()
   const run = injectedRun ?? spawnWith({ ...environment, ...credentials })
 
@@ -224,26 +397,21 @@ export const buildRunner = async ({
   /*
    * The destination, resolved and reachable, before anything is compiled.
    *
-   * The account id comes from the session mstage resolved rather than from a
-   * setting: the bucket name carries it, and a build that uploaded into one
-   * account while the deploy read another would 404 on the host.
+   * Each cloud's qualifier comes from where the deploy reads it: AWS's account
+   * from the session mstage resolved, Google's project from the stage's own
+   * declaration — the same values `sst.config.ts` and `pulumi/program.ts` name
+   * the bucket from. A build that staged into one and a deploy that read
+   * another would 404 on the host, at a boot that never happens again.
    */
-  const accountId = must(
-    run,
-    'aws',
-    ['sts', 'get-caller-identity', '--query', 'Account', '--output', 'text'],
-    'reading the AWS account id',
-  )
-  if (!/^[0-9]{12}$/.test(accountId)) {
-    throw new RunnerBuildError(`could not read the AWS account id (got ${JSON.stringify(accountId)})`)
-  }
-  const region = scope.region as string
-  const bucket = runnerArtifactsBucket({ app: config.app, stage, accountId })
   const prefix = `runner/${ref}`
-  must(run, 'aws', ['s3api', 'head-bucket', '--region', region, '--bucket', bucket], `finding the bucket ${bucket}`)
+  const destination =
+    cloud === 'aws'
+      ? awsDestination({ run, app: config.app, stage, region: scope.region as string, prefix, names })
+      : gcpDestination({ run, app: config.app, stage, project: projectOf(scope, stage), prefix, names })
+  destination.assertReachable()
 
-  if (publishedAlready({ run, region, bucket, prefix, names }) === 'complete') {
-    log(`s3://${bucket}/${prefix}/ is already published; leaving it untouched`)
+  if (destination.publishedAlready() === 'complete') {
+    log(`${destination.address}/ is already published; leaving it untouched`)
     log(`RUNNER_ARTIFACT_SOURCE=build RUNNER_ARTIFACT_REF=${ref} npm run mdeploy -- --stage ${stage}`)
     return 0
   }
@@ -282,33 +450,13 @@ export const buildRunner = async ({
 
     for (const name of names) {
       log(`==> uploading ${name}`)
-      must(
-        run,
-        'aws',
-        [
-          's3api',
-          'put-object',
-          '--region',
-          region,
-          '--bucket',
-          bucket,
-          '--key',
-          `${prefix}/${name}`,
-          '--body',
-          join(work, name),
-          // Write-once. See this file's own note: a second publication under one
-          // identity is the failure nothing downstream could detect.
-          '--if-none-match',
-          '*',
-        ],
-        `uploading ${name}`,
-      )
+      destination.put(name, join(work, name))
     }
   } finally {
     removeWorkDirectory(work)
   }
 
-  log(`staged ${archive} (${identity}) at s3://${bucket}/${prefix}/`)
+  log(`staged ${archive} (${identity}) at ${destination.address}/`)
   /*
    * The runner's own keys, not the global pair.
    *

@@ -29,6 +29,7 @@
  */
 
 import type { Placement } from './network.ts'
+import type { RunnerArtifact } from './runner-binary.ts'
 import { instanceFor } from 'naming'
 
 export type RunnerSize = 'small' | 'medium' | 'large'
@@ -86,7 +87,7 @@ export type RunnerBinary = {
   /** The filename the manifest must name. Not derivable from the URL on the host. */
   tarballName: string
   /** How both addresses are read: public HTTPS, or an object only a role may read. */
-  transport: 'https' | 's3'
+  transport: RunnerArtifact['transport']
   /** Which source this came from. Decides whether ordering can be guarded. */
   source: 'release' | 'build'
   /**
