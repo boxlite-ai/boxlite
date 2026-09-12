@@ -506,6 +506,27 @@ fn spawn_error(exec_id: &str, err: String) -> ExecResponse {
     }
 }
 
+/// Map a typed spawn failure onto the wire reason the host portal trusts:
+/// caller-caused failures keep their class, anything else stays `spawn_failed`.
+fn exec_error(exec_id: &str, err: boxlite_shared::errors::BoxliteError) -> ExecResponse {
+    let (reason, detail) = match err {
+        boxlite_shared::errors::BoxliteError::Execution(message) => ("execution_failed", message),
+        boxlite_shared::errors::BoxliteError::InvalidArgument(message) => {
+            ("invalid_argument", message)
+        }
+        other => ("spawn_failed", other.to_string()),
+    };
+    ExecResponse {
+        execution_id: exec_id.to_string(),
+        pid: 0,
+        started_at_ms: 0,
+        error: Some(ExecError {
+            reason: reason.to_string(),
+            detail,
+        }),
+    }
+}
+
 fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -552,7 +573,7 @@ async fn spawn_with_executor(
             let handle = GuestExecutor
                 .spawn(req)
                 .await
-                .map_err(|e| spawn_error(execution_id, e.to_string()))?;
+                .map_err(|e| exec_error(execution_id, e))?;
             Ok((handle, None))
         }
         Some(s) if s.starts_with(executor_const::CONTAINER_KEY) => {
@@ -661,7 +682,7 @@ async fn spawn_with_executor(
                                 }
                                 return Err(spawn_error(execution_id, msg));
                             }
-                            return Err(spawn_error(execution_id, e.to_string()));
+                            return Err(exec_error(execution_id, e));
                         }
                     }
                 }

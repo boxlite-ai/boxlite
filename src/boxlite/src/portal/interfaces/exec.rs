@@ -62,10 +62,7 @@ impl ExecutionInterface {
         // Start execution
         let exec_response = self.client.exec(request).await?.into_inner();
         if let Some(err) = exec_response.error {
-            return Err(BoxliteError::Internal(format!(
-                "{}: {}",
-                err.reason, err.detail
-            )));
+            return Err(classify_exec_error(&err.reason, &err.detail));
         }
 
         let execution_id = exec_response.execution_id.clone();
@@ -867,6 +864,17 @@ impl OutputTracker {
     }
 }
 
+/// Map the guest's wire reason onto the typed error the caller sees; unknown
+/// reasons stay `Internal` so a server fault never becomes a 4xx.
+fn classify_exec_error(reason: &str, detail: &str) -> BoxliteError {
+    match reason {
+        "invalid_argument" => BoxliteError::InvalidArgument(detail.to_string()),
+        "execution_failed" => BoxliteError::Execution(detail.to_string()),
+        "execution_exists" => BoxliteError::AlreadyExists(detail.to_string()),
+        _ => BoxliteError::Internal(format!("{reason}: {detail}")),
+    }
+}
+
 // ============================================================================
 // UNIT TESTS
 // ============================================================================
@@ -875,6 +883,28 @@ impl OutputTracker {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn classify_exec_error_maps_guest_reasons_to_typed_errors() {
+        assert!(matches!(
+            classify_exec_error("execution_failed", "cannot spawn /nope: no such file"),
+            BoxliteError::Execution(_)
+        ));
+        assert!(matches!(
+            classify_exec_error("invalid_argument", "execution_id is required"),
+            BoxliteError::InvalidArgument(_)
+        ));
+        assert!(matches!(
+            classify_exec_error("execution_exists", "already reserved"),
+            BoxliteError::AlreadyExists(_)
+        ));
+        // Unknown reasons stay server faults: the guest may have learned a
+        // new reason this host does not understand yet.
+        assert!(matches!(
+            classify_exec_error("mystery_reason", "detail"),
+            BoxliteError::Internal(_)
+        ));
+    }
 
     /// Test that CancellationToken correctly signals cancelled state.
     #[tokio::test]

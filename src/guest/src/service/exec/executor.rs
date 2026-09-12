@@ -128,6 +128,18 @@ impl Executor for GuestExecutor {
     }
 }
 
+/// A missing or non-executable program is the caller's mistake: surface it
+/// as ExecutionError (422), not Internal.
+fn classify_spawn_error(program: &str, e: std::io::Error) -> BoxliteError {
+    let message = format!("Failed to spawn '{}': {}", program, e);
+    match e.kind() {
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
+            BoxliteError::Execution(message)
+        }
+        _ => BoxliteError::Internal(message),
+    }
+}
+
 /// Spawn process with pipes (standard mode).
 fn spawn_with_pipes(req: &ExecRequest) -> BoxliteResult<ExecHandle> {
     use nix::unistd::Pid;
@@ -163,7 +175,7 @@ fn spawn_with_pipes(req: &ExecRequest) -> BoxliteResult<ExecHandle> {
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| BoxliteError::Internal(format!("Failed to spawn '{}': {}", req.program, e)))?;
+        .map_err(|e| classify_spawn_error(&req.program, e))?;
 
     let pid = child.id();
 
@@ -250,7 +262,7 @@ fn spawn_with_pty(req: &ExecRequest, config: PtyConfig) -> BoxliteResult<ExecHan
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| BoxliteError::Internal(format!("Failed to spawn '{}': {}", req.program, e)))?;
+        .map_err(|e| classify_spawn_error(&req.program, e))?;
 
     let pid = child.id();
 
@@ -313,6 +325,30 @@ fn terminate_child(child: &mut std::process::Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two io errors a caller causes by naming a program that is not
+    /// there, or that it may not run, must stay `Execution` and keep the
+    /// program in the message; every other io error is a runtime fault.
+    #[test]
+    fn spawn_error_classifies_caller_mistakes_as_execution() {
+        use std::io::{Error, ErrorKind};
+
+        for kind in [ErrorKind::NotFound, ErrorKind::PermissionDenied] {
+            match classify_spawn_error("/nonexistent/binary", Error::from(kind)) {
+                BoxliteError::Execution(message) => {
+                    assert!(message.contains("nonexistent"), "message = {message}");
+                }
+                other => panic!("{kind:?} must be Execution, got {other:?}"),
+            }
+        }
+
+        match classify_spawn_error("/bin/true", Error::from(ErrorKind::InvalidInput)) {
+            BoxliteError::Internal(message) => {
+                assert!(message.contains("/bin/true"), "message = {message}");
+            }
+            other => panic!("a runtime fault must stay Internal, got {other:?}"),
+        }
+    }
 
     #[test]
     fn terminate_child_kills_and_reaps_process() {
