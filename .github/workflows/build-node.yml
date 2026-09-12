@@ -92,7 +92,9 @@ jobs:
           npm run build:native -- --release
           npm run artifacts
 
-          command -v sccache &>/dev/null && sccache --show-stats || true
+          if command -v sccache &>/dev/null; then
+            sccache --show-stats || true
+          fi
 
       # Create tar archive to preserve Unix file permissions (especially execute bits).
       # GitHub Actions upload-artifact uses ZIP which doesn't preserve permissions.

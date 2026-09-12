@@ -143,7 +143,9 @@ jobs:
           # Fix Go runtime symbol conflicts in the static library
           bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
 
-          command -v sccache &>/dev/null && sccache --show-stats || true
+          if command -v sccache &>/dev/null; then
+            sccache --show-stats || true
+          fi
 
       - name: Package C SDK archive
         run: |

@@ -1,0 +1,11 @@
+self-hosted-runner:
+  labels:
+    - boxlite-e2e
+    - kvm
+
+paths:
+  .github/workflows/e2e-local.yml:
+    ignore:
+      # actionlint 1.7.11's bundled action schema predates this checkout v5
+      # security input, which is required for the reviewed fork-PR checkout.
+      - 'input "allow-unsafe-pr-checkout" is not defined in action "actions/checkout@v5"'

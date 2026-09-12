@@ -1,4 +1,6 @@
-PHONY_TARGETS += fmt lint clippy lint\:apps fmt\:apps fmt\:check\:apps
+PHONY_TARGETS += fmt lint clippy lint\:apps lint\:ci fmt\:apps fmt\:check\:apps
+
+ACTIONLINT_VERSION := v1.7.11
 
 # Smart format: only format changed components.
 fmt:
@@ -121,6 +123,7 @@ lint\:all:
 	@$(MAKE) lint:c
 	@$(MAKE) lint:go
 	@$(MAKE) lint:apps
+	@$(MAKE) lint:ci
 	@echo "✅ Lint checks passed"
 
 # Safe autofix path: format first, fix Python lint, then verify all lint checks.
@@ -138,6 +141,11 @@ lint\:apps: _ensure-apps-deps
 	@echo "🔍 Linting apps workspace (TypeScript)..."
 	@cd apps && yarn lint:ts
 	@echo "✅ apps workspace lint passed"
+
+lint\:ci:
+	@echo "🔍 Linting GitHub Actions workflows..."
+	@go run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
+	@echo "✅ GitHub Actions workflow lint passed"
 
 lint\:rust:
 	@$(MAKE) clippy
