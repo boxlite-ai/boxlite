@@ -79,6 +79,27 @@ test('every service group is satisfiable by its own required half', () => {
   }
 })
 
+test('each telemetry switch is declared by the service that reads it, and may be absent', () => {
+  /*
+   * The switches are the stage's to set, so they have to be declared: a key no
+   * group names cannot leave the store at all — which is what left `OTEL_ENABLED`
+   * derived from an `OTEL_DISABLED` nobody could seed. Optional, because a stage
+   * that never set one is not a short environment: the deploy supplies the same
+   * default the incumbent stack did.
+   */
+  const switches = {
+    api: ['OTEL_ENABLED'],
+    proxy: ['OTEL_LOGGING_ENABLED', 'OTEL_TRACING_ENABLED'],
+    runner: ['OTEL_LOGGING_ENABLED', 'OTEL_TRACING_ENABLED'],
+  }
+  for (const [group, keys] of Object.entries(switches)) {
+    for (const key of keys) {
+      assert.ok(config.envSelectGroup[group]?.includes(key), `env.selectGroup.${group} does not name ${key}`)
+      assert.ok(config.envOptional[group]?.includes(key), `env.selectGroup.${group} demands ${key} of every stage`)
+    }
+  }
+})
+
 test('a service reads its optional keys when present and boots without them when not', () => {
   // `serviceSecretsFrom` is the delivery side of the same question, and it has
   // to agree with the store side: a key the store was allowed to omit cannot

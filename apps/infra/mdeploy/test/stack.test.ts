@@ -400,6 +400,28 @@ test('a stage with no telemetry runs the BoxLite exporter alone', () => {
   assert.equal(read(on.seen.collector.request.environment.CLICKHOUSE_USERNAME), 'otel_writer')
 })
 
+test('the proxy is told to export, and a stage that wants it quiet says so', () => {
+  /*
+   * `cmd/proxy/config/config.go` gives neither switch a default, so an unset Go
+   * bool is false and the exporter is never built: a proxy that is healthy,
+   * pointed at the collector, and silent. The incumbent stack defaulted both to
+   * `true` and the runner's boot script still does.
+   */
+  const { providers, seen } = bundle()
+  deployStack({ providers, config, inputs: inputs() })
+  assert.equal(read(seen.edge.request.environment.OTEL_LOGGING_ENABLED), 'true')
+  assert.equal(read(seen.edge.request.environment.OTEL_TRACING_ENABLED), 'true')
+
+  const quiet = bundle()
+  deployStack({
+    providers: quiet.providers,
+    config,
+    inputs: inputs({ proxyEnvironment: { OTEL_LOGGING_ENABLED: 'false', OTEL_TRACING_ENABLED: 'false' } }),
+  })
+  assert.equal(read(quiet.seen.edge.request.environment.OTEL_LOGGING_ENABLED), 'false', 'the store has to win')
+  assert.equal(read(quiet.seen.edge.request.environment.OTEL_TRACING_ENABLED), 'false')
+})
+
 test('each consumer is told the endpoint under the name it actually reads', () => {
   /*
    * Two programs, two contracts: the collector's ClickHouse exporter reads

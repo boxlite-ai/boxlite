@@ -378,6 +378,20 @@ export const deployStack = ({
   })
 
   const proxyEnvironment = {
+    /*
+     * Telemetry on unless the stage says otherwise.
+     *
+     * The two switches the proxy actually reads — `cmd/proxy/config/config.go`
+     * declares neither with a default, so a Go bool left unset is false and the
+     * exporter is never built. The incumbent stack said `envOr(…, 'true')` and
+     * the runner's boot script still writes both; the port dropped them here,
+     * which is a proxy that looks healthy and ships nothing.
+     *
+     * Before the store's own copy, so a stage that wants its proxy quiet seeds
+     * `false` in `env.selectGroup.proxy` rather than editing this.
+     */
+    OTEL_LOGGING_ENABLED: 'true',
+    OTEL_TRACING_ENABLED: 'true',
     ...inputs.proxyEnvironment,
     OTEL_EXPORTER_OTLP_ENDPOINT: collector.otlpUrl,
   }
