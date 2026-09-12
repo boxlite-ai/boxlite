@@ -82,7 +82,7 @@ impl EmbeddedRuntime {
         if MANIFEST.is_empty() {
             return None;
         }
-        match Self::extract() {
+        match Self::versioned_dir().and_then(Self::extract) {
             Ok(runtime) => {
                 runtime.cleanup_stale();
                 Some(runtime)
@@ -96,12 +96,7 @@ impl EmbeddedRuntime {
 
     // ── Extraction ──────────────────────────────────────────────────
 
-    fn extract() -> BoxliteResult<Self> {
-        let dir = Self::versioned_dir()?;
-        Self::extract_into(dir)
-    }
-
-    fn extract_into(dir: PathBuf) -> BoxliteResult<Self> {
+    fn extract(dir: PathBuf) -> BoxliteResult<Self> {
         // Fast path: already extracted by this or a previous process.
         let stamp = dir.join(".complete");
         if stamp.exists() {
@@ -218,9 +213,8 @@ impl EmbeddedRuntime {
 
     /// Check that a completed cache contains every file produced by this build.
     ///
-    /// The completion stamp can survive a cache being populated by a different
-    /// build variant, so the stamp alone is not sufficient to trust the fast
-    /// path.
+    /// A cache can lose files after publication while retaining its completion
+    /// stamp, so the stamp alone is not sufficient to trust the fast path.
     fn has_all_manifest_files(dir: &Path) -> bool {
         MANIFEST.iter().all(|(name, _, _)| {
             std::fs::symlink_metadata(dir.join(name))
@@ -391,7 +385,7 @@ mod tests {
         std::fs::create_dir(&cache).unwrap();
         std::fs::write(cache.join(".complete"), "complete\n").unwrap();
 
-        let runtime = EmbeddedRuntime::extract_into(cache.clone()).unwrap();
+        let runtime = EmbeddedRuntime::extract(cache.clone()).unwrap();
         assert_eq!(runtime.dir(), cache);
         assert!(EmbeddedRuntime::has_all_manifest_files(runtime.dir()));
     }
