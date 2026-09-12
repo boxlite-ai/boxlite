@@ -51,6 +51,10 @@ func run() int {
 			ServiceName:    "boxlite-proxy",
 			ServiceVersion: internal.Version,
 			Environment:    cfg.Environment,
+			// The endpoint doubles as the audience: Cloud Run validates a
+			// token's `aud` against the service's own address. Empty unless a
+			// GCP stage asked for it, and empty leaves the transport alone.
+			GoogleIDTokenAudience: googleIDTokenAudience(cfg),
 		})
 		if err != nil {
 			logger.Error("Failed to initialize tracer", "error", err)
@@ -106,11 +110,12 @@ func initLogger(
 
 	logger.Info("OpenTelemetry logging is enabled")
 	newLogger, provider, err := telemetry.InitLogger(ctx, logger, telemetry.Config{
-		Endpoint:       cfg.OtelEndpoint,
-		Headers:        cfg.GetOtelHeaders(),
-		ServiceName:    "boxlite-proxy",
-		ServiceVersion: internal.Version,
-		Environment:    cfg.Environment,
+		Endpoint:              cfg.OtelEndpoint,
+		Headers:               cfg.GetOtelHeaders(),
+		ServiceName:           "boxlite-proxy",
+		ServiceVersion:        internal.Version,
+		Environment:           cfg.Environment,
+		GoogleIDTokenAudience: googleIDTokenAudience(cfg),
 	})
 	if err != nil {
 		return logger, func() {}, err
@@ -119,4 +124,21 @@ func initLogger(
 	return newLogger, func() {
 		telemetry.ShutdownLogger(newLogger, provider)
 	}, nil
+}
+
+/*
+The audience to mint an ID token for, or empty for none.
+
+The endpoint itself, because Cloud Run validates a token's `aud` against the
+service's own address — a token minted for `<endpoint>/v1/traces` is refused
+with the same 403 as no token at all. Gated on an explicit flag rather than on
+"the endpoint looks like Cloud Run": the AWS path reaches an internal load
+balancer that authorises nobody, and guessing from a hostname would put a
+metadata lookup on a host that has no metadata server.
+*/
+func googleIDTokenAudience(cfg *config.Config) string {
+	if !cfg.OtelGoogleIDToken {
+		return ""
+	}
+	return cfg.OtelEndpoint
 }

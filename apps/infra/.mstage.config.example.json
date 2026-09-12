@@ -1,0 +1,223 @@
+{
+  "stages": {
+    "dev": {
+      "home": "aws",
+      "region": "ap-southeast-1",
+      "login": {
+        "aws": {
+          "required": true
+        },
+        "github": {
+          "required": true
+        },
+        "auth0": {
+          "required": false
+        }
+      },
+      "registry": {
+        "kind": "ecr",
+        "repository": "boxlite-app-dev",
+        "immutableTags": true,
+        "scanOnPush": true
+      },
+      "scan": {
+        "blockOn": [
+          "CRITICAL",
+          "HIGH"
+        ],
+        "timeoutSeconds": 300
+      },
+      "deploy": {
+        "database": {
+          "name": "boxlite",
+          "size": "small",
+          "highlyAvailable": false,
+          "backupRetentionDays": 7,
+          "protected": false
+        },
+        "cache": {
+          "size": "small",
+          "clustered": false,
+          "encryptInTransit": true
+        },
+        "storage": {
+          "volumePrefix": "boxlite-volume",
+          "versioning": true
+        },
+        "clickhouse": {
+          "mode": "self-hosted",
+          "database": "otel",
+          "writerUsername": "otel_writer",
+          "readerUsername": "otel_reader",
+          "instanceSize": "medium",
+          "dataGb": 50
+        },
+        "runners": {
+          "size": "large",
+          "rootDiskGb": 100
+        },
+        "alarms": {
+          "apiServerErrors": {
+            "threshold": 1,
+            "periods": 1
+          },
+          "proxyUnhealthyTargets": {
+            "threshold": 1,
+            "periods": 2
+          },
+          "runnersUnreachable": {
+            "threshold": 1,
+            "periods": 3
+          }
+        }
+      }
+    },
+    "prod": {
+      "home": "aws",
+      "region": "ap-southeast-1",
+      "protect": true,
+      "login": {
+        "aws": {
+          "required": true
+        },
+        "github": {
+          "required": true
+        },
+        "auth0": {
+          "required": false
+        }
+      },
+      "registry": {
+        "kind": "ecr",
+        "repository": "boxlite-app-prod",
+        "immutableTags": true,
+        "scanOnPush": true
+      },
+      "scan": {
+        "blockOn": [
+          "CRITICAL",
+          "HIGH"
+        ],
+        "timeoutSeconds": 300
+      },
+      "deploy": {
+        "database": {
+          "name": "boxlite",
+          "size": "small",
+          "highlyAvailable": true,
+          "backupRetentionDays": 30,
+          "protected": true
+        },
+        "cache": {
+          "size": "medium",
+          "clustered": false,
+          "encryptInTransit": true
+        },
+        "storage": {
+          "volumePrefix": "boxlite-volume",
+          "versioning": true
+        },
+        "clickhouse": {
+          "mode": "self-hosted",
+          "database": "otel",
+          "writerUsername": "otel_writer",
+          "readerUsername": "otel_reader",
+          "instanceSize": "medium",
+          "dataGb": 50
+        },
+        "runners": {
+          "size": "large",
+          "rootDiskGb": 100
+        },
+        "alarms": {
+          "apiServerErrors": {
+            "threshold": 1,
+            "periods": 1
+          },
+          "proxyUnhealthyTargets": {
+            "threshold": 1,
+            "periods": 2
+          },
+          "runnersUnreachable": {
+            "threshold": 1,
+            "periods": 3
+          }
+        }
+      }
+    },
+    "dev2": {
+      "home": "gcp",
+      "region": "asia-southeast1",
+      "project": "your-gcp-project-id",
+      "zone": "asia-southeast1-b",
+      "login": {
+        "gcp": {
+          "required": true
+        },
+        "github": {
+          "required": true
+        },
+        "auth0": {
+          "required": false
+        }
+      },
+      "registry": {
+        "kind": "artifact-registry",
+        "repository": "boxlite-app-dev2",
+        "immutableTags": true,
+        "scanOnPush": true
+      },
+      "scan": {
+        "blockOn": [
+          "CRITICAL",
+          "HIGH"
+        ],
+        "timeoutSeconds": 300
+      },
+      "deploy": {
+        "database": {
+          "name": "boxlite",
+          "size": "small",
+          "highlyAvailable": false,
+          "backupRetentionDays": 7,
+          "protected": false
+        },
+        "cache": {
+          "size": "small",
+          "clustered": false,
+          "encryptInTransit": true
+        },
+        "storage": {
+          "volumePrefix": "boxlite-volume",
+          "versioning": true
+        },
+        "clickhouse": {
+          "mode": "disabled",
+          "database": "otel",
+          "writerUsername": "otel_writer",
+          "readerUsername": "otel_reader",
+          "instanceSize": "medium",
+          "dataGb": 50
+        },
+        "runners": {
+          "size": "small",
+          "rootDiskGb": 100
+        },
+        "alarms": {
+          "apiServerErrors": {
+            "threshold": 1,
+            "periods": 1
+          },
+          "proxyUnhealthyTargets": {
+            "threshold": 1,
+            "periods": 2
+          },
+          "runnersUnreachable": {
+            "threshold": 1,
+            "periods": 3
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "naming",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "How this repository names what it creates in a cloud. Read by bootstrap/ and by mdeploy/stack/providers/, so the two cannot disagree",
+  "exports": {
+    ".": {
+      "development": "./src/names.ts",
+      "default": "./src/names.ts"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=22"
+  }
+}

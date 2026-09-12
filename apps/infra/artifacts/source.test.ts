@@ -97,7 +97,7 @@ test('a component ref wins over the global one, the way its source key does', ()
 })
 
 test('staging only a Runner locally leaves the Api building from the checkout', () => {
-  // What `npm run runner:build-artifact` prints. Reading the global ref for the Api here would
+  // What `npm run runner:build-artifact:legacy` prints. Reading the global ref for the Api here would
   // resolve boxlite-app-<stage>-api:v<version>-<sha> — a tag only deploy-infra.yml ever pushes — and
   // refuse the deploy at preflight, with no published image the developer could point at.
   const local = { RUNNER_ARTIFACT_SOURCE: 'build', RUNNER_ARTIFACT_REF: REF }
@@ -126,7 +126,7 @@ test('a build deploy refuses a ref that is not the checkout it builds the rest o
 })
 
 test('every ref is checked, not only the first component that has one', () => {
-  // The regression this exists to stop: `npm run runner:build-artifact` addresses the Runner and
+  // The regression this exists to stop: `npm run runner:build-artifact:legacy` addresses the Runner and
   // nothing else, so gating on the Api's ref skipped the check entirely for exactly that deploy.
   const other = 'b'.repeat(40)
   const runnerOnly = [

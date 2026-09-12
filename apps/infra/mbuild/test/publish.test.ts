@@ -1,0 +1,983 @@
+import assert from 'node:assert/strict'
+import { existsSync, readFileSync } from 'node:fs'
+import test from 'node:test'
+import { join } from 'node:path'
+import { parseBase, parseBuildConfig } from '../src/config.ts'
+import { resolveRegistry } from '../src/address.ts'
+import {
+  promote,
+  publish,
+  PublishError,
+  ScanRefusedError,
+  verifyPublished,
+  type Run,
+  type RunOptions,
+  type RunResult,
+} from '../src/publish.ts'
+
+const SCAN = { blockOn: ['CRITICAL', 'HIGH'], timeoutSeconds: 300 }
+
+const ecrStage = (repository: string, scan: unknown = SCAN) => ({
+  home: 'aws',
+  registry: { kind: 'ecr', repository, immutableTags: true, scanOnPush: true },
+  scan,
+})
+
+/** Both halves, as `loadBuildConfig` would hand them over. */
+const declare = ({
+  artifacts,
+  stages,
+  audit,
+}: {
+  artifacts: Record<string, unknown>
+  stages: Record<string, unknown>
+  /** Omitted by every repository that audits npm at its own root. */
+  audit?: Record<string, unknown>
+}) =>
+  parseBuildConfig({
+    basePath: '/repo/apps/infra/mstage.env.json',
+    base: JSON.stringify({ root: '../..', artifacts, ...(audit ? { audit } : {}) }),
+    stagePath: '/repo/apps/infra/.mstage.config.json',
+    stages: JSON.stringify({ stages }),
+  })
+
+const ARTIFACTS = {
+  console: { dockerfile: 'apps/console/Dockerfile', context: '.' },
+  api: { dockerfile: 'apps/api/Dockerfile', context: '.' },
+}
+
+const config = declare({
+  artifacts: ARTIFACTS,
+  stages: {
+    dev: ecrStage('boxlite-backoffice-dev'),
+    prod: ecrStage('boxlite-backoffice-prod'),
+  },
+})
+
+/** The same dev registry with one artifact, and a scan budget short enough for a test to spend. */
+const withScanBudget = (timeoutSeconds: number) =>
+  declare({
+    artifacts: { api: ARTIFACTS.api },
+    stages: { dev: ecrStage('boxlite-backoffice-dev', { blockOn: ['CRITICAL', 'HIGH'], timeoutSeconds }) },
+  })
+
+const briefBudget = withScanBudget(10)
+
+/**
+ * A clock a test drives. Waiting spends its own time rather than the real kind,
+ * so a scan's whole budget goes by in an instant and every wait is recorded.
+ */
+const fakeClock = () => {
+  const waits: number[] = []
+  let elapsed = 0
+  return {
+    waits,
+    clock: {
+      now: () => elapsed,
+      wait: async (milliseconds: number) => {
+        waits.push(milliseconds)
+        elapsed += milliseconds
+      },
+    },
+  }
+}
+
+const SHA = 'b'.repeat(40)
+const ACCOUNT = '000000000000'
+// mstage declares these; mbuild's config does not repeat them.
+const dev = resolveRegistry({ config, stage: 'dev', region: 'ap-southeast-1', accountId: ACCOUNT })
+const prod = resolveRegistry({ config, stage: 'prod', region: 'us-east-1', accountId: ACCOUNT })
+
+const ok = (stdout = ''): RunResult => ({ code: 0, stdout, stderr: '' })
+const fail = (stderr: string): RunResult => ({ code: 1, stdout: '', stderr })
+
+/**
+ * Registries that answer like ECR, keyed by repository so one double can serve
+ * both ends of a promotion. `published` holds `<repository>:<tag>-<artifact>`.
+ *
+ * `scan` is how a pushed image's scan behaves. `missingReads` reads answer
+ * ScanNotFoundException before it exists, which is what ECR answers between a
+ * push returning and its scan being registered, and `status` is what every read
+ * after that reports. Only a finished scan carries counts.
+ */
+const registryDouble = ({
+  published = new Set<string>(),
+  repositories = new Set(['boxlite-backoffice-dev', 'boxlite-backoffice-prod']),
+  findings = {},
+  scan = {},
+  pushFails,
+  deniedReads = false,
+}: {
+  published?: Set<string>
+  repositories?: Set<string>
+  findings?: Record<string, number>
+  scan?: { status?: string; description?: string; missingReads?: number }
+  /** What a registry that is briefly unreachable looks like from `docker push`. */
+  pushFails?: string
+  /**
+   * The answer the double could not express before: not "no" but "I may not
+   * say". `published` covers presence and absence; this covers the read that
+   * never happened.
+   */
+  deniedReads?: boolean
+} = {}) => {
+  const { status = 'COMPLETE', description, missingReads = 0 } = scan
+  const unregistered = new Map<string, number>()
+  const calls: string[][] = []
+  const echoed: string[][] = []
+  const logins: string[] = []
+  const run: Run = async (command, args, options) => {
+    calls.push([command, ...args])
+    if (options?.echo) echoed.push([command, ...args])
+    if (command === 'docker') {
+      // What docker really does with an unfed `--password-stdin`: it falls back
+      // to prompting, and a runner has no terminal to prompt on. A double that
+      // accepts the login anyway cannot tell a piped password from a lost one.
+      if (args[0] === 'login') {
+        if (!options?.stdin) return fail('Error: Cannot perform an interactive login from a non TTY device')
+        logins.push(options.stdin)
+      }
+      if (args[0] === 'push' && pushFails) return fail(pushFails)
+      return ok()
+    }
+    const operation = `${args[0]} ${args[1]}`
+    const named = (flag: string) => args[args.indexOf(flag) + 1]
+    if (operation === 'ecr get-login-password') return ok('ecr-token\n')
+    if (operation === 'ecr describe-repositories') {
+      return repositories.has(named('--repository-names')!) ? ok() : fail('RepositoryNotFoundException')
+    }
+    if (operation === 'ecr describe-images') {
+      if (deniedReads) {
+        return fail(
+          'An error occurred (AccessDeniedException) when calling the DescribeImages operation: ' +
+            'User is not authorized to perform: ecr:DescribeImages',
+        )
+      }
+      const key = `${named('--repository-name')}:${named('--image-ids')!.replace('imageTag=', '')}`
+      return published.has(key) ? ok() : fail('ImageNotFoundException')
+    }
+    if (operation === 'ecr describe-image-scan-findings') {
+      const image = named('--image-id')!.replace('imageTag=', '')
+      const reads = unregistered.get(image) ?? missingReads
+      if (reads > 0) {
+        unregistered.set(image, reads - 1)
+        return fail(
+          'An error occurred (ScanNotFoundException) when calling the DescribeImageScanFindings operation: ' +
+            `Image scan does not exist for the image with '{imageTag:'${image}'}'`,
+        )
+      }
+      // The projection the gate asks for: the status, and the counts that only
+      // a finished scan has — COMPLETE from a scan on push, ACTIVE from the
+      // continuous kind.
+      const finished = status === 'COMPLETE' || status === 'ACTIVE'
+      return ok(JSON.stringify({ status, detail: description, counts: finished ? findings : null }))
+    }
+    return ok()
+  }
+  return { calls, echoed, logins, run, ran: (predicate: (call: string[]) => boolean) => calls.filter(predicate) }
+}
+
+const lines: string[] = []
+const log = (line: string) => lines.push(line)
+const both = (repository: string) => new Set([`${repository}:${SHA}-console`, `${repository}:${SHA}-api`])
+
+test('the registry password reaches docker through stdin, not through argv', async () => {
+  // An unfed `--password-stdin` does not fail on the password: docker prompts
+  // instead, and dies on the runner's missing terminal. That reads as a broken
+  // workflow rather than as the dropped pipe it is.
+  const probe = registryDouble()
+  await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
+  assert.deepEqual(probe.logins, ['ecr-token'], 'the token aws printed is the token docker was fed')
+  const login = probe.ran((call) => call[0] === 'docker' && call[1] === 'login')[0]!
+  assert.ok(!login.includes('ecr-token'), 'a password in an argument list is readable from the process table')
+})
+
+test('a commit already published is not rebuilt, and is not an error', async () => {
+  // Immutable tags make re-pushing fail, so a re-run of a green build has to be
+  // recognised rather than attempted.
+  const probe = registryDouble({ published: both('boxlite-backoffice-dev') })
+  const outcomes = await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
+  assert.deepEqual(
+    outcomes.map((outcome) => outcome.built),
+    [false, false],
+  )
+  assert.equal(probe.ran((call) => call[1] === 'build').length, 0)
+})
+
+test('only the missing artifact is built, from the context its config names', async () => {
+  const probe = registryDouble({ published: new Set([`boxlite-backoffice-dev:${SHA}-console`]) })
+  const outcomes = await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
+  assert.deepEqual(
+    outcomes.map((outcome) => [outcome.artifact, outcome.built]),
+    [
+      ['console', false],
+      ['api', true],
+    ],
+  )
+  const builds = probe.ran((call) => call[1] === 'build')
+  assert.equal(builds.length, 1)
+  assert.ok(builds[0]!.includes('/repo/apps/api/Dockerfile'), builds[0]!.join(' '))
+  assert.ok(builds[0]!.includes(`REVISION=${SHA}`), 'the commit reaches the image as a build argument')
+})
+
+test('every image that moves names the architecture the runtimes actually run', async () => {
+  /*
+   * `docker build` targets the host otherwise — amd64 on a CI runner, arm64 on
+   * an Apple Silicon workstation — and neither runtime this publishes for
+   * takes the second. Cloud Run runs amd64 only, and an ECS task definition
+   * declaring no `runtimePlatform` gets Fargate's x86_64 default.
+   *
+   * The failure it prevents is far from its cause: a revision built from an
+   * arm64 image dies at `exec format error`, and because tags are immutable
+   * the wrong bytes hold that commit's tag for good. `promote` pins it too,
+   * and that is the worse one to miss — a multi-arch address resolves to the
+   * host's variant, so a promotion from an arm64 workstation would carry that
+   * variant into the receiving stage, which is the one thing promoting rather
+   * than rebuilding exists to prevent.
+   *
+   * The flag and its value are asserted as an adjacent pair, so one cannot
+   * drift away from the other.
+   */
+  const built = registryDouble()
+  await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: built.run, log })
+  const moved = registryDouble({ published: both('boxlite-backoffice-dev') })
+  await promote({
+    config,
+    tag: SHA,
+    from: { stage: 'dev', registry: dev },
+    to: { stage: 'prod', registry: prod },
+    run: moved.run,
+    log,
+  })
+
+  const commands = [
+    ...built.ran((call) => call[1] === 'build'),
+    ...moved.ran((call) => call[0] === 'docker' && call[1] === 'pull'),
+  ]
+  assert.ok(commands.length > 0, 'nothing was built or pulled, so this asserted nothing')
+  for (const command of commands) {
+    const at = command.indexOf('--platform')
+    assert.notEqual(at, -1, `no --platform in: ${command.join(' ')}`)
+    assert.equal(command[at + 1], 'linux/amd64')
+  }
+})
+
+test('the dependencies that ship are audited once, before anything is built', async () => {
+  /*
+   * The check also runs in `ci.yml`, which does not reach this path: a
+   * hand-dispatched publish names its own ref, so passing CI is not something it
+   * can assume. Here the rule belongs to the tool, so a local publish is held to
+   * it too — audited inside the build loop, once, however many artifacts follow.
+   */
+  const probe = registryDouble()
+  await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
+
+  const commands = probe.ran(() => true).map((call) => `${call[0]} ${call.slice(1).join(' ')}`)
+  const isAudit = (command: string) => command.startsWith('npm ') && command.includes(' audit ')
+  const isBuild = (command: string) => command.startsWith('docker build')
+  const audit = commands.findIndex(isAudit)
+  // Two artifacts, one audit: the flag `auditOnce` closes over is the only
+  // thing that keeps the second build from paying for it again.
+  assert.equal(commands.filter(isBuild).length, 2, `both artifacts must build: ${commands.join(' | ')}`)
+  assert.equal(commands.filter(isAudit).length, 1, `audited ${commands.filter(isAudit).length} times`)
+  assert.ok(audit < commands.findIndex(isBuild), 'the audit must precede the first build')
+  assert.ok(commands[audit]!.includes('--audit-level=high'), commands[audit])
+  assert.ok(commands[audit]!.includes('--omit=dev'), 'a test runner advisory is not in the image')
+  assert.ok(commands[audit]!.includes('--prefix /repo'), 'the audit must read the repository, not the cwd')
+})
+
+test('a repository whose lockfile is yarn is audited with yarn, in the directory holding it', async () => {
+  /*
+   * `npm --prefix <root> audit` is only an audit where the root is an npm
+   * workspace. Here it is not — the images build from `apps/`, locked by Yarn 4
+   * — so that command exits ENOLOCK and the gate can never pass, which is the
+   * same as no gate at all once someone works around it.
+   *
+   * yarn takes no directory flag that survives corepack, and corepack resolves
+   * the version from where it is launched, so the directory has to be the
+   * working one rather than an argument.
+   */
+  const yarnConfig = declare({
+    artifacts: { api: ARTIFACTS.api },
+    stages: { dev: ecrStage('boxlite-backoffice-dev') },
+    audit: { directory: 'apps', manager: 'yarn' },
+  })
+  const probe = registryDouble()
+  const seen: { command: string; args: string[]; options?: RunOptions }[] = []
+  const run: Run = async (command, args, options) => {
+    seen.push({ command, args, options })
+    return probe.run(command, args, options)
+  }
+  await publish({ config: yarnConfig, stage: 'dev', registry: dev, tag: SHA, run, log })
+
+  const audits = seen.filter((call) => call.args.includes('audit'))
+  assert.equal(audits.length, 1, `audited ${audits.length} times`)
+  assert.equal(audits[0]!.command, 'corepack', 'the yarn on a PATH ignores the repository’s packageManager pin')
+  assert.deepEqual(audits[0]!.args, ['yarn', 'npm', 'audit', '--severity', 'high', '--environment', 'production'])
+  assert.equal(audits[0]!.options?.cwd, '/repo/apps', 'the audit must read the workspace that ships')
+  assert.ok(!seen.some((call) => call.command === 'npm'), 'npm cannot read a yarn lockfile')
+})
+
+test('an advisory of high severity stops the publish before it builds', async () => {
+  // Failing closed is the whole point: the previous behaviour was no check at
+  // all on this path, and a check that only warned would be the same thing.
+  const probe = registryDouble()
+  // Wrapped rather than a new option on the shared double: only this test cares
+  // what a failing audit does, and the double is every other test's.
+  const run: typeof probe.run = async (command, args, options) =>
+    command === 'npm' && args.includes('audit')
+      ? { code: 1, stdout: 'high severity advisory in a shipped dependency', stderr: '' }
+      : probe.run(command, args, options)
+  await assert.rejects(
+    () => publish({ config, stage: 'dev', registry: dev, tag: SHA, run, log }),
+    /npm audit did not pass/,
+  )
+  assert.equal(probe.ran((call) => call[1] === 'build').length, 0, 'nothing may be built after a failed audit')
+})
+
+test('a failed audit reports what npm said, from whichever stream carried it', async () => {
+  // A non-zero exit is also how npm says it could not audit at all — no
+  // lockfile, no registry — and that answer arrives on stderr with stdout
+  // empty. Blocking with an empty body would name the wrong cause and show
+  // nothing.
+  const probe = registryDouble()
+  const run: typeof probe.run = async (command, args, options) =>
+    command === 'npm' && args.includes('audit')
+      ? { code: 1, stdout: '', stderr: 'npm error code ENOLOCK' }
+      : probe.run(command, args, options)
+  await assert.rejects(
+    () => publish({ config, stage: 'dev', registry: dev, tag: SHA, run, log }),
+    /ENOLOCK/,
+  )
+})
+
+test('a re-publish that builds nothing is not gated by the audit', async () => {
+  /*
+   * `publish` calls a re-run of a green build "not a failure", and the audit
+   * must not turn it into one: an old commit whose artifacts are all present
+   * would otherwise be held against today's advisories, which is the reason
+   * `promote` has no gate either.
+   */
+  const probe = registryDouble({
+    published: new Set([`boxlite-backoffice-dev:${SHA}-console`, `boxlite-backoffice-dev:${SHA}-api`]),
+  })
+  // Counted here rather than through `probe.ran`: this wrapper answers npm
+  // itself and never delegates, so the double never sees an audit and a count
+  // taken from it could not fail.
+  const audits: string[][] = []
+  const run: typeof probe.run = async (command, args, options) => {
+    if (command === 'npm' && args.includes('audit')) {
+      audits.push([command, ...args])
+      return { code: 1, stdout: 'high severity advisory in a shipped dependency', stderr: '' }
+    }
+    return probe.run(command, args, options)
+  }
+
+  const outcomes = await publish({ config, stage: 'dev', registry: dev, tag: SHA, run, log })
+  assert.deepEqual(
+    outcomes.map((outcome) => outcome.built),
+    [false, false],
+  )
+  assert.deepEqual(audits, [], 'no build, no audit')
+})
+
+test('the commands that take minutes are echoed to the log, and nothing else is', async () => {
+  // A step whose log stays empty for ten minutes cannot be told from a hung
+  // one. Only these: `ecr get-login-password` prints a registry password and
+  // the `describe-*` calls print documents to parse.
+  const probe = registryDouble()
+  await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
+  assert.deepEqual(
+    probe.echoed.map((call) => `${call[0]} ${call[1]}`),
+    ['docker build', 'docker push', 'docker build', 'docker push'],
+  )
+})
+
+test('the log names each artifact as its build starts, not only once it is pushed', async () => {
+  const probe = registryDouble()
+  lines.length = 0
+  await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
+  assert.deepEqual(
+    lines.filter((line) => line.startsWith('Building')).map((line) => line.split(' ')[1]),
+    ['console', 'api'],
+  )
+})
+
+test('a publish addresses the stage it was given, not a default one', async () => {
+  const probe = registryDouble()
+  const outcomes = await publish({ config, stage: 'prod', registry: prod, tag: SHA, run: probe.run, log })
+  assert.ok(outcomes.every((outcome) => outcome.address.includes('.ecr.us-east-1.') && outcome.address.includes('/boxlite-backoffice-prod:')))
+})
+
+test('a repository that does not exist yet is created immutable and scanning', async () => {
+  const probe = registryDouble({ repositories: new Set() })
+  await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
+  const created = probe.ran((call) => call[2] === 'create-repository')[0]!
+  assert.ok(created.includes('IMMUTABLE'), 'a mutable tag could be repointed under a running service')
+  assert.ok(created.includes('scanOnPush=true'), 'the scan gate needs something to read')
+  assert.ok(created.includes('ap-southeast-1'), "created in the stage's own region")
+})
+
+test('a blocking finding fails, naming what it found', async () => {
+  const probe = registryDouble({ findings: { CRITICAL: 2, HIGH: 1, MEDIUM: 9 } })
+  await assert.rejects(
+    () => publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log }),
+    /has 2 CRITICAL and 1 HIGH findings/,
+  )
+})
+
+test('a scan refusal is told apart from a transient failure, so a caller stops retrying', async () => {
+  // The distinction is the point: a push and a token endpoint fail transiently
+  // and are worth another attempt; this is not, because the answer is about
+  // the image's own contents. The workflow reads it as an exit code
+  // (`bin/mbuild.ts`); this is the type it reads it from.
+  const refused = registryDouble({ findings: { CRITICAL: 1 } })
+  await assert.rejects(
+    () => publish({ config, stage: 'dev', registry: dev, tag: SHA, run: refused.run, log }),
+    (error) => error instanceof ScanRefusedError,
+  )
+
+  // And a genuinely transient one is not, or the distinction would have made
+  // everything unretryable instead.
+  const broken = registryDouble({ pushFails: 'connection reset by peer' })
+  await assert.rejects(
+    () => publish({ config, stage: 'dev', registry: dev, tag: SHA, run: broken.run, log }),
+    (error) => error instanceof PublishError && !(error instanceof ScanRefusedError),
+  )
+})
+
+test('a scan that is not registered yet is waited for rather than failed on', async () => {
+  // ECR registers the scan after the push returns, so the first read of a
+  // just-pushed image finds no scan at all. Failing there fails a publish whose
+  // image is fine, and leaves the workflow's own retry to pass it a minute
+  // later on the run that finds everything already published.
+  const probe = registryDouble({ scan: { missingReads: 2 } })
+  const { clock, waits } = fakeClock()
+  await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log, clock })
+  const reads = probe.ran((call) => call[2] === 'describe-image-scan-findings')
+  assert.equal(reads.length, 6, 'two reads that found no scan, then one that did, for each artifact')
+  assert.deepEqual(waits, [5_000, 5_000, 5_000, 5_000], 'a poll interval between reads, never after the last')
+})
+
+test('a scan still running is not read as a clean image', async () => {
+  // An unfinished scan carries no counts, and no counts read as nothing found:
+  // the gate would pass an image that nothing has finished scanning.
+  const probe = registryDouble({ scan: { status: 'IN_PROGRESS' } })
+  const { clock, waits } = fakeClock()
+  const said: string[] = []
+  await assert.rejects(
+    () =>
+      publish({
+        config: briefBudget,
+        stage: 'dev',
+        registry: dev,
+        tag: SHA,
+        run: probe.run,
+        log: (line) => said.push(line),
+        clock,
+      }),
+    /no scan result after 10s/,
+  )
+  assert.deepEqual(waits, [5_000, 5_000], 'the budget is spent, and not exceeded')
+  assert.equal(probe.ran((call) => call[2] === 'describe-image-scan-findings').length, 3, 'one read per interval')
+  assert.deepEqual(
+    said.filter((line) => line.startsWith('Waiting')),
+    [`Waiting up to 10s for the scan of ${dev.host}/boxlite-backoffice-dev:${SHA}-api (IN_PROGRESS)`],
+    'the wait is announced once, not once per poll',
+  )
+})
+
+test('a budget shorter than one poll interval still buys a second read', async () => {
+  // The wait is what is left of the budget rather than a fixed step, so a
+  // three-second budget asks again after three seconds instead of giving up
+  // having waited for nothing.
+  const probe = registryDouble({ scan: { missingReads: 1 } })
+  const { clock, waits } = fakeClock()
+  await publish({ config: withScanBudget(3), stage: 'dev', registry: dev, tag: SHA, run: probe.run, log, clock })
+  assert.deepEqual(waits, [3_000])
+  assert.equal(probe.ran((call) => call[2] === 'describe-image-scan-findings').length, 2)
+})
+
+test('a continuously scanned image is answered by its ACTIVE report, not waited on', async () => {
+  // Enhanced scanning is a registry-wide setting, so the same repository can
+  // start reporting ACTIVE without this config changing. Reading that as
+  // unfinished would spend the whole budget on findings that are current.
+  const probe = registryDouble({ scan: { status: 'ACTIVE' }, findings: { CRITICAL: 1 } })
+  const { clock, waits } = fakeClock()
+  await assert.rejects(
+    () => publish({ config: briefBudget, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log, clock }),
+    /has 1 CRITICAL findings/,
+  )
+  assert.deepEqual(waits, [], 'an ACTIVE report is an answer, not something to wait for')
+})
+
+test('a scan ECR will not run fails with the reason it gave, not with a timeout', async () => {
+  const probe = registryDouble({
+    scan: { status: 'UNSUPPORTED_IMAGE', description: 'The operating system is not supported' },
+  })
+  const { clock, waits } = fakeClock()
+  await assert.rejects(
+    () => publish({ config: briefBudget, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log, clock }),
+    /UNSUPPORTED_IMAGE: The operating system is not supported/,
+  )
+  assert.deepEqual(waits, [], 'a scan that will never run is not waited for')
+})
+
+test('the gate reads the scan status alongside the counts, as JSON', async () => {
+  // Counts alone cannot be read: absent counts mean "clean" once the scan is
+  // COMPLETE and "not scanned yet" until then. And `--output text` dies on a
+  // response that carries no findings object, which is the state being waited
+  // through.
+  const probe = registryDouble()
+  await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
+  const read = probe.ran((call) => call[2] === 'describe-image-scan-findings')[0]!
+  const query = read[read.indexOf('--query') + 1]!
+  assert.match(query, /imageScanStatus\.status/)
+  assert.match(query, /imageScanFindings\.findingSeverityCounts/)
+  assert.equal(read[read.indexOf('--output') + 1], 'json')
+})
+
+test('the scan gate runs after every push, not between them', async () => {
+  // Pushing one artifact and then failing on the other's findings would leave
+  // half a release published with no record of why the rest is missing.
+  const probe = registryDouble()
+  await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
+  const order = probe.calls.map((call) => `${call[0]} ${call[1]} ${call[2] ?? ''}`.trim())
+  assert.ok(
+    order.indexOf('aws ecr describe-image-scan-findings') > order.lastIndexOf('docker push'),
+    'every push precedes the first scan',
+  )
+})
+
+test('promote moves the built bytes rather than building them again', async () => {
+  const probe = registryDouble({ published: both('boxlite-backoffice-dev') })
+  const outcomes = await promote({
+    config,
+    tag: SHA,
+    from: { stage: 'dev', registry: dev },
+    to: { stage: 'prod', registry: prod },
+    run: probe.run,
+    log,
+  })
+  assert.equal(probe.ran((call) => call[1] === 'build').length, 0, 'rebuilding could produce different bytes')
+  assert.deepEqual(
+    outcomes.map((outcome) => outcome.artifact),
+    ['console', 'api'],
+  )
+  const api = outcomes.find((outcome) => outcome.artifact === 'api')!
+  assert.ok(api.from.includes('.ecr.ap-southeast-1.') && api.from.includes('/boxlite-backoffice-dev:'))
+  assert.ok(api.address.includes('.ecr.us-east-1.') && api.address.includes('/boxlite-backoffice-prod:'))
+  // Pull, re-tag, push: ECR shares no layers between repositories.
+  assert.deepEqual(
+    probe.ran((call) => call[0] === 'docker' && ['pull', 'tag', 'push'].includes(call[1]!)).map((call) => call[1]),
+    ['pull', 'tag', 'push', 'pull', 'tag', 'push'],
+  )
+})
+
+test('a promotion echoes its transfers, which are the part that moves whole images', async () => {
+  const probe = registryDouble({ published: both('boxlite-backoffice-dev') })
+  await promote({
+    config,
+    tag: SHA,
+    from: { stage: 'dev', registry: dev },
+    to: { stage: 'prod', registry: prod },
+    run: probe.run,
+    log,
+  })
+  assert.deepEqual(
+    probe.echoed.map((call) => `${call[0]} ${call[1]}`),
+    ['docker pull', 'docker push', 'docker pull', 'docker push'],
+    'a re-tag is instant; the pull and the push are not',
+  )
+})
+
+test('a source missing any artifact promotes nothing at all', async () => {
+  // Half a release in prod is a version that cannot start.
+  const probe = registryDouble({ published: new Set([`boxlite-backoffice-dev:${SHA}-console`]) })
+  await assert.rejects(
+    () =>
+      promote({
+        config,
+        tag: SHA,
+        from: { stage: 'dev', registry: dev },
+        to: { stage: 'prod', registry: prod },
+        run: probe.run,
+        log,
+      }),
+    /dev does not hold api at .*; nothing was promoted/,
+  )
+  assert.equal(probe.ran((call) => call[1] === 'pull').length, 0)
+})
+
+test('an artifact already in the destination is not moved twice', async () => {
+  const probe = registryDouble({
+    published: new Set([...both('boxlite-backoffice-dev'), `boxlite-backoffice-prod:${SHA}-console`]),
+  })
+  const outcomes = await promote({
+    config,
+    tag: SHA,
+    from: { stage: 'dev', registry: dev },
+    to: { stage: 'prod', registry: prod },
+    run: probe.run,
+    log,
+  })
+  assert.deepEqual(
+    outcomes.map((outcome) => [outcome.artifact, outcome.built]),
+    [
+      ['console', false],
+      ['api', true],
+    ],
+  )
+  assert.equal(probe.ran((call) => call[1] === 'pull').length, 1)
+})
+
+test('promoting a stage to itself is refused rather than quietly doing nothing', async () => {
+  await assert.rejects(
+    () =>
+      promote({
+        config,
+        tag: SHA,
+        from: { stage: 'dev', registry: dev },
+        to: { stage: 'dev', registry: dev },
+        run: registryDouble().run,
+        log,
+      }),
+    /Promoting "dev" to itself would do nothing/,
+  )
+})
+
+test("the destination's scan decides whether the receiving stage may run it", async () => {
+  const probe = registryDouble({ published: both('boxlite-backoffice-dev'), findings: { CRITICAL: 1 } })
+  await assert.rejects(
+    () =>
+      promote({
+        config,
+        tag: SHA,
+        from: { stage: 'dev', registry: dev },
+        to: { stage: 'prod', registry: prod },
+        run: probe.run,
+        log,
+      }),
+    /has 1 CRITICAL findings/,
+  )
+})
+
+test('a failed build stops the publish rather than pushing nothing', async () => {
+  const probe = registryDouble()
+  const run: Run = async (command, args) =>
+    command === 'docker' && args[0] === 'build' ? fail('no space left on device') : probe.run(command, args)
+  await assert.rejects(() => publish({ config, stage: 'dev', registry: dev, tag: SHA, run, log }), PublishError)
+})
+
+/** A registry that answers like Artifact Registry, keyed by what is published. */
+const googleDouble = ({
+  published = new Set<string>(),
+  repositories = new Set(['boxlite-backoffice']),
+  vulnerabilities = {} as Record<string, unknown[]>,
+  /**
+   * What an existing repository reports for `dockerConfig.immutableTags`. The
+   * API omits the field rather than answering false, which is why the absent
+   * case is spelled as an empty answer rather than as `False`.
+   */
+  immutableTags = 'True',
+  /** As above: a read that refused, rather than a repository that answered no. */
+  deniedReads = false,
+} = {}) => {
+  const calls: string[][] = []
+  const run: Run = async (command, args) => {
+    calls.push([command, ...args])
+    // A pushed image is a published one, which is what the scan gate then reads.
+    if (command === 'docker' && args[0] === 'push') published.add(args[1]!)
+    if (command === 'docker') return ok()
+    if (args[0] === 'auth') return ok()
+    const operation = args.slice(0, 3).join(' ')
+    if (operation === 'artifacts repositories describe') {
+      return repositories.has(args[3]!) ? ok(immutableTags) : fail('NOT_FOUND: repository')
+    }
+    if (operation === 'artifacts repositories create') return ok()
+    if (operation === 'artifacts docker images') {
+      /*
+       * Two reads, and the split is the point. `list` is the existence check and
+       * asks Artifact Registry alone; `describe` is the scan gate's read and is
+       * the one that reaches Container Analysis. Each therefore refuses with a
+       * permission from its own service.
+       */
+      if (args[3] === 'list') {
+        if (deniedReads) {
+          return fail(
+            'ERROR: (gcloud.artifacts.docker.images.list) PERMISSION_DENIED: ' +
+              "Permission 'artifactregistry.dockerimages.list' denied on resource",
+          )
+        }
+        const image = args[4]!
+        const tag = args.find((arg) => arg.startsWith('--filter=tags:'))!.replace('--filter=tags:', '')
+        /*
+         * Without `--include-tags` the resources carry no tags field, so the
+         * filter matches nothing and gcloud answers exit zero with an empty page
+         * and a warning on stderr. Modelled rather than rejected, because that
+         * is what really happens — and it reads as absence, which is why a test
+         * beside this asserts the flag is sent.
+         */
+        if (!args.includes('--include-tags')) return ok('')
+        // The banner goes to stderr, so an empty page really is empty here.
+        return published.has(`${image}:${tag}`) ? ok('sha256:0123456789abcdef\n') : ok('')
+      }
+      if (deniedReads) {
+        return fail(
+          'ERROR: (gcloud.artifacts.docker.images.describe) PERMISSION_DENIED: ' +
+            "Permission 'containeranalysis.occurrences.list' denied on resource",
+        )
+      }
+      const image = args[4]!
+      if (!published.has(image)) return fail('ERROR: (gcloud.artifacts.docker.images.describe) Image not found.')
+      // Only the flagged read carries findings. A double that answered both the
+      // same way would keep the severity gate green with the flag removed.
+      return args.includes('--show-package-vulnerability')
+        ? ok(JSON.stringify({ package_vulnerability_summary: { vulnerabilities } }))
+        : ok()
+    }
+    return ok()
+  }
+  return { calls, run, ran: (predicate: (call: string[]) => boolean) => calls.filter(predicate) }
+}
+
+const garStage = (immutableTags = true) => ({
+  home: 'gcp',
+  project: 'boxlite',
+  registry: { kind: 'artifact-registry', repository: 'boxlite-backoffice', immutableTags, scanOnPush: true },
+  scan: { blockOn: ['CRITICAL'], timeoutSeconds: 300 },
+})
+
+const gcpConfig = declare({ artifacts: { api: ARTIFACTS.api }, stages: { dev: garStage() } })
+
+const gar = resolveRegistry({ config: gcpConfig, stage: 'dev', region: 'asia-southeast1', project: 'boxlite' })
+const GAR_IMAGE = `asia-southeast1-docker.pkg.dev/boxlite/boxlite-backoffice/api:${SHA}`
+
+test('a commit publishes to Artifact Registry, at the address that cloud uses', async () => {
+  // One repository per artifact and the commit as the tag, rather than one
+  // repository and a compound tag. `addressFor` already writes both shapes.
+  const probe = googleDouble()
+  const outcomes = await publish({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run, log })
+  assert.deepEqual(
+    outcomes.map(({ artifact, address }) => [artifact, address]),
+    [['api', GAR_IMAGE]],
+  )
+  assert.ok(probe.ran((call) => call[0] === 'docker' && call[1] === 'push' && call[2] === GAR_IMAGE).length === 1)
+})
+
+test('logging in configures the credential helper, and fetches no password', async () => {
+  // Nothing expires between this and the push: the helper reads the ambient
+  // credentials each time it is asked.
+  const probe = googleDouble()
+  await publish({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run, log })
+  assert.deepEqual(probe.ran((call) => call[1] === 'auth')[0]?.slice(0, 4), [
+    'gcloud',
+    'auth',
+    'configure-docker',
+    'asia-southeast1-docker.pkg.dev',
+  ])
+  assert.equal(probe.ran((call) => call.includes('get-login-password')).length, 0)
+})
+
+test('a repository that does not exist yet is created as a docker repository', async () => {
+  const probe = googleDouble({ repositories: new Set() })
+  await publish({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run, log })
+  const created = probe.ran((call) => call.slice(1, 4).join(' ') === 'artifacts repositories create')[0]!
+  assert.ok(created.includes('--repository-format'))
+  assert.ok(created.includes('docker'))
+  assert.ok(created.includes('asia-southeast1'), created.join(' '))
+})
+
+test('the declared tag immutability reaches Artifact Registry, as it reaches ECR', async () => {
+  // The same field ECR creates as IMMUTABLE. Nothing here addresses an image by
+  // digest, so a repository created without it drops the only thing making a
+  // deployed commit tag mean exact bytes — while the config still claims it, and
+  // with no way to set it afterwards.
+  const probe = googleDouble({ repositories: new Set() })
+  await publish({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run, log })
+  const created = probe.ran((call) => call.slice(1, 4).join(' ') === 'artifacts repositories create')[0]!
+  assert.ok(created.includes('--immutable-tags'), created.join(' '))
+})
+
+test('a stage that declares mutable tags does not get an immutable repository', async () => {
+  // The flag is the declaration's, not this function's: asking for one and
+  // getting the other is the same defect in the other direction.
+  const mutable = declare({ artifacts: { api: ARTIFACTS.api }, stages: { dev: garStage(false) } })
+  const registry = resolveRegistry({ config: mutable, stage: 'dev', region: 'asia-southeast1', project: 'boxlite' })
+  const probe = googleDouble({ repositories: new Set() })
+  await publish({ config: mutable, stage: 'dev', registry, tag: SHA, run: probe.run, log })
+  const created = probe.ran((call) => call.slice(1, 4).join(' ') === 'artifacts repositories create')[0]!
+  assert.ok(!created.includes('--immutable-tags'), created.join(' '))
+})
+
+test('a repository whose tags can still be moved is refused, not published into', async () => {
+  // Immutability is fixed when the repository is created, so one made before the
+  // declaration changed cannot be brought to it. Publishing anyway would leave
+  // the config claiming a deployed tag means exact bytes while the tag can still
+  // be repointed under a running service — the guarantee, quietly absent.
+  const probe = googleDouble({ immutableTags: '' })
+  await assert.rejects(
+    () => publish({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run, log }),
+    /has mutable tags and this stage declares immutableTags/,
+  )
+  assert.equal(probe.ran((call) => call[0] === 'docker' && call[1] === 'push').length, 0, 'it pushed anyway')
+})
+
+test('a commit already published is not rebuilt on this cloud either', async () => {
+  const probe = googleDouble({ published: new Set([GAR_IMAGE]) })
+  const outcomes = await publish({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run, log })
+  assert.deepEqual(outcomes, [{ artifact: 'api', address: GAR_IMAGE, built: false }])
+  assert.equal(probe.ran((call) => call[1] === 'build').length, 0)
+})
+
+test('vulnerability occurrences are counted by severity, which is what the gate reads', async () => {
+  // Artifact Analysis answers one entry per occurrence; ECR answers counts. The
+  // gate takes counts, so the translation happens once, here.
+  const probe = googleDouble({
+    published: new Set([GAR_IMAGE]),
+    vulnerabilities: { CRITICAL: [{}, {}], LOW: [{}] },
+  })
+  await assert.rejects(
+    () => publish({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run, log }),
+    /has 2 CRITICAL findings/,
+  )
+})
+
+test('a clean image passes the same gate', async () => {
+  const probe = googleDouble({ published: new Set([GAR_IMAGE]), vulnerabilities: { LOW: [{}] } })
+  await assert.doesNotReject(() =>
+    publish({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run, log }),
+  )
+})
+
+test('a build is given paths resolved from the repository, not from the working directory', async () => {
+  // mstage.env.json lives in apps/infra beside .mstage.config.json, while the
+  // Dockerfiles its `artifacts` name live at the repository root. Handing
+  // docker the declared strings makes `apps/console/Dockerfile` mean
+  // `apps/infra/apps/console/Dockerfile`, which is nothing.
+  const probe = registryDouble()
+  await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
+  const build = probe.ran((call) => call[0] === 'docker' && call[1] === 'build')[0]!
+  assert.equal(build[build.indexOf('-f') + 1], '/repo/apps/console/Dockerfile')
+  assert.equal(build.at(-1), '/repo', 'the context is the repository root, not "."')
+})
+
+test('the base file resolves to Dockerfiles that exist', async () => {
+  // Not a fixture: the real mstage.env.json, so a `root` that stops pointing
+  // at the repository is caught here rather than by a build that cannot find
+  // its own Dockerfile.
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const real = parseBase(path.pathname, readFileSync(path, 'utf8'))
+  for (const [artifact, { dockerfile, context }] of Object.entries(real.artifacts)) {
+    assert.ok(existsSync(join(real.repository, dockerfile)), `${artifact}: ${dockerfile}`)
+    assert.ok(existsSync(join(real.repository, context)), `${artifact} context: ${context}`)
+  }
+})
+
+test('the base file points the audit at a lockfile the declared manager can read', async () => {
+  // Not a fixture, for the same reason as the test above: the declared
+  // directory and the declared manager have to agree with what is on disk, or
+  // the gate exits "could not audit" and blocks every publish.
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const real = parseBase(path.pathname, readFileSync(path, 'utf8'))
+  const lockfile = { npm: 'package-lock.json', yarn: 'yarn.lock' }[real.audit.manager]
+  const declared = join(real.audit.directory, lockfile)
+  assert.ok(existsSync(join(real.repository, declared)), `the ${real.audit.manager} audit reads ${declared}`)
+})
+
+test('a config that does not say where the repository is refuses to load', async () => {
+  // Guessing would mean guessing wrong once, silently, in whichever direction
+  // the caller happened to be standing.
+  assert.throws(
+    () => parseBase('/repo/apps/infra/mstage.env.json', JSON.stringify({ artifacts: {} })),
+    /must set root/,
+  )
+})
+
+test('the existence check asks Artifact Registry alone, never Container Analysis', async () => {
+  /*
+   * `describe` reaches Container Analysis for a pkg.dev repository, so asking
+   * "does this repository hold this tag" through it made the answer depend on a
+   * grant the deploy has no reason to hold — three deploys refused for images
+   * the repository was holding, each naming the images it was holding.
+   */
+  const probe = googleDouble({ published: new Set([GAR_IMAGE]) })
+  await verifyPublished({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run })
+  const reads = probe.calls.filter((call) => call[0] === 'gcloud')
+  assert.ok(reads.length > 0, 'it read the registry at all')
+  assert.ok(
+    // `calls` carries the command itself, so the verb sits after `images`.
+    reads.every((call) => call[4] === 'list'),
+    `the existence check must not describe: ${JSON.stringify(reads)}`,
+  )
+  // Without this the listed resources carry no tags field, `--filter=tags:` matches
+  // nothing, and every image reads as absent — the same false absence by another
+  // route, and silent because gcloud still exits zero.
+  assert.ok(
+    reads.every((call) => call.includes('--include-tags')),
+    `a tag filter without --include-tags matches nothing: ${JSON.stringify(reads)}`,
+  )
+})
+
+test('a registry read that did not answer is not an image that is missing', async () => {
+  /*
+   * What three GCP deploys of dev actually hit, in the shape the read has now.
+   * The preflight image check runs as the deploy identity rather than as the
+   * publisher, so it is the identity most likely to be missing a registry
+   * grant; answered as "not published" a refusal was reported as "dev does not
+   * hold this commit's images" — for two images the repository was holding,
+   * pushed three minutes earlier by a green mbuild run.
+   */
+  const probe = googleDouble({ deniedReads: true })
+  await assert.rejects(
+    () => verifyPublished({ config: gcpConfig, stage: 'dev', registry: gar, tag: SHA, run: probe.run }),
+    /Could not tell whether \S+ is published: .*PERMISSION_DENIED/,
+  )
+})
+
+test('the same on ECR, whose answer for absence is its own exception', async () => {
+  // Both registrars answer this question and both used to answer it the same
+  // wrong way, so the fix is only half applied if one of them still does.
+  const probe = registryDouble({ deniedReads: true })
+  await assert.rejects(
+    () => verifyPublished({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run }),
+    /Could not tell whether \S+\/boxlite-backoffice-dev:\S+ is published: .*AccessDeniedException/,
+  )
+})
+
+test('a stage missing any image is refused, named by the address that was looked for', async () => {
+  // The address rather than the artifact name: it carries the repository and
+  // the tag, which is what a person compares against the publish that was
+  // supposed to have written them.
+  const probe = registryDouble({ published: new Set([`boxlite-backoffice-dev:${SHA}-console`]) })
+  await assert.rejects(
+    () => verifyPublished({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run }),
+    new RegExp(`dev does not hold \\S+/boxlite-backoffice-dev:${SHA}-api$`),
+  )
+})
+
+test('verifying reads the registry and does nothing else to it', async () => {
+  // It runs before a deploy has committed to anything, so it must not create a
+  // repository, log in, or build. Anything it changed would be one more thing a
+  // refused deploy had already done.
+  const probe = registryDouble({ repositories: new Set() })
+  await assert.rejects(() => verifyPublished({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run }))
+  assert.deepEqual(
+    [...new Set(probe.calls.map((call) => `${call[0]} ${call[1]} ${call[2] ?? ''}`.trim()))],
+    ['aws ecr describe-images'],
+  )
+})
+
+test('verifying reports the address a runtime pulls, for every declared artifact', async () => {
+  // The strings the deploy resolves through the same function. A check that
+  // agreed on the answer but not on the address would pass against an image
+  // nothing pulls.
+  const probe = registryDouble({ published: both('boxlite-backoffice-dev') })
+  assert.deepEqual(await verifyPublished({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run }), [
+    {
+      artifact: 'console',
+      address: `${ACCOUNT}.dkr.ecr.ap-southeast-1.amazonaws.com/boxlite-backoffice-dev:${SHA}-console`,
+    },
+    { artifact: 'api', address: `${ACCOUNT}.dkr.ecr.ap-southeast-1.amazonaws.com/boxlite-backoffice-dev:${SHA}-api` },
+  ])
+})

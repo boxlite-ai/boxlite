@@ -39,6 +39,11 @@ func InitTracer(ctx context.Context, config Config, exporterFilters ...ExporterF
 	if config.TLSConfig != nil {
 		traceOpts = append(traceOpts, otlptracehttp.WithTLSClientConfig(config.TLSConfig))
 	}
+	if config.GoogleIDTokenAudience != "" {
+		// Adds an Authorization header per request; everything else about the
+		// exporter's transport is left alone.
+		traceOpts = append(traceOpts, otlptracehttp.WithHTTPClient(newGoogleIDTokenClient(config.GoogleIDTokenAudience, nil)))
+	}
 	traceExporter, err := otlptracehttp.New(ctx, traceOpts...)
 	if err != nil {
 		return nil, err

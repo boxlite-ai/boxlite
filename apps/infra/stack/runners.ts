@@ -384,7 +384,8 @@ for (const { label, instance } of !deploysRunner
         RUNNER_VERSION: runnerTargetVersion,
         RUNNER_PORT: String(PORTS.RUNNER),
         // The source selection, not the resolved URLs: the script runs the same resolver, so
-        // `npm run runner:update` out of band lands the identical artifact.
+        // `npm run runner:update:legacy` out of band lands the identical artifact. The
+        // unsuffixed name is mdeploy's, and reaches a different fleet.
         RUNNER_ARTIFACT_SOURCE: runnerArtifactSource.kind,
         RUNNER_ARTIFACT_BUCKET: artifactsBucketName,
         BOXLITE_ARTIFACT_REF: runnerArtifactSource.kind === 'build' ? (runnerArtifactSource.ref ?? '') : '',

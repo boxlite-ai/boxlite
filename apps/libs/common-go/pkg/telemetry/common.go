@@ -21,6 +21,16 @@ type Config struct {
 	Environment    string
 	ExtraLabels    map[string]string
 	TLSConfig      *tls.Config
+	/*
+		The audience to mint a Google ID token for, or empty for no token.
+
+		Set only where the endpoint authorises by caller — a Cloud Run collector
+		with an invoker list. It is the collector's base URL, not a path under
+		it: Cloud Run checks the token's `aud` against the service's own
+		address. Empty on AWS, where the endpoint is an internal load balancer
+		and there is no per-request identity to prove. See `gcp_idtoken.go`.
+	*/
+	GoogleIDTokenAudience string
 }
 
 func (c Config) Attributes() []attribute.KeyValue {

@@ -24,10 +24,12 @@
  * the two URLs and the command that fetches them differ — the verify/swap/rollback below is the
  * same either way.
  *
- * Usage:
- *   npm run runner:update                  # source from the environment, every running runner
- *   npm run runner:update -- 0.9.5         # explicit version, always a release
- *   INSTANCE_IDS=i-abc npm run runner:update
+ * Usage — the `:legacy` suffix is load-bearing. The unsuffixed names are
+ * mdeploy's, they reach the fleet that path owns, and they take `--version`
+ * rather than the positional argument below:
+ *   npm run runner:update:legacy                 # source from the environment, every running runner
+ *   npm run runner:update:legacy -- 0.9.5        # explicit version, always a release
+ *   INSTANCE_IDS=i-abc npm run runner:update:legacy
  *
  * Env:
  *   RUNNER_ARTIFACT_SOURCE  release|build (see artifacts/source.ts; default release)
@@ -149,7 +151,7 @@ export function resolveUpgrade(
   { readVersion = readWorkspaceVersion } = {},
 ) {
   // An explicit version on the command line names a release whatever the environment selects:
-  // `npm run runner:update -- 0.9.5` has only ever meant one thing.
+  // `npm run runner:update:legacy -- 0.9.5` has only ever meant one thing.
   const explicitVersion = argv[2] ? resolveVersion(argv, environment) : undefined
   const source: any = explicitVersion
     ? { kind: 'release', version: explicitVersion }
