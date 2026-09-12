@@ -41,6 +41,21 @@ describe('CreateBoxDto resource minimums', () => {
   })
 })
 
+// Resource sizes are integers end to end (integer DB columns); pin the
+// boundary so fractions never reach the warm-pool integer query.
+describe('CreateBoxDto resource integrality', () => {
+  it.each([
+    ['cpus', { cpus: 1.5 }],
+    ['memory_mib', { memory_mib: 256.5 }],
+    ['disk_size_gb', { disk_size_gb: 1.5 }],
+  ])('rejects fractional %s with an isInt constraint', async (field, body) => {
+    const errors = await validate(plainToInstance(CreateBoxDto, body))
+
+    const fieldError = errors.find((error) => error.property === field)
+    expect(fieldError?.constraints).toHaveProperty('isInt')
+  })
+})
+
 describe('CreateBoxDto lifecycle policy', () => {
   it('accepts second-based lifecycle fields', async () => {
     const errors = await validate(plainToInstance(CreateBoxDto, { auto_stop: 900, auto_delete: 604800 }))
