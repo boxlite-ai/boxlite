@@ -453,6 +453,8 @@ export interface JsBox {
   export(dest: string, options?: JsExportOptions | null): Promise<string>;
   start(): Promise<void>;
   stop(): Promise<void>;
+  pause(): Promise<void>;
+  resume(): Promise<void>;
   metrics(): Promise<JsBoxMetrics>;
   copyIn(
     hostPath: string,
