@@ -314,6 +314,14 @@ test('the upgrade policy selects hosts by the label those hosts actually carry',
   // ENFORCEMENT, not VALIDATION: a policy that only reports would leave the
   // fleet on the old binary while every report said "non-compliant".
   assert.match(source, /mode: 'ENFORCEMENT'/)
+
+  /*
+   * And the hosts ask for the agent themselves. `enable-osconfig=PER-VM` is what
+   * a project carries when VM Manager is turned on for it, and it means no
+   * instance runs the agent unless its own metadata says TRUE — a fleet trusting
+   * the project-wide value reports no inventory and the policy reaches nobody.
+   */
+  assert.match(source, /'enable-osconfig': 'TRUE'/)
 })
 
 // ── the database's machine ──────────────────────────────────────────────────
