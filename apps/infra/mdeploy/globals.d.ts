@@ -41,7 +41,15 @@ declare global {
      * while working perfectly at deploy time.
      */
     interface Output<T> {
-      apply<U>(callback: (value: T) => U): Output<U extends Output<infer V> ? V : U>
+      /*
+       * A callback may return a plain value, another `Output`, or a `Promise`,
+       * and both engines flatten all three the same way. The promise arm is not
+       * hypothetical: an apply that has to await something — a lookup whose
+       * absence it wants to handle rather than crash on — is async, and without
+       * this the result types out as `Output<Promise<U>>` and every reader of
+       * it becomes an error here while working perfectly at deploy time.
+       */
+      apply<U>(callback: (value: T) => U): Output<U extends Output<infer V> ? V : U extends Promise<infer W> ? W : U>
       readonly [index: number]: Output<any>
       readonly __output: T
     }

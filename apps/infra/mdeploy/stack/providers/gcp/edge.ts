@@ -51,6 +51,25 @@ const LOAD_BALANCER_RANGES = ['130.211.0.0/22', '35.191.0.0/16']
  */
 const NODE_LOCAL_DNS = '169.254.20.10/32'
 
+/**
+ * The two coordinates one zone's NEG is read for: the backend attaches the self
+ * link, the alarm keys on the id. One lookup, because a second one is a second
+ * chance to hit the race the first one is written to survive.
+ */
+type ProxyNeg = { selfLink: string; generatedId: string }
+
+/**
+ * Whether a NEG lookup failed because *this* NEG is not there yet.
+ *
+ * The name is required, not decoration. "not found" appears in errors about
+ * things nobody asked about, and reading one of those as absence would drop a
+ * zone that does have endpoints — the backend would come out short with every
+ * resource green. A quota or permissions failure has to stay fatal for the same
+ * reason.
+ */
+export const isMissingNeg = (error: Error, name: string): boolean =>
+  /was not found|notFound|404/i.test(error.message) && error.message.includes(name)
+
 /** The managed CSI provider's value: JSON is also valid YAML. */
 export const secretProviderParameters = (reference: string): string =>
   JSON.stringify([{ resourceName: versionedSecretRef(reference), path: PROXY_API_KEY_PATH }])
@@ -413,26 +432,57 @@ export const gcpEdgeProvider =
     )
 
     /*
-     * Deployment readiness is the NEG wait: because the Service pre-existed the
-     * Pods, GKE injects its readiness gate and does not mark the Deployment
-     * available until each endpoint has been registered. The invoke can then
-     * read a real NEG instead of racing the controller with a guessed self link.
+     * Deployment readiness is the NEG wait, for the zones that have a Pod:
+     * because the Service pre-existed the Pods, GKE injects its readiness gate
+     * and does not mark the Deployment available until each endpoint has been
+     * registered. So a ready Deployment means every zone running a Pod already
+     * has its NEG, and those are read rather than guessed.
+     *
+     * It says nothing about the others. GKE creates one NEG per zone that has a
+     * *node*, on its own schedule, and Autopilot adds node zones whenever the
+     * region has room — on this cluster `us-east5-c` got its NEG 28 seconds
+     * after the Deployment was ready, while the lookup was already running. A
+     * missing one used to abort the whole update, and because the backend and
+     * its forwarding rule are replaced by name, the abort landed after the old
+     * pair had been deleted: the box proxy lost its public address entirely
+     * until the next apply.
+     *
+     * So a zone GKE has not reached yet is skipped rather than fatal. What is
+     * skipped is empty by construction — a Pod there would have held the
+     * readiness gate — and the next apply picks it up. Only a genuine absence
+     * counts: anything else is re-thrown, because a permissions or quota error
+     * read as "no NEG" would silently shrink the backend to whatever answered.
      */
-    const negLinks = host.zones.apply((zones: string[]) => {
+    // `deployment.id` is in the list for its ordering only: the readiness gate
+    // it stands for is what makes a pod-bearing zone's NEG already exist.
+    const negs = $resolve([host.zones, deployment.id]).apply(async (resolved: any[]) => {
+      const zones = resolved[0] as string[]
       if (zones.length === 0) {
         throw new Error('the proxy cluster reported no zones, so its NEGs cannot be found')
       }
-      return $resolve(
-        zones.map((zone) =>
-          gcp.compute
-            .getNetworkEndpointGroupOutput({ project, zone, name }, { dependsOn: [deployment] })
-            .selfLink.apply((selfLink: string | undefined) => {
-              if (!selfLink) throw new Error(`GKE created no self link for proxy NEG ${name} in ${zone}`)
-              return selfLink
-            }),
-        ),
+      const perZone = await Promise.all(
+        zones.map(async (zone): Promise<ProxyNeg | null> => {
+          const neg = await gcp.compute
+            .getNetworkEndpointGroup({ project, zone, name })
+            .catch((error: Error) => {
+              if (isMissingNeg(error, name)) return null
+              throw error
+            })
+          if (neg === null) return null
+          // A lookup that answered is not allowed to answer with nothing: an
+          // empty self link would reach the backend as `group: ''`, which is a
+          // backend pointing at no endpoints rather than a missing zone.
+          if (!neg.selfLink) throw new Error(`GKE reported NEG ${name} in ${zone} with no self link`)
+          return { selfLink: neg.selfLink, generatedId: String(neg.generatedId) }
+        }),
       )
+      const found = perZone.filter((neg): neg is ProxyNeg => neg !== null)
+      if (found.length === 0) {
+        throw new Error(`GKE created no NEG named ${name} in any of ${zones.join(', ')}`)
+      }
+      return found
     })
+    const negLinks = negs.apply((found: ProxyNeg[]) => found.map(({ selfLink }) => selfLink))
 
     const health = new gcp.compute.HealthCheck('ProxyHealthCheck', {
       name,
@@ -567,15 +617,17 @@ export const gcpEdgeProvider =
       url: $util.output(`https://${request.domain}`),
       /*
        * The alarm keys on one NEG's numeric id, and there are now as many NEGs
-       * as zones. The first zone the cluster reports is the one carried: an
-       * alert per zone would be three alerts for one outage, and the filter has
-       * room for exactly one resource label.
+       * as zones. The first one *found* is the one carried — an alert per zone
+       * would be three alerts for one outage, and the filter has room for
+       * exactly one resource label.
+       *
+       * Read off the same lookup the backend uses rather than a second one of
+       * its own. A separate `getNetworkEndpointGroupOutput` here stayed fatal
+       * on a zone GKE had not reached yet, which is the whole failure the
+       * lookup above exists to survive: fixing one site and not the other
+       * leaves the update aborting at the same point for the same reason.
        */
-      metricTarget: host.zones.apply((zones: string[]) =>
-        gcp.compute
-          .getNetworkEndpointGroupOutput({ project, zone: zones[0] as string, name }, { dependsOn: [deployment] })
-          .generatedId.apply(String),
-      ),
+      metricTarget: negs.apply((found: ProxyNeg[]) => found[0]!.generatedId),
       ready: [
         deployment,
         service,

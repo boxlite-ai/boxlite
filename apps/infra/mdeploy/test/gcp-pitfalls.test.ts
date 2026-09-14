@@ -37,7 +37,7 @@ import {
   SUBNET_CIDR,
 } from '../stack/providers/gcp/network.ts'
 import { BOOT_DISK_TYPE, MACHINE as RUNNER_MACHINE } from '../stack/providers/gcp/runners.ts'
-import { PROXY_API_KEY_FILE, secretProviderParameters } from '../stack/providers/gcp/edge.ts'
+import { PROXY_API_KEY_FILE, isMissingNeg, secretProviderParameters } from '../stack/providers/gcp/edge.ts'
 import { instanceFor } from 'naming'
 
 /*
@@ -641,6 +641,41 @@ test('the Kubernetes identity maps to the existing proxy GSA and gets only secre
   assert.match(source, /secretId: coordinates\.apply/)
 })
 
+test('a zone GKE has not created a NEG in yet is skipped, and nothing else is', () => {
+  /*
+   * GKE creates one NEG per node zone on its own schedule, and Autopilot adds
+   * node zones whenever the region has room: `us-east5-c` got its NEG 28
+   * seconds after the Deployment went ready, while the lookup was running. That
+   * used to abort the update — after the backend and forwarding rule had
+   * already been deleted for replacement, so the box proxy sat with no public
+   * address until the next apply.
+   *
+   * Absence is therefore survivable. Anything else is not: a quota or
+   * permissions failure read as absence would drop a zone that does have
+   * endpoints, leaving a short backend with every resource green.
+   */
+  const name = 'boxlite-app-dev-proxy'
+  assert.equal(isMissingNeg(new Error(`The resource 'projects/p/zones/us-east5-c/networkEndpointGroups/${name}' was not found`), name), true)
+  assert.equal(isMissingNeg(new Error(`googleapi: Error 404: not found: ${name}, notFound`), name), true)
+  // Another resource's absence says nothing about this one.
+  assert.equal(isMissingNeg(new Error("The resource 'projects/p/zones/us-east5-c/instances/other' was not found"), name), false)
+  // And a failure that is not an absence stays fatal.
+  assert.equal(isMissingNeg(new Error(`Error 403: Required 'compute.networkEndpointGroups.get' on ${name}`), name), false)
+  assert.equal(isMissingNeg(new Error(`Error 429: Quota exceeded for ${name}`), name), false)
+
+  const source = sourceOf('edge')
+  // The skip is what keeps a partial answer usable; an empty one is still fatal.
+  assert.match(source, /if \(found\.length === 0\)/)
+  /*
+   * And the alarm reads off that same lookup. It used to run a second,
+   * `Output`-shaped one of its own, which stayed fatal on exactly the zone the
+   * first one was rewritten to survive — so the update still aborted at the
+   * same point, for the same reason, with the entry point already deleted.
+   */
+  assert.equal(source.match(/getNetworkEndpointGroup\(\{/g)?.length, 1)
+  assert.equal(/getNetworkEndpointGroupOutput\(/.test(source), false)
+})
+
 test('a Pod may reach the resolver it is actually pointed at, not only kube-dns', () => {
   /*
    * Autopilot enables NodeLocal DNSCache, whose DaemonSet runs on the host
@@ -684,7 +719,13 @@ test('the standalone NEG exists before the old load balancer backend is switched
   assert.match(source, /'cloud\.google\.com\/neg'/)
   assert.match(source, /'pulumi\.com\/skipAwait': 'true'/)
   assert.match(source, /dependsOn: \[\s*service,/)
-  assert.match(source, /getNetworkEndpointGroupOutput\([\s\S]*dependsOn: \[deployment\]/)
+  /*
+   * The lookup is still ordered behind the readiness gate, by resolving
+   * `deployment.id` alongside the zone list rather than by a `dependsOn` on an
+   * `Output`-shaped lookup: it has to await a per-zone absence it means to
+   * survive, and `getNetworkEndpointGroupOutput` gives it nothing to catch.
+   */
+  assert.match(source, /\$resolve\(\[host\.zones, deployment\.id\]\)/)
   // One backend per zone: a regional Autopilot cluster puts Pods wherever the
   // region has room, and a single-zone backend list would leave the rest
   // unreachable with every health check still green.
