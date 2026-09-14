@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { Logger } from '@nestjs/common'
 import { Storage } from '@google-cloud/storage'
 import { createVolumeBucketStore, VolumeBucketNotEmptyError } from './volume-bucket.store'
 
@@ -29,6 +30,19 @@ jest.mock('@google-cloud/storage', () => ({
     })),
   })),
 }))
+
+/** A create response that echoes back everything `create` asked for. */
+function createdBucket(overrides: Record<string, unknown> = {}) {
+  return {
+    metadata: {
+      location: 'US-CENTRAL1',
+      iamConfiguration: { uniformBucketLevelAccess: { enabled: true } },
+      softDeletePolicy: { retentionDurationSeconds: '0' },
+      ...overrides,
+    },
+    delete: mockDeleteBucket,
+  }
+}
 
 function buildStore(values: Record<string, unknown>) {
   const configService = {
@@ -108,7 +122,11 @@ describe('GCS volume bucket store', () => {
   // into the next and silently short-circuits the code under test.
   beforeEach(() => {
     mockGetAccessToken.mockResolvedValue('ya29.token')
-    mockCreateBucket.mockResolvedValue(undefined)
+    // The shape the real client returns — `[Bucket, apiResponse]`, the Bucket
+    // carrying what the service actually applied. `create` reads it now, so a
+    // mock that resolved `undefined` would exercise a path production never
+    // takes.
+    mockCreateBucket.mockResolvedValue([createdBucket()])
     mockSetLabels.mockResolvedValue(undefined)
     mockDeleteFiles.mockResolvedValue(undefined)
     mockDeleteBucket.mockResolvedValue(undefined)
@@ -145,6 +163,77 @@ describe('GCS volume bucket store', () => {
       iamConfiguration: { uniformBucketLevelAccess: { enabled: true } },
       softDeletePolicy: { retentionDurationSeconds: '0' },
     })
+  })
+
+  /*
+   * The check that exists because the failure is invisible. `createBucket`
+   * resolves on a 2xx whatever the service did with the metadata, so a policy
+   * it ignored reads exactly like one it applied — and the cost lands weeks
+   * later, on a bill or on data a user believed deleted.
+   */
+  it('refuses a bucket the service did not apply the soft-delete policy to', async () => {
+    mockCreateBucket.mockResolvedValue([createdBucket({ softDeletePolicy: { retentionDurationSeconds: '604800' } })])
+
+    await expect(buildStore(gcsConfig).create('boxlite-volume-abc', {})).rejects.toThrow(
+      /soft delete retention is "604800", want "0"/,
+    )
+  })
+
+  /*
+   * Absence is treated as a changed response shape, not as a policy the service
+   * dropped — a `buckets.insert` against a real project answers all three, so a
+   * field that stops arriving says more about the client than about the bucket.
+   * Failing every volume creation over that would cost more than the check is
+   * worth, so the bucket stands and the lost coverage is logged.
+   */
+  it('keeps a bucket whose settings came back missing, and says they went unverified', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
+    mockCreateBucket.mockResolvedValue([{ metadata: {}, delete: mockDeleteBucket }])
+
+    await expect(buildStore(gcsConfig).create('boxlite-volume-abc', {})).resolves.toBeUndefined()
+    expect(mockDeleteBucket).not.toHaveBeenCalled()
+    expect(mockSetLabels).toHaveBeenCalled()
+    expect(warn.mock.calls.flat().join(' ')).toMatch(/no soft delete retention.*not verified/s)
+    warn.mockRestore()
+  })
+
+  // Empty at this instant, so leaving it would be a billable bucket no volume
+  // record points at — and the labels must not be written to something that is
+  // about to be thrown away.
+  it('deletes the bucket it refuses, and never labels it', async () => {
+    mockCreateBucket.mockResolvedValue([createdBucket({ iamConfiguration: { uniformBucketLevelAccess: { enabled: false } } })])
+
+    await expect(buildStore(gcsConfig).create('boxlite-volume-abc', {})).rejects.toThrow(/uniform bucket-level access/)
+    expect(mockDeleteBucket).toHaveBeenCalled()
+    expect(mockSetLabels).not.toHaveBeenCalled()
+  })
+
+  /*
+   * The branch that would otherwise be silent. A refused bucket that also fails
+   * to delete is the exact thing this guard exists to prevent — billable, and
+   * pointed at by no volume record — so it cannot go unreported, and the
+   * cleanup error must not displace the mismatch that caused the refusal.
+   */
+  it('reports a refused bucket it could not delete, without losing the reason', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
+    mockCreateBucket.mockResolvedValue([createdBucket({ location: 'EUROPE-WEST1' })])
+    mockDeleteBucket.mockRejectedValue(new Error('deletion protection'))
+
+    await expect(buildStore(gcsConfig).create('boxlite-volume-abc', {})).rejects.toThrow(/location is "EUROPE-WEST1"/)
+    expect(warn.mock.calls.flat().join(' ')).toMatch(/could not be deleted.*still billable.*deletion protection/s)
+    warn.mockRestore()
+  })
+
+  // A response shape that carried no `delete` would otherwise raise a TypeError
+  // from the cleanup and lose the reason the bucket was refused in the first
+  // place — which is the one thing this path must not do.
+  it('keeps the reason when the response cannot even be cleaned up', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
+    mockCreateBucket.mockResolvedValue([{ metadata: createdBucket({ location: 'EUROPE-WEST1' }).metadata }])
+
+    await expect(buildStore(gcsConfig).create('boxlite-volume-abc', {})).rejects.toThrow(/location is "EUROPE-WEST1"/)
+    expect(warn.mock.calls.flat().join(' ')).toMatch(/could not be deleted/)
+    warn.mockRestore()
   })
 
   // GCS labels reject the S3 tag keys verbatim: uppercase is not allowed. A

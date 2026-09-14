@@ -179,7 +179,7 @@ class GcsVolumeBucketStore implements VolumeBucketStore {
   }
 
   async create(bucket: string, labels: Record<string, string>): Promise<void> {
-    await this.storage.createBucket(bucket, {
+    const [created] = await this.storage.createBucket(bucket, {
       location: this.location,
       // Volume buckets are private platform storage; uniform access removes
       // per-object ACLs as a way to widen that by accident.
@@ -193,6 +193,46 @@ class GcsVolumeBucketStore implements VolumeBucketStore {
       // field, and the client passes bucket metadata through untouched.
       softDeletePolicy: { retentionDurationSeconds: '0' },
     })
+
+    /*
+     * Confirm those three rather than assume them — see `checkAppliedSettings`.
+     * A 2xx says the bucket exists, not that it is the bucket asked for.
+     */
+    const { wrong, unconfirmed } = checkAppliedSettings(created?.metadata, this.location)
+    if (wrong.length > 0) {
+      /*
+       * Created, but not what was asked for. Deleted rather than kept: it is
+       * empty at this instant so the delete is cheap and safe, and keeping it
+       * would leave a billable bucket no volume record points at.
+       *
+       * The delete cannot change the outcome — the reason to fail is the
+       * mismatch, and a cleanup error must not replace the message explaining
+       * it — but it is reported, because a bucket left behind is exactly what
+       * this guard exists to prevent.
+       */
+      try {
+        await created?.delete()
+      } catch (error) {
+        // try/catch rather than a rejection handler: it also covers a response
+        // that carried no `delete`, which would otherwise raise a TypeError
+        // here and displace the mismatch this block exists to report.
+        this.logger.warn(
+          `Volume bucket ${bucket} was refused and could not be deleted; it is still billable: ${
+            (error as Error)?.message ?? String(error)
+          }`,
+        )
+      }
+      throw new Error(`Volume bucket ${bucket} was not created as asked: ${wrong.join('; ')}`)
+    }
+    if (unconfirmed.length > 0) {
+      // Far more likely a changed response shape than a policy the service
+      // dropped, so the bucket stands and the loss of coverage is said out loud.
+      this.logger.warn(
+        `Volume bucket ${bucket} was created, but the response reported no ${unconfirmed.join(', no ')}; ` +
+          'those settings were not verified',
+      )
+    }
+
     await this.storage.bucket(bucket).setLabels(toGcsLabels(labels), {})
   }
 
@@ -240,6 +280,70 @@ function asErrorArray(error: unknown): Error[] {
 
 function statusOf(error: unknown): number | undefined {
   return (error as { code?: number } | undefined)?.code
+}
+
+/**
+ * What the service applied, checked against what was asked for.
+ *
+ * `createBucket` resolves on a 2xx and the response was otherwise discarded, so
+ * a setting the service did not apply read exactly like one it did — and each
+ * of these three costs something real when it goes missing. Soft delete left at
+ * the default keeps a volume the user deleted recoverable and billable for
+ * seven days after the state machine reports DELETED. Uniform access left off
+ * leaves per-object ACLs as a way to widen the bucket by accident. A location
+ * that did not take puts every read a box makes in another region.
+ *
+ * A value that came back different is separated from one that did not come back
+ * at all, because they are different failures. A wrong value means the service
+ * did something other than what was asked, which is the case this exists for. A
+ * missing field is far more likely to mean the client stopped echoing bucket
+ * metadata — and failing every volume creation over a changed response shape
+ * would be a worse outcome than losing the check, so that one warns.
+ *
+ * The distinction rests on an observation rather than an assumption: on
+ * 2026-09-14 a `buckets.insert` against a real project answered
+ * `softDeletePolicy: {"retentionDurationSeconds":"0"}`,
+ * `iamConfiguration.uniformBucketLevelAccess.enabled: true` and
+ * `location: "US-EAST5"` — all three present, the retention as a string. The
+ * comparisons below are written for exactly that shape.
+ *
+ * Every disagreement is collected rather than the first returned: a bucket that
+ * got none of the three is a different problem from one that missed one.
+ */
+function checkAppliedSettings(
+  metadata: Record<string, any> | undefined,
+  location: string,
+): { wrong: string[]; unconfirmed: string[] } {
+  const retention = metadata?.softDeletePolicy?.retentionDurationSeconds
+  const uniform = metadata?.iamConfiguration?.uniformBucketLevelAccess?.enabled
+  const applied = metadata?.location
+
+  const wrong: string[] = []
+  const unconfirmed: string[] = []
+
+  // The API answers int64 fields as strings; compared as one rather than
+  // trusting which side of that the client hands back.
+  if (retention === undefined || retention === null) {
+    unconfirmed.push('soft delete retention')
+  } else if (String(retention) !== '0') {
+    wrong.push(`soft delete retention is ${JSON.stringify(retention)}, want "0"`)
+  }
+
+  if (uniform === undefined || uniform === null) {
+    unconfirmed.push('uniform bucket-level access')
+  } else if (uniform !== true) {
+    wrong.push(`uniform bucket-level access is ${JSON.stringify(uniform)}, want true`)
+  }
+
+  // GCS reports the location upper-cased; a stage names its region in the lower
+  // case every other API uses.
+  if (applied === undefined || applied === null || applied === '') {
+    unconfirmed.push('location')
+  } else if (String(applied).toUpperCase() !== location.toUpperCase()) {
+    wrong.push(`location is ${JSON.stringify(applied)}, want ${JSON.stringify(location)}`)
+  }
+
+  return { wrong, unconfirmed }
 }
 
 /**
