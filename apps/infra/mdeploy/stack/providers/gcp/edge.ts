@@ -1,454 +1,452 @@
 /*
- * The box proxy on GCP: a terminating load balancer in front of container hosts.
+ * The GCP box proxy: a GKE Deployment behind the existing global SSL proxy
+ * load balancer.
  *
- * This used to be a layer-4 passthrough, justified by the proxy needing to read
- * the SNI name itself. That justification was wrong about both ends.
+ * TLS still terminates at Google's target SSL proxy. The proxy routes on the
+ * HTTP Host header, not SNI, so the Pod receives the same plaintext stream the
+ * old VM container did. The only backend change is from a managed instance
+ * group to a standalone `GCE_VM_IP_PORT` NEG populated by GKE.
  *
- * The proxy does not read SNI. It routes on the HTTP Host header —
- * `parseHost(ctx.Request.Host)` in `apps/proxy/pkg/proxy/get_box_target.go` —
- * and a Host header survives termination. Nor does the AWS side pass TLS
- * through: `providers/aws/edge.ts` declares `listen: '443/tls'`, which is an
- * NLB listener that terminates, with an ACM certificate for `<domain>` and
- * `*.<domain>` on the balancer. The task behind it receives plaintext on 4000,
- * and `ENABLE_TLS` is unset on both clouds, so the container never serves TLS
- * at all.
- *
- * Passing through therefore did not port the AWS design; it broke it. The
- * proxy serves a certificate from `TLS_CERT_FILE`/`TLS_KEY_FILE`
- * (`pkg/proxy/proxy.go`) and there is no ACME client anywhere in `apps/proxy`,
- * so nothing would have placed one — every hostname under `*.<domain>` would
- * have failed its handshake.
- *
- * So the balancer terminates here as it does there, and the wildcard
- * certificate is the deploy's job on both clouds. What GCP spells differently
- * is the certificate: a Google-managed wildcard exists only through Certificate
- * Manager with DNS authorization, which is four resources where ACM is one.
- *
- * The asymmetry that remains is real and unrelated: Cloud Run cannot be a
- * backend of this balancer, so the proxy runs on a managed instance group of
- * container-optimised VMs and costs a machine per zone the AWS side does not.
- *
- * THE CLIENT'S ADDRESS, decided rather than inherited. A proxy balancer opens
- * its own connection, so `ginCtx.ClientIP()` — used once, to set
- * `X-Forwarded-For` in `pkg/proxy/auth_callback.go` — sees the balancer. That
- * is parity, not a regression: the AWS side terminates at a `443/tls` NLB
- * listener with `ip` targets, a combination that does not preserve the client
- * address either. `proxyHeader: 'PROXY_V1'` would carry it, and is deliberately
- * not set — Gin does not parse PROXY protocol, so it would corrupt the first
- * bytes of every request rather than reveal an address. If that header is ever
- * required to carry the real client, it needs a change in `apps/proxy` first.
+ * The API key takes a different path from every ordinary environment value:
+ * Secret Manager -> managed GKE CSI provider -> read-only Pod volume -> file.
+ * No Kubernetes Secret and no secret-valued environment variable is created.
+ * The Pod's Kubernetes service account impersonates the existing proxy Google
+ * service account through Workload Identity, which preserves its Cloud Run
+ * invoker identity and gives the CSI provider one narrowly scoped principal.
  */
 
+import type { WorkloadHost } from '../../cluster.ts'
 import type { Edge, EdgeProvider, EdgeRequest } from '../../edge.ts'
 import { PROXY_PORT } from '../../edge.ts'
 import type { Placement } from '../../network.ts'
-import { splitSecretRef } from './secret-env.ts'
-import { instanceFor } from 'naming'
+import { RUNNER_PORT } from '../../runners.ts'
 import { certificateNameFor } from './certificate-name.ts'
+import { GKE_POD_CIDR, SUBNET_CIDR } from './network.ts'
+import { secretCoordinatesOf, versionedSecretRef } from './secret-env.ts'
+import { instanceFor } from 'naming'
 
-/**
- * Container-Optimized OS, which ships Docker and a credential helper for
- * Artifact Registry and nothing else worth patching.
- *
- * The alternative was a general image with a startup script that installs
- * Docker, which is the same thing done worse: slower to boot, and one more
- * thing to keep patched on a host that faces the internet.
- */
-const COS_IMAGE = 'cos-cloud/cos-stable'
+const NAMESPACE = 'boxlite'
+const KUBERNETES_SERVICE_ACCOUNT = 'proxy'
+const CONTAINER = 'proxy'
+const SECRET_PROVIDER_CLASS = 'proxy'
+const SECRET_VOLUME = 'proxy-secrets'
+const SECRET_MOUNT = '/var/run/secrets/boxlite'
+const PROXY_API_KEY = 'PROXY_API_KEY'
+const PROXY_API_KEY_PATH = 'proxy-api-key'
+export const PROXY_API_KEY_FILE = `${SECRET_MOUNT}/${PROXY_API_KEY_PATH}`
 
-/** What the proxy runs on. Small: it forwards bytes, it does not compute. */
-const MACHINE_TYPE = 'e2-standard-2'
-
-/**
- * The container, started by the boot script rather than declared in metadata.
- *
- * `gce-container-declaration` was the documented contract for this image family
- * and is now refused outright — *"the option to deploy a container during VM
- * instance creation that relies on a container startup agent is discontinued"*,
- * as a 400 at template creation. So the host starts it itself, which is what
- * that notice points at for a single container.
- *
- * Two things the declaration used to do for free, and both are here on purpose:
- * `--restart always` is what `restartPolicy: Always` meant, and
- * `docker-credential-gcr configure-docker` is what lets this pull from the
- * stage's own Artifact Registry as the instance's service account.
- *
- * Every value still arrives through the env file rather than through argv or
- * metadata: a metadata value is readable by anything on the host, and argv is
- * readable in the process table. The proxy is the one host in this stack that
- * faces the internet.
- *
- * `DOCKER_CONFIG` is what makes the credential helper work at all here.
- * Container-Optimized OS mounts `/` read-only, so `configure-docker`'s default
- * destination is unwritable and it exits non-zero — `Unable to save docker
- * config: mkdir /root/.docker: read-only file system`. Under `set -e` that
- * aborts the script on its first line, so the container is never started and
- * the group reports two hosts that never became healthy with nothing in the
- * deploy having failed. `/var/lib` is writable on this image, and every docker
- * invocation below reads the same variable.
- */
-const DOCKER_CONFIG = '/var/lib/docker-config'
-
-export const startProxy = (image: string, registryHost: string): string =>
-  [
-    `export DOCKER_CONFIG=${DOCKER_CONFIG}`,
-    `mkdir -p ${DOCKER_CONFIG}`,
-    `docker-credential-gcr configure-docker --registries=${registryHost}`,
-    `docker pull ${image}`,
-    'docker rm -f proxy 2>/dev/null || true',
-    /*
-     * Host networking: the passthrough balancer forwards to the instance's own
-     * address, so the container has to be listening on it rather than behind a
-     * bridge with a published port.
-     *
-     * `--log-driver=gcplogs` is what makes this container's output readable at
-     * all. COS's own agent ships journald, and docker's default `json-file`
-     * driver writes to neither the journal nor Cloud Logging — so a container
-     * that starts and exits leaves the group reporting an unhealthy host and
-     * nothing anywhere saying why. The AWS side needs no equivalent: an ECS
-     * task's log driver is the platform's own. Paired with the
-     * `roles/logging.logWriter` grant below, which is what the driver
-     * authenticates with.
-     */
-    `docker run -d --name proxy --restart always --network host --log-driver=gcplogs ` +
-      `--log-opt gcp-meta-name=proxy --env-file /run/proxy.env ${image}`,
-    /*
-     * The host's own firewall, which is the second thing this image does not
-     * share with a general Linux box.
-     *
-     * Container-Optimized OS boots with an `INPUT` policy that drops inbound
-     * connections it was not built to expect, so a `--network host` container
-     * listening on 4000 is reachable from nowhere — the packets never reach it.
-     * The failure is silent in exactly the way a drop is: the balancer reports
-     * `detailedHealthState: TIMEOUT` rather than a refusal or a bad status, the
-     * container logs nothing because nothing arrived, and the GCP firewall rule
-     * that permits the probe ranges is plainly correct. Observed on `dev2`: two
-     * hosts serving `/health` locally and timing out from the balancer.
-     *
-     * Appended after the container starts so a host is never briefly open on a
-     * port with nothing behind it, and idempotent because this script runs on
-     * every boot — `-C` tests for the rule before `-A` adds it.
-     */
-    `iptables -w -C INPUT -p tcp --dport ${PROXY_PORT} -j ACCEPT 2>/dev/null || ` +
-      `iptables -w -A INPUT -p tcp --dport ${PROXY_PORT} -j ACCEPT`,
-  ].join('\n')
-
-/**
- * The named port the balancer resolves on the instance group, and the two
- * ranges its front ends connect from.
- *
- * The ranges are Google's own for global external proxy load balancers and for
- * health checks, and they are the same two. Documented rather than guessed:
- * https://docs.cloud.google.com/load-balancing/docs/tcp/set-up-global-ext-proxy-ssl
- */
-const NAMED_PORT = 'proxy'
+const REPLICAS = 2
+const MAX_CONNECTIONS_PER_POD = 10_000
 const LOAD_BALANCER_RANGES = ['130.211.0.0/22', '35.191.0.0/16']
 
-/** The Artifact Registry host an image address begins with, for the credential helper. */
-const registryHostOf = (image: string): string => image.split('/')[0] as string
+/** The managed CSI provider's value: JSON is also valid YAML. */
+export const secretProviderParameters = (reference: string): string =>
+  JSON.stringify([{ resourceName: versionedSecretRef(reference), path: PROXY_API_KEY_PATH }])
 
-/** Where the container reads its configuration from, and nowhere else. */
-export const PROXY_ENV_FILE = '/run/proxy.env'
-
-/**
- * One `NAME=value` line of the env file, quoted so a value cannot escape it.
- *
- * Three refusals rather than one substitution, because the three failures are
- * different and only one of them is representable.
- *
- * A value that is not a plain string is an unresolved `Output`, and this is the
- * boundary that says so. Rendering one writes Pulumi's own *"Calling [toString]
- * on an [Output<T>]"* text — several lines of it — into the file, which docker
- * rejects whole (`invalid env file … contains whitespaces`, exit 125): the
- * container never starts, and the value that broke it is not named anywhere.
- * Failing here names it, at deploy time.
- *
- * A newline cannot be carried by an env file at all, so it is refused rather
- * than escaped — `--env-file` is one variable per line and there is no
- * continuation.
- *
- * A single quote is merely quoting, so it is escaped: `'` closes the literal,
- * `\'` inserts one, `'` reopens it.
- */
-export const proxyEnvLine = (name: string, value: unknown): string => {
-  if (typeof value !== 'string') {
-    throw new Error(
-      `${name} reached the proxy's env file as ${typeof value} rather than a string — an unresolved ` +
-        'Output renders as Pulumi’s [toString] refusal and docker rejects the whole file; resolve it first',
-    )
-  }
-  if (/[\r\n]/.test(value)) {
-    throw new Error(`${name} contains a newline, which an env file cannot carry — one variable is one line`)
-  }
-  return `printf '%s=%s\\n' ${name} '${value.replace(/'/g, `'\\''`)}' >> ${PROXY_ENV_FILE}`
-}
+const gsaMember = (email: string): string => `serviceAccount:${email}`
 
 export const gcpEdgeProvider =
   ({
     project,
-    region,
-    zone,
+    host,
     placement,
     network,
+    runnerServiceAccount,
     zoneId,
     dependsOn,
   }: {
     project: string
-    region: string
-    /**
-     * The zone the group's hosts are created in, the same one the stage's other
-     * machines use. Declared rather than spread across the region: a regional
-     * group's `maxSurge` must be zero or at least its zone count, so a group
-     * spanning three zones cannot express "replace one host at a time, with a
-     * spare" — which is the policy every running box's connection depends on.
-     */
-    zone: string
+    host: Extract<WorkloadHost, { cloud: 'gcp'; runtime: 'gke' }>
     placement: Extract<Placement, { cloud: 'gcp' }>
-    /**
-     * The network the firewall rule attaches to, from the network's own
-     * binding.
-     *
-     * Taken rather than derived. It used to be recovered from the subnetwork by
-     * stripping `/regions/…` off it, which yields `projects/<project>` — and the
-     * API reads the last segment as the network's name, so the rule was refused
-     * for a network named after the project. A self link is a thing to be handed,
-     * not a string to be cut down.
-     */
+    /** The VPC self link both firewall rules attach to. */
     network: $util.Output<string>
-    /** The Cloudflare zone the two records are written into. */
+    /** The runner is the only VM a Proxy Pod accepts a direct route to. */
+    runnerServiceAccount: $util.Output<string>
     zoneId: string
     dependsOn: any[]
   }): EdgeProvider =>
   (request: EdgeRequest): Edge => {
+    const name = instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' })
+
     /*
-     * The whole boot: the environment file, then the container.
-     *
-     * Every value goes through the file — the plain ones as well as the secrets
-     * — because the channel that used to carry the plain ones was the container
-     * declaration, and that is metadata, which anything on this host can read.
-     * One file, one `--env-file`, and nothing about the proxy's configuration
-     * is visible to a process that merely runs here.
-     *
-     * `gcloud` is not on Container-Optimized OS, so a secret is fetched from the
-     * metadata server's own token and the Secret Manager REST API. That is the
-     * documented way to read one from a COS host and needs nothing installed.
+     * Prefer the store's by-reference channel. For an existing stage that still
+     * carries the key as a value, copy it once into a stack-owned Secret Manager
+     * version so this VM -> GKE replacement does not require an outage-causing
+     * store migration first. New stages should pin a Secret Manager version in
+     * `env.selectGroup.secret`; that path never puts the payload in Pulumi state.
      */
-    /*
-     * `request.environment` is resolved rather than cast.
-     *
-     * Its values are `Input<string>`, and at least one is a genuine unresolved
-     * `Output` — the composition root sets `OTEL_EXPORTER_OTLP_ENDPOINT` from
-     * the collector's URL. Spreading it under an `as Record<string, string>`
-     * cast and interpolating the result writes Pulumi's own
-     * *"Calling [toString] on an [Output<T>] is not supported"* text into the
-     * env file, across several lines — which docker rejects outright
-     * (`invalid env file … contains whitespaces`, exit 125), so the container
-     * never starts and the group reports hosts that never became healthy.
-     */
-    const environmentNames = Object.keys(request.environment)
-    const startupScript = $resolve([
-      request.image,
-      request.apiUrl,
-      $resolve(Object.values(request.secrets)),
-      $resolve(Object.values(request.environment)),
-    ]).apply(([image, apiUrl, references, resolved]) => {
-      /*
-       * Not `String(...)` per value. Coercing here is what hid the defect this
-       * file's own note describes: it turns an unresolved `Output` into the
-       * `[toString]` refusal text and hands it on as a perfectly good string.
-       * The values arrive resolved from `$resolve` above, and `proxyEnvLine`
-       * refuses anything that is not a string rather than rendering it.
-       */
-      const values: Record<string, unknown> = {
-        ...Object.fromEntries(environmentNames.map((name, index) => [name, (resolved as unknown[])[index]])),
-        PROXY_PORT: String(PROXY_PORT),
-        PROXY_PROTOCOL: request.protocol,
-        // api-client-go appends paths like `/config` directly, so the `/api`
-        // prefix belongs here rather than inside the proxy.
-        BOXLITE_API_URL: `${String(apiUrl).replace(/\/$/, '')}/api`,
-        PROXY_DOMAIN: request.domain,
-        /*
-         * The collector authorises by caller on this cloud, and enforces it per
-         * request against a Google ID token — so a proxy that sends none is
-         * answered 403 and exports nothing, exactly as every runner did. The
-         * runner provider sets the same flag; see
-         * `apps/libs/common-go/pkg/telemetry/gcp_idtoken.go`.
-         */
-        OTEL_EXPORTER_OTLP_GOOGLE_ID_TOKEN: 'true',
+    const unexpectedSecrets = Object.keys(request.secrets).filter((key) => key !== PROXY_API_KEY)
+    if (unexpectedSecrets.length > 0) {
+      throw new Error(`the GKE proxy has no file reader for ${unexpectedSecrets.join(', ')}`)
+    }
+    const storedReference = request.secrets[PROXY_API_KEY]
+    const inlineKey = request.environment[PROXY_API_KEY]
+    if (storedReference !== undefined && inlineKey !== undefined) {
+      throw new Error(`${PROXY_API_KEY} reached the GKE proxy through both its value and reference channels`)
+    }
+
+    let secretReference: $util.Input<string>
+    const ownedSecretResources: any[] = []
+    if (storedReference !== undefined) {
+      secretReference = storedReference
+    } else {
+      if (inlineKey === undefined || (typeof inlineKey === 'string' && inlineKey.length === 0)) {
+        throw new Error(`${PROXY_API_KEY} reached neither the GKE proxy's value nor its reference channel`)
       }
-      const plain = Object.entries(values).map(([name, value]) => proxyEnvLine(name, value))
-      const secrets = Object.keys(request.secrets).map((name, index) => {
-        const { secret, version } = splitSecretRef((references as string[])[index] as string)
-        return (
-          `printf '%s=%s\\n' ${name} "$(curl -sf -H "Authorization: Bearer $TOKEN" ` +
-          `"https://secretmanager.googleapis.com/v1/projects/${project}/secrets/${secret}/versions/${version}:access" ` +
-          `| sed -n 's/.*\\"data\\": \\"\\([^\\"]*\\)\\".*/\\1/p' | base64 -d)" >> /run/proxy.env`
-        )
+      const secret = new gcp.secretmanager.Secret('ProxyApiKeySecret', {
+        project,
+        secretId: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy-api-key' }),
+        replication: { auto: {} },
       })
-      return [
-        '#!/bin/bash',
-        'set -euo pipefail',
-        ': > /run/proxy.env',
-        'chmod 600 /run/proxy.env',
-        ...(secrets.length > 0
-          ? [
-              'TOKEN=$(curl -sf -H "Metadata-Flavor: Google" ' +
-                'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token ' +
-                "| sed -n 's/.*\"access_token\":\"\\([^\"]*\\)\".*/\\1/p')",
-              // Fail closed: a proxy started without its API key answers every
-              // box request as unauthorized, which reads as a control-plane bug.
-              '[ -n "$TOKEN" ] || { echo "no metadata token; refusing to start" >&2; exit 1; }',
-            ]
-          : []),
-        ...plain,
-        ...secrets,
-        startProxy(String(image), registryHostOf(String(image))),
-      ].join('\n')
+      const version = new gcp.secretmanager.SecretVersion('ProxyApiKeyValue', {
+        secret: secret.id,
+        secretData: $util.secret(inlineKey),
+      })
+      secretReference = version.name
+      ownedSecretResources.push(secret, version)
+    }
+
+    const reference = $util.output(secretReference)
+    const coordinates = reference.apply(secretCoordinatesOf)
+    const mountedReference = reference.apply(versionedSecretRef)
+
+    const workloadIdentity = new gcp.serviceaccount.IAMMember('ProxyWorkloadIdentity', {
+      serviceAccountId: placement.serviceAccount.apply(
+        (email: string) => `projects/${project}/serviceAccounts/${email}`,
+      ),
+      role: 'roles/iam.workloadIdentityUser',
+      member: `serviceAccount:${project}.svc.id.goog[${NAMESPACE}/${KUBERNETES_SERVICE_ACCOUNT}]`,
+    })
+    const secretAccessor = new gcp.secretmanager.SecretIamMember('ProxySecretAccessor', {
+      project: coordinates.apply(({ project: secretProject }: { project: string }) => secretProject),
+      secretId: coordinates.apply(({ secret }: { secret: string }) => secret),
+      role: 'roles/secretmanager.secretAccessor',
+      member: placement.serviceAccount.apply(gsaMember),
     })
 
-    const template = new gcp.compute.InstanceTemplate('ProxyTemplate', {
-      namePrefix: `${instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' })}-`,
-      project,
-      region,
-      machineType: MACHINE_TYPE,
-      disks: [{ sourceImage: COS_IMAGE, autoDelete: true, boot: true, diskSizeGb: 20 }],
-      networkInterfaces: [
-        {
-          subnetwork: placement.subnetwork,
-          /*
-           * No external address. A passthrough balancer forwarded to the
-           * instance's own, so one was required; a proxy balancer reaches the
-           * backend over the network instead, and the host's outbound — the
-           * image pull — goes through Cloud NAT. That leaves the proxy hosts
-           * with no internet-facing address at all, which is strictly better
-           * for the one workload that used to have the most exposed one.
-           *
-           * It is also what `constraints/compute.vmExternalIpAccess` requires:
-           * an organization that forbids external addresses refuses the
-           * instance outright, and this stack has no reason to ask for one.
-           */
+    const k8s = { provider: host.provider }
+    const namespace = new kubernetes.core.v1.Namespace('ProxyNamespace', { metadata: { name: NAMESPACE } }, k8s)
+    const serviceAccount = new kubernetes.core.v1.ServiceAccount(
+      'ProxyKubernetesServiceAccount',
+      {
+        metadata: {
+          name: KUBERNETES_SERVICE_ACCOUNT,
+          namespace: namespace.metadata.name,
+          annotations: {
+            'iam.gke.io/gcp-service-account': placement.serviceAccount,
+            'iam.gke.io/return-principal-id-as-email': 'true',
+          },
         },
-      ],
-      serviceAccount: { email: placement.serviceAccount, scopes: ['cloud-platform'] },
-      metadata: { 'startup-script': startupScript },
-      // A template is immutable, so a change makes a new one and the group
-      // rolls onto it rather than failing on an in-place update.
-      lifecycle: { createBeforeDestroy: true },
-    })
+      },
+      { ...k8s, dependsOn: [workloadIdentity] },
+    )
+    const secretProvider = new kubernetes.apiextensions.CustomResource(
+      'ProxySecretProviderClass',
+      {
+        apiVersion: 'secrets-store.csi.x-k8s.io/v1',
+        kind: 'SecretProviderClass',
+        metadata: { name: SECRET_PROVIDER_CLASS, namespace: namespace.metadata.name },
+        spec: {
+          provider: 'gke',
+          parameters: { secrets: reference.apply(secretProviderParameters) },
+        },
+      },
+      { ...k8s, dependsOn: [...host.ready, secretAccessor, ...ownedSecretResources] },
+    )
 
     /*
-     * The two grants this host needs, and the ones Cloud Run never did.
-     *
-     * A Cloud Run service's image is pulled by Google's own service agent and
-     * its stdout is collected by the platform, so nothing in `api.ts` or
-     * `collector.ts` grants either of these. This host does both for itself.
-     *
-     * Without the registry read the group boots, the startup script runs,
-     * `docker pull` is denied, and the balancer reports two hosts that never
-     * became healthy with nothing in the deploy having failed.
-     *
-     * Without the log write the container's own output goes nowhere: COS ships
-     * journald to Cloud Logging as the instance's service account, and an
-     * unhealthy host is then unexplainable — `logging.logEntries.create` denied
-     * is the only trace, on the serial console. The AWS side gets this for
-     * free, because an ECS task's log driver is the platform's.
+     * Create the annotated Service before any selected Pod. The NEG controller
+     * injects a readiness gate only when it sees the Service as the Pod is
+     * admitted. Awaiting endpoints here would deadlock, so this resource alone
+     * skips Pulumi's Service await; the Deployment below supplies the real wait.
      */
-    const pull = new gcp.projects.IAMMember('ProxyRegistryReader', {
-      project,
-      role: 'roles/artifactregistry.reader',
-      member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
-    })
-    const logs = new gcp.projects.IAMMember('ProxyLogWriter', {
-      project,
-      role: 'roles/logging.logWriter',
-      member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
-    })
+    const service = new kubernetes.core.v1.Service(
+      'ProxyService',
+      {
+        metadata: {
+          name: CONTAINER,
+          namespace: namespace.metadata.name,
+          annotations: {
+            'cloud.google.com/neg': JSON.stringify({ exposed_ports: { [PROXY_PORT]: { name } } }),
+            'pulumi.com/skipAwait': 'true',
+          },
+        },
+        spec: {
+          type: 'ClusterIP',
+          selector: { 'app.kubernetes.io/name': CONTAINER },
+          ports: [{ name: CONTAINER, protocol: 'TCP', port: PROXY_PORT, targetPort: CONTAINER }],
+        },
+      },
+      { ...k8s, dependsOn: [namespace] },
+    )
+
+    const plainEnvironment = { ...request.environment }
+    delete plainEnvironment[PROXY_API_KEY]
+    const environment: Record<string, $util.Input<string>> = {
+      ...plainEnvironment,
+      PROXY_PORT: String(PROXY_PORT),
+      PROXY_PROTOCOL: request.protocol,
+      BOXLITE_API_URL: $util.output(request.apiUrl).apply((url: string) => `${url.replace(/\/$/, '')}/api`),
+      PROXY_DOMAIN: request.domain,
+      PROXY_API_KEY_FILE,
+    }
+
+    const labels = { 'app.kubernetes.io/name': CONTAINER, 'app.kubernetes.io/component': 'edge' }
+    const deployment = new kubernetes.apps.v1.Deployment(
+      'ProxyDeployment',
+      {
+        metadata: { name: CONTAINER, namespace: namespace.metadata.name, labels },
+        spec: {
+          replicas: REPLICAS,
+          minReadySeconds: 10,
+          strategy: { type: 'RollingUpdate', rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } },
+          selector: { matchLabels: { 'app.kubernetes.io/name': CONTAINER } },
+          template: {
+            metadata: {
+              labels,
+              // A pinned reference changes the Pod template and rolls both
+              // readers. An unversioned reference remains explicitly latest.
+              annotations: { 'boxlite.ai/proxy-api-key-version': mountedReference },
+            },
+            spec: {
+              serviceAccountName: serviceAccount.metadata.name,
+              automountServiceAccountToken: true,
+              /*
+               * Longer than the hour the load balancer drains for, on purpose.
+               *
+               * Three timeouts in a row: the backend drains a removed endpoint
+               * for 3600s, the proxy shuts down gracefully for the same, and the
+               * kubelet must outlast both or it SIGKILLs a Pod that is still
+               * serving connections the balancer believes it is draining. The
+               * minute of headroom is what keeps the last of them from being cut.
+               */
+              terminationGracePeriodSeconds: 3_660,
+              nodeSelector: { 'iam.gke.io/gke-metadata-server-enabled': 'true' },
+              topologySpreadConstraints: [
+                {
+                  maxSkew: 1,
+                  topologyKey: 'topology.kubernetes.io/zone',
+                  whenUnsatisfiable: 'ScheduleAnyway',
+                  labelSelector: { matchLabels: { 'app.kubernetes.io/name': CONTAINER } },
+                },
+              ],
+              securityContext: { seccompProfile: { type: 'RuntimeDefault' } },
+              containers: [
+                {
+                  name: CONTAINER,
+                  image: request.image,
+                  imagePullPolicy: 'IfNotPresent',
+                  ports: [{ name: CONTAINER, containerPort: PROXY_PORT, protocol: 'TCP' }],
+                  env: Object.entries(environment).map(([name, value]) => ({ name, value })),
+                  volumeMounts: [{ name: SECRET_VOLUME, mountPath: SECRET_MOUNT, readOnly: true }],
+                  startupProbe: {
+                    httpGet: { path: '/health', port: CONTAINER, scheme: 'HTTP' },
+                    periodSeconds: 5,
+                    failureThreshold: 60,
+                  },
+                  readinessProbe: {
+                    httpGet: { path: '/health', port: CONTAINER, scheme: 'HTTP' },
+                    periodSeconds: 10,
+                    timeoutSeconds: 5,
+                    failureThreshold: 3,
+                  },
+                  livenessProbe: {
+                    httpGet: { path: '/health', port: CONTAINER, scheme: 'HTTP' },
+                    periodSeconds: 30,
+                    timeoutSeconds: 5,
+                    failureThreshold: 3,
+                  },
+                  resources: {
+                    requests: { cpu: '250m', memory: '256Mi' },
+                    limits: { cpu: '1', memory: '512Mi' },
+                  },
+                  securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ['ALL'] } },
+                },
+              ],
+              volumes: [
+                {
+                  name: SECRET_VOLUME,
+                  csi: {
+                    driver: 'secrets-store-gke.csi.k8s.io',
+                    readOnly: true,
+                    volumeAttributes: { secretProviderClass: secretProvider.metadata.name },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+      {
+        ...k8s,
+        dependsOn: [
+          service,
+          serviceAccount,
+          secretProvider,
+          workloadIdentity,
+          secretAccessor,
+          ...host.ready,
+          ...dependsOn,
+          ...ownedSecretResources,
+        ],
+        customTimeouts: { create: '20m', update: '20m' },
+      },
+    )
 
     /*
-     * Global, because the balancer in front of it is. The values are the AWS
-     * target group's, so a host is called healthy or unhealthy by the same
-     * question on both clouds.
+     * What a Pod may talk to, denied by default.
      *
-     * The proxy's own route, on its own port. A TCP check on the port would
-     * call a host healthy while the container behind it was still starting.
+     * The VPC firewall already says who reaches the node and who the node
+     * reaches, but every Pod in this cluster shares those rules — inside the
+     * cluster the proxy is otherwise reachable by anything that lands in the
+     * namespace. This is the half only Kubernetes can express, and it is worth
+     * having precisely because the proxy's whole job is opening connections on
+     * behalf of a caller: a compromised one with no egress policy is a tunnel
+     * into the VPC.
+     *
+     * Deny first, then name the five things it genuinely needs. Enforced by
+     * Dataplane V2, which `cluster.ts` turns on at creation.
      */
+    const denyAll = new kubernetes.networking.v1.NetworkPolicy(
+      'ProxyDefaultDeny',
+      {
+        metadata: { name: 'default-deny', namespace: namespace.metadata.name },
+        spec: { podSelector: {}, policyTypes: ['Ingress', 'Egress'] },
+      },
+      { ...k8s, dependsOn: [namespace] },
+    )
+
+    new kubernetes.networking.v1.NetworkPolicy(
+      'ProxyNetworkPolicy',
+      {
+        metadata: { name: CONTAINER, namespace: namespace.metadata.name },
+        spec: {
+          podSelector: { matchLabels: { 'app.kubernetes.io/name': CONTAINER } },
+          policyTypes: ['Ingress', 'Egress'],
+          // Only the balancer's own ranges, and only the port it forwards to.
+          // Health checks arrive from the same two ranges.
+          ingress: [
+            {
+              from: LOAD_BALANCER_RANGES.map((cidr) => ({ ipBlock: { cidr } })),
+              ports: [{ protocol: 'TCP', port: PROXY_PORT }],
+            },
+          ],
+          egress: [
+            // Cluster DNS. Named by namespace rather than by address: kube-dns
+            // has a Service IP this module has no way to know.
+            {
+              to: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } } }],
+              ports: [
+                { protocol: 'UDP', port: 53 },
+                { protocol: 'TCP', port: 53 },
+              ],
+            },
+            // The GKE metadata server, which is how Workload Identity mints the
+            // token the proxy calls the control plane with.
+            {
+              to: [{ ipBlock: { cidr: '169.254.169.254/32' } }],
+              ports: [
+                { protocol: 'TCP', port: 80 },
+                { protocol: 'TCP', port: 988 },
+              ],
+            },
+            // The runner fleet, on its one port. The VPC firewall admits this
+            // from the Pod range; this is the same statement from inside.
+            {
+              to: [{ ipBlock: { cidr: SUBNET_CIDR } }],
+              ports: [{ protocol: 'TCP', port: RUNNER_PORT }],
+            },
+            // The control plane, the collector and Secret Manager: all public
+            // addresses reached over TLS, so the destination cannot be narrowed
+            // to a range this module could name.
+            {
+              to: [{ ipBlock: { cidr: '0.0.0.0/0' } }],
+              ports: [{ protocol: 'TCP', port: 443 }],
+            },
+          ],
+        },
+      },
+      { ...k8s, dependsOn: [denyAll] },
+    )
+
+    const disruptionBudget = new kubernetes.policy.v1.PodDisruptionBudget(
+      'ProxyDisruptionBudget',
+      {
+        metadata: { name: CONTAINER, namespace: namespace.metadata.name },
+        spec: { minAvailable: 1, selector: { matchLabels: { 'app.kubernetes.io/name': CONTAINER } } },
+      },
+      { ...k8s, dependsOn: [deployment] },
+    )
+
+    /*
+     * Deployment readiness is the NEG wait: because the Service pre-existed the
+     * Pods, GKE injects its readiness gate and does not mark the Deployment
+     * available until each endpoint has been registered. The invoke can then
+     * read a real NEG instead of racing the controller with a guessed self link.
+     */
+    const negLinks = host.zones.apply((zones: string[]) => {
+      if (zones.length === 0) {
+        throw new Error('the proxy cluster reported no zones, so its NEGs cannot be found')
+      }
+      return $resolve(
+        zones.map((zone) =>
+          gcp.compute
+            .getNetworkEndpointGroupOutput({ project, zone, name }, { dependsOn: [deployment] })
+            .selfLink.apply((selfLink: string | undefined) => {
+              if (!selfLink) throw new Error(`GKE created no self link for proxy NEG ${name} in ${zone}`)
+              return selfLink
+            }),
+        ),
+      )
+    })
+
     const health = new gcp.compute.HealthCheck('ProxyHealthCheck', {
-      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
+      name,
       project,
       httpHealthCheck: { requestPath: '/health', port: PROXY_PORT },
       checkIntervalSec: 30,
       timeoutSec: 5,
       healthyThreshold: 2,
       unhealthyThreshold: 3,
+      // The alarm consumes health transitions from this exact NEG.
+      logConfig: { enable: true },
     })
-
-    const group = new gcp.compute.RegionInstanceGroupManager(
-      'Proxy',
+    const backend = new gcp.compute.BackendService(
+      'ProxyBackend',
       {
-        name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
+        name,
         project,
-        region,
-        baseInstanceName: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
-        versions: [{ instanceTemplate: template.selfLinkUnique }],
-        targetSize: 2,
-        // One zone, the stage's own. See the note on `zone` above: the rolling
-        // policy below is only expressible in a group that spans one.
-        distributionPolicyZones: [zone],
-        // What the balancer connects to. A proxy load balancer opens its own
-        // connection to the backend, so this is the container's port and not
-        // the 443 a client dialled.
-        namedPorts: [{ name: NAMED_PORT, port: PROXY_PORT }],
-        // Rolling, one at a time, with a spare: every running box's connection
-        // goes through these, so a group that replaced both at once would drop
-        // every session.
-        updatePolicy: {
-          type: 'PROACTIVE',
-          minimalAction: 'REPLACE',
-          maxSurgeFixed: 1,
-          maxUnavailableFixed: 0,
-        },
-        // The same check the balancer uses. A group with no autohealing keeps
-        // a host that stopped answering in rotation until someone notices.
-        autoHealingPolicies: { healthCheck: health.id, initialDelaySec: 300 },
+        loadBalancingScheme: 'EXTERNAL_MANAGED',
+        protocol: 'TCP',
+        healthChecks: [health.id],
+        /*
+         * One backend per zone, because a standalone NEG is zonal.
+         *
+         * The cluster reports where it runs nodes and GKE creates a NEG in each
+         * of those zones; a backend list built from one of them would carry the
+         * Pods that happened to land there and leave the rest unreachable — with
+         * every health check green, because the endpoints that are missing are
+         * the ones nothing is checking.
+         */
+        backends: negLinks.apply((links: string[]) =>
+          links.map((group) => ({
+            group,
+            balancingMode: 'CONNECTION',
+            maxConnectionsPerEndpoint: MAX_CONNECTIONS_PER_POD,
+            capacityScaler: 1,
+          })),
+        ),
+        timeoutSec: 3_600,
+        connectionDrainingTimeoutSec: 3_600,
       },
-      { dependsOn },
+      { dependsOn: [deployment] },
     )
 
-    const backend = new gcp.compute.BackendService('ProxyBackend', {
-      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
-      project,
-      // A proxy balancer: it terminates the client's TLS and opens its own
-      // plaintext connection to the group, which is what the AWS NLB's
-      // `443/tls` listener does.
-      loadBalancingScheme: 'EXTERNAL_MANAGED',
-      protocol: 'TCP',
-      portName: NAMED_PORT,
-      healthChecks: [health.id],
-      backends: [{ group: group.instanceGroup, balancingMode: 'UTILIZATION', capacityScaler: 1 }],
-      // An hour, matching the API's: a box session held open through a pause
-      // must not be closed under it.
-      timeoutSec: 3_600,
-    })
-
-    /*
-     * The wildcard certificate, which is four resources on this cloud.
-     *
-     * A Google-managed certificate covering `*.<domain>` exists only through
-     * Certificate Manager with DNS authorization — the load balancer's own
-     * `ManagedSslCertificate` cannot hold a wildcard at all. The authorization
-     * publishes a challenge record, the certificate proves the domain with it,
-     * a map carries the certificate and the target proxy holds the map.
-     *
-     * One authorization covers both names: an authorization for `<domain>`
-     * answers for `<domain>` and `*.<domain>` alike.
-     */
     const authorization = new gcp.certificatemanager.DnsAuthorization('ProxyDnsAuthorization', {
-      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
+      name,
       project,
       domain: request.domain,
     })
-    // The challenge record, in the zone that actually answers for this domain.
-    // Without it the certificate never leaves `PROVISIONING`.
     const challenge = new cloudflare.Record('ProxyDnsAuthorizationRecord', {
       zoneId,
       name: authorization.dnsResourceRecords[0].name,
@@ -457,48 +455,35 @@ export const gcpEdgeProvider =
       proxied: false,
       ttl: 60,
     })
-    // The name is keyed to the domains and the delete comes last; see
-    // `certificate-name.ts` for what goes wrong under a fixed name.
     const certificate = new gcp.certificatemanager.Certificate(
       'ProxyCertificate',
       {
-        name: certificateNameFor({
-          domain: request.domain,
-          base: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
-        }),
+        name: certificateNameFor({ domain: request.domain, base: name }),
         project,
-        // Both names, as the AWS side's `domain` plus `aliases` are: the apex is
-        // the proxy itself and the wildcard is every box that will ever exist.
         managed: { domains: [request.domain, `*.${request.domain}`], dnsAuthorizations: [authorization.id] },
       },
       { deleteBeforeReplace: false },
     )
-    const certificates = new gcp.certificatemanager.CertificateMap('ProxyCertificateMap', {
-      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
-      project,
-    })
+    const certificates = new gcp.certificatemanager.CertificateMap('ProxyCertificateMap', { name, project })
     const entry = new gcp.certificatemanager.CertificateMapEntry('ProxyCertificateEntry', {
-      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
+      name,
       project,
       map: certificates.name,
       certificates: [certificate.id],
-      // Everything this balancer answers, rather than a hostname list that
-      // would have to name each box.
       matcher: 'PRIMARY',
     })
 
-    const address = new gcp.compute.GlobalAddress('ProxyAddress', {
-      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
-      project,
-    })
+    // These logical names are unchanged, so the IP, certificate map binding and
+    // DNS records stay in place while only ProxyBackend changes its group.
+    const address = new gcp.compute.GlobalAddress('ProxyAddress', { name, project })
     const sslProxy = new gcp.compute.TargetSSLProxy('ProxyTargetSslProxy', {
-      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
+      name,
       project,
       backendService: backend.id,
       certificateMap: certificates.id.apply((id: string) => `//certificatemanager.googleapis.com/${id}`),
     })
     const forwarding = new gcp.compute.GlobalForwardingRule('ProxyForwardingRule', {
-      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
+      name,
       project,
       loadBalancingScheme: 'EXTERNAL_MANAGED',
       ipProtocol: 'TCP',
@@ -507,31 +492,26 @@ export const gcpEdgeProvider =
       target: sslProxy.id,
     })
 
-    /*
-     * The balancer reaches the hosts, and nothing else does.
-     *
-     * A proxy balancer connects from Google's own front ends rather than from
-     * the client, so the source is these two documented ranges and the port is
-     * the container's — not `0.0.0.0/0` on 443, which is what a passthrough
-     * needed. The same ranges carry the health checks.
-     */
-    const firewall = new gcp.compute.Firewall('ProxyFirewall', {
-      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
+    const loadBalancerIngress = new gcp.compute.Firewall('ProxyFirewall', {
+      name,
       project,
       network,
       direction: 'INGRESS',
       allows: [{ protocol: 'tcp', ports: [String(PROXY_PORT)] }],
       sourceRanges: LOAD_BALANCER_RANGES,
-      targetServiceAccounts: [placement.serviceAccount],
+      targetServiceAccounts: [host.nodeServiceAccount],
+    })
+    const runnerIngress = new gcp.compute.Firewall('ProxyToRunnerFirewall', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy-to-runner' }),
+      project,
+      network,
+      direction: 'INGRESS',
+      priority: 1000,
+      allows: [{ protocol: 'tcp', ports: [String(RUNNER_PORT)] }],
+      sourceRanges: [GKE_POD_CIDR],
+      targetServiceAccounts: [runnerServiceAccount],
     })
 
-    /*
-     * Two records, not one. The apex is what a client resolves for the proxy
-     * itself; the wildcard is every box that will ever exist. Both unproxied:
-     * Google's managed certificate is validated by reaching this address, and a
-     * proxied record answers from Cloudflare instead — so the certificate would
-     * sit in `PROVISIONING` and never leave it.
-     */
     const apex = new cloudflare.Record('ProxyRecord', {
       zoneId,
       name: request.domain,
@@ -551,9 +531,32 @@ export const gcpEdgeProvider =
 
     return {
       url: $util.output(`https://${request.domain}`),
-      // A log-based metric filters on the group's own name here, where AWS
-      // dimensions a metric by the balancer's ARN suffix.
-      metricTarget: group.name,
-      ready: [group, forwarding, firewall, pull, logs, entry, challenge, apex, wildcard],
+      /*
+       * The alarm keys on one NEG's numeric id, and there are now as many NEGs
+       * as zones. The first zone the cluster reports is the one carried: an
+       * alert per zone would be three alerts for one outage, and the filter has
+       * room for exactly one resource label.
+       */
+      metricTarget: host.zones.apply((zones: string[]) =>
+        gcp.compute
+          .getNetworkEndpointGroupOutput({ project, zone: zones[0] as string, name }, { dependsOn: [deployment] })
+          .generatedId.apply(String),
+      ),
+      ready: [
+        deployment,
+        service,
+        disruptionBudget,
+        backend,
+        forwarding,
+        loadBalancerIngress,
+        runnerIngress,
+        workloadIdentity,
+        secretAccessor,
+        entry,
+        challenge,
+        apex,
+        wildcard,
+        ...ownedSecretResources,
+      ],
     }
   }

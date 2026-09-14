@@ -18,6 +18,7 @@
  */
 
 import type { StackProviders } from '../../index.ts'
+import type { WorkloadHost } from '../../cluster.ts'
 import type { Network, NetworkBinding, Placement } from '../../network.ts'
 import { gcpImages } from '../../image.ts'
 import { gcpAlarmProvider } from './alarms.ts'
@@ -41,6 +42,11 @@ const onGcp = <T extends { cloud: string }>(value: T, what: string): Extract<T, 
 const binding = (network: Network): Extract<NetworkBinding, { cloud: 'gcp' }> => onGcp(network.binding, 'network')
 const placement = (network: Network, role: Parameters<Network['placementFor']>[0]): Extract<Placement, { cloud: 'gcp' }> =>
   onGcp(network.placementFor(role), 'placement')
+const gkeHost = (host: WorkloadHost): Extract<WorkloadHost, { cloud: 'gcp'; runtime: 'gke' }> => {
+  const value = onGcp(host, 'host')
+  if (value.runtime !== 'gke') throw new Error(`The GCP proxy was handed ${value.runtime} host`)
+  return value
+}
 
 /**
  * A zone in the stage's region: the one declared, or the region's first.
@@ -100,9 +106,8 @@ export const gcpStackProviders = ({
     images: gcpImages({ stage, region, project }),
     network: gcpNetworkProvider({ project, region, appShort }),
     storage: gcpStorageProvider({ project, region, appShort }),
-    // Builds nothing: Cloud Run has no cluster. It still carries the network's
-    // rules, which every workload waits on.
-    cluster: ({ network }) => gcpClusterProvider({ region, network }),
+    // Cloud Run hosts the API and collector; GKE exists only for the proxy.
+    cluster: ({ network }) => gcpClusterProvider({ project, region, appShort, network }),
     database: ({ network }) =>
       gcpDatabaseProvider({
         network: binding(network),
@@ -140,13 +145,6 @@ export const gcpStackProviders = ({
         region,
         placement: placement(network, 'otel-collector'),
         clickhouse,
-        // Everything that ships telemetry, named. There is no security group
-        // to say it for us.
-        callers: [
-          placement(network, 'api').serviceAccount,
-          placement(network, 'proxy').serviceAccount,
-          placement(network, 'runner').serviceAccount,
-        ],
         dependsOn,
       }),
     api: ({ dependencies, network }) =>
@@ -165,18 +163,18 @@ export const gcpStackProviders = ({
         network: binding(network).network,
         runnerAccount: placement(network, 'runner').serviceAccount,
       }),
-    // Not a Cloud Run service: Cloud Run cannot be a backend of the balancer
-    // this needs, so the proxy runs on VMs. See `edge.ts`.
-    edge: ({ network, dependsOn }) =>
+    // Not a Cloud Run service: the proxy is a GKE workload behind a standalone
+    // NEG attached to the existing global SSL proxy load balancer.
+    edge: ({ host, network, dependsOn }) =>
       gcpEdgeProvider({
         project,
-        region,
-        zone,
+        host: gkeHost(host),
         placement: placement(network, 'proxy'),
         // The network itself, because a firewall rule attaches to one. The
         // placement carries only a subnetwork, and the two are not derivable
         // from each other by string surgery — see the note in `edge.ts`.
         network: binding(network).network,
+        runnerServiceAccount: placement(network, 'runner').serviceAccount,
         zoneId,
         dependsOn,
       }),

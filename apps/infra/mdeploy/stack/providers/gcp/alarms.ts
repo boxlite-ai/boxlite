@@ -30,9 +30,9 @@ const PERIOD = '60s'
  * A log-based metric is written with a *logging* resource type — what the log
  * entry carried — and an alert policy is filtered with a *monitoring* one. The
  * two overlap enough to look identical and do not coincide:
- * `gce_instance_group_manager` is a perfectly good logging resource and is not
- * a monitored resource descriptor at all, so a policy naming it is refused with
- * `The resource name does not represent a known descriptor`.
+ * The old VM autohealer logged against `gce_instance_group_manager`, which is
+ * not a monitored resource descriptor at all. GKE's standalone NEG health
+ * transitions use `gce_network_endpoint_group` in both vocabularies.
  *
  * So each alarm states both, and they are only equal where the two vocabularies
  * happen to agree. Naming the wrong monitoring type is the quiet failure this
@@ -40,18 +40,10 @@ const PERIOD = '60s'
  */
 const CLOUD_RUN = { logging: 'cloud_run_revision', monitoring: 'cloud_run_revision' }
 
-/*
- * The autohealer's repair entries are logged against the group manager, which
- * Monitoring does not know. Logging writes such a series against `global`,
- * which is the descriptor here.
- *
- * UNVERIFIED, deliberately marked: no repair has been emitted on this stage, so
- * this is the documented fallback rather than an observed series. It is the
- * difference between an alarm that fires and one that is merely accepted, and
- * the way to settle it is one measurement — force a repair, then read the
- * series' own resource type — not a second reading of the docs.
- */
-const INSTANCE_GROUP = { logging: 'gce_instance_group_manager', monitoring: 'global' }
+const NETWORK_ENDPOINT_GROUP = {
+  logging: 'gce_network_endpoint_group',
+  monitoring: 'gce_network_endpoint_group',
+}
 
 /**
  * What one alert policy watches: its own metric, and its own workload's kind.
@@ -156,16 +148,18 @@ export const gcpAlarmProvider =
       resourceName: 'ProxyUnhealthyTargetAlarm',
       project,
       metricName: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy-unhealthy' }),
-      // The group's own autohealer logs a repair when a host stops answering,
-      // which is the closest thing this cloud has to AWS's UnHealthyHostCount.
-      resourceType: INSTANCE_GROUP,
+      // `ProxyHealthCheck` enables transition logging. Its resource label is
+      // the standalone NEG's numeric id, so another stage cannot contribute.
+      resourceType: NETWORK_ENDPOINT_GROUP,
       filter: subjects.edge.metricTarget.apply(
-        (group: string) =>
-          `resource.type="${INSTANCE_GROUP.logging}" AND resource.labels.instance_group_manager_name="${group}" ` +
-          'AND jsonPayload.event_type="INSTANCE_REPAIR"',
+        (negId: string) =>
+          `logName="projects/${project}/logs/compute.googleapis.com%2Fhealthchecks" ` +
+          `AND resource.type="${NETWORK_ENDPOINT_GROUP.logging}" ` +
+          `AND resource.labels.network_endpoint_group_id="${negId}" ` +
+          'AND jsonPayload.healthCheckProbeResult.healthState="UNHEALTHY"',
       ),
       threshold: request.proxyUnhealthyTargets,
-      description: 'The box proxy is repairing hosts; boxes may be unreachable',
+      description: 'The box proxy has an unhealthy GKE network endpoint',
       notificationChannels,
     })
 

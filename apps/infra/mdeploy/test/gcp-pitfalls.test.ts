@@ -29,9 +29,14 @@ import {
 } from '../stack/providers/gcp/clickhouse.ts'
 import { MACHINE as DATABASE_MACHINE } from '../stack/providers/gcp/database.ts'
 import { gcpStackProviders } from '../stack/providers/gcp/index.ts'
-import { MANAGED_PROXY_CIDR, SUBNET_CIDR } from '../stack/providers/gcp/network.ts'
+import {
+  GKE_POD_CIDR,
+  GKE_SERVICE_CIDR,
+  MANAGED_PROXY_CIDR,
+  SUBNET_CIDR,
+} from '../stack/providers/gcp/network.ts'
 import { BOOT_DISK_TYPE, MACHINE as RUNNER_MACHINE } from '../stack/providers/gcp/runners.ts'
-import { PROXY_ENV_FILE, proxyEnvLine, startProxy } from '../stack/providers/gcp/edge.ts'
+import { PROXY_API_KEY_FILE, secretProviderParameters } from '../stack/providers/gcp/edge.ts'
 
 /*
  * The committed example, not this machine's stage file.
@@ -155,10 +160,23 @@ test('the control plane answers on api.<domain>, the name everything is configur
   assert.match(source, /address: \$util\.output\(`https:\/\/\$\{apiHost\}`\)/)
 })
 
-test('the collector pairs named invokers with internal ingress, and adds no public one', () => {
-  // The same question, answered the other way and correctly: nothing fronts the
-  // collector, so every caller it has can present a token.
-  assert.equal(sourceOf('collector').includes("member: 'allUsers'"), false)
+test('the collector is invocable from the network, and the ingress is the whole restriction', () => {
+  /*
+   * The pair that replaced per-caller IAM. OTLP carries no credential, so
+   * authorising by caller meant every sender minting a Google ID token for this
+   * service's address — one implementation per language, for a service whose
+   * ingress already admits nothing from outside the VPC. The AWS side puts the
+   * same collector behind an internal load balancer that authorises nobody.
+   *
+   * `allUsers` is therefore correct here *only* while the ingress stays
+   * internal: widening that one word publishes an open telemetry sink, and no
+   * type or apply would object.
+   */
+  const source = sourceOf('collector')
+  assert.match(source, /member: 'allUsers'/)
+  assert.match(source, /ingress: 'INGRESS_TRAFFIC_INTERNAL_ONLY'/)
+  // And nothing mints tokens for it any more.
+  assert.equal(/GOOGLE_ID_TOKEN/.test(sourceOf('runners') + sourceOf('edge')), false)
 })
 
 test('the telemetry database admits every identity that speaks to it, not just the writer', () => {
@@ -327,6 +345,40 @@ test('the upgrade policy selects hosts by the label those hosts actually carry',
   // `runner-upgrade.test.ts` for what dash does to the payload's first line.
   assert.equal(/interpreter: 'SHELL'/.test(source), false, 'SHELL is dash here, and the payload is bash')
   assert.equal(source.match(/interpreter: 'NONE'/g)?.length, 2, 'both scripts have to be run directly')
+})
+
+test('the proxy Pods are denied by default, and the engine that enforces it is on', () => {
+  /*
+   * A NetworkPolicy on a cluster with no policy engine is accepted by the API
+   * server and enforced by nothing — the manifest would claim a boundary the
+   * cluster does not have. The two therefore have to be asserted together.
+   *
+   * Read out of the source because building the provider creates resources.
+   */
+  const cluster = sourceOf('cluster')
+  assert.match(cluster, /datapathProvider: 'ADVANCED_DATAPATH'/, 'no policy engine, so no policy is enforced')
+
+  const edge = sourceOf('edge')
+  assert.match(edge, /name: 'default-deny'/)
+  assert.match(edge, /policyTypes: \['Ingress', 'Egress'\]/)
+  // Egress is the half that matters for a proxy: its job is opening connections
+  // for a caller, so an unbounded one is a tunnel into the VPC.
+  for (const destination of [/169\.254\.169\.254\/32/, /SUBNET_CIDR/, /port: 443/]) {
+    assert.match(edge, destination)
+  }
+})
+
+test('a Pod outlives the window its endpoint is drained for', () => {
+  /*
+   * Three timeouts in a row, and the kubelet's has to be the longest: a Pod
+   * SIGKILLed at 3600s is one the balancer still believes it is draining, and
+   * the connections it was holding are cut rather than finished.
+   */
+  const edge = sourceOf('edge')
+  const grace = Number(/terminationGracePeriodSeconds: ([\d_]+)/.exec(edge)?.[1]?.replace(/_/g, ''))
+  const draining = Number(/connectionDrainingTimeoutSec: ([\d_]+)/.exec(edge)?.[1]?.replace(/_/g, ''))
+  assert.ok(Number.isFinite(grace) && Number.isFinite(draining), 'both timeouts must be stated')
+  assert.ok(grace > draining, `grace ${grace}s must outlast draining ${draining}s`)
 })
 
 // ── the database's machine ──────────────────────────────────────────────────
@@ -499,19 +551,18 @@ test('the firewall attaches to the network it was handed, not one cut out of a s
   assert.match(sourceOf('index'), /network: binding\(network\)\.network/)
 })
 
-test('the proxy container is started by the host, not declared in metadata', () => {
-  /*
-   * `gce-container-declaration` is discontinued: an instance template carrying
-   * it is refused with a 400 at creation, so this is not a deprecation to plan
-   * for. The replacement has to keep both things the declaration did — restart
-   * the container, and authenticate the pull.
-   */
-  const source = sourceOf('edge')
-  // The metadata key, not the prose: the comment above `startProxy` names it to
-  // explain why it is gone, and should go on naming it.
-  assert.equal(source.includes("'gce-container-declaration':"), false)
-  assert.match(source, /docker run -d --name proxy --restart always/)
-  assert.match(source, /docker-credential-gcr configure-docker/)
+test('the proxy is a GKE Deployment and no VM proxy host remains', () => {
+  const edge = sourceOf('edge')
+  assert.match(edge, /new kubernetes\.apps\.v1\.Deployment\(/)
+  assert.match(edge, /new kubernetes\.core\.v1\.Service\(/)
+  assert.equal(/new gcp\.compute\.(?:InstanceTemplate|RegionInstanceGroupManager)\(/.test(edge), false)
+
+  const cluster = sourceOf('cluster')
+  assert.match(cluster, /new gcp\.container\.Cluster\(/)
+  // Autopilot owns the nodes, so there is no pool of ours to assert — the
+  // guarantee moved to the flag that makes Google provision them.
+  assert.match(cluster, /enableAutopilot: true/)
+  assert.equal(/new gcp\.container\.NodePool\(/.test(cluster), false, 'a pool beside Autopilot is not a thing')
 })
 
 test('the box proxy is fronted by a certificate the deploy provisions', () => {
@@ -545,21 +596,69 @@ test('the proxy hosts admit the balancer and not the internet', () => {
   const source = sourceOf('edge')
   assert.match(source, /const LOAD_BALANCER_RANGES = \['130\.211\.0\.0\/22', '35\.191\.0\.0\/16'\]/)
   assert.match(source, /sourceRanges: LOAD_BALANCER_RANGES/)
+  assert.match(source, /targetServiceAccounts: \[host\.nodeServiceAccount\]/)
   assert.equal(source.includes("sourceRanges: ['0.0.0.0/0']"), false)
 })
 
-test('the proxy may read the registry it pulls from, which Cloud Run never needed', () => {
-  // Cloud Run's own service agent pulls for the api and the collector. This host
-  // pulls as itself, so without the grant the group boots and never goes healthy.
-  assert.match(sourceOf('edge'), /role: 'roles\/artifactregistry\.reader'/)
+test('the GKE nodes may read the registry, without granting that role to the workload', () => {
+  const cluster = sourceOf('cluster')
+  assert.match(cluster, /role: 'roles\/artifactregistry\.reader'/)
+  assert.match(cluster, /serviceAccount: nodeAccount\.email/)
+  assert.equal(/roles\/artifactregistry\.reader/.test(sourceOf('edge')), false)
 })
 
-test('nothing about the proxy’s configuration is left readable in metadata', () => {
-  // Metadata is readable by anything on the host, and this is the one host in
-  // the stack that faces the internet. Every value goes through the env file.
+test('the cluster enables managed Secret Manager CSI and Workload Identity', () => {
+  const source = sourceOf('cluster')
+  assert.match(source, /workloadIdentityConfig: \{ workloadPool: `\$\{project\}\.svc\.id\.goog` \}/)
+  assert.match(source, /secretManagerConfig: \{ enabled: true \}/)
+  // The metadata server is Autopilot's own default; what still has to be said
+  // is which identity its nodes run as, or they fall back to the project's
+  // default Compute account.
+  assert.match(source, /autoProvisioningDefaults: \{\s*serviceAccount: nodeAccount\.email/)
+  assert.match(source, /enablePrivateNodes: true/)
+})
+
+test('the proxy key is a CSI file, never a Kubernetes Secret or secret-valued env entry', () => {
   const source = sourceOf('edge')
-  assert.match(source, /--env-file \/run\/proxy\.env/)
-  assert.match(source, /chmod 600 \/run\/proxy\.env/)
+  assert.match(source, /kind: 'SecretProviderClass'/)
+  assert.match(source, /provider: 'gke'/)
+  assert.match(source, /driver: 'secrets-store-gke\.csi\.k8s\.io'/)
+  assert.match(source, /delete plainEnvironment\[PROXY_API_KEY\]/)
+  assert.equal(/kubernetes\.core\.v1\.Secret/.test(source), false)
+  assert.equal(PROXY_API_KEY_FILE, '/var/run/secrets/boxlite/proxy-api-key')
+  assert.deepEqual(JSON.parse(secretProviderParameters('projects/p/secrets/proxy/versions/7')), [
+    { resourceName: 'projects/p/secrets/proxy/versions/7', path: 'proxy-api-key' },
+  ])
+})
+
+test('the Kubernetes identity maps to the existing proxy GSA and gets only secret access', () => {
+  const source = sourceOf('edge')
+  assert.match(source, /'iam\.gke\.io\/gcp-service-account': placement\.serviceAccount/)
+  assert.match(source, /role: 'roles\/iam\.workloadIdentityUser'/)
+  assert.match(source, /role: 'roles\/secretmanager\.secretAccessor'/)
+  assert.match(source, /secretId: coordinates\.apply/)
+})
+
+test('the standalone NEG exists before the old load balancer backend is switched', () => {
+  const source = sourceOf('edge')
+  assert.match(source, /'cloud\.google\.com\/neg'/)
+  assert.match(source, /'pulumi\.com\/skipAwait': 'true'/)
+  assert.match(source, /dependsOn: \[\s*service,/)
+  assert.match(source, /getNetworkEndpointGroupOutput\([\s\S]*dependsOn: \[deployment\]/)
+  // One backend per zone: a regional Autopilot cluster puts Pods wherever the
+  // region has room, and a single-zone backend list would leave the rest
+  // unreachable with every health check still green.
+  assert.match(source, /backends: negLinks\.apply\(/)
+  assert.match(source, /links\.map\(\(group\) => \(\{/)
+  assert.match(source, /balancingMode: 'CONNECTION'/)
+})
+
+test('GKE Pod addresses, not the workload GSA, are admitted to runners', () => {
+  const edge = sourceOf('edge')
+  assert.match(edge, /new gcp\.compute\.Firewall\('ProxyToRunnerFirewall'/)
+  assert.match(edge, /sourceRanges: \[GKE_POD_CIDR\]/)
+  assert.match(edge, /targetServiceAccounts: \[runnerServiceAccount\]/)
+  assert.equal(/sourceServiceAccounts: \[accounts\.api\.email, accounts\.proxy\.email\]/.test(sourceOf('network')), false)
 })
 
 // ── what an alarm watches ───────────────────────────────────────────────────
@@ -570,124 +669,26 @@ test('an alert policy names the kind its own metric comes from', () => {
    * `resource.type` at all (`must specify a restriction on "resource.type"`, a
    * 400), and a condition naming the wrong kind is accepted and matches
    * nothing — which is what a hardcoded `cloud_run_revision` did to the proxy
-   * alarm, whose metric counts `gce_instance_group_manager` entries.
+   * alarm, whose metric counts health transitions for a standalone NEG.
    */
   assert.equal(
-    alertPolicyFilter({ metricName: 'boxlite-dev2-proxy-unhealthy', resourceType: 'gce_instance_group_manager' }),
-    'metric.type="logging.googleapis.com/user/boxlite-dev2-proxy-unhealthy" AND resource.type="gce_instance_group_manager"',
+    alertPolicyFilter({ metricName: 'boxlite-dev2-proxy-unhealthy', resourceType: 'gce_network_endpoint_group' }),
+    'metric.type="logging.googleapis.com/user/boxlite-dev2-proxy-unhealthy" AND resource.type="gce_network_endpoint_group"',
   )
 })
 
 test('an alarm names its logging resource and its monitoring resource separately', () => {
-  /*
-   * They are two vocabularies. `gce_instance_group_manager` is a valid logging
-   * resource and is not a monitored resource descriptor at all — a policy
-   * naming it is refused outright with `The resource name does not represent a
-   * known descriptor`. Collapsing the two into one string is what produced that
-   * refusal, after collapsing them the other way had produced an alarm that
-   * matched nothing.
-   */
   const source = sourceOf('alarms')
   assert.match(source, /const CLOUD_RUN = \{ logging: 'cloud_run_revision', monitoring: 'cloud_run_revision' \}/)
-  assert.match(source, /const INSTANCE_GROUP = \{ logging: 'gce_instance_group_manager', monitoring: 'global' \}/)
+  assert.match(source, /logging: 'gce_network_endpoint_group'/)
+  assert.match(source, /monitoring: 'gce_network_endpoint_group'/)
   // The policy reads the monitoring half and the metric the logging half.
   assert.match(source, /resourceType: resourceType\.monitoring/)
-  assert.match(source, /resource\.type="\$\{INSTANCE_GROUP\.logging\}"/)
+  assert.match(source, /resource\.labels\.network_endpoint_group_id/)
+  assert.match(source, /healthCheckProbeResult\.healthState="UNHEALTHY"/)
+  assert.match(sourceOf('edge'), /logConfig: \{ enable: true \}/)
   assert.equal(/resourceType: '/.test(source), false, 'an alarm names a resource kind as a bare literal')
 })
-
-// ── the proxy's boot script, as a value rather than as source text ──────────
-//
-// These call the builders instead of matching the file, because the three
-// defects below were each a *missing* line: a regex over the source proves the
-// line that was added is spelled right and says nothing about the one that is
-// absent. Reverting any of the three makes exactly one of these fail.
-
-test('the credential helper is pointed somewhere writable before it runs', () => {
-  /*
-   * Container-Optimized OS mounts `/` read-only, so `configure-docker`'s
-   * default destination cannot be created and it exits non-zero —
-   * `Unable to save docker config: mkdir /root/.docker: read-only file system`.
-   * Under `set -e` that aborts the boot script on its first line and the
-   * container is never started, while the deploy reports success.
-   *
-   * Order is the whole assertion: exporting the variable after the helper has
-   * already run would read exactly as correct and fix nothing.
-   */
-  const script = startProxy('asia-southeast1-docker.pkg.dev/p/r/proxy:abc', 'asia-southeast1-docker.pkg.dev')
-  const exported = script.indexOf('export DOCKER_CONFIG=')
-  const configured = script.indexOf('docker-credential-gcr configure-docker')
-  assert.ok(exported !== -1, 'DOCKER_CONFIG is never exported')
-  assert.ok(configured !== -1, 'the credential helper is never run')
-  assert.ok(exported < configured, 'DOCKER_CONFIG is exported after the helper has already failed')
-  assert.equal(/DOCKER_CONFIG=\/(root|home)/.test(script), false, 'DOCKER_CONFIG points at a read-only path')
-})
-
-test('the host opens the port its own container listens on', () => {
-  /*
-   * COS boots with an `INPUT` policy that drops inbound connections, so a
-   * `--network host` container listening on 4000 is reachable from nowhere.
-   * The balancer reports `detailedHealthState: TIMEOUT` — a drop, not a
-   * refusal — with a firewall rule that plainly permits the probe ranges and
-   * nothing in the container's log, because nothing arrived.
-   *
-   * Idempotent because this script runs on every boot, and after the container
-   * so a host is never briefly open on a port with nothing behind it.
-   */
-  const script = startProxy('host/p/r/proxy:abc', 'host')
-  assert.match(script, /iptables .*--dport 4000 -j ACCEPT/, 'the host firewall is never opened')
-  assert.match(script, /iptables -w -C INPUT[^\n]*\|\|/, 'the rule is added without testing for it first')
-  assert.ok(
-    script.indexOf('docker run') < script.indexOf('iptables'),
-    'the port is opened before anything listens on it',
-  )
-})
-
-test('the container ships its output somewhere a person can read it', () => {
-  // Docker's default `json-file` driver writes to neither the journal nor Cloud
-  // Logging, and COS's agent ships only the journal — so a container that
-  // starts and exits leaves an unhealthy host and nothing anywhere saying why.
-  // An ECS task gets this from the platform; this host does not.
-  assert.match(startProxy('host/p/r/proxy:abc', 'host'), /--log-driver=gcplogs/)
-  // The grant the driver authenticates with. No pure function to call: it is a
-  // resource, so this one is still read out of the source.
-  assert.match(sourceOf('edge'), /role: 'roles\/logging\.logWriter'/)
-})
-
-test('a value that never resolved is refused rather than written', () => {
-  /*
-   * The defect this guards is not a bad string, it is a *non*-string: the
-   * composition root sets `OTEL_EXPORTER_OTLP_ENDPOINT` from the collector's
-   * URL, and an `Output` that reached the file was rendered as Pulumi's own
-   * `Calling [toString] on an [Output<T>]` text — several lines of it. Docker
-   * rejects the whole file (`invalid env file … contains whitespaces`, exit
-   * 125) and names none of the variables in it.
-   */
-  const unresolved = { apply: () => unresolved }
-  assert.throws(
-    () => proxyEnvLine('OTEL_EXPORTER_OTLP_ENDPOINT', unresolved),
-    /OTEL_EXPORTER_OTLP_ENDPOINT reached the proxy's env file as object/,
-  )
-  // And a resolved one is written, to the one file the container reads.
-  assert.equal(
-    proxyEnvLine('OTEL_EXPORTER_OTLP_ENDPOINT', 'https://otel.invalid'),
-    `printf '%s=%s\\n' OTEL_EXPORTER_OTLP_ENDPOINT 'https://otel.invalid' >> ${PROXY_ENV_FILE}`,
-  )
-})
-
-test('a value cannot end its own quoting or its own line', () => {
-  /*
-   * The same failure class as the refusal above, reached from the value side.
-   * A single quote closed the shell literal, so the rest of the value became
-   * shell words; a newline made one variable into two lines and docker refused
-   * the file. One is escapable and the other is not — an env file is one
-   * variable per line with no continuation — so they answer differently.
-   */
-  assert.match(proxyEnvLine('K', "a'b"), /'a'\\''b'/)
-  assert.throws(() => proxyEnvLine('K', 'a\nb'), /contains a newline/)
-  assert.throws(() => proxyEnvLine('K', 'a\rb'), /contains a newline/)
-})
-
 
 /** A CIDR as the two numbers that decide whether two of them can overlap. */
 const rangeOf = (cidr: string): { first: number; last: number } => {
@@ -696,7 +697,7 @@ const rangeOf = (cidr: string): { first: number; last: number } => {
   return { first, last: first + 2 ** (32 - Number(width)) - 1 }
 }
 
-test('the proxy-only subnet cannot collide with the range Google picks for Private Service Access', () => {
+test('the fixed GKE and proxy ranges neither overlap nor collide with Private Service Access', () => {
   /*
    * The internal balancer's Envoys need a subnet of their own, and the range it
    * takes is the one thing about it nobody can see fail in review: the Private
@@ -710,15 +711,22 @@ test('the proxy-only subnet cannot collide with the range Google picks for Priva
    * allocator. Moving either constant out of that `/16`, or letting the two
    * subnets overlap, breaks the argument silently and the deploy months later.
    */
-  const workload = rangeOf(SUBNET_CIDR)
-  const managed = rangeOf(MANAGED_PROXY_CIDR)
-  assert.ok(workload.last < managed.first || managed.last < workload.first, 'the two subnets overlap')
+  const cidrs = [SUBNET_CIDR, MANAGED_PROXY_CIDR, GKE_POD_CIDR, GKE_SERVICE_CIDR]
+  for (const [index, leftCidr] of cidrs.entries()) {
+    for (const rightCidr of cidrs.slice(index + 1)) {
+      const left = rangeOf(leftCidr)
+      const right = rangeOf(rightCidr)
+      assert.ok(left.last < right.first || right.last < left.first, `${leftCidr} overlaps ${rightCidr}`)
+    }
+  }
   const slash16 = (cidr: string) => Math.floor(rangeOf(cidr).first / 2 ** 16)
-  assert.equal(
-    slash16(MANAGED_PROXY_CIDR),
-    slash16(SUBNET_CIDR),
-    'the proxy subnet sits in a /16 the workload subnet does not block, so the allocator may take it',
-  )
+  for (const cidr of cidrs.slice(1)) {
+    assert.equal(
+      slash16(cidr),
+      slash16(SUBNET_CIDR),
+      `${cidr} sits in a /16 the workload subnet does not block, so the allocator may take it`,
+    )
+  }
 })
 
 test('the runner still reaches the control plane by a name this stack owns', () => {

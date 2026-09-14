@@ -34,19 +34,12 @@ export const gcpCollectorProvider =
     region,
     placement,
     clickhouse,
-    callers,
     dependsOn,
   }: {
     project: string
     region: string
     placement: Extract<Placement, { cloud: 'gcp' }>
     clickhouse: ClickHouse
-    /**
-     * The identities allowed to invoke this. Cloud Run authorises by caller, so
-     * every workload that ships telemetry has to be named — there is no
-     * security group to say it for us.
-     */
-    callers: $util.Output<string>[]
     dependsOn: any[]
   }): CollectorProvider =>
   (request: CollectorRequest): Collector => {
@@ -114,28 +107,32 @@ export const gcpCollectorProvider =
     )
 
     /*
-     * Who may invoke it, named one at a time.
+     * The network is the boundary here, as it is on AWS.
      *
-     * `allUsers` would be the shortest line here and is exactly what internal
-     * ingress exists to avoid — the two are independent, and a service that is
-     * internal-only but publicly invocable is reachable by anything else in the
-     * network. Both, always.
+     * OTLP carries no credential of its own, so authorising per caller means
+     * every sender has to mint a Google ID token for this service's address —
+     * a Cloud Run-shaped concern pushed into the collector's clients, one
+     * implementation per language, for a service whose ingress already admits
+     * nothing from outside the VPC. The AWS side puts the same collector behind
+     * an internal load balancer that authorises nobody, and this now matches it.
+     *
+     * What that costs is worth stating plainly: anything that reaches this
+     * network can write telemetry attributed to anything. `ingress` above is
+     * the whole of the restriction, so widening it is what must never happen
+     * quietly — the two lines are a pair.
      */
-    const invokers = callers.map(
-      (member, index) =>
-        new gcp.cloudrunv2.ServiceIamMember(`OtelCollectorInvoker${index}`, {
-          project,
-          location: region,
-          name: service.name,
-          role: 'roles/run.invoker',
-          member: member.apply((email: string) => `serviceAccount:${email}`),
-        }),
-    )
+    const invoker = new gcp.cloudrunv2.ServiceIamMember('OtelCollectorInvoker', {
+      project,
+      location: region,
+      name: service.name,
+      role: 'roles/run.invoker',
+      member: 'allUsers',
+    })
 
     return {
       // Cloud Run answers on 443 with no port suffix, so unlike the AWS side
       // there is nothing to append: the URI is the endpoint.
       otlpUrl: service.uri,
-      ready: [service, ...invokers, ...readable],
+      ready: [service, invoker, ...readable],
     }
   }

@@ -13,31 +13,35 @@
  * is where the difference would surface, so it is named here too.
  *
  * `secretKeyRef.secret` takes a secret and `version` takes the version beside
- * it, so a reference carrying `/versions/<v>` in the `secret` field declares the
- * version twice and Cloud Run resolves the pair to nothing. Splitting happens
- * here and only here, which is what keeps the shape from being written out at
- * each call site — the way it goes wrong four times before anyone notices.
+ * it. Splitting happens here and only here, which is what lets mstage carry an
+ * explicit payload version without writing that suffix into Cloud Run's
+ * `secret` field as well.
  *
  * Two forms arrive, from two sources that genuinely differ:
  *
- *   projects/<p>/secrets/<s>              a stored address, from the `secret`
- *                                         marker group. mstage's own validator
- *                                         *refuses* a version on the end
- *                                         (`env/secret-address.ts`), so this
- *                                         form can never carry one.
- *   projects/<p>/secrets/<s>/versions/<v> minted by a provider in this bundle,
- *                                         which controls the string and pins the
- *                                         version so a rotation is a change the
- *                                         deploy can see.
+ *   projects/<p>/secrets/<s>              a stored address that follows latest.
+ *   projects/<p>/secrets/<s>/versions/<v> a stored or provider-created address
+ *                                         pinned to one payload version.
  *
- * Accepting both rather than picking one: an operator writing into the store
- * cannot pin, and a provider that has just created a version should not throw
- * that away. A stored address resolves `latest`, which is the only thing it
- * could mean.
+ * Accepting both rather than picking one: an unversioned address resolves
+ * `latest`, while a versioned one makes rotation an explicit deployment input.
  */
 
 /** What a reference with no version of its own resolves to. */
 const LATEST = 'latest'
+
+type ParsedSecretRef = { project: string; secret: string; version: string }
+
+const parseSecretRef = (reference: string): ParsedSecretRef => {
+  const match = /^projects\/([^/]+)\/secrets\/([^/]+)(?:\/versions\/([^/]+))?$/.exec(reference)
+  if (!match) {
+    throw new Error(
+      `${JSON.stringify(reference)} is not a Secret Manager reference; a GCP stage delivers a secret as ` +
+        'projects/<project>/secrets/<secret>, optionally with /versions/<version>',
+    )
+  }
+  return { project: match[1] as string, secret: match[2] as string, version: match[3] ?? LATEST }
+}
 
 /** One `env` entry, in the shape `gcp.cloudrunv2.Service` takes. */
 export type ContainerEnv = {
@@ -54,14 +58,20 @@ export type ContainerEnv = {
  * one, which is the failure the whole by-reference channel exists to prevent.
  */
 export const splitSecretRef = (reference: string): { secret: string; version: string } => {
-  const match = /^projects\/[^/]+\/secrets\/([^/]+)(?:\/versions\/([^/]+))?$/.exec(reference)
-  if (!match) {
-    throw new Error(
-      `${JSON.stringify(reference)} is not a Secret Manager reference; a GCP stage delivers a secret as ` +
-        'projects/<project>/secrets/<secret>, optionally with /versions/<version> when a provider pinned one',
-    )
-  }
-  return { secret: match[1] as string, version: match[2] ?? LATEST }
+  const { secret, version } = parseSecretRef(reference)
+  return { secret, version }
+}
+
+/** The project and secret id an IAM binding attaches to. */
+export const secretCoordinatesOf = (reference: string): { project: string; secret: string } => {
+  const { project, secret } = parseSecretRef(reference)
+  return { project, secret }
+}
+
+/** The full payload resource name the GKE CSI provider consumes. */
+export const versionedSecretRef = (reference: string): string => {
+  const { project, secret, version } = parseSecretRef(reference)
+  return `projects/${project}/secrets/${secret}/versions/${version}`
 }
 
 /**

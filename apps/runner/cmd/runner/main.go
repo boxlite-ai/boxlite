@@ -64,10 +64,6 @@ func run() int {
 			ServiceName:    "boxlite-runner",
 			ServiceVersion: internal.Version,
 			Environment:    cfg.Environment,
-			// The endpoint doubles as the audience: Cloud Run validates a
-			// token's `aud` against the service's own address. Empty unless a
-			// GCP stage asked for it, and empty leaves the transport alone.
-			GoogleIDTokenAudience: googleIDTokenAudience(cfg),
 		}
 
 		newLogger, lp, err := telemetry.InitLogger(ctx, logger, telemetryConfig)
@@ -90,10 +86,6 @@ func run() int {
 			ServiceName:    "boxlite-runner",
 			ServiceVersion: internal.Version,
 			Environment:    cfg.Environment,
-			// The endpoint doubles as the audience: Cloud Run validates a
-			// token's `aud` against the service's own address. Empty unless a
-			// GCP stage asked for it, and empty leaves the transport alone.
-			GoogleIDTokenAudience: googleIDTokenAudience(cfg),
 		}
 
 		tp, err := telemetry.InitTracer(ctx, telemetryConfig, &filters.NotFoundExporterFilter{})
@@ -327,9 +319,3 @@ with the same 403 as no token at all. Gated on an explicit flag rather than on
 balancer that authorises nobody, and guessing from a hostname would put a
 metadata lookup on a host that has no metadata server.
 */
-func googleIDTokenAudience(cfg *config.Config) string {
-	if !cfg.OtelGoogleIDToken {
-		return ""
-	}
-	return cfg.OtelEndpoint
-}

@@ -79,7 +79,7 @@ declare global {
   /**
    * The provider namespaces, as `any`.
    *
-   * See the note at the top: giving these real types means importing three
+   * See the note at the top: giving these real types means importing every
    * large packages into every typecheck, including in a repository whose stages
    * are all on one cloud. What this file guarantees is the wiring between
    * modules, not the spelling of a resource's arguments.
@@ -90,6 +90,7 @@ declare global {
   const random: any
   const cloudflare: any
   const command: any
+  const kubernetes: any
 
   /**
    * A resource handle a contract holds on to but never reads into.

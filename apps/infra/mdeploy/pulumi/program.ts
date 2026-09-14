@@ -41,12 +41,12 @@ export class PulumiProgramError extends Error {
  * without the packages, and mdeploy floats to repositories that have not
  * adopted GCP.
  *
- * Five, not one. `gcp` is the obvious one; the rest are what the GCP bundle also
+ * Six, not one. `gcp` is the obvious one; the rest are what the GCP bundle also
  * reaches for, and each was found by reading it rather than by assuming.
  * `random` generates the database and cache passwords and each extra runner's
  * token, `cloudflare` writes the two DNS records — the zone is not Google's on
- * either cloud — and `command` runs the post-deploy registration of the runners
- * the API does not seed itself.
+ * either cloud — `kubernetes` places the proxy in GKE, and `command` runs the
+ * post-deploy registration of the runners the API does not seed itself.
  *
  * `command` is the one SST supplies on its own, which is why the AWS providers
  * use it with nothing declared: this engine has no such bundle and injects only
@@ -66,6 +66,7 @@ export type PulumiModules = {
   random: object
   cloudflare: object
   command: object
+  kubernetes: object
 }
 
 /** What a program returns to the engine: the stack's outputs, by name. */
@@ -78,28 +79,37 @@ const PULUMI_GCP = '@pulumi/gcp'
 const PULUMI_RANDOM = '@pulumi/random'
 const PULUMI_CLOUDFLARE = '@pulumi/cloudflare'
 const PULUMI_COMMAND = '@pulumi/command'
+const PULUMI_KUBERNETES = '@pulumi/kubernetes'
 
 /**
  * The real modules, imported only when a GCP stage asks for them.
  *
  * The specifiers are constants rather than literals on purpose. A literal would
- * make typechecking this file require all four packages to be installed, and
+ * make typechecking this file require every provider package to be installed, and
  * `@pulumi/gcp` is a large download that no AWS stage needs. Resolving them at
  * runtime, when a GCP stage is actually deploying, does not.
  */
 const loadModules: ModuleLoader = async () => {
   try {
-    const [pulumi, gcp, random, cloudflare, command] = await Promise.all([
+    const [pulumi, gcp, random, cloudflare, command, kubernetes] = await Promise.all([
       import(PULUMI),
       import(PULUMI_GCP),
       import(PULUMI_RANDOM),
       import(PULUMI_CLOUDFLARE),
       import(PULUMI_COMMAND),
+      import(PULUMI_KUBERNETES),
     ])
-    return { pulumi: pulumi as PulumiModules['pulumi'], gcp, random, cloudflare, command }
+    return { pulumi: pulumi as PulumiModules['pulumi'], gcp, random, cloudflare, command, kubernetes }
   } catch (error) {
     throw new PulumiProgramError(
-      `A GCP stage needs ${[PULUMI, PULUMI_GCP, PULUMI_RANDOM, PULUMI_CLOUDFLARE, PULUMI_COMMAND].join(', ')} ` +
+      `A GCP stage needs ${[
+        PULUMI,
+        PULUMI_GCP,
+        PULUMI_RANDOM,
+        PULUMI_CLOUDFLARE,
+        PULUMI_COMMAND,
+        PULUMI_KUBERNETES,
+      ].join(', ')} ` +
         `installed in apps/infra. Install them, or pass a loader to gcpProgram. (${(error as Error).message})`,
     )
   }
@@ -139,6 +149,7 @@ export const installGlobals = ({
   target.random = modules.random
   target.cloudflare = modules.cloudflare
   target.command = modules.command
+  target.kubernetes = modules.kubernetes
 }
 
 export type ProgramInput = {
