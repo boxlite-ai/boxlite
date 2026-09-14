@@ -453,6 +453,15 @@ impl BoxImpl {
         }
         self.ensure_usable_without_rerunning_main("exec")?;
 
+        // Reject exec on paused boxes — shim can't handle gRPC requests while SIGSTOP'd.
+        let status = self.state.read().status;
+        if !status.can_exec() {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot exec on box in {} state",
+                status
+            )));
+        }
+
         let live = self.live_state().await?;
 
         // Inject container ID into environment if not already set
@@ -673,6 +682,240 @@ impl BoxImpl {
         ))
     }
 
+    /// Pause the box (freeze VM via SIGSTOP).
+    ///
+    /// Performs a clean quiesce:
+    ///   1. Guest filesystem quiesce (FIFREEZE — best-effort)
+    ///   2. SIGSTOP shim process (pauses all vCPUs and virtio backends)
+    ///
+    /// Idempotent: calling pause() on an already-Paused box is a no-op.
+    /// The box must be Running; other states return InvalidState.
+    pub(crate) async fn pause(&self) -> BoxliteResult<()> {
+        // Check if already shutdown
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+
+        let status = self.state.read().status;
+
+        // Idempotent: already paused
+        if status.is_paused() {
+            return Ok(());
+        }
+
+        // Only Running boxes can be paused
+        if !status.can_pause() {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot pause box in {} state",
+                status
+            )));
+        }
+
+        let pid = {
+            let state = self.state.read();
+            state
+                .pid
+                .map(|p| p as i32)
+                .ok_or_else(|| BoxliteError::Internal("Box is running but has no PID".into()))?
+        };
+
+        // Phase 1: Freeze guest I/O (best-effort, 5s timeout)
+        let frozen = self.guest_quiesce().await;
+
+        // Re-check shutdown token after async quiesce — stop() may have raced.
+        if self.shutdown_token.is_cancelled() {
+            if frozen {
+                self.guest_thaw().await;
+            }
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+
+        // Phase 2: SIGSTOP — pause vCPUs
+        // SAFETY: sending SIGSTOP to a known valid PID that we own (shim process).
+        let ret = unsafe { libc::kill(pid, libc::SIGSTOP) };
+        if ret != 0 {
+            let os_err = std::io::Error::last_os_error();
+            if frozen {
+                self.guest_thaw().await;
+            }
+            if os_err.raw_os_error() == Some(libc::ESRCH) {
+                // Process died between status check and SIGSTOP (stop() raced).
+                let mut state = self.state.write();
+                state.mark_stop();
+                if let Err(e) = self.runtime.box_manager.save_box(self.id(), &state) {
+                    tracing::warn!(box_id = %self.config.id, error = %e, "Failed to persist Stopped state after ESRCH");
+                }
+                return Err(BoxliteError::Stopped(
+                    "Shim process died during pause".into(),
+                ));
+            }
+            tracing::error!(box_id = %self.config.id, pid, error = %os_err, "SIGSTOP failed with unexpected error");
+            return Err(BoxliteError::Internal(format!(
+                "Failed to SIGSTOP shim process (pid={}): {}",
+                pid, os_err
+            )));
+        }
+
+        // Update state
+        let stop_raced = {
+            let mut state = self.state.write();
+            if let Err(e) = state.transition_to(BoxStatus::Paused) {
+                // If stop() raced and state is already Stopping/Stopped,
+                // undo our SIGSTOP so stop() can proceed with shutdown.
+                if matches!(state.status, BoxStatus::Stopping | BoxStatus::Stopped) {
+                    // SAFETY: undo SIGSTOP on the shim so stop() teardown can proceed.
+                    unsafe {
+                        libc::kill(pid, libc::SIGCONT);
+                    }
+                    true
+                } else {
+                    tracing::warn!(box_id = %self.config.id, error = %e, "State transition to Paused failed (race?)");
+                    state.force_status(BoxStatus::Paused);
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        // Handle stop() race outside the lock (guest_thaw is async).
+        if stop_raced {
+            if frozen {
+                self.guest_thaw().await;
+            }
+            return Err(BoxliteError::Stopped("Box is being stopped".into()));
+        }
+        {
+            let mut state = self.state.write();
+            state.quiesced = frozen;
+            if let Err(e) = self.runtime.box_manager.save_box(self.id(), &state) {
+                tracing::warn!(box_id = %self.config.id, error = %e, "Failed to persist Paused state");
+            }
+        }
+
+        for listener in &self.event_listeners {
+            listener.on_box_paused(&self.config.id);
+        }
+
+        tracing::info!(box_id = %self.config.id, frozen, "Box paused");
+        Ok(())
+    }
+
+    /// Resume the box from paused state (SIGCONT + thaw).
+    ///
+    /// Performs:
+    ///   1. SIGCONT shim process (resumes vCPUs)
+    ///   2. Guest filesystem thaw (FITHAW — best-effort)
+    ///
+    /// Idempotent: calling resume() on a Running box is a no-op.
+    /// The box must be Paused; other states return InvalidState.
+    pub(crate) async fn resume(&self) -> BoxliteResult<()> {
+        // Check if already shutdown
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+
+        let status = self.state.read().status;
+
+        // Idempotent: already running
+        if status.is_running() {
+            return Ok(());
+        }
+
+        // Only Paused boxes can be resumed
+        if !status.can_resume() {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot resume box in {} state",
+                status
+            )));
+        }
+
+        let pid = {
+            let state = self.state.read();
+            state
+                .pid
+                .map(|p| p as i32)
+                .ok_or_else(|| BoxliteError::Internal("Box is paused but has no PID".into()))?
+        };
+
+        // Phase 1: SIGCONT — resume vCPUs
+        // SAFETY: sending SIGCONT to a known valid PID that we own (shim process).
+        let ret = unsafe { libc::kill(pid, libc::SIGCONT) };
+        if ret != 0 {
+            let os_err = std::io::Error::last_os_error();
+            // Process vanished while paused (ESRCH) — transition to Stopped
+            // so the box doesn't stay stuck in Paused forever.
+            if os_err.raw_os_error() == Some(libc::ESRCH) {
+                let mut state = self.state.write();
+                state.mark_stop();
+                if let Err(e) = self.runtime.box_manager.save_box(self.id(), &state) {
+                    tracing::warn!(box_id = %self.config.id, error = %e, "Failed to persist Stopped state after ESRCH");
+                }
+                return Err(BoxliteError::Internal(
+                    "Shim process died while paused".into(),
+                ));
+            }
+            tracing::error!(
+                box_id = %self.config.id,
+                pid,
+                error = %os_err,
+                "SIGCONT failed with unexpected error"
+            );
+            return Err(BoxliteError::Internal(format!(
+                "Failed to SIGCONT shim process (pid={}): {}",
+                pid, os_err
+            )));
+        }
+
+        // Verify process is alive before transitioning state
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            let mut state = self.state.write();
+            state.mark_stop();
+            if let Err(e) = self.runtime.box_manager.save_box(self.id(), &state) {
+                tracing::warn!(box_id = %self.config.id, error = %e, "Failed to persist Stopped state");
+            }
+            return Err(BoxliteError::Internal(
+                "Shim process died while paused".into(),
+            ));
+        }
+
+        // Update state
+        let was_quiesced;
+        {
+            let mut state = self.state.write();
+            if let Err(e) = state.transition_to(BoxStatus::Running) {
+                // If stop() raced and state is already Stopping/Stopped, don't override.
+                if matches!(state.status, BoxStatus::Stopping | BoxStatus::Stopped) {
+                    return Err(BoxliteError::Stopped("Box is being stopped".into()));
+                }
+                tracing::warn!(box_id = %self.config.id, error = %e, "State transition to Running failed (race?)");
+                state.force_status(BoxStatus::Running);
+            }
+            was_quiesced = state.quiesced;
+            state.quiesced = false;
+            if let Err(e) = self.runtime.box_manager.save_box(self.id(), &state) {
+                tracing::warn!(box_id = %self.config.id, error = %e, "Failed to persist Running state");
+            }
+        }
+
+        // Phase 2: Thaw guest I/O (only if pause() actually froze filesystems)
+        if was_quiesced {
+            self.guest_thaw().await;
+        }
+
+        for listener in &self.event_listeners {
+            listener.on_box_resumed(&self.config.id);
+        }
+
+        tracing::info!(box_id = %self.config.id, "Box resumed");
+        Ok(())
+    }
+
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
         let t0 = Instant::now();
 
@@ -704,12 +947,48 @@ impl BoxImpl {
         // Cancel the token - signals all in-flight operations to abort
         self.shutdown_token.cancel();
 
+        // If the box is paused (SIGSTOP'd), we must SIGCONT before attempting
+        // guest shutdown RPC — a stopped process can't handle gRPC requests.
+        // Without this, we'd hit the 10s timeout then SIGKILL.
+        {
+            let state = self.state.read();
+            if state.status == BoxStatus::Paused
+                && let Some(pid) = state.pid
+            {
+                // SAFETY: sending SIGCONT to our own shim process PID.
+                let ret = unsafe { libc::kill(pid as i32, libc::SIGCONT) };
+                if ret != 0 {
+                    tracing::debug!(
+                        box_id = %self.config.id,
+                        pid,
+                        error = %std::io::Error::last_os_error(),
+                        "SIGCONT failed (process may have exited while paused)"
+                    );
+                } else {
+                    tracing::debug!(
+                        box_id = %self.config.id,
+                        pid,
+                        "Sent SIGCONT to paused shim before guest shutdown"
+                    );
+                }
+            }
+        }
+
         // Only attempt graceful shutdown for boxes that should have a live
         // shim. Calling live_state() on Configured/Failed would route
         // through the restart pipeline and spawn a new VM — exactly what
         // stop() must NOT do.
-        let should_attach = self.state.read().status == BoxStatus::Running;
-        if should_attach && let Ok(live) = self.ensure_booted().await {
+        //
+        // A Paused box has a live shim too (SIGCONT'd above). `ensure_booted`
+        // refuses any non-Running status on an initialized handle, so reuse the
+        // cached LiveState directly for it.
+        let status = self.state.read().status;
+        let live = match status {
+            BoxStatus::Running => self.ensure_booted().await.ok(),
+            BoxStatus::Paused => self.live.get(),
+            _ => None,
+        };
+        if let Some(live) = live {
             // Recovered boxes lazy-attach here via vmm_attach (now
             // ProcessIdentity-gated). Live boxes hit the cached LiveState.
             // Either way the teardown is identical:
@@ -855,6 +1134,15 @@ impl BoxImpl {
         }
         self.ensure_usable_without_rerunning_main("copy into")?;
 
+        // Reject when paused — guest can't handle gRPC file upload while SIGSTOP'd.
+        let status = self.state.read().status;
+        if status.is_paused() {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot copy into box in {} state",
+                status
+            )));
+        }
+
         // Ensure box is running
         let live = self.live_state().await?;
 
@@ -933,6 +1221,15 @@ impl BoxImpl {
             ));
         }
         self.ensure_usable_without_rerunning_main("copy out")?;
+
+        // Reject when paused — guest can't handle gRPC file download while SIGSTOP'd.
+        let status = self.state.read().status;
+        if status.is_paused() {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot copy from box in {} state",
+                status
+            )));
+        }
 
         // Ensure box is running
         let live = self.live_state().await?;
@@ -1354,52 +1651,72 @@ impl BoxImpl {
     where
         Fut: Future<Output = BoxliteResult<R>>,
     {
-        let (pid, was_running) = {
+        let (pid, was_running, was_paused, was_quiesced) = {
             let state = self.state.read();
             let running = state.status.is_running();
-            let pid = if running {
+            let paused = state.status.is_paused();
+            let quiesced = state.quiesced;
+            let pid = if running || paused {
                 state.pid.map(|p| p as i32)
             } else {
                 None
             };
-            (pid, running)
+            (pid, running, paused, quiesced)
         };
 
         let Some(pid) = pid else {
-            if was_running {
+            if was_running || was_paused {
                 return Err(BoxliteError::Internal(
-                    "Box is running but has no PID".to_string(),
+                    "Box is active but has no PID".to_string(),
                 ));
             }
-            // Not running — execute directly, no quiesce needed.
+            // Not active — execute directly, no quiesce needed.
             return fut.await;
         };
 
         let t0 = Instant::now();
 
         // Phase 1: Freeze guest I/O (best-effort, 5s timeout)
+        // If user paused and quiesce succeeded during pause(), skip (already frozen).
+        // If user paused but quiesce failed during pause(), log warning — we cannot
+        // retry because the process is SIGSTOP'd and cannot respond to gRPC.
+        // The operation degrades to crash-consistent (SIGSTOP-only).
         let t_quiesce = Instant::now();
-        let frozen = self.guest_quiesce().await;
+        let frozen = if was_paused {
+            if !was_quiesced {
+                tracing::warn!(
+                    box_id = %self.id(),
+                    "Box was paused without successful guest quiesce; \
+                     snapshot/export will be crash-consistent only (SIGSTOP without FIFREEZE)"
+                );
+            }
+            false
+        } else {
+            self.guest_quiesce().await
+        };
         let quiesce_ms = t_quiesce.elapsed().as_millis() as u64;
 
         // Phase 2: SIGSTOP — pause vCPUs
-        // SAFETY: sending SIGSTOP to a known valid PID that we own (shim process).
-        let ret = unsafe { libc::kill(pid, libc::SIGSTOP) };
-        if ret != 0 {
-            // If SIGSTOP fails, thaw before returning error
-            if frozen {
-                self.guest_thaw().await;
+        // Skip if already paused by user — process is already stopped.
+        if !was_paused {
+            // SAFETY: sending SIGSTOP to a known valid PID that we own (shim process).
+            let ret = unsafe { libc::kill(pid, libc::SIGSTOP) };
+            if ret != 0 {
+                // If SIGSTOP fails, thaw before returning error
+                if frozen {
+                    self.guest_thaw().await;
+                }
+                return Err(BoxliteError::Internal(format!(
+                    "Failed to SIGSTOP shim process (pid={}): {}",
+                    pid,
+                    std::io::Error::last_os_error()
+                )));
             }
-            return Err(BoxliteError::Internal(format!(
-                "Failed to SIGSTOP shim process (pid={}): {}",
-                pid,
-                std::io::Error::last_os_error()
-            )));
-        }
-        {
-            let mut state = self.state.write();
-            state.force_status(BoxStatus::Paused);
-            let _ = self.runtime.box_manager.save_box(self.id(), &state);
+            {
+                let mut state = self.state.write();
+                state.force_status(BoxStatus::Paused);
+                let _ = self.runtime.box_manager.save_box(self.id(), &state);
+            }
         }
 
         // Phase 3: Caller's operation
@@ -1408,20 +1725,25 @@ impl BoxImpl {
         let operation_ms = t_op.elapsed().as_millis() as u64;
 
         // Phase 4: SIGCONT — resume vCPUs (always, even if f() failed)
-        // SAFETY: Always send SIGCONT — harmless ESRCH if process already dead.
-        unsafe {
-            libc::kill(pid, libc::SIGCONT);
-        }
-        // Only transition to Running if process is still alive after resume.
-        if unsafe { libc::kill(pid, 0) } == 0 {
-            let mut state = self.state.write();
-            state.force_status(BoxStatus::Running);
-            let _ = self.runtime.box_manager.save_box(self.id(), &state);
+        // If user had paused the box, leave in Paused state — user must call resume().
+        if !was_paused {
+            // Bracket-initiated pause: resume as before.
+            // SAFETY: Always send SIGCONT — harmless ESRCH if process already dead.
+            unsafe {
+                libc::kill(pid, libc::SIGCONT);
+            }
+            // Only transition to Running if process is still alive after resume.
+            if unsafe { libc::kill(pid, 0) } == 0 {
+                let mut state = self.state.write();
+                state.force_status(BoxStatus::Running);
+                let _ = self.runtime.box_manager.save_box(self.id(), &state);
+            }
         }
 
-        // Phase 5: Thaw guest I/O (always, best-effort)
+        // Phase 5: Thaw guest I/O (best-effort)
+        // Skip if user had paused — thaw will happen when user calls resume().
         let t_thaw = Instant::now();
-        if frozen {
+        if frozen && !was_paused {
             self.guest_thaw().await;
         }
         let thaw_ms = t_thaw.elapsed().as_millis() as u64;
@@ -1433,6 +1755,7 @@ impl BoxImpl {
             operation_ms,
             thaw_ms,
             frozen,
+            was_paused,
             "Quiesce bracket completed"
         );
 
@@ -1456,7 +1779,7 @@ impl BoxImpl {
         match result {
             Ok(Ok(count)) => {
                 tracing::debug!(frozen_count = count, "Guest filesystems quiesced");
-                true
+                count > 0
             }
             Ok(Err(e)) => {
                 tracing::warn!(
@@ -1540,6 +1863,14 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
     async fn stop(&self) -> BoxliteResult<()> {
         self.stop().await
+    }
+
+    async fn pause(&self) -> BoxliteResult<()> {
+        self.pause().await
+    }
+
+    async fn resume(&self) -> BoxliteResult<()> {
+        self.resume().await
     }
 
     async fn copy_into(

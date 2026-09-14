@@ -303,6 +303,22 @@ impl BoxBackend for RestBox {
         Ok(())
     }
 
+    async fn pause(&self) -> BoxliteResult<()> {
+        let box_id = self.box_id_str();
+        let path = format!("/boxes/{}/pause", box_id);
+        let resp: BoxResponse = self.client.post_empty(&path).await?;
+        self.validate_info(resp.to_box_info()?)?;
+        Ok(())
+    }
+
+    async fn resume(&self) -> BoxliteResult<()> {
+        let box_id = self.box_id_str();
+        let path = format!("/boxes/{}/resume", box_id);
+        let resp: BoxResponse = self.client.post_empty(&path).await?;
+        self.validate_info(resp.to_box_info()?)?;
+        Ok(())
+    }
+
     async fn copy_into(
         &self,
         host_src: &Path,

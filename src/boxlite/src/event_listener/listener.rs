@@ -44,6 +44,12 @@ pub trait EventListener: Send + Sync {
     /// Called after a box VM stops.
     fn on_box_stopped(&self, _box_id: &BoxID, _exit_code: Option<i32>) {}
 
+    /// Called after a box VM is paused (SIGSTOP).
+    fn on_box_paused(&self, _box_id: &BoxID) {}
+
+    /// Called after a box VM is resumed from pause (SIGCONT).
+    fn on_box_resumed(&self, _box_id: &BoxID) {}
+
     /// Called after a box is removed.
     fn on_box_removed(&self, _box_id: &BoxID) {}
 
