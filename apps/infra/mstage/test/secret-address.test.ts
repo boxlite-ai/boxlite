@@ -6,6 +6,7 @@ import { SECRET_GROUP, assertSecretAddresses, secretAddressesOf } from '../src/e
 const PARAMETER = 'arn:aws:ssm:ap-southeast-1:123456789012:parameter/boxlite-backoffice/dev/oidc-client-secret'
 const SECRETS_MANAGER = 'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:boxlite-backoffice/dev/key-AbCdEf'
 const SECRET_MANAGER = 'projects/boxlite-dev/secrets/oidc-client-secret'
+const SECRET_MANAGER_VERSION = `${SECRET_MANAGER}/versions/7`
 
 const held = (address: string) => JSON.stringify({ address })
 
@@ -47,11 +48,10 @@ test('a bare parameter name is not an address; an ARN is what names the region a
   )
 })
 
-test('a version on the end is refused, because Cloud Run takes the version itself', () => {
-  assert.throws(
-    () => secretAddressesOf({ values: { KEY: held(`${SECRET_MANAGER}/versions/3`) }, home: 'gcp' }),
-    /with no version on the end/,
-  )
+test('a Secret Manager address may pin the payload version', () => {
+  assert.deepEqual(secretAddressesOf({ values: { KEY: held(SECRET_MANAGER_VERSION) }, home: 'gcp' }), {
+    KEY: SECRET_MANAGER_VERSION,
+  })
 })
 
 test('a document that is not one address, spelled exactly, says what is wrong with it', () => {

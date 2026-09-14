@@ -116,10 +116,16 @@ test('a bundle handed the other cloud’s network says which module was, by name
     ready: [],
   } as any
   assert.throws(() => gcp().database({ network: awsNetwork }), /The GCP stack was handed aws network/)
-  // The GCP proxy is a machine rather than a Cloud Run service, so its bundle
-  // ignores the host and narrows the placement instead — which is where the
-  // wrong cloud surfaces.
-  const gcpHost = { cloud: 'gcp' as const, region: 'asia-southeast1' }
+  const gcpHost = {
+    cloud: 'gcp' as const,
+    runtime: 'gke' as const,
+    region: 'asia-southeast1',
+    zone: 'asia-southeast1-a',
+    zones: { apply: () => ({}) } as never,
+    provider: {},
+    nodeServiceAccount: {} as any,
+    ready: [],
+  }
   assert.throws(
     () => gcp().edge({ host: gcpHost, network: awsNetwork, dependsOn: [] }),
     /The GCP stack was handed aws placement/,
@@ -127,7 +133,7 @@ test('a bundle handed the other cloud’s network says which module was, by name
 })
 
 test('a bundle handed the other cloud’s host says so too', () => {
-  const gcpHost = { cloud: 'gcp' as const, region: 'asia-southeast1' } as const
+  const gcpHost = { cloud: 'gcp' as const, runtime: 'cloud-run' as const, region: 'asia-southeast1' } as const
   assert.throws(
     () => aws().collector({ host: gcpHost as any, network: {} as any, clickhouse: {} as any, dependsOn: [] }),
     /The AWS stack was handed gcp host/,

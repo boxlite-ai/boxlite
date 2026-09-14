@@ -90,9 +90,11 @@ const BOOTSTRAP_SECRET = 'mstage-bootstrap'
 const SERVICES = [
   // Network, Subnetwork, Router, RouterNat, Firewall, Address, GlobalAddress,
   // BackendService, RegionBackendService, the two ForwardingRules,
-  // TargetHttpsProxy, URLMap, ManagedSslCertificate, the runner InstanceTemplate
-  // and RegionInstanceGroupManager, and their Disks.
+  // TargetHttpsProxy, URLMap, ManagedSslCertificate, the runner/ClickHouse
+  // instances and their disks.
   'compute.googleapis.com',
+  // The GKE control plane and node pool that run the proxy.
+  'container.googleapis.com',
   // cloudrunv2.Service for the api and the otel-collector.
   'run.googleapis.com',
   // redis.Instance: the cache.
@@ -166,6 +168,9 @@ const DEPLOYER_ROLES = [
   // Every compute.* resource: the network, the NAT, the firewall rules, the
   // load balancer in front of the proxy, and the runners.
   'roles/compute.admin',
+  // The proxy's GKE cluster and node pool, plus Kubernetes API access as the
+  // cluster creator for the Deployment, Service and SecretProviderClass.
+  'roles/container.admin',
   // The api and the otel-collector.
   'roles/run.admin',
   // The cache.

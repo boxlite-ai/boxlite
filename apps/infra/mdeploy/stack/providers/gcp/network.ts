@@ -40,6 +40,19 @@ const INTERNAL_PORTS = [API_PORT, PROXY_PORT, RUNNER_PORT, OTLP_HTTP_PORT].map(S
 export const SUBNET_CIDR = '10.20.0.0/20'
 
 /**
+ * Alias ranges used by the GKE proxy Pods and Kubernetes Services.
+ *
+ * Both stay inside the `/16` already made unavailable to Private Service
+ * Access by `SUBNET_CIDR`, while not overlapping either primary subnet below.
+ * Naming the ranges on the subnet lets the cluster adopt them instead of
+ * asking GKE to create an implicit range that no firewall rule could name.
+ */
+export const GKE_POD_CIDR = '10.20.32.0/19'
+export const GKE_SERVICE_CIDR = '10.20.64.0/22'
+export const GKE_POD_RANGE = 'gke-proxy-pods'
+export const GKE_SERVICE_RANGE = 'gke-proxy-services'
+
+/**
  * The subnet the region's Envoy load balancers put their own proxies in.
  *
  * It holds no workload and is not a placement: `REGIONAL_MANAGED_PROXY` is
@@ -100,6 +113,10 @@ export const gcpNetworkProvider =
       region,
       network: network.id,
       ipCidrRange: SUBNET_CIDR,
+      secondaryIpRanges: [
+        { rangeName: GKE_POD_RANGE, ipCidrRange: GKE_POD_CIDR },
+        { rangeName: GKE_SERVICE_RANGE, ipCidrRange: GKE_SERVICE_CIDR },
+      ],
       // Cloud Run reaches this subnet through a connector or direct VPC egress;
       // both require Google's own access to the range.
       privateIpGoogleAccess: true,
@@ -197,7 +214,8 @@ export const gcpNetworkProvider =
       targetServiceAccounts: serviceIdentities,
     })
 
-    // The runner answers the API and the proxy, and nothing else reaches it.
+    // The runner answers the API here. GKE Pod addresses are admitted by the
+    // proxy edge beside the cluster that owns their secondary range.
     const runnerIngress = new gcp.compute.Firewall('RunnerFirewall', {
       name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'runner' }),
       project,
@@ -205,7 +223,7 @@ export const gcpNetworkProvider =
       direction: 'INGRESS',
       priority: 1000,
       allows: [{ protocol: 'tcp', ports: [String(RUNNER_PORT)] }],
-      sourceServiceAccounts: [accounts.api.email, accounts.proxy.email],
+      sourceServiceAccounts: [accounts.api.email],
       targetServiceAccounts: [accounts.runner.email],
     })
 

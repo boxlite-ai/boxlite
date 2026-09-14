@@ -6,8 +6,10 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -23,7 +25,8 @@ import (
 type Config struct {
 	ProxyPort             int                `envconfig:"PROXY_PORT" validate:"required"`
 	ProxyProtocol         string             `envconfig:"PROXY_PROTOCOL" validate:"required"`
-	ProxyApiKey           string             `envconfig:"PROXY_API_KEY" validate:"required"`
+	ProxyApiKey           string             `envconfig:"PROXY_API_KEY"`
+	ProxyApiKeyFile       string             `envconfig:"PROXY_API_KEY_FILE"`
 	CookieDomain          *string            `envconfig:"COOKIE_DOMAIN"`
 	TLSCertFile           string             `envconfig:"TLS_CERT_FILE"`
 	TLSKeyFile            string             `envconfig:"TLS_KEY_FILE"`
@@ -37,7 +40,6 @@ type Config struct {
 	OtelTracingEnabled    bool               `envconfig:"OTEL_TRACING_ENABLED"`
 	OtelEndpoint          string             `envconfig:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 	OtelHeaders           string             `envconfig:"OTEL_EXPORTER_OTLP_HEADERS"`
-	OtelGoogleIDToken     bool               `envconfig:"OTEL_EXPORTER_OTLP_GOOGLE_ID_TOKEN" default:"false"`
 	Environment           string             `envconfig:"ENVIRONMENT"`
 	ApiClient             *apiclient.APIClient
 }
@@ -69,6 +71,11 @@ func GetConfig() (*Config, error) {
 	}
 
 	err = envconfig.Process("", config)
+	if err != nil {
+		return nil, err
+	}
+
+	config.ProxyApiKey, err = loadProxyAPIKey(config.ProxyApiKey, config.ProxyApiKeyFile)
 	if err != nil {
 		return nil, err
 	}
@@ -147,6 +154,33 @@ func GetConfig() (*Config, error) {
 	}
 
 	return config, nil
+}
+
+// loadProxyAPIKey keeps the two supported delivery channels mutually
+// exclusive. GKE mounts Secret Manager into a file; local and AWS deployments
+// continue to supply the same value directly. A terminal line ending is
+// ignored because secrets are commonly created from a line-oriented CLI, while
+// all other bytes (including spaces) remain part of the key.
+func loadProxyAPIKey(value, path string) (string, error) {
+	if value != "" && path != "" {
+		return "", fmt.Errorf("PROXY_API_KEY and PROXY_API_KEY_FILE are mutually exclusive")
+	}
+	if value != "" {
+		return value, nil
+	}
+	if path == "" {
+		return "", fmt.Errorf("one of PROXY_API_KEY or PROXY_API_KEY_FILE is required")
+	}
+
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read PROXY_API_KEY_FILE %q: %w", path, err)
+	}
+	key := strings.TrimRight(string(payload), "\r\n")
+	if key == "" {
+		return "", fmt.Errorf("PROXY_API_KEY_FILE %q is empty", path)
+	}
+	return key, nil
 }
 
 func (c *Config) GetOtelHeaders() map[string]string {

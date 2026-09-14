@@ -40,9 +40,9 @@ type AddressForm = { pattern: RegExp; describe: string }
  * What each cloud's reference channel can resolve.
  *
  * A full ARN, not a bare parameter name: ECS accepts a bare name only within
- * the task's own region and account, and an ARN shows both. The Secret Manager
- * form is the resource name without a version — Cloud Run takes the version as
- * its own field, so an address carrying one declares it twice.
+ * the task's own region and account, and an ARN shows both. A Secret Manager
+ * address may pin `/versions/<version>`; each runtime adapter splits or embeds
+ * that resource name in the shape its own API expects.
  */
 const ADDRESS_FORMS: Record<Cloud, AddressForm> = {
   aws: {
@@ -52,8 +52,9 @@ const ADDRESS_FORMS: Record<Cloud, AddressForm> = {
       'or a Secrets Manager secret ARN',
   },
   gcp: {
-    pattern: /^projects\/[a-z0-9-]+\/secrets\/[A-Za-z0-9_-]+$/,
-    describe: 'a Secret Manager secret name (projects/<project>/secrets/<secret>), with no version on the end',
+    pattern: /^projects\/[a-z0-9-]+\/secrets\/[A-Za-z0-9_-]+(?:\/versions\/[A-Za-z0-9_-]+)?$/,
+    describe:
+      'a Secret Manager secret name (projects/<project>/secrets/<secret>), optionally pinned with /versions/<version>',
   },
 }
 

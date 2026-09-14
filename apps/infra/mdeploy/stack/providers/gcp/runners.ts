@@ -172,19 +172,6 @@ udevadm trigger --name-match=kvm || true`,
       startWrapper: null,
       unitEnvironment: {
         CLOUDSDK_CORE_PROJECT: project,
-        /*
-         * The collector is a Cloud Run service with an invoker list, and that
-         * is enforced per request against a Google ID token — so a host on the
-         * list that sends none is answered 403 by Google's front end and
-         * exports nothing. This tells the runner to mint one from the metadata
-         * server; `apps/libs/common-go/pkg/telemetry/gcp_idtoken.go` says why a
-         * static `OTEL_EXPORTER_OTLP_HEADERS` cannot carry it.
-         *
-         * Only on this cloud: the AWS collector is behind an internal load
-         * balancer that authorises no caller, and a host there has no metadata
-         * server to ask.
-         */
-        OTEL_EXPORTER_OTLP_GOOGLE_ID_TOKEN: 'true',
       },
     }
 

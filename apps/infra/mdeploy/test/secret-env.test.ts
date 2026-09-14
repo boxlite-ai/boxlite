@@ -12,7 +12,12 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { containerEnvironment, splitSecretRef } from '../stack/providers/gcp/secret-env.ts'
+import {
+  containerEnvironment,
+  secretCoordinatesOf,
+  splitSecretRef,
+  versionedSecretRef,
+} from '../stack/providers/gcp/secret-env.ts'
 
 const REFERENCE = 'projects/boxlite-gcp-dev/secrets/boxlite-dev-db-password/versions/4'
 
@@ -31,18 +36,14 @@ test('a version reference is split into the two halves Cloud Run wants', () => {
   assert.deepEqual(splitSecretRef('projects/p/secrets/s/versions/latest'), { secret: 's', version: 'latest' })
 })
 
-test('a stored address carries no version, and resolves the latest one', () => {
-  // The reproducer. mstage's own validator *refuses* a version on a stored
-  // address, so every secret the `secret` marker group delivers arrives in this
-  // shape — and a parser that demanded one threw on all of them, on the one
-  // channel whose whole point is that the value never travels.
+test('an unversioned stored address resolves latest', () => {
   assert.deepEqual(splitSecretRef('projects/boxlite-gcp-dev/secrets/boxlite-dev-oidc-client-secret'), {
     secret: 'boxlite-dev-oidc-client-secret',
     version: 'latest',
   })
 })
 
-test('the shape mstage accepts for a stored address is a shape this parses', () => {
+test('every GCP shape mstage accepts is a shape this parses', () => {
   // One convention rather than two. Both land in the same Cloud Run field, so a
   // form mstage would write and this would reject is a deploy that fails on a
   // string neither side thinks is wrong. Read from mstage's own validator rather
@@ -53,10 +54,19 @@ test('the shape mstage accepts for a stored address is a shape this parses', () 
 
   const pattern = new RegExp(declared[1]!.slice(1, -1))
   const address = 'projects/boxlite-gcp-dev/secrets/boxlite-dev-oidc-client-secret'
-  assert.match(address, pattern, 'the fixture below has to be an address mstage would accept')
-  assert.doesNotThrow(() => splitSecretRef(address))
-  // And the reverse: mstage refuses a version, so this must not require one.
-  assert.doesNotMatch(`${address}/versions/4`, pattern)
+  for (const reference of [address, `${address}/versions/4`]) {
+    assert.match(reference, pattern, 'the fixture below has to be an address mstage would accept')
+    assert.doesNotThrow(() => splitSecretRef(reference))
+  }
+})
+
+test('GKE gets a full payload resource while IAM gets its owning secret', () => {
+  assert.equal(versionedSecretRef('projects/p/secrets/s'), 'projects/p/secrets/s/versions/latest')
+  assert.equal(versionedSecretRef('projects/p/secrets/s/versions/7'), 'projects/p/secrets/s/versions/7')
+  assert.deepEqual(secretCoordinatesOf('projects/other-project/secrets/s/versions/7'), {
+    project: 'other-project',
+    secret: 's',
+  })
 })
 
 test('a string that is not a reference is refused, because it is a plaintext secret', () => {

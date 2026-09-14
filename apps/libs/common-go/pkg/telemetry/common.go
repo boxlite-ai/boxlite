@@ -30,7 +30,6 @@ type Config struct {
 		address. Empty on AWS, where the endpoint is an internal load balancer
 		and there is no per-request identity to prove. See `gcp_idtoken.go`.
 	*/
-	GoogleIDTokenAudience string
 }
 
 func (c Config) Attributes() []attribute.KeyValue {
