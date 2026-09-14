@@ -20,6 +20,7 @@ import {
   ON_HOST,
   encodeUpgradePayload,
   renderUpgradePayload,
+  renderPolicyScripts,
   upgradeResourceName,
   upgradeTrigger,
   type UpgradeTarget,
@@ -405,21 +406,55 @@ test('a cloud with no channel here is named rather than guessed at', () => {
  * Both files are read together so one cloud cannot quietly become the exception.
  */
 test('each host waits on the host before it, so a fleet is never restarted at once', () => {
-  for (const cloud of ['aws', 'gcp'] as const) {
-    const source = readFileSync(fileURLToPath(new URL(`../stack/providers/${cloud}/runners.ts`, import.meta.url)), 'utf8')
-    const upgrades = source.slice(source.indexOf('let previousUpgrade'))
-    assert.notEqual(upgrades, '', `${cloud} does not chain its upgrades at all`)
-    assert.match(
-      upgrades,
-      /previousUpgrade = new command\.local\.Command\(\s*upgradeResourceName\(/,
-      `${cloud} does not carry each upgrade forward as the next one's predecessor`,
-    )
-    assert.match(
-      upgrades,
-      /dependsOn: \[[^\]]*\.\.\.\(previousUpgrade \? \[previousUpgrade\] : \[\]\)\]/,
-      `${cloud} does not make each upgrade wait on the previous host`,
-    )
-    // Its own instance too: a host that does not exist has nothing to upgrade.
-    assert.match(upgrades, /dependsOn: \[instance,/, `${cloud} does not make an upgrade wait on its own host`)
-  }
+  /*
+   * One guarantee, stated to two executors. AWS chains a command per host and
+   * the dependency graph sequences them; GCP hands the fleet to the OS Config
+   * agents, where the same "one at a time" is a rollout budget — there is no
+   * chain to write, and asserting one would demand the shape it replaced.
+   */
+  const aws = readFileSync(fileURLToPath(new URL('../stack/providers/aws/runners.ts', import.meta.url)), 'utf8')
+  const upgrades = aws.slice(aws.indexOf('let previousUpgrade'))
+  assert.notEqual(upgrades, '', 'aws does not chain its upgrades at all')
+  assert.match(
+    upgrades,
+    /previousUpgrade = new command\.local\.Command\(\s*upgradeResourceName\(/,
+    "aws does not carry each upgrade forward as the next one's predecessor",
+  )
+  assert.match(
+    upgrades,
+    /dependsOn: \[[^\]]*\.\.\.\(previousUpgrade \? \[previousUpgrade\] : \[\]\)\]/,
+    'aws does not make each upgrade wait on the previous host',
+  )
+  // Its own instance too: a host that does not exist has nothing to upgrade.
+  assert.match(upgrades, /dependsOn: \[instance,/, 'aws does not make an upgrade wait on its own host')
+
+  const gcp = readFileSync(fileURLToPath(new URL('../stack/providers/gcp/runners.ts', import.meta.url)), 'utf8')
+  assert.match(gcp, /disruptionBudget: \{ fixed: 1 \}/, 'gcp lets the agents take the whole fleet down together')
+  assert.match(gcp, /minWaitDuration: '\d+s'/, 'gcp counts a host out of the budget the moment it reports')
+  assert.equal(/previousUpgrade/.test(gcp), false, 'gcp still chains commands it no longer creates')
+})
+
+test('the policy scripts answer in the exit codes the agent grades them by', () => {
+  /*
+   * The whole contract of an `exec` resource: 100 from `validate` means "in the
+   * desired state" and `enforce` never runs; 101 is the only answer that makes
+   * it run. A script that fell off its end with 0 — which is success to a shell
+   * — is an *error* to the agent, and the host would be reported non-compliant
+   * forever without anything being attempted.
+   */
+  const { validate, enforce } = renderPolicyScripts(target())
+
+  // Both guards report "nothing to do", and the mismatch path is the only 101.
+  assert.equal(validate.match(/^\s*exit 100$/gm)?.length, 2, 'validate must answer 100 on both guards')
+  assert.match(validate, /echo "not serving [$]TARGET"\nexit 101\n$/, 'validate must end by asking for enforcement')
+
+  // The work, graded the other way round.
+  assert.match(enforce, /then exit 100; fi/, 'enforce must turn a clean run into 100')
+  assert.match(enforce, /exit 101\n$/, 'and anything else into 101')
+  assert.match(enforce, /bash <<'BOXLITE_RUNNER_UPGRADE'/, 'enforce must run the payload as it is, not a second copy of it')
+  assert.equal(enforce.match(/^exit 101$/gm)?.length, 1, 'exactly one line turns a non-zero status into a policy failure')
+  // The payload keeps its own guards, and that is the point: the agent may
+  // reach enforce long after validate, and a host that converged in between
+  // must still be left alone.
+  assert.match(enforce, /already serving [$]TARGET; leaving the unit untouched/)
 })

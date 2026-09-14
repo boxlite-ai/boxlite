@@ -41,13 +41,8 @@ import {
   registrationDir,
   registrationPayload,
 } from '../../runner-registration.ts'
-import {
-  UPGRADE_RUNNER_COMMAND,
-  encodeUpgradePayload,
-  upgradeDir,
-  upgradeResourceName,
-  upgradeTrigger,
-} from '../../runner-upgrade.ts'
+import { renderPolicyScripts } from '../../runner-upgrade.ts'
+import { instanceFor } from 'naming'
 import { splitSecretRef } from './secret-env.ts'
 
 /**
@@ -74,6 +69,17 @@ export const MACHINE = { small: 'n4-standard-4', medium: 'n4-standard-8', large:
 export const BOOT_DISK_TYPE = 'hyperdisk-balanced'
 
 const IMAGE = 'ubuntu-os-cloud/ubuntu-2404-lts-amd64'
+
+/**
+ * The label that says which host is which, and the one rule that spells it.
+ *
+ * Two readers: the instance carries it, and the OS policy selects on it. A
+ * second spelling would be an assignment that matches nothing, which is a
+ * fleet that silently never upgrades.
+ */
+const RUNNER_LABEL = 'boxlite-runner'
+const runnerLabelValue = (controlPlaneRunnerName: string): string =>
+  controlPlaneRunnerName.toLowerCase().replace(/[^a-z0-9_-]/g, '-')
 
 /**
  * The wrapper that fetches every secret this host reads, on every start.
@@ -296,7 +302,7 @@ udevadm trigger --name-match=kvm || true`,
           metadataStartupScript: userData.apply((encoded: string) =>
             Buffer.from(encoded, 'base64').toString('utf8'),
           ),
-          labels: { 'boxlite-runner': slot.controlPlaneRunnerName.toLowerCase().replace(/[^a-z0-9_-]/g, '-') },
+          labels: { [RUNNER_LABEL]: runnerLabelValue(slot.controlPlaneRunnerName) },
           // A host holds boxes. A teardown that took one with it would take
           // every box running on it.
           deletionProtection: true,
@@ -320,59 +326,74 @@ udevadm trigger --name-match=kvm || true`,
      *
      * `metadataStartupScript` is ignored after the first boot and the instance
      * is protected, so a deploy that changes the binary changes nothing on a
-     * host that already exists — "at boot" means "never" here. These land it in
-     * place over a tunnelled ssh; `src/upgrade-runners.ts` records why that is
-     * the channel on this cloud, and why the answer differs from the one
-     * `providers/gcp/clickhouse.ts` reached for its own reconcile.
+     * host that already exists — "at boot" means "never" here.
      *
-     * One command per host, chained, exactly as on AWS: the dependency graph
-     * keeps two hosts from restarting at once, and a failure stops the chain.
+     * Declared as a desired state rather than pushed as a command: the OS
+     * Config agent on each host evaluates `validate` and runs `enforce` only
+     * when it answers 101. What that buys is the permission: an assignment is
+     * project IAM (`osconfig.osPolicyAssignmentAdmin`), where the tunnelled ssh
+     * it replaces needed OS Login — a POSIX identity granted per person, which
+     * an account outside the instance's organization cannot be given at all.
+     *
+     * `disruptionBudget` takes over from the chained commands: one host at a
+     * time, and `minWaitDuration` keeps a host counted against the budget while
+     * its boxes are still reconnecting.
+     *
+     * The cost is written down rather than smoothed over: an apply no longer
+     * waits for the fleet. The assignment exists when Pulumi returns and the
+     * agents converge within their own cycle, so "deployed" and "serving the
+     * new binary" are two moments now. The report API is what closes that gap —
+     * see `DEPLOY.md`.
      */
-    let previousUpgrade: any
-    for (const [index, instance] of instances.entries()) {
-      const { slot } = assignments[index]
-      // No region: a GCP stage installs a published release. A build-mode binary
-      // is staged in S3, which this cloud has no bucket for — `runner-binary.ts`
-      // refuses that combination before any of this runs.
-      const payload = encodeUpgradePayload({
-        identity: request.binary.identity,
-        binary: request.binary,
-        port: RUNNER_PORT,
-      })
-      previousUpgrade = new command.local.Command(
-        upgradeResourceName(slot),
-        {
-          // See `runner-registration.ts`: a local command runs from the
-          // engine's own cwd, and `$cli` is a name only SST defines.
-          dir: upgradeDir(),
-          create: UPGRADE_RUNNER_COMMAND,
-          update: UPGRADE_RUNNER_COMMAND,
-          environment: {
-            RUNNER_UPGRADE_CLOUD: 'gcp',
-            // The instance's name, which is what `gcloud compute ssh` takes.
-            RUNNER_UPGRADE_TARGET: slot.nameTag,
-            RUNNER_UPGRADE_LABEL: slot.controlPlaneRunnerName,
-            RUNNER_UPGRADE_IDENTITY: request.binary.identity,
-            RUNNER_UPGRADE_PAYLOAD: payload,
-            GCP_PROJECT: project,
-            GCP_ZONE: zone,
-          },
-          // The identity and the address it came from. See the AWS side's note:
-          // no digest, because the stack never reads one — and re-running on
-          // every deploy would restart a converged fleet for nothing.
-          triggers: [upgradeTrigger({ identity: request.binary.identity, binary: request.binary }), instance.id],
+    const scripts = renderPolicyScripts({
+      identity: request.binary.identity,
+      binary: request.binary,
+      port: RUNNER_PORT,
+    })
+    new gcp.osconfig.OsPolicyAssignment(
+      'RunnerBinary',
+      {
+        name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'runner-binary' }),
+        project,
+        // Zonal, like the hosts it selects.
+        location: zone,
+        description: `BoxLite runner binary ${request.binary.identity}`,
+        instanceFilter: {
+          /*
+           * One label set per host, which the API ORs together.
+           *
+           * There is no wildcard on a label value, and a fleet-wide label would
+           * be a change to instances this module deliberately never updates. The
+           * per-host label is already there — `RUNNER_LABEL` above is the one
+           * spelling both sides use.
+           */
+          inclusionLabels: assignments.map(({ slot }) => ({
+            labels: { [RUNNER_LABEL]: runnerLabelValue(slot.controlPlaneRunnerName) },
+          })),
         },
-        /*
-         * The host, and whatever the caller said has to exist first.
-         *
-         * `dependsOn` carries the network's own rules, `RunnerIapFirewall`
-         * among them — see `stack/index.ts`. Without that rule the tunnel
-         * cannot open at all, and gcloud would spend the whole connect window
-         * failing against a host that is perfectly healthy.
-         */
-        { dependsOn: [instance, ...dependsOn, ...(previousUpgrade ? [previousUpgrade] : [])] },
-      )
-    }
+        osPolicies: [
+          {
+            id: 'runner-binary',
+            mode: 'ENFORCEMENT',
+            resourceGroups: [
+              {
+                resources: [
+                  {
+                    id: 'swap-binary',
+                    exec: {
+                      validate: { interpreter: 'SHELL', script: scripts.validate },
+                      enforce: { interpreter: 'SHELL', script: scripts.enforce },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        rollout: { disruptionBudget: { fixed: 1 }, minWaitDuration: '300s' },
+      },
+      { dependsOn: [...instances, ...dependsOn] },
+    )
 
     /*
      * The rows the API will not seed.

@@ -110,6 +110,10 @@ const SERVICES = [
   'storage.googleapis.com',
   // The repository a stage's images are published into.
   'artifactregistry.googleapis.com',
+  // The OS policy that lands a new runner binary on a host that already exists.
+  // A deploy declares the desired state and each host's own agent converges to
+  // it, which is what replaces the tunnelled ssh that needed OS Login.
+  'osconfig.googleapis.com',
   // certificatemanager.DnsAuthorization, Certificate, CertificateMap and
   // CertificateMapEntry: the box proxy's wildcard certificate, which only
   // Certificate Manager can issue as a Google-managed one.
@@ -183,6 +187,8 @@ const DEPLOYER_ROLES = [
   // gcp.projects.IAMMember: the stack grants project-level roles to those
   // service accounts.
   'roles/resourcemanager.projectIamAdmin',
+  // The OS policy assignment that upgrades the runner fleet in place.
+  'roles/osconfig.osPolicyAssignmentAdmin',
   // The log-based metrics the alert policies are built on, and the policies.
   'roles/logging.configWriter',
   'roles/monitoring.editor',
@@ -810,6 +816,36 @@ const ensureArtifactsBucket = async ({
   log('    created')
 }
 
+/**
+ * What turns the OS Config agent on, for every instance in the project.
+ *
+ * Project-wide rather than per instance, and that is the point: the runner
+ * hosts are `protect: true` with their boot script in `ignoreChanges`, so a
+ * deploy can change nothing about a host that already exists — but common
+ * project metadata reaches the agent on machines that are already running, with
+ * no restart and nothing entering them.
+ *
+ * Merged, never replaced: `add-metadata` leaves every other key alone, where
+ * `gcloud compute project-info add-metadata --metadata-from-file` semantics for
+ * a whole map would drop the SSH keys and anything else the project carries.
+ */
+const ensureOsConfigAgent = async ({
+  gcloud,
+  log,
+}: {
+  gcloud: Gcloud
+  log: (line: string) => void
+}): Promise<void> => {
+  log('==> enable-osconfig')
+  await gcloud.apply('Could not turn the OS Config agent on for the project', [
+    'compute',
+    'project-info',
+    'add-metadata',
+    '--metadata=enable-osconfig=TRUE',
+  ])
+  log('    on, project-wide')
+}
+
 export type GcpBootstrapInput = {
   run: Run
   /** The project this stage lives in, from `mstage.config.json`. */
@@ -937,6 +973,7 @@ export const bootstrapGcp = async ({
   log(`    refs/heads/main and environment ${stage} may act as it`)
 
   await ensureRepository({ gcloud, repository, region, immutableTags, log })
+  await ensureOsConfigAgent({ gcloud, log })
   await ensureArtifactsBucket({
     gcloud,
     bucket: gcpRunnerArtifactsBucket({ app, stage, project }),
