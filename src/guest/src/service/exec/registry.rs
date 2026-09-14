@@ -541,7 +541,17 @@ impl ExecutionRegistry {
         tokio::spawn(async move {
             registry.ensure_lifecycle_manager().await;
             let exit = state.wait_exit(&execution_id).await;
-            state.cancel_timeout_task().await;
+            // A leader that forks and returns -- `sh -c "cmd &"` -- exits long
+            // before its children, so its exit alone does not end the job and
+            // cancelling here would hand the survivors an unbounded lifetime.
+            // While the group lives the watcher keeps its own clock and retires
+            // itself once the group empties, which is the only condition that
+            // both ends the job and invalidates the captured pgid. Output EOF
+            // proves neither: a child that redirects its stdio releases these
+            // pipes at once and keeps running.
+            if !state.job_group_alive() {
+                state.cancel_timeout_task().await;
+            }
             let output = state.wait_terminal_output_summary().await;
             let snapshot = TerminalSnapshot { exit, output };
             let retained_bytes = state.retained_output_bytes().await;
@@ -678,6 +688,7 @@ mod release_tests {
     use crate::reaper::ExitSlot;
     use crate::service::exec::exec_handle::{ExecHandle, ExitStatus};
     use crate::service::exec::output::{OutputStreamSummary, OutputTerminalSummary};
+    use crate::service::exec::process_instance::ProcessInstance;
     use crate::service::exec::state::{ExecutionExit, TerminalSnapshot};
     use nix::unistd::{pipe, Pid};
     use std::os::unix::process::ExitStatusExt;
@@ -877,6 +888,89 @@ mod release_tests {
             Some(ExecutionLookup::Live(_))
         ));
         drop(stdout_peer);
+    }
+
+    /// A forking exec keeps its deadline while its group lives — through the
+    /// leader's exit and through output EOF alike.
+    ///
+    /// EOF is not the job's end: `sh -c "cmd >/dev/null 2>&1 &"` releases these
+    /// pipes the instant the leader returns while the child runs on. Retiring
+    /// the deadline on either signal would hand that child an unbounded life.
+    #[tokio::test]
+    async fn terminal_observer_keeps_the_deadline_while_the_group_lives() {
+        use std::os::unix::process::CommandExt;
+
+        let _test_guard = crate::reaper::reap_test_guard().await;
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "sleep 30 & exit 0"]);
+        // SAFETY: `setpgid` is async-signal-safe and this closure allocates and
+        // locks nothing between fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                if nix::libc::setpgid(0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().expect("spawn group leader");
+        let leader = Pid::from_raw(child.id() as i32);
+        let process = ProcessInstance::capture(leader).expect("capture while live");
+
+        // Reap the leader: it forked and returned, the group lives on.
+        tokio::task::spawn_blocking(move || {
+            let _fence = crate::reaper::reap_fence();
+            child.wait().expect("wait for leader")
+        })
+        .await
+        .expect("wait task must not panic");
+
+        let registry = ExecutionRegistry::new();
+        let (_stdin_peer, stdin) = pipe().unwrap();
+        let (stdout, stdout_peer) = pipe().unwrap();
+        let (stderr, stderr_peer) = pipe().unwrap();
+        let state = ExecutionState::new(
+            ExecHandle::new(leader, stdin, stdout, Some(stderr))
+                .expect("test pipe must register with Tokio"),
+            ExitSlot::settled_for_test(ExitStatus::Code(0)),
+            Some(process),
+        );
+        assert!(
+            state.job_group_alive(),
+            "the forked child must outlive its leader for this test to mean anything"
+        );
+
+        let timeout_task = tokio::spawn(std::future::pending());
+        let timeout_abort = timeout_task.abort_handle();
+        state.set_timeout_task(timeout_task).await;
+
+        registry.register("forking-exec".into(), state).await;
+        registry.observe_terminal(
+            "forking-exec".into(),
+            registry.get("forking-exec").await.unwrap(),
+        );
+
+        // The leader is already gone; the deadline must survive it.
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !timeout_abort.is_finished(),
+            "deadline was retired at leader exit while the group was still live"
+        );
+
+        // Output EOF must not retire it either: the group is still live.
+        drop((stdout_peer, stderr_peer));
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !timeout_abort.is_finished(),
+            "deadline was retired at output EOF while the group was still live"
+        );
+
+        let _ = nix::sys::signal::kill(Pid::from_raw(-leader.as_raw()), Signal::SIGKILL);
+        timeout_abort.abort();
     }
 
     #[tokio::test]
