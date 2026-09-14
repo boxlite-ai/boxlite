@@ -322,6 +322,11 @@ test('the upgrade policy selects hosts by the label those hosts actually carry',
    * the project-wide value reports no inventory and the policy reaches nobody.
    */
   assert.match(source, /'enable-osconfig': 'TRUE'/)
+
+  // And the scripts run as files, not through /bin/sh: see the shebang test in
+  // `runner-upgrade.test.ts` for what dash does to the payload's first line.
+  assert.equal(/interpreter: 'SHELL'/.test(source), false, 'SHELL is dash here, and the payload is bash')
+  assert.equal(source.match(/interpreter: 'NONE'/g)?.length, 2, 'both scripts have to be run directly')
 })
 
 // ── the database's machine ──────────────────────────────────────────────────

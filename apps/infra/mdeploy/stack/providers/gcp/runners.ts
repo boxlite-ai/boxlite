@@ -397,8 +397,8 @@ udevadm trigger --name-match=kvm || true`,
                   {
                     id: 'swap-binary',
                     exec: {
-                      validate: { interpreter: 'SHELL', script: scripts.validate },
-                      enforce: { interpreter: 'SHELL', script: scripts.enforce },
+                      validate: { interpreter: 'NONE', script: scripts.validate },
+                      enforce: { interpreter: 'NONE', script: scripts.enforce },
                     },
                   },
                 ],
