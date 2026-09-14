@@ -639,6 +639,24 @@ test('the Kubernetes identity maps to the existing proxy GSA and gets only secre
   assert.match(source, /secretId: coordinates\.apply/)
 })
 
+test('the workload identity binding waits for the cluster whose pool it names', () => {
+  /*
+   * `<project>.svc.id.goog` does not exist until a cluster with Workload
+   * Identity has been created, and the member naming it is a plain string, so
+   * nothing in the argument list orders the two — the binding would otherwise
+   * be granted while the cluster is still being created, and the API refuses
+   * the whole policy with `Identity Pool does not exist`.
+   *
+   * Bounded to this resource: the dependency has to be on the binding rather
+   * than merely somewhere in the file, so the match may not cross into the
+   * next `new gcp.` construction.
+   */
+  assert.match(
+    sourceOf('edge'),
+    /'ProxyWorkloadIdentity',(?:(?!new gcp\.)[\s\S])*?\{ dependsOn: host\.ready \}/,
+  )
+})
+
 test('the standalone NEG exists before the old load balancer backend is switched', () => {
   const source = sourceOf('edge')
   assert.match(source, /'cloud\.google\.com\/neg'/)
