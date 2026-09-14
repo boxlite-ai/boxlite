@@ -53,7 +53,7 @@ pub type SharedBoxImpl = Arc<BoxImpl>;
 /// Separated from BoxImpl to allow operations like `info()` without initializing LiveState.
 pub(crate) struct LiveState {
     // VM process control
-    handler: std::sync::Mutex<Box<dyn VmmHandler>>,
+    handler: Arc<std::sync::Mutex<Box<dyn VmmHandler>>>,
     guest_session: GuestSession,
 
     /// Host-side network control backend (gvproxy ServicesMux client), owned
@@ -94,7 +94,7 @@ impl LiveState {
         #[cfg(target_os = "linux")] bind_mount: Option<BindMountHandle>,
     ) -> Self {
         Self {
-            handler: std::sync::Mutex::new(handler),
+            handler: Arc::new(std::sync::Mutex::new(handler)),
             guest_session,
             network: network.map(Arc::from),
             published_ports,
@@ -725,10 +725,25 @@ impl BoxImpl {
                 tracing::warn!(box_id = %self.config.id, "Guest shutdown timed out after 10s");
             }
 
-            // Stop handler
-            if let Ok(mut handler) = live.handler.lock() {
-                handler.stop()?;
-            }
+            // Stop handler. `ShimHandler::stop` polls graceful shutdown
+            // with `std::thread::sleep` for up to `GRACEFUL_SHUTDOWN_TIMEOUT_MS`,
+            // so it must NOT run on this Tokio worker — it would park the
+            // worker and the `tokio::time::timeout` guarding `stop()`
+            // (runtime shutdown / AutoStop sweeper) cannot preempt a
+            // synchronous sleep. Run it on a blocking thread; the await
+            // here is the cancellation point the outer timeout can actually
+            // fire on, and dropping the JoinHandle on cancel detaches —
+            // the task still runs to completion, killing the VM in the
+            // background. See docs/investigations/issue-1242-teardown-blocks-worker.md.
+            let handler = Arc::clone(&live.handler);
+            tokio::task::spawn_blocking(move || {
+                let mut handler = handler
+                    .lock()
+                    .map_err(|e| BoxliteError::Internal(format!("handler lock poisoned: {}", e)))?;
+                handler.stop()
+            })
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
         }
         // If live_state() failed (vmm_attach said Absent — shim is gone),
         // or status wasn't Running, fall through to cleanup.
@@ -2125,6 +2140,128 @@ mod tests {
         assert!(
             !is_process_alive(pid),
             "stop() must kill the recovered shim process when self.live is None"
+        );
+
+        // ChildGuard's Drop reaps the (now-dead) child.
+        drop(child);
+    }
+
+    // Reproducer for issue #1242: `ShimHandler::stop` polls graceful
+    // shutdown with `std::thread::sleep` for up to
+    // `GRACEFUL_SHUTDOWN_TIMEOUT_MS` (2 s). Before the fix this sleep ran
+    // on the calling Tokio worker, parking it for the whole window — the
+    // `tokio::time::timeout` guarding `stop()` (runtime shutdown / REST
+    // AutoStop) could not preempt it. This test proves the graceful
+    // teardown now runs on a blocking thread: a concurrent async task on
+    // the *same* (current-thread, single-worker) runtime makes progress
+    // while `stop()` is inside the graceful window.
+    //
+    // The stand-in must ignore SIGTERM — otherwise `graceful_stop`'s
+    // `waitpid(WNOHANG)` reaps the process on the first poll and the 2 s
+    // `thread::sleep` loop is never entered, so the bug would not
+    // manifest and the test would pass both with and without the fix
+    // (`sleep 300` dies on SIGTERM, so it cannot be the stand-in). `sh -c
+    // "trap '' TERM; while true; do sleep 1; done"` ignores SIGTERM and
+    // loops forever (the `while` prevents an `exec` optimization that
+    // would replace the shell and drop the trap), forcing `graceful_stop`
+    // into the full 2 s poll loop until SIGKILL lands.
+    #[tokio::test]
+    async fn stop_does_not_park_tokio_worker_during_graceful_shutdown() {
+        let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
+        // `new_for_test` skips the host KVM preflight — this test uses a
+        // stand-in process (not a real VM), so no hypervisor is needed.
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .expect("create runtime");
+
+        let child = ChildGuard(
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg("trap '' TERM; while true; do sleep 1; done")
+                .spawn()
+                .expect("spawn SIGTERM-ignoring stand-in"),
+        );
+        let pid = child.0.id();
+
+        let id = BoxIDMint::mint();
+        let box_home = runtime.layout.boxes_dir().join(id.as_str());
+        let config = BoxConfig {
+            id: id.clone(),
+            name: None,
+            created_at: Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions {
+                rootfs: RootfsSpec::Image("alpine:latest".into()),
+                detach: false,
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            engine_kind: VmmKind::Libkrun,
+            box_home: box_home.clone(),
+        };
+
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Running;
+        state.pid = Some(pid);
+        let lock_id = runtime.lock_manager.allocate().expect("allocate lock");
+        state.set_lock_id(lock_id);
+
+        std::fs::create_dir_all(&box_home).expect("create box dir");
+        let st = crate::util::process_start_time(pid).expect("OS reports start_time");
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .expect("box_layout is infallible");
+        let pid_file = layout.pid_file_path();
+        std::fs::write(&pid_file, format!("{pid}\n{st}\n")).expect("write pid file");
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("add box to manager");
+
+        let litebox = runtime
+            .get(config.id.as_str())
+            .await
+            .expect("get box")
+            .expect("box exists");
+
+        // A 50 ms beacon on the *same* current-thread runtime. With the
+        // bug, `stop()`'s sync `thread::sleep` parks the worker for ~2 s,
+        // the beacon is never polled, and `stop()` wins the select at
+        // ~2 s. With the fix, `stop()` yields at the `spawn_blocking`
+        // join, the worker polls the beacon, and the beacon wins at
+        // ~50 ms.
+        let beacon = tokio::time::sleep(Duration::from_millis(50));
+        tokio::pin!(beacon);
+        let stop_fut = litebox.stop();
+        tokio::pin!(stop_fut);
+
+        let beacon_won = tokio::select! {
+            _ = &mut beacon => true,
+            _ = &mut stop_fut => false,
+        };
+
+        assert!(
+            beacon_won,
+            "stop() parked the Tokio worker during graceful shutdown; the graceful \
+             teardown must run on a blocking thread, not the worker"
+        );
+
+        // Let the (still running) graceful teardown complete for cleanup —
+        // the SIGKILL lands at the 2 s graceful timeout.
+        stop_fut.await.expect("stop should complete after beacon");
+
+        // Give SIGKILL a moment to land and be reaped.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !is_process_alive(pid),
+            "stop() must still kill the stand-in (via SIGKILL at the graceful timeout) \
+             even though it ran on a blocking thread"
         );
 
         // ChildGuard's Drop reaps the (now-dead) child.

@@ -1822,7 +1822,19 @@ impl super::backend::RuntimeBackend for LocalRuntime {
     }
 
     async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()> {
-        self.0.remove(id_or_name, force)
+        // `RuntimeImpl::remove` is entirely synchronous (DB lookups,
+        // dependency checks, `ShimHandler::from_pid(pid).stop()` on the
+        // force path with its ≤2 s graceful-shutdown poll, DB removal).
+        // Running it on a Tokio worker parks the worker for that whole
+        // window — see issue #1242. Move the entire sync call onto a
+        // blocking thread; the `.await` here yields, the runtime stays
+        // responsive, and the inner `GRACEFUL_SHUTDOWN_TIMEOUT_MS` still
+        // bounds the kill.
+        let this = Arc::clone(&self.0);
+        let id_or_name = id_or_name.to_string();
+        tokio::task::spawn_blocking(move || this.remove(&id_or_name, force))
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))?
     }
 
     async fn shutdown(&self, timeout: Option<i32>) -> BoxliteResult<()> {
