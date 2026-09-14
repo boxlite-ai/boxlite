@@ -258,6 +258,134 @@ const upgradeOverSsm = ({
 }
 
 /**
+ * The policy channel: the fleet's declared state, rewritten and waited on.
+ *
+ * Not a per-host command. The assignment a deploy created *is* the desired
+ * state, so a hand roll edits that one rather than standing a second enforcer
+ * beside it — two assignments over one fleet would each see the other's work as
+ * drift and take turns undoing it.
+ *
+ * What this costs is written down where the CLI prints it: the roll lasts until
+ * the next deploy, which re-asserts the identity the checkout declares. On the
+ * ssh channel a hand-install survived, because the payload refused to replace
+ * something newer; a declarative channel has no such asymmetry.
+ *
+ * Waiting is the report API, not an exit status: the agents converge on their
+ * own cycle, so "done" is every targeted host reporting compliant.
+ */
+export const upgradeFleetOverPolicy = ({
+  targets,
+  identity,
+  scripts,
+  project,
+  zone,
+  assignment,
+  deadlineSeconds = 900,
+  run,
+  sleep,
+  log,
+  writeFile,
+}: {
+  /** Instance names, as the reports name them. */
+  targets: string[]
+  identity: string
+  scripts: { validate: string; enforce: string }
+  project: string
+  zone: string
+  /** The assignment the deploy owns, by name. */
+  assignment: string
+  deadlineSeconds?: number
+  run: RunCommand
+  sleep: (seconds: number) => void
+  log: (line: string) => void
+  writeFile: (contents: string) => string
+}): number => {
+  const policy = {
+    osPolicies: [
+      {
+        id: 'runner-binary',
+        mode: 'ENFORCEMENT',
+        resourceGroups: [
+          {
+            resources: [
+              {
+                id: 'swap-binary',
+                exec: {
+                  validate: { interpreter: 'SHELL', script: scripts.validate },
+                  enforce: { interpreter: 'SHELL', script: scripts.enforce },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  }
+  const file = writeFile(JSON.stringify(policy, null, 2))
+  log(`==> declaring ${identity} on ${assignment}`)
+  const written = run('gcloud', [
+    'compute',
+    'os-config',
+    'os-policy-assignments',
+    'update',
+    assignment,
+    `--project=${project}`,
+    `--location=${zone}`,
+    `--file=${file}`,
+    '--quiet',
+  ])
+  if (!written.ok) {
+    throw new Error(`could not rewrite ${assignment}: ${written.stderr || written.stdout || '(no output)'}`)
+  }
+
+  /*
+   * Compliance per host, polled to a deadline.
+   *
+   * `UNKNOWN` is the normal first answer — the agent has not evaluated the new
+   * revision yet — so only `NON_COMPLIANT` after the deadline is a failure, and
+   * the deadline is generous because a swap includes a restart and a health
+   * probe.
+   */
+  const remaining = new Set(targets)
+  for (let waited = 0; waited < deadlineSeconds; waited += 30) {
+    const reported = run('gcloud', [
+      'compute',
+      'os-config',
+      'os-policy-assignment-reports',
+      'list',
+      `--project=${project}`,
+      `--location=${zone}`,
+      `--assignment=${assignment}`,
+      '--format=value(instance,osPolicyCompliances[0].complianceState)',
+    ])
+    if (reported.ok) {
+      for (const line of reported.stdout.split('\n').filter(Boolean)) {
+        const [instance, state] = line.trim().split(/\s+/)
+        // The report names the instance by resource path, and which segment
+        // holds the name differs by surface — `…/instances/<name>` and
+        // `…/instances/<name>/report` are both seen. Matching a whole segment
+        // is what keeps `runner` from also matching `runner-2`.
+        const segments = instance?.split('/') ?? []
+        const host = [...remaining].find((name) => segments.includes(name))
+        if (host && state === 'COMPLIANT') {
+          log(`    ${host}: compliant`)
+          remaining.delete(host)
+        }
+      }
+    }
+    if (remaining.size === 0) {
+      log(`==> every host reports ${identity}`)
+      return 0
+    }
+    sleep(30)
+  }
+  throw new Error(
+    `${[...remaining].join(', ')} did not report compliant with ${assignment} within ${deadlineSeconds}s; ` +
+      'the agents may still be converging — `gcloud compute os-config os-policy-assignment-reports list` says where they are',
+  )
+}
+
+/**
  * IAP: one tunnelled ssh, whose remote exit status is the verdict.
  *
  * `--quiet` so gcloud mints a key rather than asking, and no host key is
