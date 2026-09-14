@@ -444,6 +444,16 @@ test('the policy scripts answer in the exit codes the agent grades them by', () 
    */
   const { validate, enforce } = renderPolicyScripts(target())
 
+  /*
+   * The shell, chosen in the file. `interpreter: SHELL` is /bin/sh — dash on
+   * Ubuntu — and this payload opens with `set -euo pipefail`, which dash
+   * refuses with exit 2: an execution error to the agent, so the host reports
+   * UNKNOWN and the upgrade is never attempted. A real fleet reported exactly
+   * that before this line existed.
+   */
+  assert.ok(validate.startsWith('#!/bin/bash\n'), 'validate must name its own shell')
+  assert.ok(enforce.startsWith('#!/bin/bash\n'), 'enforce must name its own shell')
+
   // Both guards report "nothing to do", and the mismatch path is the only 101.
   assert.equal(validate.match(/^\s*exit 100$/gm)?.length, 2, 'validate must answer 100 on both guards')
   assert.match(validate, /echo "not serving [$]TARGET"\nexit 101\n$/, 'validate must end by asking for enforcement')

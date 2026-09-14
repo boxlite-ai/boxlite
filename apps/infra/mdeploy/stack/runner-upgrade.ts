@@ -319,10 +319,22 @@ export const renderUpgradePayload = (target: UpgradeTarget): string => {
  */
 export type UpgradePolicyScripts = { validate: string; enforce: string }
 
+/**
+ * The interpreter, spelled in the file rather than named in the resource.
+ *
+ * `interpreter: SHELL` is `/bin/sh`, which on Ubuntu is dash: the very first
+ * line of this payload — `set -euo pipefail` — is a bashism there, and dash
+ * answers `Illegal option -o pipefail` with exit 2. To the agent that is
+ * neither 100 nor 101 but an execution error, so the host reports UNKNOWN and
+ * nothing is ever attempted. `NONE` runs the file itself, which is what makes
+ * this line the one that chooses the shell.
+ */
+const SHEBANG = '#!/bin/bash\n'
+
 export const renderPolicyScripts = (target: UpgradeTarget): UpgradePolicyScripts => {
   assertUpgradeTarget(target)
   return {
-    validate: `${preamble(target)}${guards(100)}echo "not serving $TARGET"
+    validate: `${SHEBANG}${preamble(target)}${guards(100)}echo "not serving $TARGET"
 exit 101
 `,
     /*
@@ -334,7 +346,7 @@ exit 101
      * are exactly right — a second vocabulary. A heredoc keeps one copy of the
      * work and one place where 0 becomes 100.
      */
-    enforce: `set -u
+    enforce: `${SHEBANG}set -u
 bash <<'BOXLITE_RUNNER_UPGRADE'
 ${renderUpgradePayload(target)}
 BOXLITE_RUNNER_UPGRADE
