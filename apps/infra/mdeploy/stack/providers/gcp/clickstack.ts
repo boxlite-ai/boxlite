@@ -172,7 +172,11 @@ export const publishClickStack = ({
     loadBalancingScheme: 'INTERNAL',
     protocol: 'TCP',
     healthChecks: [health.id],
-    backends: [{ group: group.id }],
+    // Stated, because the provider's default is the one an `INTERNAL` service
+    // refuses: `UTILIZATION` is answered with a 400 naming the field, and a
+    // passthrough balancer has no requests to rate-limit — it counts
+    // connections. `edge.ts` says the same thing about its own backend.
+    backends: [{ group: group.id, balancingMode: 'CONNECTION' }],
   })
   const forwarding = new gcp.compute.ForwardingRule('ClickStackForwardingRule', {
     name,
