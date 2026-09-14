@@ -33,10 +33,12 @@ import {
   GKE_POD_CIDR,
   GKE_SERVICE_CIDR,
   MANAGED_PROXY_CIDR,
+  PSC_NAT_CIDR,
   SUBNET_CIDR,
 } from '../stack/providers/gcp/network.ts'
 import { BOOT_DISK_TYPE, MACHINE as RUNNER_MACHINE } from '../stack/providers/gcp/runners.ts'
 import { PROXY_API_KEY_FILE, secretProviderParameters } from '../stack/providers/gcp/edge.ts'
+import { instanceFor } from 'naming'
 
 /*
  * The committed example, not this machine's stage file.
@@ -729,7 +731,7 @@ test('the fixed GKE and proxy ranges neither overlap nor collide with Private Se
    * allocator. Moving either constant out of that `/16`, or letting the two
    * subnets overlap, breaks the argument silently and the deploy months later.
    */
-  const cidrs = [SUBNET_CIDR, MANAGED_PROXY_CIDR, GKE_POD_CIDR, GKE_SERVICE_CIDR]
+  const cidrs = [SUBNET_CIDR, MANAGED_PROXY_CIDR, PSC_NAT_CIDR, GKE_POD_CIDR, GKE_SERVICE_CIDR]
   for (const [index, leftCidr] of cidrs.entries()) {
     for (const rightCidr of cidrs.slice(index + 1)) {
       const left = rangeOf(leftCidr)
@@ -745,6 +747,56 @@ test('the fixed GKE and proxy ranges neither overlap nor collide with Private Se
       `${cidr} sits in a /16 the workload subnet does not block, so the allocator may take it`,
     )
   }
+})
+
+test('the ClickStack publication is named what the console looks for', () => {
+  /*
+   * Two repositories meet at a string. Backoffice's preflight composes
+   * `<app>-<stage>-clickstack` itself and describes whatever answers to it —
+   * nothing is handed over, and absence is read as "not published yet". So
+   * respelling this attachment fails no deploy here: it silently leaves the
+   * console's Observability panel with no data source.
+   */
+  const source = sourceOf('clickstack')
+  // Both halves, or the guard proves nothing: that the attachment is named
+  // from the artifact `clickstack`, and that this artifact is the string the
+  // other repository composes. Asserting only the second re-tests `instanceFor`
+  // and leaves the literal here free to be respelled.
+  const [, artifact] =
+    /const name = instanceFor\(\{ app: \$app\.name, stage: \$app\.stage, artifact: '([a-z-]+)' \}\)/.exec(source) ?? []
+  assert.equal(artifact, 'clickstack', 'the attachment no longer takes its name from the published artifact')
+  assert.equal(instanceFor({ app: 'boxlite-app', stage: 'dev', artifact }), 'boxlite-app-dev-clickstack')
+
+  // ACCEPT_AUTOMATIC would let any project in the organization connect an
+  // endpoint to this ClickHouse — a wider grant than the firewall below gives
+  // anybody already inside the network.
+  assert.match(source, /connectionPreference: 'ACCEPT_MANUAL'/)
+  assert.match(source, /consumerAcceptLists: \[\{ projectIdOrNum: consumerProject/)
+  // Proxy protocol prepends the consumer's endpoint address to the stream, and
+  // ClickHouse would read those bytes as the first line of a request.
+  assert.match(source, /enableProxyProtocol: false/)
+})
+
+test('the publication admits the two kinds of traffic that carry no service account', () => {
+  /*
+   * `clickhouse.ts`'s rule keys on service accounts, which is exact and covers
+   * every caller inside this network. Neither packet here carries one: a health
+   * probe originates in Google's own infrastructure, and a consumer's
+   * connection has been translated into the NAT range on the way in. Without
+   * both ranges the backend never turns healthy and the console reaches
+   * nothing — with every resource created and the deploy green.
+   */
+  const source = sourceOf('clickstack')
+  assert.match(source, /const HEALTH_PROBE_RANGES = \['35\.191\.0\.0\/16', '130\.211\.0\.0\/22'\]/)
+  assert.match(source, /sourceRanges: \[\.\.\.HEALTH_PROBE_RANGES, PSC_NAT_CIDR\]/)
+  /*
+   * Passthrough rather than the `INTERNAL_MANAGED` scheme `api.ts` uses: a
+   * managed balancer terminates the connection on an Envoy and speaks HTTP,
+   * where the console's traffic is opaque TCP that has to arrive at ClickHouse
+   * as it was sent.
+   */
+  assert.match(source, /loadBalancingScheme: 'INTERNAL'/)
+  assert.equal(/loadBalancingScheme: 'INTERNAL_MANAGED'/.test(source), false)
 })
 
 test('the runner still reaches the control plane by a name this stack owns', () => {

@@ -101,6 +101,20 @@ test('a managed ClickHouse arrives whole or not at all', () => {
   assert.equal(managed?.url, 'https://clickhouse.invalid')
 })
 
+test('the ClickStack consumer is a service account or nobody', () => {
+  // Nobody is a supported state: a stage publishes to whoever is configured,
+  // and a stage with no console configures none. What is not supported is a
+  // value Google would reject — caught here, where the key is named, rather
+  // than as a policy error during the apply.
+  assert.equal(read(complete).clickStackConsumer, null)
+  assert.throws(
+    () => read({ ...complete, CLICKSTACK_CONSUMER_ACCOUNT: 'console@example.com' }),
+    /CLICKSTACK_CONSUMER_ACCOUNT must be a service account email/,
+  )
+  const account = 'bl-bo-dev-console-run@example-project.iam.gserviceaccount.com'
+  assert.equal(read({ ...complete, CLICKSTACK_CONSUMER_ACCOUNT: account }).clickStackConsumer, account)
+})
+
 test('a service group the deploy never received stops it rather than shipping a short environment', () => {
   // A container handed a silently short environment refuses a feature hours
   // later, somewhere that does not mention the key.

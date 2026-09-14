@@ -115,6 +115,28 @@ const managedClickHouseFrom = (
   return parts as { url: string; writerSecretArn: string; readerSecretArn: string }
 }
 
+/**
+ * The identity let read this stage's ClickHouse reader password.
+ *
+ * A grant rather than a copy: the consumer reads the secret this stack owns, so
+ * a rotation reaches it with nothing to synchronise and no second value to go
+ * stale. One account, because the publication has one consumer — a second one
+ * is a second grant, not a longer string.
+ *
+ * Optional: a stage that publishes nothing has nobody to name, and a stage on
+ * AWS reaches its ClickHouse a different way entirely.
+ */
+const clickStackConsumerFrom = (environment: NodeJS.ProcessEnv): string | null => {
+  const account = optional(environment, 'CLICKSTACK_CONSUMER_ACCOUNT')
+  if (account === null) return null
+  // Checked here rather than at the IAM call: a malformed member comes back
+  // from Google as a policy error naming neither this key nor this stage.
+  if (!/^[^@\s]+@[^@\s]+\.iam\.gserviceaccount\.com$/.test(account)) {
+    throw new StackEnvError(`CLICKSTACK_CONSUMER_ACCOUNT must be a service account email, and is ${account}`)
+  }
+  return account
+}
+
 /** Everything one deploy decides, as opposed to what `mdeploy.config.json` declares. */
 export type StackEnvironment = {
   /** The commit being deployed. Every container runs the same one. */
@@ -138,6 +160,11 @@ export type StackEnvironment = {
   runnerFleet: RunnerSlot[]
   /** A ClickHouse someone else operates, for a stage that runs none of its own. */
   managedClickHouse: { url: string; writerSecretArn: string; readerSecretArn: string } | null
+  /**
+   * The consumer of this stage's ClickStack publication, by service account, or
+   * null for a stage that publishes to nobody.
+   */
+  clickStackConsumer: string | null
   /**
    * The DNS zone every public record is written into.
    *
@@ -259,6 +286,7 @@ export const readStackEnvironment = ({
     senderDomain: optional(environment, 'MAIL_DOMAIN'),
     runnerFleet: fleetFrom({ environment, app, stage }),
     managedClickHouse: managedClickHouseFrom(environment),
+    clickStackConsumer: clickStackConsumerFrom(environment),
     dnsZoneId: required(environment, 'CLOUDFLARE_ZONE_ID', 'every public record this stage writes goes into it'),
     mailRelayHost: optional(environment, 'MAIL_RELAY_HOST'),
     ...channels({ environment, declaration, region, stage, home }),

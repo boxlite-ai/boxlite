@@ -20,6 +20,7 @@
  * touches a machine.
  */
 
+import { publishClickStack } from './clickstack.ts'
 import { renderClickHouseSchema } from '../../../../scripts/clickhouse-host.js'
 import type { ClickHouse, ClickHouseProvider, ClickHouseRequest } from '../../clickhouse.ts'
 import type { NetworkBinding, WorkloadRole } from '../../network.ts'
@@ -227,14 +228,23 @@ export const gcpClickHouseProvider =
   ({
     network,
     project,
+    region,
     zone,
     appShort,
     callers,
+    clickStackConsumerProject,
+    clickStackConsumerAccount,
     managed,
     dependsOn,
   }: {
     network: Extract<NetworkBinding, { cloud: 'gcp' }>
     project: string
+    /**
+     * The stage's region: where the ClickStack publication's regional resources
+     * live. The instance below does not need it — a zone already names its
+     * region — but a subnet, a backend service and an attachment all do.
+     */
+    region: string
     /**
      * A zone in the stage's region. An instance is zonal where a subnet is not,
      * and the region itself is not needed here — the zone already names it.
@@ -248,6 +258,13 @@ export const gcpClickHouseProvider =
      * the account created below and never handed in.
      */
     callers: $util.Output<string>[]
+    /**
+     * The project whose endpoints may reach this ClickHouse over Private
+     * Service Connect. See `publishClickStack`, which owns the publication.
+     */
+    clickStackConsumerProject: string
+    /** The identity let read the reader password, or null to grant nobody. */
+    clickStackConsumerAccount: string | null
     managed: { url: string; writerSecretArn: string; readerSecretArn: string } | null
     dependsOn: any[]
   }): ClickHouseProvider =>
@@ -393,6 +410,29 @@ export const gcpClickHouseProvider =
       // the writer here costs.
       sourceServiceAccounts: callers,
       targetServiceAccounts: [host.email],
+    })
+
+    /*
+     * Published to the consumer in another network, always.
+     *
+     * Not conditional on anything: a self-hosted ClickHouse on GCP is the only
+     * source of the console's Observability panel, and the accept list — not
+     * the existence of the attachment — is what decides who may connect. See
+     * `clickstack.ts` for the chain from here to an endpoint.
+     */
+    publishClickStack({
+      project,
+      region,
+      zone,
+      network: network.network,
+      subnetwork: network.subnetwork,
+      instanceLink: instance.selfLink,
+      hostAccount: host.email,
+      port: HTTP_PORT,
+      consumerProject: clickStackConsumerProject,
+      consumerAccount: clickStackConsumerAccount,
+      readerSecretId: reader.secret.secretId,
+      dependsOn: [instance],
     })
 
     return {
