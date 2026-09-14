@@ -110,13 +110,28 @@ export const gcpEdgeProvider =
     const coordinates = reference.apply(secretCoordinatesOf)
     const mountedReference = reference.apply(versionedSecretRef)
 
-    const workloadIdentity = new gcp.serviceaccount.IAMMember('ProxyWorkloadIdentity', {
-      serviceAccountId: placement.serviceAccount.apply(
-        (email: string) => `projects/${project}/serviceAccounts/${email}`,
-      ),
-      role: 'roles/iam.workloadIdentityUser',
-      member: `serviceAccount:${project}.svc.id.goog[${NAMESPACE}/${KUBERNETES_SERVICE_ACCOUNT}]`,
-    })
+    /*
+     * The binding waits for the cluster, because the pool it names is the
+     * cluster's.
+     *
+     * `<project>.svc.id.goog` does not exist until a cluster with Workload
+     * Identity has been created; granted before that, the API refuses the whole
+     * policy with `Error 400: Identity Pool does not exist`. Nothing in the
+     * argument list expresses that order — the member is a plain string — so
+     * the dependency has to be stated, and a real deploy proved it: the binding
+     * failed seven seconds in, while the cluster was still being created.
+     */
+    const workloadIdentity = new gcp.serviceaccount.IAMMember(
+      'ProxyWorkloadIdentity',
+      {
+        serviceAccountId: placement.serviceAccount.apply(
+          (email: string) => `projects/${project}/serviceAccounts/${email}`,
+        ),
+        role: 'roles/iam.workloadIdentityUser',
+        member: `serviceAccount:${project}.svc.id.goog[${NAMESPACE}/${KUBERNETES_SERVICE_ACCOUNT}]`,
+      },
+      { dependsOn: host.ready },
+    )
     const secretAccessor = new gcp.secretmanager.SecretIamMember('ProxySecretAccessor', {
       project: coordinates.apply(({ project: secretProject }: { project: string }) => secretProject),
       secretId: coordinates.apply(({ secret }: { secret: string }) => secret),
