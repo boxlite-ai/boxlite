@@ -39,6 +39,18 @@ const REPLICAS = 2
 const MAX_CONNECTIONS_PER_POD = 10_000
 const LOAD_BALANCER_RANGES = ['130.211.0.0/22', '35.191.0.0/16']
 
+/**
+ * Where a Pod on this cluster actually sends a DNS query.
+ *
+ * Not kube-dns. Autopilot enables NodeLocal DNSCache, whose DaemonSet runs with
+ * `hostNetwork: true` and binds this link-local address — and a Pod's
+ * `/etc/resolv.conf` names it rather than the kube-dns Service. Host-network
+ * traffic has no Pod identity, so the `kube-system` selector below cannot
+ * match it and Dataplane V2 drops the query: every lookup ends in `i/o
+ * timeout`, which reads as the name being wrong rather than as a policy.
+ */
+const NODE_LOCAL_DNS = '169.254.20.10/32'
+
 /** The managed CSI provider's value: JSON is also valid YAML. */
 export const secretProviderParameters = (reference: string): string =>
   JSON.stringify([{ resourceName: versionedSecretRef(reference), path: PROXY_API_KEY_PATH }])
@@ -347,10 +359,17 @@ export const gcpEdgeProvider =
             },
           ],
           egress: [
-            // Cluster DNS. Named by namespace rather than by address: kube-dns
-            // has a Service IP this module has no way to know.
+            // Cluster DNS, both ways it can be served. The namespace selector
+            // is kube-dns itself, which has a Service IP this module has no way
+            // to know; the address beside it is the node-local cache that
+            // Autopilot puts in front of kube-dns, which the selector cannot
+            // reach for the reason `NODE_LOCAL_DNS` gives. Naming only one of
+            // them is what left the first GKE proxy unable to resolve anything.
             {
-              to: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } } }],
+              to: [
+                { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } } },
+                { ipBlock: { cidr: NODE_LOCAL_DNS } },
+              ],
               ports: [
                 { protocol: 'UDP', port: 53 },
                 { protocol: 'TCP', port: 53 },

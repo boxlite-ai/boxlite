@@ -641,6 +641,26 @@ test('the Kubernetes identity maps to the existing proxy GSA and gets only secre
   assert.match(source, /secretId: coordinates\.apply/)
 })
 
+test('a Pod may reach the resolver it is actually pointed at, not only kube-dns', () => {
+  /*
+   * Autopilot enables NodeLocal DNSCache, whose DaemonSet runs on the host
+   * network and binds a link-local address that a Pod's `/etc/resolv.conf`
+   * then names. Host-network traffic carries no Pod identity, so an egress
+   * rule written only as `namespaceSelector: kube-system` never matches it and
+   * Dataplane V2 drops every query.
+   *
+   * The failure is silent in the worst way: the first GKE proxy reported
+   * `lookup api.dev.boxlite.ai: i/o timeout`, retried ten times and exited 2,
+   * which reads as the control plane being down rather than as a policy.
+   */
+  const source = sourceOf('edge')
+  assert.match(source, /const NODE_LOCAL_DNS = '169\.254\.20\.10\/32'/)
+  assert.match(source, /\{ ipBlock: \{ cidr: NODE_LOCAL_DNS \} \}/)
+  // Both, not either: the selector is still what reaches kube-dns on a cluster
+  // running without the node-local cache in front of it.
+  assert.match(source, /namespaceSelector: \{ matchLabels: \{ 'kubernetes\.io\/metadata\.name': 'kube-system' \} \}/)
+})
+
 test('the workload identity binding waits for the cluster whose pool it names', () => {
   /*
    * `<project>.svc.id.goog` does not exist until a cluster with Workload
