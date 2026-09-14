@@ -296,7 +296,24 @@ udevadm trigger --name-match=kvm || true`,
            * grants the deployer alone — and the key gcloud mints is scoped to
            * that identity and expires.
            */
-          metadata: { 'enable-oslogin': 'TRUE' },
+          metadata: {
+            'enable-oslogin': 'TRUE',
+            /*
+             * The OS Config agent, asked for by the host itself.
+             *
+             * A project may carry `enable-osconfig=PER-VM`, which is VM
+             * Manager's own default when it is turned on for a project — and it
+             * means exactly this: nothing runs unless the instance says so. A
+             * fleet that relied on the project-wide `TRUE` would look configured
+             * and report no inventory at all, which is also what an upgrade
+             * policy that never reaches a host looks like.
+             *
+             * Metadata is an in-place update, so this lands on hosts that
+             * already exist — the only channel that does, for a machine whose
+             * boot script is frozen and which is never replaced.
+             */
+            'enable-osconfig': 'TRUE',
+          },
           // The boot script is base64 on AWS and plain text here, which is the
           // one place the two clouds want the same value differently.
           metadataStartupScript: userData.apply((encoded: string) =>
