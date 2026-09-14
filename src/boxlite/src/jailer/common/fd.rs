@@ -489,30 +489,106 @@ mod tests {
         );
     }
 
+    /// Make the listed syscalls fail with EPERM for the rest of this (child) process.
+    #[cfg(target_os = "linux")]
+    fn deny_syscalls(syscalls: &[libc::c_long]) -> bool {
+        use seccompiler::{BpfProgram, SeccompAction, SeccompFilter};
+
+        let Ok(arch) = std::env::consts::ARCH.try_into() else {
+            return false;
+        };
+        let rules = syscalls.iter().map(|&nr| (nr, vec![])).collect();
+        let Ok(filter) = SeccompFilter::new(
+            rules,
+            SeccompAction::Allow,
+            SeccompAction::Errno(libc::EPERM as u32),
+            arch,
+        ) else {
+            return false;
+        };
+        let Ok(program): Result<BpfProgram, _> = filter.try_into() else {
+            return false;
+        };
+        seccompiler::apply_filter(&program).is_ok()
+    }
+
+    /// A failing `getdents64` must report failure, not "enumerated, nothing to close".
+    #[cfg(target_os = "linux")]
+    fn child_proc_enumeration_reports_getdents64_failure() -> i32 {
+        if !deny_syscalls(&[libc::SYS_getdents64]) {
+            return 1;
+        }
+        if close_fds_via_proc(3) {
+            return 2;
+        }
+        0
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_proc_enumeration_reports_getdents64_failure() {
+        run_in_child(
+            "test_proc_enumeration_reports_getdents64_failure",
+            child_proc_enumeration_reports_getdents64_failure,
+        );
+    }
+
+    /// With `close_range` and `getdents64` both failing, `close_fds_from` must still
+    /// close inherited FDs through the brute-force fallback.
+    #[cfg(target_os = "linux")]
+    fn child_close_fds_from_falls_back_when_getdents64_fails() -> i32 {
+        let fd = unsafe { libc::dup(STDOUT_FD) };
+        if fd <= STDERR_FD {
+            return 1;
+        }
+        if !deny_syscalls(&[libc::SYS_close_range, libc::SYS_getdents64]) {
+            return 2;
+        }
+        if close_fds_from(3).is_err() {
+            return 3;
+        }
+        if unsafe { libc::fcntl(fd, libc::F_GETFD) } != -1 {
+            return 4;
+        }
+        0
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_close_fds_from_falls_back_when_getdents64_fails() {
+        run_in_child(
+            "test_close_fds_from_falls_back_when_getdents64_fails",
+            child_close_fds_from_falls_back_when_getdents64_fails,
+        );
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn test_parse_fd_from_name() {
         // Valid numeric names
-        assert_eq!(parse_fd_from_name(b"0\0".as_ptr()), Some(0));
-        assert_eq!(parse_fd_from_name(b"3\0".as_ptr()), Some(3));
-        assert_eq!(parse_fd_from_name(b"42\0".as_ptr()), Some(42));
-        assert_eq!(parse_fd_from_name(b"1024\0".as_ptr()), Some(1024));
-        assert_eq!(parse_fd_from_name(b"65535\0".as_ptr()), Some(65535));
+        assert_eq!(parse_fd_from_name(c"0".as_ptr().cast()), Some(0));
+        assert_eq!(parse_fd_from_name(c"3".as_ptr().cast()), Some(3));
+        assert_eq!(parse_fd_from_name(c"42".as_ptr().cast()), Some(42));
+        assert_eq!(parse_fd_from_name(c"1024".as_ptr().cast()), Some(1024));
+        assert_eq!(parse_fd_from_name(c"65535".as_ptr().cast()), Some(65535));
 
         // Non-numeric names (. and ..)
-        assert_eq!(parse_fd_from_name(b".\0".as_ptr()), None);
-        assert_eq!(parse_fd_from_name(b"..\0".as_ptr()), None);
+        assert_eq!(parse_fd_from_name(c".".as_ptr().cast()), None);
+        assert_eq!(parse_fd_from_name(c"..".as_ptr().cast()), None);
 
         // Empty name
-        assert_eq!(parse_fd_from_name(b"\0".as_ptr()), None);
+        assert_eq!(parse_fd_from_name(c"".as_ptr().cast()), None);
 
         // Overflow: i32::MAX (2147483647) should succeed
-        assert_eq!(parse_fd_from_name(b"2147483647\0".as_ptr()), Some(i32::MAX));
+        assert_eq!(
+            parse_fd_from_name(c"2147483647".as_ptr().cast()),
+            Some(i32::MAX)
+        );
 
         // Overflow: i32::MAX + 1 (2147483648) should return None (checked_add overflow)
-        assert_eq!(parse_fd_from_name(b"2147483648\0".as_ptr()), None);
+        assert_eq!(parse_fd_from_name(c"2147483648".as_ptr().cast()), None);
 
         // Overflow: very large number should return None
-        assert_eq!(parse_fd_from_name(b"99999999999\0".as_ptr()), None);
+        assert_eq!(parse_fd_from_name(c"99999999999".as_ptr().cast()), None);
     }
 }
