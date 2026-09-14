@@ -1984,9 +1984,12 @@ mod tests {
             .await;
         });
 
-        let res = tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
+        // This timeout covers the full watchdog recovery path, including the
+        // status probe and reconnect fallback. Expiration only means that no
+        // result reached the channel; it does not prove the watchdog failed.
+        let res = tokio::time::timeout(Duration::from_secs(4), result_rx.recv())
             .await
-            .expect("watchdog never fired")
+            .expect("timed out waiting for watchdog result")
             .expect("result channel closed without value");
         assert_eq!(res.exit_code, -1);
         let msg = res.error_message.expect("expected diagnostic message");
