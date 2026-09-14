@@ -33,7 +33,7 @@
 
 import type { Placement } from '../../network.ts'
 import type { RunnerProvider, RunnerRequest, Runners } from '../../runners.ts'
-import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE } from '../../runners.ts'
+import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE, runnerPolicyName } from '../../runners.ts'
 import { renderRunnerBoot, type BootPlatform } from '../../runner-boot.ts'
 import {
   REGISTER_RUNNERS_COMMAND,
@@ -42,7 +42,6 @@ import {
   registrationPayload,
 } from '../../runner-registration.ts'
 import { renderPolicyScripts } from '../../runner-upgrade.ts'
-import { instanceFor } from 'naming'
 import { splitSecretRef } from './secret-env.ts'
 
 /**
@@ -370,7 +369,7 @@ udevadm trigger --name-match=kvm || true`,
     new gcp.osconfig.OsPolicyAssignment(
       'RunnerBinary',
       {
-        name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'runner-binary' }),
+        name: runnerPolicyName({ app: $app.name, stage: $app.stage }),
         project,
         // Zonal, like the hosts it selects.
         location: zone,

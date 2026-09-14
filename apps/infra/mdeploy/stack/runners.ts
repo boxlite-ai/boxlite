@@ -157,6 +157,16 @@ export type RunnerProvider = (request: RunnerRequest) => Runners
 export const runnerNamePrefix = ({ app, stage }: { app: string; stage: string }): string =>
   instanceFor({ app, stage, artifact: 'runner' })
 
+/**
+ * The OS policy assignment that carries the fleet's binary, by name.
+ *
+ * Two writers spell it: the deploy creates it, and `runner:update` rewrites the
+ * same one — standing a second assignment beside the first would leave two
+ * enforcers taking turns undoing each other's work.
+ */
+export const runnerPolicyName = ({ app, stage }: { app: string; stage: string }): string =>
+  instanceFor({ app, stage, artifact: 'runner-binary' })
+
 export const runnerNameFor = ({ app, stage, index }: { app: string; stage: string; index: number }): string =>
   index === 1 ? runnerNamePrefix({ app, stage }) : `${runnerNamePrefix({ app, stage })}-${index}`
 

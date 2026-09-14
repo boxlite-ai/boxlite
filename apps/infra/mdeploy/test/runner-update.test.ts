@@ -43,6 +43,14 @@ const gcpFleet = (calls: string[][] = []): RunCommand => {
   return (file, args) => {
     calls.push([file, ...args])
     if (args[1] === 'instances') return ok('boxlite-app-dev2-runner\nboxlite-app-dev2-runner-2')
+    // Both hosts report compliant on the first poll, which is what lets the
+    // roll finish without the test spending its deadline.
+    if (args[2] === 'os-policy-assignment-reports') {
+      return ok(
+        'projects/p/locations/z/instances/boxlite-app-dev2-runner/report\tCOMPLIANT\n' +
+          'projects/p/locations/z/instances/boxlite-app-dev2-runner-2/report\tCOMPLIANT',
+      )
+    }
     return ok('new identity: 0.10.0')
   }
 }
@@ -173,17 +181,38 @@ test('an empty fleet is a refusal, not a silent success', async () => {
   await assert.rejects(() => drive(['--stage', 'dev'], empty), /no running runner in boxlite-app\/dev/)
 })
 
-test('on GCP the fleet is listed by name and reached through the tunnel', async () => {
-  // The same two questions, answered with this cloud's own vocabulary: an
-  // instance name rather than an id, and IAP rather than SSM.
+test('on GCP the roll rewrites the fleet’s policy and waits for the agents', async () => {
+  /*
+   * No ssh at all on this cloud: the hosts are declared by one OS policy
+   * assignment, so a hand roll edits that assignment and waits for every host
+   * to report compliant. A second assignment would be a second enforcer, and
+   * the two would take turns undoing each other.
+   */
   const calls: string[][] = []
   assert.equal(await drive(['--stage', 'dev2'], gcpFleet(calls), 'gcp'), 0)
+
   const listed = calls.find((call) => call[2] === 'instances')
   assert.ok(listed?.some((argument) => argument.startsWith('--filter=name~^boxlite-app-dev2-runner')))
-  const sessions = calls.filter((call) => call[2] === 'ssh')
-  assert.equal(sessions.length, 2)
-  assert.ok(sessions[0]?.includes('--tunnel-through-iap'))
-  assert.ok(sessions[0]?.includes('boxlite-app-dev2-runner'))
+
+  const written = calls.find((call) => call[3] === 'os-policy-assignments' && call[4] === 'update')
+  assert.ok(written, 'the roll never rewrote the assignment')
+  assert.ok(written?.includes('boxlite-app-dev2-runner-binary'), 'it rewrote some other assignment')
+  assert.ok(written?.some((argument) => argument.startsWith('--file=')), 'the policy has to arrive as a file')
+
+  assert.ok(
+    calls.some((call) => call[3] === 'os-policy-assignment-reports'),
+    'the roll never waited for the agents to converge',
+  )
+  assert.equal(calls.filter((call) => call[2] === 'ssh').length, 0, 'the tunnel is gone from this path')
+})
+
+test('--host is refused on GCP, because the policy is the whole fleet', async () => {
+  // Narrowing the assignment would leave it pointing at one machine after the
+  // roll, which is a fleet whose other hosts are declared by nothing.
+  await assert.rejects(
+    () => drive(['--stage', 'dev2', '--host', 'boxlite-app-dev2-runner'], gcpFleet(), 'gcp'),
+    /--host is not available on GCP/,
+  )
 })
 
 test('a stage is required, and mstage says which ones there are', async () => {

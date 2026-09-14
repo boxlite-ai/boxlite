@@ -29,15 +29,25 @@
  * names a published version.
  */
 
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { parseInvocation, type Options } from 'mstage/cli'
 import { loadConfig } from 'mstage/config'
 import { resolveHome } from 'mstage/home'
 import { run as mstage } from 'mstage/run'
 import { resolveScope } from 'mstage/scope'
 import { deployRoot } from './config.ts'
-import { sleepSeconds, spawnWith, upgradeOne, type RunCommand, type UpgradeOneRequest } from './upgrade-runners.ts'
-import { encodeUpgradePayload } from '../stack/runner-upgrade.ts'
-import { RUNNER_PORT, runnerNamePrefix } from '../stack/runners.ts'
+import {
+  sleepSeconds,
+  spawnWith,
+  upgradeFleetOverPolicy,
+  upgradeOne,
+  type RunCommand,
+  type UpgradeOneRequest,
+} from './upgrade-runners.ts'
+import { encodeUpgradePayload, renderPolicyScripts } from '../stack/runner-upgrade.ts'
+import { RUNNER_PORT, runnerNamePrefix, runnerPolicyName } from '../stack/runners.ts'
 import { resolveRunnerBinary } from '../stack/runner-binary.ts'
 import { zoneIn } from '../stack/providers/gcp/index.ts'
 
@@ -169,6 +179,20 @@ const gcpHosts = ({
 }
 
 /** The subset an operator named, or all of them. Naming one that is not there is a mistake, not a filter. */
+/**
+ * Where the rewritten policy is handed to gcloud.
+ *
+ * A file rather than stdin: `os-policy-assignments update` takes `--file`, and
+ * the scripts inside carry newlines and shell metacharacters that no command
+ * line survives. Written under the OS temp directory, which is this process's
+ * own and goes away with it.
+ */
+const writePolicyFile = (contents: string): string => {
+  const path = join(mkdtempSync(join(tmpdir(), 'boxlite-runner-policy-')), 'policy.json')
+  writeFileSync(path, contents, { mode: 0o600 })
+  return path
+}
+
 const selected = (hosts: Host[], named: string[]): Host[] => {
   if (named.length === 0) return hosts
   const missing = named.filter((name) => !hosts.some((host) => host.label === name || host.target === name))
@@ -283,6 +307,46 @@ export const updateRunners = async ({
   log(`==> rolling ${hosts.length} host(s) in ${config.app}/${scope.stage} to ${binary.identity}`)
   log(`==> artifact: ${binary.tarballUrl}`)
   if (allowDowngrade) log('==> --allow-downgrade: a host serving something newer WILL be replaced')
+
+  /*
+   * On GCP the fleet is declared, not commanded.
+   *
+   * A deploy owns one OS policy assignment over these hosts, so a hand roll
+   * rewrites that assignment rather than reaching into each machine — there is
+   * no ssh here that an account outside the instance's organization could open
+   * anyway. The consequences are the two lines printed below: the roll covers
+   * the whole fleet, and it lasts until the next deploy re-asserts the identity
+   * the checkout declares.
+   */
+  if (home.identity.home === 'gcp') {
+    if (named.length > 0) {
+      throw new RunnerUpdateError(
+        '--host is not available on GCP: the fleet is one declared state, and narrowing it would leave ' +
+          'the assignment pointing at a single machine after the roll',
+      )
+    }
+    const zone = zoneIn(scope.region as string, scope.zone ?? null)
+    log('==> this rewrites the deployed policy; the next mdeploy restores the checkout’s identity')
+    upgradeFleetOverPolicy({
+      targets: hosts.map((host) => host.target),
+      identity: binary.identity,
+      scripts: renderPolicyScripts({
+        identity: binary.identity,
+        binary,
+        port: RUNNER_PORT,
+        allowDowngrade,
+      }),
+      project: scope.project as string,
+      zone,
+      assignment: runnerPolicyName({ app: config.app, stage: scope.stage as string }),
+      run,
+      sleep,
+      log,
+      writeFile: writePolicyFile,
+    })
+    log(`==> done (${hosts.length} host(s))`)
+    return 0
+  }
 
   for (const [index, host] of hosts.entries()) {
     log(`==> [${index + 1}/${hosts.length}]`)
