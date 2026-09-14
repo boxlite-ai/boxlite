@@ -38,6 +38,7 @@ interface BoxRuntime {
     options: JsBoxOptions,
     name?: string | null,
   ): Promise<{ readonly created: boolean; readonly box: BoxLike }>;
+  remove(idOrName: string, force?: boolean | null): Promise<void>;
 }
 
 /**
@@ -885,6 +886,41 @@ export class SimpleBox {
       return;
     }
     await this._box.stop();
+    // `stop()` only stops the VM. `autoRemove` on JsBoxOptions is a
+    // deprecated field REST runtimes silently ignore (local runtimes still
+    // self-delete on stop, which is why this only leaks remotely) - the
+    // explicit remove() below is what actually deletes the box over REST.
+    // Only a box this instance created is removed; one reused via
+    // `reuseExisting: true` may still be open in an outer session.
+    if (this._boxOpts.autoRemove && this._created) {
+      await this._removeAfterStop();
+    }
+  }
+
+  /**
+   * Delete `this._box`, retrying once if the stop() above is still
+   * finalizing server-side (`Box state change in progress`).
+   */
+  private async _removeAfterStop(): Promise<void> {
+    const box = this._box;
+    if (!box) {
+      return;
+    }
+    for (const [attempt, delayMs] of [0, 1000].entries()) {
+      if (delayMs) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      try {
+        await this._runtime.remove(box.id, true);
+        return;
+      } catch (err) {
+        if (attempt === 1) {
+          // Local runtimes already deleted it as part of stop() above, so
+          // "not found" here is the expected, already-clean case.
+          console.debug(`autoRemove cleanup for box ${box.id}:`, err);
+        }
+      }
+    }
   }
 
   /**

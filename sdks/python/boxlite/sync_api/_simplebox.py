@@ -7,6 +7,7 @@ Async-only metadata retrieval is not exposed.
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Optional
 
 from ..exec import ExecResult
@@ -96,6 +97,7 @@ class SyncSimpleBox:
 
         # Store for lazy creation in __enter__
         self._name = name
+        self._auto_remove = auto_remove
         self._reuse_existing = reuse_existing
         self._box: SyncBox | None = None
         self._created: bool | None = None
@@ -121,14 +123,42 @@ class SyncSimpleBox:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Exit context - stops the box, then stops runtime if owned."""
-        # Stop the box (SyncBox.stop() is already sync)
+        """Exit context - stops the box, deletes it if auto_remove was
+        requested, then stops runtime if owned.
+
+        `SyncBox.stop()` only stops the VM. Deletion used to be implied by
+        `auto_remove=True`, but that field is deprecated and REST runtimes
+        silently ignore it (local runtimes still self-delete on stop, which
+        is why this only leaks remotely). The explicit `remove()` call below
+        is what actually deletes the box over REST. Only a box this instance
+        created is removed - one reused via `reuse_existing=True` may still
+        be open in an outer session.
+        """
         if self._box is not None:
             self._box.stop()
+            if self._auto_remove and self._created:
+                self._remove_after_stop()
 
         # Stop runtime if we own it
         if self._owns_runtime:
             self._runtime.stop()
+
+    def _remove_after_stop(self) -> None:
+        """Delete `self._box`, retrying once if the stop() above is still
+        finalizing server-side (`Box state change in progress`)."""
+        for attempt, delay in enumerate((0, 1)):
+            if delay:
+                time.sleep(delay)
+            try:
+                self._runtime.remove(self._box.id, force=True)
+                return
+            except Exception:
+                if attempt == 1:
+                    # Local runtimes already deleted it as part of stop()
+                    # above, so "not found" here is expected and already clean.
+                    logger.debug(
+                        "auto_remove cleanup for box %s", self._box.id, exc_info=True
+                    )
 
     @property
     def id(self) -> str:
