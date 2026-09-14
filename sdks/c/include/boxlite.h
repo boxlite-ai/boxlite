@@ -62,6 +62,8 @@ typedef enum BoxliteErrorCode {
   // Interactive execution session was reaped server-side after disconnect.
   // Reattach is no longer possible — start a new exec.
   SessionReaped = 21,
+  // Default runtime has already been initialized.
+  AlreadyInitialized = 22,
 } BoxliteErrorCode;
 
 // Network mode exposed by [`CNetworkInfo`].
