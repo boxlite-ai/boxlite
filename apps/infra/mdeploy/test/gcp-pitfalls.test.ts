@@ -797,6 +797,13 @@ test('the publication admits the two kinds of traffic that carry no service acco
    */
   assert.match(source, /loadBalancingScheme: 'INTERNAL'/)
   assert.equal(/loadBalancingScheme: 'INTERNAL_MANAGED'/.test(source), false)
+  /*
+   * And every backend of one names `CONNECTION`, because the provider's default
+   * is the value that scheme refuses: a real apply answered
+   * `Invalid value for field 'resource.backends[0].balancingMode': 'UTILIZATION'`
+   * and created nothing. `edge.ts` states it for the same reason.
+   */
+  assert.match(source, /backends: \[\{ group: group\.id, balancingMode: 'CONNECTION' \}\]/)
 })
 
 test('the runner still reaches the control plane by a name this stack owns', () => {
