@@ -97,7 +97,9 @@ pub(crate) enum BuildFailureKind {
 /// Build outcome. Invalid states are unrepresentable.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub(crate) enum BuildResult {
-    Spawned { pid: i32 },
+    Spawned {
+        pid: i32,
+    },
     Failed {
         kind: BuildFailureKind,
         error: String,
