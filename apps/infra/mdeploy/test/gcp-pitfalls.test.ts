@@ -297,6 +297,25 @@ test('the hosts may read the staged binary, and only while one is being installe
   assert.match(source, /dependsOn: \[\.\.\.dependsOn, \.\.\.staged\]/)
 })
 
+test('the upgrade policy selects hosts by the label those hosts actually carry', () => {
+  /*
+   * An assignment whose filter matches nothing is a fleet that silently never
+   * upgrades — no error anywhere, because "no VM matched" is a valid policy.
+   * The instance and the filter therefore read one constant, and this is what
+   * keeps a second spelling from being introduced beside it.
+   */
+  const source = sourceOf('runners')
+  assert.match(source, /const RUNNER_LABEL = 'boxlite-runner'/)
+  assert.equal(
+    source.match(/\[RUNNER_LABEL\]: runnerLabelValue\(/g)?.length,
+    2,
+    'the label is spelled once for the instance and once for the filter, or they can drift',
+  )
+  // ENFORCEMENT, not VALIDATION: a policy that only reports would leave the
+  // fleet on the old binary while every report said "non-compliant".
+  assert.match(source, /mode: 'ENFORCEMENT'/)
+})
+
 // ── the database's machine ──────────────────────────────────────────────────
 
 test('every Cloud SQL size names its edition beside its tier', () => {

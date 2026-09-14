@@ -197,7 +197,7 @@ fi
  *      condition, because `set -e` exempts if-conditions and would otherwise
  *      abort before the rollback could run.
  */
-export const renderUpgradePayload = (target: UpgradeTarget): string => {
+const assertUpgradeTarget = (target: UpgradeTarget): void => {
   if (!BINARY_IDENTITY.test(target.identity)) {
     throw new RunnerUpgradeError(
       `the target identity must be X.Y.Z or X.Y.Z+<commit>; got ${JSON.stringify(target.identity)}`,
@@ -211,11 +211,10 @@ export const renderUpgradePayload = (target: UpgradeTarget): string => {
   if (!Number.isInteger(target.port) || target.port < 1 || target.port > 65_535) {
     throw new RunnerUpgradeError(`the health port must be a whole number from 1 to 65535; got ${target.port}`)
   }
-  const region = target.region ?? null
-  const fetch = (url: string, destination: string) =>
-    artifactFetchCommand({ artifact: target.binary, url, destination, region })
+}
 
-  return `set -euo pipefail
+/** What the host is and how to ask what it is serving. Both scripts open with it. */
+const preamble = (target: UpgradeTarget): string => `set -euo pipefail
 echo "${ON_HOST}"
 
 TARGET="${target.identity}"
@@ -230,21 +229,37 @@ probe_identity() {
   curl -fsS --max-time 3 "$HEALTH" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p'
 }
 
-if [ ! -x /usr/local/bin/boxlite-runner ] ||
+`
+
+/**
+ * Steps 1 and 2, parameterised by what "nothing to do" is called.
+ *
+ * A shell command reads 0; an OS policy's `validate` reads 100 — and reads it as
+ * *in the desired state*, which is what keeps `enforce` from running against a
+ * host that is still bootstrapping or already serving the target.
+ */
+const guards = (satisfied: number): string => `if [ ! -x /usr/local/bin/boxlite-runner ] ||
   [ ! -f /etc/systemd/system/boxlite-runner.service ] ||
   ! systemctl is-enabled --quiet boxlite-runner 2>/dev/null; then
   echo "still bootstrapping (binary or unit not in place, or not enabled); the boot script installs $TARGET itself — nothing to do"
-  exit 0
+  exit ${satisfied}
 fi
 
 CURRENT=$(probe_identity || true)
 echo "current identity: \${CURRENT:-<not serving>}"
 if [ "$CURRENT" = "$TARGET" ]; then
   echo "already serving $TARGET; leaving the unit untouched"
-  exit 0
+  exit ${satisfied}
 fi
 
-${downgradeGuard(target.binary.source)}
+`
+
+/** Steps 3 to 5, in the shell's own grading: fall off the end, or exit 1. */
+const swapSequence = (target: UpgradeTarget): string => {
+  const region = target.region ?? null
+  const fetch = (url: string, destination: string) =>
+    artifactFetchCommand({ artifact: target.binary, url, destination, region })
+  return `${downgradeGuard(target.binary.source)}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 ${fetch(target.binary.tarballUrl, '$WORK/runner.tar.gz')}
@@ -287,6 +302,47 @@ else
   exit 1
 fi
 `
+}
+
+export const renderUpgradePayload = (target: UpgradeTarget): string => {
+  assertUpgradeTarget(target)
+  return `${preamble(target)}${guards(0)}${swapSequence(target)}`
+}
+
+/**
+ * The same work as an OS policy's two scripts, graded by exit code.
+ *
+ * `validate` answers the two guards and nothing else: 100 means the host is in
+ * the desired state, 101 is the only answer that makes the agent run `enforce`.
+ * `enforce` is the tail of the same script — it re-checks nothing, because the
+ * agent reaches it only after `validate` said to.
+ */
+export type UpgradePolicyScripts = { validate: string; enforce: string }
+
+export const renderPolicyScripts = (target: UpgradeTarget): UpgradePolicyScripts => {
+  assertUpgradeTarget(target)
+  return {
+    validate: `${preamble(target)}${guards(100)}echo "not serving $TARGET"
+exit 101
+`,
+    /*
+     * The payload verbatim, in its own shell, with only its final status
+     * translated.
+     *
+     * Re-grading it line by line would mean teaching `verifyAgainstManifest`
+     * and the downgrade guard — both shared with the boot script, where 0 and 1
+     * are exactly right — a second vocabulary. A heredoc keeps one copy of the
+     * work and one place where 0 becomes 100.
+     */
+    enforce: `set -u
+bash <<'BOXLITE_RUNNER_UPGRADE'
+${renderUpgradePayload(target)}
+BOXLITE_RUNNER_UPGRADE
+status=$?
+if [ "$status" -eq 0 ]; then exit 100; fi
+exit 101
+`,
+  }
 }
 
 /**

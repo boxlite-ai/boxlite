@@ -161,6 +161,16 @@ test('a fresh project gets every prerequisite mdeploy and mbuild cannot create f
   assert.equal(gcloud.applied('service-accounts create', 'bl-app-publish').length, 1, 'no image publisher')
   assert.equal(gcloud.applied('artifacts repositories create', 'boxlite-app-gcp-dev').length, 1, 'no docker repository')
   /*
+   * What lets a deploy reach a host it can never re-create: the OS Config agent
+   * reads project metadata, so turning it on here covers the runners that are
+   * already running with their boot script frozen.
+   */
+  assert.equal(
+    gcloud.applied('project-info add-metadata', 'enable-osconfig=TRUE').length,
+    1,
+    'the OS Config agent is never turned on, so no policy can reach a host',
+  )
+  /*
    * The declaration mbuild reads, honoured at the one moment it can be: tag
    * immutability is fixed at creation and no command changes it afterwards. A
    * repository made without it is one mbuild then refuses to publish into, so
@@ -262,6 +272,7 @@ test('a service account is granted its roles on the run that created it', async 
       'roles/iap.tunnelResourceAccessor',
       'roles/logging.configWriter',
       'roles/monitoring.editor',
+      'roles/osconfig.osPolicyAssignmentAdmin',
       'roles/redis.admin',
       'roles/resourcemanager.projectIamAdmin',
       'roles/run.admin',
@@ -303,7 +314,7 @@ test('a policy write that lost the read-modify-write race is retried, not report
   const roles = new Set(
     grants.map((argv: string[]) => argv.find((arg) => arg.startsWith('--role='))?.slice('--role='.length)),
   )
-  assert.equal(roles.size, 16, 'every role has to land, whichever attempt lands it')
+  assert.equal(roles.size, 17, 'every role has to land, whichever attempt lands it')
   // Three conflicts, three retries: the attempts exceed the roles by exactly
   // what was refused, so nothing was skipped and nothing retried blindly.
   assert.equal(grants.length, roles.size + 3, `attempts: ${grants.length}`)
