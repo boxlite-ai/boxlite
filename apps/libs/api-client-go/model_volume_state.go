@@ -22,10 +22,8 @@ type VolumeState string
 const (
 	VOLUMESTATE_CREATING VolumeState = "creating"
 	VOLUMESTATE_READY VolumeState = "ready"
-	VOLUMESTATE_PENDING_CREATE VolumeState = "pending_create"
-	VOLUMESTATE_PENDING_DELETE VolumeState = "pending_delete"
-	VOLUMESTATE_DELETING VolumeState = "deleting"
-	VOLUMESTATE_DELETED VolumeState = "deleted"
+	VOLUMESTATE_DESTROYING VolumeState = "destroying"
+	VOLUMESTATE_DESTROYED VolumeState = "destroyed"
 	VOLUMESTATE_ERROR VolumeState = "error"
 	VOLUMESTATE_UNKNOWN_DEFAULT_OPEN_API VolumeState = "unknown_default_open_api"
 )
@@ -34,10 +32,8 @@ const (
 var AllowedVolumeStateEnumValues = []VolumeState{
 	"creating",
 	"ready",
-	"pending_create",
-	"pending_delete",
-	"deleting",
-	"deleted",
+	"destroying",
+	"destroyed",
 	"error",
 	"unknown_default_open_api",
 }
