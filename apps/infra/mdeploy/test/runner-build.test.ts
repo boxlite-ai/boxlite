@@ -15,6 +15,7 @@ import { isAbsolute } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { RunnerBuildError, buildRunner, inspectCheckout } from '../src/runner-build.ts'
+import { readWorkspaceVersion } from '../stack/runner-binary.ts'
 import type { CommandResult, RunCommand } from '../src/upgrade-runners.ts'
 
 const REF = 'a'.repeat(40)
@@ -34,6 +35,16 @@ const EXAMPLE = fileURLToPath(new URL('../../.mstage.config.example.json', impor
  * would fail on that rather than on what is being asserted.
  */
 const CHECKOUT = new URL('../../../..', import.meta.url).pathname.replace(/\/$/, '')
+
+/**
+ * The name a staged object actually has, read rather than restated.
+ *
+ * `runner:build` composes it from the workspace version, so a literal here is a
+ * second copy of a number the repository bumps on every release — and the copy
+ * only fails on the merge commit, where the version is main's rather than the
+ * branch's. That is exactly the failure that is invisible locally.
+ */
+const STAGED_ARCHIVE = `boxlite-runner-v${readWorkspaceVersion({ from: CHECKOUT })}-${REF}-linux-amd64.tar.gz`
 const ok = (stdout = ''): CommandResult => ({ ok: true, status: 0, stdout, stderr: '' })
 const failed = (stderr: string): CommandResult => ({ ok: false, status: 1, stdout: '', stderr })
 
@@ -146,7 +157,7 @@ test('a commit already published is a no-op, because rerunning is normal here', 
     const asked = args.join(' ')
     if (asked.includes('list-objects-v2')) {
       // Both objects, as the API would name them.
-      return ok(`runner/${REF}/boxlite-runner-v0.10.0-${REF}-linux-amd64.tar.gz runner/${REF}/boxlite-runner-v0.10.0-${REF}-linux-amd64.tar.gz.sha256`)
+      return ok(`runner/${REF}/${STAGED_ARCHIVE} runner/${REF}/${STAGED_ARCHIVE}.sha256`)
     }
     return happy(calls)(file, args)
   }
@@ -162,7 +173,7 @@ test('a half-published commit is reported rather than completed', async () => {
   // every host would then fail its digest check.
   const partial = (file: string, args: string[]): CommandResult =>
     args.join(' ').includes('list-objects-v2')
-      ? ok(`runner/${REF}/boxlite-runner-v0.10.0-${REF}-linux-amd64.tar.gz`)
+      ? ok(`runner/${REF}/${STAGED_ARCHIVE}`)
       : happy()(file, args)
   await assert.rejects(
     () => drive(partial),
