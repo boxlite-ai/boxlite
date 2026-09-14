@@ -107,21 +107,25 @@ func TestMitmRouting_SecretHostPort80_NoMitm(t *testing.T) {
 	}}
 	matcher := NewSecretHostMatcher(secrets)
 
-	// The routing logic in TCPWithFilter checks:
-	//   if secretMatcher != nil && destPort == 443
-	// Port 80 should NOT trigger MITM even for secret hosts.
-	// We verify the matcher itself works but the port check is in TCPWithFilter.
 	if !matcher.Matches("api.openai.com") {
 		t.Fatal("matcher should match api.openai.com")
 	}
-	// The port 80 check is enforced by TCPWithFilter routing logic,
-	// which only calls inspectAndForward for port 443 when no allowlist.
-	// This is a design verification — port 80 MITM is intentionally excluded.
+	// Port 80 is excluded on purpose: the MITM proxy terminates TLS, so there
+	// is nothing to substitute into on cleartext HTTP.
+	got := decideTCPInspectRoute("api.openai.com", net.IPv4(203, 0, 113, 7), 80, nil, matcher)
+	if got != tcpInspectForward {
+		t.Fatalf("port 80 to a secret host should forward untouched, got %v", got)
+	}
 }
 
-// TestMitmRouting_AllowlistAndSecrets_MitmPriority verifies that when a host
-// appears in BOTH the allowlist and secret hosts, MITM takes priority.
-func TestMitmRouting_AllowlistAndSecrets_MitmPriority(t *testing.T) {
+// TestMitmRouting_AllowlistedSecretHostIsStillMitmd verifies that a host the
+// allowlist permits and a secret names is still substituted into.
+//
+// The allowlist decides WHETHER the connection happens; the secret matcher
+// decides HOW it is treated. The routing-level proof that the allowlist runs
+// first lives in TestInspectTCP_* (forked_tcp_inspect_test.go) — this test
+// drives mitmAndForward directly and only covers the substitution half.
+func TestMitmRouting_AllowlistedSecretHostIsStillMitmd(t *testing.T) {
 	ca := newTestCA(t)
 
 	secrets := []SecretConfig{{
@@ -132,15 +136,8 @@ func TestMitmRouting_AllowlistAndSecrets_MitmPriority(t *testing.T) {
 	}}
 	matcher := NewSecretHostMatcher(secrets)
 
-	// Also create an allowlist filter that includes the same host
-	filter := testFilter("api.example.com")
-
-	// Both should match
 	if !matcher.Matches("api.example.com") {
 		t.Fatal("secret matcher should match")
-	}
-	if filter != nil && !filter.MatchesHostname("api.example.com") {
-		t.Fatal("TCP filter should match")
 	}
 
 	// Verify MITM works for this host (proves MITM path is reachable)

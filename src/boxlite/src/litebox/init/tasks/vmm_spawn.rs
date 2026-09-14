@@ -350,10 +350,26 @@ fn build_network_backend(
     runtime: &SharedRuntimeImpl,
 ) -> BoxliteResult<Option<Box<dyn NetworkBackend>>> {
     // Disabled = no network at all.
-    let allow_net = match &options.network {
-        NetworkSpec::Enabled { allow_net } => allow_net.clone(),
-        NetworkSpec::Disabled => return Ok(None),
-    };
+    if matches!(options.network, NetworkSpec::Disabled) {
+        if !options.secrets.is_empty() {
+            tracing::warn!(
+                secrets = options.secrets.len(),
+                "network.mode=\"disabled\" drops the configured secrets: MITM \
+                 substitution has no traffic to act on"
+            );
+        }
+        return Ok(None);
+    }
+
+    // Secret hosts join the allowlist here rather than at the caller, so every
+    // downstream consumer (DNS sinkhole zones, egress filter, backend spec)
+    // sees one policy. Empty stays empty — see `effective_allow_net`.
+    let allow_net = options.effective_allow_net();
+    tracing::debug!(
+        rules = allow_net.len(),
+        secrets = options.secrets.len(),
+        "assembled egress allowlist"
+    );
 
     let config = NetworkBackendConfig {
         socket_path: layout.net_backend_socket_path(),

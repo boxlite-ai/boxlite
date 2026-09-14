@@ -166,6 +166,10 @@ func (f *AllowNetFilter) SetResolvedHostIPs(exact, wildcard map[string][]net.IP)
 // overlapping wildcards), so the check unions across every matching rule:
 // destIP is allowed when any matching rule resolves it, independent of rule
 // order, and fails closed only when none do.
+//
+// It is one of the two terms in the post-peek gate, not the whole of it: it
+// knows nothing about IP/CIDR rules, so inspectedDestinationAllowed pairs it
+// with MatchesIP (forked_tcp.go).
 func (f *AllowNetFilter) AllowHostToIP(hostname string, destIP net.IP) bool {
 	hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
 	if hostname == "" {

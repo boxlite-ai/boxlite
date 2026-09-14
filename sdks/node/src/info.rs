@@ -56,6 +56,12 @@ pub struct JsOutboundNetworkInfo {
     pub mode: String,
     #[napi(js_name = "allowNet")]
     pub allow_net: Vec<String>,
+    /// The allowlist actually enforced: `allowNet` plus each exact hostname
+    /// named by a configured secret. Entries past `allowNet` are the
+    /// secret-derived ones. Wildcard and address entries in a secret's hosts
+    /// list never join, so those still need their own rule.
+    #[napi(js_name = "effectiveAllowNet")]
+    pub effective_allow_net: Vec<String>,
 }
 
 impl From<OutboundNetworkInfo> for JsOutboundNetworkInfo {
@@ -63,6 +69,7 @@ impl From<OutboundNetworkInfo> for JsOutboundNetworkInfo {
         Self {
             mode: network_mode_to_string(direction.mode),
             allow_net: direction.allow_net,
+            effective_allow_net: direction.effective_allow_net,
         }
     }
 }
@@ -341,6 +348,10 @@ mod tests {
             OutboundNetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: vec!["api.example.com".to_string()],
+                effective_allow_net: vec![
+                    "api.example.com".to_string(),
+                    "secret.example.com".to_string(),
+                ],
             },
             InboundNetworkInfo {
                 mode: NetworkMode::Disabled,
@@ -360,6 +371,11 @@ mod tests {
         };
         assert_eq!(network.outbound.mode, "enabled");
         assert_eq!(network.outbound.allow_net, vec!["api.example.com"]);
+        assert_eq!(
+            network.outbound.effective_allow_net,
+            vec!["api.example.com", "secret.example.com"],
+            "the enforced list must survive the FFI conversion distinctly"
+        );
         assert_eq!(network.inbound.mode, "disabled");
         let ports = network.published_ports.expect("resolved publications");
         assert_eq!(ports.len(), 1);
@@ -372,6 +388,7 @@ mod tests {
             OutboundNetworkInfo {
                 mode: NetworkMode::Disabled,
                 allow_net: Vec::new(),
+                effective_allow_net: Vec::new(),
             },
             InboundNetworkInfo {
                 mode: NetworkMode::Enabled,
@@ -394,6 +411,7 @@ mod tests {
             OutboundNetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: Vec::new(),
+                effective_allow_net: Vec::new(),
             },
             InboundNetworkInfo {
                 mode: NetworkMode::Enabled,

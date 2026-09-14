@@ -74,6 +74,12 @@ pub(crate) struct PyOutboundNetworkInfo {
     pub(crate) mode: String,
     #[pyo3(get)]
     pub(crate) allow_net: Vec<String>,
+    /// The allowlist actually enforced: `allow_net` plus each exact hostname
+    /// named by a configured secret. Entries past `allow_net` are the
+    /// secret-derived ones. Wildcard and address entries in a secret's hosts
+    /// list never join, so those still need their own rule.
+    #[pyo3(get)]
+    pub(crate) effective_allow_net: Vec<String>,
 }
 
 impl From<OutboundNetworkInfo> for PyOutboundNetworkInfo {
@@ -81,6 +87,7 @@ impl From<OutboundNetworkInfo> for PyOutboundNetworkInfo {
         Self {
             mode: network_mode_to_string(direction.mode),
             allow_net: direction.allow_net,
+            effective_allow_net: direction.effective_allow_net,
         }
     }
 }
@@ -90,6 +97,7 @@ impl PyOutboundNetworkInfo {
         serde_json::json!({
             "mode": self.mode,
             "allow_net": self.allow_net,
+            "effective_allow_net": self.effective_allow_net,
         })
     }
 }
@@ -492,6 +500,13 @@ mod tests {
             OutboundNetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: vec!["api.example.com".to_string()],
+                // Deliberately longer than allow_net: a conversion that copied
+                // the configured list, or dropped the secret-derived host,
+                // would otherwise pass.
+                effective_allow_net: vec![
+                    "api.example.com".to_string(),
+                    "secret.example.com".to_string(),
+                ],
             },
             InboundNetworkInfo {
                 mode: NetworkMode::Disabled,
@@ -508,6 +523,14 @@ mod tests {
         let network = resolved.network.expect("network metadata");
         assert_eq!(network.outbound.mode, "enabled");
         assert_eq!(network.outbound.allow_net, vec!["api.example.com"]);
+        assert_eq!(
+            network.outbound.effective_allow_net,
+            vec!["api.example.com", "secret.example.com"]
+        );
+        // The dict form feeds __repr__, so it must carry the field too.
+        let json = network.outbound.json_value();
+        assert_eq!(json["effective_allow_net"][1], "secret.example.com");
+        assert_eq!(json["allow_net"].as_array().unwrap().len(), 1);
         assert_eq!(network.inbound.mode, "disabled");
         let ports = network.published_ports.expect("resolved publications");
         assert_eq!(ports.len(), 1);
@@ -520,6 +543,7 @@ mod tests {
             OutboundNetworkInfo {
                 mode: NetworkMode::Disabled,
                 allow_net: Vec::new(),
+                effective_allow_net: Vec::new(),
             },
             InboundNetworkInfo {
                 mode: NetworkMode::Enabled,
@@ -540,6 +564,7 @@ mod tests {
             OutboundNetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: Vec::new(),
+                effective_allow_net: Vec::new(),
             },
             InboundNetworkInfo {
                 mode: NetworkMode::Enabled,

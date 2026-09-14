@@ -51,11 +51,21 @@ pub struct CPublishedPortList {
 /// Outbound (guest → internet) network mode and allowlist.
 /// `allow_net` points to `allow_net_count` owned strings, owned by the
 /// enclosing [`CNetworkInfo`].
+///
+/// `effective_allow_net` is the allowlist actually enforced: `allow_net` plus
+/// each exact hostname named by a configured secret (wildcard and address
+/// entries in a secret's hosts list never join). It owns its own strings — never
+/// an alias of `allow_net`, even when the two lists are equal, so
+/// `free_network_info` cannot double-free. It is appended last so the
+/// preceding fields keep their offsets; `CNetworkInfo.inbound` moves, which
+/// post-split callers pick up on recompile.
 #[repr(C)]
 pub struct COutboundNetworkInfo {
     pub mode: BoxliteNetworkMode,
     pub allow_net: *mut *mut c_char,
     pub allow_net_count: c_int,
+    pub effective_allow_net: *mut *mut c_char,
+    pub effective_allow_net_count: c_int,
 }
 
 /// Inbound (internet → guest) network mode and allowlist.
@@ -187,6 +197,15 @@ impl COutboundNetworkInfo {
     fn from_outbound(direction: &boxlite::OutboundNetworkInfo) -> Self {
         let (allow_net, allow_net_count) =
             into_raw_slice(direction.allow_net.iter().map(|h| to_c_str(h)).collect());
+        // Separate allocation on purpose: aliasing allow_net's pointers when
+        // the lists happen to be equal would make free_network_info double-free.
+        let (effective_allow_net, effective_allow_net_count) = into_raw_slice(
+            direction
+                .effective_allow_net
+                .iter()
+                .map(|h| to_c_str(h))
+                .collect(),
+        );
         Self {
             mode: match direction.mode {
                 NetworkMode::Enabled => BoxliteNetworkMode::BoxliteNetworkModeEnabled,
@@ -194,6 +213,8 @@ impl COutboundNetworkInfo {
             },
             allow_net,
             allow_net_count,
+            effective_allow_net,
+            effective_allow_net_count,
         }
     }
 }
@@ -280,6 +301,10 @@ pub(crate) unsafe fn free_network_info(network: *mut CNetworkInfo) {
     unsafe {
         let network = Box::from_raw(network);
         free_allow_net(network.outbound.allow_net, network.outbound.allow_net_count);
+        free_allow_net(
+            network.outbound.effective_allow_net,
+            network.outbound.effective_allow_net_count,
+        );
         free_allow_net(network.inbound.allow_net, network.inbound.allow_net_count);
         free_published_port_list(network.published_ports);
     }
@@ -617,6 +642,7 @@ mod tests {
             OutboundNetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: vec!["api.example.com".to_string()],
+                effective_allow_net: vec!["api.example.com".to_string()],
             },
             InboundNetworkInfo {
                 mode: NetworkMode::Disabled,
@@ -639,12 +665,15 @@ mod tests {
             );
         }
 
-        // One free of the aliased allowlist, not two.
+        // The legacy alias is still freed exactly once — the second free is
+        // effective_allow_net, which owns its own strings even when they spell
+        // the same hosts. Two lists, two frees, no double-free.
         let before = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst);
         unsafe { free_network_info(network.as_ptr()) };
         assert_eq!(
             FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst) - before,
-            1
+            2,
+            "expected one free for the aliased allow_net and one for effective_allow_net"
         );
     }
 
@@ -659,6 +688,13 @@ mod tests {
             OutboundNetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: vec!["api.example.com".to_string()],
+                // Deliberately longer than allow_net: a conversion that aliased
+                // the configured list, or dropped the secret-derived host,
+                // would otherwise pass.
+                effective_allow_net: vec![
+                    "api.example.com".to_string(),
+                    "secret.example.com".to_string(),
+                ],
             },
             InboundNetworkInfo {
                 mode: NetworkMode::Disabled,
@@ -679,6 +715,25 @@ mod tests {
                 .unwrap(),
             "api.example.com"
         );
+        assert_eq!(unresolved_ref.outbound.effective_allow_net_count, 2);
+        let effective = unsafe {
+            std::slice::from_raw_parts(
+                unresolved_ref.outbound.effective_allow_net,
+                unresolved_ref.outbound.effective_allow_net_count as usize,
+            )
+        };
+        assert_eq!(
+            effective
+                .iter()
+                .map(|h| unsafe { CStr::from_ptr(*h) }.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["api.example.com", "secret.example.com"]
+        );
+        // Separate allocations, so the two lists cannot be the same pointer.
+        assert_ne!(
+            unresolved_ref.outbound.allow_net as usize,
+            unresolved_ref.outbound.effective_allow_net as usize
+        );
         assert_eq!(
             unresolved_ref.inbound.mode,
             BoxliteNetworkMode::BoxliteNetworkModeDisabled
@@ -691,6 +746,7 @@ mod tests {
             OutboundNetworkInfo {
                 mode: NetworkMode::Disabled,
                 allow_net: Vec::new(),
+                effective_allow_net: Vec::new(),
             },
             InboundNetworkInfo {
                 mode: NetworkMode::Enabled,
@@ -714,6 +770,7 @@ mod tests {
             OutboundNetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: Vec::new(),
+                effective_allow_net: Vec::new(),
             },
             InboundNetworkInfo {
                 mode: NetworkMode::Enabled,
@@ -742,6 +799,12 @@ mod tests {
         unsafe { free_network_info(resolved.as_ptr()) };
 
         let after = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst);
-        assert_eq!(after - before, 2, "nested network strings must be freed");
+        assert_eq!(
+            after - before,
+            4,
+            "nested network strings must be freed: the first fixture's one \
+             allow_net entry, its two separately-allocated effective_allow_net \
+             entries, and the last fixture's published host_ip"
+        );
     }
 }

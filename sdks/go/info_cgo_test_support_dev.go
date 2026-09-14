@@ -17,11 +17,18 @@ func cNetworkInfoTraversalTestFixtures() [4]*NetworkInfo {
 	allowHost := C.CString("api.example.com")
 	defer C.free(unsafe.Pointer(allowHost))
 	allowNet := []*C.char{allowHost}
+	// The effective list deliberately differs from allow_net, so a converter
+	// that read the wrong pointer would be caught rather than coincide.
+	secretHost := C.CString("secret.example.com")
+	defer C.free(unsafe.Pointer(secretHost))
+	effectiveAllowNet := []*C.char{allowHost, secretHost}
 	unresolved := C.CNetworkInfo{
 		outbound: C.COutboundNetworkInfo{
-			mode:            C.BoxliteNetworkModeEnabled,
-			allow_net:       (**C.char)(unsafe.Pointer(&allowNet[0])),
-			allow_net_count: 1,
+			mode:                      C.BoxliteNetworkModeEnabled,
+			allow_net:                 (**C.char)(unsafe.Pointer(&allowNet[0])),
+			allow_net_count:           1,
+			effective_allow_net:       (**C.char)(unsafe.Pointer(&effectiveAllowNet[0])),
+			effective_allow_net_count: 2,
 		},
 		inbound: C.CInboundNetworkInfo{
 			mode: C.BoxliteNetworkModeDisabled,
@@ -63,9 +70,11 @@ func cNetworkInfoTraversalTestFixtures() [4]*NetworkInfo {
 	}
 	populated := C.CNetworkInfo{
 		outbound: C.COutboundNetworkInfo{
-			mode:            C.BoxliteNetworkModeEnabled,
-			allow_net:       (**C.char)(unsafe.Pointer(&allowNet[0])),
-			allow_net_count: 1,
+			mode:                      C.BoxliteNetworkModeEnabled,
+			allow_net:                 (**C.char)(unsafe.Pointer(&allowNet[0])),
+			allow_net_count:           1,
+			effective_allow_net:       (**C.char)(unsafe.Pointer(&allowNet[0])),
+			effective_allow_net_count: 1,
 		},
 		inbound: C.CInboundNetworkInfo{
 			mode: C.BoxliteNetworkModeEnabled,

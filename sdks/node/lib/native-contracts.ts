@@ -281,6 +281,14 @@ export interface JsPublishedPort {
 export interface JsOutboundNetworkInfo {
   mode: "enabled" | "disabled";
   allowNet: string[];
+  /**
+   * The allowlist actually enforced: `allowNet` plus each exact hostname
+   * named by a configured secret. Entries past `allowNet` are the
+   * secret-derived ones. Empty means unrestricted, exactly as for
+   * `allowNet`. Wildcard and address entries in a secret's `hosts` list
+   * never join, so those still need their own rule.
+   */
+  effectiveAllowNet: string[];
 }
 
 export interface JsInboundNetworkInfo {

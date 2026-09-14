@@ -47,7 +47,11 @@ func main() {
 		boxlite.WithNetwork(boxlite.NetworkSpec{
 			Outbound: boxlite.OutboundNetworkSpec{
 				Mode:     boxlite.NetworkModeEnabled,
-				AllowNet: []string{"api.openai.com"},
+				// api.openai.com is allowed automatically: an exact
+				// Secret.hosts entry joins a non-empty allow_net. List
+				// hosts needing no credential here (wildcard secret
+				// hosts still need their own rule).
+				AllowNet: []string{"pypi.org"},
 			},
 		}),
 		boxlite.WithSecret(boxlite.Secret{

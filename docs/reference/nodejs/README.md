@@ -134,7 +134,7 @@ interface NetworkSpec {
 }
 ```
 
-Use `allowNet` only when `mode: "enabled"`. Empty or omitted `allowNet` means full outbound access. `mode: "disabled"` removes the guest network interface entirely.
+Use `allowNet` only when `mode: "enabled"`. Empty or omitted `allowNet` means full outbound access. Exact hosts named by a configured secret join a non-empty allowlist automatically, so a credential's host needs no second entry; they do not join an empty one, which already means full access, and a wildcard `Secret.hosts` entry is not merged (its matching is narrower than an allowlist wildcard) so it still needs its own rule. `box.info()` reports the merged result as `network.outbound.effectiveAllowNet`. `mode: "disabled"` removes the guest network interface entirely.
 
 #### `JsEnvVar`
 

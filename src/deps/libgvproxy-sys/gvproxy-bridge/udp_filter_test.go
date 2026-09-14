@@ -67,6 +67,22 @@ func startNetwork(t *testing.T, allowNet []string) *guestTap {
 // there is no buffer to fill.
 func startNetworkWith(t *testing.T, cfg GvproxyConfig) *guestTap {
 	t.Helper()
+	return startNetworkWithMitm(t, cfg, networkMitm{})
+}
+
+// networkMitm carries the two slots gvproxy_create fills from a box's secrets
+// (main.go:426-428) and that startNetworkWith leaves empty. stubResolution
+// swaps the live DNS lookups buildAllowNet performs for deterministic ones, so
+// a test that needs the egress pin does not need the internet.
+type networkMitm struct {
+	ca             *BoxCA
+	secretMatcher  *SecretHostMatcher
+	stubResolution bool
+}
+
+// startNetworkWithMitm is startNetworkWith's body with the MITM slots exposed.
+func startNetworkWithMitm(t *testing.T, cfg GvproxyConfig, mitm networkMitm) *guestTap {
+	t.Helper()
 
 	// Mirror gvproxy_create: only resolve hostname rules when an allow_net is
 	// present. An empty allow_net is the common case and needs no resolution;
@@ -74,7 +90,11 @@ func startNetworkWith(t *testing.T, cfg GvproxyConfig) *guestTap {
 	// already gate on len(cfg.AllowNet) > 0.
 	var resolved allowNetResolution
 	if len(cfg.AllowNet) > 0 {
-		resolved = buildAllowNet(cfg.AllowNet)
+		if mitm.stubResolution {
+			resolved.exactIPs, resolved.suffixIPs = stubResolvedHostIPs(cfg.AllowNet)
+		} else {
+			resolved = buildAllowNet(cfg.AllowNet)
+		}
 	}
 	tapConfig := buildTapConfig(cfg, types.QemuProtocol, resolved.zones)
 	// Route the unlisted TEST-NET destination to a test-owned loopback
@@ -87,9 +107,14 @@ func startNetworkWith(t *testing.T, cfg GvproxyConfig) *guestTap {
 		t.Fatalf("virtualnetwork.New: %v", err)
 	}
 
-	if len(cfg.AllowNet) > 0 {
-		filter := newAllowNetFilter(cfg, resolved.exactIPs, resolved.suffixIPs)
-		if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, filter, nil, nil); err != nil {
+	// Same condition as production (main.go:477): secrets alone are reason
+	// enough to replace the upstream forwarders.
+	if len(cfg.AllowNet) > 0 || mitm.secretMatcher != nil {
+		var filter *AllowNetFilter
+		if len(cfg.AllowNet) > 0 {
+			filter = newAllowNetFilter(cfg, resolved.exactIPs, resolved.suffixIPs)
+		}
+		if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, filter, mitm.ca, mitm.secretMatcher); err != nil {
 			t.Fatalf("installAllowNetHandlers: %v", err)
 		}
 	}

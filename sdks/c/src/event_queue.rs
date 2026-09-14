@@ -1287,6 +1287,7 @@ mod owned_ffi_ptr_nested_leak_tests {
                 OutboundNetworkInfo {
                     mode: NetworkMode::Enabled,
                     allow_net: vec!["api.example.com".to_string()],
+                    effective_allow_net: vec!["api.example.com".to_string()],
                 },
                 InboundNetworkInfo {
                     mode: NetworkMode::Enabled,
@@ -1309,9 +1310,10 @@ mod owned_ffi_ptr_nested_leak_tests {
         let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
         assert_eq!(
             after - before,
-            6,
+            7,
             "OwnedFfiPtr<CBoxInfo>::drop reclaimed {} inner CStrings; \
-             expected 6 (four BoxInfo strings + allow_net + host_ip). Inner allocations leak.",
+             expected 7 (four BoxInfo strings + allow_net + effective_allow_net \
+             + host_ip). Inner allocations leak.",
             after - before
         );
     }

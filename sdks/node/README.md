@@ -181,7 +181,10 @@ const box = new SimpleBox({
   network: {
     outbound: {
       mode: 'enabled',
-      allowNet: ['api.openai.com'],
+      // api.openai.com is allowed automatically: an exact hosts entry on a
+      // secret joins a non-empty allowNet. List the hosts that need no
+      // credential here (wildcard secret hosts still need their own rule).
+      allowNet: ['pypi.org'],
     },
     inbound: {
       mode: 'disabled',

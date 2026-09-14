@@ -551,6 +551,72 @@ impl Default for BoxOptions {
     }
 }
 
+/// The `allow_net` rule a `Secret.hosts` entry contributes, or `None` when it
+/// contributes none.
+///
+/// The invariant: **an entry earns egress only if it can also receive
+/// substitution.** Secret matching compares the TLS SNI against
+/// `ToLower(entry)`, so an entry carrying surrounding whitespace or a trailing
+/// root dot can never match a real ClientHello. Granting it egress anyway would
+/// be worse than blocking it — the request would leave the box with the literal
+/// placeholder in place of the credential.
+///
+/// What that leaves out, and why:
+///
+/// - **Whitespace or a trailing dot** (`" x.com "`, `"x.com."`): unmatchable by
+///   the secret matcher, per the invariant above.
+/// - A **single label** (`"intranet"`): the gateway builds no reachable DNS
+///   zone for a dotless name, so synthesizing a rule would report the host as
+///   allowed while it stayed unreachable. Reporting an honest `allow_net` beats
+///   reporting a rule that does nothing.
+/// - A **wildcard** matches one label for a secret (`api.x.com`) and any depth
+///   for an allowlist (`a.b.x.com`), so merging it would grant egress the
+///   credential declaration never claimed, and `allow_net` cannot express the
+///   narrower form.
+/// - An **IP or CIDR** can never match: substitution keys off the SNI hostname,
+///   so such an entry is inert in a secret. Merged, it would become a real
+///   address rule — `"0.0.0.0/0"` would hand a restricted box the whole IPv4
+///   internet, and unlike a hostname rule an address rule also opens UDP.
+///
+/// Case is the one thing normalized rather than rejected, because it is the one
+/// thing the secret matcher itself folds. It has to be normalized: the
+/// gateway's DNS zone lookup compares record names with `==` on the raw
+/// string, so a rule synthesized as `"API.Foo.com"` would never answer the
+/// lowercase query a guest actually sends. Entries the caller wrote into
+/// `allow_net` themselves are never rewritten — those are their rules, and
+/// folding them would break the mixed-case queries they do answer.
+///
+/// Address classification mirrors the enforcement layer's own (`net.ParseIP` /
+/// `net.ParseCIDR` in the gvproxy bridge's allowlist builder).
+fn secret_host_as_allow_net_rule(host: &str) -> Option<String> {
+    if host.is_empty()
+        || host.trim() != host
+        || host.ends_with('.')
+        || host.starts_with("*.")
+        || !host.contains('.')
+        || host.contains('/')
+        || host.contains(':')
+        || host.parse::<IpAddr>().is_ok()
+    {
+        return None;
+    }
+    Some(host.to_ascii_lowercase())
+}
+
+/// Whether `configured` already carries the synthesized `rule`.
+///
+/// Exact comparison against the caller's spelling, deliberately. The gateway
+/// compares zone and record names case-sensitively and keys zones off the raw
+/// string, so two spellings are two rules there: folding case or the trailing
+/// dot here would let a configured entry the gateway mishandles —
+/// `"github.com."` builds a malformed zone, `"GitHub.com"` answers only
+/// mixed-case queries — suppress the synthesized rule that works. Allowlists
+/// are unions, so a redundant spelling costs one startup lookup; a suppressed
+/// one costs reachability.
+fn already_listed(configured: &str, rule: &str) -> bool {
+    configured.trim() == rule
+}
+
 impl BoxOptions {
     /// Resolve the modern and deprecated deletion inputs to one policy.
     #[allow(deprecated)]
@@ -564,6 +630,51 @@ impl BoxOptions {
     /// Explicit `auto_delete` takes precedence over deprecated `auto_remove`.
     pub(crate) fn removes_on_stop(&self) -> bool {
         self.effective_auto_delete() > 0
+    }
+
+    /// The egress allowlist actually enforced: the configured `allow_net` plus
+    /// each exact hostname named by a configured secret.
+    ///
+    /// Declaring a credential for a host already says that host must be
+    /// reachable, so callers do not restate it in `allow_net`. Three limits,
+    /// all deliberate:
+    ///
+    /// - Secrets merge only into a *non-empty* `allow_net`. An empty one means
+    ///   unrestricted egress, so merging there would silently turn an open box
+    ///   into a restricted one — the opposite of what adding a credential asks
+    ///   for.
+    /// - Wildcard and address entries in `Secret.hosts` do not merge; see
+    ///   [`secret_host_as_allow_net_rule`].
+    /// - What merges is a normalized rule, not the caller's spelling, for the
+    ///   reason given there.
+    ///
+    /// Nothing is written back into `self`. Like `effective_capabilities`, the
+    /// policy is recomputed wherever it is needed so the raw fields keep
+    /// saying what the caller asked for, and deleting a secret withdraws its
+    /// host again.
+    pub(crate) fn effective_allow_net(&self) -> Vec<String> {
+        let NetworkSpec::Enabled { allow_net } = &self.network else {
+            return Vec::new();
+        };
+        // Empty means unrestricted; there is nothing to merge into.
+        if allow_net.is_empty() {
+            return Vec::new();
+        }
+
+        let mut merged = allow_net.clone();
+        for host in self.secrets.iter().flat_map(|secret| &secret.hosts) {
+            let Some(rule) = secret_host_as_allow_net_rule(host) else {
+                continue;
+            };
+            if merged
+                .iter()
+                .any(|configured| already_listed(configured, &rule))
+            {
+                continue;
+            }
+            merged.push(rule);
+        }
+        merged
     }
 
     /// Sanitize and validate options.
@@ -2335,6 +2446,203 @@ mod tests {
         let opts: BoxOptions = serde_json::from_str(json).unwrap();
         assert_eq!(opts.entrypoint, Some(vec!["dockerd".to_string()]));
         assert_eq!(opts.cmd, Some(vec!["--iptables=false".to_string()]));
+    }
+
+    // ========================================================================
+    // Effective allowlist tests (Secret.hosts merged into allow_net)
+    // ========================================================================
+
+    fn opts_with(allow_net: Vec<&str>, secret_hosts: Vec<Vec<&str>>) -> BoxOptions {
+        BoxOptions {
+            network: NetworkSpec::Enabled {
+                allow_net: allow_net.into_iter().map(String::from).collect(),
+            },
+            secrets: secret_hosts
+                .into_iter()
+                .enumerate()
+                .map(|(i, hosts)| Secret {
+                    name: format!("s{i}"),
+                    hosts: hosts.into_iter().map(String::from).collect(),
+                    placeholder: format!("<BOXLITE_SECRET:s{i}>"),
+                    value: "value".to_string(),
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn effective_allow_net_merges_secret_hosts_into_a_restricted_allowlist() {
+        let opts = opts_with(vec!["pypi.org"], vec![vec!["github.com", "api.github.com"]]);
+        assert_eq!(
+            opts.effective_allow_net(),
+            vec!["pypi.org", "github.com", "api.github.com"],
+            "configured entries keep their order, secret hosts follow"
+        );
+    }
+
+    #[test]
+    fn effective_allow_net_stays_empty_when_allow_net_is_empty() {
+        let opts = opts_with(vec![], vec![vec!["github.com"]]);
+        assert!(
+            opts.effective_allow_net().is_empty(),
+            "an empty allow_net means unrestricted; merging would silently restrict the box"
+        );
+    }
+
+    #[test]
+    fn effective_allow_net_is_empty_when_network_is_disabled() {
+        let opts = BoxOptions {
+            network: NetworkSpec::Disabled,
+            secrets: vec![test_secret()],
+            ..Default::default()
+        };
+        assert!(opts.effective_allow_net().is_empty());
+    }
+
+    #[test]
+    fn effective_allow_net_deduplicates_a_host_allow_net_already_lists() {
+        let opts = opts_with(vec!["github.com"], vec![vec!["github.com", "GitHub.com"]]);
+        assert_eq!(
+            opts.effective_allow_net(),
+            vec!["github.com"],
+            "both spellings synthesize the same rule, which allow_net already carries"
+        );
+    }
+
+    /// A spelling the configured list does not carry verbatim is appended, even
+    /// when the egress filter would fold the two together. `"github.com."`
+    /// builds a malformed DNS zone, so suppressing the plain secret host in its
+    /// favour would leave github.com unreachable.
+    #[test]
+    fn effective_allow_net_keeps_a_secret_host_a_broken_spelling_would_shadow() {
+        let opts = opts_with(vec!["github.com."], vec![vec!["github.com"]]);
+        assert_eq!(
+            opts.effective_allow_net(),
+            vec!["github.com.", "github.com"],
+            "a working spelling must not be dropped for an equivalent-looking broken one"
+        );
+    }
+
+    /// The gateway's DNS zone lookup compares record names with `==`, so a
+    /// secret host appended in mixed case would never answer the lowercase
+    /// query a guest sends. Case is folded on the synthesized rule; the
+    /// caller's own entries are never touched.
+    #[test]
+    fn effective_allow_net_lowercases_the_rule_it_synthesizes() {
+        let opts = opts_with(vec!["PyPI.org"], vec![vec!["API.Example.COM"]]);
+        assert_eq!(
+            opts.effective_allow_net(),
+            vec!["PyPI.org", "api.example.com"],
+            "the appended rule is lowercased; PyPI.org stays as written"
+        );
+    }
+
+    /// An entry earns egress only if it can also receive substitution. The
+    /// secret matcher compares the SNI against `ToLower(entry)`, so a padded or
+    /// dotted entry never matches a real ClientHello — granting it egress would
+    /// send the request out with the placeholder still in it.
+    #[test]
+    fn effective_allow_net_rejects_entries_the_secret_matcher_cannot_match() {
+        let opts = opts_with(
+            vec!["pypi.org"],
+            vec![vec![
+                " api.example.com ",
+                "api.example.com.",
+                "intranet",
+                "ok.example.com",
+            ]],
+        );
+        assert_eq!(
+            opts.effective_allow_net(),
+            vec!["pypi.org", "ok.example.com"],
+            "only an entry both layers can honor earns a rule"
+        );
+    }
+
+    /// A configured wildcard does NOT make a secret host redundant. The
+    /// wildcard's DNS catch-all answers with the base domain's address, so
+    /// relying on it would point the credential's host at the wrong server;
+    /// the exact rule resolves the host itself, and the gateway keeps the
+    /// wildcard covering the siblings either way.
+    #[test]
+    fn effective_allow_net_still_merges_a_host_under_a_configured_wildcard() {
+        let opts = opts_with(
+            vec!["*.example.com"],
+            vec![vec!["api.example.com", "example.com"]],
+        );
+        assert_eq!(
+            opts.effective_allow_net(),
+            vec!["*.example.com", "api.example.com", "example.com"],
+            "the host gets its own rule, and so does the apex the wildcard never covered"
+        );
+    }
+
+    /// An address rule in `Secret.hosts` is inert for substitution (which keys
+    /// off TLS SNI) but would become real egress if merged — and address rules
+    /// open UDP too, which no hostname rule does.
+    #[test]
+    fn effective_allow_net_does_not_merge_addresses_from_secret_hosts() {
+        let opts = opts_with(
+            vec!["pypi.org"],
+            vec![vec![
+                "0.0.0.0/0",
+                "10.0.0.0/8",
+                "1.2.3.4",
+                "::1",
+                "2001:db8::/32",
+                "api.example.com",
+            ]],
+        );
+        assert_eq!(
+            opts.effective_allow_net(),
+            vec!["pypi.org", "api.example.com"],
+            "no IP or CIDR may cross over; the hostname still does"
+        );
+    }
+
+    /// Secret wildcard matching takes one label; allowlist wildcard matching
+    /// takes any depth. Merging the rule would hand out egress to hosts the
+    /// credential itself would never be substituted into.
+    #[test]
+    fn effective_allow_net_does_not_merge_wildcard_secret_hosts() {
+        let opts = opts_with(
+            vec!["pypi.org"],
+            vec![vec!["*.example.com", "api.example.com"]],
+        );
+        assert_eq!(
+            opts.effective_allow_net(),
+            vec!["pypi.org", "api.example.com"],
+            "the wildcard stays out; the exact host still merges"
+        );
+    }
+
+    #[test]
+    fn effective_allow_net_skips_secrets_without_usable_hosts() {
+        let opts = opts_with(vec!["pypi.org"], vec![vec![], vec!["", "  "]]);
+        assert_eq!(opts.effective_allow_net(), vec!["pypi.org"]);
+    }
+
+    /// Configured entries are never rewritten — not IPs, not CIDRs, not blanks.
+    /// A differently-cased secret host is appended rather than folded into the
+    /// configured spelling: the gateway treats the two as separate rules, and
+    /// only the lowercase one answers the query a guest sends.
+    #[test]
+    fn effective_allow_net_preserves_configured_entries_verbatim() {
+        let opts = opts_with(
+            vec!["10.0.0.0/8", "  ", "Example.COM"],
+            vec![vec!["example.com"]],
+        );
+        assert_eq!(
+            opts.effective_allow_net(),
+            vec!["10.0.0.0/8", "  ", "Example.COM", "example.com"],
+        );
+    }
+
+    #[test]
+    fn effective_allow_net_deduplicates_across_secrets() {
+        let opts = opts_with(vec!["pypi.org"], vec![vec!["a.com"], vec!["a.com"]]);
+        assert_eq!(opts.effective_allow_net(), vec!["pypi.org", "a.com"]);
     }
 
     // ========================================================================

@@ -198,6 +198,26 @@ Structured network configuration for outbound connectivity.
   holding **only** hostnames denies all UDP egress — otherwise a guest could
   sidestep the rule by addressing the resolved IP directly. QUIC/HTTP3 to such
   a host falls back to TCP; add the IP or CIDR to keep UDP open.
+- Each **exact** host named by a configured `Secret.hosts` joins a non-empty
+  `allow_net` automatically — declaring a credential for a host already says
+  that host must be reachable, so there is no second list to keep in sync.
+  Three deliberate limits:
+  - Secret hosts do **not** join an empty `allow_net`: empty already means
+    full access, and merging there would silently restrict the box.
+  - A **wildcard** `Secret.hosts` entry (`*.example.com`) is **not** merged and
+    still needs its own `allow_net` rule. Secret matching accepts one label
+    (`api.example.com`); an `allow_net` wildcard accepts any depth
+    (`a.b.example.com`), so merging it would grant egress the credential never
+    claimed, and `allow_net` has no syntax for the narrower form.
+  - Security: a secret is an egress grant as well as a credential —
+    `allow_net` is not the only gate.
+
+  `box.info()` reports the merged result under
+  `network.outbound.effective_allow_net`, so the enforced set is inspectable.
+  It is computed from the box's stored options rather than read back from the
+  running gateway, so a box that was already running when this behavior
+  shipped reports the merged set while its live gateway still enforces the
+  pre-merge one — restart the box to re-apply policy.
 - The gateway's DNS resolver and DHCP are internal services and stay reachable
   regardless of `allow_net`.
 - `host.boxlite.internal` is a built-in hostname that resolves to

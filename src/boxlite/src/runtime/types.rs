@@ -331,11 +331,58 @@ pub struct PublishedPort {
 /// Records whether the guest can reach external hosts and which hosts are
 /// allowed when [`mode`][Self::mode] is [`NetworkMode::Enabled`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "OutboundNetworkInfoWire")]
 pub struct OutboundNetworkInfo {
     pub mode: NetworkMode,
     /// Empty means unrestricted outbound access.
     #[serde(default)]
     pub allow_net: Vec<String>,
+
+    /// The allowlist actually enforced: [`allow_net`][Self::allow_net] plus
+    /// each exact hostname named by a configured secret. Declaring a credential
+    /// for a host already allows that host, so the entries past `allow_net` are
+    /// the secret-derived ones — that difference is the provenance, and nothing
+    /// records it separately.
+    ///
+    /// Secret hosts only join a non-empty `allow_net`; empty here means
+    /// unrestricted, exactly as for `allow_net`. Wildcard and address entries
+    /// in `Secret.hosts` never join, so those still need their own rule.
+    ///
+    /// Computed from the box's stored options, not read back from the running
+    /// gateway. The two agree for every box this build started, because the
+    /// gateway is configured from the same function. They can disagree for a
+    /// box that was already running when the merge shipped: its live gateway
+    /// still enforces the pre-merge set, and only a restart re-applies policy.
+    /// Such a box reports secret hosts as allowed while its DNS still
+    /// sinkholes them.
+    #[serde(default)]
+    pub effective_allow_net: Vec<String>,
+}
+
+/// Deserialization shape for [`OutboundNetworkInfo`]. A payload without
+/// `effective_allow_net` predates the secret-host merge, where the enforced
+/// set was exactly `allow_net`. Folding it that way beats letting the field
+/// default to empty, which would read as "unrestricted" for a box that is in
+/// fact restricted.
+#[derive(Deserialize)]
+struct OutboundNetworkInfoWire {
+    mode: NetworkMode,
+    #[serde(default)]
+    allow_net: Vec<String>,
+    #[serde(default)]
+    effective_allow_net: Option<Vec<String>>,
+}
+
+impl From<OutboundNetworkInfoWire> for OutboundNetworkInfo {
+    fn from(wire: OutboundNetworkInfoWire) -> Self {
+        Self {
+            mode: wire.mode,
+            effective_allow_net: wire
+                .effective_allow_net
+                .unwrap_or_else(|| wire.allow_net.clone()),
+            allow_net: wire.allow_net,
+        }
+    }
 }
 
 /// Network configuration for inbound (internet → guest) traffic.
@@ -389,6 +436,11 @@ pub struct NetworkInfo {
 impl NetworkInfo {
     /// Build metadata for both directions, filling the deprecated flat
     /// mirrors from `outbound`.
+    ///
+    /// The mirror set is frozen at `mode` + `allow_net`: the C ABI aliases
+    /// those to `outbound`'s own allocations, so a mirror that carried a
+    /// different list would break that aliasing contract. New information
+    /// lands on `outbound` only.
     pub fn new(
         outbound: OutboundNetworkInfo,
         inbound: InboundNetworkInfo,
@@ -424,9 +476,15 @@ struct NetworkInfoWire {
 
 impl From<NetworkInfoWire> for NetworkInfo {
     fn from(wire: NetworkInfoWire) -> Self {
-        let outbound = wire.outbound.unwrap_or_else(|| OutboundNetworkInfo {
-            mode: wire.mode.unwrap_or_default(),
-            allow_net: wire.allow_net.unwrap_or_default(),
+        let outbound = wire.outbound.unwrap_or_else(|| {
+            // Pre-split payloads predate the secret-host merge, so the
+            // enforced set was exactly what the caller configured.
+            let allow_net = wire.allow_net.unwrap_or_default();
+            OutboundNetworkInfo {
+                mode: wire.mode.unwrap_or_default(),
+                effective_allow_net: allow_net.clone(),
+                allow_net,
+            }
         });
         Self::new(
             outbound,
@@ -543,6 +601,7 @@ impl BoxInfo {
                 OutboundNetworkInfo {
                     mode: network_config.outbound.mode,
                     allow_net: network_config.outbound.allow_net,
+                    effective_allow_net: config.options.effective_allow_net(),
                 },
                 InboundNetworkInfo {
                     mode: network_config.inbound.mode,
@@ -699,6 +758,11 @@ mod tests {
         // And the deprecated mirrors follow outbound.
         assert_eq!(network.mode, NetworkMode::Disabled);
         assert_eq!(network.allow_net, vec!["api.example.com".to_string()]);
+        // Pre-split payloads predate the merge: enforced == configured.
+        assert_eq!(
+            network.outbound.effective_allow_net,
+            vec!["api.example.com".to_string()]
+        );
     }
 
     /// Readers that predate the split look for top-level `mode`/`allow_net`,
@@ -709,6 +773,10 @@ mod tests {
             OutboundNetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: vec!["api.example.com".to_string()],
+                effective_allow_net: vec![
+                    "api.example.com".to_string(),
+                    "secret.example.com".to_string(),
+                ],
             },
             InboundNetworkInfo {
                 mode: NetworkMode::Disabled,
@@ -723,6 +791,26 @@ mod tests {
         assert_eq!(value["inbound"]["mode"], "disabled");
         assert_eq!(value["mode"], "enabled");
         assert_eq!(value["allow_net"][0], "api.example.com");
+        assert_eq!(
+            value["outbound"]["effective_allow_net"][1],
+            "secret.example.com"
+        );
+        // The deprecated mirror stays the configured list, not the enforced one.
+        assert_eq!(value["allow_net"].as_array().unwrap().len(), 1);
+    }
+
+    /// A nested payload written before the secret-host merge must read back as
+    /// "enforced == configured", not as an empty (i.e. unrestricted) list.
+    #[test]
+    fn outbound_network_info_folds_a_payload_without_the_effective_list() {
+        let outbound: OutboundNetworkInfo =
+            serde_json::from_str(r#"{"mode":"enabled","allow_net":["api.example.com"]}"#).unwrap();
+
+        assert_eq!(
+            outbound.effective_allow_net,
+            vec!["api.example.com".to_string()],
+            "a restricted box must not read back as unrestricted"
+        );
     }
 
     /// A payload carrying both shapes must not lose the nested one.
@@ -818,6 +906,86 @@ mod tests {
         assert!(
             published_ports(&info).is_some_and(<[PublishedPort]>::is_empty),
             "a box with no requested mappings is known-empty"
+        );
+    }
+
+    /// `info()` must show what is actually enforced, not only what the caller
+    /// typed — otherwise the merge is invisible and a blocked host is harder
+    /// to diagnose than before, not easier.
+    #[test]
+    fn box_info_reports_the_effective_allowlist_including_secret_hosts() {
+        let config = BoxConfig {
+            id: BoxID::parse("01HJK4TNRPQSXYZ8WM6NCVT9R6").unwrap(),
+            name: None,
+            created_at: Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions {
+                network: crate::runtime::options::NetworkSpec::Enabled {
+                    allow_net: vec!["pypi.org".to_string()],
+                },
+                secrets: vec![crate::runtime::options::Secret {
+                    name: "gh".to_string(),
+                    hosts: vec!["github.com".to_string()],
+                    placeholder: "<BOXLITE_SECRET:gh>".to_string(),
+                    value: "token".to_string(),
+                }],
+                ..Default::default()
+            },
+            engine_kind: crate::vmm::VmmKind::Libkrun,
+            box_home: PathBuf::from("/tmp/box"),
+        };
+
+        let info = BoxInfo::new(&config, &BoxState::new());
+        let network = info.network.as_ref().expect("local network metadata");
+
+        assert_eq!(
+            network.outbound.allow_net,
+            vec!["pypi.org".to_string()],
+            "the configured list keeps saying what the caller asked for"
+        );
+        assert_eq!(
+            network.outbound.effective_allow_net,
+            vec!["pypi.org".to_string(), "github.com".to_string()],
+            "the enforced list carries the secret host; the difference is its provenance"
+        );
+        // The deprecated flat mirror stays the configured list.
+        assert_eq!(network.allow_net, vec!["pypi.org".to_string()]);
+    }
+
+    /// An unrestricted box stays unrestricted when a secret is added — the
+    /// guard that keeps the merge from being a breaking tightening.
+    #[test]
+    fn box_info_effective_allowlist_stays_empty_for_an_unrestricted_box() {
+        let config = BoxConfig {
+            id: BoxID::parse("01HJK4TNRPQSXYZ8WM6NCVT9R7").unwrap(),
+            name: None,
+            created_at: Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions {
+                network: crate::runtime::options::NetworkSpec::Enabled { allow_net: vec![] },
+                secrets: vec![crate::runtime::options::Secret {
+                    name: "gh".to_string(),
+                    hosts: vec!["github.com".to_string()],
+                    placeholder: "<BOXLITE_SECRET:gh>".to_string(),
+                    value: "token".to_string(),
+                }],
+                ..Default::default()
+            },
+            engine_kind: crate::vmm::VmmKind::Libkrun,
+            box_home: PathBuf::from("/tmp/box"),
+        };
+
+        let info = BoxInfo::new(&config, &BoxState::new());
+        let network = info.network.as_ref().expect("local network metadata");
+
+        assert!(network.outbound.allow_net.is_empty());
+        assert!(
+            network.outbound.effective_allow_net.is_empty(),
+            "empty means unrestricted; a secret must not narrow the box"
         );
     }
 

@@ -5,7 +5,10 @@ package main
 // Fork of gvisor-tap-vsock@v0.8.7/pkg/services/forwarder/tcp.go.
 // Two paths:
 //   - Standard: IP/CIDR match or no filter → upstream flow (Dial → Accept → relay)
-//   - Inspect:  port 443/80 with hostname rules → Accept → Peek SNI/Host → check → Dial → relay
+//   - Inspect:  port 443/80 with hostname rules, or any :443 with secrets →
+//              Accept → Peek SNI/Host → check IP rule OR hostname pin →
+//              MITM (secret hosts) or Dial → relay. The check gates both
+//              outcomes: MITM is a treatment, not an authorization.
 //
 // When filter is nil: identical to upstream (zero overhead).
 
@@ -78,6 +81,46 @@ func decideTCPRoute(destIP net.IP, destPort uint16, filter *AllowNetFilter, secr
 	}
 
 	return tcpRouteBlock
+}
+
+// tcpInspectRoute is the post-peek decision: what to do once the guest's
+// SNI/Host is known. It is the second half of decideTCPRoute, which routes
+// :443/:80 here precisely because it cannot decide without the hostname.
+type tcpInspectRoute int
+
+const (
+	tcpInspectBlock tcpInspectRoute = iota
+	tcpInspectForward
+	tcpInspectMitm
+)
+
+// decideTCPInspectRoute resolves a peeked connection against the SAME filter
+// the pre-peek path uses. MITM is a treatment applied to an already-allowed
+// destination, never an authorization of its own: a secret host is reachable
+// only where allow_net also covers the address being dialed. (boxlite merges
+// Secret.hosts into allow_net before it gets here, so declaring a credential
+// still reaches its host without the caller restating it.)
+func decideTCPInspectRoute(hostname string, destIP net.IP, destPort uint16,
+	filter *AllowNetFilter, secretMatcher *SecretHostMatcher) tcpInspectRoute {
+
+	if !inspectedDestinationAllowed(hostname, destIP, filter) {
+		return tcpInspectBlock
+	}
+	if destPort == 443 && secretMatcher != nil && hostname != "" && secretMatcher.Matches(hostname) {
+		return tcpInspectMitm
+	}
+	return tcpInspectForward
+}
+
+// inspectedDestinationAllowed is the post-peek allowlist gate. It restores the
+// IP/CIDR term that decideTCPRoute skips for :443 whenever secrets exist, so
+// configuring a credential cannot narrow allow_net; the hostname egress pin is
+// the second term. A nil filter means no allow_net at all: forward everything.
+func inspectedDestinationAllowed(hostname string, destIP net.IP, filter *AllowNetFilter) bool {
+	if filter == nil {
+		return true
+	}
+	return filter.MatchesIP(destIP) || filter.AllowHostToIP(hostname, destIP)
 }
 
 func resolveTCPDestination(localAddress tcpip.Address, nat map[tcpip.Address]tcpip.Address,
@@ -188,36 +231,38 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destIP net.IP, 
 		hostname = peekHTTPHost(br)
 	}
 
-	// Step 3: Check for MITM secret substitution (HTTPS only, takes priority over allowlist)
-	if destPort == 443 && secretMatcher != nil && hostname != "" && secretMatcher.Matches(hostname) {
+	// Step 3: One allowlist decision, covering both outcomes. Wrapping the
+	// guest here rather than once per branch keeps the peeked bytes replayable
+	// on whichever branch runs.
+	bufferedGuest := &bufferedConn{Conn: guestConn, reader: br}
+
+	switch decideTCPInspectRoute(hostname, destIP, destPort, filter, secretMatcher) {
+	case tcpInspectMitm:
 		secrets := secretMatcher.SecretsForHost(hostname)
 		logrus.WithFields(logrus.Fields{
 			"hostname":    hostname,
 			"num_secrets": len(secrets),
 		}).Debug("MITM: intercepting for secret substitution")
-		bufferedGuest := &bufferedConn{Conn: guestConn, reader: br}
 		mitmAndForward(bufferedGuest, hostname, destAddr, ca, secrets)
 		return
-	}
-
-	// Step 4: Check allowlist (skip if no allowlist — secrets-only mode allows all traffic).
-	// The pin ties the guest-supplied hostname to the dialed IP: a hostname
-	// alone no longer authorizes a connection to an arbitrary guest-chosen IP.
-	if filter != nil && (hostname == "" || !filter.AllowHostToIP(hostname, destIP)) {
+	case tcpInspectForward:
 		logrus.WithFields(logrus.Fields{
 			"dst":      destAddr,
 			"hostname": hostname,
-		}).Info("allowNet TCP: blocked (hostname not in allowlist)")
+		}).Debug("allowNet TCP: allowed")
+	default:
+		// dst is the post-NAT dial string, so it cannot tell an IP-rule miss
+		// from a hostname-rule miss on its own; dst_ip is the policy address.
+		logrus.WithFields(logrus.Fields{
+			"dst":      destAddr,
+			"dst_ip":   destIP,
+			"hostname": hostname,
+		}).Info("allowNet TCP: blocked (no matching IP or hostname rule)")
 		guestConn.Close()
 		return
 	}
 
-	logrus.WithFields(logrus.Fields{
-		"dst":      destAddr,
-		"hostname": hostname,
-	}).Debug("allowNet TCP: allowed by hostname")
-
-	// Step 5: Dial upstream
+	// Step 4: Dial upstream
 	outbound, err := net.Dial("tcp", destAddr)
 	if err != nil {
 		logrus.WithField("error", err).Trace("allowNet TCP: upstream dial failed")
@@ -225,11 +270,9 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destIP net.IP, 
 		return
 	}
 
-	// Step 5: Relay using tcpproxy.DialProxy (same as standardForward).
-	// Wrap guestConn with the bufio.Reader so peeked bytes are replayed
-	// automatically when DialProxy copies guest→server.
-	bufferedGuest := &bufferedConn{Conn: guestConn, reader: br}
-
+	// Step 5: Relay using tcpproxy.DialProxy (same as standardForward). The
+	// bufio.Reader wrapper replays the peeked bytes as DialProxy copies
+	// guest→server.
 	remote := tcpproxy.DialProxy{
 		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
 			return outbound, nil
