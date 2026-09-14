@@ -568,26 +568,29 @@ mod tests {
     #[test]
     fn test_parse_fd_from_name() {
         // Valid numeric names
-        assert_eq!(parse_fd_from_name(b"0\0".as_ptr()), Some(0));
-        assert_eq!(parse_fd_from_name(b"3\0".as_ptr()), Some(3));
-        assert_eq!(parse_fd_from_name(b"42\0".as_ptr()), Some(42));
-        assert_eq!(parse_fd_from_name(b"1024\0".as_ptr()), Some(1024));
-        assert_eq!(parse_fd_from_name(b"65535\0".as_ptr()), Some(65535));
+        assert_eq!(parse_fd_from_name(c"0".as_ptr().cast()), Some(0));
+        assert_eq!(parse_fd_from_name(c"3".as_ptr().cast()), Some(3));
+        assert_eq!(parse_fd_from_name(c"42".as_ptr().cast()), Some(42));
+        assert_eq!(parse_fd_from_name(c"1024".as_ptr().cast()), Some(1024));
+        assert_eq!(parse_fd_from_name(c"65535".as_ptr().cast()), Some(65535));
 
         // Non-numeric names (. and ..)
-        assert_eq!(parse_fd_from_name(b".\0".as_ptr()), None);
-        assert_eq!(parse_fd_from_name(b"..\0".as_ptr()), None);
+        assert_eq!(parse_fd_from_name(c".".as_ptr().cast()), None);
+        assert_eq!(parse_fd_from_name(c"..".as_ptr().cast()), None);
 
         // Empty name
-        assert_eq!(parse_fd_from_name(b"\0".as_ptr()), None);
+        assert_eq!(parse_fd_from_name(c"".as_ptr().cast()), None);
 
         // Overflow: i32::MAX (2147483647) should succeed
-        assert_eq!(parse_fd_from_name(b"2147483647\0".as_ptr()), Some(i32::MAX));
+        assert_eq!(
+            parse_fd_from_name(c"2147483647".as_ptr().cast()),
+            Some(i32::MAX)
+        );
 
         // Overflow: i32::MAX + 1 (2147483648) should return None (checked_add overflow)
-        assert_eq!(parse_fd_from_name(b"2147483648\0".as_ptr()), None);
+        assert_eq!(parse_fd_from_name(c"2147483648".as_ptr().cast()), None);
 
         // Overflow: very large number should return None
-        assert_eq!(parse_fd_from_name(b"99999999999\0".as_ptr()), None);
+        assert_eq!(parse_fd_from_name(c"99999999999".as_ptr().cast()), None);
     }
 }
