@@ -71,6 +71,21 @@ export const GKE_SERVICE_RANGE = 'gke-proxy-services'
 export const MANAGED_PROXY_CIDR = '10.20.16.0/24'
 
 /**
+ * The range a Private Service Connect publication translates consumers into.
+ *
+ * Declared here with the other ranges rather than beside the attachment that
+ * uses it, because what makes an address range correct is every other range in
+ * the same network: this one sits directly above the managed-proxy subnet and
+ * below the GKE ranges, and the reasoning in `MANAGED_PROXY_CIDR` about the
+ * Private Service Access allocation covers it unchanged.
+ *
+ * `clickstack.ts` builds the subnet, since a publication owns its own NAT
+ * addresses — a second publication would need a second range, not a share of
+ * this one.
+ */
+export const PSC_NAT_CIDR = '10.20.17.0/24'
+
+/**
  * The range reserved for Google's own managed services.
  *
  * A `/16` because Google allocates out of it per service and per region, and a

@@ -76,6 +76,7 @@ export const gcpStackProviders = ({
   relayHost = null,
   artifactsBucket,
   managedClickHouse = null,
+  clickStackConsumer = null,
   notificationChannels = [],
 }: {
   stage: string
@@ -98,6 +99,8 @@ export const gcpStackProviders = ({
   /** Where a build-mode runner binary is staged, which the hosts are let read. */
   artifactsBucket: string
   managedClickHouse?: { url: string; writerSecretArn: string; readerSecretArn: string } | null
+  /** Who may read the ClickHouse reader password; see `clickstack.ts`. */
+  clickStackConsumer?: string | null
   notificationChannels?: string[]
 }): StackProviders => {
   const zone = zoneIn(region, declaredZone)
@@ -128,6 +131,7 @@ export const gcpStackProviders = ({
       gcpClickHouseProvider({
         network: binding(network),
         project,
+        region,
         zone,
         appShort,
         // The collector writes and the API reads; both carry an account, and
@@ -135,6 +139,13 @@ export const gcpStackProviders = ({
         // the module that owns the rule, so this cannot hand over one identity
         // while that comment claims two — which is exactly what it used to do.
         callers: CLICKHOUSE_CALLERS.map((role) => placement(network, role).serviceAccount),
+        // The one project allowed to connect an endpoint. Today the console is
+        // deployed into this same project, so the producer's own id is the
+        // accept list; the identity that reads the password is stage
+        // configuration already, because it is the one of the two that differs
+        // between an app's own consumer and somebody else's.
+        clickStackConsumerProject: project,
+        clickStackConsumerAccount: clickStackConsumer,
         managed: managedClickHouse,
         dependsOn: network.ready,
       }),

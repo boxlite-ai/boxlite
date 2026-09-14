@@ -261,6 +261,7 @@ export const gcpProgram =
         relayHost: stackEnvironment.mailRelayHost,
         artifactsBucket,
         managedClickHouse: stackEnvironment.managedClickHouse,
+        clickStackConsumer: stackEnvironment.clickStackConsumer,
       }),
       config,
       inputs: {
