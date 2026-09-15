@@ -92,6 +92,20 @@ pub(crate) struct ReferencedPaths {
     pub(crate) complete: bool,
 }
 
+/// Whether a filesystem error hides something rather than proving it absent.
+///
+/// Only `NotFound` proves absence. `Path::exists` cannot make that call — it
+/// answers `false` for a permission or I/O error exactly as it does for a
+/// missing path — so probing with it reports a *complete* answer for a
+/// directory that merely could not be opened, or for a live box's overlay
+/// that merely could not be stat'd. The eviction pass has no second guard, so
+/// it would then delete the backing file under every running box: the exact
+/// conflation [`ReferencedPaths::complete`] exists to prevent. The same
+/// hazard is spelled out for the chain walk in `qcow2::read_backing_chain`.
+fn failure_means_unknown(kind: std::io::ErrorKind) -> bool {
+    kind != std::io::ErrorKind::NotFound
+}
+
 /// Paths in one directory listing, with an entry that could not be read
 /// recorded as a hole in the answer rather than dropped.
 ///
@@ -200,14 +214,51 @@ impl BaseDiskManager {
         match fs::read_dir(boxes_dir) {
             Ok(entries) => {
                 for box_dir in listed_paths(entries, &mut referenced) {
+                    // Only a directory can be a box. A stray file here — an
+                    // editor swap file, a `.DS_Store` — would otherwise make
+                    // every overlay path under it stat as `ENOTDIR`, which the
+                    // predicate below correctly calls "unknown", and one such
+                    // entry would then hold the whole answer incomplete for
+                    // good. `is_dir()` cannot make this call either: it says
+                    // false for a real box the scan could not stat, and that
+                    // must stay unknown rather than become "not a box".
+                    match fs::metadata(&box_dir) {
+                        Ok(md) if md.is_dir() => {}
+                        Ok(_) => continue,
+                        // Raced away between listing and stat: it holds nothing.
+                        Err(e) if !failure_means_unknown(e.kind()) => continue,
+                        Err(e) => {
+                            tracing::warn!(
+                                "GC: failed to stat box dir {}: {}",
+                                box_dir.display(),
+                                e
+                            );
+                            referenced.complete = false;
+                            continue;
+                        }
+                    }
+
                     let disks_dir = box_dir.join("disks");
                     for overlay in [
                         disk_filenames::CONTAINER_DISK,
                         disk_filenames::GUEST_ROOTFS_DISK,
                     ] {
                         let overlay_path = disks_dir.join(overlay);
-                        if overlay_path.exists() {
-                            referenced.absorb(super::read_backing_chain_checked(&overlay_path));
+                        match fs::metadata(&overlay_path) {
+                            Ok(_) => {
+                                referenced.absorb(super::read_backing_chain_checked(&overlay_path))
+                            }
+                            // A box owns at most these two overlays and often
+                            // only one, so a missing file is ordinary.
+                            Err(e) if !failure_means_unknown(e.kind()) => {}
+                            Err(e) => {
+                                tracing::warn!(
+                                    "GC: failed to stat overlay {}: {}",
+                                    overlay_path.display(),
+                                    e
+                                );
+                                referenced.complete = false;
+                            }
                         }
                     }
                 }
@@ -216,7 +267,7 @@ impl BaseDiskManager {
                 // A boxes directory that cannot be listed is the worst case:
                 // every overlay under it is invisible, so the set looks empty
                 // rather than partial.
-                if boxes_dir.exists() {
+                if failure_means_unknown(e.kind()) {
                     tracing::warn!(
                         "GC: failed to read boxes dir {}: {}",
                         boxes_dir.display(),
@@ -235,7 +286,7 @@ impl BaseDiskManager {
                 }
             }
             Err(e) => {
-                if self.bases_dir.exists() {
+                if failure_means_unknown(e.kind()) {
                     tracing::warn!(
                         "GC: failed to read bases dir {}: {}",
                         self.bases_dir.display(),
@@ -895,6 +946,108 @@ mod tests {
                 created_at: 0,
             })
             .unwrap();
+    }
+
+    /// A directory that is merely unopenable must not be reported as an empty
+    /// one. `Path::exists` cannot tell the two apart — it answers `false` for
+    /// a permission or `ENOTDIR` error just as it does for a missing path —
+    /// and the eviction pass, which has no second guard, deletes what is
+    /// absent from the set.
+    #[test]
+    fn only_a_missing_directory_is_a_complete_answer() {
+        assert!(
+            !failure_means_unknown(std::io::ErrorKind::NotFound),
+            "a directory that is genuinely absent holds no boxes"
+        );
+        for kind in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::NotADirectory,
+            std::io::ErrorKind::Other,
+        ] {
+            assert!(
+                failure_means_unknown(kind),
+                "{kind:?} hides the contents rather than proving them empty"
+            );
+        }
+    }
+
+    /// The same thing end to end, through a failure a test can actually
+    /// provoke: a `boxes_dir` whose parent is a regular file. `read_dir`
+    /// fails with `ENOTDIR` and `exists()` answers `false`, so the old probe
+    /// called that a complete, empty scan.
+    #[test]
+    fn an_unopenable_boxes_dir_is_not_a_complete_answer() {
+        let (_dir, mgr) = setup();
+        let tmp = TempDir::new().unwrap();
+        let not_a_dir = tmp.path().join("regular-file");
+        std::fs::write(&not_a_dir, b"x").unwrap();
+        let boxes_dir = not_a_dir.join("boxes");
+        assert!(!boxes_dir.exists(), "exists() cannot see the ENOTDIR");
+
+        let referenced = mgr.referenced_backing_paths_checked(&boxes_dir);
+
+        assert!(
+            !referenced.complete,
+            "a boxes dir that could not be opened leaves the answer unknown"
+        );
+    }
+
+    /// The same conflation one level down: a live box whose overlay cannot be
+    /// stat'd must not read as a box that owns no overlay. Provoked without
+    /// privileges by making the box's `disks` a regular file, so the overlay
+    /// path stats as `ENOTDIR` while `exists()` answers `false`.
+    #[test]
+    fn an_unstattable_overlay_is_not_a_complete_answer() {
+        let (_dir, mgr) = setup();
+        let tmp = TempDir::new().unwrap();
+        let boxes_dir = tmp.path().join("boxes");
+        std::fs::create_dir_all(boxes_dir.join("live-box")).unwrap();
+        // Not a directory, so every overlay path under it stats as ENOTDIR.
+        std::fs::write(boxes_dir.join("live-box").join("disks"), b"x").unwrap();
+        assert!(
+            !boxes_dir
+                .join("live-box")
+                .join("disks")
+                .join(disk_filenames::CONTAINER_DISK)
+                .exists(),
+            "exists() cannot see the ENOTDIR"
+        );
+
+        let referenced = mgr.referenced_backing_paths_checked(&boxes_dir);
+
+        assert!(
+            !referenced.complete,
+            "an overlay that could not be stat'd leaves the answer unknown"
+        );
+    }
+
+    /// The flip side of stat'ing instead of probing: a stray file under
+    /// `boxes_dir` is not a box, and must not be read as one the scan could
+    /// not see. Every overlay path under it stats as `ENOTDIR`, which is
+    /// genuinely "unknown" for a directory — so without the kind check one
+    /// `.DS_Store` would hold `complete` false for good, and both image-disk
+    /// passes skip on an incomplete answer. The old `exists()` probe skipped
+    /// such an entry harmlessly, so this is the regression the switch invites.
+    #[test]
+    fn a_stray_file_among_the_boxes_is_not_an_unreadable_box() {
+        let (_dir, mgr) = setup();
+        let tmp = TempDir::new().unwrap();
+        let boxes_dir = tmp.path().join("boxes");
+
+        // One real box with a real overlay, so the scan has something to find.
+        let live_disks = boxes_dir.join("live-box").join("disks");
+        std::fs::create_dir_all(&live_disks).unwrap();
+        std::fs::write(live_disks.join(disk_filenames::CONTAINER_DISK), b"x").unwrap();
+
+        // And the entry Finder leaves behind.
+        std::fs::write(boxes_dir.join(".DS_Store"), b"x").unwrap();
+
+        let referenced = mgr.referenced_backing_paths_checked(&boxes_dir);
+
+        assert!(
+            referenced.complete,
+            "a file that cannot be a box says nothing about what the scan saw"
+        );
     }
 
     /// `read_dir` hands back a `Result` per entry, and dropping the `Err`
