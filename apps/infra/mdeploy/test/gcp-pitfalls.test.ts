@@ -657,6 +657,17 @@ test('a zone GKE has not created a NEG in yet is skipped, and nothing else is', 
   const name = 'boxlite-app-dev-proxy'
   assert.equal(isMissingNeg(new Error(`The resource 'projects/p/zones/us-east5-c/networkEndpointGroups/${name}' was not found`), name), true)
   assert.equal(isMissingNeg(new Error(`googleapi: Error 404: not found: ${name}, notFound`), name), true)
+  /*
+   * The bare two-word form, which is what the *invoke* path answers with and
+   * what a real prod apply hit: `.../zones/us-east5-c/networkEndpointGroups/
+   * <name> not found`. The first predicate only knew the REST wordings, so the
+   * skip never fired and the update aborted on exactly the zone it was written
+   * to survive.
+   */
+  assert.equal(
+    isMissingNeg(new Error(`projects/p/zones/us-east5-c/networkEndpointGroups/${name} not found`), name),
+    true,
+  )
   // Another resource's absence says nothing about this one.
   assert.equal(isMissingNeg(new Error("The resource 'projects/p/zones/us-east5-c/instances/other' was not found"), name), false)
   // And a failure that is not an absence stays fatal.
