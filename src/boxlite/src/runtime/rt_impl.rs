@@ -270,7 +270,7 @@ impl RuntimeImpl {
         })?;
 
         let runtime_lock = RuntimeLock::acquire(layout.home_dir()).map_err(|e| match e {
-            BoxliteError::RuntimeInUse { .. } => e,
+            BoxliteError::RuntimeInUse(_) => e,
             e => BoxliteError::Internal(format!(
                 "Failed to acquire runtime lock at {}: {}",
                 layout.home_dir().display(),

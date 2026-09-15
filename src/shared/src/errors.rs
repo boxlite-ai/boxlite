@@ -35,8 +35,8 @@ pub enum BoxliteError {
     RpcTransport(String),
 
     /// Another local Runtime owns this home; queries may read committed state.
-    #[error("Another BoxliteRuntime is already using directory: {home_dir}\nOnly one runtime instance can use a BOXLITE_HOME directory at a time.", home_dir = .home_dir.display())]
-    RuntimeInUse { home_dir: std::path::PathBuf },
+    #[error("Another BoxliteRuntime is already using directory: {}\nOnly one runtime instance can use a BOXLITE_HOME directory at a time.", .0.display())]
+    RuntimeInUse(std::path::PathBuf),
 
     #[error("internal error: {0}")]
     Internal(String),
@@ -193,9 +193,8 @@ impl BoxliteError {
             BoxliteError::MetadataError(_) => (500, "MetadataError", "metadata_error"),
             BoxliteError::Config(_) => (500, "ConfigError", "config_error"),
             // Keep the existing wire contract; RuntimeInUse is a local routing signal.
-            BoxliteError::Internal(_) | BoxliteError::RuntimeInUse { .. } => {
-                (500, "InternalError", "internal")
-            }
+            BoxliteError::RuntimeInUse(_) => (500, "InternalError", "internal"),
+            BoxliteError::Internal(_) => (500, "InternalError", "internal"),
         }
     }
 }
@@ -352,9 +351,7 @@ mod tests {
                 "config_error",
             ),
             (
-                BoxliteError::RuntimeInUse {
-                    home_dir: "/tmp/boxlite".into(),
-                },
+                BoxliteError::RuntimeInUse("/tmp/boxlite".into()),
                 500,
                 "InternalError",
                 "internal",

@@ -68,9 +68,7 @@ fn test_version_string() {
 #[test]
 fn test_error_code_mapping() {
     assert_eq!(
-        error_to_code(&BoxliteError::RuntimeInUse {
-            home_dir: "/tmp/boxlite".into()
-        }),
+        error_to_code(&BoxliteError::RuntimeInUse("/tmp/boxlite".into())),
         BoxliteErrorCode::Internal
     );
     assert_eq!(

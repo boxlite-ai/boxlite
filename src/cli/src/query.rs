@@ -17,7 +17,7 @@ impl QueryRuntime {
         match result {
             Ok(runtime) => Ok(Self(Backend::Runtime(runtime))),
             Err(error) => match error.downcast_ref::<BoxliteError>() {
-                Some(BoxliteError::RuntimeInUse { home_dir }) => Ok(Self(Backend::ReadOnly(
+                Some(BoxliteError::RuntimeInUse(home_dir)) => Ok(Self(Backend::ReadOnly(
                     ReadOnlyRuntime::new(home_dir.clone()),
                 ))),
                 _ => Err(error),
