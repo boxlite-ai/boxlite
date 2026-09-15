@@ -5,9 +5,11 @@
 //! mountable in place of the id (`-v my-data:/data`).
 //!
 //! Each leaf module owns its own `Args` struct and `run()`; this module holds
-//! the subcommand enum and dispatches. Volumes are a REST-runtime capability:
-//! the local runtime has no volume backend and every command returns
-//! "not supported" against it.
+//! the subcommand enum and dispatches. Against a REST runtime the commands
+//! call `/v1/volumes`; against the local runtime they work on the store under
+//! `{home}/volumes/`, one directory per volume. Either way an unknown id or
+//! name is "not found": only `create` and an anonymous `-v /path` mount make
+//! a volume.
 
 use clap::{Args, Subcommand};
 

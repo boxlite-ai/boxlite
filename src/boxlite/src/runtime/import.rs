@@ -72,7 +72,17 @@ pub(crate) async fn import_box(
 /// Read the persisted configuration, falling back to the v1/v2 image field.
 ///
 /// An archive is untrusted input, so its options are validated here rather
-/// than after disks have been installed and box metadata persisted.
+/// than after disks have been installed and box metadata persisted. They are
+/// validated as *persisted* options: export writes the box's resolved config,
+/// so a managed or anonymous mount arrives carrying both its reference and
+/// the payload path of the machine it came from. The request rule would
+/// refuse that as two origins; `sanitize_import` accepts it, and a trusted
+/// import hands the mounts through untouched for `provision_box` to
+/// re-resolve against this runtime's store. The path in the archive is never
+/// trusted, only the reference. A custom kernel is the exception: the archive
+/// carries only its source path, so `sanitize_import` checks that source the
+/// way create does, and a kernel this host cannot stage is refused before
+/// anything is provisioned.
 fn options_from_manifest(
     manifest: &ArchiveManifest,
     policy: ArchiveImportPolicy,
@@ -94,7 +104,8 @@ fn options_from_manifest(
             );
         }
     }
-    options.sanitize().map_err(|error| {
+
+    options.sanitize_import().map_err(|error| {
         BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
     })?;
 
@@ -126,10 +137,7 @@ fn options_from_manifest(
     // the ceiling #1152 is about — because it replaces the whole struct rather
     // than just the isolation fields it means to. The box still boots on a
     // disk sized from its own `disk_size_gb`, so re-derive the limit.
-    // `sanitize` assigns it outright, so running it twice is idempotent.
-    options.sanitize().map_err(|error| {
-        BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
-    })?;
+    options.rederive_fsize_limit()?;
 
     Ok(options)
 }
@@ -398,12 +406,12 @@ mod tests {
     #[test]
     fn untrusted_import_rejects_managed_volumes() {
         let mut options = BoxOptions::default();
-        options
-            .volumes
-            .push(crate::runtime::options::VolumeSpec::managed_volume(
-                "someone-elses-data",
-                "/data",
-            ));
+        options.volumes.push(crate::runtime::options::VolumeSpec {
+            managed_volume: Some("someone-elses-data".to_string()),
+            host_path: "/".to_string(),
+            guest_path: "/data".to_string(),
+            ..Default::default()
+        });
 
         let error =
             options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
@@ -411,6 +419,66 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
         assert!(error.to_string().contains("volume mounts"));
+    }
+
+    /// An exported box carries its mounts as they were persisted: a reference
+    /// plus the payload path on the machine it came from. Translating the
+    /// manifest neither rejects that shape as "two origins" nor trusts the
+    /// path; it hands the mounts through verbatim for the runtime to
+    /// re-resolve against the local store before the box is provisioned.
+    #[test]
+    fn trusted_import_keeps_persisted_mounts_for_the_runtime_to_resolve() {
+        use crate::runtime::options::VolumeSpec;
+
+        let volumes = vec![
+            VolumeSpec {
+                host_path: "/elsewhere/volumes/OLDNAMED/_data".into(),
+                ..VolumeSpec::managed_volume("shared", "/data")
+            },
+            VolumeSpec {
+                managed_volume: Some("OLDANON".into()),
+                host_path: "/elsewhere/volumes/OLDANON/_data".into(),
+                ..VolumeSpec::anonymous_volume("/scratch")
+            },
+        ];
+        let options = BoxOptions {
+            volumes: volumes.clone(),
+            ..Default::default()
+        };
+
+        let resolved = options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::Trusted)
+            .expect("a persisted mount is a valid archive mount");
+
+        assert_eq!(2, resolved.volumes.len());
+        for (imported, exported) in resolved.volumes.iter().zip(&volumes) {
+            assert_eq!(exported.managed_volume, imported.managed_volume);
+            assert_eq!(exported.host_path, imported.host_path);
+            assert_eq!(exported.guest_path, imported.guest_path);
+            assert_eq!(exported.anonymous, imported.anonymous);
+        }
+    }
+
+    /// An archive carries a custom kernel only as the path it was ingested
+    /// from: export bundles neither the source file nor the box's staged copy,
+    /// so an imported box has to stage the kernel again at its first boot.
+    /// A trusted import therefore checks the source the way create does and
+    /// refuses an archive whose kernel this host cannot stage, instead of
+    /// provisioning a box that fails on its first `start`.
+    #[test]
+    fn trusted_import_refuses_a_custom_kernel_whose_source_is_missing() {
+        let mut options = BoxOptions::default();
+        options.advanced.kernel = Some(crate::experimental::custom_kernel::KernelOptions::new(
+            "/nonexistent/boxlite-test/vmlinuz",
+        ));
+
+        let error = options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::Trusted)
+            .expect_err("a kernel this host cannot stage must be refused at import");
+
+        assert!(
+            matches!(error, BoxliteError::InvalidArgument(_)),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains("regular file"), "{error}");
     }
 
     #[test]
