@@ -1,7 +1,7 @@
 {
-  "_comment": "Signup is the visitor's first contact, so this title names the product.",
+  "_comment": "The single-step signup screen, shown only when Identifier First is off; the visitor's first contact, so this title names the product.",
   "signup": {
     "title": "Welcome to BoxLite",
-    "description": "Agentic cloud platform for AI Agent builder"
+    "description": "Boxes your agents build in, and ship from."
   }
 }
