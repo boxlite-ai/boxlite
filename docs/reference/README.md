@@ -196,22 +196,47 @@ Structured network configuration for outbound connectivity.
   match the destination address and apply to both. Hostname rules are enforced
   by inspecting TLS SNI / HTTP Host, which only TCP carries, so an `allow_net`
   holding **only** hostnames denies all UDP egress — otherwise a guest could
-  sidestep the rule by addressing the resolved IP directly. QUIC/HTTP3 to such
-  a host falls back to TCP; add the IP or CIDR to keep UDP open.
+  sidestep the rule by addressing an allowed name's IP directly. QUIC/HTTP3 to
+  such a host falls back to TCP; add the IP or CIDR to keep UDP open.
+- A hostname rule authorizes the **name**, not an address. Once the SNI / Host
+  matches, the gateway resolves the name itself through the host resolver and
+  connects to its current address; the address the guest connected to is
+  ignored. A host that changes IP while the box runs stays reachable, each
+  subdomain under a wildcard resolves to its own address, and a guest that
+  hard-codes another IP with an allowed SNI still reaches the allowed host. A
+  name that resolves to a private, loopback or CGNAT address is not connected
+  to unless an IP or CIDR rule also lists that range. Link-local (metadata,
+  `169.254.0.0/16`) and the box's own subnet are refused outright: no rule
+  re-admits them, matching how the gateway treats a guest-chosen address.
+- **DNS inside the box is not restricted.** `allow_net` is a connection-layer
+  control: `/etc/resolv.conf` points at the gateway `192.168.127.1`, which
+  forwards every query, listed name or not, to the host's resolver. A denied
+  destination therefore resolves to its real address and fails when the guest
+  **connects**, not when it looks the name up. A denied name previously
+  resolved to `0.0.0.0`, so code that detected the block by inspecting a
+  lookup result must check for a failed connection instead.
 - The gateway's DNS resolver and DHCP are internal services and stay reachable
   regardless of `allow_net`.
 - `host.boxlite.internal` is a built-in hostname that resolves to
-  `192.168.127.254` and reaches host loopback services. The DNS record is
-  always served, but egress to that address is governed by `allow_net`: add
-  `"192.168.127.254"`, or a CIDR covering it, to reach it under a non-empty
-  allowlist.
+  `192.168.127.254` and reaches host loopback services. Spell it in lower
+  case: the record label is compared byte for byte, so `HOST.boxlite.internal`
+  answers `NXDOMAIN` rather than the host address. The record is served
+  whatever `allow_net` says, but egress to that address is governed by it:
+  add `"192.168.127.254"`, or a CIDR covering it, to reach it under a
+  non-empty allowlist.
 - Security: with an empty or omitted `allow_net`, any service bound to host
   loopback is reachable from inside the box via `host.boxlite.internal` or
-  `192.168.127.254`; allowing that address opens all of them.
+  `192.168.127.254`; allowing that address opens all of them. And `allow_net`
+  bounds where the guest can **connect**, not what it can look up: every query
+  it makes reaches the host's resolver, denied names included, so a query name
+  is a channel out of the box. Earlier versions answered denied names
+  `0.0.0.0` locally, which narrowed that channel for A queries but never
+  closed it, since other record types were forwarded regardless. Treat
+  `allow_net` as a routing control, not a containment boundary.
 
 **Supported patterns:**
 - Exact hostname: `"api.openai.com"`
-- Wildcard hostname: `"*.example.com"`
+- Wildcard hostname: `"*.example.com"` (any depth of subdomain; not the apex)
 - Exact IP: `"192.168.1.10"`
 - CIDR range: `"10.0.0.0/8"`
 

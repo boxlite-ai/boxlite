@@ -18,6 +18,11 @@ import (
 	"testing"
 )
 
+// dialTo is the upstreamDial a test hands mitmAndForward for a fixed address.
+func dialTo(addr string) upstreamDial {
+	return dialAddress((&net.Dialer{}).DialContext, addr)
+}
+
 // TestMitmRouting_SecretHostGetsMitmd verifies that when a TLS connection
 // targets a secret host, mitmAndForward is called and secrets are substituted.
 func TestMitmRouting_SecretHostGetsMitmd(t *testing.T) {
@@ -38,7 +43,7 @@ func TestMitmRouting_SecretHostGetsMitmd(t *testing.T) {
 
 	// Simulate: guest TLS → mitmAndForward → upstream
 	guestConn, proxyConn := net.Pipe()
-	go mitmAndForward(proxyConn, "api.openai.com", upstreamAddr, ca, secrets, &tls.Config{InsecureSkipVerify: true})
+	go mitmAndForward(proxyConn, "api.openai.com", dialTo(upstreamAddr), ca, secrets, &tls.Config{InsecureSkipVerify: true})
 
 	// Client does TLS handshake with the MITM proxy
 	caPool, _ := ca.CACertPool()
@@ -150,7 +155,7 @@ func TestMitmRouting_AllowlistAndSecrets_MitmPriority(t *testing.T) {
 	defer cleanup()
 
 	guestConn, proxyConn := net.Pipe()
-	go mitmAndForward(proxyConn, "api.example.com", upstreamAddr, ca, secrets, &tls.Config{InsecureSkipVerify: true})
+	go mitmAndForward(proxyConn, "api.example.com", dialTo(upstreamAddr), ca, secrets, &tls.Config{InsecureSkipVerify: true})
 
 	caPool, _ := ca.CACertPool()
 	tlsConn := tls.Client(guestConn, &tls.Config{

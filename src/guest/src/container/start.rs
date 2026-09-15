@@ -51,6 +51,9 @@ pub(crate) fn create_container_etc_files(
     use std::os::unix::fs::OpenOptionsExt;
 
     const DEFAULT_HOSTNAME: &str = "boxlite";
+    // Must equal the host's GATEWAY_IP (boxlite/src/net/constants.rs): gvproxy
+    // serves the guest's DNS there. A literal because the guest agent cannot
+    // depend on the host crate; network_spec.rs asserts the two agree.
     const DNS_GATEWAY: &str = "192.168.127.1";
     const FILE_MODE: u32 = 0o644; // matches containerd WriteFile(path, content, 0644)
 

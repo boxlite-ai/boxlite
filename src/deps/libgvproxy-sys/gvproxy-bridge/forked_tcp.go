@@ -5,7 +5,13 @@ package main
 // Fork of gvisor-tap-vsock@v0.8.7/pkg/services/forwarder/tcp.go.
 // Two paths:
 //   - Standard: IP/CIDR match or no filter → upstream flow (Dial → Accept → relay)
-//   - Inspect:  port 443/80 with hostname rules → Accept → Peek SNI/Host → check → Dial → relay
+//   - Inspect:  port 443/80 with hostname rules → Accept → Peek SNI/Host → decide → Dial → relay
+//
+// What the inspect path dials depends on what authorized the connection. An
+// IP/CIDR match dials the address the guest chose (NAT applied, as upstream
+// does). A hostname match dials the NAME: the gateway resolves it itself and
+// the guest's destination address is discarded (egress_dialer.go). A secret
+// host is MITM'd and likewise dialed by name.
 //
 // When filter is nil: identical to upstream (zero overhead).
 
@@ -95,9 +101,53 @@ func resolveTCPDestination(localAddress tcpip.Address, nat map[tcpip.Address]tcp
 	return net.IP(addr4[:]), dialAddress
 }
 
+// tcpInspectRoute is the post-peek decision: what to do once the guest's
+// SNI/Host is known. decideTCPRoute sends :443/:80 here precisely because it
+// cannot decide without the hostname.
+type tcpInspectRoute int
+
+const (
+	tcpInspectBlock tcpInspectRoute = iota
+	tcpInspectForward
+	tcpInspectMitm
+)
+
+// tcpEgress says which destination the gateway dials for an allowed
+// connection: the guest's address, or the peeked name.
+type tcpEgress int
+
+const (
+	egressByAddress tcpEgress = iota
+	egressByName
+)
+
+// decideTCPInspectRoute resolves a peeked connection. A secret host is MITM'd
+// (HTTPS only) and dialed by name, so a credential never travels to an
+// address the guest picked. Otherwise an IP/CIDR match forwards to the guest's
+// address — the host.boxlite.internal NAT lives on that path — and a hostname
+// match forwards by name. hostname is already canonical.
+func decideTCPInspectRoute(hostname string, destIP net.IP, destPort uint16,
+	filter *AllowNetFilter, secretMatcher *SecretHostMatcher) (tcpInspectRoute, tcpEgress) {
+
+	if destPort == 443 && secretMatcher != nil && hostname != "" && secretMatcher.Matches(hostname) {
+		return tcpInspectMitm, egressByName
+	}
+	// No allowlist (secrets-only mode): everything else flows as addressed.
+	if filter == nil {
+		return tcpInspectForward, egressByAddress
+	}
+	if filter.MatchesIP(destIP) {
+		return tcpInspectForward, egressByAddress
+	}
+	if filter.MatchesHostname(hostname) {
+		return tcpInspectForward, egressByName
+	}
+	return tcpInspectBlock, egressByAddress
+}
+
 func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 	natLock *sync.Mutex, ec2MetadataAccess bool, filter *AllowNetFilter,
-	ca *BoxCA, secretMatcher *SecretHostMatcher) *tcp.Forwarder {
+	dialer *egressDialer, ca *BoxCA, secretMatcher *SecretHostMatcher) *tcp.Forwarder {
 
 	return tcp.NewForwarder(s, 0, 10, func(r *tcp.ForwarderRequest) {
 		localAddress := r.ID().LocalAddress
@@ -118,7 +168,7 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 			standardForward(r, destAddr)
 			return
 		case tcpRouteInspect:
-			inspectAndForward(r, destAddr, destIP, destPort, filter, ca, secretMatcher)
+			inspectAndForward(r, destAddr, destIP, destPort, filter, dialer, ca, secretMatcher)
 			return
 		default:
 			// No matching rule: block
@@ -161,10 +211,11 @@ func standardForward(r *tcp.ForwarderRequest, destAddr string) {
 	remote.HandleConn(gonet.NewTCPConn(&wq, ep))
 }
 
-// inspectAndForward: Accept → Peek SNI/Host → check allowlist → Dial → relay.
+// inspectAndForward: Accept → Peek SNI/Host → decide → Dial → relay.
 // The flow is reversed from upstream because we need to read from the guest
-// before deciding whether to connect to the upstream server.
-func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destIP net.IP, destPort uint16, filter *AllowNetFilter, ca *BoxCA, secretMatcher *SecretHostMatcher) {
+// before deciding whether, and where, to connect.
+func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destIP net.IP, destPort uint16,
+	filter *AllowNetFilter, dialer *egressDialer, ca *BoxCA, secretMatcher *SecretHostMatcher) {
 	// Step 1: Accept TCP from guest first (reversed from upstream)
 	var wq waiter.Queue
 	ep, tcpErr := r.CreateEndpoint(&wq)
@@ -179,7 +230,9 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destIP net.IP, 
 	}
 	guestConn := gonet.NewTCPConn(&wq, ep)
 
-	// Step 2: Peek to extract hostname (non-consuming read via bufio.Reader)
+	// Step 2: Peek to extract hostname (non-consuming read via bufio.Reader).
+	// Canonicalized once here; an IP literal in SNI/Host becomes "" and can
+	// only be authorized by an IP rule.
 	br := bufio.NewReaderSize(guestConn, 16384)
 	var hostname string
 	if destPort == 443 {
@@ -187,55 +240,76 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destIP net.IP, 
 	} else {
 		hostname = peekHTTPHost(br)
 	}
+	hostname = canonicalHostname(hostname)
 
-	// Step 3: Check for MITM secret substitution (HTTPS only, takes priority over allowlist)
-	if destPort == 443 && secretMatcher != nil && hostname != "" && secretMatcher.Matches(hostname) {
+	// Step 3: One decision, covering every outcome. Wrapping the guest here
+	// rather than once per branch keeps the peeked bytes replayable on
+	// whichever branch runs.
+	bufferedGuest := &bufferedConn{Conn: guestConn, reader: br}
+	route, egress := decideTCPInspectRoute(hostname, destIP, destPort, filter, secretMatcher)
+
+	var dial upstreamDial
+	var dst string
+	if egress == egressByName {
+		dial = dialer.byName(hostname, destPort)
+		dst = fmt.Sprintf("%s:%d", hostname, destPort)
+	} else {
+		dial = dialAddress(dialer.dial, destAddr)
+		dst = destAddr
+	}
+	fields := logrus.Fields{
+		"dst":      dst,
+		"dst_ip":   destIP,
+		"hostname": hostname,
+		"egress":   egressName(egress),
+	}
+
+	switch route {
+	case tcpInspectMitm:
 		secrets := secretMatcher.SecretsForHost(hostname)
 		logrus.WithFields(logrus.Fields{
 			"hostname":    hostname,
 			"num_secrets": len(secrets),
 		}).Debug("MITM: intercepting for secret substitution")
-		bufferedGuest := &bufferedConn{Conn: guestConn, reader: br}
-		mitmAndForward(bufferedGuest, hostname, destAddr, ca, secrets)
+		mitmAndForward(bufferedGuest, hostname, dial, ca, secrets)
 		return
-	}
-
-	// Step 4: Check allowlist (skip if no allowlist — secrets-only mode allows all traffic).
-	// The pin ties the guest-supplied hostname to the dialed IP: a hostname
-	// alone no longer authorizes a connection to an arbitrary guest-chosen IP.
-	if filter != nil && (hostname == "" || !filter.AllowHostToIP(hostname, destIP)) {
-		logrus.WithFields(logrus.Fields{
-			"dst":      destAddr,
-			"hostname": hostname,
-		}).Info("allowNet TCP: blocked (hostname not in allowlist)")
+	case tcpInspectForward:
+		logrus.WithFields(fields).Debug("allowNet TCP: allowed")
+	default:
+		logrus.WithFields(fields).Info("allowNet TCP: blocked (no matching IP or hostname rule)")
 		guestConn.Close()
 		return
 	}
 
-	logrus.WithFields(logrus.Fields{
-		"dst":      destAddr,
-		"hostname": hostname,
-	}).Debug("allowNet TCP: allowed by hostname")
-
-	// Step 5: Dial upstream
-	outbound, err := net.Dial("tcp", destAddr)
+	// Step 4: Dial upstream, bounded so a stalled peer cannot hold the guest's
+	// connection open indefinitely. A by-name dial carries the same bound
+	// internally (egress_dialer.go DialHost), which is what covers the MITM
+	// branch above; this one is what covers the address path.
+	ctx, cancel := context.WithTimeout(context.Background(), upstreamDialTimeout)
+	defer cancel()
+	outbound, err := dial(ctx)
 	if err != nil {
-		logrus.WithField("error", err).Trace("allowNet TCP: upstream dial failed")
+		logrus.WithFields(fields).WithField("error", err).Trace("allowNet TCP: upstream dial failed")
 		guestConn.Close()
 		return
 	}
 
-	// Step 5: Relay using tcpproxy.DialProxy (same as standardForward).
-	// Wrap guestConn with the bufio.Reader so peeked bytes are replayed
-	// automatically when DialProxy copies guest→server.
-	bufferedGuest := &bufferedConn{Conn: guestConn, reader: br}
-
+	// Step 5: Relay using tcpproxy.DialProxy (same as standardForward). The
+	// bufio.Reader wrapper replays the peeked bytes as DialProxy copies
+	// guest→server.
 	remote := tcpproxy.DialProxy{
 		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
 			return outbound, nil
 		},
 	}
 	remote.HandleConn(bufferedGuest)
+}
+
+func egressName(e tcpEgress) string {
+	if e == egressByName {
+		return "by-name"
+	}
+	return "by-address"
 }
 
 // bufferedConn wraps a net.Conn with a bufio.Reader for Read operations.

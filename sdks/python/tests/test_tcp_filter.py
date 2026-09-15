@@ -176,15 +176,6 @@ class TCPFilterTestBase:
 class TestDefaultFullAccess(TCPFilterTestBase):
     """When no allow_net is set, all traffic should pass freely."""
 
-    async def test_dns_resolves_any_host(self):
-        """Any hostname should resolve to a real IP."""
-        async with self.make_box() as box:
-            result = await box.exec(
-                "nslookup", self.live_targets.allowed_host, timeout=10
-            )
-            assert result.exit_code == 0
-            assert "0.0.0.0" not in result.stdout
-
     async def test_http_to_any_host(self):
         """HTTP to any host should work."""
         async with self.make_box() as box:
@@ -209,33 +200,57 @@ class TestDefaultFullAccess(TCPFilterTestBase):
 
 
 # ---------------------------------------------------------------------------
-# 2. Hostname-only allowlist — DNS sinkhole + TCP SNI/Host inspection
+# 2. Hostname-only allowlist — TCP SNI/Host inspection at connect time
 # ---------------------------------------------------------------------------
 
 
 class TestHostnameAllowlist(TCPFilterTestBase):
-    """allow_net with hostnames filters via DNS sinkhole + SNI/Host."""
+    """allow_net with hostnames is enforced on SNI/Host when the gateway dials.
 
-    async def test_allowed_host_dns_resolves(self):
-        """Allowed hostname should resolve to a real IP (not sinkholed)."""
+    DNS is not filtered: every name resolves, allowed or not. The control is
+    whether the connection is made.
+    """
+
+    async def test_blocked_host_resolves_but_does_not_connect(self):
+        """allow_net is enforced when the gateway dials, not by DNS.
+
+        A name outside the allowlist resolves normally — that is the contract
+        now — and still cannot be reached. The allowed-host probe in the middle
+        is what keeps the final assertion honest: without it this would also
+        pass on a box with no working network at all.
+        """
         async with self.make_box(
             network=enabled_network(self.live_targets.allowed_host),
         ) as box:
-            result = await box.exec(
-                "nslookup", self.live_targets.allowed_host, timeout=10
+            dns = await box.exec("nslookup", self.live_targets.blocked_host, timeout=10)
+            # Both halves: a failed lookup also has no "0.0.0.0" in it.
+            assert dns.exit_code == 0 and "Address" in dns.stdout, (
+                f"DNS is unrestricted now; an unlisted name must resolve, "
+                f"got exit={dns.exit_code} stdout={dns.stdout!r}"
             )
-            assert result.exit_code == 0
-            assert "0.0.0.0" not in result.stdout
+            assert "0.0.0.0" not in dns.stdout, "the sinkhole answer is gone"
 
-    async def test_blocked_host_dns_sinkholed(self):
-        """Non-allowed hostname should be sinkholed to 0.0.0.0."""
-        async with self.make_box(
-            network=enabled_network(self.live_targets.allowed_host),
-        ) as box:
-            result = await box.exec(
-                "nslookup", self.live_targets.blocked_host, timeout=10
+            allowed = await box.exec(
+                "wget",
+                "-q",
+                "-O-",
+                "--timeout=5",
+                f"http://{self.live_targets.allowed_host}/",
+                timeout=15,
             )
-            assert "0.0.0.0" in result.stdout
+            assert allowed.exit_code == 0, "allowed host must stay reachable"
+
+            blocked = await box.exec(
+                "wget",
+                "-q",
+                "-O-",
+                "--timeout=3",
+                f"http://{self.live_targets.blocked_host}/",
+                timeout=10,
+            )
+            assert blocked.exit_code != 0, (
+                "unlisted host must be refused at connect time"
+            )
 
     async def test_http_to_allowed_host_succeeds(self):
         """HTTP to allowed host — TCP filter checks Host header, should pass."""
@@ -293,21 +308,6 @@ class TestHostnameAllowlist(TCPFilterTestBase):
                 f"direct IP should be blocked, got exit_code={result.exit_code}"
             )
 
-    async def test_blocked_host_http_fails(self):
-        """HTTP to a non-allowed host should fail (sinkholed DNS + TCP blocked)."""
-        async with self.make_box(
-            network=enabled_network(self.live_targets.allowed_host),
-        ) as box:
-            result = await box.exec(
-                "wget",
-                "-q",
-                "-O-",
-                "--timeout=3",
-                f"http://{self.live_targets.blocked_host}/",
-                timeout=10,
-            )
-            assert result.exit_code != 0, "HTTP to blocked host should fail"
-
 
 # ---------------------------------------------------------------------------
 # 3. Wildcard hostname allowlist
@@ -317,28 +317,54 @@ class TestHostnameAllowlist(TCPFilterTestBase):
 class TestWildcardAllowlist(TCPFilterTestBase):
     """Wildcard patterns should match subdomains via SNI/Host."""
 
-    async def test_wildcard_allows_subdomain_dns(self):
-        """*.example.com should allow subdomains via DNS.
-
-        The DNS sinkhole creates a wildcard zone for *.example.com.
-        Subdomains should resolve (not sinkholed to 0.0.0.0).
-        Note: nslookup may show "Parse error" for some wildcard responses
-        depending on the DNS resolver implementation. We check the response
-        doesn't contain 0.0.0.0 (sinkhole indicator).
-        """
-        async with self.make_box(network=enabled_network("*.example.com")) as box:
-            result = await box.exec("nslookup", "www.example.com", timeout=10)
-            # Wildcard DNS may not return clean nslookup output, but it should
-            # NOT sinkhole the subdomain to 0.0.0.0
-            assert "0.0.0.0" not in result.stdout, (
-                f"wildcard subdomain should not be sinkholed, got: {result.stdout}"
+    async def test_wildcard_allows_subdomain_connection(self):
+        """A subdomain under the wildcard must be reachable."""
+        async with self.make_box(
+            network=enabled_network("*.example.com"),
+        ) as box:
+            result = await box.exec(
+                "wget",
+                "-q",
+                "-O-",
+                "--timeout=5",
+                "http://www.example.com/",
+                timeout=15,
+            )
+            assert result.exit_code == 0, (
+                f"subdomain under the wildcard should be reachable, "
+                f"got exit_code={result.exit_code}"
             )
 
-    async def test_wildcard_blocks_different_domain(self):
-        """*.example.com should NOT match evil.com."""
-        async with self.make_box(network=enabled_network("*.example.com")) as box:
-            result = await box.exec("nslookup", "evil.com", timeout=10)
-            assert "0.0.0.0" in result.stdout or result.exit_code != 0
+    async def test_wildcard_blocks_different_domain_connection(self):
+        """A domain outside the wildcard must be refused when connecting.
+
+        It still resolves — DNS is not filtered — so the assertion has to be
+        about reachability, with the allowed subdomain as the control.
+        """
+        async with self.make_box(
+            network=enabled_network("*.example.com"),
+        ) as box:
+            allowed = await box.exec(
+                "wget",
+                "-q",
+                "-O-",
+                "--timeout=5",
+                "http://www.example.com/",
+                timeout=15,
+            )
+            assert allowed.exit_code == 0, "the wildcard subdomain must be reachable"
+
+            blocked = await box.exec(
+                "wget",
+                "-q",
+                "-O-",
+                "--timeout=3",
+                f"http://{self.live_targets.blocked_host}/",
+                timeout=10,
+            )
+            assert blocked.exit_code != 0, (
+                "a domain outside the wildcard must be refused at connect time"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -444,42 +470,59 @@ class TestEdgeCases(TCPFilterTestBase):
     """Edge cases and boundary conditions."""
 
     async def test_empty_allowlist_allows_all(self):
-        """Empty allow_net = full access (no filter)."""
+        """Empty allow_net = full access.
+
+        Asserted with a direct-IP connection, which is exactly what a non-empty
+        allowlist forbids and what a name lookup cannot distinguish now that
+        DNS is unfiltered.
+        """
         async with self.make_box(network=enabled_network()) as box:
-            result = await box.exec(
-                "nslookup", self.live_targets.allowed_host, timeout=10
+            result = await self.tcp_probe(box, self.live_targets.allowed_ip)
+            assert "EXIT:0" in result.stdout, (
+                f"empty allow_net must permit a direct-IP connection, "
+                f"got: {result.stdout}"
             )
-            assert result.exit_code == 0
-            assert "0.0.0.0" not in result.stdout
 
     async def test_multiple_allowed_hosts(self):
-        """Multiple hostnames in allow_net should all be accessible."""
+        """Every hostname in allow_net is reachable, and nothing else is."""
         async with self.make_box(
             network=enabled_network(
                 self.live_targets.allowed_host,
                 self.live_targets.second_allowed_host,
             ),
         ) as box:
-            r1 = await box.exec("nslookup", self.live_targets.allowed_host, timeout=10)
-            assert r1.exit_code == 0
-            assert "0.0.0.0" not in r1.stdout
-
-            r2 = await box.exec(
-                "nslookup",
+            for host in (
+                self.live_targets.allowed_host,
                 self.live_targets.second_allowed_host,
+            ):
+                r = await box.exec(
+                    "wget",
+                    "-q",
+                    "-O-",
+                    "--timeout=5",
+                    f"http://{host}/",
+                    timeout=15,
+                )
+                assert r.exit_code == 0, f"listed host {host} must be reachable"
+
+            blocked = await box.exec(
+                "wget",
+                "-q",
+                "-O-",
+                "--timeout=3",
+                f"http://{self.live_targets.blocked_host}/",
                 timeout=10,
             )
-            assert r2.exit_code == 0
-            assert "0.0.0.0" not in r2.stdout
-
-            # Unlisted host should be blocked
-            r3 = await box.exec("nslookup", self.live_targets.blocked_host, timeout=10)
-            assert "0.0.0.0" in r3.stdout
+            assert blocked.exit_code != 0, (
+                "an unlisted host must be refused at connect time"
+            )
 
     async def test_gateway_ip_always_reachable(self):
-        """Gateway IP should always be reachable for DNS/DHCP.
+        """The gateway resolver answers regardless of allow_net.
 
-        Even with restrictive allow_net, internal network must work.
+        allow_net does not filter DNS, so this holds for any name; the point
+        here is that a restrictive allowlist does not cut the box off from its
+        own resolver.
         """
         async with self.make_box(
             network=enabled_network(self.live_targets.allowed_host),
