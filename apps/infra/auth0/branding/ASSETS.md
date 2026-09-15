@@ -4,15 +4,25 @@ The browser loads Universal Login branding from the selected stage's dashboard
 origin. Source files live in `apps/dashboard/public/auth0/`; Vite copies them
 into the dashboard build and Nest serves them through the stack domain.
 
-| Public file                        | Source                                                                  | SHA-256                                                            |
-| ---------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `boxlite-light-ec0b1243.png`       | `apps/dashboard/src/assets/boxlite-light.png`                           | `ec0b124340e956a6619e866809e2dad8e5f75e83e10a301c766ecdd81710f8e0` |
-| `boxlite-black-12c2c991.png`       | `apps/dashboard/src/assets/boxlite-black.png`                           | `12c2c991a30c82b4c8cc5b1a2ca4f808add8e2645f82c309693385ef1b687c05` |
-| `ibm-plex-mono-400-ba204497.woff2` | `@ibm/plex-mono@2.5.0` `fonts/complete/woff2/IBMPlexMono-Regular.woff2` | `ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350` |
-| `IBM-Plex-OFL-d741e57d.txt`        | `@ibm/plex-mono@2.5.0` `LICENSE.txt` (normalized text)                  | `d741e57d5f865e294df801f96b7b5161a88b211df65887e4358d271c9fc5fb4f` |
+| Public file                            | Source                                                                  | SHA-256                                                            |
+| -------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `boxlite-light-ec0b1243.png`           | `apps/dashboard/src/assets/boxlite-light.png`                           | `ec0b124340e956a6619e866809e2dad8e5f75e83e10a301c766ecdd81710f8e0` |
+| `boxlite-black-12c2c991.png`           | `apps/dashboard/src/assets/boxlite-black.png`                           | `12c2c991a30c82b4c8cc5b1a2ca4f808add8e2645f82c309693385ef1b687c05` |
+| `ibm-plex-mono-400-ba204497.woff2`     | `@ibm/plex-mono@2.5.0` `fonts/complete/woff2/IBMPlexMono-Regular.woff2` | `ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350` |
+| `IBM-Plex-OFL-d741e57d.txt`            | `@ibm/plex-mono@2.5.0` `LICENSE.txt` (normalized text)                  | `d741e57d5f865e294df801f96b7b5161a88b211df65887e4358d271c9fc5fb4f` |
+| `github-invertocat-white-ccd84c89.svg` | `brand.github.com` `GitHub_Logos.zip` `SVG/GitHub_Invertocat_White.svg` | `ccd84c89b1056345608fc3489357f8acc7397e49a3cdc2d418b6c8016911d47b` |
 
 IBM Plex Mono is published under OFL-1.1 by <https://github.com/IBM/plex>.
 Keep the license beside the fonts.
+
+The Invertocat is GitHub's trademark rather than an OSS asset: the brand toolkit
+at <https://brand.github.com/foundations/logo> permits a GitHub logo used to link
+to GitHub, which is what a "Continue with GitHub" button does. The white variant
+is here because Auth0's built-in social icon is the near-black `#161514` mark on
+the widget's `#1A1D24` background, and no theme token recolors it — the SVG it
+inlines carries a literal fill, not `currentColor`. This one file is wired
+through the connection's `options.icon_url` instead of `branding/theme.json`, so
+the Universal Login command neither reads nor writes it.
 
 Two wordmarks because the surfaces have opposite backgrounds. The login widget
 is dark and takes the light wordmark through `branding/theme.json`
