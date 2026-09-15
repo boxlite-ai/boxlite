@@ -1,0 +1,7 @@
+{
+  "_comment": "The signup counterpart of login-id, and the visitor's first contact, so this title names the product.",
+  "signup-id": {
+    "title": "Welcome to BoxLite",
+    "description": "Boxes your agents build in, and ship from."
+  }
+}

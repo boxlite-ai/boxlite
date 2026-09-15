@@ -1,7 +1,7 @@
 {
-  "_comment": "The login screen is for returning users; the wordmark already names BoxLite above it.",
+  "_comment": "The single-step login screen, shown only when Identifier First is off; the wordmark already names BoxLite above it.",
   "login": {
     "title": "Welcome back",
-    "description": "Agentic cloud platform for AI Agent builder"
+    "description": "The cloud platform your agents run on"
   }
 }
