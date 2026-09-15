@@ -285,6 +285,25 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithUser(boxDto.RunAsUser))
 	}
 
+	// Only a capped box pays for an advanced-options handle; an unconditional
+	// one would put `advanced` on every create. Forwarded even when the box's
+	// network is disabled: the core rejects that pairing itself, and dropping
+	// the cap here would hide the conflict behind a 201.
+	limit := boxlite.NetworkRateLimit{TxKbps: boxDto.NetworkTxKbps, RxKbps: boxDto.NetworkRxKbps}
+	if limit != (boxlite.NetworkRateLimit{}) {
+		advanced, err := boxlite.NewAdvancedBoxOptions()
+		if err != nil {
+			return "", "", fmt.Errorf("failed to allocate advanced options: %w", err)
+		}
+		// GetOrCreate clones the handle into the box options, so it is only
+		// needed until then.
+		defer advanced.Close()
+		if err := advanced.SetNetworkRateLimit(limit); err != nil {
+			return "", "", fmt.Errorf("failed to set network rate limit: %w", err)
+		}
+		opts = append(opts, boxlite.WithAdvancedOptions(advanced))
+	}
+
 	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Volumes)
 	if err != nil {
 		return "", "", err

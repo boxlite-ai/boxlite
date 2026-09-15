@@ -61,6 +61,14 @@ export interface Box {
      */
     'networkAllowList'?: string;
     /**
+     * Cap on traffic the box sends, in kilobits per second; absent or 0 is uncapped
+     */
+    'networkTxKbps'?: number;
+    /**
+     * Cap on traffic reaching the box, in kilobits per second; absent or 0 is uncapped
+     */
+    'networkRxKbps'?: number;
+    /**
      * The target environment for the box
      */
     'target': string;

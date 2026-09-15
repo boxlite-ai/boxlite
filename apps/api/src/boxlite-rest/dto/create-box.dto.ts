@@ -14,8 +14,10 @@ import {
   IsNumber,
   IsInt,
   IsBoolean,
+  IsInt,
   IsObject,
   IsArray,
+  Max,
   Min,
   IsIn,
   Validate,
@@ -24,7 +26,11 @@ import {
   ValidatorConstraint,
   ValidatorConstraintInterface,
 } from 'class-validator'
-import { isValidNetworkAllowEntry, MAX_NETWORK_ALLOW_LIST_ENTRIES } from '../../box/utils/network-validation.util'
+import {
+  isValidNetworkAllowEntry,
+  MAX_NETWORK_ALLOW_LIST_ENTRIES,
+  MAX_NETWORK_RATE_LIMIT_KBPS,
+} from '../../box/utils/network-validation.util'
 
 const logger = new Logger('CreateBoxDto')
 
@@ -198,6 +204,44 @@ export class SecretSpecDto {
   placeholder?: string
 }
 
+/**
+ * Per-direction bandwidth cap in kbit/s, named from the box's point of view
+ * (`tx` is what the box sends). Omitted or 0 leaves a direction uncapped. The
+ * ceiling is the Box column's int4 range, not a bandwidth policy.
+ */
+export class NetworkRateLimitDto {
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(MAX_NETWORK_RATE_LIMIT_KBPS)
+  tx_kbps?: number
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(MAX_NETWORK_RATE_LIMIT_KBPS)
+  rx_kbps?: number
+}
+
+export class CreateBoxAdvancedOptionsDto {
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => NetworkRateLimitDto)
+  network_rate_limit?: NetworkRateLimitDto
+
+  // advanced.capabilities is implemented by `boxlite serve` and the reference
+  // server; the runner has no path for it yet. Named here so the refusal says
+  // why instead of the bare "property capabilities should not exist" the
+  // whitelist would report. Lift this once the runner forwards a capability
+  // policy.
+  @ValidateIf((_, value) => value !== undefined)
+  @IsIn([undefined], {
+    message: 'advanced.capabilities is not supported for cloud boxes',
+  })
+  capabilities?: never
+}
+
 export class CreateBoxDto {
   @IsOptional()
   @IsString()
@@ -328,12 +372,11 @@ export class CreateBoxDto {
   })
   rootfs_path?: never
 
-  // advanced.capabilities is implemented by `boxlite serve` and the reference
-  // server; the runner has no path for it yet. Lift this once the runner
-  // forwards a capability policy.
-  @ValidateIf((_, value) => value !== undefined)
-  @IsIn([undefined], {
-    message: 'advanced options are not supported for cloud boxes',
-  })
-  advanced?: never
+  // Only `network_rate_limit` is implemented here; see the nested DTO for the
+  // sub-field that is still refused.
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => CreateBoxAdvancedOptionsDto)
+  advanced?: CreateBoxAdvancedOptionsDto
 }

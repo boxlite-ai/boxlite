@@ -235,6 +235,12 @@ int main() {
         boxlite_options_free(opts);
         return 1;
     }
+    /* Per-direction bandwidth cap in kbit/s (tx = what the box sends); 0 is uncapped. */
+    if (boxlite_advanced_options_set_network_rate_limit(advanced, 10000, 100000) != Ok) {
+        boxlite_advanced_options_free(advanced);
+        boxlite_options_free(opts);
+        return 1;
+    }
     boxlite_options_set_advanced(opts, advanced);
     boxlite_advanced_options_free(advanced);
 

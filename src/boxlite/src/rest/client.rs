@@ -522,6 +522,24 @@ impl ApiClient {
         )
     }
 
+    /// Cached, unlike `require_linux_capabilities_enabled`: a dropped bandwidth
+    /// cap costs bandwidth, it does not widen what the guest may do, and the
+    /// uncached re-read exists for gates whose silent failure is a privilege
+    /// change. Every in-repo server also rejects the field outright when it
+    /// predates it, so a stale positive can only degrade the error message.
+    pub async fn require_network_rate_limit_enabled(&self) -> BoxliteResult<()> {
+        let config = self.get_config().await?;
+        let capabilities = config.capabilities.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "Remote server did not advertise network rate limit support".to_string(),
+            )
+        })?;
+        ensure_capability(
+            "network rate limit",
+            capabilities.network_rate_limit_enabled,
+        )
+    }
+
     pub async fn require_clone_enabled(&self) -> BoxliteResult<()> {
         let config = self.get_config().await?;
         let capabilities = config.capabilities.ok_or_else(|| {
@@ -1163,6 +1181,79 @@ mod tests {
         server.abort();
 
         assert!(matches!(second, Err(BoxliteError::Unsupported(_))));
+    }
+
+    /// The rate-limit gate reads the cached config: the server accepts exactly
+    /// one connection, so a second `GET /v1/config` would fail on the transport
+    /// instead of returning `Ok`.
+    #[tokio::test]
+    async fn network_rate_limit_gate_reuses_cached_server_config() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let body = r#"{"capabilities":{"network_rate_limit_enabled":true}}"#;
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                headers.push(socket.read_u8().await.unwrap());
+            }
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            drop(listener);
+        });
+
+        let client =
+            ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        client.require_network_rate_limit_enabled().await.unwrap();
+        server.await.unwrap();
+        client
+            .require_network_rate_limit_enabled()
+            .await
+            .expect("second check must be answered from the cache");
+    }
+
+    #[tokio::test]
+    async fn network_rate_limit_gate_fails_closed_when_unadvertised() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let body = r#"{"capabilities":{"linux_capabilities_enabled":true}}"#;
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                headers.push(socket.read_u8().await.unwrap());
+            }
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+
+        let client =
+            ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let error = client.require_network_rate_limit_enabled().await;
+        server.abort();
+
+        assert!(
+            matches!(error, Err(BoxliteError::Unsupported(_))),
+            "got: {error:?}"
+        );
     }
 
     #[test]

@@ -14,6 +14,8 @@ Name | Type | Description | Notes
 **_public** | **boolean** | Whether the box http preview is public | [default to undefined]
 **networkBlockAll** | **boolean** | Whether to block all network access for the box | [default to undefined]
 **networkAllowList** | **string** | Comma-separated list of allowed CIDR network addresses for the box | [optional] [default to undefined]
+**networkTxKbps** | **number** | Cap on traffic the box sends, in kilobits per second; absent or 0 is uncapped | [optional] [default to undefined]
+**networkRxKbps** | **number** | Cap on traffic reaching the box, in kilobits per second; absent or 0 is uncapped | [optional] [default to undefined]
 **target** | **string** | The target environment for the box | [default to undefined]
 **image** | **string** | The image used for the box | [optional] [default to undefined]
 **cpu** | **number** | The CPU quota for the box | [default to undefined]
@@ -51,6 +53,8 @@ const instance: Box = {
     _public,
     networkBlockAll,
     networkAllowList,
+    networkTxKbps,
+    networkRxKbps,
     target,
     image,
     cpu,

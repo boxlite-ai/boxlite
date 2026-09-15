@@ -105,6 +105,7 @@ export {
   type SocketAddress,
   type AdvancedBoxOptions,
   type ContainerCapabilities,
+  type NetworkRateLimit,
   type SimpleBoxOptions,
   type SecurityOptions,
   type Secret,

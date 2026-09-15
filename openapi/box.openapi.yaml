@@ -1480,6 +1480,13 @@ components:
               type: boolean
               description: Whether Docker-style Linux capability add/drop policy is supported
               example: true
+            network_rate_limit_enabled:
+              type: boolean
+              description: |
+                Whether per-box network bandwidth caps (`advanced.network_rate_limit`)
+                are supported. A client re-reads this before a capped create and
+                refuses to send the cap to a server that does not advertise it.
+              example: true
             max_cpus:
               type: integer
               description: Maximum allowed vCPUs per box
@@ -1931,6 +1938,8 @@ components:
       properties:
         capabilities:
           $ref: "#/components/schemas/CreateContainerCapabilities"
+        network_rate_limit:
+          $ref: "#/components/schemas/CreateNetworkRateLimit"
 
     CreateContainerCapabilities:
       type: object
@@ -1955,6 +1964,39 @@ components:
             Linux capabilities to remove from the container capability set.
             Names are case-insensitive, may include the `CAP_` prefix, and may be `ALL`.
           example: [NET_RAW]
+
+    CreateNetworkRateLimit:
+      type: object
+      description: |
+        Per-direction bandwidth cap for the box's network interface, in
+        kilobits per second, named from the box's point of view: `tx` is what
+        the box sends, `rx` is what reaches it. Which side opened a connection
+        does not matter — traffic arriving over an inbound forward is charged
+        to `rx` like a reply to an outbound request.
+
+        Shaping happens below IP, so one budget per direction covers TCP, UDP,
+        ICMP and ARP together. Omitting a direction, or sending `0`, leaves it
+        uncapped — the convention Firecracker, Kata and Cloud Hypervisor share.
+
+        Servers advertise support as `capabilities.network_rate_limit_enabled`
+        on `GET /v1/config`; a server that does not advertise it rejects this
+        object rather than dropping it. A server also rejects a value its
+        shaper cannot represent, and rejects any cap when the box's outbound
+        network is disabled — there is no interface to shape.
+      additionalProperties: false
+      properties:
+        tx_kbps:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Guest to internet, kilobits per second; 0 or absent is uncapped
+          example: 10000
+        rx_kbps:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Internet to guest, kilobits per second; 0 or absent is uncapped
+          example: 100000
 
     VolumeSpec:
       type: object

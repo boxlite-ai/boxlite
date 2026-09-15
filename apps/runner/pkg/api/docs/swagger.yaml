@@ -45,6 +45,14 @@ definitions:
         type: string
       networkBlockAll:
         type: boolean
+      networkRxKbps:
+        type: integer
+      networkTxKbps:
+        description: |-
+          Per-direction bandwidth cap in kbit/s from the box's point of view
+          (tx = what the box sends). Zero is uncapped on both sides of the wire,
+          so an API that never sends the field needs no special case.
+        type: integer
       organizationId:
         description: Nullable for backward compatibility
         type: string
@@ -140,6 +148,10 @@ definitions:
         type: string
       networkBlockAll:
         type: boolean
+      networkRxKbps:
+        type: integer
+      networkTxKbps:
+        type: integer
       osUser:
         type: string
       secrets:
@@ -231,15 +243,6 @@ definitions:
       networkLimitEgress:
         type: boolean
     type: object
-  dto.VolumeDTO:
-    properties:
-      mountPath:
-        type: string
-      subpath:
-        type: string
-      volumeId:
-        type: string
-    type: object
   dto.SecretDTO:
     properties:
       hosts:
@@ -255,6 +258,15 @@ definitions:
     required:
       - name
       - value
+    type: object
+  dto.VolumeDTO:
+    properties:
+      mountPath:
+        type: string
+      subpath:
+        type: string
+      volumeId:
+        type: string
     type: object
   enums.BoxState:
     enum:

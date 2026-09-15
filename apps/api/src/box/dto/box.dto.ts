@@ -122,6 +122,20 @@ export class BoxDto {
   })
   networkAllowList?: string
 
+  @ApiPropertyOptional({
+    description: 'Cap on traffic the box sends, in kilobits per second; absent or 0 is uncapped',
+    example: 10000,
+    type: 'integer',
+  })
+  networkTxKbps?: number
+
+  @ApiPropertyOptional({
+    description: 'Cap on traffic reaching the box, in kilobits per second; absent or 0 is uncapped',
+    example: 100000,
+    type: 'integer',
+  })
+  networkRxKbps?: number
+
   @ApiProperty({
     description: 'The target environment for the box',
     example: 'local',
@@ -311,6 +325,8 @@ export class BoxDto {
       public: box.public,
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
+      networkTxKbps: box.networkTxKbps,
+      networkRxKbps: box.networkRxKbps,
       labels: box.labels,
       volumes: box.volumes,
       state: this.getBoxState(box),

@@ -106,6 +106,7 @@ export class BoxliteBoxController {
         auto_delete: req.body?.auto_delete,
         auto_resume: req.body?.auto_resume,
         network: req.body?.network,
+        advanced: req.body?.advanced,
       }),
     },
   })

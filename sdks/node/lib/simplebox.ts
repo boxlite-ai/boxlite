@@ -364,8 +364,21 @@ export interface ContainerCapabilities {
   drop?: string[];
 }
 
+/**
+ * Per-direction bandwidth cap for the box's network interface, in kilobits
+ * per second, named from the box's point of view. Shaping happens below IP,
+ * so one budget per direction covers TCP, UDP, ICMP and ARP together.
+ */
+export interface NetworkRateLimit {
+  /** Guest to internet; omitted or 0 leaves it uncapped. */
+  txKbps?: number;
+  /** Internet to guest; omitted or 0 leaves it uncapped. */
+  rxKbps?: number;
+}
+
 export interface AdvancedBoxOptions {
   capabilities?: ContainerCapabilities;
+  networkRateLimit?: NetworkRateLimit;
 }
 
 /** Box-scoped network operations for a SimpleBox. */
@@ -532,6 +545,9 @@ export class SimpleBox {
                   add: [...(options.advanced.capabilities.add ?? [])],
                   drop: [...(options.advanced.capabilities.drop ?? [])],
                 }
+              : undefined,
+            networkRateLimit: options.advanced.networkRateLimit
+              ? { ...options.advanced.networkRateLimit }
               : undefined,
           }
         : undefined,
