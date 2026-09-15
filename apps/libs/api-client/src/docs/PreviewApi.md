@@ -4,10 +4,62 @@ All URIs are relative to *http://localhost:3000*
 
 |Method | HTTP request | Description|
 |------------- | ------------- | -------------|
+|[**ensureBoxReady**](#ensureboxready) | **POST** /preview/{boxId}/ensure-ready | Resume a stopped box and wait until it is running|
 |[**getBoxIdFromSignedPreviewUrlToken**](#getboxidfromsignedpreviewurltoken) | **GET** /preview/{signedPreviewToken}/{port}/box-id | Get box ID from signed preview URL token|
 |[**hasBoxAccess**](#hasboxaccess) | **GET** /preview/{boxId}/access | Check if user has access to the box|
 |[**isBoxPublic**](#isboxpublic) | **GET** /preview/{boxId}/public | Check if box is public|
 |[**isValidAuthToken**](#isvalidauthtoken) | **GET** /preview/{boxId}/validate/{authToken} | Check if box auth token is valid|
+
+# **ensureBoxReady**
+> ensureBoxReady()
+
+
+### Example
+
+```typescript
+import {
+    PreviewApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new PreviewApi(configuration);
+
+let boxId: string; //ID of the box
+
+const { status, data } = await apiInstance.ensureBoxReady(
+    boxId
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **boxId** | [**string**] | ID of the box | |
+
+
+### Return type
+
+void (empty response body)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: Not defined
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**204** | Box is running |  -  |
+|**408** | Box did not reach a running state before the resume timeout |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **getBoxIdFromSignedPreviewUrlToken**
 > string getBoxIdFromSignedPreviewUrlToken()

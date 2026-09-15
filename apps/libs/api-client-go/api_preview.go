@@ -24,6 +24,18 @@ import (
 type PreviewAPI interface {
 
 	/*
+	EnsureBoxReady Resume a stopped box and wait until it is running
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId ID of the box
+	@return PreviewAPIEnsureBoxReadyRequest
+	*/
+	EnsureBoxReady(ctx context.Context, boxId string) PreviewAPIEnsureBoxReadyRequest
+
+	// EnsureBoxReadyExecute executes the request
+	EnsureBoxReadyExecute(r PreviewAPIEnsureBoxReadyRequest) (*http.Response, error)
+
+	/*
 	GetBoxIdFromSignedPreviewUrlToken Get box ID from signed preview URL token
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -80,6 +92,96 @@ type PreviewAPI interface {
 
 // PreviewAPIService PreviewAPI service
 type PreviewAPIService service
+
+type PreviewAPIEnsureBoxReadyRequest struct {
+	ctx context.Context
+	ApiService PreviewAPI
+	boxId string
+}
+
+func (r PreviewAPIEnsureBoxReadyRequest) Execute() (*http.Response, error) {
+	return r.ApiService.EnsureBoxReadyExecute(r)
+}
+
+/*
+EnsureBoxReady Resume a stopped box and wait until it is running
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId ID of the box
+ @return PreviewAPIEnsureBoxReadyRequest
+*/
+func (a *PreviewAPIService) EnsureBoxReady(ctx context.Context, boxId string) PreviewAPIEnsureBoxReadyRequest {
+	return PreviewAPIEnsureBoxReadyRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+	}
+}
+
+// Execute executes the request
+func (a *PreviewAPIService) EnsureBoxReadyExecute(r PreviewAPIEnsureBoxReadyRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPost
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "PreviewAPIService.EnsureBoxReady")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/preview/{boxId}/ensure-ready"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
 
 type PreviewAPIGetBoxIdFromSignedPreviewUrlTokenRequest struct {
 	ctx context.Context

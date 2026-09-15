@@ -35,26 +35,17 @@ import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
-import { AUTO_RESUME_TIMEOUT_SECONDS, BoxAutoResumeService } from './box-auto-resume.service'
+import {
+  AUTO_RESUME_TIMEOUT_SECONDS,
+  BoxAutoResumeService,
+  RESUMABLE_STATES,
+} from '../box/services/box-auto-resume.service'
 import { BoxState } from '../box/enums/box-state.enum'
+import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
 const OBSERVATION_ONLY: ProxyActivityPolicy = { activity: false, autoResume: false }
-
-// States a tunnel request may wait out: either the box is stopped (or on its
-// way there) and can be started again, or it is already on its way up. Every
-// other non-STARTED state — ERROR, ARCHIVED/ARCHIVING, DESTROYED/DESTROYING,
-// RESIZING, UNKNOWN — either never reaches STARTED on its own or needs an
-// explicit operator action, so waiting 30s to time out is strictly worse for
-// the caller than an immediate 409.
-const TUNNEL_RESUMABLE_STATES: readonly BoxState[] = [
-  BoxState.STOPPED,
-  BoxState.STOPPING,
-  BoxState.STARTING,
-  BoxState.CREATING,
-  BoxState.RESTORING,
-]
 
 // Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product
 // spec: @All() expands to the SEARCH verb, which OpenAPI 3.0 cannot express.
@@ -253,12 +244,21 @@ export class BoxliteProxyController {
       .updateLastActivityAt(box.id, new Date())
       .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
 
-    // POL-352: mirror proxyToRunner's policy — a stopped box that opted into
+    // Refused here as well as inside ensureReady: this route already holds the
+    // box, so an ineligible one is rejected without a second lookup. The
+    // service stays the authority — see assertResumable.
     // autoResume gets woken here rather than rejected, since minting the
     // tunnel URI is the caller's only touchpoint before the CONNECT itself
     // (which has no box row to check against).
-    if (box.state !== BoxState.STARTED) {
-      if (!box.autoResume || !TUNNEL_RESUMABLE_STATES.includes(box.state)) {
+    // "Running" here means settled: a box that is STARTED with a stop already
+    // submitted would otherwise skip the resume and be handed a URL whose
+    // runner goes away underneath the client. ensureReady handles that case by
+    // waiting out the stop and starting it again, so route it there too — and
+    // do not apply the whitelist to it, since STARTED is not in it.
+    const settledRunning = box.state === BoxState.STARTED && box.desiredState === BoxDesiredState.STARTED
+    if (!settledRunning) {
+      const resumable = box.state === BoxState.STARTED || RESUMABLE_STATES.includes(box.state)
+      if (!box.autoResume || !resumable) {
         throw new ConflictException(`Box ${boxId} is not running (state: ${box.state})`)
       }
       await this.resumeForTunnel(box.id, authContext, res)

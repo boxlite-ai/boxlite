@@ -133,7 +133,15 @@ func dialRunnerTunnel(ctx context.Context, runnerInfo *RunnerInfo, boxID string,
 	if err != nil {
 		return nil, err
 	}
-	if err := conn.SetDeadline(time.Now().Add(runnerTunnelSetupTimeout)); err != nil {
+	// Clamp to the caller's deadline when it is nearer: the retry loop in
+	// dialGuestPort bounds the whole wait, and a runner that accepts the
+	// connection but never answers the CONNECT would otherwise stretch this
+	// attempt past that window on its own setup timeout.
+	deadline := time.Now().Add(runnerTunnelSetupTimeout)
+	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
+		deadline = callerDeadline
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
 		conn.Close()
 		return nil, err
 	}
