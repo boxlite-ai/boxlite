@@ -660,6 +660,33 @@ pub struct ImageInfo {
     pub size: Option<Bytes>,
 }
 
+impl ImageInfo {
+    pub(crate) fn from_cached(reference: String, cached: crate::db::CachedImage) -> Self {
+        use std::str::FromStr;
+        let cached_at = DateTime::parse_from_rfc3339(&cached.cached_at)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|e| {
+                tracing::warn!("Invalid cached_at timestamp: {}, using epoch", e);
+                DateTime::<Utc>::from(std::time::SystemTime::UNIX_EPOCH)
+            });
+        let (repository, tag) = match oci_client::Reference::from_str(&reference) {
+            Ok(r) => (
+                r.repository().to_string(),
+                r.tag().unwrap_or("latest").to_string(),
+            ),
+            Err(_) => (reference.clone(), "<none>".to_string()),
+        };
+        Self {
+            reference,
+            repository,
+            tag,
+            id: cached.manifest_digest,
+            cached_at,
+            size: None,
+        }
+    }
+}
+
 // ============================================================================
 // BOX CONFIG (Podman-style separation)
 // ============================================================================

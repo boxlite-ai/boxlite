@@ -1,5 +1,6 @@
 use crate::cli::GlobalFlags;
 use crate::formatter::{self, OutputFormat};
+use crate::query::QueryRuntime;
 use boxlite::runtime::types::ImageInfo;
 use clap::Args;
 use serde::Serialize;
@@ -51,9 +52,8 @@ impl From<&ImageInfo> for ImagePresenter {
 
 pub async fn execute(args: ImagesArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let options = global.resolve_runtime_options()?;
-    let rt = global.create_runtime_with_options(options)?;
-    let image_handle = rt.images()?;
-    let images = image_handle.list().await?;
+    let rt = QueryRuntime::from_runtime(global.create_runtime_with_options(options))?;
+    let images = rt.list_images().await?;
 
     if args.quiet {
         for info in images {

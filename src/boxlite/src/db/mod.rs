@@ -78,6 +78,41 @@ impl Database {
         })
     }
 
+    /// Open an existing database and pin a committed snapshot, including its
+    /// schema version. Drop all handles promptly to release the read transaction.
+    /// This path never initializes schema or changes the journal mode.
+    pub(crate) fn open_read_only_snapshot(db_path: &Path) -> BoxliteResult<Self> {
+        let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| {
+                BoxliteError::Database(format!(
+                    "Failed to open read-only database {}: {e}",
+                    db_path.display()
+                ))
+            })?;
+        // Queries must not inherit the owner's 100-second mutation timeout.
+        db_err!(conn.busy_timeout(std::time::Duration::from_secs(1)))?;
+        db_err!(conn.execute_batch("BEGIN DEFERRED"))?;
+        let version: Option<i32> = db_err!(
+            conn.query_row(
+                "SELECT version FROM schema_version WHERE id = 1",
+                [],
+                |row| row.get(0)
+            )
+            .optional()
+        )?;
+        if version != Some(schema::SCHEMA_VERSION) {
+            return Err(BoxliteError::Database(format!(
+                "Read-only schema version mismatch at {}: database has {:?}, process expects v{}. No migration was attempted; use a matching BoxLite version or stop the owner before upgrading.",
+                db_path.display(),
+                version,
+                schema::SCHEMA_VERSION
+            )));
+        }
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+        })
+    }
+
     /// Acquire the database connection.
     pub(crate) fn conn(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock()
