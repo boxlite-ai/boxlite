@@ -3,5 +3,10 @@
     "stackOrigin": "https://dev.boxlite.ai",
     "publicOidcIssuer": "https://auth.dev.boxlite.ai/",
     "auth0TenantDomain": "dev-j60pjpmu6neaeaga.us.auth0.com"
+  },
+  "prod": {
+    "stackOrigin": "https://app.boxlite.ai",
+    "publicOidcIssuer": "https://auth.boxlite.ai/",
+    "auth0TenantDomain": "boxlite.us.auth0.com"
   }
 }

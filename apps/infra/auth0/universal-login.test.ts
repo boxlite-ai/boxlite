@@ -319,15 +319,20 @@ test('the checked-in source binds dev to the reviewed stack, issuer, tenant, and
     source.theme.widget && (source.theme.widget as JsonObject).logo_url,
     'https://dev.boxlite.ai/auth0/boxlite-light-ec0b1243.png',
   )
-  assert.equal(source.prompts[0].text.login && (source.prompts[0].text.login as JsonObject).title, 'Welcome back')
-  assert.equal(
-    source.prompts[1].text.signup && (source.prompts[1].text.signup as JsonObject).title,
-    'Welcome to BoxLite',
-  )
+  const copy = new Map(source.prompts.map((prompt) => [prompt.prompt, prompt.text]))
+  assert.deepEqual([...copy.keys()].sort(), ['login', 'login-id', 'signup', 'signup-id'])
+  // Identifier First serves login-id/signup-id, so both variants of each screen carry the same copy.
+  for (const [prompt, title, description] of [
+    ['login-id', 'Welcome back', 'The cloud platform your agents run on'],
+    ['login', 'Welcome back', 'The cloud platform your agents run on'],
+    ['signup-id', 'Welcome to BoxLite', 'Boxes your agents build in, and ship from.'],
+    ['signup', 'Welcome to BoxLite', 'Boxes your agents build in, and ship from.'],
+  ] as const) {
+    assert.deepEqual(copy.get(prompt), { [prompt]: { title, description } })
+  }
   assert.equal(source.tenant.picture_url, 'https://dev.boxlite.ai/auth0/boxlite-black-12c2c991.png')
   assert.equal('_comment' in source.theme, false)
   assert.equal('_comment' in source.tenant, false)
-  assert.equal('_comment' in source.prompts[0].text, false)
 })
 
 test('the dashboard ships only the documented content-addressed Auth0 assets', () => {
@@ -336,6 +341,7 @@ test('the dashboard ships only the documented content-addressed Auth0 assets', (
     'IBM-Plex-OFL-d741e57d.txt': 'd741e57d5f865e294df801f96b7b5161a88b211df65887e4358d271c9fc5fb4f',
     'boxlite-black-12c2c991.png': '12c2c991a30c82b4c8cc5b1a2ca4f808add8e2645f82c309693385ef1b687c05',
     'boxlite-light-ec0b1243.png': 'ec0b124340e956a6619e866809e2dad8e5f75e83e10a301c766ecdd81710f8e0',
+    'github-invertocat-white-ccd84c89.svg': 'ccd84c89b1056345608fc3489357f8acc7397e49a3cdc2d418b6c8016911d47b',
     'ibm-plex-mono-400-ba204497.woff2': 'ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350',
   }
   assert.deepEqual(readdirSync(root).sort(), Object.keys(expectedHashes).sort())

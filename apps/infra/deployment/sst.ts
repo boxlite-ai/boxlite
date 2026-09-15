@@ -453,7 +453,7 @@ if (sstArgs[0] === 'deploy') {
     // checkout deploys two commits — and nothing downstream would notice: the staged Runner object
     // still verifies and the post-deploy check only reads X.Y.Z. Checking one component's ref
     // would miss the deploy that addresses only the other, which is what
-    // `npm run runner:build-artifact` produces. Out-of-scope entries are undefined and drop out.
+    // `npm run runner:build-artifact:legacy` produces. Out-of-scope entries are undefined and drop out.
     requireCheckoutMatchesArtifactRefs([apiSource, runnerSource])
 
     if (apiSource && (apiSource.kind === 'release' || apiSource.ref)) {
