@@ -63,6 +63,7 @@ const gcp = () =>
     domain: 'gcp-dev.boxlite.ai',
     zoneId: 'zone-1',
     artifactsBucket: 'boxlite-app-gcp-dev-artifacts-boxlite-gcp-dev',
+    volumePrefix: 'boxlite-volume',
   })
 
 test('both clouds answer every module the stack asks about', () => {

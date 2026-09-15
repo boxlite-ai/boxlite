@@ -34,6 +34,26 @@ const VOLUME_ROLE = 'roles/storage.admin'
 export const VOLUME_OBJECT_ACCESS_ROLE = 'roles/storage.objectAdmin'
 
 /**
+ * The CEL that says "buckets under this prefix, and no others".
+ *
+ * `resource.name` for a bucket is `projects/_/buckets/<name>`, so the condition
+ * is written against that shape rather than against the bare name. Google
+ * evaluates a false condition as no grant at all, which is the behaviour
+ * wanted: a malformed prefix denies rather than widens.
+ *
+ * A function rather than a value built here, because two modules bound
+ * themselves with it and neither may spell it differently: this one bounds the
+ * API and the vending account, and `runners.ts` bounds the hosts that mount.
+ * Two spellings would be two prefixes that drift, and the drift is silent —
+ * a condition that matches nothing denies rather than errors.
+ */
+export const volumeConditionFor = (volumePrefix: string) => ({
+  title: 'volume-buckets-only',
+  description: `Buckets named ${volumePrefix}-*`,
+  expression: `resource.name.startsWith("projects/_/buckets/${volumePrefix}-")`,
+})
+
+/**
  * The account the API mints a per-organization token for.
  *
  * Google's equivalent of assuming a role: the API holds
@@ -65,19 +85,7 @@ export const gcpStorageProvider =
       displayName: `BoxLite volume access (${$app.stage})`,
     })
 
-    /*
-     * The CEL that says "buckets under this prefix, and no others".
-     *
-     * `resource.name` for a bucket is `projects/_/buckets/<name>`, so the
-     * condition is written against that shape rather than against the bare
-     * name. Google evaluates a false condition as no grant at all, which is the
-     * behaviour wanted: a malformed prefix denies rather than widens.
-     */
-    const volumeCondition = {
-      title: 'volume-buckets-only',
-      description: `Buckets named ${request.volumePrefix}-*`,
-      expression: `resource.name.startsWith("projects/_/buckets/${request.volumePrefix}-")`,
-    }
+    const volumeCondition = volumeConditionFor(request.volumePrefix)
 
     return {
       name: bucket.name,

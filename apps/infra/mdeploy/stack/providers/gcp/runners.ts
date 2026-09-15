@@ -43,6 +43,7 @@ import {
 } from '../../runner-registration.ts'
 import { renderPolicyScripts } from '../../runner-upgrade.ts'
 import { splitSecretRef } from './secret-env.ts'
+import { volumeConditionFor } from './storage.ts'
 
 /**
  * What each requested size answers to.
@@ -125,6 +126,7 @@ export const gcpRunnerProvider =
     zone,
     placement,
     artifactsBucket,
+    volumePrefix,
     adminApiKey,
     regionId,
     dependsOn,
@@ -135,6 +137,8 @@ export const gcpRunnerProvider =
     placement: Extract<Placement, { cloud: 'gcp' }>
     /** Where a build-mode binary is staged. Read-only, and only under `runner/`. */
     artifactsBucket: string
+    /** What a volume bucket is named, which is all a host may reach. */
+    volumePrefix: string
     /** What registers the hosts the API does not seed. See `runner-registration.ts`. */
     adminApiKey: $util.Input<string>
     /** The region those rows go in — the same one the API seeded its own into. */
@@ -172,6 +176,25 @@ udevadm trigger --name-match=kvm || true`,
       startWrapper: null,
       unitEnvironment: {
         CLOUDSDK_CORE_PROJECT: project,
+        /*
+         * Mount volumes with gcsfuse rather than mount-s3: `installVolumeMount`
+         * above puts gcsfuse on these hosts and no mount-s3, so a host that
+         * reached for the other tool would fail on a missing binary.
+         *
+         * The runner that reads this is not on this branch. The backend switch
+         * and the gcsfuse mount path are #1468 — here `apps/runner/pkg/boxlite/
+         * volumes.go` still execs mount-s3 unconditionally — so until that
+         * lands the variable is inert rather than wrong: the config field does
+         * not exist, and a runner ignores what it cannot parse. The two ship
+         * together in any case, because the API creates the buckets mounted
+         * here and has to name the same backend.
+         *
+         * gcsfuse takes no credential of its own there: it resolves Application
+         * Default Credentials from the instance service account, the same way
+         * the AWS hosts fall through to their instance role. That is what the
+         * grants below are for.
+         */
+        VOLUME_STORAGE_BACKEND: 'gcs',
       },
     }
 
@@ -200,6 +223,68 @@ udevadm trigger --name-match=kvm || true`,
             }),
           ]
         : []
+
+    /*
+     * What gcsfuse mounts a volume with.
+     *
+     * The mirror of the AWS provider's `RunnerVolumeS3Policy`, and it goes to
+     * the same kind of identity for the same reason: a host mounts as itself on
+     * both clouds — mount-s3 falls through to the instance role, gcsfuse
+     * resolves Application Default Credentials — so the grant belongs to the
+     * runner's service account. The vending account in `storage.ts` is the
+     * API's to mint from and reaches no host.
+     *
+     * Two roles because neither alone is enough, and the pair is not the
+     * obvious one. `objectUser` is the object CRUD, answering the AWS policy's
+     * GetObject/PutObject/DeleteObject and its bucket-level ListBucket. The
+     * second is here for one permission: `storage.buckets.get`, which gcsfuse
+     * calls once per mount for GetStorageLayout. No object role carries it —
+     * not `objectUser`, not `objectViewer`, not `objectAdmin` — so a grant of
+     * object access alone fails the mount before it reads a byte.
+     * `objectViewer` in particular adds nothing here: its permissions are a
+     * subset of `objectUser`'s, and it is the read-only half of a pair that
+     * still would not mount.
+     *
+     * `legacyBucketReader` and not `bucketViewer` for that second role, which
+     * reads backwards and is not. Beside `objectUser` the legacy role adds
+     * exactly `storage.buckets.get` — everything else it carries is already in
+     * `objectUser` — while `bucketViewer` adds `storage.buckets.list` as well.
+     * It is also already this module's answer to the same need: `storage.ts`
+     * hands the API `listGrant: 'roles/storage.legacyBucketReader'` on a volume
+     * bucket, and one name for one permission is what keeps the two readable
+     * against each other.
+     *
+     * Bucket lifecycle stays the API's, exactly as on AWS: a compromised runner
+     * must not be able to delete the volume it is serving.
+     *
+     * Bounded by the volume prefix, and that bound is not decoration. Google
+     * grants a role at the project or at one named resource and offers no
+     * wildcard between them, so the unbounded form of this reaches every bucket
+     * the project holds — including the artifacts bucket fifteen lines above,
+     * where `RunnerArtifactsRead` deliberately confines these same hosts to
+     * reading one prefix. Project-wide `objectUser` would subsume that binding
+     * and hand a compromised runner write and delete over the staged binary
+     * every other host installs. The AWS policy forecloses it by naming
+     * `arn:…:::boxlite-volume-*`; the CEL below is how this cloud says the same
+     * sentence, and it is the one `storage.ts` bounds the API with.
+     *
+     * Constructed and not held, as `ProxyRegistryReader` and the AWS policy
+     * are: nothing sequences on these. A host needs them to serve a volume, not
+     * to boot, and the grant on the staged binary above is the one a boot
+     * script would race.
+     */
+    new gcp.projects.IAMMember('RunnerVolumeObjects', {
+      project,
+      role: 'roles/storage.objectUser',
+      member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
+      condition: volumeConditionFor(volumePrefix),
+    })
+    new gcp.projects.IAMMember('RunnerVolumeBuckets', {
+      project,
+      role: 'roles/storage.legacyBucketReader',
+      member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
+      condition: volumeConditionFor(volumePrefix),
+    })
 
     const assignments = request.fleet
 

@@ -59,6 +59,40 @@ test('a volume prefix that is not a bucket name on both clouds is refused', () =
   // two ways is not one to accept.
   assert.throws(() => parse({ storage: { volumePrefix: 'BoxLite_Volume', versioning: true } }), /must match/)
   assert.throws(() => parse({ storage: { volumePrefix: 'x', versioning: true } }), /must match/)
+  /*
+   * Shape is not enough: `boxlite-volumes` passes the pattern and is still
+   * wrong, because the API hardcodes the singular. That combination deploys
+   * and then denies every mount — a CEL condition matching no bucket is no
+   * grant and no error — so it is refused where it can still be read as a
+   * configuration mistake.
+   */
+  assert.throws(
+    () => parse({ storage: { volumePrefix: 'boxlite-volumes', versioning: true } }),
+    /must be boxlite-volume:/,
+  )
+})
+
+test('the prefix this refuses to vary is the one the API actually names', () => {
+  /*
+   * The guard above pins one value. What makes that value right is a template
+   * literal in another app: `Volume.getBucketName()` builds the name the API
+   * creates and the runner mounts, and it is not built from this config. Change
+   * it there and nothing here objects — every grant this repository writes goes
+   * on bounding a prefix no bucket has, and a CEL condition that matches nothing
+   * denies without erroring, so the deploy succeeds and every mount 403s.
+   *
+   * Read rather than imported. `apps/api` is a different project with its own
+   * build, and one line of its source is the whole of what this pairing needs;
+   * importing the entity would drag a TypeORM decorator graph into a config
+   * test to learn a string.
+   */
+  const entity = readFileSync(new URL('../../../api/src/box/entities/volume.entity.ts', import.meta.url), 'utf8')
+  const named = /return `([a-z][a-z0-9-]*)-\$\{this\.id\}`/.exec(entity)?.[1]
+  assert.ok(named, 'volume.entity.ts no longer builds its bucket name from a literal prefix')
+  assert.doesNotThrow(
+    () => parse({ storage: { volumePrefix: named, versioning: true } }),
+    `the API names volume buckets ${named}-<id>, and this config would refuse that`,
+  )
 })
 
 test('a size no provider answers to is refused here rather than at the apply', () => {

@@ -73,6 +73,24 @@ const UNQUOTED_NAME = /^[a-z][a-z0-9_]*$/
  */
 const BUCKET_PREFIX = /^[a-z0-9][a-z0-9-]{1,40}$/
 
+/**
+ * The one value the field may take, because the other half of it is not
+ * configurable.
+ *
+ * The API names a volume bucket `boxlite-volume-<id>` in
+ * `apps/api/src/box/entities/volume.entity.ts` and reads no setting for it, so
+ * this field describes that name rather than choosing it. A stage that named
+ * anything else would deploy cleanly and then grant on buckets that do not
+ * exist: on GCP a CEL condition matching nothing is no grant and no error, so
+ * the first mount is answered 403 with nothing anywhere to explain it.
+ *
+ * Kept as a field rather than deleted because both clouds write their grants
+ * from it, and two providers spelling a literal are two places to drift. What
+ * changes is that the value is checked here, where a wrong one is a refused
+ * deploy rather than a silent denial hours later.
+ */
+const VOLUME_PREFIX = 'boxlite-volume'
+
 const DATABASE_SIZES: DatabaseSize[] = ['small', 'medium']
 const CACHE_SIZES: CacheSize[] = ['small', 'medium']
 const RUNNER_SIZES: RunnerSize[] = ['small', 'medium', 'large']
@@ -185,7 +203,14 @@ const parseStorage = (raw: unknown, where: string, { partial }: { partial: boole
   assertKeys(block, ['volumePrefix', 'versioning'] as const, where, { partial })
   const parsed: Partial<StorageRequest> = {}
   if ('volumePrefix' in block) {
-    parsed.volumePrefix = assertPattern(block.volumePrefix, BUCKET_PREFIX, `${where}.volumePrefix`)
+    const prefix = assertPattern(block.volumePrefix, BUCKET_PREFIX, `${where}.volumePrefix`)
+    if (prefix !== VOLUME_PREFIX) {
+      throw new DeployConfigError(
+        `${where}.volumePrefix must be ${VOLUME_PREFIX}: the API names volume buckets ${VOLUME_PREFIX}-<id> ` +
+          'and reads no setting for it, so another value grants on buckets nothing creates',
+      )
+    }
+    parsed.volumePrefix = prefix
   }
   if ('versioning' in block) parsed.versioning = assertBoolean(block.versioning, `${where}.versioning`)
   return parsed
