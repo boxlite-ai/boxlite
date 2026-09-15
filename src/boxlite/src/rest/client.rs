@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use reqwest::header::CONTENT_LENGTH;
 use reqwest::{Client, Method, RequestBuilder, StatusCode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -249,6 +250,12 @@ impl ApiClient {
     // Convenience methods
     // ========================================================================
 
+    /// Some gateways reject bodyless POSTs unless zero length is explicit,
+    /// even when the HTTP transport can infer it.
+    fn empty_post_request(&self, path: &str) -> RequestBuilder {
+        self.http.post(self.url(path)).header(CONTENT_LENGTH, 0)
+    }
+
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> BoxliteResult<T> {
         let builder = self.http.get(self.url(path));
         self.send_json(builder).await
@@ -274,12 +281,12 @@ impl ApiClient {
     }
 
     pub async fn post_empty<T: DeserializeOwned>(&self, path: &str) -> BoxliteResult<T> {
-        let builder = self.http.post(self.url(path));
+        let builder = self.empty_post_request(path);
         self.send_json(builder).await
     }
 
     pub async fn post_empty_no_content(&self, path: &str) -> BoxliteResult<()> {
-        let builder = self.http.post(self.url(path));
+        let builder = self.empty_post_request(path);
         self.send_no_content(builder).await
     }
 
@@ -450,8 +457,7 @@ impl ApiClient {
         }
         let path = format!("/boxes/{}/network/tunnel?port={port}", box_id.as_ref());
         let builder = self
-            .http
-            .post(self.url(&path))
+            .empty_post_request(&path)
             .header(reqwest::header::ACCEPT, "application/json");
         let descriptor: TunnelDescriptor = self.send_json(builder).await?;
         Ok(descriptor.uri)
@@ -732,6 +738,25 @@ mod tests {
     fn client_with(cred: Arc<dyn Credential>) -> ApiClient {
         let opts = BoxliteRestOptions::new("http://localhost:1").with_credential(cred);
         ApiClient::new(&opts).expect("client")
+    }
+
+    #[test]
+    fn empty_post_request_explicitly_declares_zero_content_length() {
+        let client = unauthenticated_client(BoxliteRestOptions::new("https://api.example.com"));
+        let request = client
+            .empty_post_request("/boxes/box1/start")
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            request
+                .headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .and_then(|value| value.to_str().ok()),
+            Some("0"),
+            "the request must declare its empty body before the HTTP transport runs"
+        );
+        assert!(request.body().is_none(), "an empty POST must stay bodyless");
     }
 
     #[tokio::test]
