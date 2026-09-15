@@ -50,8 +50,10 @@ func filepathBase(p string) string {
 	return p
 }
 
-// scopeEnvSetenv returns the --setenv= values systemd-run was asked to pass
-// through, or nil when getMountCmd took the plain exec branch.
+// scopeEnvSetenv returns any --setenv= values systemd-run was asked to pass
+// through. Nothing emits them now, so it returns nil on every host and stands
+// as the guard that says so: a credential reappearing on the argv shows up
+// here rather than silently.
 func scopeEnvSetenv(cmd *exec.Cmd) []string {
 	var out []string
 	for _, a := range cmd.Args {
@@ -65,13 +67,22 @@ func scopeEnvSetenv(cmd *exec.Cmd) []string {
 	return out
 }
 
-// mountEnv returns the credential environment the mount process will see,
-// from whichever branch getMountCmd took.
+// mountEnv returns what the mount command adds on top of the environment it
+// inherits, which is the credential environment the mount process will see.
+// getMountCmd appends the spec to os.Environ() on both branches, so the tail
+// past the ambient entries is what the spec contributed. Taken by position
+// rather than by set difference: a spec entry whose exact KEY=VALUE is already
+// in the environment — AWS_REGION on an AWS runner — is still the spec's, and
+// comparing values would drop it.
 func mountEnv(cmd *exec.Cmd) []string {
 	if e := scopeEnvSetenv(cmd); e != nil {
 		return e
 	}
-	return cmd.Env
+	ambient := len(os.Environ())
+	if len(cmd.Env) <= ambient {
+		return nil
+	}
+	return cmd.Env[ambient:]
 }
 
 func testClient(t *testing.T) *Client {
@@ -134,6 +145,43 @@ func TestMountS3ArgvWithCredentials(t *testing.T) {
 	}
 }
 
+// Whatever carries the credentials to the mount tool, it must not be the argv:
+// a process table is world-readable, so a secret there is a secret handed to
+// every user on the host. Asserted on the s3 backend because it is the only one
+// with a secret to leak, and on the whole command line rather than on the shape
+// the leak took, so a future way of passing it fails here too.
+func TestMountS3KeepsTheSecretOutOfTheCommandLine(t *testing.T) {
+	c := testClient(t)
+	c.awsAccessKeyId = "AKIAEXAMPLE"
+	c.awsSecretAccessKey = "s3cret-value"
+	c.awsRegion = "eu-west-1"
+
+	cmd := c.getMountCmd(context.Background(), "boxlite-volume-abc", "/mnt/boxlite-volume-abc")
+
+	// The leak only ever existed on the systemd branch, so a host without it
+	// would pass this whatever the code did. Say so rather than pass quietly.
+	if _, err := os.Stat("/run/systemd/system"); err != nil {
+		t.Skip("no systemd on this host; the branch that could leak is not the one under test")
+	}
+
+	for _, arg := range cmd.Args {
+		if strings.Contains(arg, "s3cret-value") {
+			t.Fatalf("the secret reached the command line: %q", arg)
+		}
+	}
+	// It still has to arrive, or the mount authenticates as nobody.
+	got := mountEnv(cmd)
+	delivered := false
+	for _, env := range got {
+		if env == "AWS_SECRET_ACCESS_KEY=s3cret-value" {
+			delivered = true
+		}
+	}
+	if !delivered {
+		t.Errorf("the secret never reached the mount tool: %v", got)
+	}
+}
+
 // A partially configured backend injects only what is set: a lone region must
 // not synthesise empty key variables, which mount-s3 would read as a broken
 // static credential pair instead of falling back to the instance role.
@@ -191,11 +239,9 @@ func TestGcsfuseArgvOmitsMountS3OnlyFlags(t *testing.T) {
 }
 
 // The GCS spec adds no credential environment of its own, so a configured
-// AWS_* pair cannot be turned into a systemd-run --setenv= argument, where
-// /proc/<pid>/cmdline would expose it to every local user. This says nothing
-// about the runner's own environment: cmd.Env is nil, so the child still
-// inherits os.Environ() — that is how an off-GCE
-// GOOGLE_APPLICATION_CREDENTIALS reaches gcsfuse.
+// AWS_* pair reaches neither the mount tool nor the command line. This says
+// nothing about the runner's own environment: it is passed through either way
+// — that is how an off-GCE GOOGLE_APPLICATION_CREDENTIALS reaches gcsfuse.
 func TestGcsfuseCarriesNoCredentialEnv(t *testing.T) {
 	c := testClient(t)
 	c.volumeBackend = volumeBackendGCS
@@ -209,9 +255,9 @@ func TestGcsfuseCarriesNoCredentialEnv(t *testing.T) {
 	if got := mountEnv(cmd); len(got) != 0 {
 		t.Errorf("gcsfuse must carry no credential env, got %v", got)
 	}
-	for _, a := range cmd.Args {
-		if a == "--setenv=AWS_SECRET_ACCESS_KEY=minioadmin" {
-			t.Error("secret leaked into systemd-run argv")
+	for _, arg := range cmd.Args {
+		if strings.Contains(arg, "minioadmin") {
+			t.Errorf("a configured credential reached the command line: %q", arg)
 		}
 	}
 }
@@ -339,19 +385,49 @@ func TestMountProbeSeparatesCannotRunFromNotMounted(t *testing.T) {
 	c := testClient(t)
 	dir := t.TempDir()
 
-	mounted, err := c.isDirectoryMounted(context.Background(), dir)
-	if err != nil || mounted {
-		t.Fatalf("an ordinary directory is simply not a mountpoint, got mounted=%v err=%v", mounted, err)
+	// Only this half needs the real binary: it is the one asking what an
+	// answer looks like, and on a host without util-linux that is the host's
+	// shape rather than a defect here. The cancelled-context half below needs
+	// no binary at all — the probe is attempted, but a finished context is
+	// what the error is read as — so it runs either way and is not inside
+	// this guard.
+	if _, err := exec.LookPath("mountpoint"); err == nil {
+		mounted, err := c.isDirectoryMounted(context.Background(), dir)
+		if err != nil || mounted {
+			t.Fatalf("an ordinary directory is simply not a mountpoint, got mounted=%v err=%v", mounted, err)
+		}
 	}
 
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	mounted, err = c.isDirectoryMounted(cancelled, dir)
+	mounted, err := c.isDirectoryMounted(cancelled, dir)
 	if err == nil {
 		t.Error("a probe that could not run reported an answer instead of an error")
 	}
 	if mounted {
 		t.Error("a probe that could not run must not claim the path is mounted")
+	}
+}
+
+// A host that never installed util-linux has no `mountpoint` to run, and that
+// is fixed somewhere else entirely — in the provisioning, not in this path. The
+// probe has to say which of the two it hit, or the reader goes looking for a
+// mount that was never inspected. PATH is emptied rather than the binary being
+// renamed, so the case is the same on every host.
+func TestMountProbeNamesAMissingBinary(t *testing.T) {
+	t.Setenv("PATH", "")
+	c := testClient(t)
+
+	mounted, err := c.isDirectoryMounted(context.Background(), t.TempDir())
+
+	if mounted {
+		t.Error("a probe that never ran must not claim the path is mounted")
+	}
+	if err == nil {
+		t.Fatal("a probe that never ran reported an answer instead of an error")
+	}
+	if !strings.Contains(err.Error(), "mountpoint is not installed") {
+		t.Errorf("the error must name the missing binary, got %v", err)
 	}
 }

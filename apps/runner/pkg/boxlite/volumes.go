@@ -253,7 +253,7 @@ func shouldRemoveMountDir(dirExisted bool, unmountErr error) bool {
 
 // isDirectoryMounted answers whether path is a mountpoint. The error is
 // non-nil only when the probe could not run to an answer — a finished context,
-// or a deadline hit mid-probe.
+// a deadline hit mid-probe, or no `mountpoint` binary to run at all.
 //
 // The two must stay distinguishable. A probe that cannot run and reports
 // "false" is not a harmless default: callers use it to decide whether a mount
@@ -276,6 +276,13 @@ func (c *Client) isDirectoryMounted(ctx context.Context, path string) (bool, err
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		return false, nil
+	}
+	// Still no answer, but the two reasons are fixed in different places: a
+	// host without util-linux has no `mountpoint` to run, which is the
+	// provisioning's problem, not this path's. Saying so here saves the reader
+	// looking for a mount that was never inspected.
+	if errors.Is(err, exec.ErrNotFound) {
+		return false, fmt.Errorf("mount probe on %s cannot run: mountpoint is not installed on this host: %w", path, err)
 	}
 	return false, fmt.Errorf("mount probe on %s failed: %w", path, err)
 }
@@ -434,10 +441,11 @@ func (c *Client) mountS3Spec(bucket string, path string) mountSpec {
 //
 // The spec contributes no credential environment of its own; gcsfuse resolves
 // Application Default Credentials, which on GCE is the attached instance
-// service account. The runner's own environment is still inherited (cmd.Env is
-// nil), which is what lets a GOOGLE_APPLICATION_CREDENTIALS path work off-GCE.
-// What this does buy is that no secret is placed on the systemd-run argv, where
-// /proc/<pid>/cmdline exposes it to every local user.
+// service account. The runner's own environment is still passed through, which
+// is what lets a GOOGLE_APPLICATION_CREDENTIALS path work off-GCE.
+// Keeping a secret off the argv is not what the empty spec buys — wrapMountCmd
+// does that for both backends now — so this is simply a backend with no
+// credential of its own to carry.
 func gcsfuseMountSpec(bucket string, path string) mountSpec {
 	return mountSpec{
 		bin: "gcsfuse",
@@ -466,17 +474,23 @@ func gcsfuseMountSpec(bucket string, path string) mountSpec {
 // caller's failure path is for.
 func (c *Client) wrapMountCmd(ctx context.Context, spec mountSpec) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, spec.bin, spec.args...)
-	cmd.Env = spec.env
 
 	if _, err := os.Stat("/run/systemd/system"); err == nil {
-		sdArgs := []string{"--scope"}
-		for _, env := range spec.env {
-			sdArgs = append(sdArgs, "--setenv="+env)
-		}
-		sdArgs = append(sdArgs, "--", spec.bin)
+		sdArgs := []string{"--scope", "--", spec.bin}
 		sdArgs = append(sdArgs, spec.args...)
 		cmd = exec.CommandContext(ctx, "systemd-run", sdArgs...)
 	}
+
+	// One environment, set after the branch rather than inside it, so the two
+	// paths cannot drift. The spec's credentials go here and never on the argv:
+	// under --scope systemd-run runs the mount tool as its child and passes this
+	// down, while an AWS_SECRET_ACCESS_KEY in the command line is readable by
+	// `ps` to every user on the host for as long as the mount lives.
+	// os.Environ() underneath because the mount tool needs PATH, the proxy and
+	// CA settings, and any AWS_SESSION_TOKEN the runner holds; a spec entry wins
+	// over an ambient one of the same name, which is how exec resolves a
+	// duplicate.
+	cmd.Env = append(os.Environ(), spec.env...)
 
 	cmd.Stderr = io.Writer(&log.ErrorLogWriter{})
 	cmd.Stdout = io.Writer(&log.InfoLogWriter{})

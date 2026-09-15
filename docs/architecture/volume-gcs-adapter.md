@@ -31,7 +31,7 @@ volumes.go    getMountCmd split into backend selection / argv / systemd wrapper
 
 `getMountCmd` previously mixed three jobs in one function: building the argv, building the
 credential environment, and wrapping in systemd. It is now split by backend
-(`volumes.go:391`):
+(`volumes.go:398`):
 
 ```go
 type mountSpec struct{ bin string; args, env []string }
@@ -44,18 +44,20 @@ func (c *Client) getMountCmd(ctx context.Context, volume, path string) *exec.Cmd
 }
 ```
 
-- `mountS3Spec` (`volumes.go:401`) — the existing argv and the four conditional `AWS_*`
+- `mountS3Spec` (`volumes.go:408`) — the existing argv and the four conditional `AWS_*`
   injections, moved verbatim. No behaviour change.
-- `gcsfuseMountSpec` (`volumes.go:441`) — empty env. On GCE, credentials resolve through
+- `gcsfuseMountSpec` (`volumes.go:449`) — empty env. On GCE, credentials resolve through
   ADC and the metadata server, exactly the shape the runner already relies on with the EC2
   instance role and no injected secrets [documented].
-- `wrapMountCmd` (`volumes.go:467`) — shares the existing systemd branch and IO redirection.
+- `wrapMountCmd` (`volumes.go:475`) — shares the existing systemd branch and IO
+  redirection, and is where the spec's environment is attached: once, after the
+  branch, so the mount tool sees the same thing whether or not systemd wraps it.
 
 Five changes were required:
 
 | Change | Why |
 |---|---|
-| `systemd-run --scope` **kept for both backends**, with `--setenv=` dropped only under gcs | [measured] A FUSE daemon started directly lands in the service's own cgroup; after `systemctl restart` the mount is gone and the data unreadable. Under `--scope` it lands in its own transient scope and survives. Note the deadline kill reaches only the foreground process — a daemon that has already forked is cleaned up by the umount on the failure path |
+| `systemd-run --scope` **kept for both backends**, with the credentials passed as the command's environment rather than on its argv | [measured] A FUSE daemon started directly lands in the service's own cgroup; after `systemctl restart` the mount is gone and the data unreadable. Under `--scope` it lands in its own transient scope and survives. Note the deadline kill reaches only the foreground process — a daemon that has already forked is cleaned up by the umount on the failure path |
 | `exec.Command` → `exec.CommandContext`, plus `volumeMountTimeout` (`volumes.go:32`, 90s) | [measured] gcsfuse defaults `MaxRetryAttempts` to the int64 maximum, i.e. retry forever. `Create` receives gin's request context, which carries **no deadline** (`box.go:49`; `server.go` sets no read/write timeout), so the context alone cannot bound this and the path needs a limit of its own |
 | `volumeProbeTimeout` (`:36`, 10s) and `volumeReadyTimeout` (`:42`, 30s) | On a wedged FUSE mount, `stat`, `umount` and `mountpoint` all block indefinitely. The readiness loop became a single overall deadline rather than "attempts × per-attempt timeout", which in the worst case would hold the per-volume mutex for hundreds of seconds |
 | `isDirectoryMounted` returns `(bool, error)` (`:262`) | "Could not probe" and "not mounted" previously shared one `false`. Callers use it to decide whether to mount and whether a mount is theirs to tear down, so a false negative means **mounting over a live mount** or **unmounting someone else's** |
@@ -66,10 +68,10 @@ Five changes were required:
 [measured] gcsfuse 3.8.4. mount-s3's `--allow-other` and `--allow-delete` are rejected by
 gcsfuse as `unknown flag`.
 
-| mount-s3 (`mountS3Spec`, `volumes.go:401`) | gcsfuse | Notes |
+| mount-s3 (`mountS3Spec`, `volumes.go:408`) | gcsfuse | Notes |
 |---|---|---|
 | `--allow-other` | `-o allow_other` | Both `-o` and `--o` are accepted; `-o` is the documented spelling |
-| `--file-mode 0666` `--dir-mode 0777` | same names, same values | Takes octal as a string; defaults are `0644`/`0755`. Both backends share the constants `volumeFileMode` and `volumeDirMode` (`volumes.go:377`) |
+| `--file-mode 0666` `--dir-mode 0777` | same names, same values | Takes octal as a string; defaults are `0644`/`0755`. Both backends share the constants `volumeFileMode` and `volumeDirMode` (`volumes.go:385`) |
 | `--allow-delete` `--allow-overwrite` | dropped | gcsfuse permits both by default |
 | — | `--implicit-dirs` | **Newly required**: on a flat bucket a directory that exists only as an object-name prefix is otherwise invisible |
 | — | `--metadata-cache-ttl-secs` | **Must be set explicitly**; see §4 |
@@ -119,7 +121,7 @@ failures.
 | mount-s3 1.20 | `--metadata-ttl` defaults to `minimal`, i.e. **strong read-after-write consistency** [documented] |
 | gcsfuse 3.8 | `--metadata-cache-ttl-secs` defaults to **60** [measured], i.e. up to 60 seconds stale |
 
-`mountS3Spec` (`volumes.go:401`) does **not** set `--metadata-ttl` today, so it gets strong
+`mountS3Spec` (`volumes.go:408`) does **not** set `--metadata-ttl` today, so it gets strong
 consistency. Switching to gcsfuse would default to a 60-second staleness window. Setting
 `0` recovers strong consistency at the cost of the request reduction the cache would give.
 **That is a trade-off, and it has to be stated in the argv rather than inherited.**
