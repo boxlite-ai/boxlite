@@ -577,8 +577,8 @@ impl<S: Sandbox> Jailer<S> {
                     .map(|name| sockets.real_dir().join(name));
                 std::iter::once(binding).chain(real)
             };
-            let mut bind = vec![sockets.box_sock()];
-            let mut connect = vec![sockets.ready_sock()];
+            let mut bind = vec![sockets.box_sock(), sockets.ssh_sock(), sockets.shim_sock()];
+            let mut connect = vec![sockets.ready_sock(), sockets.box_sock(), sockets.ssh_sock()];
             if self.network_backend_enabled {
                 bind.extend([
                     net_backend.clone(),
@@ -1260,17 +1260,25 @@ mod tests {
                 "net.sock",
                 "net.sock-krun.sock",
                 "net.sock-krun.sock",
+                "shim.sock",
+                "shim.sock",
+                "ssh.sock",
+                "ssh.sock",
             ]
         );
         assert_eq!(
             socket_names(&ctx.unix_sockets.connect),
             [
+                "box.sock",
+                "box.sock",
                 "net.sock",
                 "net.sock",
                 "net.sock-krun.sock",
                 "net.sock-krun.sock",
                 "ready.sock",
                 "ready.sock",
+                "ssh.sock",
+                "ssh.sock",
             ]
         );
 
@@ -1339,11 +1347,25 @@ mod tests {
 
         assert_eq!(
             socket_names(&ctx.unix_sockets.bind),
-            ["box.sock", "box.sock"]
+            [
+                "box.sock",
+                "box.sock",
+                "ssh.sock",
+                "ssh.sock",
+                "shim.sock",
+                "shim.sock"
+            ]
         );
         assert_eq!(
             socket_names(&ctx.unix_sockets.connect),
-            ["ready.sock", "ready.sock"]
+            [
+                "ready.sock",
+                "ready.sock",
+                "box.sock",
+                "box.sock",
+                "ssh.sock",
+                "ssh.sock"
+            ]
         );
     }
 

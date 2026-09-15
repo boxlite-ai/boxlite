@@ -87,11 +87,7 @@ fn main() -> BoxliteResult<()> {
 
     // Initialize logging using box_dir derived from exit_file path.
     // Logs go to box_dir/logs/ so the sandbox only needs write access to box_dir.
-    let box_dir = config
-        .exit_file
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+    let box_dir = config.box_home()?.to_path_buf();
     let _log_guard = init_logging(&box_dir);
     timing("logging initialized");
 
@@ -125,6 +121,8 @@ fn main() -> BoxliteResult<()> {
 
 #[allow(unused_mut)]
 fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()> {
+    let _shim_server =
+        vmm::shim_server::ShimServer::start(config.sockets()?, config.security.network_enabled)?;
     tracing::debug!(
         shares = ?config.fs_shares.shares(),
         "Filesystem shares configured"
@@ -314,8 +312,8 @@ fn install_graceful_shutdown_handler(transport: boxlite_shared::BoxTransport) {
 
         // Re-raise SIGTERM with default handler for correct exit status (128+15=143)
         unsafe {
-            libc::signal(libc::SIGTERM, libc::SIG_DFL);
-            libc::raise(libc::SIGTERM);
+            libc::signal(SIGTERM, libc::SIG_DFL);
+            libc::raise(SIGTERM);
         }
     });
 }

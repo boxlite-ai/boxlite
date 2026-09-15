@@ -44,6 +44,7 @@ pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use disk::DiskInfo;
 pub use event_listener::{AuditEvent, AuditEventKind, AuditEventListener, EventListener};
 pub use litebox::SnapshotHandle;
+pub use litebox::SshHandle;
 pub use litebox::archive::ArchiveManifest;
 pub use litebox::snapshot_mgr::SnapshotInfo;
 pub use litebox::{
@@ -62,6 +63,7 @@ pub use runtime::options::{
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use runtime::id::{BaseDiskID, BaseDiskIDMint, BoxID, BoxIDMint};
+pub use runtime::ssh::{SshApplicationState, SshApplyResult, SshAuth, SshConfig, SshStatus};
 pub use runtime::types::ContainerID;
 pub use runtime::types::{
     BoxInfo, BoxLifecyclePolicy, BoxState, BoxStateInfo, BoxStatus, InboundNetworkInfo,

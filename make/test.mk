@@ -13,6 +13,9 @@ export FAIL_FAST
 # go: regex, pytest -k / vitest -t: expression/substring).
 export FILTER
 
+# Select a single Rust integration binary without building/discovering every suite.
+RUST_TEST ?= *
+
 # Advanced nextest-only filter expression. Use this for CI-specific exclusions
 # that cannot be expressed as a simple positive FILTER pattern.
 export NEXTEST_FILTER_EXPR
@@ -254,7 +257,7 @@ test\:unit\:guest:
 	fi; \
 	echo "🧪 Running guest unit tests..."; \
 	if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run --no-tests=fail -p boxlite-guest; \
+		cargo nextest run --no-tests=fail -p boxlite-guest $(NEXTEST_FILTER); \
 	else \
 		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests sysctl::tests; \
 	fi
@@ -335,10 +338,10 @@ test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)
 test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:rust)
 	@echo "🧪 Running Rust integration tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite --features krun,gvproxy --test '*' --no-fail-fast --profile vm \
+		cargo nextest run -p boxlite --features krun,gvproxy --test '$(RUST_TEST)' --no-fail-fast --profile vm \
 			$(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite --features krun,gvproxy --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
+		cargo test -p boxlite --features krun,gvproxy --test '$(RUST_TEST)' --no-fail-fast -- --test-threads=1 --nocapture \
 			$(CARGOTEST_FILTER); \
 	fi
 

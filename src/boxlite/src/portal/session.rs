@@ -16,6 +16,11 @@ pub struct GuestSession {
 }
 
 impl GuestSession {
+    pub(crate) async fn ssh(&self) -> BoxliteResult<crate::portal::interfaces::ssh::SshInterface> {
+        let channel = self.connection.channel().await?;
+        Ok(crate::portal::interfaces::ssh::SshInterface::new(channel))
+    }
+
     /// Create a session (connects lazily on first use).
     pub fn new(transport: BoxTransport) -> Self {
         Self {

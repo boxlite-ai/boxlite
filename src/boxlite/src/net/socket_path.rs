@@ -119,6 +119,38 @@ impl BoxSockets {
         self.binding_dir().join(BOX_SOCK)
     }
 
+    /// Raw SSH channel bridged by libkrun to the dedicated guest vsock port.
+    pub fn ssh_sock(&self) -> PathBuf {
+        self.binding_dir().join("ssh.sock")
+    }
+
+    /// Private control requests and listener descriptors sent directly to the shim.
+    pub fn shim_sock(&self) -> PathBuf {
+        self.binding_dir().join("shim.sock")
+    }
+
+    /// Called only after the previous shim has exited, before spawning its replacement.
+    pub(crate) fn remove_stale_vsock_listeners(&self) -> BoxliteResult<()> {
+        use std::os::unix::fs::FileTypeExt;
+        for path in [self.box_sock(), self.ssh_sock()] {
+            let cleanup = || -> std::io::Result<()> {
+                match std::fs::symlink_metadata(&path) {
+                    Ok(metadata) if metadata.file_type().is_socket() => std::fs::remove_file(&path),
+                    Ok(_) => Err(std::io::Error::other("vsock bridge path is not a socket")),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(error) => Err(error),
+                }
+            };
+            cleanup().map_err(|error| {
+                BoxliteError::Storage(format!(
+                    "remove stale vsock listener {}: {error}",
+                    path.display()
+                ))
+            })?;
+        }
+        Ok(())
+    }
+
     /// Guest-ready notification socket (host binds the listener).
     pub fn ready_sock(&self) -> PathBuf {
         self.binding_dir().join(READY_SOCK)

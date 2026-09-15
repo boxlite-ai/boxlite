@@ -4,7 +4,6 @@ use boxlite_shared::{
     Ssh as SshService, SshConfigureRequest, SshConfigureResponse, SshDisableRequest,
     SshDisableResponse, SshStatus, SshStatusRequest, SshStatusResponse,
 };
-use std::net::SocketAddr;
 use tonic::{Request, Response, Status};
 
 #[tonic::async_trait]
@@ -13,17 +12,15 @@ impl SshService for GuestServer {
         &self,
         request: Request<SshConfigureRequest>,
     ) -> Result<Response<SshConfigureResponse>, Status> {
-        if !self.init_state.lock().await.initialized {
+        let init_state = self.init_state.lock().await;
+        if !init_state.initialized {
             return Err(Status::failed_precondition(
                 "Guest.Init must complete before SSH is configured",
             ));
         }
+        drop(init_state);
 
-        let request = request.into_inner();
-        let listen_addr: SocketAddr = request.listen_address.parse().map_err(|error| {
-            Status::invalid_argument(format!("invalid SSH listen address: {error}"))
-        })?;
-        let config = SshConfig::new(listen_addr, request.ca_public_key, request.principal)
+        let config = SshConfig::from_request(request.into_inner())
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
         let status = self
             .ssh_manager
@@ -49,7 +46,13 @@ impl SshService for GuestServer {
         _request: Request<SshDisableRequest>,
     ) -> Result<Response<SshDisableResponse>, Status> {
         Ok(Response::new(SshDisableResponse {
-            status: Some(self.ssh_manager.disable().await.into()),
+            status: Some(
+                self.ssh_manager
+                    .disable()
+                    .await
+                    .map_err(|error| Status::internal(error.to_string()))?
+                    .into(),
+            ),
         }))
     }
 }
@@ -58,10 +61,11 @@ impl From<SshRuntimeStatus> for SshStatus {
     fn from(status: SshRuntimeStatus) -> Self {
         Self {
             enabled: status.enabled,
-            listen_address: status
-                .listen_addr
-                .map(|address| address.to_string())
-                .unwrap_or_default(),
+            vsock_port: if status.enabled {
+                boxlite_shared::constants::network::GUEST_SSH_PORT
+            } else {
+                0
+            },
             generation: status.generation,
             host_key_fingerprint: status.host_key_fingerprint.unwrap_or_default(),
         }

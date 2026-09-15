@@ -121,6 +121,10 @@ pub type SharedRuntimeImpl = Arc<RuntimeImpl>;
 /// - Immutable fields: No lock needed - never change after creation
 /// - Atomic fields: Lock-free (RuntimeMetricsStorage uses AtomicU64)
 pub struct RuntimeImpl {
+    /// SSH configuration and identity are independent of box configuration.
+    pub(crate) ssh_config_store: crate::db::SshConfigStore,
+    /// SSH updates and boot share a lock across replacement BoxImpl instances.
+    pub(crate) ssh_locks: crate::litebox::ssh::SshLocks,
     /// Coordination lock for multi-step atomic operations.
     /// Acquire this BEFORE accessing box_manager/image_manager
     /// when you need atomicity across multiple operations.
@@ -317,6 +321,7 @@ impl RuntimeImpl {
             crate::disk::BaseDiskManager::new(layout.bases_dir(), base_disk_store.clone());
         let snapshot_store = crate::db::SnapshotStore::new(db.clone());
         let snapshot_mgr = crate::litebox::snapshot_mgr::SnapshotManager::new(snapshot_store);
+        let ssh_config_store = crate::db::SshConfigStore::new(db.clone());
         let box_store = BoxStore::new(db);
 
         // Initialize lock manager for per-entity multiprocess-safe locking
@@ -344,6 +349,8 @@ impl RuntimeImpl {
         let guest_rootfs_mgr = GuestRootfsManager::new(base_disk_mgr.clone(), layout.temp_dir());
 
         let inner = Arc::new(Self {
+            ssh_locks: crate::litebox::ssh::SshLocks::default(),
+            ssh_config_store,
             sync_state: RwLock::new(SynchronizedState {
                 active_boxes_by_id: HashMap::new(),
                 active_boxes_by_name: HashMap::new(),
@@ -635,9 +642,9 @@ impl RuntimeImpl {
     }
 
     /// Remove a box completely by ID or name.
-    pub fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()> {
+    pub async fn remove(self: &Arc<Self>, id_or_name: &str, force: bool) -> BoxliteResult<()> {
         let box_id = self.resolve_id(id_or_name)?;
-        self.remove_box(&box_id, force)
+        self.remove_box(&box_id, force).await
     }
 
     // ========================================================================
@@ -975,10 +982,18 @@ impl RuntimeImpl {
             .ok_or_else(|| BoxliteError::NotFound(id_or_name.to_string()))
     }
 
+    pub(crate) fn ssh_store(&self, id: &BoxID) -> crate::runtime::ssh::SshStore {
+        crate::runtime::ssh::SshStore::new(
+            self.ssh_config_store.clone(),
+            id.as_str(),
+            self.ssh_locks.get(id),
+        )
+    }
+
     /// Remove a box from the runtime (internal implementation).
     ///
-    /// This is the internal implementation called by both `BoxliteRuntime::remove()`
-    /// and `LiteBox::stop()` when its removal policy is enabled.
+    /// Entry point for `BoxliteRuntime::remove()`. Stop and watcher cleanup use
+    /// `remove_box_locked()` while holding the same coordinator.
     ///
     /// Handles both persisted boxes (in database) and in-memory-only boxes
     /// (created but not yet started).
@@ -990,7 +1005,33 @@ impl RuntimeImpl {
     /// # Errors
     /// - Box not found
     /// - Box is active and force=false
-    pub(crate) fn remove_box(&self, id: &BoxID, force: bool) -> BoxliteResult<()> {
+    pub(crate) async fn remove_box(self: &Arc<Self>, id: &BoxID, force: bool) -> BoxliteResult<()> {
+        let coordinator = self.ssh_locks.get(id);
+        let _guard = coordinator.updates.lock().await;
+        // A cancelled SSH caller can leave a blocking operation on the blocking pool.
+        coordinator.drain_io().await;
+        self.remove_box_locked(id, force).await
+    }
+
+    /// Caller holds the box's SSH coordinator and has drained its blocking operations.
+    /// Stop and watcher cleanup reuse their existing guard through deletion.
+    pub(crate) async fn remove_box_locked(
+        self: &Arc<Self>,
+        id: &BoxID,
+        force: bool,
+    ) -> BoxliteResult<()> {
+        let runtime = self.clone();
+        let id_owned = id.clone();
+        self.ssh_store(id)
+            .with_io("remove box", move |_| {
+                runtime.remove_box_sync(&id_owned, force)
+            })
+            .await
+    }
+
+    fn remove_box_sync(&self, id: &BoxID, force: bool) -> BoxliteResult<()> {
+        #[cfg(test)]
+        let _completed = crate::runtime::ssh::tests::pause_io(id.as_str(), "remove box");
         tracing::debug!(box_id = %id, force = force, "RuntimeInnerImpl::remove_box called");
 
         // Try to get box from database first
@@ -1037,6 +1078,7 @@ impl RuntimeImpl {
 
             // Remove from BoxManager (database-first)
             self.box_manager.remove_box(id)?;
+            self.invalidate_box_impl(id, config.name.as_deref());
 
             // Free the lock if one was allocated
             if let Some(lock_id) = state.lock_id {
@@ -1090,9 +1132,6 @@ impl RuntimeImpl {
                     "Failed to cleanup box directory"
                 );
             }
-
-            // Invalidate cache
-            self.invalidate_box_impl(id, config.name.as_deref());
 
             tracing::info!(box_id = %id, "Removed box");
             return Ok(());
@@ -1675,7 +1714,13 @@ impl RuntimeImpl {
     /// new handles from runtime.get() will get a fresh BoxImpl.
     pub(crate) fn invalidate_box_impl(&self, box_id: &BoxID, box_name: Option<&str>) {
         let mut sync = self.sync_state.write().unwrap();
-        sync.active_boxes_by_id.remove(box_id);
+        if let Some(box_impl) = sync
+            .active_boxes_by_id
+            .remove(box_id)
+            .and_then(|weak| weak.upgrade())
+        {
+            box_impl.shutdown_token.cancel();
+        }
         if let Some(name) = box_name {
             sync.active_boxes_by_name.remove(name);
         }
@@ -1822,7 +1867,7 @@ impl super::backend::RuntimeBackend for LocalRuntime {
     }
 
     async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()> {
-        self.0.remove(id_or_name, force)
+        self.0.remove(id_or_name, force).await
     }
 
     async fn shutdown(&self, timeout: Option<i32>) -> BoxliteResult<()> {
@@ -2772,8 +2817,8 @@ mod tests {
         child.wait().ok();
     }
 
-    #[test]
-    fn test_remove_box_refuses_live_pid_without_force_even_unknown() {
+    #[tokio::test]
+    async fn test_remove_box_refuses_live_pid_without_force_even_unknown() {
         let (runtime, _dir) = create_test_runtime();
 
         let (pid, mut child) = spawn_dummy_process();
@@ -2792,7 +2837,7 @@ mod tests {
             .add_box(&config, &state)
             .expect("Failed to add box");
 
-        let result = runtime.remove_box(&config.id, false);
+        let result = runtime.remove_box(&config.id, false).await;
         assert!(result.is_err());
         assert!(
             crate::util::is_process_alive(pid),
@@ -2805,8 +2850,9 @@ mod tests {
 
         runtime
             .remove_box(&config.id, true)
+            .await
             .expect("Force remove should kill process and remove box");
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         assert!(
             !crate::util::is_process_alive(pid),
             "Force remove should kill the live process"
@@ -3410,8 +3456,8 @@ mod tests {
     // Remove box clone dependency guard (Fix #7)
     // ====================================================================
 
-    #[test]
-    fn test_remove_box_blocked_by_clone_dependency() {
+    #[tokio::test]
+    async fn test_remove_box_blocked_by_clone_dependency() {
         let (runtime, _dir) = create_test_runtime();
 
         // Create box A with a disk.
@@ -3462,7 +3508,7 @@ mod tests {
             .unwrap();
 
         // Try to remove box A (non-force) — should fail.
-        let result = runtime.remove_box(&config_a.id, false);
+        let result = runtime.remove_box(&config_a.id, false).await;
         assert!(result.is_err());
         let msg = format!("{}", result.unwrap_err());
         assert!(
@@ -3472,8 +3518,8 @@ mod tests {
         assert!(msg.contains(&config_b.id.to_string()));
     }
 
-    #[test]
-    fn test_remove_box_succeeds_when_no_dependents() {
+    #[tokio::test]
+    async fn test_remove_box_succeeds_when_no_dependents() {
         let (runtime, _dir) = create_test_runtime();
 
         let config = test_box_config_in_layout(false, &runtime);
@@ -3492,7 +3538,7 @@ mod tests {
         let binding_dir = config.sockets().binding_dir();
         assert!(std::fs::symlink_metadata(&binding_dir).is_ok());
 
-        let result = runtime.remove_box(&config.id, false);
+        let result = runtime.remove_box(&config.id, false).await;
         assert!(result.is_ok());
         assert!(
             std::fs::symlink_metadata(&binding_dir).is_err(),
@@ -3500,8 +3546,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_remove_box_with_force_ignores_dependents() {
+    #[tokio::test]
+    async fn test_remove_box_with_force_ignores_dependents() {
         let (runtime, _dir) = create_test_runtime();
 
         // Create box A.
@@ -3546,7 +3592,7 @@ mod tests {
             .unwrap();
 
         // Force remove should succeed despite dependency.
-        let result = runtime.remove_box(&config_a.id, true);
+        let result = runtime.remove_box(&config_a.id, true).await;
         assert!(result.is_ok());
     }
 

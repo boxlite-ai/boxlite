@@ -24,6 +24,16 @@ pub mod network {
     /// Guest connects to this port to signal it's ready to serve
     /// Port 2696 = "BOXM" on phone keypad
     pub const GUEST_READY_PORT: u32 = 2696;
+
+    /// SSH has its own byte stream and never binds a guest IP address.
+    pub const GUEST_SSH_PORT: u32 = 2697;
+}
+
+/// Bounds shared by the shim transport and guest SSH server.
+pub mod ssh {
+    pub const MAX_CONNECTIONS: usize = 128;
+    pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+    pub const CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 }
 
 /// Executor environment variable

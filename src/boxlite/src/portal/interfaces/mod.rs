@@ -6,6 +6,7 @@ pub mod container;
 pub mod exec;
 pub mod files;
 pub mod guest;
+pub(crate) mod ssh;
 
 pub use container::{ContainerInitConfig, ContainerInterface, ContainerRootfsInitConfig};
 pub use exec::ExecutionInterface;

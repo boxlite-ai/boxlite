@@ -363,17 +363,6 @@ impl ListenerRegistry {
         entry.stopped.await.unwrap_or(false)
     }
 
-    fn cancel_all(&self) {
-        let entries = self
-            .lock()
-            .drain()
-            .map(|(_, entry)| entry)
-            .collect::<Vec<_>>();
-        for entry in entries {
-            let _ = entry.cancel.send(());
-        }
-    }
-
     fn len(&self) -> usize {
         self.lock().len()
     }
@@ -425,13 +414,15 @@ impl Drop for ListenerRegistration {
 pub(crate) struct ReverseStreamlocalManager {
     listeners: ListenerRegistry,
     connection_permits: Arc<Semaphore>,
+    tasks: super::ConnectionTasks,
 }
 
 impl ReverseStreamlocalManager {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(tasks: super::ConnectionTasks) -> Self {
         Self {
             listeners: ListenerRegistry::default(),
             connection_permits: Arc::new(Semaphore::new(MAX_FORWARD_CONNECTIONS)),
+            tasks,
         }
     }
 
@@ -472,21 +463,30 @@ impl ReverseStreamlocalManager {
         }
 
         let token = uuid::Uuid::new_v4().to_string();
-        let helper =
-            match RunningHelper::start(server, socket_path, ingress_address, token.clone()).await {
-                Ok(helper) => helper,
-                Err(error) => {
-                    debug!(%error, socket_path, "reverse streamlocal helper start failed");
-                    return false;
-                }
-            };
+        let helper = match RunningHelper::start(
+            server,
+            socket_path,
+            ingress_address,
+            token.clone(),
+            self.tasks.clone(),
+        )
+        .await
+        {
+            Ok(helper) => helper,
+            Err(error) => {
+                debug!(%error, socket_path, "reverse streamlocal helper start failed");
+                return false;
+            }
+        };
 
         spawn_listener(
             ingress,
             socket_path.to_string(),
             token,
-            session_handle,
-            self.connection_permits.clone(),
+            ListenerContext {
+                session_handle,
+                permits: self.connection_permits.clone(),
+            },
             helper,
             registration,
         );
@@ -501,12 +501,6 @@ impl ReverseStreamlocalManager {
     }
 }
 
-impl Drop for ReverseStreamlocalManager {
-    fn drop(&mut self) {
-        self.listeners.cancel_all();
-    }
-}
-
 struct RunningHelper {
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
@@ -515,6 +509,7 @@ struct RunningHelper {
     stdin_task: JoinHandle<()>,
     output: mpsc::Receiver<Result<ExecOutput, tonic::Status>>,
     buffered_stdout: Vec<u8>,
+    tasks: super::ConnectionTasks,
 }
 
 impl RunningHelper {
@@ -523,6 +518,7 @@ impl RunningHelper {
         socket_path: &str,
         ingress: SocketAddrV4,
         token: String,
+        tasks: super::ConnectionTasks,
     ) -> Result<Self, String> {
         let container_id = super::bridge::resolve_single_container(&server)
             .await
@@ -554,11 +550,18 @@ impl RunningHelper {
             // Matches every sibling failure below: the execution is registered
             // and running, so it must be torn down rather than leaked.
             Err(error) => {
-                spawn_failed_helper_cleanup(server.clone(), registry, execution_id, None, None);
+                spawn_failed_helper_cleanup(
+                    server.clone(),
+                    registry,
+                    execution_id,
+                    None,
+                    None,
+                    tasks.clone(),
+                );
                 return Err(format!("reverse streamlocal stdin setup failed: {error}"));
             }
         };
-        let stdin_task = tokio::spawn(async move {
+        let stdin_task = tasks.spawn(async move {
             if let Ok(Err(error)) = input.await {
                 debug!(%error, "reverse streamlocal helper stdin ended");
             }
@@ -578,6 +581,7 @@ impl RunningHelper {
                 execution_id,
                 None,
                 Some(stdin_task),
+                tasks.clone(),
             );
             return Err("reverse streamlocal stdin setup failed".into());
         }
@@ -602,6 +606,7 @@ impl RunningHelper {
                     execution_id,
                     None,
                     Some(stdin_task),
+                    tasks.clone(),
                 );
                 return Err(format!("reverse streamlocal attach failed: {error}"));
             }
@@ -620,6 +625,7 @@ impl RunningHelper {
                     execution_id,
                     None,
                     Some(stdin_task),
+                    tasks.clone(),
                 );
                 return Err("reverse streamlocal attach timed out".into());
             }
@@ -649,6 +655,7 @@ impl RunningHelper {
                     execution_id,
                     Some(output),
                     Some(stdin_task),
+                    tasks.clone(),
                 );
                 return Err(error);
             }
@@ -662,6 +669,7 @@ impl RunningHelper {
             stdin_task,
             output,
             buffered_stdout,
+            tasks,
         })
     }
 
@@ -702,6 +710,7 @@ impl RunningHelper {
             Some(self.output),
             Some(self.stdin_task),
             force_termination,
+            self.tasks,
         );
     }
 }
@@ -737,16 +746,23 @@ fn helper_execution_launch(
     }
 }
 
+struct ListenerContext {
+    session_handle: SessionHandle,
+    permits: Arc<Semaphore>,
+}
+
 fn spawn_listener(
     ingress: TcpListener,
     socket_path: String,
     token: String,
-    session_handle: SessionHandle,
-    permits: Arc<Semaphore>,
+    context: ListenerContext,
     mut helper: RunningHelper,
     mut registration: ListenerRegistration,
 ) {
-    tokio::spawn(async move {
+    let tasks = helper.tasks.clone();
+    tasks.spawn(async move {
+        let ListenerContext { session_handle, permits } = context;
+        let tasks = helper.tasks.clone();
         enum End {
             Cancelled,
             HelperEnded,
@@ -757,6 +773,7 @@ fn spawn_listener(
         let end = loop {
             tokio::select! {
                 biased;
+                _ = tasks.cancelled() => break End::Cancelled,
                 _ = registration.cancelled() => break End::Cancelled,
                 completed = pending_opens.join_next(), if !pending_opens.is_empty() => {
                     if let Some(Err(error)) = completed {
@@ -803,6 +820,7 @@ fn spawn_listener(
                     let handle = session_handle.clone();
                     let path = socket_path.clone();
                     let expected_token = token.clone();
+                    let relay_tasks = tasks.clone();
                     pending_opens.spawn(async move {
                         let stream = match authenticate_ingress(stream, expected_token.as_bytes()).await {
                             Ok(stream) => stream,
@@ -817,7 +835,7 @@ fn spawn_listener(
                         )
                         .await;
                         match channel {
-                            Ok(Ok(channel)) => spawn_relay(channel, stream, permit),
+                            Ok(Ok(channel)) => spawn_relay(channel, stream, permit, relay_tasks),
                             Ok(Err(error)) => {
                                 debug!(%error, "SSH client rejected reverse streamlocal channel")
                             }
@@ -830,7 +848,7 @@ fn spawn_listener(
 
         // Closing the ingress first prevents a post-cancel helper connection
         // from starting another SSH channel. Already-open relays own their TCP
-        // streams independently and may continue draining.
+        // streams independently and are cancelled when their connection ends.
         drop(ingress);
         let was_cancelled = matches!(end, End::Cancelled);
         let stop_acknowledged = if matches!(end, End::HelperEnded) {
@@ -878,15 +896,21 @@ async fn authenticate_ingress(
 fn spawn_relay(
     channel: Channel<Msg>,
     mut stream: TcpStream,
-    _permit: tokio::sync::OwnedSemaphorePermit,
+    permit: tokio::sync::OwnedSemaphorePermit,
+    tasks: super::ConnectionTasks,
 ) {
-    tokio::spawn(async move {
+    tasks.clone().spawn(async move {
+        let _permit = permit;
         let mut channel = channel.into_stream();
-        if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut stream).await {
-            debug!(%error, "SSH reverse streamlocal relay ended with an error");
+        tokio::select! {
+            biased;
+            _ = tasks.cancelled() => {},
+            result = tokio::io::copy_bidirectional(&mut channel, &mut stream) => {
+                if let Err(error) = result {
+                    debug!(%error, "SSH reverse streamlocal relay ended with an error");
+                }
+            }
         }
-        let _ = channel.shutdown().await;
-        let _ = stream.shutdown().await;
     });
 }
 
@@ -986,8 +1010,17 @@ fn spawn_failed_helper_cleanup(
     execution_id: String,
     output: Option<mpsc::Receiver<Result<ExecOutput, tonic::Status>>>,
     stdin_task: Option<JoinHandle<()>>,
+    tasks: super::ConnectionTasks,
 ) {
-    spawn_execution_cleanup(server, registry, execution_id, output, stdin_task, true);
+    spawn_execution_cleanup(
+        server,
+        registry,
+        execution_id,
+        output,
+        stdin_task,
+        true,
+        tasks,
+    );
 }
 
 fn spawn_execution_cleanup(
@@ -997,10 +1030,12 @@ fn spawn_execution_cleanup(
     output: Option<mpsc::Receiver<Result<ExecOutput, tonic::Status>>>,
     stdin_task: Option<JoinHandle<()>>,
     force_termination: bool,
+    tasks: super::ConnectionTasks,
 ) {
-    tokio::spawn(async move {
+    let child_tasks = tasks.clone();
+    tasks.spawn(async move {
         let output_task = output.map(|mut output| {
-            tokio::spawn(async move {
+            child_tasks.spawn(async move {
                 while let Some(message) = output.recv().await {
                     let Ok(message) = message else {
                         break;
@@ -1083,6 +1118,41 @@ fn spawn_execution_cleanup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn relay_retains_its_connection_permit_until_the_task_exits() {
+        let (channel, client, client_channel, server) = super::super::tests::relay_channel().await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (_peer, _) = listener.accept().await.unwrap();
+        let permits = Arc::new(Semaphore::new(1));
+        let permit = permits.clone().acquire_owned().await.unwrap();
+        let shutdown = CancellationToken::new();
+        let tasks = super::super::ConnectionTasks::new(&shutdown);
+        spawn_relay(channel, stream, permit, tasks.clone());
+        assert_eq!(
+            permits.available_permits(),
+            0,
+            "a running relay must retain its forwarding permit"
+        );
+        shutdown.cancel();
+        tasks.finish().await;
+        let _permit = tokio::time::timeout(std::time::Duration::from_secs(1), permits.acquire())
+            .await
+            .unwrap()
+            .unwrap();
+        drop(client_channel);
+        client
+            .disconnect(russh::Disconnect::ByApplication, "test complete", "")
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), server)
+            .await
+            .unwrap();
+    }
 
     const TOKEN: &str = "9e3d4f4f-e9e5-4896-a42c-9fe5f53244af";
 
@@ -1163,6 +1233,54 @@ mod tests {
 
     /// The pathname must never be reachable by a container process, not even
     /// for the window between `bind` and the chmod that follows it.
+    #[tokio::test]
+    async fn connection_finish_waits_for_helper_exit_output_and_stdin_cleanup() {
+        use crate::reaper::ExitSlot;
+        use crate::service::exec::exec_handle::{ExecHandle, ExitStatus};
+        use crate::service::exec::state::ExecutionState;
+        let server = Arc::new(GuestServer::new(crate::layout::GuestLayout::new()));
+        let (stdin, _stdin_peer) = nix::unistd::pipe().unwrap();
+        let (stdout, _stdout_peer) = nix::unistd::pipe().unwrap();
+        let handle =
+            ExecHandle::new(nix::unistd::Pid::from_raw(31_005), stdin, stdout, None).unwrap();
+        let (exit, exit_tx) = ExitSlot::pending_for_test();
+        server
+            .registry
+            .register(
+                "helper-cleanup".into(),
+                ExecutionState::new_for_test(handle, exit),
+            )
+            .await;
+        let (tasks, _) = super::super::ConnectionTasks::for_test();
+        let (output_tx, output_rx) = mpsc::channel(1);
+        let (stdin_tx, stdin_rx) = oneshot::channel::<()>();
+        let stdin_task = tasks.spawn(async move {
+            let _ = stdin_rx.await;
+        });
+        spawn_execution_cleanup(
+            server.clone(),
+            server.registry.clone(),
+            "helper-cleanup".into(),
+            Some(output_rx),
+            Some(stdin_task),
+            false,
+            tasks.clone(),
+        );
+        tasks.stop();
+        let mut finished = Box::pin(tasks.finish());
+        assert!(futures::poll!(&mut finished).is_pending());
+        assert!(server.registry.exists("helper-cleanup").await);
+        exit_tx.send(Some(ExitStatus::Code(0))).unwrap();
+        assert!(futures::poll!(&mut finished).is_pending());
+        drop(output_tx);
+        assert!(futures::poll!(&mut finished).is_pending());
+        stdin_tx.send(()).unwrap();
+        tokio::time::timeout(CONTROL_CALL_TIMEOUT, finished)
+            .await
+            .unwrap();
+        assert!(!server.registry.exists("helper-cleanup").await);
+    }
+
     #[tokio::test]
     async fn the_listener_pathname_is_owner_only_before_any_chmod() {
         let dir = tempfile::tempdir().expect("tempdir");

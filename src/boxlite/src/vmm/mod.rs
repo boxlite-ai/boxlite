@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
 
+mod accept;
 pub mod controller;
 pub mod engine;
 pub mod exit_info;
@@ -15,6 +16,8 @@ pub mod guest_check;
 #[cfg(feature = "krun")]
 pub mod krun;
 pub mod registry;
+pub mod shim_server;
+mod ssh_forwarder;
 
 use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
 use crate::jailer::SecurityOptions;
@@ -245,6 +248,24 @@ pub struct InstanceSpec {
     /// Whether the box should continue running when the parent process exits.
     /// When false, the shim detects parent death via watchdog pipe POLLHUP.
     pub detach: bool,
+}
+
+impl InstanceSpec {
+    /// Resolve the box directory used by sockets, logs, and sandbox paths.
+    pub fn box_home(&self) -> BoxliteResult<&std::path::Path> {
+        self.exit_file
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or_else(|| BoxliteError::Config("shim exit file has no parent directory".into()))
+    }
+
+    /// Use the same path authority in runtime, shim, and the VMM bridge.
+    pub fn sockets(&self) -> BoxliteResult<crate::net::socket_path::BoxSockets> {
+        Ok(crate::net::socket_path::BoxSockets::new(
+            &self.box_id,
+            self.box_home()?.join("sockets"),
+        ))
+    }
 }
 
 /// Entrypoint configuration that the guest should run.

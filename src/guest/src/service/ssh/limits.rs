@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-pub(crate) const MAX_CONNECTIONS: usize = 128;
+pub(crate) use boxlite_shared::constants::ssh::MAX_CONNECTIONS;
 pub(crate) const MAX_CHANNELS_PER_CONNECTION: usize = 16;
 pub(crate) const MAX_ENV_VARS: usize = 32;
 pub(crate) const MAX_ENV_NAME_BYTES: usize = 256;
@@ -23,3 +23,4 @@ pub(crate) const PROCESS_TERMINATION_GRACE: Duration = Duration::from_secs(1);
 pub(crate) const FORWARD_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const DISCONNECT_GRACE_TIMEOUT: Duration = Duration::from_secs(1);
+pub(crate) const SERVICE_STOP_TIMEOUT: Duration = Duration::from_secs(5);

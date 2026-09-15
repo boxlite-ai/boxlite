@@ -51,14 +51,14 @@ service Guest {
 // from Guest.Init so credentials and listener policy can be rotated without
 // rebuilding or restarting the guest.
 service Ssh {
-  // Enable SSH or replace policy for subsequent authentication attempts.
-  // Pre-auth transports close; authenticated connections retain their snapshot.
+  // Enable SSH or replace its complete configuration.
+  // Close all existing transports, including authenticated connections.
   rpc Configure(SshConfigureRequest) returns (SshConfigureResponse);
 
   // Return the currently active listener state.
   rpc Status(SshStatusRequest) returns (SshStatusResponse);
 
-  // Stop accepts and close pre-auth transports. Authenticated sessions may drain.
+  // Stop accepts and close all SSH transports and their owned session work.
   rpc Disable(SshDisableRequest) returns (SshDisableResponse);
 }
 
@@ -224,13 +224,30 @@ message ThawResponse {
 // ============================================================================
 
 message SshConfigureRequest {
-  // Guest TCP socket address, for example "0.0.0.0:22".
-  string listen_address = 1;
-  // OpenSSH public key for the CA trusted to sign user certificates.
-  string ca_public_key = 2;
+  // The guest listens only on the dedicated SSH vsock port.
+  reserved 1;
+  reserved "listen_address";
+  // Retired single-CA field. Never populate it: old guests must fail closed
+  // instead of silently trusting only one CA or ignoring the chosen mode.
+  reserved 2;
+  reserved "ca_public_key";
   // Required certificate principal (normally the host-owned Box ID).
   string principal = 3;
+  // Unencrypted OpenSSH Ed25519 private key, prepared by the host.
+  string host_private_key = 4;
+  // Absence is invalid. No credentials must never imply unauthenticated SSH.
+  oneof auth {
+    SshKeyAuth keys = 5;
+    SshNoAuth no_auth = 6;
+  }
 }
+
+message SshKeyAuth {
+  repeated string ca_public_keys = 1;
+  repeated string public_keys = 2;
+}
+
+message SshNoAuth {}
 
 message SshConfigureResponse {
   SshStatus status = 1;
@@ -250,12 +267,14 @@ message SshDisableResponse {
 
 message SshStatus {
   bool enabled = 1;
-  // Actual bound address. Empty while disabled.
-  string listen_address = 2;
+  reserved 2;
+  reserved "listen_address";
   // Increases when SSH state changes in this guest process; resets on restart.
   uint64 generation = 3;
-  // SHA-256 fingerprint of the persistent guest host key. Empty while disabled.
+  // SHA-256 fingerprint of the host-supplied key. Empty while disabled.
   string host_key_fingerprint = 4;
+  // Dedicated guest vsock port; zero while disabled.
+  uint32 vsock_port = 5;
 }
 
 // ============================================================================

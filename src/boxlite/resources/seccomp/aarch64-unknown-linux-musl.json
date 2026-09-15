@@ -3,6 +3,72 @@
         "default_action": "trap",
         "filter_action": "allow",
         "filter": [
+            {
+                "syscall": "unlinkat",
+                "comment": "SSH shim teardown removes its control socket; Landlock restricts filesystem paths",
+                "args": [{"index": 2, "type": "dword", "op": "eq", "val": 0, "comment": "File removal only; no AT_REMOVEDIR"}]
+            },
+            {
+                "syscall": "fcntl",
+                "comment": "SSH shim: retain the listener while passing a close-on-exec duplicate",
+                "args": [{"index": 1, "type": "dword", "op": "eq", "val": 1030, "comment": "F_DUPFD_CLOEXEC"}]
+            },
+            {
+                "syscall": "fcntl",
+                "comment": "SSH shim: validate owned descriptors before closing",
+                "args": [{"index": 1, "type": "dword", "op": "eq", "val": 1, "comment": "F_GETFD"}]
+            },
+            {
+                "syscall": "sendto",
+                "comment": "SSH shim: Tokio stream writes"
+            },
+            {
+                "syscall": "accept4",
+                "comment": "SSH shim: Tokio accepts nonblocking streams",
+                "args": [{"index": 3, "type": "dword", "op": "eq", "val": 526336, "comment": "SOCK_NONBLOCK | SOCK_CLOEXEC"}]
+            },
+            {
+                "syscall": "socket",
+                "comment": "SSH shim: connect to private guest Unix bridges",
+                "args": [
+                    {"index": 0, "type": "dword", "op": "eq", "val": 1, "comment": "AF_UNIX"},
+                    {"index": 1, "type": "dword", "op": "eq", "val": 526337, "comment": "SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC"},
+                    {"index": 2, "type": "dword", "op": "eq", "val": 0}
+                ]
+            },
+            {
+                "syscall": "setsockopt",
+                "comment": "SSH shim: disable Nagle on accepted TCP connections",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 6, "comment": "IPPROTO_TCP"},
+                    {"index": 2, "type": "dword", "op": "eq", "val": 1, "comment": "TCP_NODELAY"}
+                ]
+            },
+            {
+                "syscall": "fcntl",
+                "comment": "SSH shim: Tokio verifies that received listeners are nonblocking",
+                "args": [{"index": 1, "type": "dword", "op": "eq", "val": 3, "comment": "F_GETFL"}]
+            },
+            {
+                "syscall": "bind",
+                "comment": "SSH shim: bind the private Unix control socket"
+            },
+            {
+                "syscall": "listen",
+                "comment": "SSH shim: listen on the private Unix control socket"
+            },
+            {
+                "syscall": "getsockname",
+                "comment": "SSH shim: validate received listener endpoints"
+            },
+            {
+                "syscall": "getsockopt",
+                "comment": "SSH shim: validate received stream and listener descriptors"
+            },
+            {
+                "syscall": "shutdown",
+                "comment": "SSH shim: propagate stream half-close"
+            },
       {
         "syscall": "getxattr",
         "comment": "virtiofs xattr passthrough (e.g. dropping security.capability on write); a blocked xattr syscall SIGSYS-kills the VMM"

@@ -117,7 +117,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut config = tonic_build::configure()
         .build_server(true)
-        .build_client(true);
+        .build_client(true)
+        .skip_debug("boxlite.v1.SshConfigureRequest")
+        .type_attribute("boxlite.v1.SshConfigureRequest.auth", "#[derive(Debug)]");
 
     // proto3 optional fields require protoc >= 3.12
     // For 3.12-3.14, we need --experimental_allow_proto3_optional

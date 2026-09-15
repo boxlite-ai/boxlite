@@ -24,6 +24,7 @@ nix = { version = "0.29", features = ["mount", "process", "fs", "dir", "sched", 
 async-trait = "0.1"
 uuid = { version = "1.10", features = ["v4"] }
 tonic = "0.12"
+tokio-util = { version = "0.7", features = ["rt"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 async-stream = "0.3"

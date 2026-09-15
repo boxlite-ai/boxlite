@@ -500,6 +500,12 @@ impl Vmm for Krun {
             );
             ctx.add_vsock_port(network::GUEST_AGENT_PORT, grpc_socket_path, true)?;
 
+            let ssh_socket = config.sockets()?.ssh_sock();
+            let ssh_socket = ssh_socket
+                .to_str()
+                .ok_or_else(|| BoxliteError::Engine("invalid SSH vsock bridge path".into()))?;
+            ctx.add_vsock_port(network::GUEST_SSH_PORT, ssh_socket, true)?;
+
             // Configure ready notification channel (Unix socket bridged to vsock)
             // listen=false: host creates socket and listens, guest connects via vsock
             let ready_socket_path = match &config.ready_transport {
