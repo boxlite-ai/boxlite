@@ -11,6 +11,27 @@ use super::manager::ImageManifest;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 // ============================================================================
+// IMAGE DISK CACHE KEY
+// ============================================================================
+
+/// The image-disk cache key for an ordered list of layer digests.
+///
+/// A free function rather than a method because the cache reclaim pass has to
+/// rebuild the very same key from `image_index` rows — which store the same
+/// ordered list (`ImageStore::update_index`) — to tell a cached disk that is
+/// still reachable from one that is not. Two derivations of one key would
+/// drift, and the direction it would drift in is "delete a live disk".
+pub(crate) fn image_digest_for_layers<S: AsRef<str>>(layers: &[S]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    for layer in layers {
+        hasher.update(layer.as_ref().as_bytes());
+    }
+    format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+
+// ============================================================================
 // IMAGE OBJECT
 // ============================================================================
 
@@ -58,7 +79,6 @@ impl ImageObject {
     }
 
     /// Get list of layer digests
-    #[allow(dead_code)]
     pub fn layer_digests(&self) -> Vec<&str> {
         self.manifest
             .layers
@@ -282,13 +302,7 @@ impl ImageObject {
     /// This is used as a cache key for base disks - same layers = same base disk.
     /// Uses SHA256 hash of concatenated layer digests.
     pub(crate) fn compute_image_digest(&self) -> String {
-        use sha2::{Digest, Sha256};
-
-        let mut hasher = Sha256::new();
-        for layer in &self.manifest.layers {
-            hasher.update(layer.digest.as_bytes());
-        }
-        format!("sha256:{}", hex::encode(hasher.finalize()))
+        image_digest_for_layers(&self.layer_digests())
     }
 
     // ========================================================================

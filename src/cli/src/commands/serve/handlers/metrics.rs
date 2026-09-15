@@ -21,6 +21,8 @@ pub(in crate::commands::serve) async fn runtime_metrics(
             num_running_boxes: metrics.num_running_boxes(),
             total_commands_executed: metrics.total_commands_executed(),
             total_exec_errors: metrics.total_exec_errors(),
+            image_disks_evicted_total: metrics.image_disks_evicted_total(),
+            image_disk_bytes_reclaimed_total: metrics.image_disk_bytes_reclaimed_total(),
         })
         .into_response(),
         Err(e) => error_from_boxlite(&e),

@@ -309,6 +309,8 @@ pub(super) struct RuntimeMetricsResponse {
     pub num_running_boxes: u64,
     pub total_commands_executed: u64,
     pub total_exec_errors: u64,
+    pub image_disks_evicted_total: u64,
+    pub image_disk_bytes_reclaimed_total: u64,
 }
 
 #[derive(Serialize)]

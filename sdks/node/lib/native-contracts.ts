@@ -322,6 +322,8 @@ export interface JsRuntimeMetrics {
   numRunningBoxes: number;
   totalCommandsExecuted: number;
   totalExecErrors: number;
+  imageDisksEvictedTotal: number;
+  imageDiskBytesReclaimedTotal: number;
 }
 
 export interface JsBoxMetrics {

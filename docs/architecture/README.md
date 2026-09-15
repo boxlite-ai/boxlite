@@ -7,6 +7,9 @@ Container security design: [Linux capability API](./container-capabilities.md)
 Jailer network permission design:
 [guest networking, host IP grants, and AF_UNIX control plane](./jailer-network-permissions.md)
 
+Custom OCI images, stage 1 (Chinese):
+[S1 详细设计与执行计划](./custom-oci-images-s1-design.zh-CN.md)
+
 ## Overview
 
 BoxLite is an embeddable virtual machine runtime that follows the SQLite philosophy: a library that
@@ -539,18 +542,18 @@ BoxLite provides comprehensive metrics at runtime and per-Box levels.
 │  ┌─────────────────────────────────┐   │
 │  │  AtomicU64 counters (lock-free) │   │
 │  │  - boxes_created                │   │
-│  │  - boxes_destroyed              │   │
-│  │  - total_exec_calls             │   │
-│  │  - total_bytes_transferred      │   │
+│  │  - boxes_stopped                │   │
+│  │  - total_commands               │   │
+│  │  - total_exec_errors            │   │
 │  └─────────────────────────────────┘   │
 └─────────────────────────────────────────┘
            │
            ▼
 ┌─────────────────────────────────────────┐
 │            BoxMetrics (per-Box)         │
-│  - cpu_time_ms                          │
-│  - memory_usage_bytes                   │
-│  - exec_count                           │
+│  - cpu_percent                          │
+│  - memory_bytes                         │
+│  - commands_executed_total              │
 │  - network_bytes_sent                   │
 │  - network_bytes_received               │
 └─────────────────────────────────────────┘

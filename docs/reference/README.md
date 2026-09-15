@@ -266,7 +266,7 @@ cpus=4  # 4 CPU cores
 **Notes:**
 - CPU scheduling is proportional (shares-based)
 - Does not reserve physical cores, just scheduling weight
-- Monitor actual usage with `box.metrics().cpu_time_ms`
+- Monitor actual usage with `box.metrics().cpu_percent`
 
 #### `memory_mib: int`
 
@@ -287,7 +287,7 @@ memory_mib=4096   # 4 GB
 - 1 MiB = 1024 KiB = 1,048,576 bytes
 - Minimum 128 MiB required for most images
 - Out of memory kills the box process
-- Monitor with `box.metrics().memory_usage_bytes`
+- Monitor with `box.metrics().memory_bytes`
 
 #### `disk_size_gb: int | None`
 
