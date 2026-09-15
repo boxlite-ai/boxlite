@@ -885,10 +885,35 @@ impl RuntimeImpl {
             if state.status != BoxStatus::Running || config.options.detach {
                 continue;
             }
-            let Some(pid) = state.pid else { continue };
-            if !crate::util::is_process_alive(pid) {
+            let Some(state_pid) = state.pid else { continue };
+            if !crate::util::is_process_alive(state_pid) {
                 continue;
             }
+
+            let box_layout = self
+                .layout
+                .box_layout(config.id.as_str(), false)
+                .expect("box_layout is infallible");
+
+            // Same trust rule as force-remove: `state.pid` is a cache, and
+            // `shim.pid` is the record of which process that number meant. A
+            // pid the record cannot vouch for gets the treatment a dead one
+            // gets — nothing of ours to stop — rather than a SIGTERM and, five
+            // seconds later, a SIGKILL aimed at whoever inherited it.
+            let Some(record) =
+                crate::util::PidFileReader::at(box_layout.pid_file_path()).actionable_record()
+            else {
+                // Say so. A dead pid is the ordinary case and passes quietly
+                // above, but this one is alive under a number the record does
+                // not vouch for — the auto-stop is being skipped, and silence
+                // here reads exactly like a box that was stopped.
+                eprintln!(
+                    "[boxlite] Skipping auto-stop, no live shim recorded: id={}, state pid={state_pid}",
+                    config.id
+                );
+                continue;
+            };
+            let pid = record.pid;
 
             eprintln!(
                 "[boxlite] Auto-stopping non-detached box: id={}, pid={pid}",
@@ -904,7 +929,10 @@ impl RuntimeImpl {
             let start = std::time::Instant::now();
             let timeout = std::time::Duration::from_secs(5);
             loop {
-                if !crate::util::is_process_alive(pid) {
+                // Re-checks identity, not just liveness: the pid can be
+                // recycled inside this very wait, and the force kill below
+                // would then land on the process that inherited it.
+                if !record.still_running() {
                     break;
                 }
                 if start.elapsed() > timeout {
@@ -917,11 +945,6 @@ impl RuntimeImpl {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
-
-            let box_layout = self
-                .layout
-                .box_layout(config.id.as_str(), false)
-                .expect("box_layout is infallible");
 
             // The third way a box dies, and it must report the exit code like the
             // other two. `stop()` records it, and so does the live watcher — but
@@ -1005,10 +1028,37 @@ impl RuntimeImpl {
                     // detached box's inner pid-ns tree (inner bwrap + shim + VM) —
                     // which a single-pid kill misses, since #851 stopped tying
                     // detached boxes to the launcher's lifetime.
-                    if let Some(pid) = state.pid {
-                        tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
-                        let mut handler = ShimHandler::from_pid(pid, config.id.clone());
-                        let _ = handler.stop();
+                    //
+                    // Identity comes from `shim.pid`, not `state.pid`: the row is
+                    // a cache that outlives the process it names, and force
+                    // remove is the path that reaches it after an unclean exit.
+                    // The record is what separates the box's shim from whatever
+                    // inherited its number — and it has to be the *recorded*
+                    // fingerprint, since one sampled here would just agree with
+                    // itself and hand the sweep a stranger's process tree.
+                    let box_layout = self.layout.box_layout(id.as_str(), false)?;
+                    match crate::util::PidFileReader::at(box_layout.pid_file_path())
+                        .actionable_record()
+                    {
+                        Some(record) => {
+                            tracing::info!(box_id = %id, pid = record.pid, "Force stopping box process tree");
+                            let mut handler =
+                                ShimHandler::from_pid_record(record, config.id.clone());
+                            let _ = handler.stop();
+                        }
+                        None => {
+                            // No pid anyone may signal. `reap_box` is keyed by
+                            // box id rather than pid, so it stays correct against
+                            // a stale row and still reaps whatever the box left
+                            // in its cgroup.
+                            tracing::warn!(
+                                box_id = %id,
+                                pid = ?state.pid,
+                                "No shim.pid record vouches for the recorded pid; \
+                                 reaping by cgroup only"
+                            );
+                            crate::jailer::reap_box(&config.id);
+                        }
                     }
                     // Update status to stopped and save
                     state.set_status(BoxStatus::Stopped);
@@ -2385,6 +2435,7 @@ mod tests {
             .box_manager
             .add_box(&config, &state)
             .expect("Failed to add box");
+        write_box_pid_file(&runtime, &config, pid);
 
         // shutdown_sync should kill the process
         runtime.shutdown_sync();
@@ -2515,6 +2566,7 @@ mod tests {
             .box_manager
             .add_box(&config_regular, &state_regular)
             .unwrap();
+        write_box_pid_file(&runtime, &config_regular, pid_regular);
 
         // Detached running box
         let config_detached = test_box_config(true);
@@ -2523,6 +2575,7 @@ mod tests {
             .box_manager
             .add_box(&config_detached, &state_detached)
             .unwrap();
+        write_box_pid_file(&runtime, &config_detached, pid_detached);
 
         // Stopped box (should be skipped regardless)
         let config_stopped = test_box_config(false);
@@ -2589,6 +2642,7 @@ mod tests {
         let config = test_box_config(false);
         let state = running_state(pid);
         runtime.box_manager.add_box(&config, &state).unwrap();
+        write_box_pid_file(&runtime, &config, pid);
 
         // Drop the runtime without calling shutdown
         drop(runtime);
@@ -2787,6 +2841,10 @@ mod tests {
             .expect("Failed to allocate lock");
         state.set_lock_id(lock_id);
 
+        // Force-remove tells this pid from a number the row has gone stale on
+        // by reading the record; without it the force path declines to signal.
+        write_box_pid_file(&runtime, &config, pid);
+
         runtime
             .box_manager
             .add_box(&config, &state)
@@ -2814,6 +2872,209 @@ mod tests {
         assert!(runtime.box_manager.box_by_id(&config.id).unwrap().is_none());
 
         child.wait().ok();
+    }
+
+    /// Give a fabricated Running box the `shim.pid` a real one always has.
+    ///
+    /// The shim writes it in `pre_exec` before `spawn` returns, and the three
+    /// sites that delete it all run after the box is stopped — so the file is
+    /// present for exactly as long as the box is running. Teardown reads it as
+    /// the record of *which* process `state.pid` names, and a box built without
+    /// it looks to those paths like a database row gone stale.
+    fn write_box_pid_file(runtime: &RuntimeImpl, config: &BoxConfig, pid: u32) {
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .expect("box_layout is infallible");
+        write_pid_file_with_fingerprint(&layout.pid_file_path(), pid);
+    }
+
+    /// Write a two-line `shim.pid` whose start-time cannot be `pid`'s.
+    ///
+    /// This is what the file looks like once the recorded process has exited
+    /// and an unrelated one has taken its number: the pid still reads as alive,
+    /// and the fingerprint is the only thing separating the two.
+    fn write_pid_file_with_stale_fingerprint(pid_file: &std::path::Path, pid: u32) {
+        if let Some(parent) = pid_file.parent() {
+            std::fs::create_dir_all(parent).expect("create box directory");
+        }
+        let stale = crate::util::process_start_time(pid)
+            .expect("OS reports start_time")
+            .wrapping_add(1);
+        std::fs::write(pid_file, format!("{pid}\n{stale}\n")).expect("write shim.pid");
+    }
+
+    /// Force-remove kills through `state.pid`, a database cache that outlives
+    /// the process it names. `shim.pid` is the only record of *which* process
+    /// that number meant, so a pid the file's fingerprint disowns must not be
+    /// signalled — the box still has to be removed.
+    ///
+    /// Sampling the fingerprint at handler construction is not this check: a
+    /// recycled pid fingerprints as itself and passes.
+    #[test]
+    fn test_remove_box_force_does_not_signal_a_recycled_pid() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, mut bystander) = spawn_dummy_process();
+
+        let config = test_box_config_in_layout(false, &runtime);
+        let mut state = running_state(pid);
+        state.set_lock_id(
+            runtime
+                .lock_manager
+                .allocate()
+                .expect("Failed to allocate lock"),
+        );
+
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .expect("box_layout is infallible");
+        write_pid_file_with_stale_fingerprint(&layout.pid_file_path(), pid);
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        runtime
+            .remove_box(&config.id, true)
+            .expect("Force remove should still remove the box");
+
+        // SIGTERM would have killed `sleep` outright, so survival is the
+        // observable that separates guarded from unguarded.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            crate::util::is_process_alive(pid),
+            "Force remove signalled pid {pid}, which the box's shim.pid fingerprint \
+             says is no longer the recorded process"
+        );
+        assert!(
+            runtime.box_manager.box_by_id(&config.id).unwrap().is_none(),
+            "Refusing to signal the pid must not stop the box being removed"
+        );
+
+        bystander.kill().ok();
+        bystander.wait().ok();
+    }
+
+    /// The other way the record can fail to vouch for a database pid: no
+    /// `shim.pid` at all. Recovery deletes the file as soon as the identity
+    /// stops holding, so "pid in the database, no record on disk" is the
+    /// durable shape of a stale pid — and there is nothing left to prove the
+    /// number is still the box's.
+    #[test]
+    fn test_remove_box_force_does_not_signal_a_pid_without_a_record() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, mut bystander) = spawn_dummy_process();
+
+        let config = test_box_config_in_layout(false, &runtime);
+        let mut state = running_state(pid);
+        state.set_lock_id(
+            runtime
+                .lock_manager
+                .allocate()
+                .expect("Failed to allocate lock"),
+        );
+
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .expect("box_layout is infallible");
+        assert!(
+            !layout.pid_file_path().exists(),
+            "this test's premise is a missing shim.pid"
+        );
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        runtime
+            .remove_box(&config.id, true)
+            .expect("Force remove should still remove the box");
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            crate::util::is_process_alive(pid),
+            "Force remove signalled pid {pid} on a database cache alone, with no \
+             shim.pid to say the number is still the box's"
+        );
+        assert!(runtime.box_manager.box_by_id(&config.id).unwrap().is_none());
+
+        bystander.kill().ok();
+        bystander.wait().ok();
+    }
+
+    /// `shutdown_sync` is the third path that kills by database pid, and the
+    /// one every non-detached box takes when its runtime goes away. It carries
+    /// the same obligation as force-remove: a pid the box's `shim.pid` no
+    /// longer vouches for belongs to someone else.
+    #[test]
+    fn test_shutdown_sync_does_not_signal_a_recycled_pid() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, mut bystander) = spawn_dummy_process();
+
+        let config = test_box_config_in_layout(false, &runtime);
+        let state = running_state(pid);
+
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .expect("box_layout is infallible");
+        write_pid_file_with_stale_fingerprint(&layout.pid_file_path(), pid);
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        runtime.shutdown_sync();
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            crate::util::is_process_alive(pid),
+            "shutdown_sync SIGTERMed pid {pid}, which the box's shim.pid fingerprint \
+             says is no longer the recorded process"
+        );
+
+        bystander.kill().ok();
+        bystander.wait().ok();
+    }
+
+    /// A live pid with no `shim.pid` behind it is not the box's to stop either.
+    #[test]
+    fn test_shutdown_sync_does_not_signal_a_pid_without_a_record() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, mut bystander) = spawn_dummy_process();
+
+        let config = test_box_config_in_layout(false, &runtime);
+        let state = running_state(pid);
+
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .expect("box_layout is infallible");
+        assert!(
+            !layout.pid_file_path().exists(),
+            "this test's premise is a missing shim.pid"
+        );
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        runtime.shutdown_sync();
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            crate::util::is_process_alive(pid),
+            "shutdown_sync SIGTERMed pid {pid}, which no shim.pid record vouches for"
+        );
+
+        bystander.kill().ok();
+        bystander.wait().ok();
     }
 
     /// Write a two-line `shim.pid` whose start-time matches the live PID
@@ -3108,6 +3369,7 @@ mod tests {
         let config = test_box_config(false);
         let state = running_state(pid);
         runtime.box_manager.add_box(&config, &state).unwrap();
+        write_box_pid_file(&runtime, &config, pid);
 
         let start = std::time::Instant::now();
         runtime.shutdown_sync();
@@ -3148,6 +3410,7 @@ mod tests {
         let config = test_box_config(false);
         let state = running_state(pid);
         runtime.box_manager.add_box(&config, &state).unwrap();
+        write_box_pid_file(&runtime, &config, pid);
 
         // Wrap in LocalRuntime (the backend wrapper) and call via trait
         let local = LocalRuntime(Arc::clone(&runtime));
