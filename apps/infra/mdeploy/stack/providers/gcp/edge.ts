@@ -68,7 +68,7 @@ type ProxyNeg = { selfLink: string; generatedId: string }
  * reason.
  */
 export const isMissingNeg = (error: Error, name: string): boolean =>
-  /was not found|notFound|404/i.test(error.message) && error.message.includes(name)
+  /not ?found|404/i.test(error.message) && error.message.includes(name)
 
 /** The managed CSI provider's value: JSON is also valid YAML. */
 export const secretProviderParameters = (reference: string): string =>
