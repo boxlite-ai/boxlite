@@ -274,6 +274,21 @@ export const apiEnvironmentFrom = ({
        */
       ...(home === 'aws' ? { PORT: String(API_PORT) } : {}),
       S3_REGION: region,
+      /*
+       * Which object store backs a managed volume. The API creates the bucket
+       * the runner mounts, so the two have to name the same backend — which is
+       * why this and the runner's own variable come from one decision, and why
+       * only the GCP branch names anything.
+       *
+       * The API that reads these is not on this branch either: the GCS store is
+       * #1468, and here the control plane builds an S3 client unconditionally,
+       * so both variables are inert until it lands.
+       *
+       * GCS_LOCATION is the stage's own region. A bucket created without one
+       * lands wherever the client defaults to, away from the runners that mount
+       * it, and every file a box touches becomes a cross-region read.
+       */
+      ...(home === 'gcp' ? { VOLUME_STORAGE_BACKEND: 'gcs', GCS_LOCATION: region } : {}),
       OTEL_ENABLED: String(!flag(environment, 'OTEL_DISABLED')),
       ...dashboardFrom(environment, domain),
       ...oidcFrom(environment, domain),

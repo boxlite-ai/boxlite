@@ -56,6 +56,81 @@ const sourceOf = (module: string): string =>
   readFileSync(fileURLToPath(new URL(`../stack/providers/gcp/${module}.ts`, import.meta.url)), 'utf8')
 
 /**
+ * Every project-level IAM resource this provider constructs, whichever
+ * constructor it uses and however deeply it is nested.
+ *
+ * Scanning to a balanced close rather than matching a closing line. The first
+ * version of this pinned `\n    })`, so it enumerated only blocks that closed
+ * at exactly four spaces — a grant one level deeper, which is the shape
+ * `RunnerArtifactsRead` already uses in this same file, went unseen and green.
+ * `IAMBinding` is included because it is authoritative, and so the more
+ * dangerous of the two to leave unbounded.
+ *
+ * It reads source text, which is the limit worth stating: it can see the
+ * argument a constructor is written with, not the resource Pulumi synthesises
+ * from it. A grant assembled from a variable would satisfy this and still be
+ * unbounded.
+ *
+ * The scan skips comments and quoted literals, because a parenthesis inside
+ * either is prose and not structure — counting them, as the first version did,
+ * ends a block wherever someone writes one in a comment. What it still cannot
+ * do is tell a regex literal from a division; nothing in these providers writes
+ * one, and an unbalanced scan now throws rather than running to the end of the
+ * file and returning a block that swallows the next grant's `condition:`.
+ */
+const endOfLiteral = (source: string, open: number): number => {
+  const quote = source[open]
+  for (let index = open + 1; index < source.length; index += 1) {
+    if (source[index] === '\\') {
+      index += 1
+      continue
+    }
+    if (source[index] === quote) return index
+  }
+  return -1
+}
+
+const projectIamBlocks = (source: string): string[] => {
+  const blocks: string[] = []
+  const opener = /new gcp\.projects\.IAM(?:Member|Binding)\(/g
+  for (let match = opener.exec(source); match; match = opener.exec(source)) {
+    let depth = 0
+    let index = match.index + match[0].length - 1
+    let closed = false
+    for (; index < source.length; index += 1) {
+      const character = source[index]
+      const pair = source.slice(index, index + 2)
+      if (pair === '//') {
+        const newline = source.indexOf('\n', index)
+        if (newline === -1) break
+        index = newline
+        continue
+      }
+      if (pair === '/*') {
+        const end = source.indexOf('*/', index + 2)
+        if (end === -1) break
+        index = end + 1
+        continue
+      }
+      if (character === "'" || character === '"' || character === '`') {
+        const end = endOfLiteral(source, index)
+        if (end === -1) break
+        index = end
+        continue
+      }
+      if (character === '(') depth += 1
+      else if (character === ')' && --depth === 0) {
+        closed = true
+        break
+      }
+    }
+    assert.ok(closed, `the IAM grant at offset ${match.index} never closes, so this scan proves nothing`)
+    blocks.push(source.slice(match.index, index + 1))
+  }
+  return blocks
+}
+
+/**
  * The bundle, which creates no resource: every entry is a function from the
  * modules it depends on to a provider. Building one is what runs the wiring
  * that decides which identities each module is handed.
@@ -69,6 +144,7 @@ const gcpBundle = () =>
     domain: 'dev2.boxlite.ai',
     zoneId: 'zone-1',
     artifactsBucket: 'boxlite-app-dev2-artifacts-boxlite-dev2',
+    volumePrefix: 'boxlite-volume',
   })
 
 // ── the container's port ────────────────────────────────────────────────────
@@ -98,6 +174,137 @@ test('an AWS stage still declares it, because ECS reserves nothing', () => {
   // The other half. Dropping it everywhere would leave the task with no way to
   // learn its port — the same outage, arrived at by fixing the first one.
   assert.equal(apiEnvironment('aws').PORT, '3000')
+})
+
+// ── which object store backs a volume ───────────────────────────────────────
+
+test('a GCP stage tells the API to create volume buckets on GCS, in its own region', () => {
+  /*
+   * The runner defaults to s3, and the API defaults with it, so a GCP stage
+   * that names nothing creates S3 buckets that no host on it can mount. The
+   * failure is not at deploy time: the stage comes up, and the first volume a
+   * user creates is the one that fails.
+   *
+   * The location is the stage's region rather than a constant. A bucket
+   * created without one lands wherever the client defaults to, which is a
+   * cross-region read on every file a box touches, billed per operation.
+   */
+  const gcp = apiEnvironment('gcp')
+  assert.equal(gcp.VOLUME_STORAGE_BACKEND, 'gcs')
+  assert.equal(gcp.GCS_LOCATION, 'asia-southeast1')
+})
+
+test('an AWS stage names neither, so it keeps mount-s3 and its bucket lifecycle', () => {
+  // The compatibility half: the backend switch defaults to s3 on both sides,
+  // and an AWS stage reaches that default by saying nothing at all.
+  const aws = apiEnvironment('aws')
+  assert.equal('VOLUME_STORAGE_BACKEND' in aws, false)
+  assert.equal('GCS_LOCATION' in aws, false)
+})
+
+test('the runner is told to mount with the tool its host was actually given', () => {
+  /*
+   * Two lines of one file that have to agree: `installVolumeMount` puts
+   * gcsfuse on the host, and `unitEnvironment` decides which tool the runner
+   * reaches for. Install gcsfuse and say nothing, and the runner keeps its s3
+   * default and execs mount-s3 — a binary this platform never installs — so
+   * every box that asks for a volume fails on a missing executable.
+   */
+  const source = sourceOf('runners')
+  assert.match(source, /apt-get install -y gcsfuse/, 'the host is not given gcsfuse')
+  assert.match(source, /VOLUME_STORAGE_BACKEND: 'gcs'/, 'the runner is not told to use it')
+  // The AWS provider installs it from mountpoint-s3-release; matching the
+  // install rather than the name keeps this from passing on prose that merely
+  // mentions mount-s3, which the comment above the variable does.
+  assert.equal(source.includes('mountpoint-s3-release'), false, 'this platform installs a mount-s3 to fall back to')
+})
+
+test('the host that mounts holds a grant on the buckets it mounts', () => {
+  /*
+   * gcsfuse mounts as the instance's service account — it is handed no
+   * credential, exactly as mount-s3 on AWS falls through to the instance role.
+   * So the runner's own identity needs the volume grant, and the AWS provider
+   * gives its role one (`RunnerVolumeS3Policy`). Without the counterpart here
+   * the deploy succeeds, the host boots, gcsfuse is installed, the backend is
+   * selected — and the first mount is answered 403 by Cloud Storage.
+   *
+   * The bucket-level half is the one that is easy to drop: `storage.buckets.get`
+   * is what gcsfuse calls once per mount for GetStorageLayout, no object role
+   * includes it, and object access alone fails before reading a byte.
+   */
+  const grants = projectIamBlocks(sourceOf('runners'))
+  /*
+   * Read out of each grant's own block rather than out of the file. An earlier
+   * revision matched the role and the condition across the whole source with a
+   * lazy `[\s\S]*?` between them, which walks out of the block it started in:
+   * delete this grant's condition and the gap simply runs on to the next
+   * grant's, leaving the assertion green with the property it names gone.
+   *
+   * Roles are pinned per resource and not as loose strings, for the same reason.
+   * `objectViewer` sits beside `objectUser` on another app's runtime account in
+   * this same project, so it is the natural thing to copy here — but its
+   * permissions are a subset of `objectUser`'s and neither carries
+   * `storage.buckets.get`, so the pair that reads as safer mounts nothing. This
+   * file also grants `objectViewer` for the staged binary, which is right and
+   * unrelated, so a check on a role alone would pass for the wrong grant.
+   */
+  const grantNamed = (name: string): string => {
+    const found = grants.filter((block) => block.includes(`('${name}',`))
+    assert.equal(found.length, 1, `expected one ${name} grant, found ${found.length}`)
+    return found[0]
+  }
+
+  const objects = grantNamed('RunnerVolumeObjects')
+  assert.match(objects, /role: 'roles\/storage\.objectUser'/, 'the host cannot read or write volume objects')
+  assert.match(
+    objects,
+    /condition: volumeConditionFor\(volumePrefix\)/,
+    'the volume object grant reaches every bucket in the project',
+  )
+
+  const buckets = grantNamed('RunnerVolumeBuckets')
+  assert.match(
+    buckets,
+    /role: 'roles\/storage\.legacyBucketReader'/,
+    'the host cannot call GetStorageLayout, so every mount fails',
+  )
+  assert.match(
+    buckets,
+    /condition: volumeConditionFor\(volumePrefix\)/,
+    'the bucket grant reaches every bucket in the project',
+  )
+})
+
+test('the volume grant cannot reach the bucket the staged binary lives in', () => {
+  /*
+   * The regression this file could not see until it was written down. Fifteen
+   * lines above the volume grant, `RunnerArtifactsRead` confines these same
+   * hosts to reading one prefix of the artifacts bucket — read-only, because a
+   * runner that could write there could replace the binary every other host
+   * installs. The AWS side says so outright: "a runner can never write here."
+   *
+   * Google has no wildcard between "one named resource" and "the whole
+   * project", so the volume grant is a project-level role narrowed by a CEL
+   * condition. Drop the condition and the role is simply project-wide:
+   * `objectUser` carries `storage.objects.create` and `.delete`, so it
+   * subsumes the artifacts binding and the confinement above becomes a comment.
+   * That is not a hypothetical — it is what an earlier revision of this change
+   * did, and nothing here caught it.
+   *
+   * Asserting on the condition alone would not catch it either, since a grant
+   * can carry a condition about something else. The pairing is what matters:
+   * every project-level role handed to the runner's own account is bounded by
+   * the volume prefix.
+   */
+  const grants = projectIamBlocks(sourceOf('runners'))
+  assert.ok(grants.length >= 2, `expected the two volume grants, found ${grants.length}`)
+  for (const grant of grants) {
+    assert.match(
+      grant,
+      /condition: volumeConditionFor\(volumePrefix\)/,
+      `a project-level grant here reaches every bucket in the project:\n${grant}`,
+    )
+  }
 })
 
 test('the API is told to apply its own schema, as the incumbent stack tells it', () => {

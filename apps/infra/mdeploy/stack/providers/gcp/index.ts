@@ -75,6 +75,7 @@ export const gcpStackProviders = ({
   zoneId,
   relayHost = null,
   artifactsBucket,
+  volumePrefix,
   managedClickHouse = null,
   clickStackConsumer = null,
   notificationChannels = [],
@@ -98,6 +99,11 @@ export const gcpStackProviders = ({
   relayHost?: string | null
   /** Where a build-mode runner binary is staged, which the hosts are let read. */
   artifactsBucket: string
+  /**
+   * What a volume bucket is named. The storage module bounds the API with it;
+   * the runners module bounds the hosts that mount with the same sentence.
+   */
+  volumePrefix: string
   managedClickHouse?: { url: string; writerSecretArn: string; readerSecretArn: string } | null
   /** Who may read the ClickHouse reader password; see `clickstack.ts`. */
   clickStackConsumer?: string | null
@@ -199,6 +205,7 @@ export const gcpStackProviders = ({
         zone,
         placement: placement(network, 'runner'),
         artifactsBucket,
+        volumePrefix,
         adminApiKey,
         regionId,
         dependsOn,

@@ -260,6 +260,9 @@ export const gcpProgram =
         zoneId: stackEnvironment.dnsZoneId,
         relayHost: stackEnvironment.mailRelayHost,
         artifactsBucket,
+        // The hosts are bounded by the same prefix the storage module bounds
+        // the API with, so it is read from the one declaration of it.
+        volumePrefix: config.storage.volumePrefix,
         managedClickHouse: stackEnvironment.managedClickHouse,
         clickStackConsumer: stackEnvironment.clickStackConsumer,
       }),
