@@ -135,9 +135,7 @@ impl PyExecution {
             Some(stream) => Ok(PyExecStdin {
                 stream: Arc::new(Mutex::new(stream)),
             }),
-            None => Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "stdin stream not available",
-            )),
+            None => Err(crate::util::invalid_state("stdin stream not available")),
         }
     }
 
@@ -147,9 +145,7 @@ impl PyExecution {
             Some(stream) => Ok(PyExecStdout {
                 stream: Arc::new(Mutex::new(stream)),
             }),
-            None => Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "stdout stream not available",
-            )),
+            None => Err(crate::util::invalid_state("stdout stream not available")),
         }
     }
 
@@ -159,9 +155,7 @@ impl PyExecution {
             Some(stream) => Ok(PyExecStderr {
                 stream: Arc::new(Mutex::new(stream)),
             }),
-            None => Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "stderr stream not available",
-            )),
+            None => Err(crate::util::invalid_state("stderr stream not available")),
         }
     }
 

@@ -808,10 +808,12 @@ print(f"Network received: {metrics.network_bytes_received}")
 ### Exception Types
 
 ```python
-from boxlite import BoxliteError, ExecError, TimeoutError, ParseError
+from boxlite import BoxliteError, NotFoundError, ExecError, TimeoutError, ParseError
 ```
 
-**BoxliteError** - Base exception for all BoxLite errors
+**BoxliteError** - Base exception for all BoxLite errors (a `RuntimeError` subclass)
+
+**NotFoundError**, **AlreadyExistsError**, **InvalidStateError**, **StoppedError**, **ResourceExhaustedError**, ... - Runtime errors, one class per kind; see the [Python API reference](../../docs/reference/python/README.md#error-types) for the full list
 
 **ExecError** - Command execution failed
 

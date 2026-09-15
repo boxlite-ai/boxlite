@@ -110,8 +110,9 @@ except ImportError as e:
 
 # Import Python convenience wrappers (re-exported via __all__)
 try:
+    from . import errors as _errors
     from .codebox import CodeBox  # noqa: F401
-    from .errors import BoxliteError, ExecError, ParseError, TimeoutError  # noqa: F401
+    from .errors import *
     from .exec import ExecResult  # noqa: F401
     from .simplebox import SimpleBox  # noqa: F401
 
@@ -121,13 +122,10 @@ try:
             "SimpleBox",
             "CodeBox",
             "ExecResult",
-            # Error types
-            "BoxliteError",
-            "ExecError",
-            "TimeoutError",
-            "ParseError",
         ]
     )
+    # Error types
+    __all__.extend(_errors.__all__)
 except ImportError:
     pass
 

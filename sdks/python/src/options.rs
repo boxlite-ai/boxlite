@@ -9,7 +9,7 @@ use boxlite::runtime::options::{
     NetworkMode, NetworkSpec, OutboundNetworkConfig, PortProtocol, PortSpec, RegistryTransport,
     RootfsSpec, VolumeSpec,
 };
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyTuple};
 
@@ -165,10 +165,12 @@ impl PyImageRegistry {
 
 fn validate_registry_host(host: &str) -> PyResult<()> {
     if host.trim().is_empty() {
-        return Err(PyRuntimeError::new_err("image registry host is required"));
+        return Err(crate::util::invalid_argument(
+            "image registry host is required",
+        ));
     }
     if host.contains("://") || host.contains('/') {
-        return Err(PyRuntimeError::new_err(format!(
+        return Err(crate::util::invalid_argument(format!(
             "image registry host must be host[:port], not a URL: {host}"
         )));
     }
@@ -179,7 +181,7 @@ fn parse_registry_transport(transport: &str) -> PyResult<RegistryTransport> {
     match transport {
         "" | "https" => Ok(RegistryTransport::Https),
         "http" => Ok(RegistryTransport::Http),
-        _ => Err(PyRuntimeError::new_err(format!(
+        _ => Err(crate::util::invalid_argument(format!(
             "unsupported registry transport: {transport}"
         ))),
     }
@@ -187,7 +189,7 @@ fn parse_registry_transport(transport: &str) -> PyResult<RegistryTransport> {
 
 fn validate_registry_auth(username: &Option<String>, password: &Option<String>) -> PyResult<()> {
     if username.is_some() != password.is_some() {
-        return Err(PyRuntimeError::new_err(
+        return Err(crate::util::invalid_argument(
             "registry username and password must be provided together",
         ));
     }
@@ -810,7 +812,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
         if let Ok(t) = obj.cast::<PyTuple>() {
             let len = t.len();
             let err = || {
-                PyRuntimeError::new_err(
+                crate::util::invalid_argument(
                     "volumes tuples must be (host_path, guest_path[, read_only])",
                 )
             };
@@ -848,7 +850,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
             for key in d.keys() {
                 let key: String = key.extract()?;
                 if !KEYS.contains(&key.as_str()) {
-                    return Err(PyRuntimeError::new_err(format!(
+                    return Err(crate::util::invalid_argument(format!(
                         "unknown volume dict key {key:?}; expected one of {}",
                         KEYS.join(", ")
                     )));
@@ -866,14 +868,14 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
 
             let (managed_volume, host_path) = match (managed_volume, host_path) {
                 (Some(_), Some(_)) => {
-                    return Err(PyRuntimeError::new_err(
+                    return Err(crate::util::invalid_argument(
                         "volume dict takes managed_volume or host_path, not both",
                     ));
                 }
                 (Some(managed_volume), None) => (Some(managed_volume), String::new()),
                 (None, Some(host_path)) => (None, host_path),
                 (None, None) => {
-                    return Err(PyRuntimeError::new_err(
+                    return Err(crate::util::invalid_argument(
                         "volume dict requires managed_volume or host_path",
                     ));
                 }
@@ -881,7 +883,11 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
 
             let guest_path: String = match d.get_item("guest_path") {
                 Ok(Some(v)) => v.extract()?,
-                _ => return Err(PyRuntimeError::new_err("volume dict missing guest_path")),
+                _ => {
+                    return Err(crate::util::invalid_argument(
+                        "volume dict missing guest_path",
+                    ));
+                }
             };
 
             let read_only: bool = match d.get_item("read_only") {
@@ -897,7 +903,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
             });
         }
 
-        Err(PyRuntimeError::new_err(
+        Err(crate::util::invalid_argument(
             "volumes entries must be tuple or dict",
         ))
     }
@@ -931,7 +937,9 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyPortSpec {
         if let Ok(t) = obj.cast::<PyTuple>() {
             let len = t.len();
             let err = || {
-                PyRuntimeError::new_err("ports tuples must be (host, guest[, protocol[, host_ip]])")
+                crate::util::invalid_argument(
+                    "ports tuples must be (host, guest[, protocol[, host_ip]])",
+                )
             };
             let host_port: Option<u16>;
             let guest_port: u16;
@@ -974,7 +982,9 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyPortSpec {
             } else if let Ok(Some(v)) = d.get_item("guest") {
                 v.extract()?
             } else {
-                return Err(PyRuntimeError::new_err("ports dict missing guest_port"));
+                return Err(crate::util::invalid_argument(
+                    "ports dict missing guest_port",
+                ));
             };
 
             let host_port: Option<u16> = if let Ok(Some(v)) = d.get_item("host_port") {
@@ -1005,7 +1015,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyPortSpec {
             });
         }
 
-        Err(PyRuntimeError::new_err(
+        Err(crate::util::invalid_argument(
             "ports entries must be tuple or dict",
         ))
     }
