@@ -152,6 +152,91 @@ Box process takeover from the host application.
 - Clean process tree management
 - Enables jailer to sandbox the shim process
 
+### Shim control and SSH forwarding
+
+`ShimServer` owns one background OS thread and a single-thread Tokio runtime.
+The thread starts at the beginning of `run_shim`, after jail entry and before
+seccomp TSYNC. TCP forwarding and guest SSH configuration have independent paths:
+
+```text
+runtime SshStore::apply (runtime/ssh.rs) — explicit orchestration
+  ├─ ShimClient::set (shim_server/client.rs)
+  │    └─ ControlServer::respond (shim_server/control.rs) — shim.sock, JSON + SCM_RIGHTS
+  │         └─ SshForwarder::set (ssh_forwarder/mod.rs) — stop/join old listener; start new one
+  │              └─ private listener task: TCP ⇄ ssh.sock ⇄ guest vsock 2697
+  └─ GuestSession::ssh (portal/session.rs)
+       └─ SshInterface::configure / disable (portal/interfaces/ssh.rs) — guest RPC
+Unix client → ssh.sock → guest vsock 2697 (direct libkrun bridge)
+
+runtime SshStore::status
+  ├─ ShimClient::get_socket_addr → SshForwarder::get_socket_addr
+  └─ GuestSession::ssh → SshInterface::status
+```
+
+The shim stores only the forwarding target and current listener task/address.
+Closing forwarding does not disable guest SSH; guest configuration does not
+modify forwarding. The runtime's public entry point composes both operations.
+Guest gRPC carries authentication and the saved host key and reports the guest's
+vsock port, fingerprint and generation. No guest configuration, identity, status,
+application generation, deadline, or Begin/Apply/Abort operation lives in the shim.
+
+`set(None)` closes forwarding. `set(Some((fd, address)))` replaces it after
+closing and joining the old listener and connections. The runtime binds the TCP
+listener and sends its FD with `SCM_RIGHTS` and its actual bound `SocketAddr` with
+Serde. The receiving boundary checks descriptor count, network permission, socket
+type, listening state, and exact endpoint. Replies carry no FDs. Once the listener
+task exits, `get_socket_addr` returns `None`.
+
+Control permits 32 concurrent connections, each with one request and response;
+excess connections close immediately. Complete requests call the forwarder under
+a mutex; there is no command queue or separate SSH executor. Frames remain limited
+to 1 MiB, with 10-second read/write timeouts and a 30-second total client timeout.
+Slow control peers cannot block SSH acceptance or byte copying. Shutdown stops
+control acceptance, cancels and joins control connections, closes and joins the
+forwarder, removes mode-0600 `shim.sock`, then joins the OS thread.
+
+The runtime queries forwarding and guest state independently. Queries do not
+reconcile or mutate either side, and failures are returned to the caller.
+Configuration and host identity remain in SQLite; fixed socket cleanup stays
+with the box socket lifecycle. See the [SSH guide](../guides/ssh.md) for public
+update behavior and partial failures. Runtime and shim must update together.
+
+Guest SSH shutdown has two explicit owners:
+
+```text
+RunningListener (service/ssh/mod.rs) — one generation
+  ├─ accept_loop → tracked Connection::run (service/ssh/connection.rs)
+  │    ├─ connection permit + generation child cancellation token
+  │    ├─ russh transport/session → SshConnection handler
+  │    └─ ConnectionTasks → TCP/Unix listeners, relays, channel I/O, execution cleanup
+  └─ stop → cancel generation → finish accept loop → wait for connections
+Connection::run → stop tasks + close transport → await actual russh session
+  → close and wait for ConnectionTasks → release connection permit
+```
+
+Connection and forwarding semaphores enforce concurrency limits only. Each
+connection supervisor retains its permit until its handler and all tracked
+cleanup finish. Forwarding managers share the connection cancellation signal;
+they do not launch cleanup from `Drop`. ChannelBridge registers execution
+cleanup immediately after launch, and channel close only requests that existing
+task to terminate the process group, wait for exit/output, and release execution.
+Handler and transport destructors keep synchronous cancellation/FD fallbacks.
+
+A reverse-listener cancel stops accepting and waits for pending channel opens;
+its acknowledgement permits rebinding without cancelling established relays.
+Unix helper listener acknowledgement remains separate from helper exit, with
+the existing 30-second relay drain bound. Whole-connection shutdown stops its
+listeners and relays and waits for helper cleanup too.
+
+The service closes its connection tracker only after the accept task ends; each
+connection closes its task tracker only after the russh handler exits. Tracked
+parents register any cleanup children before exiting, so the tracker cannot
+briefly become empty while another producer can still add work. Service stop
+may abort a timed-out accept task, but never its connection supervisors. A
+cancelled or timed-out stop retains the old generation in manager state; later
+Disable/Configure waits for that same cleanup before a replacement can bind.
+
+
 ### Jailer (Security Isolation)
 
 Defense-in-depth security layer that sandboxes the shim process, inspired by Firecracker's jailer.

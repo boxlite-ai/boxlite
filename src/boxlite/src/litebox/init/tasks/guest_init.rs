@@ -11,6 +11,7 @@ use crate::net::constants::{GATEWAY_IP, GUEST_CIDR, GUEST_INTERFACE};
 use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
 use crate::portal::interfaces::{ContainerInitConfig, GuestInitConfig, NetworkInitConfig};
+use crate::runtime::ssh::{SshConfig, SshStore};
 use async_trait::async_trait;
 use boxlite_shared::ContainerDevice;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -40,6 +41,7 @@ pub struct GuestInitTask;
 struct GuestBootstrapConfig {
     guest: GuestInitConfig,
     container: ContainerInitConfig,
+    ssh: Option<(SshConfig, SshStore, crate::net::socket_path::BoxSockets)>,
 }
 
 #[async_trait]
@@ -47,6 +49,30 @@ impl PipelineTask<InitCtx> for GuestInitTask {
     async fn run(self: Box<Self>, ctx: InitCtx) -> BoxliteResult<()> {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
+
+        let (store, network_enabled, sockets) = {
+            let ctx = ctx.lock().await;
+            (
+                ctx.runtime.ssh_store(&ctx.config.id),
+                ctx.config.options.advanced.security.network_enabled,
+                ctx.config.sockets(),
+            )
+        };
+        let ssh = match store.load().await? {
+            Some(mut config) if config.enabled => {
+                if !network_enabled && config.tcp_listen_address.is_some() {
+                    return Err(BoxliteError::InvalidArgument(
+                        "TCP SSH requires security.network_enabled=true".into(),
+                    ));
+                }
+                if config.host_private_key.is_none() {
+                    config = store.save(config).await?;
+                }
+                Some((config, store, sockets))
+            }
+            Some(_) => None,
+            None => None,
+        };
 
         let (guest_session, volume_mgr, rootfs_init, container_mounts, bootstrap) = {
             let mut ctx = ctx.lock().await;
@@ -81,6 +107,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             };
             let advanced = ctx.config.options.advanced.resolve_container_security()?;
             let bootstrap = GuestBootstrapConfig {
+                ssh,
                 guest: GuestInitConfig {
                     volumes: volume_mgr.build_guest_mounts(),
                     network,
@@ -166,6 +193,10 @@ async fn run_guest_init(
     let mut container_interface = guest_session.container().await?;
     let returned_id = container_interface.init(bootstrap.container).await?;
     tracing::info!(container_id = %returned_id, "Container created");
+
+    if let Some((config, store, sockets)) = bootstrap.ssh {
+        store.apply(&sockets, &guest_session, config).await?;
+    }
 
     // Running init is deliberately *not* done here. The container is created and
     // left standing at the gate; the host runs it with `Container.Start` after a

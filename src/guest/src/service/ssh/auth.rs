@@ -1,48 +1,25 @@
-//! OpenSSH user-certificate authorization for the embedded server.
+//! Authorization policy shared by every SSH authentication method.
 
+use boxlite_shared::ssh::SshKeySet;
+use boxlite_shared::{BoxliteError, BoxliteResult};
 use russh::keys::ssh_key::certificate::CertType;
-use russh::keys::{Algorithm, Certificate, HashAlg, PublicKey};
+use russh::keys::{Certificate, PublicKey};
 
 pub(crate) const SSH_USER: &str = "root";
 
-#[derive(Debug)]
-pub(crate) enum AuthorizerError {
-    InvalidCaKey(String),
-    UnsupportedCaAlgorithm(Algorithm),
-    InvalidPrincipal,
-}
-
-impl std::fmt::Display for AuthorizerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidCaKey(error) => write!(f, "invalid SSH CA public key: {error}"),
-            Self::UnsupportedCaAlgorithm(algorithm) => write!(
-                f,
-                "unsupported SSH CA algorithm {algorithm}; only Ed25519 is enabled"
-            ),
-            Self::InvalidPrincipal => write!(
-                f,
-                "SSH certificate principal must be a non-empty URL-safe identifier"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for AuthorizerError {}
-
 #[derive(Clone)]
-pub(crate) struct CertificateAuthorizer {
-    ca_fingerprint: russh::keys::ssh_key::Fingerprint,
-    principal: String,
+pub(crate) enum SshAuthorizer {
+    Keys { keys: SshKeySet, principal: String },
+    NoAuth,
 }
 
-/// Capabilities granted by the authenticated OpenSSH user certificate.
+/// Capabilities granted to a successfully authenticated connection.
 ///
 /// OpenSSH certificates are deny-by-default: a capability is available only
 /// when its `permit-*` extension is present. Server-wide policy is applied on
 /// top of this identity at the request handler.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CertificatePermissions {
+pub(crate) struct SshPermissions {
     pub(crate) pty: bool,
     pub(crate) port_forwarding: bool,
     pub(crate) agent_forwarding: bool,
@@ -51,31 +28,49 @@ pub(crate) struct CertificatePermissions {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthorizedIdentity {
-    pub(crate) permissions: CertificatePermissions,
+    pub(crate) permissions: SshPermissions,
 }
 
-impl CertificateAuthorizer {
+impl SshAuthorizer {
     pub(crate) fn new(
-        ca_public_key: &str,
+        ca_public_keys: &[String],
+        public_keys: &[String],
         principal: impl Into<String>,
-    ) -> Result<Self, AuthorizerError> {
+    ) -> BoxliteResult<Self> {
         let principal = principal.into();
-        if !is_valid_principal(&principal) {
-            return Err(AuthorizerError::InvalidPrincipal);
-        }
-
-        let ca_public_key = PublicKey::from_openssh(ca_public_key.trim())
-            .map_err(|error| AuthorizerError::InvalidCaKey(error.to_string()))?;
-        if ca_public_key.algorithm() != Algorithm::Ed25519 {
-            return Err(AuthorizerError::UnsupportedCaAlgorithm(
-                ca_public_key.algorithm(),
+        if !ca_public_keys.is_empty() && !is_valid_principal(&principal) {
+            return Err(BoxliteError::InvalidArgument(
+                "SSH certificate principal must be a non-empty URL-safe identifier".into(),
             ));
         }
-
-        Ok(Self {
-            ca_fingerprint: ca_public_key.fingerprint(HashAlg::Sha256),
+        Ok(Self::Keys {
+            keys: SshKeySet::parse(ca_public_keys, public_keys)?,
             principal,
         })
+    }
+
+    pub(crate) fn method(&self) -> russh::MethodKind {
+        match self {
+            Self::Keys { .. } => russh::MethodKind::PublicKey,
+            Self::NoAuth => russh::MethodKind::None,
+        }
+    }
+
+    pub(crate) fn authorize_none(&self, user: &str) -> Option<AuthorizedIdentity> {
+        (user == SSH_USER && matches!(self, Self::NoAuth))
+            .then_some(AuthorizedIdentity::unrestricted())
+    }
+
+    pub(crate) fn authorize_publickey(
+        &self,
+        user: &str,
+        key: &PublicKey,
+    ) -> Option<AuthorizedIdentity> {
+        let Self::Keys { keys, .. } = self else {
+            return None;
+        };
+        (user == SSH_USER && keys.public_keys.contains(key.key_data()))
+            .then_some(AuthorizedIdentity::unrestricted())
     }
 
     /// Validate every security-relevant certificate field that russh leaves
@@ -85,13 +80,16 @@ impl CertificateAuthorizer {
         user: &str,
         certificate: &Certificate,
     ) -> Option<AuthorizedIdentity> {
+        let Self::Keys { keys, principal } = self else {
+            return None;
+        };
         if user != SSH_USER
             || certificate.cert_type() != CertType::User
-            || certificate.validate([&self.ca_fingerprint]).is_err()
+            || certificate.validate(&keys.ca_fingerprints).is_err()
             || !certificate
                 .valid_principals()
                 .iter()
-                .any(|principal| principal == &self.principal)
+                .any(|candidate| candidate == principal)
             || !certificate.critical_options().is_empty()
         {
             return None;
@@ -99,7 +97,7 @@ impl CertificateAuthorizer {
 
         let extensions = certificate.extensions();
         Some(AuthorizedIdentity {
-            permissions: CertificatePermissions {
+            permissions: SshPermissions {
                 pty: extensions.contains_key("permit-pty"),
                 port_forwarding: extensions.contains_key("permit-port-forwarding"),
                 agent_forwarding: extensions.contains_key("permit-agent-forwarding"),
@@ -114,6 +112,25 @@ impl CertificateAuthorizer {
     }
 }
 
+impl AuthorizedIdentity {
+    fn unrestricted() -> Self {
+        Self {
+            permissions: SshPermissions {
+                pty: true,
+                port_forwarding: true,
+                // Agent and X11 forwarding remain unsupported by server policy.
+                agent_forwarding: false,
+                x11_forwarding: false,
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+pub(super) fn certificate_authorizer(ca: &str, principal: &str) -> BoxliteResult<SshAuthorizer> {
+    SshAuthorizer::new(&[ca.to_owned()], &[], principal)
+}
+
 fn is_valid_principal(principal: &str) -> bool {
     !principal.is_empty()
         && principal.len() <= 128
@@ -126,7 +143,7 @@ fn is_valid_principal(principal: &str) -> bool {
 mod tests {
     use super::*;
     use russh::keys::ssh_key::certificate::Builder;
-    use russh::keys::{Algorithm, EcdsaCurve, PrivateKey};
+    use russh::keys::{Algorithm, EcdsaCurve, HashAlg, PrivateKey};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn private_key() -> PrivateKey {
@@ -167,23 +184,25 @@ mod tests {
 
     #[test]
     fn parses_a_ca_public_key_without_retaining_its_body() {
-        let authorizer = CertificateAuthorizer::new(&public_key(), "box_123").unwrap();
-        assert_eq!(authorizer.principal, "box_123");
+        let authorizer = certificate_authorizer(&public_key(), "box_123").unwrap();
+        assert!(
+            matches!(authorizer, SshAuthorizer::Keys { principal, .. } if principal == "box_123")
+        );
     }
 
     #[test]
     fn rejects_invalid_ca_and_unscoped_principal() {
         assert!(matches!(
-            CertificateAuthorizer::new("not a key", "box_123"),
-            Err(AuthorizerError::InvalidCaKey(_))
+            certificate_authorizer("not a key", "box_123"),
+            Err(BoxliteError::InvalidArgument(_))
         ));
         assert!(matches!(
-            CertificateAuthorizer::new(&public_key(), ""),
-            Err(AuthorizerError::InvalidPrincipal)
+            certificate_authorizer(&public_key(), ""),
+            Err(BoxliteError::InvalidArgument(_))
         ));
         assert!(matches!(
-            CertificateAuthorizer::new(&public_key(), "../other-box"),
-            Err(AuthorizerError::InvalidPrincipal)
+            certificate_authorizer(&public_key(), "../other-box"),
+            Err(BoxliteError::InvalidArgument(_))
         ));
 
         let mut rng = russh::keys::key::safe_rng();
@@ -198,8 +217,8 @@ mod tests {
         .to_openssh()
         .unwrap();
         assert!(matches!(
-            CertificateAuthorizer::new(&ecdsa_ca, "box_123"),
-            Err(AuthorizerError::UnsupportedCaAlgorithm(_))
+            certificate_authorizer(&ecdsa_ca, "box_123"),
+            Err(BoxliteError::InvalidArgument(_))
         ));
     }
 
@@ -208,7 +227,7 @@ mod tests {
         let ca_key = private_key();
         let other_ca = private_key();
         let ca_public_key = ca_key.public_key().to_openssh().unwrap();
-        let authorizer = CertificateAuthorizer::new(&ca_public_key, "box_123").unwrap();
+        let authorizer = certificate_authorizer(&ca_public_key, "box_123").unwrap();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -260,7 +279,7 @@ mod tests {
     fn rejects_expired_certificates_and_unknown_critical_options() {
         let ca_key = private_key();
         let ca_public_key = ca_key.public_key().to_openssh().unwrap();
-        let authorizer = CertificateAuthorizer::new(&ca_public_key, "box_123").unwrap();
+        let authorizer = certificate_authorizer(&ca_public_key, "box_123").unwrap();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -284,8 +303,7 @@ mod tests {
     fn certificate_extensions_grant_only_named_capabilities() {
         let ca_key = private_key();
         let authorizer =
-            CertificateAuthorizer::new(&ca_key.public_key().to_openssh().unwrap(), "box_123")
-                .unwrap();
+            certificate_authorizer(&ca_key.public_key().to_openssh().unwrap(), "box_123").unwrap();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -304,7 +322,7 @@ mod tests {
         let identity = authorizer.authorize("root", &certificate).unwrap();
         assert_eq!(
             identity.permissions,
-            CertificatePermissions {
+            SshPermissions {
                 pty: true,
                 port_forwarding: true,
                 agent_forwarding: false,
@@ -317,8 +335,7 @@ mod tests {
     fn accepts_an_rsa_subject_certificate_signed_by_the_ed25519_ca() {
         let ca_key = private_key();
         let authorizer =
-            CertificateAuthorizer::new(&ca_key.public_key().to_openssh().unwrap(), "box_123")
-                .unwrap();
+            certificate_authorizer(&ca_key.public_key().to_openssh().unwrap(), "box_123").unwrap();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()

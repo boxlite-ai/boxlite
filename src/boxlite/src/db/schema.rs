@@ -7,7 +7,7 @@
 //! Each table has queryable columns for efficient filtering + JSON blob for full data.
 
 /// Current schema version.
-pub const SCHEMA_VERSION: i32 = 10;
+pub const SCHEMA_VERSION: i32 = 11;
 
 /// Schema version tracking table.
 pub const SCHEMA_VERSION_TABLE: &str = r#"
@@ -33,6 +33,15 @@ CREATE TABLE IF NOT EXISTS box_config (
 
 CREATE INDEX IF NOT EXISTS idx_box_config_created_at ON box_config(created_at);
 CREATE INDEX IF NOT EXISTS idx_box_config_name ON box_config(name);
+"#;
+
+/// Independent SSH configuration and host identity (v11).
+pub const SSH_CONFIG_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS ssh_config (
+    box_id TEXT PRIMARY KEY NOT NULL,
+    json TEXT NOT NULL,
+    FOREIGN KEY (box_id) REFERENCES box_config(id) ON DELETE CASCADE
+);
 "#;
 
 /// BoxState table schema.
@@ -155,6 +164,7 @@ pub fn all_schemas() -> Vec<&'static str> {
     vec![
         SCHEMA_VERSION_TABLE,
         BOX_CONFIG_TABLE,
+        SSH_CONFIG_TABLE,
         BOX_STATE_TABLE,
         ALIVE_TABLE,
         IMAGE_INDEX_TABLE,

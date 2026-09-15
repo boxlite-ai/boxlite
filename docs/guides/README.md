@@ -4,6 +4,10 @@
 
 - [AutoStop、AutoResume 与 AutoDelete](./auto-stop-resume.md)
 
+## Networking
+
+- [SSH through the shim from the local Rust runtime](./ssh.md)
+
 ## Building from Source
 
 ### Prerequisites

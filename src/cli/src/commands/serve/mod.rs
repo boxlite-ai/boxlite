@@ -2775,6 +2775,20 @@ mod tests {
     }
 
     #[test]
+    fn create_box_request_rejects_ssh_configuration() {
+        for auth in [
+            serde_json::json!({"type": "no_auth"}),
+            serde_json::json!({"type": "keys", "public_keys": []}),
+        ] {
+            let body = serde_json::json!({"image": "alpine:latest", "ssh": {"listen_address": "0.0.0.0:2222", "auth": auth}});
+            let error = serde_json::from_value::<super::types::CreateBoxRequest>(body)
+                .err()
+                .unwrap();
+            assert!(error.to_string().contains("unknown field `ssh`"));
+        }
+    }
+
+    #[test]
     fn create_box_request_rejects_client_supplied_security_preset() {
         // A malicious or careless client sends `security: "development"`
         // hoping to disable the jailer. `deny_unknown_fields` turns

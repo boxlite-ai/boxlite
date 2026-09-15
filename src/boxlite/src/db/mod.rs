@@ -12,6 +12,7 @@ mod images;
 pub(crate) mod migration;
 mod schema;
 pub(crate) mod snapshot;
+mod ssh;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -26,6 +27,7 @@ pub(crate) use base_disk::BaseDiskStore;
 pub use boxes::BoxStore;
 pub use images::{CachedImage, ImageIndexStore};
 pub(crate) use snapshot::SnapshotStore;
+pub(crate) use ssh::SshConfigStore;
 
 /// Helper macro to convert rusqlite errors to BoxliteError.
 macro_rules! db_err {
@@ -51,9 +53,7 @@ impl Database {
     /// `db_path` is the path to the SQLite file. The `home_dir` (e.g., `~/.boxlite`)
     /// is derived from the DB path for migrations that need filesystem access.
     pub fn open(db_path: &Path) -> BoxliteResult<Self> {
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        Self::protect_files(db_path)?;
 
         let conn = db_err!(Connection::open(db_path))?;
 
@@ -72,6 +72,7 @@ impl Database {
         ))?;
 
         Self::init_schema(&conn, db_path)?;
+        Self::protect_files(db_path)?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -81,6 +82,52 @@ impl Database {
     /// Acquire the database connection.
     pub(crate) fn conn(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock()
+    }
+
+    fn protect_files(db_path: &Path) -> BoxliteResult<()> {
+        use std::fs::{self, OpenOptions};
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+
+        let protect = || -> std::io::Result<()> {
+            if let Some(parent) = db_path.parent().filter(|path| !path.as_os_str().is_empty()) {
+                fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(parent)?;
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+            }
+            // Restrict the database before SQLite creates journals: its Unix VFS
+            // derives new WAL/SHM permissions from the database's mode.
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(db_path)?;
+            if !file.metadata()?.is_file() {
+                return Err(std::io::Error::other("database is not a regular file"));
+            }
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+            for suffix in ["-wal", "-shm", "-journal"] {
+                let mut name = db_path.as_os_str().to_owned();
+                name.push(suffix);
+                match OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                    .open(Path::new(&name))
+                {
+                    Ok(file) => file.set_permissions(fs::Permissions::from_mode(0o600))?,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(())
+        };
+        protect().map_err(|error| {
+            BoxliteError::Storage(format!("protect database {}: {error}", db_path.display()))
+        })
     }
 
     /// Initialize database schema.
@@ -163,6 +210,30 @@ impl Database {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn ssh_sqlite_schema_and_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = TempDir::new().unwrap();
+        let path = home.path().join("db/boxlite.db");
+        let db = Database::open(&path).unwrap();
+        let version: i32 = db
+            .conn()
+            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 11, "SSH SQLite schema was not installed");
+        for (path, mode) in [
+            (path.parent().unwrap().to_owned(), 0o700),
+            (path.clone(), 0o600),
+            (path.with_file_name("boxlite.db-wal"), 0o600),
+            (path.with_file_name("boxlite.db-shm"), 0o600),
+        ] {
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+        }
+    }
 
     #[test]
     fn test_db_open() {

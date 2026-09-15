@@ -6,7 +6,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
@@ -130,6 +130,9 @@ pub(crate) struct BoxImpl {
     /// Event listeners (from runtime options).
     pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
 
+    // Configured boxes retain their state on stop, so state alone cannot guard bookkeeping.
+    stop_completed: AtomicBool,
+
     // --- Lazily initialized ---
     live: OnceCell<LiveState>,
 
@@ -186,6 +189,7 @@ impl BoxImpl {
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
             event_listeners: Vec::new(), // populated from runtime options
+            stop_completed: AtomicBool::new(false),
             live: OnceCell::new(),
             watcher: std::sync::OnceLock::new(),
             container_start: Arc::new(OnceCell::new()),
@@ -282,7 +286,7 @@ impl BoxImpl {
         // Check if already shutdown (via stop() or runtime shutdown)
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
-                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+                "This box handle is spent. Use runtime.get() to get a fresh handle.".into(),
             ));
         }
 
@@ -448,7 +452,7 @@ impl BoxImpl {
         // Check if box is stopped before proceeding (via stop() or runtime shutdown)
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
-                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+                "This box handle is spent. Use runtime.get() to get a fresh handle.".into(),
             ));
         }
         self.ensure_usable_without_rerunning_main("exec")?;
@@ -604,7 +608,7 @@ impl BoxImpl {
 
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
-                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+                "This box handle is spent. Use runtime.get() to get a fresh handle.".into(),
             ));
         }
 
@@ -650,7 +654,7 @@ impl BoxImpl {
         // Check if box is stopped before proceeding (via stop() or runtime shutdown)
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
-                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+                "This box handle is spent. Use runtime.get() to get a fresh handle.".into(),
             ));
         }
         self.ensure_usable_without_rerunning_main("metrics")?;
@@ -674,13 +678,19 @@ impl BoxImpl {
     }
 
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
+        let ssh_lock = self.runtime.ssh_locks.get(&self.config.id);
+        let _ssh_guard = ssh_lock.updates.lock().await;
+        // A cancelled configure may still be committing on the blocking pool.
+        ssh_lock.drain_io().await;
         let t0 = Instant::now();
 
         // Early exit if already stopped (idempotent, prevents double-counting)
         // Note: We check status, not shutdown_token, because the token may be cancelled
         // by runtime.shutdown() before stop() is called on each box.
-        if self.state.read().status == BoxStatus::Stopped {
-            return Ok(());
+        if self.state.read().status == BoxStatus::Stopped
+            || self.stop_completed.load(Ordering::Relaxed)
+        {
+            return self.cleanup_after_stop().await;
         }
 
         // Abort the box watcher (if armed) so it does not run past stop().
@@ -709,7 +719,7 @@ impl BoxImpl {
         // through the restart pipeline and spawn a new VM — exactly what
         // stop() must NOT do.
         let should_attach = self.state.read().status == BoxStatus::Running;
-        if should_attach && let Ok(live) = self.ensure_booted().await {
+        if should_attach && let Ok(live) = self.ensure_booted_locked().await {
             // Recovered boxes lazy-attach here via vmm_attach (now
             // ProcessIdentity-gated). Live boxes hit the cached LiveState.
             // Either way the teardown is identical:
@@ -793,6 +803,7 @@ impl BoxImpl {
             }
         }
 
+        // Complete VM bookkeeping before fallible, retryable auto-removal.
         // Invalidate cache so new handles get fresh BoxImpl
         self.runtime
             .invalidate_box_impl(self.id(), self.config.name.as_deref());
@@ -813,11 +824,24 @@ impl BoxImpl {
             .boxes_stopped
             .fetch_add(1, Ordering::Relaxed);
 
-        // Apply the configured remove-on-stop policy.
-        if self.config.options.removes_on_stop() {
-            self.runtime.remove_box(self.id(), false)?;
-        }
+        self.stop_completed.store(true, Ordering::Relaxed);
+        self.cleanup_after_stop().await
+    }
 
+    async fn cleanup_after_stop(&self) -> BoxliteResult<()> {
+        // A spent handle can outlive a replacement VM with the same box ID.
+        // Lifecycle coordination protects this check through cleanup/removal.
+        if let Some((_, state)) = self.runtime.box_manager.box_by_id(self.id())?
+            && (state.status.is_active() || state.pid.is_some())
+        {
+            return Ok(());
+        }
+        if self.config.options.removes_on_stop() {
+            match self.runtime.remove_box_locked(self.id(), false).await {
+                Ok(()) | Err(BoxliteError::NotFound(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
         Ok(())
     }
 
@@ -850,7 +874,7 @@ impl BoxImpl {
         // Check if box is stopped before proceeding
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
-                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+                "This box handle is spent. Use runtime.get() to get a fresh handle.".into(),
             ));
         }
         self.ensure_usable_without_rerunning_main("copy into")?;
@@ -929,7 +953,7 @@ impl BoxImpl {
         // Check if box is stopped before proceeding
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
-                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+                "This box handle is spent. Use runtime.get() to get a fresh handle.".into(),
             ));
         }
         self.ensure_usable_without_rerunning_main("copy out")?;
@@ -1008,7 +1032,7 @@ impl BoxImpl {
     {
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
-                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+                "This box handle is spent. Use runtime.get() to get a fresh handle.".into(),
             ));
         }
         self.ensure_usable_without_rerunning_main("copy into")?;
@@ -1049,7 +1073,7 @@ impl BoxImpl {
     ) -> BoxliteResult<(boxlite_shared::BoxByteStream, CopySourceKind)> {
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
-                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+                "This box handle is spent. Use runtime.get() to get a fresh handle.".into(),
             ));
         }
         self.ensure_usable_without_rerunning_main("copy out")?;
@@ -1100,7 +1124,44 @@ impl BoxImpl {
     /// booting it is the restart. Only an *initialized* cell on a box that is no
     /// longer Running means the VM behind it is dead.
     async fn ensure_booted(&self) -> BoxliteResult<&LiveState> {
-        if self.live.initialized() && self.state.read().status != BoxStatus::Running {
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "This box handle is spent. Use runtime.get() to get a fresh handle.".into(),
+            ));
+        }
+        if let Some(live) = self.initialized_live_state()? {
+            return Ok(live);
+        }
+
+        let ssh_lock = self.runtime.ssh_locks.get(&self.config.id);
+        let _ssh_guard = ssh_lock.updates.lock().await;
+        // Cancelled removal can keep running on the blocking pool.
+        ssh_lock.drain_io().await;
+        // stop() may have invalidated this handle while boot waited for the lock.
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "This box handle is spent. Use runtime.get() to get a fresh handle.".into(),
+            ));
+        }
+        if !self.runtime.box_manager.has_box(&self.config.id)? {
+            return Err(BoxliteError::NotFound(format!("box {}", self.config.id)));
+        }
+        self.ensure_booted_locked().await
+    }
+
+    /// Caller holds the SSH lifecycle lock through OnceCell publication.
+    async fn ensure_booted_locked(&self) -> BoxliteResult<&LiveState> {
+        if let Some(live) = self.initialized_live_state()? {
+            return Ok(live);
+        }
+        self.live.get_or_try_init(|| self.init_live_state()).await
+    }
+
+    fn initialized_live_state(&self) -> BoxliteResult<Option<&LiveState>> {
+        let Some(live) = self.live.get() else {
+            return Ok(None);
+        };
+        if self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
                 "Box {} is no longer running and this handle is spent — it still holds the \
                  stopped VM, and cannot boot another. Drop it and call runtime.get() for a \
@@ -1109,8 +1170,21 @@ impl BoxImpl {
                 self.config.id
             )));
         }
+        Ok(Some(live))
+    }
 
-        self.live.get_or_try_init(|| self.init_live_state()).await
+    /// Obtain the current guest channel without booting or starting a container.
+    pub(crate) fn ssh_session(&self) -> Option<crate::portal::GuestSession> {
+        if !matches!(
+            self.state.read().status,
+            BoxStatus::Running | BoxStatus::Paused
+        ) {
+            return None;
+        }
+        Some(match self.live.get() {
+            Some(live) => live.guest_session.clone(),
+            None => crate::portal::GuestSession::new(self.config.transport()),
+        })
     }
 
     /// Run the container's init exactly once. Booting only creates the container;
@@ -1897,6 +1971,247 @@ mod tests {
         })
         .await
         .expect("background Container.Start task did not finish");
+    }
+
+    #[tokio::test]
+    async fn ssh_coordination_does_not_block_initialized_metrics() {
+        let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        fixture.box_impl.container_start.set(()).unwrap();
+        let coordinator = fixture
+            .box_impl
+            .runtime
+            .ssh_locks
+            .get(fixture.box_impl.id());
+        let _guard = coordinator.updates.lock().await;
+
+        let mut metrics = Box::pin(fixture.box_impl.metrics());
+        assert!(
+            matches!(futures::poll!(&mut metrics), std::task::Poll::Ready(Ok(_))),
+            "metrics() waited for SSH coordination despite an initialized running VM"
+        );
+    }
+
+    #[tokio::test]
+    async fn ssh_coordination_does_not_delay_cancelled_handle_rejection() {
+        let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        fixture.box_impl.shutdown_token.cancel();
+        let coordinator = fixture
+            .box_impl
+            .runtime
+            .ssh_locks
+            .get(fixture.box_impl.id());
+        let _guard = coordinator.updates.lock().await;
+
+        let mut boot = Box::pin(fixture.box_impl.ensure_booted());
+        assert!(
+            matches!(
+                futures::poll!(&mut boot),
+                std::task::Poll::Ready(Err(BoxliteError::Stopped(_)))
+            ),
+            "cancelled initialized handles must be rejected before SSH coordination"
+        );
+    }
+
+    #[tokio::test]
+    async fn ssh_coordination_does_not_delay_stopped_handle_rejection() {
+        let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        fixture.box_impl.state.write().status = BoxStatus::Stopped;
+        let coordinator = fixture
+            .box_impl
+            .runtime
+            .ssh_locks
+            .get(fixture.box_impl.id());
+        let _guard = coordinator.updates.lock().await;
+
+        let mut boot = Box::pin(fixture.box_impl.ensure_booted());
+        assert!(
+            matches!(
+                futures::poll!(&mut boot),
+                std::task::Poll::Ready(Err(BoxliteError::Stopped(_)))
+            ),
+            "stopped initialized handles must be rejected before SSH coordination"
+        );
+    }
+
+    #[tokio::test]
+    async fn ssh_coordination_still_serializes_uninitialized_start() {
+        let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        Arc::get_mut(&mut fixture.box_impl).unwrap().live.take();
+        // The boot pipeline must not inspect its inputs until SSH releases the lock.
+        fixture.box_impl.state.write().lock_id = None;
+        let coordinator = fixture
+            .box_impl
+            .runtime
+            .ssh_locks
+            .get(fixture.box_impl.id());
+        let guard = coordinator.updates.lock().await;
+        let mut start = Box::pin(fixture.box_impl.start());
+        assert!(futures::poll!(&mut start).is_pending());
+
+        drop(guard);
+        let result = start.await;
+        assert!(
+            matches!(&result, Err(BoxliteError::Internal(error)) if error.contains("missing lock_id")),
+            "start did not enter initialization after SSH released coordination: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ssh_uninitialized_start_rejects_deleted_database_record() {
+        let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        Arc::get_mut(&mut fixture.box_impl).unwrap().live.take();
+        fixture.box_impl.state.write().lock_id = None;
+        fixture
+            .box_impl
+            .runtime
+            .box_manager
+            .remove_box(fixture.box_impl.id())
+            .unwrap();
+
+        let result = fixture.box_impl.start().await;
+        assert!(
+            matches!(result, Err(BoxliteError::NotFound(_))),
+            "deleted boxes must be rejected before boot inspects stale initialization inputs: {result:?}"
+        );
+    }
+
+    async fn cached_running_box_for_remove_test() -> StartFixture {
+        let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        let cached = fixture
+            .box_impl
+            .runtime
+            .get(fixture.box_impl.id().as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .box_backend
+            .as_any_arc()
+            .downcast::<BoxImpl>()
+            .unwrap_or_else(|_| panic!("test runtime returned a non-local box"));
+        let live = Arc::get_mut(&mut fixture.box_impl)
+            .unwrap()
+            .live
+            .take()
+            .unwrap();
+        assert!(cached.live.set(live).is_ok());
+        cached.container_start.set(()).unwrap();
+        fixture.box_impl = cached;
+        fixture
+    }
+
+    #[tokio::test]
+    async fn rejected_remove_preserves_initialized_handle() {
+        use crate::runtime::backend::RuntimeBackend;
+        use crate::runtime::rt_impl::LocalRuntime;
+
+        let fixture = cached_running_box_for_remove_test().await;
+        let runtime = LocalRuntime(fixture.box_impl.runtime.clone());
+        let result = runtime.remove(fixture.box_impl.id().as_str(), false).await;
+        assert!(matches!(result, Err(BoxliteError::InvalidState(_))));
+        assert!(!fixture.box_impl.shutdown_token.is_cancelled());
+        fixture.box_impl.metrics().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ssh_force_remove_invalidates_initialized_handle() {
+        use crate::runtime::backend::RuntimeBackend;
+        use crate::runtime::rt_impl::LocalRuntime;
+
+        let fixture = cached_running_box_for_remove_test().await;
+        let runtime = LocalRuntime(fixture.box_impl.runtime.clone());
+        runtime
+            .remove(fixture.box_impl.id().as_str(), true)
+            .await
+            .unwrap();
+        assert!(
+            fixture.box_impl.shutdown_token.is_cancelled(),
+            "successful removal left the cached running handle valid"
+        );
+        assert!(matches!(
+            fixture.box_impl.metrics().await,
+            Err(BoxliteError::Stopped(_))
+        ));
+        assert!(matches!(
+            fixture.box_impl.start().await,
+            Err(BoxliteError::Stopped(_))
+        ));
+        assert!(
+            runtime
+                .get(fixture.box_impl.id().as_str())
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn ssh_start_queued_behind_remove_cannot_boot_deleted_box() {
+        use crate::runtime::backend::RuntimeBackend;
+        use crate::runtime::rt_impl::LocalRuntime;
+
+        let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        let runtime = LocalRuntime(fixture.box_impl.runtime.clone());
+        let old = runtime
+            .get(fixture.box_impl.id().as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .box_backend
+            .as_any_arc()
+            .downcast::<BoxImpl>()
+            .unwrap_or_else(|_| panic!("test runtime returned a non-local box"));
+        assert!(!old.live.initialized());
+        std::fs::create_dir_all(&old.config.box_home).unwrap();
+        let coordinator = old.runtime.ssh_locks.get(old.id());
+        let guard = coordinator.updates.lock().await;
+        let mut remove = Box::pin(runtime.remove(old.id().as_str(), true));
+        assert!(
+            futures::poll!(&mut remove).is_pending(),
+            "remove bypassed SSH coordination before the old handle queued for boot"
+        );
+        let mut start = Box::pin(old.start());
+        assert!(futures::poll!(&mut start).is_pending());
+
+        drop(guard);
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            remove.await.unwrap();
+            start.await
+        })
+        .await
+        .expect("queued removal and startup did not release SSH coordination");
+        assert!(
+            matches!(
+                result,
+                Err(BoxliteError::Stopped(_) | BoxliteError::NotFound(_))
+            ),
+            "queued old handle attempted to boot after deletion: {result:?}"
+        );
+        assert!(!old.live.initialized());
+        assert!(!old.runtime.box_manager.has_box(old.id()).unwrap());
+        assert!(!old.config.box_home.exists());
+    }
+
+    #[tokio::test]
+    async fn stop_auto_remove_reuses_ssh_coordination() {
+        let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        let box_impl = Arc::get_mut(&mut fixture.box_impl).unwrap();
+        box_impl.config.options.auto_delete = Some(1);
+        box_impl.config.options.detach = false;
+        std::fs::create_dir_all(&box_impl.config.box_home).unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), fixture.box_impl.stop())
+            .await
+            .expect("stop auto-removal tried to acquire its SSH lock twice")
+            .unwrap();
+        assert!(
+            !fixture
+                .box_impl
+                .runtime
+                .box_manager
+                .has_box(fixture.box_impl.id())
+                .unwrap()
+        );
+        assert!(!fixture.box_impl.config.box_home.exists());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

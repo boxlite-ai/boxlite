@@ -348,14 +348,10 @@ impl VmmController for ShimController {
         let config_json = serde_json::to_string(&serializable_config)
             .map_err(|e| BoxliteError::Engine(format!("Failed to serialize config: {}", e)))?;
 
-        // Clean up stale socket file if it exists (defense in depth)
-        // Only relevant for Unix sockets
-        if let boxlite_shared::BoxTransport::Unix { socket_path } = &config.transport
-            && socket_path.exists()
-        {
-            tracing::warn!("Removing stale Unix socket: {}", socket_path.display());
-            let _ = std::fs::remove_file(socket_path);
-        }
+        // libkrun refuses to register a bridge whose old socket still exists.
+        serializable_config
+            .sockets()?
+            .remove_stale_vsock_listeners()?;
 
         // Spawn Box subprocess with piped stdio
         tracing::info!(

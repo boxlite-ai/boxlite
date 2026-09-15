@@ -30,6 +30,7 @@ pub type BoxByteStream =
 pub mod constants;
 pub mod errors;
 pub mod layout;
+pub mod ssh;
 pub mod tar;
 pub mod transport;
 
@@ -51,6 +52,7 @@ pub use generated::guest_client::GuestClient;
 pub use generated::guest_server::{Guest, GuestServer};
 
 // SSH control service
+pub use generated::ssh_client::SshClient;
 pub use generated::ssh_server::{Ssh, SshServer};
 
 // Execution service
