@@ -341,6 +341,7 @@ test('the dashboard ships only the documented content-addressed Auth0 assets', (
     'IBM-Plex-OFL-d741e57d.txt': 'd741e57d5f865e294df801f96b7b5161a88b211df65887e4358d271c9fc5fb4f',
     'boxlite-black-12c2c991.png': '12c2c991a30c82b4c8cc5b1a2ca4f808add8e2645f82c309693385ef1b687c05',
     'boxlite-light-ec0b1243.png': 'ec0b124340e956a6619e866809e2dad8e5f75e83e10a301c766ecdd81710f8e0',
+    'github-invertocat-white-ccd84c89.svg': 'ccd84c89b1056345608fc3489357f8acc7397e49a3cdc2d418b6c8016911d47b',
     'ibm-plex-mono-400-ba204497.woff2': 'ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350',
   }
   assert.deepEqual(readdirSync(root).sort(), Object.keys(expectedHashes).sort())
