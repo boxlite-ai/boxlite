@@ -155,16 +155,8 @@ impl Sandbox for BwrapSandbox {
         // Replace the command with bwrap-wrapped version.
         *cmd = bwrap_cmd.build(std::path::Path::new(&binary), &args);
 
-        // Add cgroup join as a pre_exec hook (async-signal-safe).
-        if let Some(cgroup_procs) = cgroup::build_cgroup_procs_path(ctx.id) {
-            use std::os::unix::process::CommandExt;
-            unsafe {
-                cmd.pre_exec(move || {
-                    let _ = cgroup::add_self_to_cgroup_raw(&cgroup_procs);
-                    Ok(())
-                });
-            }
-        }
+        // Cgroup join happens in Jailer::post_spawn() after the child PID is
+        // known, so it can warn on failure rather than silently ignoring it.
     }
 
     fn name(&self) -> &'static str {

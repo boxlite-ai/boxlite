@@ -162,6 +162,9 @@ impl<'a> ShimSpawner<'a> {
             BoxliteError::Engine(err_msg)
         })?;
 
+        // 7a. Join child into its cgroup now that the PID is known.
+        jail.post_spawn(child.id());
+
         // 8. Write config to stdin, then close (shim reads until EOF).
         // The child is already spawned and will read from stdin, so this is a
         // producer-consumer pattern via the kernel pipe buffer. For typical
