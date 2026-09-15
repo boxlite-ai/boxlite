@@ -334,6 +334,9 @@ Handle to a running or stopped box.
 
 - `info() -> Awaitable[BoxInfo]`
   Get box metadata (async)
+  - `info.advanced` contains `AdvancedBoxInfo` when the runtime reports the
+    capability, privileged-mode, and nested-virtualization policy used for
+    named-box reuse checks
   - `info.network` contains `NetworkInfo` when network metadata is available
   - When `info.network` is not `None`, `published_ports` is `None` when
     this handle does not know the bindings, `[]` when there are no active
