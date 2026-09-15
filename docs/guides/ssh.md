@@ -248,8 +248,10 @@ the applied state; query `status()` after an application failure.
 The fixed `ssh.sock` belongs to the existing box socket lifecycle. It may remain
 present while SSH is disabled; file existence does not prove guest SSH is
 available. Update and Disable stop the guest service without unlinking the
-bridge. A stopped VM can leave socket files behind; connections are closed. Restart and
-box removal use the existing socket-directory cleanup.
+bridge. Guest shutdown requests SSH session teardown before stopping containers.
+The Unix bridge follows the existing VM process cleanup and is not guaranteed
+to reject connections immediately when `stop()` returns. Restart and box removal
+use the existing socket-directory cleanup.
 No arbitrary external Unix paths are stored or deleted.
 
 Configuration IO retains its per-box coordinator even if its caller is cancelled.
