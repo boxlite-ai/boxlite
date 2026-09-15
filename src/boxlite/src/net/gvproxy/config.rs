@@ -82,7 +82,9 @@ pub struct GvproxyConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capture_file: Option<String>,
 
-    /// Network allowlist for DNS sinkhole filtering.
+    /// Network allowlist. IP and CIDR rules match the destination address;
+    /// hostname rules are matched on the peeked TLS SNI / HTTP Host and dialed
+    /// by name by the gateway. DNS is not filtered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_net: Vec<String>,
 
@@ -341,7 +343,7 @@ impl GvproxyConfig {
         self
     }
 
-    /// Set network allowlist for DNS sinkhole filtering.
+    /// Set the network allowlist (see the `allow_net` field).
     pub fn with_allow_net(mut self, allow_net: Vec<String>) -> Self {
         self.allow_net = allow_net;
         self

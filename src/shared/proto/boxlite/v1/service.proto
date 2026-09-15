@@ -111,7 +111,12 @@ message GuestInitResponse {
   }
 }
 
-message GuestInitSuccess {}
+message GuestInitSuccess {
+  // 1 carried the resolver the guest applied, in an unreleased revision that
+  // guest images may still be cached from. Reserved so reusing the tag cannot
+  // be misparsed by one of them.
+  reserved 1;
+}
 
 message GuestInitError {
   string reason = 1;
@@ -193,6 +198,9 @@ message NetworkInit {
   string interface = 1;        // interface name (e.g., "eth0")
   optional string ip = 2;      // IP address (optional, use DHCP if not set)
   optional string gateway = 3; // gateway address
+  // 4 carried the resolver address, in an unreleased revision that guest
+  // images may still be cached from. Reserved for the same reason.
+  reserved 4;
 }
 
 message PingRequest {}

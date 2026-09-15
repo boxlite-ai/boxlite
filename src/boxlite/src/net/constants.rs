@@ -59,10 +59,6 @@ pub const GATEWAY_MAC_STRING: &str = "5a:94:ef:e4:0c:dd";
 /// Default MTU for the virtual network
 pub const DEFAULT_MTU: u16 = 1500;
 
-/// DNS server IP address (same as gateway)
-/// Containers point to this IP for DNS resolution
-pub const DNS_SERVER_IP: &str = GATEWAY_IP;
-
 /// DNS search domains
 pub const DNS_SEARCH_DOMAINS: &[&str] = &["local"];
 

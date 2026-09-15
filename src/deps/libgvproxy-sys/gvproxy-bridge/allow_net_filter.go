@@ -6,7 +6,9 @@ package main
 // IP/CIDR rules are checked directly against destination IPs, so they apply to
 // both transports. Hostname rules need SNI/Host inspection (forked_tcp.go),
 // which only TCP can do — UDP therefore denies hostname-only allowlists
-// (forked_udp.go).
+// (forked_udp.go). A hostname match authorizes the name alone: the gateway
+// then dials the name itself (egress_dialer.go), so the filter never needs to
+// know which addresses a name has.
 
 import (
 	"net"
@@ -24,9 +26,6 @@ type AllowNetFilter struct {
 	exactHosts       map[string]bool  // "api.openai.com" → true
 	wildcardSuffixes []string         // ".example.com"
 	hasHostnameRules bool
-
-	exactHostIPs      map[string][]net.IP // "api.openai.com" → resolved IPv4 set (egress pin)
-	wildcardSuffixIPs map[string][]net.IP // ".example.com" → resolved IPv4 set (egress pin)
 }
 
 // NewAllowNetFilter parses allow_net rules into IP/CIDR and hostname categories.
@@ -84,15 +83,24 @@ func NewAllowNetFilter(rules []string, internalIPs ...string) *AllowNetFilter {
 
 		// Wildcard: *.example.com
 		if strings.HasPrefix(host, "*.") {
-			suffix := strings.ToLower(host[1:]) // ".example.com"
-			f.wildcardSuffixes = append(f.wildcardSuffixes, suffix)
+			domain := canonicalHostname(host[2:])
+			if domain == "" {
+				logrus.WithField("rule", rule).Warn("allowNet: ignoring malformed wildcard rule")
+				continue
+			}
+			f.wildcardSuffixes = append(f.wildcardSuffixes, "."+domain) // ".example.com"
 			f.hasHostnameRules = true
 			logrus.WithField("wildcard", host).Debug("allowNet: added wildcard")
 			continue
 		}
 
 		// Exact hostname
-		f.exactHosts[strings.ToLower(host)] = true
+		name := canonicalHostname(host)
+		if name == "" {
+			logrus.WithField("rule", rule).Warn("allowNet: ignoring malformed hostname rule")
+			continue
+		}
+		f.exactHosts[name] = true
 		f.hasHostnameRules = true
 		logrus.WithField("hostname", host).Debug("allowNet: added hostname")
 	}
@@ -130,7 +138,7 @@ func (f *AllowNetFilter) MatchesIP(destIP net.IP) bool {
 
 // MatchesHostname checks if hostname is allowed by hostname rules.
 func (f *AllowNetFilter) MatchesHostname(hostname string) bool {
-	hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
+	hostname = canonicalHostname(hostname)
 	if hostname == "" {
 		return false
 	}
@@ -150,49 +158,22 @@ func (f *AllowNetFilter) HasHostnameRules() bool {
 	return f.hasHostnameRules
 }
 
-// SetResolvedHostIPs installs the gateway DNS resolution results for hostname
-// rules, keyed the same way as exactHosts/wildcardSuffixes. The TCP forwarder
-// uses these to pin the dialed IP to the hostname's own resolution.
-func (f *AllowNetFilter) SetResolvedHostIPs(exact, wildcard map[string][]net.IP) {
-	f.exactHostIPs = exact
-	f.wildcardSuffixIPs = wildcard
-}
-
-// AllowHostToIP reports whether hostname is allow-listed AND destIP is one of
-// the IPs the gateway DNS resolved for it (the egress pin). It is the single
-// point that ties the guest-supplied hostname to the dialed IP, closing the
-// domain-fronting decoupling that MatchesHostname alone leaves open. A
-// hostname can be covered by an exact rule and one or more wildcards (or
-// overlapping wildcards), so the check unions across every matching rule:
-// destIP is allowed when any matching rule resolves it, independent of rule
-// order, and fails closed only when none do.
-func (f *AllowNetFilter) AllowHostToIP(hostname string, destIP net.IP) bool {
-	hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
-	if hostname == "" {
-		return false
+// canonicalHostname is the one spelling every hostname comparison uses: rules
+// at parse time, the peeked SNI / Host header, and DNS question names. It
+// lowercases, drops the FQDN trailing dot, and returns "" for anything that is
+// not a name — empty input and IP literals (bare or bracketed). An IP literal
+// in a Host header or SNI must never be treated as a hostname: a hostname
+// grants egress to wherever the name resolves, and a literal would let the
+// guest pick that address itself.
+func canonicalHostname(raw string) string {
+	name := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+	if name == "" {
+		return ""
 	}
-	ip4 := destIP.To4()
-	if ip4 == nil {
-		return false
+	if net.ParseIP(strings.Trim(name, "[]")) != nil {
+		return ""
 	}
-	if f.exactHosts[hostname] && containsIPv4(f.exactHostIPs[hostname], ip4) {
-		return true
-	}
-	for _, suffix := range f.wildcardSuffixes {
-		if strings.HasSuffix(hostname, suffix) && containsIPv4(f.wildcardSuffixIPs[suffix], ip4) {
-			return true
-		}
-	}
-	return false
-}
-
-func containsIPv4(ips []net.IP, target net.IP) bool {
-	for _, ip := range ips {
-		if ip.Equal(target) {
-			return true
-		}
-	}
-	return false
+	return name
 }
 
 func toIPv4Key(ip net.IP) [4]byte {
