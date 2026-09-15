@@ -33,6 +33,7 @@ type Client struct {
 	awsEndpointUrl     string
 	awsAccessKeyId     string
 	awsSecretAccessKey string
+	volumeBackend      string
 	volumeMutexes      map[string]*sync.Mutex
 	volumeMutexesMutex sync.Mutex
 	volumeCleanupMutex sync.Mutex
@@ -53,6 +54,7 @@ type ClientConfig struct {
 	AWSEndpointUrl               string
 	AWSAccessKeyId               string
 	AWSSecretAccessKey           string
+	VolumeStorageBackend         string
 	VolumeCleanupInterval        time.Duration
 	VolumeCleanupDryRun          bool
 	VolumeCleanupExclusionPeriod time.Duration
@@ -195,6 +197,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		awsEndpointUrl:     config.AWSEndpointUrl,
 		awsAccessKeyId:     config.AWSAccessKeyId,
 		awsSecretAccessKey: config.AWSSecretAccessKey,
+		volumeBackend:      config.VolumeStorageBackend,
 		volumeMutexes:      make(map[string]*sync.Mutex),
 		volumeCleanup: volumeCleanupConfig{
 			interval:        config.VolumeCleanupInterval,

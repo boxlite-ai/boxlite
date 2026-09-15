@@ -36,6 +36,7 @@ type Config struct {
 	AWSAccessKeyId                     string        `envconfig:"AWS_ACCESS_KEY_ID"`
 	AWSSecretAccessKey                 string        `envconfig:"AWS_SECRET_ACCESS_KEY"`
 	AWSDefaultBucket                   string        `envconfig:"AWS_DEFAULT_BUCKET"`
+	VolumeStorageBackend               string        `envconfig:"VOLUME_STORAGE_BACKEND" default:"s3" validate:"oneof=s3 gcs"`
 	ResourceLimitsDisabled             bool          `envconfig:"RESOURCE_LIMITS_DISABLED"`
 	BoxStartTimeoutSec                 int           `envconfig:"BOX_START_TIMEOUT_SEC"`
 	UseSnapshotEntrypoint              bool          `envconfig:"USE_SNAPSHOT_ENTRYPOINT"`

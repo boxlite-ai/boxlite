@@ -29,6 +29,7 @@ import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxRepository } from '../repositories/box.repository'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { setTimeout as sleep } from 'timers/promises'
+import { isVolumeStorageConfigured } from '../stores/volume-bucket.store'
 
 // Shape Postgres accepts for a `uuid` column. Used to keep plain names out of
 // an id predicate, not to validate ids - the database is the authority.
@@ -48,7 +49,7 @@ export class VolumeService {
   ) {}
 
   async create(organization: Organization, createVolumeDto: CreateVolumeDto): Promise<Volume> {
-    if (!this.configService.get('s3.endpoint')) {
+    if (!isVolumeStorageConfigured(this.configService)) {
       throw new ServiceUnavailableException('Object storage is not configured')
     }
 

@@ -118,6 +118,7 @@ func run() int {
 		AWSEndpointUrl:               cfg.AWSEndpointUrl,
 		AWSAccessKeyId:               cfg.AWSAccessKeyId,
 		AWSSecretAccessKey:           cfg.AWSSecretAccessKey,
+		VolumeStorageBackend:         cfg.VolumeStorageBackend,
 		VolumeCleanupInterval:        cfg.VolumeCleanupInterval,
 		VolumeCleanupDryRun:          cfg.VolumeCleanupDryRun,
 		VolumeCleanupExclusionPeriod: cfg.VolumeCleanupExclusionPeriod,
