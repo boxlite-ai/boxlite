@@ -28,10 +28,15 @@ type CreateBoxDTO struct {
 	Secrets          []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
 	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
 	NetworkAllowList *string           `json:"networkAllowList,omitempty"`
-	Metadata         map[string]string `json:"metadata,omitempty"`
-	AuthToken        *string           `json:"authToken,omitempty"`
-	OtelEndpoint     *string           `json:"otelEndpoint,omitempty"`
-	SkipStart        *bool             `json:"skipStart,omitempty"`
+	// Per-direction bandwidth cap in kbit/s from the box's point of view
+	// (tx = what the box sends). Zero is uncapped on both sides of the wire,
+	// so an API that never sends the field needs no special case.
+	NetworkTxKbps uint64            `json:"networkTxKbps,omitempty"`
+	NetworkRxKbps uint64            `json:"networkRxKbps,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	AuthToken     *string           `json:"authToken,omitempty"`
+	OtelEndpoint  *string           `json:"otelEndpoint,omitempty"`
+	SkipStart     *bool             `json:"skipStart,omitempty"`
 
 	// Nullable for backward compatibility
 	OrganizationId *string `json:"organizationId,omitempty"`
@@ -56,6 +61,8 @@ type RecoverBoxDTO struct {
 	Secrets          []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
 	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
 	NetworkAllowList *string           `json:"networkAllowList,omitempty"`
+	NetworkTxKbps    uint64            `json:"networkTxKbps,omitempty"`
+	NetworkRxKbps    uint64            `json:"networkRxKbps,omitempty"`
 	ErrorReason      string            `json:"errorReason" validate:"required"`
 } //	@name	RecoverBoxDTO
 

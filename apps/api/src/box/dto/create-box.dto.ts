@@ -4,9 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, IsInt, Min } from 'class-validator'
+import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, IsInt, Max, Min } from 'class-validator'
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
+import { MAX_NETWORK_RATE_LIMIT_KBPS } from '../utils/network-validation.util'
 import { BoxSecret, BoxVolume } from './box.dto'
 
 @ApiSchema({ name: 'CreateBox' })
@@ -118,6 +119,30 @@ export class CreateBoxDto {
   @IsOptional()
   @IsString()
   networkAllowList?: string
+
+  @ApiPropertyOptional({
+    description:
+      'Cap on traffic the box sends, in kilobits per second. Omit or 0 for no cap. ' +
+      'Shaped below IP, so one budget covers TCP, UDP, ICMP and ARP together.',
+    example: 10000,
+    type: 'integer',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(MAX_NETWORK_RATE_LIMIT_KBPS)
+  networkTxKbps?: number
+
+  @ApiPropertyOptional({
+    description: 'Cap on traffic reaching the box, in kilobits per second. Omit or 0 for no cap.',
+    example: 100000,
+    type: 'integer',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(MAX_NETWORK_RATE_LIMIT_KBPS)
+  networkRxKbps?: number
 
   @ApiPropertyOptional({
     description: 'The box class type',

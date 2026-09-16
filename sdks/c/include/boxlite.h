@@ -563,6 +563,18 @@ enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_drop(CAdvancedBo
                                                                      const char *const *capabilities,
                                                                      int count);
 
+// Cap the box's network bandwidth per direction, in kilobits per second,
+// from the box's point of view: `tx_kbps` is what the box sends, `rx_kbps`
+// what reaches it. `0` leaves a direction uncapped, so a caller can forward a
+// flag unconditionally — the convention `--net-tx-kbps` / `--net-rx-kbps` use.
+//
+// Unlike `boxlite_advanced_options_set_security_enabled`, a null handle is an
+// `InvalidArgument`, not a no-op: a cap the caller believes is in force but
+// that never landed is a fail-open, so the failure has to be visible.
+enum BoxliteErrorCode boxlite_advanced_options_set_network_rate_limit(CAdvancedBoxOptions *opts,
+                                                                      uint64_t tx_kbps,
+                                                                      uint64_t rx_kbps);
+
 // Submit a box export.
 //
 // On success, the callback owns the returned path and must release it with
@@ -1028,8 +1040,9 @@ void boxlite_options_set_auto_resume_enabled(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
 
-// Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
-// `CBoxliteOptions`. Clones the advanced configuration into the box options —
+// Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation,
+// health check, network rate limit) to a `CBoxliteOptions`. Clones the
+// advanced configuration into the box options —
 // the caller retains ownership of `advanced_opts` and is responsible for
 // freeing it via `boxlite_advanced_options_free`.
 //

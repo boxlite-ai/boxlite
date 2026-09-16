@@ -689,6 +689,13 @@ const docTemplate = `{
                 "networkBlockAll": {
                     "type": "boolean"
                 },
+                "networkRxKbps": {
+                    "type": "integer"
+                },
+                "networkTxKbps": {
+                    "description": "Per-direction bandwidth cap in kbit/s from the box's point of view\n(tx = what the box sends). Zero is uncapped on both sides of the wire,\nso an API that never sends the field needs no special case.",
+                    "type": "integer"
+                },
                 "organizationId": {
                     "description": "Nullable for backward compatibility",
                     "type": "string"
@@ -823,6 +830,12 @@ const docTemplate = `{
                 },
                 "networkBlockAll": {
                     "type": "boolean"
+                },
+                "networkRxKbps": {
+                    "type": "integer"
+                },
+                "networkTxKbps": {
+                    "type": "integer"
                 },
                 "osUser": {
                     "type": "string"
@@ -959,20 +972,6 @@ const docTemplate = `{
                 }
             }
         },
-        "dto.VolumeDTO": {
-            "type": "object",
-            "properties": {
-                "mountPath": {
-                    "type": "string"
-                },
-                "subpath": {
-                    "type": "string"
-                },
-                "volumeId": {
-                    "type": "string"
-                }
-            }
-        },
         "dto.SecretDTO": {
             "type": "object",
             "required": [
@@ -993,6 +992,20 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.VolumeDTO": {
+            "type": "object",
+            "properties": {
+                "mountPath": {
+                    "type": "string"
+                },
+                "subpath": {
+                    "type": "string"
+                },
+                "volumeId": {
                     "type": "string"
                 }
             }

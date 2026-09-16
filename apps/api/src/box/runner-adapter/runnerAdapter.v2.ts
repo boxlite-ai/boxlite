@@ -144,6 +144,8 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       })),
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
+      networkTxKbps: box.networkTxKbps,
+      networkRxKbps: box.networkRxKbps,
       metadata,
       authToken: box.authToken,
       organizationId: box.organizationId,

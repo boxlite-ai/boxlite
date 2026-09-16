@@ -249,6 +249,26 @@ processes. Both lists default to empty, preserving BoxLite's Docker-compatible
 - The resolved set is applied to OCI bounding, effective, and permitted sets.
   Inheritable and ambient capabilities stay unset; they are not implied by `add`.
 
+#### `advanced.network_rate_limit`
+
+Per-direction bandwidth cap for the box's network interface, in kilobits per
+second, named from the box's point of view: `tx_kbps` is what the box sends,
+`rx_kbps` is what reaches it (`txKbps` / `rxKbps` in Node). Omitting a
+direction, or `0`, leaves it uncapped.
+
+- Shaping happens below IP in the gvproxy bridge, so one budget per direction
+  covers TCP, UDP, ICMP and ARP together; inbound port-forward traffic counts
+  against the same budget as outbound requests.
+- A cap on a box with outbound networking disabled is rejected — there is no
+  interface to shape.
+- Over REST the cap travels under `advanced`. A server advertises support as
+  `capabilities.network_rate_limit_enabled` on `GET /v1/config`; the client
+  refuses to send a cap to a server that does not, so an older server never
+  silently ignores it.
+- Verified on Linux. On macOS the guest link is a datagram socket whose sender
+  behaviour under backpressure is unverified, so `tx_kbps` may drop frames
+  there instead of slowing the guest; `rx_kbps` is paced the same way on both.
+
 #### `cpus: int`
 
 Number of CPU cores allocated to the box.

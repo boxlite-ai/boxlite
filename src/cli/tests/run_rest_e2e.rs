@@ -64,3 +64,49 @@ fn run_over_rest_streams_output_and_propagates_exit_code() {
     // the server is torn down.
     serve.wait_until_no_boxes();
 }
+
+/// `run --url` with a bandwidth cap must reach the box. The client re-reads
+/// `GET /v1/config` for `network_rate_limit_enabled`, `boxlite serve` advertises
+/// it and maps `advanced.network_rate_limit` onto its local runtime. Wire
+/// coverage only: the shaper itself is pinned by the gvproxy bridge tests, and
+/// a throughput measurement here could not tell "slow CI host" from "the cap
+/// was dropped". What this proves is that the door `sanitize_remote` used to
+/// close is open end to end.
+#[test]
+fn run_over_rest_accepts_a_network_rate_limit() {
+    let serve = ServeChild::start();
+    let client_home = boxlite_test_utils::home::PerTestBoxHome::new();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_boxlite"))
+        .arg("--home")
+        .arg(&client_home.path)
+        .arg("--url")
+        .arg(serve.url())
+        .args([
+            "run",
+            "--rm",
+            "--net-tx-kbps",
+            "10000",
+            "--net-rx-kbps",
+            "100000",
+            "alpine:latest",
+            "sh",
+            "-c",
+            "echo shaped-over-rest",
+        ])
+        .output()
+        .expect("run --url with a rate limit");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a capped create must be accepted over REST — stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains("shaped-over-rest"),
+        "the capped box must still run its command — stdout={stdout:?} stderr={stderr:?}"
+    );
+
+    serve.wait_until_no_boxes();
+}

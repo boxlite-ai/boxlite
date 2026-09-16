@@ -107,7 +107,7 @@ Configuration options for creating a box.
 | `network` | `NetworkSpec` | `{ mode: "enabled" }` | Structured network configuration |
 | `ports` | `JsPortSpec[]` | `[]` | Local TCP port mappings; omit `hostPort` for automatic allocation |
 | `secrets` | `Secret[]` | `[]` | Outbound HTTP(S) secret substitution rules |
-| `advanced` | `AdvancedBoxOptions` | `{}` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
+| `advanced` | `AdvancedBoxOptions` | `{}` | Expert-only options, including `capabilities` and `networkRateLimit` |
 | `autoRemove` | `boolean` | `false` | Auto cleanup when stopped |
 | `detach` | `boolean` | `false` | Survive parent process exit |
 
@@ -121,6 +121,18 @@ const options = {
       add: ["NET_BIND_SERVICE"],
       drop: ["NET_RAW"],
     },
+  },
+};
+```
+
+A per-direction bandwidth cap lives there too (kilobits per second, from the
+box's point of view; omitted or `0` leaves a direction uncapped):
+
+```typescript
+const options = {
+  image: "alpine:latest",
+  advanced: {
+    networkRateLimit: { txKbps: 10_000, rxKbps: 100_000 },
   },
 };
 ```
@@ -426,6 +438,10 @@ interface SimpleBoxOptions {
     capabilities?: {
       add?: string[];     // Add Linux capabilities
       drop?: string[];    // Remove Linux capabilities
+    };
+    networkRateLimit?: {
+      txKbps?: number;    // Guest to internet, kbit/s; omitted or 0 is uncapped
+      rxKbps?: number;    // Internet to guest, kbit/s; omitted or 0 is uncapped
     };
   };
 }
