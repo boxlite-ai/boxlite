@@ -241,7 +241,7 @@ impl TestGuest {
                 .available_permits(),
             limits::MAX_CONNECTIONS
         );
-        assert!(self.guest.ssh_manager.state.lock().await.round.is_none());
+        assert!(self.guest.ssh_manager.state.lock().await.tasks.is_none());
         let _ = self.stop.send(());
         self.task.await.unwrap();
     }
@@ -706,7 +706,7 @@ async fn grpc_ssh_failure_does_not_hide_mount_or_network_errors() {
             "mount volumes"
         }));
         assert!(!fixture.guest.init_state.lock().await.initialized);
-        assert!(fixture.guest.ssh_manager.state.lock().await.round.is_none());
+        assert!(fixture.guest.ssh_manager.state.lock().await.tasks.is_none());
         fixture.stop().await;
     }
 }
@@ -767,7 +767,7 @@ async fn ssh_failure_logs_and_status_redact_all_configuration_inputs() {
             assert!(!diagnostic.contains(secret_line), "leaked {field}");
             assert!(!diagnostic.contains("PRIVATE KEY"), "leaked {field}");
         }
-        assert!(fixture.guest.ssh_manager.state.lock().await.round.is_none());
+        assert!(fixture.guest.ssh_manager.state.lock().await.tasks.is_none());
         fixture.stop().await;
     }
 }
@@ -850,13 +850,22 @@ async fn stop_timeout_retains_cleanup_and_prevents_next_generation() {
     let mut fixture = TestGuest::new().await;
     let configuration = config(&private_key(), &[&private_key()], None);
     fixture.start(configuration.clone()).await;
-    let outstanding_cleanup = fixture.guest.ssh_manager.tasks().token();
+    let outstanding_cleanup = fixture
+        .guest
+        .ssh_manager
+        .state
+        .lock()
+        .await
+        .tasks
+        .as_ref()
+        .unwrap()
+        .token();
     let error = fixture.configure(configuration.clone()).await.unwrap_err();
     assert_eq!(error.code(), tonic::Code::DeadlineExceeded);
     let status = fixture.status().await;
     assert!(!status.enabled);
     assert_eq!(status.generation, 1);
-    assert!(fixture.guest.ssh_manager.state.lock().await.round.is_some());
+    assert!(fixture.guest.ssh_manager.state.lock().await.tasks.is_some());
     drop(outstanding_cleanup);
     assert_eq!(
         fixture.configure(configuration).await.unwrap().generation,
@@ -870,30 +879,96 @@ async fn shutdown_cancels_a_configure_waiting_for_cleanup() {
     let mut fixture = TestGuest::new().await;
     let configuration = config(&private_key(), &[&private_key()], None);
     fixture.start(configuration.clone()).await;
-    let cleanup = fixture.guest.ssh_manager.tasks().token();
+    let cleanup = fixture
+        .guest
+        .ssh_manager
+        .state
+        .lock()
+        .await
+        .tasks
+        .as_ref()
+        .unwrap()
+        .token();
     let cancel = fixture
         .guest
         .ssh_manager
         .state
         .lock()
         .await
-        .round
+        .tasks
         .as_ref()
         .unwrap()
-        .cancel
         .clone();
     let guest = fixture.guest.clone();
     let configure = tokio::spawn(async move { guest.ssh_manager.configure(configuration).await });
-    cancel.cancelled().await;
+    let (cancelled_tx, cancelled_rx) = oneshot::channel();
+    cancel.spawn_tracked(move |cancel| async move {
+        cancel.cancelled().await;
+        let _ = cancelled_tx.send(());
+    });
+    cancelled_rx.await.unwrap();
     let guest = fixture.guest.clone();
-    let shutdown = tokio::spawn(async move { guest.ssh_manager.shutdown().await });
-    fixture.guest.ssh_manager.shutdown_token.cancelled().await;
+    let shutdown = guest.ssh_manager.shutdown();
+    tokio::pin!(shutdown);
+    assert!(futures::poll!(&mut shutdown).is_pending());
+    assert!(guest
+        .ssh_manager
+        .shutting_down
+        .load(std::sync::atomic::Ordering::SeqCst));
     drop(cleanup);
     assert_eq!(
         configure.await.unwrap().unwrap_err().code(),
         tonic::Code::FailedPrecondition
     );
-    shutdown.await.unwrap().unwrap();
+    shutdown.await.unwrap();
     assert!(!fixture.status().await.enabled);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn cancelled_disable_retains_group_and_rejects_pending_admission() {
+    let mut fixture = TestGuest::new().await;
+    let configuration = config(&private_key(), &[&private_key()], None);
+    fixture.start(configuration.clone()).await;
+    let tasks = fixture
+        .guest
+        .ssh_manager
+        .state
+        .lock()
+        .await
+        .tasks
+        .clone()
+        .unwrap();
+    let cleanup = tasks.token();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (stream, peer) = listener.accept().await.unwrap();
+
+    let mut disable = Box::pin(fixture.guest.ssh_manager.disable());
+    assert!(futures::poll!(&mut disable).is_pending());
+    assert!(tasks.is_cancelled());
+    let mut admission = Box::pin(fixture.guest.ssh_manager.spawn_connection(stream, peer));
+    assert!(futures::poll!(&mut admission).is_pending());
+    // Dropping the control future releases its state lock, but retains draining.
+    drop(disable);
+    admission.await;
+    let mut client = client;
+    let mut byte = [0];
+    assert_eq!(
+        tokio::io::AsyncReadExt::read(&mut client, &mut byte)
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(fixture.guest.ssh_manager.state.lock().await.tasks.is_some());
+    drop(cleanup);
+    fixture.guest.ssh_manager.disable().await.unwrap();
+    assert!(fixture.guest.ssh_manager.state.lock().await.tasks.is_none());
+    assert_eq!(
+        fixture.configure(configuration).await.unwrap().generation,
+        2
+    );
     fixture.stop().await;
 }

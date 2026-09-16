@@ -12,6 +12,7 @@ mod server;
 mod session;
 mod sftp;
 mod streamlocal;
+mod task_group;
 mod workload;
 
 pub(crate) use workload::{BoxliteWorkloadExecutor, SshWorkload};
@@ -21,12 +22,13 @@ use auth::SshAuthorizer;
 use backoff::Backoff;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::net::{Shutdown, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
+use task_group::TaskGroup;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
 use tracing::{debug, info, warn};
 
 /// Fully validated before any SSH listener is opened.
@@ -98,20 +100,15 @@ pub(crate) struct SshManager {
     guest: OnceLock<Weak<GuestServer>>,
     state: Mutex<SshState>,
     connection_permits: Arc<tokio::sync::Semaphore>,
-    shutdown_token: CancellationToken,
-    tasks: std::sync::Mutex<TaskTracker>,
+    shutting_down: AtomicBool,
 }
 
 #[derive(Default)]
 struct SshState {
-    round: Option<SshRound>,
-    status: boxlite_shared::SshStatus,
-}
-
-struct SshRound {
+    config: Option<SshConfig>,
+    tasks: Option<TaskGroup>,
     listener: Option<JoinHandle<()>>,
-    cancel: CancellationToken,
-    tasks: TaskTracker,
+    status: boxlite_shared::SshStatus,
 }
 
 impl Default for SshManager {
@@ -120,50 +117,14 @@ impl Default for SshManager {
             guest: OnceLock::new(),
             state: Mutex::new(SshState::default()),
             connection_permits: Arc::new(tokio::sync::Semaphore::new(limits::MAX_CONNECTIONS)),
-            shutdown_token: CancellationToken::new(),
-            tasks: std::sync::Mutex::new(TaskTracker::new()),
+            shutting_down: AtomicBool::new(false),
         }
     }
 }
 
-struct ConnectionContext {
-    guest: Arc<GuestServer>,
-    authorizer: Arc<SshAuthorizer>,
-    permits: Arc<tokio::sync::Semaphore>,
-    shutdown_token: CancellationToken,
-    tasks: TaskTracker,
-}
-
-#[derive(Debug)]
-pub(crate) enum SshShutdownError {
-    ConnectionBudgetClosed,
-    TimedOut,
-    ListenerFailed,
-}
-
-impl std::fmt::Display for SshShutdownError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::ConnectionBudgetClosed => "SSH connection budget closed",
-            Self::TimedOut => "timed out waiting for SSH sessions to stop",
-            Self::ListenerFailed => "SSH listener task failed while stopping",
-        })
-    }
-}
-impl std::error::Error for SshShutdownError {}
-
 impl SshManager {
     pub(crate) fn attach_guest(&self, guest: &Arc<GuestServer>) {
         let _ = self.guest.set(Arc::downgrade(guest));
-    }
-
-    // A generation cannot be replaced until every producer of SSH tasks has
-    // exited. This also covers cleanup spawned from a russh handler's Drop.
-    pub(super) fn tasks(&self) -> TaskTracker {
-        self.tasks
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
     }
 
     pub(crate) async fn configure(
@@ -178,7 +139,7 @@ impl SshManager {
             .and_then(Weak::upgrade)
             .ok_or_else(|| tonic::Status::internal("SSH manager is not attached"))?;
         let mut state = self.state.lock().await;
-        if self.shutdown_token.is_cancelled()
+        if self.shutting_down.load(Ordering::SeqCst)
             || guest
                 .shutting_down
                 .load(std::sync::atomic::Ordering::SeqCst)
@@ -188,7 +149,7 @@ impl SshManager {
             )
             .into());
         }
-        self.stop(&mut state).await.map_err(stop_status)?;
+        self.stop(&mut state).await?;
         let listener = TcpListener::bind(config.listen_addr)
             .await
             .map_err(|error| {
@@ -197,7 +158,7 @@ impl SshManager {
         let address = listener.local_addr().map_err(|error| {
             tonic::Status::internal(format!("failed to read SSH listener address: {error}"))
         })?;
-        if self.shutdown_token.is_cancelled()
+        if self.shutting_down.load(Ordering::SeqCst)
             || guest
                 .shutting_down
                 .load(std::sync::atomic::Ordering::SeqCst)
@@ -211,19 +172,7 @@ impl SshManager {
         let host_public_key = russh::keys::PublicKey::new(public.key_data().clone(), "")
             .to_openssh()
             .map_err(|_| tonic::Status::internal("failed to encode SSH host public key"))?;
-        let tasks = TaskTracker::new();
-        *self
-            .tasks
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = tasks.clone();
-        let cancel = self.shutdown_token.child_token();
-        let context = ConnectionContext {
-            guest,
-            authorizer: config.authorizer,
-            permits: self.connection_permits.clone(),
-            shutdown_token: cancel.clone(),
-            tasks: tasks.clone(),
-        };
+        let tasks = TaskGroup::default();
         state.status = boxlite_shared::SshStatus {
             enabled: true,
             listen_address: address.to_string(),
@@ -231,11 +180,9 @@ impl SshManager {
             host_public_key,
             host_key_fingerprint: public.fingerprint(russh::keys::HashAlg::Sha256).to_string(),
         };
-        state.round = Some(SshRound {
-            listener: Some(tokio::spawn(accept_loop(listener, config.server, context))),
-            cancel,
-            tasks,
-        });
+        state.config = Some(config);
+        state.listener = Some(tasks.spawn(accept_loop(listener, guest)));
+        state.tasks = Some(tasks);
         info!(%address, generation = state.status.generation, "embedded SSH listener ready");
         Ok(state.status.clone())
     }
@@ -243,10 +190,9 @@ impl SshManager {
     pub(crate) async fn status(&self) -> boxlite_shared::SshStatus {
         let state = self.state.lock().await;
         let mut status = state.status.clone();
-        if state.round.as_ref().is_some_and(|round| {
-            round.cancel.is_cancelled()
-                || round.listener.as_ref().is_none_or(JoinHandle::is_finished)
-        }) {
+        if state.tasks.as_ref().is_some_and(TaskGroup::is_cancelled)
+            || state.listener.as_ref().is_none_or(JoinHandle::is_finished)
+        {
             status.enabled = false;
             status.listen_address.clear();
             status.host_public_key.clear();
@@ -257,155 +203,148 @@ impl SshManager {
 
     pub(crate) async fn disable(&self) -> Result<boxlite_shared::SshStatus, Box<tonic::Status>> {
         let mut state = self.state.lock().await;
-        self.stop(&mut state).await.map_err(stop_status)?;
+        self.stop(&mut state).await?;
         Ok(state.status.clone())
     }
 
-    async fn stop(&self, state: &mut SshState) -> Result<(), SshShutdownError> {
+    async fn stop(&self, state: &mut SshState) -> Result<(), Box<tonic::Status>> {
         state.status = boxlite_shared::SshStatus {
             generation: state.status.generation,
             ..Default::default()
         };
+        if let Some(tasks) = &state.tasks {
+            tasks.cancel();
+        }
         let draining = async {
-            if let Some(round) = state.round.as_mut() {
-                round.cancel.cancel();
-                if let Some(listener) = round.listener.as_mut() {
-                    let result = listener.await;
-                    round.listener = None;
-                    if result.is_err() {
-                        return Err(SshShutdownError::ListenerFailed);
-                    }
-                }
-                round.tasks.close();
-                round.tasks.wait().await;
+            if let Some(tasks) = &state.tasks {
+                tasks.wait().await;
             }
-            let _all = self
-                .connection_permits
-                .clone()
-                .acquire_many_owned(limits::MAX_CONNECTIONS as u32)
-                .await
-                .map_err(|_| SshShutdownError::ConnectionBudgetClosed)?;
-            Ok(())
+            if let Some(listener) = state.listener.as_mut() {
+                listener.await
+            } else {
+                Ok(())
+            }
         };
-        tokio::time::timeout(limits::CONTROL_CALL_TIMEOUT, draining)
+        let listener_result = tokio::time::timeout(limits::CONTROL_CALL_TIMEOUT, draining)
             .await
-            .map_err(|_| SshShutdownError::TimedOut)??;
-        state.round = None;
-        Ok(())
+            .map_err(|_| {
+                tonic::Status::deadline_exceeded("timed out waiting for SSH sessions to stop")
+            })?;
+        state.listener = None;
+        state.tasks = None;
+        state.config = None;
+        listener_result
+            .map_err(|_| tonic::Status::internal("SSH listener task failed while stopping").into())
     }
 
-    pub(crate) async fn shutdown(&self) -> Result<(), SshShutdownError> {
-        self.shutdown_token.cancel();
+    pub(crate) async fn shutdown(&self) -> Result<(), Box<tonic::Status>> {
+        self.shutting_down.store(true, Ordering::SeqCst);
         self.stop(&mut *self.state.lock().await).await
     }
 
     #[cfg(test)]
-    pub(crate) fn close_connection_budget_for_test(&self) {
-        self.connection_permits.close();
+    pub(crate) async fn pending_cleanup_for_test(
+        &self,
+    ) -> tokio_util::task::task_tracker::TaskTrackerToken {
+        let mut state = self.state.lock().await;
+        state.tasks.get_or_insert_with(TaskGroup::default).token()
     }
-}
 
-fn stop_status(error: SshShutdownError) -> tonic::Status {
-    match error {
-        SshShutdownError::TimedOut => tonic::Status::deadline_exceeded(error.to_string()),
-        other => tonic::Status::internal(other.to_string()),
-    }
-}
-
-async fn accept_loop(
-    listener: TcpListener,
-    config: Arc<russh::server::Config>,
-    context: ConnectionContext,
-) {
-    let ConnectionContext {
-        guest,
-        authorizer,
-        permits,
-        shutdown_token,
-        tasks,
-    } = context;
-    let mut backoff = Backoff::new();
-
-    loop {
-        let accepted = tokio::select! {
-            biased;
-            _ = shutdown_token.cancelled() => break,
-            accepted = listener.accept() => accepted,
+    async fn spawn_connection(&self, stream: tokio::net::TcpStream, peer: SocketAddr) {
+        let state = self.state.lock().await;
+        if self.shutting_down.load(Ordering::SeqCst) || !state.status.enabled {
+            return;
+        }
+        let (Some(config), Some(tasks)) = (&state.config, &state.tasks) else {
+            return;
         };
-        match accepted {
-            Ok((socket, peer_addr)) => {
-                backoff.reset();
-                if let Err(error) = socket.set_nodelay(true) {
-                    debug!(%peer_addr, %error, "failed to enable TCP_NODELAY for SSH connection");
-                }
-                let (socket, shutdown_socket) = match socket_with_shutdown_handle(socket) {
-                    Ok(sockets) => sockets,
-                    Err(error) => {
-                        warn!(%peer_addr, %error, "failed to prepare SSH connection socket");
-                        continue;
-                    }
-                };
-                let permit = match permits.clone().try_acquire_owned() {
-                    Ok(permit) => permit,
-                    Err(_) => {
-                        warn!(%peer_addr, "SSH connection limit reached");
-                        continue;
-                    }
-                };
+        if tasks.is_cancelled() {
+            return;
+        }
+        let Some(guest) = self.guest.get().and_then(Weak::upgrade) else {
+            return;
+        };
+        if guest.shutting_down.load(Ordering::SeqCst) {
+            return;
+        }
+        let Ok(permit) = self.connection_permits.clone().try_acquire_owned() else {
+            warn!(%peer, "SSH connection limit reached");
+            return;
+        };
+        let config_server = config.server.clone();
+        let authorizer = config.authorizer.clone();
+        let connection_tasks = tasks.clone();
+        tasks.spawn_tracked(move |cancel| async move {
+            let _permit = permit;
+            let (authenticated_tx, authenticated_rx) = tokio::sync::oneshot::channel();
+            let handler =
+                server::SshConnection::new(guest, authorizer, authenticated_tx, connection_tasks);
+            serve_connection(
+                stream,
+                peer,
+                config_server,
+                handler,
+                authenticated_rx,
+                cancel,
+            )
+            .await;
+        });
+    }
+}
 
-                let (authenticated_tx, authenticated_rx) = tokio::sync::oneshot::channel();
-                let handler = server::SshConnection::new(
-                    guest.clone(),
-                    authorizer.clone(),
-                    authenticated_tx,
-                    shutdown_token.clone(),
-                    tasks.token(),
-                );
-                let config = config.clone();
-                let connection_shutdown_token = shutdown_token.clone();
-                tasks.spawn(async move {
-                    let _permit = permit;
-                    let handshake = tokio::time::timeout(
-                        limits::AUTHENTICATION_TIMEOUT,
-                        russh::server::run_stream(config, socket, handler),
-                    );
-                    tokio::pin!(handshake);
-                    let handshake_result = tokio::select! {
-                        biased;
-                        _ = connection_shutdown_token.cancelled() => {
-                            let _ = shutdown_socket.shutdown(Shutdown::Both);
-                            return;
-                        }
-                        result = &mut handshake => result,
-                    };
-                    match handshake_result {
-                        Ok(Ok(running)) => {
-                            monitor_session(
-                                running,
-                                authenticated_rx,
-                                connection_shutdown_token,
-                                shutdown_socket,
-                                peer_addr,
-                            )
-                            .await;
-                        }
-                        Ok(Err(error)) => {
-                            debug!(%peer_addr, %error, "SSH handshake failed");
-                        }
-                        Err(_) => warn!(%peer_addr, "SSH identification exchange timed out"),
-                    }
-                });
+async fn accept_loop(listener: TcpListener, guest: Arc<GuestServer>) {
+    let mut backoff = Backoff::new();
+    loop {
+        match listener.accept().await {
+            Ok((stream, peer)) => {
+                backoff.reset();
+                guest.ssh_manager.spawn_connection(stream, peer).await;
             }
             Err(error) => {
                 warn!(%error, "SSH accept failed");
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => break,
-                    _ = backoff.wait() => {}
-                }
+                backoff.wait().await;
             }
         }
     }
-    debug!("embedded SSH accept loop stopped");
+}
+
+async fn serve_connection(
+    stream: tokio::net::TcpStream,
+    peer: SocketAddr,
+    config: Arc<russh::server::Config>,
+    handler: server::SshConnection,
+    authenticated: tokio::sync::oneshot::Receiver<()>,
+    cancel: CancellationToken,
+) {
+    if let Err(error) = stream.set_nodelay(true) {
+        debug!(%peer, %error, "failed to enable TCP_NODELAY for SSH connection");
+    }
+    let (stream, shutdown_socket) = match socket_with_shutdown_handle(stream) {
+        Ok(sockets) => sockets,
+        Err(error) => {
+            warn!(%peer, %error, "failed to prepare SSH connection socket");
+            return;
+        }
+    };
+    let handshake = tokio::time::timeout(
+        limits::AUTHENTICATION_TIMEOUT,
+        russh::server::run_stream(config, stream, handler),
+    );
+    let result = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            let _ = shutdown_socket.shutdown(Shutdown::Both);
+            return;
+        }
+        result = handshake => result,
+    };
+    match result {
+        Ok(Ok(running)) => {
+            monitor_session(running, authenticated, cancel, shutdown_socket, peer).await
+        }
+        Ok(Err(error)) => debug!(%peer, %error, "SSH handshake failed"),
+        Err(_) => warn!(%peer, "SSH identification exchange timed out"),
+    }
 }
 
 async fn monitor_session(

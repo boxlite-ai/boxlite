@@ -46,7 +46,7 @@ pub(crate) struct SshConnection {
     forwarding: ForwardingManager,
     reverse_streamlocal: ReverseStreamlocalManager,
     authenticated: Option<oneshot::Sender<()>>,
-    stop: tokio_util::sync::CancellationToken,
+    tasks: super::TaskGroup,
     _lifetime: tokio_util::task::task_tracker::TaskTrackerToken,
 }
 
@@ -55,10 +55,9 @@ impl SshConnection {
         guest: Arc<GuestServer>,
         authorizer: Arc<SshAuthorizer>,
         authenticated: oneshot::Sender<()>,
-        stop: tokio_util::sync::CancellationToken,
-        lifetime: tokio_util::task::task_tracker::TaskTrackerToken,
+        tasks: super::TaskGroup,
     ) -> Self {
-        let tasks = guest.ssh_manager.tasks();
+        let lifetime = tasks.token();
         Self {
             guest,
             authorizer,
@@ -66,10 +65,10 @@ impl SshConnection {
             pending_state: HashMap::new(),
             bridges: HashMap::new(),
             permissions: SessionPermissions::default(),
-            forwarding: ForwardingManager::new(tasks),
-            reverse_streamlocal: ReverseStreamlocalManager::new(),
+            forwarding: ForwardingManager::new(tasks.clone()),
+            reverse_streamlocal: ReverseStreamlocalManager::new(tasks.clone()),
             authenticated: Some(authenticated),
-            stop,
+            tasks,
             _lifetime: lifetime,
         }
     }
@@ -91,7 +90,7 @@ impl SshConnection {
     }
 
     fn is_shutting_down(&self) -> bool {
-        self.stop.is_cancelled()
+        self.tasks.is_cancelled()
             || self
                 .guest
                 .shutting_down
@@ -111,6 +110,7 @@ impl SshConnection {
         let tty = state.tty.take();
         let env = state.into_execution_env();
         let bridge = ChannelBridge::start(
+            self.tasks.clone(),
             self.guest.clone(),
             command,
             tty,
@@ -277,6 +277,7 @@ impl russh::server::Handler for SshConnection {
         let channel_id = channel.id();
         let session_handle = session.handle();
         match ChannelBridge::start(
+            self.tasks.clone(),
             self.guest.clone(),
             Command::Streamlocal(socket_path.to_string()),
             None,
@@ -810,8 +811,7 @@ mod tests {
             guest.clone(),
             authorizer.clone(),
             tx,
-            Default::default(),
-            guest.ssh_manager.tasks().token(),
+            super::super::TaskGroup::default(),
         );
         assert_eq!(
             raw.auth_publickey_offered(SSH_USER, user.public_key())
@@ -845,8 +845,7 @@ mod tests {
             guest.clone(),
             authorizer,
             tx,
-            Default::default(),
-            guest.ssh_manager.tasks().token(),
+            super::super::TaskGroup::default(),
         );
         assert_eq!(
             certified

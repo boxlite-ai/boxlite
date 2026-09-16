@@ -423,14 +423,16 @@ impl Drop for ListenerRegistration {
 
 /// Owns reverse streamlocal listeners created by one authenticated connection.
 pub(crate) struct ReverseStreamlocalManager {
+    tasks: super::TaskGroup,
     listeners: ListenerRegistry,
     cancel: tokio_util::sync::CancellationToken,
     connection_permits: Arc<Semaphore>,
 }
 
 impl ReverseStreamlocalManager {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(tasks: super::TaskGroup) -> Self {
         Self {
+            tasks,
             listeners: ListenerRegistry::default(),
             cancel: Default::default(),
             connection_permits: Arc::new(Semaphore::new(MAX_FORWARD_CONNECTIONS)),
@@ -475,6 +477,7 @@ impl ReverseStreamlocalManager {
 
         let token = uuid::Uuid::new_v4().to_string();
         let helper = match RunningHelper::start(
+            self.tasks.clone(),
             server,
             socket_path,
             ingress_address,
@@ -518,6 +521,7 @@ impl Drop for ReverseStreamlocalManager {
 }
 
 struct RunningHelper {
+    tasks: super::TaskGroup,
     cancel: tokio_util::sync::CancellationToken,
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
@@ -530,6 +534,7 @@ struct RunningHelper {
 
 impl RunningHelper {
     async fn start(
+        tasks: super::TaskGroup,
         server: Arc<GuestServer>,
         socket_path: &str,
         ingress: SocketAddrV4,
@@ -566,11 +571,18 @@ impl RunningHelper {
             // Matches every sibling failure below: the execution is registered
             // and running, so it must be torn down rather than leaked.
             Err(error) => {
-                spawn_failed_helper_cleanup(server.clone(), registry, execution_id, None, None);
+                spawn_failed_helper_cleanup(
+                    tasks.clone(),
+                    server.clone(),
+                    registry,
+                    execution_id,
+                    None,
+                    None,
+                );
                 return Err(format!("reverse streamlocal stdin setup failed: {error}"));
             }
         };
-        let stdin_task = server.ssh_manager.tasks().spawn(async move {
+        let stdin_task = tasks.spawn_tracked(move |_| async move {
             if let Ok(Err(error)) = input.await {
                 debug!(%error, "reverse streamlocal helper stdin ended");
             }
@@ -585,6 +597,7 @@ impl RunningHelper {
             .is_err()
         {
             spawn_failed_helper_cleanup(
+                tasks.clone(),
                 server.clone(),
                 registry,
                 execution_id,
@@ -609,6 +622,7 @@ impl RunningHelper {
                     .await;
                 drop(stdin_tx);
                 spawn_failed_helper_cleanup(
+                    tasks.clone(),
                     server.clone(),
                     registry,
                     execution_id,
@@ -627,6 +641,7 @@ impl RunningHelper {
                     .await;
                 drop(stdin_tx);
                 spawn_failed_helper_cleanup(
+                    tasks.clone(),
                     server.clone(),
                     registry,
                     execution_id,
@@ -656,6 +671,7 @@ impl RunningHelper {
                     .await;
                 drop(stdin_tx);
                 spawn_failed_helper_cleanup(
+                    tasks.clone(),
                     server.clone(),
                     registry,
                     execution_id,
@@ -667,6 +683,7 @@ impl RunningHelper {
         };
 
         Ok(Self {
+            tasks,
             cancel,
             server,
             registry,
@@ -709,6 +726,7 @@ impl RunningHelper {
 
     fn spawn_cleanup(self, force_termination: bool) {
         spawn_execution_cleanup(
+            self.tasks,
             self.server,
             self.registry,
             self.execution_id,
@@ -759,8 +777,8 @@ fn spawn_listener(
     mut helper: RunningHelper,
     mut registration: ListenerRegistration,
 ) {
-    let tasks = helper.server.ssh_manager.tasks();
-    tasks.clone().spawn(async move {
+    let tasks = helper.tasks.clone();
+    tasks.clone().spawn_tracked(move |cancel| async move {
         enum End {
             Cancelled,
             HelperEnded,
@@ -772,6 +790,7 @@ fn spawn_listener(
             tokio::select! {
                 biased;
                 _ = registration.cancelled() => break End::Cancelled,
+                _ = cancel.cancelled() => break End::Cancelled,
                 completed = pending_opens.join_next(), if !pending_opens.is_empty() => {
                     if let Some(Err(error)) = completed {
                         warn!(%error, "reverse streamlocal channel task failed");
@@ -1002,16 +1021,26 @@ fn append_stopped_marker_prefix(buffer: &mut Vec<u8>, chunk: &[u8]) -> bool {
 }
 
 fn spawn_failed_helper_cleanup(
+    tasks: super::TaskGroup,
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
     execution_id: String,
     output: Option<mpsc::Receiver<Result<ExecOutput, tonic::Status>>>,
     stdin_task: Option<JoinHandle<()>>,
 ) {
-    spawn_execution_cleanup(server, registry, execution_id, output, stdin_task, true);
+    spawn_execution_cleanup(
+        tasks,
+        server,
+        registry,
+        execution_id,
+        output,
+        stdin_task,
+        true,
+    );
 }
 
 fn spawn_execution_cleanup(
+    tasks: super::TaskGroup,
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
     execution_id: String,
@@ -1019,9 +1048,9 @@ fn spawn_execution_cleanup(
     stdin_task: Option<JoinHandle<()>>,
     force_termination: bool,
 ) {
-    server.ssh_manager.tasks().spawn(async move {
+    tasks.clone().spawn_tracked(move |_| async move {
         let output_task = output.map(|mut output| {
-            tokio::spawn(async move {
+            tasks.spawn_tracked(move |_| async move {
                 while let Some(message) = output.recv().await {
                     let Ok(message) = message else {
                         break;
