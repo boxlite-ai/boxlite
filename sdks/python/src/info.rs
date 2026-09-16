@@ -480,6 +480,7 @@ mod tests {
             auto_delete: 0,
             auto_resume: true,
             health_status: HealthStatus::default(),
+            ssh_status: None,
             exit_code: None,
             started_at: None,
             last_activity_at: None,

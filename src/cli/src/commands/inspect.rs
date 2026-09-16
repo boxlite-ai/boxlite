@@ -65,6 +65,16 @@ struct InspectStatePresenter {
     /// local boxes, which record no activity.
     #[serde(rename = "LastActivityAt")]
     last_activity_at: Option<String>,
+    #[serde(rename = "Ssh")]
+    ssh: Option<InspectSshPresenter>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectSshPresenter {
+    #[serde(rename = "Status")]
+    status: boxlite::SshState,
+    #[serde(rename = "ErrorReason")]
+    error_reason: Option<String>,
 }
 
 impl From<&BoxInfo> for InspectPresenter {
@@ -77,6 +87,10 @@ impl From<&BoxInfo> for InspectPresenter {
             created: info.created_at.to_rfc3339(),
             status: info.status.as_str().to_string(),
             state: InspectStatePresenter {
+                ssh: state.ssh_status.map(|ssh| InspectSshPresenter {
+                    status: ssh.state,
+                    error_reason: ssh.error_reason,
+                }),
                 status: state.status.as_str().to_string(),
                 running: state.running,
                 pid: state.pid.unwrap_or(0),
@@ -262,9 +276,71 @@ mod tests {
             auto_delete: 0,
             auto_resume: true,
             health_status: HealthStatus::new(),
+            ssh_status: None,
             exit_code: None,
             started_at,
             last_activity_at: None,
+        }
+    }
+
+    #[test]
+    fn inspect_ssh_status_json_yaml_and_templates() {
+        for state in [
+            boxlite::SshState::Disabled,
+            boxlite::SshState::Ready,
+            boxlite::SshState::Failed,
+        ] {
+            let mut info = inspect_info(None);
+            let reason =
+                (state == boxlite::SshState::Failed).then_some("SSH listen: address in use");
+            info.ssh_status = Some(boxlite::SshStatus {
+                state,
+                error_reason: reason.map(str::to_string),
+            });
+            let expected = match state {
+                boxlite::SshState::Disabled => "disabled",
+                boxlite::SshState::Ready => "ready",
+                boxlite::SshState::Failed => "failed",
+            };
+            let presenters = vec![InspectPresenter::from(&info)];
+            for format in ["json", "yaml"] {
+                let mut output = Vec::new();
+                write_inspect_output(&presenters, format, &mut output).unwrap();
+                let value: serde_json::Value = if format == "json" {
+                    serde_json::from_slice(&output).unwrap()
+                } else {
+                    serde_yaml::from_slice(&output).unwrap()
+                };
+                assert_eq!(value[0]["State"]["Ssh"]["Status"], expected);
+                assert_eq!(
+                    value[0]["State"]["Ssh"]["ErrorReason"],
+                    serde_json::json!(reason)
+                );
+            }
+            let mut output = Vec::new();
+            write_inspect_output(&presenters, "{{.State.Ssh.Status}}", &mut output).unwrap();
+            assert_eq!(String::from_utf8(output).unwrap(), format!("{expected}\n"));
+            if let Some(reason) = reason {
+                let mut output = Vec::new();
+                write_inspect_output(&presenters, "{{.State.Ssh.ErrorReason}}", &mut output)
+                    .unwrap();
+                assert_eq!(String::from_utf8(output).unwrap(), format!("{reason}\n"));
+            }
+        }
+        for format in ["json", "yaml"] {
+            let mut output = Vec::new();
+            write_inspect_output(
+                &vec![InspectPresenter::from(&inspect_info(None))],
+                format,
+                &mut output,
+            )
+            .unwrap();
+            let value: serde_json::Value = if format == "json" {
+                serde_json::from_slice(&output).unwrap()
+            } else {
+                serde_yaml::from_slice(&output).unwrap()
+            };
+            assert!(value[0]["State"]["Ssh"].is_null());
         }
     }
 

@@ -90,6 +90,9 @@ async fn guest_ssh_public_key_exec_pty_sftp_survive_vm_restart() {
         .unwrap();
     for _ in 0..2 {
         sandbox.start().await.unwrap();
+        let status = sandbox.info().await.unwrap().ssh_status.unwrap();
+        assert_eq!(status.state, boxlite::SshState::Ready);
+        assert!(status.error_reason.is_none());
         let published = sandbox
             .info()
             .await
@@ -129,8 +132,130 @@ async fn guest_ssh_public_key_exec_pty_sftp_survive_vm_restart() {
         checked_output(sftp).await;
         assert_eq!(std::fs::read(download).unwrap(), b"SSH SFTP round trip\n");
         sandbox.stop().await.unwrap();
+        assert_eq!(sandbox.info().await.unwrap().ssh_status, Some(status));
         sandbox = runtime.get("guest-ssh").await.unwrap().unwrap();
     }
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn guest_ssh_invalid_config_does_not_block_main_command() {
+    use boxlite::{AttachOptions, BoxStatus};
+    use tokio_stream::StreamExt;
+
+    let home = common::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+    let mut options = common::alpine_opts();
+    options.ssh_config = Some(SshConfig {
+        listen_address: "invalid".into(),
+        host_private_key: "test-only-private-marker".into(),
+        ca: None,
+        authorized_keys: vec![],
+    });
+    options.detach = true;
+    options.cmd = Some(vec![
+        "sh".into(),
+        "-c".into(),
+        "printf 'main-command-ran\\n'; exec sleep 300".into(),
+    ]);
+    let sandbox = runtime.create(options, None).await.unwrap();
+    sandbox
+        .start()
+        .await
+        .expect("SSH configuration must not block start");
+    let info = sandbox.info().await.unwrap();
+    assert_eq!(info.status, BoxStatus::Running);
+    let status = info.ssh_status.unwrap();
+    assert_eq!(status.state, boxlite::SshState::Failed);
+    let reason = status.error_reason.as_ref().unwrap();
+    assert!(reason.contains("SSH validate:"));
+    assert!(!reason.contains("test-only-private-marker"));
+    assert_eq!(
+        runtime
+            .get_info(sandbox.id().as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .ssh_status,
+        Some(status.clone())
+    );
+    assert_eq!(
+        runtime.list_info().await.unwrap()[0].ssh_status,
+        Some(status.clone())
+    );
+    let mut execution = sandbox.attach(AttachOptions::main()).await.unwrap();
+    let mut stdout = execution.stdout().unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut output = String::new();
+        while let Some(chunk) = stdout.next().await {
+            output.push_str(&chunk);
+            if output.contains("main-command-ran") {
+                return;
+            }
+        }
+        panic!("main command did not produce its marker");
+    })
+    .await
+    .unwrap();
+    let box_id = sandbox.id().to_string();
+    let pid = sandbox.info().await.unwrap().pid;
+    drop(stdout);
+    drop(execution);
+    drop(sandbox);
+    drop(runtime);
+
+    // Reattach must retain the last result without issuing Guest.Init again.
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+    let sandbox = runtime.get(&box_id).await.unwrap().unwrap();
+    sandbox.start().await.unwrap();
+    let info = sandbox.info().await.unwrap();
+    assert_eq!(info.pid, pid);
+    assert_eq!(info.ssh_status, Some(status.clone()));
+    sandbox.stop().await.unwrap();
+    assert_eq!(
+        sandbox.info().await.unwrap().ssh_status,
+        Some(status.clone())
+    );
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+    drop(sandbox);
+    drop(runtime);
+
+    // Seed a previous outcome so a new boot must actually replace it.
+    let connection = rusqlite::Connection::open(home.path.join("db/boxlite.db")).unwrap();
+    connection
+        .execute(
+            "UPDATE box_state SET json = json_set(json, '$.ssh_status', json(?1)) WHERE id = ?2",
+            rusqlite::params![r#"{"state":"ready","error_reason":null}"#, box_id],
+        )
+        .unwrap();
+    drop(connection);
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+    let sandbox = runtime.get(&box_id).await.unwrap().unwrap();
+    assert_eq!(
+        sandbox.info().await.unwrap().ssh_status.unwrap().state,
+        boxlite::SshState::Ready
+    );
+    sandbox.start().await.unwrap();
+    assert_eq!(sandbox.info().await.unwrap().ssh_status, Some(status));
+    sandbox.stop().await.unwrap();
     runtime
         .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
         .await

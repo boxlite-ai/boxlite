@@ -27,15 +27,15 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-/// Fully validated before Guest.Init performs any mount or network changes.
-pub(crate) struct SshConfig {
+/// Fully validated before any SSH listener is opened.
+struct SshConfig {
     listen_addr: SocketAddr,
     authorizer: Arc<SshAuthorizer>,
     server: Arc<russh::server::Config>,
 }
 
 impl SshConfig {
-    pub(crate) fn parse(config: boxlite_shared::SshConfig) -> BoxliteResult<Self> {
+    fn parse(config: boxlite_shared::SshConfig) -> BoxliteResult<Self> {
         let listen_addr = config.listen_address.parse().map_err(|_| {
             BoxliteError::Config("invalid SSH listen address: expected IP:port".into())
         })?;
@@ -113,7 +113,43 @@ impl SshManager {
         let _ = self.guest.set(Arc::downgrade(guest));
     }
 
-    pub(crate) async fn start(&self, ssh: SshConfig) -> BoxliteResult<()> {
+    /// SSH is optional: return a sanitized outcome instead of failing Guest.Init.
+    pub(crate) async fn configure(
+        &self,
+        config: Option<boxlite_shared::SshConfig>,
+    ) -> boxlite_shared::SshInitResult {
+        use boxlite_shared::{SshInitResult, SshInitState};
+        let Some(config) = config else {
+            return SshInitResult {
+                state: SshInitState::Disabled.into(),
+                error_reason: None,
+            };
+        };
+        let config = match SshConfig::parse(config) {
+            Ok(config) => config,
+            Err(error) => return Self::failure("validate", error),
+        };
+        match self.start(config).await {
+            Ok(()) => SshInitResult {
+                state: SshInitState::Ready.into(),
+                error_reason: None,
+            },
+            Err(error) => Self::failure("listen", error),
+        }
+    }
+
+    fn failure(stage: &'static str, error: BoxliteError) -> boxlite_shared::SshInitResult {
+        // All parsing errors above and in auth use fixed messages, never decoder
+        // errors or raw input. Listener errors contain only a parsed IP and port.
+        let reason = format!("SSH {stage}: {error}");
+        warn!(stage, error_reason = %reason, "SSH initialization failed; continuing guest initialization");
+        boxlite_shared::SshInitResult {
+            state: boxlite_shared::SshInitState::Failed.into(),
+            error_reason: Some(reason),
+        }
+    }
+
+    async fn start(&self, ssh: SshConfig) -> BoxliteResult<()> {
         let guest = self.guest.get().and_then(Weak::upgrade).ok_or_else(|| {
             BoxliteError::Internal("SSH manager is not attached to the guest server".into())
         })?;

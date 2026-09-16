@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 
-pub use crate::litebox::{BoxState, BoxStatus, HealthStatus};
+pub use crate::litebox::{BoxState, BoxStatus, HealthStatus, SshState, SshStatus};
 use crate::runtime::id::BoxID;
 use crate::runtime::options::{NetworkConfig, NetworkMode, PortProtocol};
 /// Re-exported here so the CLI can reach volume metadata the same way it
@@ -488,6 +488,10 @@ pub struct BoxInfo {
     /// Health status.
     pub health_status: HealthStatus,
 
+    /// Latest SSH initialization result; not a liveness probe.
+    #[serde(default)]
+    pub ssh_status: Option<SshStatus>,
+
     /// Exit code of the container's init process, when the box stopped
     /// because its main command exited (docker semantics).
     pub exit_code: Option<i32>,
@@ -557,6 +561,7 @@ impl BoxInfo {
             auto_delete: config.options.effective_auto_delete(),
             auto_resume: config.options.auto_resume.unwrap_or(true),
             health_status: state.health_status,
+            ssh_status: state.ssh_status.clone(),
             exit_code: state.exit_code,
             started_at: state.started_at,
             // Activity is recorded by the control plane, not by a local box.
@@ -580,6 +585,7 @@ impl PartialEq for BoxInfo {
             && self.auto_delete == other.auto_delete
             && self.auto_resume == other.auto_resume
             && self.health_status == other.health_status
+            && self.ssh_status == other.ssh_status
     }
 }
 
@@ -604,6 +610,10 @@ pub struct BoxStateInfo {
 
     /// Init exit code, when the box stopped because its command exited.
     pub exit_code: Option<i32>,
+
+    /// Latest SSH initialization result, retained across stop and reattach.
+    #[serde(default)]
+    pub ssh_status: Option<SshStatus>,
 }
 
 impl BoxStateInfo {
@@ -614,6 +624,7 @@ impl BoxStateInfo {
             running: state.status.is_running(),
             pid: state.pid,
             exit_code: state.exit_code,
+            ssh_status: state.ssh_status.clone(),
         }
     }
 }
@@ -627,6 +638,7 @@ impl From<&BoxInfo> for BoxStateInfo {
             running: info.status.is_running(),
             pid: info.pid,
             exit_code: info.exit_code,
+            ssh_status: info.ssh_status.clone(),
         }
     }
 }

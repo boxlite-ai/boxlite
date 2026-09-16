@@ -202,6 +202,53 @@ impl std::fmt::Display for BoxStatus {
     }
 }
 
+/// Result of the most recent SSH initialization, not a liveness probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SshState {
+    Disabled,
+    Ready,
+    Failed,
+}
+
+impl std::fmt::Display for SshState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Disabled => "disabled",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        })
+    }
+}
+
+/// SSH initialization status. Stop and reattach preserve this result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshStatus {
+    pub state: SshState,
+    /// Sanitized diagnostic, present only when initialization failed.
+    pub error_reason: Option<String>,
+}
+
+impl SshStatus {
+    pub(crate) fn from_guest(result: boxlite_shared::SshInitResult) -> Option<Self> {
+        use boxlite_shared::SshInitState;
+        let state = match SshInitState::try_from(result.state).ok()? {
+            SshInitState::Disabled => SshState::Disabled,
+            SshInitState::Ready => SshState::Ready,
+            SshInitState::Failed => SshState::Failed,
+            SshInitState::Unspecified => return None,
+        };
+        Some(Self {
+            state,
+            error_reason: if state == SshState::Failed {
+                result.error_reason
+            } else {
+                None
+            },
+        })
+    }
+}
+
 /// Dynamic box state (changes during lifecycle).
 ///
 /// This is updated frequently and persisted to database.
@@ -222,6 +269,9 @@ pub struct BoxState {
     /// Health status.
     #[serde(default)]
     pub health_status: HealthStatus,
+    /// Latest SSH initialization result; absent for old guests or records.
+    #[serde(default)]
+    pub ssh_status: Option<SshStatus>,
     /// Human-readable reason the box entered `Failed` (or other terminal state).
     /// Set by `mark_failed`; cleared by `mark_stop` and successful transitions.
     /// Serde default keeps existing DB rows readable without migration.
@@ -351,6 +401,7 @@ impl BoxState {
             last_updated: Utc::now(),
             lock_id: None,
             health_status: HealthStatus::new(),
+            ssh_status: None,
             error_reason: None,
             exit_code: None,
             started_at: None,
@@ -493,6 +544,59 @@ impl Default for BoxState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ssh_status_maps_guest_results_and_ignores_unknown_states() {
+        use boxlite_shared::{SshInitResult, SshInitState};
+        for (wire, expected) in [
+            (SshInitState::Disabled, SshState::Disabled),
+            (SshInitState::Ready, SshState::Ready),
+            (SshInitState::Failed, SshState::Failed),
+        ] {
+            let status = SshStatus::from_guest(SshInitResult {
+                state: wire.into(),
+                error_reason: Some("sanitized reason".into()),
+            })
+            .unwrap();
+            assert_eq!(status.state, expected);
+            assert_eq!(
+                status.error_reason.as_deref(),
+                (expected == SshState::Failed).then_some("sanitized reason")
+            );
+        }
+        for unknown in [0, 99] {
+            assert!(
+                SshStatus::from_guest(SshInitResult {
+                    state: unknown,
+                    error_reason: None
+                })
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn ssh_status_defaults_for_old_records_and_survives_stop() {
+        let mut state = BoxState::new();
+        let mut old = serde_json::to_value(&state).unwrap();
+        old.as_object_mut().unwrap().remove("ssh_status");
+        assert!(
+            serde_json::from_value::<BoxState>(old)
+                .unwrap()
+                .ssh_status
+                .is_none()
+        );
+        let status = SshStatus {
+            state: SshState::Failed,
+            error_reason: Some("SSH listen: address in use".into()),
+        };
+        state.ssh_status = Some(status.clone());
+        state.set_status(BoxStatus::Running);
+        state.mark_stop();
+        assert_eq!(state.ssh_status, Some(status.clone()));
+        let info = crate::BoxStateInfo::new(&state);
+        assert_eq!(info.ssh_status, Some(status));
+    }
 
     #[test]
     fn test_status_is_active() {

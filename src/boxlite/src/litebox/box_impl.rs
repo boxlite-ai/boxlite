@@ -1224,7 +1224,11 @@ impl BoxImpl {
         // operations succeed. If any operation fails, the guard's Drop will
         // cleanup the VM process and directory.
         let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
-        let (live_state, mut cleanup_guard) = builder.build().await?;
+        let super::init::BoxBuildResult {
+            live_state,
+            mut cleanup_guard,
+            ssh_status,
+        } = builder.build().await?;
 
         // The box is up. If we adopted one whose init was already running, that
         // init needs no `Container.Start`; recording it now keeps
@@ -1273,6 +1277,7 @@ impl BoxImpl {
             // so its existing Some/None value must be preserved.
             if !adopting_running {
                 state.mark_started();
+                state.ssh_status = ssh_status;
             }
 
             // This is a fresh run of the box's main command, so the exit code

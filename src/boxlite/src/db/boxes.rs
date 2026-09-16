@@ -385,6 +385,42 @@ mod tests {
     const TEST_ID_3: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R3";
 
     #[test]
+    fn ssh_status_survives_database_reopen_and_legacy_rows() {
+        let (store, dir) = create_test_db();
+        let config = create_test_config(TEST_ID_1);
+        let mut state = BoxState::new();
+        state.ssh_status = Some(crate::SshStatus {
+            state: crate::SshState::Failed,
+            error_reason: Some("SSH validate: invalid host private key".into()),
+        });
+        state.set_status(crate::BoxStatus::Running);
+        store.save(&config, &state).unwrap();
+        drop(store);
+        let reopened = BoxStore::new(Database::open(&dir.path().join("test.db")).unwrap());
+        let loaded = reopened.load_state(TEST_ID_1).unwrap().unwrap();
+        assert_eq!(loaded.status, crate::BoxStatus::Running);
+        assert_eq!(loaded.ssh_status, state.ssh_status);
+        let mut legacy = serde_json::to_value(&loaded).unwrap();
+        legacy.as_object_mut().unwrap().remove("ssh_status");
+        reopened
+            .db
+            .conn()
+            .execute(
+                "UPDATE box_state SET json = ?1 WHERE id = ?2",
+                params![legacy.to_string(), TEST_ID_1],
+            )
+            .unwrap();
+        assert!(
+            reopened
+                .load_state(TEST_ID_1)
+                .unwrap()
+                .unwrap()
+                .ssh_status
+                .is_none()
+        );
+    }
+
+    #[test]
     fn test_save_and_load_config() {
         let (store, _dir) = create_test_db();
         let config = create_test_config(TEST_ID_1);

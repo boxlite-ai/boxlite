@@ -99,7 +99,24 @@ message GuestInitResponse {
   }
 }
 
-message GuestInitSuccess {}
+message GuestInitSuccess {
+  // Absent for guests predating SSH initialization reporting.
+  SshInitResult ssh_status = 1;
+}
+
+// Most recent initialization result, not a continuous liveness probe.
+message SshInitResult {
+  SshInitState state = 1;
+  // Sanitized diagnostic, present only on failure.
+  optional string error_reason = 2;
+}
+
+enum SshInitState {
+  SSH_INIT_STATE_UNSPECIFIED = 0;
+  SSH_INIT_STATE_DISABLED = 1;
+  SSH_INIT_STATE_READY = 2;
+  SSH_INIT_STATE_FAILED = 3;
+}
 
 message GuestInitError {
   string reason = 1;

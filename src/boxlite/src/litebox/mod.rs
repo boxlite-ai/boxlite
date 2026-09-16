@@ -29,7 +29,7 @@ pub use network::{
     BoxConnection, BoxReader, BoxTunnel, BoxWriter, NetworkHandle, SocketAddress, TunnelForwarder,
 };
 pub use snapshot::SnapshotHandle;
-pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
+pub use state::{BoxState, BoxStatus, HealthState, HealthStatus, SshState, SshStatus};
 
 pub(crate) use box_impl::SharedBoxImpl;
 pub(crate) use init::BoxBuilder;

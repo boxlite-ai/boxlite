@@ -24,7 +24,10 @@ impl GuestInterface {
     ///
     /// This must be called first after connection, before Container.Init.
     /// Sets up volumes (virtiofs + block devices) and network.
-    pub async fn init(&mut self, config: GuestInitConfig) -> BoxliteResult<()> {
+    pub async fn init(
+        &mut self,
+        config: GuestInitConfig,
+    ) -> BoxliteResult<Option<crate::SshStatus>> {
         tracing::debug!("Sending GuestInit request");
         tracing::trace!(
             volumes = config.volumes.len(),
@@ -53,9 +56,9 @@ impl GuestInterface {
         let response = self.client.init(request).await?.into_inner();
 
         match response.result {
-            Some(guest_init_response::Result::Success(_)) => {
+            Some(guest_init_response::Result::Success(result)) => {
                 tracing::debug!("Guest initialized");
-                Ok(())
+                Ok(result.ssh_status.and_then(crate::SshStatus::from_guest))
             }
             Some(guest_init_response::Result::Error(err)) => {
                 tracing::error!("Guest init failed: {}", err.reason);

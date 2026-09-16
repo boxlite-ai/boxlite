@@ -75,6 +75,31 @@ impl std::fmt::Debug for generated::SshConfig {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn ssh_init_outcome_wire_roundtrip_and_old_guest_compatibility() {
+        use super::{GuestInitSuccess, SshInitResult, SshInitState};
+        use prost::Message;
+        assert!(GuestInitSuccess::decode(&[][..])
+            .unwrap()
+            .ssh_status
+            .is_none());
+        for state in [
+            SshInitState::Disabled,
+            SshInitState::Ready,
+            SshInitState::Failed,
+        ] {
+            let success = GuestInitSuccess {
+                ssh_status: Some(SshInitResult {
+                    state: state.into(),
+                    error_reason: (state == SshInitState::Failed)
+                        .then(|| "SSH listen: address in use".into()),
+                }),
+            };
+            let decoded = GuestInitSuccess::decode(success.encode_to_vec().as_slice()).unwrap();
+            assert_eq!(decoded, success);
+        }
+    }
+
+    #[test]
     fn ssh_init_wire_roundtrip_redacts_private_key_debug() {
         use prost::Message;
         let request = super::GuestInitRequest {

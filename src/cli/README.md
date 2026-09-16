@@ -517,9 +517,17 @@ Display detailed information on one or more boxes (JSON, YAML, or Go-style templ
 ```bash
 boxlite inspect mybox
 boxlite inspect -f '{{.State.Status}}' mybox
+boxlite inspect -f '{{.State.Ssh.Status}}' mybox
+boxlite inspect -f '{{.State.Ssh.ErrorReason}}' mybox
 boxlite inspect --latest -f yaml
 boxlite inspect box1 box2 -f json
 ```
+
+`State.Ssh` records the latest SSH initialization result: `Status` is
+`disabled`, `ready`, or `failed`; `ErrorReason` is populated only on failure.
+It is `null` before initialization or when an older guest/record has no result.
+SSH failure does not block workload startup. Stop and reattach preserve this
+result; a new initialization replaces it. `ready` is not a liveness probe.
 
 ### `boxlite images`
 

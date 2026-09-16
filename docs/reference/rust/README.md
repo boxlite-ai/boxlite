@@ -238,6 +238,9 @@ pub struct BoxInfo {
     /// Current lifecycle status
     pub status: BoxStatus,
 
+    /// Latest SSH initialization result, if reported by the guest
+    pub ssh_status: Option<SshStatus>,
+
     /// Creation timestamp (UTC)
     pub created_at: DateTime<Utc>,
 
@@ -682,9 +685,36 @@ forwarding remain disabled for both methods.
 
 The host private key must be unencrypted OpenSSH text supplied by the caller.
 The guest uses the injected key in memory; it does not generate keys or read
-SSH files. `Guest.Init` validates the entire configuration before mounts and
-network setup, then binds SSH before reporting success. There is no live SSH
-configuration RPC. An absent `ssh_config` disables SSH, including for old boxes.
+SSH files. After mounts and network setup succeed, `Guest.Init` validates the
+entire SSH configuration before opening a listener. Invalid configuration,
+keys, authentication settings, or a listener bind failure produce a sanitized
+SSH diagnostic and do not prevent the main workload from starting. Mount,
+network, and workload errors still fail startup. `Guest.Init` remains one-shot,
+even after SSH initialization fails; there is no live configuration or retry RPC.
+
+`LiteBox::info`, `BoxliteRuntime::get_info`, and `list_info` expose
+`ssh_status: Option<SshStatus>` (also available on `BoxState` and `BoxStateInfo`):
+
+- `SshState::Disabled`: this initialization had no SSH configuration.
+- `SshState::Ready`: validation and listener binding succeeded.
+- `SshState::Failed`: SSH initialization failed; `error_reason` contains a
+  sanitized diagnostic. Other states have no error reason.
+- `None`: no result yet, an old database record, or an older guest that does
+  not return an SSH result.
+
+This records the **latest initialization**, not ongoing service health.
+Stopping and reattaching preserve the result; a new initialization replaces it.
+There is no automatic retry or background monitoring. CLI `inspect` exposes
+`State.Ssh.Status` (`disabled`, `ready`, `failed`) and `State.Ssh.ErrorReason`
+in JSON, YAML, and templates. `State.Ssh` is `null` when the result is absent:
+
+```bash
+boxlite inspect -f '{{.State.Ssh.Status}}' mybox
+boxlite inspect -f '{{.State.Ssh.ErrorReason}}' mybox
+```
+
+This status is currently exposed by the local Rust runtime and CLI; other SDKs
+and the REST contract do not expose it.
 
 The complete configuration, including the private key, is persisted with box
 options and retained on restart, clone, export, and import. Clones therefore

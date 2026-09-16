@@ -57,6 +57,21 @@ fn certificate(
     builder.sign(ca).unwrap()
 }
 
+fn ssh_result(
+    response: boxlite_shared::GuestInitResponse,
+    expected: boxlite_shared::SshInitState,
+) -> boxlite_shared::SshInitResult {
+    let Some(guest_init_response::Result::Success(success)) = response.result else {
+        panic!("Guest.Init must succeed");
+    };
+    let status = success.ssh_status.expect("SSH outcome");
+    assert_eq!(status.state(), expected);
+    if expected != boxlite_shared::SshInitState::Failed {
+        assert!(status.error_reason.is_none());
+    }
+    status
+}
+
 struct TestGuest {
     guest: Arc<GuestServer>,
     client: GuestClient<Channel>,
@@ -118,10 +133,10 @@ impl TestGuest {
         let address = socket.local_addr().unwrap();
         config.listen_address = address.to_string();
         drop(socket);
-        assert!(matches!(
-            self.init(Some(config)).await.unwrap().result,
-            Some(guest_init_response::Result::Success(_))
-        ));
+        ssh_result(
+            self.init(Some(config)).await.unwrap(),
+            boxlite_shared::SshInitState::Ready,
+        );
         address
     }
 
@@ -365,7 +380,7 @@ async fn grpc_ssh_rejects_untrusted_credentials_and_invalid_signatures() {
 }
 
 #[tokio::test]
-async fn grpc_ssh_validates_all_inputs_before_mounting_and_leaves_no_listener() {
+async fn grpc_ssh_invalid_inputs_allow_init_and_leave_no_listener() {
     let host = private_key();
     let user = private_key();
     let ca = private_key();
@@ -406,34 +421,38 @@ async fn grpc_ssh_validates_all_inputs_before_mounting_and_leaves_no_listener() 
     invalid.push(ssh);
     for ssh in invalid {
         let mut fixture = TestGuest::new().await;
-        let status = fixture
-            .client
-            .init(GuestInitRequest {
-                ssh_config: Some(ssh),
-                network: None,
-                // This mount would fail if reached. SSH validation must win first.
-                volumes: vec![boxlite_shared::Volume {
-                    mount_point: "/nonexistent/ssh-test".into(),
-                    container_id: String::new(),
-                    source: Some(boxlite_shared::volume::Source::BlockDevice(
-                        boxlite_shared::BlockDeviceSource {
-                            device: "/nonexistent/ssh-test-device".into(),
-                            ..Default::default()
-                        },
-                    )),
-                }],
-            })
+        let response = fixture
+            .init(Some(ssh))
             .await
-            .unwrap_err();
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
-        assert!(!status.message().contains("private-marker"));
-        assert!(!fixture.guest.init_state.lock().await.initialized);
+            .expect("SSH errors must not fail Guest.Init");
+        let status = ssh_result(response.clone(), boxlite_shared::SshInitState::Failed);
+        let reason = status.error_reason.unwrap();
+        assert!(reason.contains("SSH validate:"));
+        assert!(!reason.contains("private-marker"));
+        assert!(!reason.contains(
+            host.to_openssh(Default::default())
+                .unwrap()
+                .lines()
+                .nth(1)
+                .unwrap()
+        ));
+        assert!(matches!(
+            response.result,
+            Some(guest_init_response::Result::Success(_))
+        ));
+        assert!(fixture.guest.init_state.lock().await.initialized);
+        assert!(fixture.guest.ssh_manager.listener.lock().await.is_none());
+        let duplicate = fixture.init(None).await.unwrap();
+        assert!(matches!(
+            duplicate.result,
+            Some(guest_init_response::Result::Error(_))
+        ));
         fixture.stop().await;
     }
 }
 
 #[tokio::test]
-async fn grpc_ssh_bind_failure_can_retry_and_duplicate_init_is_rejected() {
+async fn grpc_ssh_bind_failure_allows_init_and_duplicate_init_is_rejected() {
     let host = private_key();
     let user = private_key();
     let mut fixture = TestGuest::new().await;
@@ -441,33 +460,34 @@ async fn grpc_ssh_bind_failure_can_retry_and_duplicate_init_is_rejected() {
     let address = occupied.local_addr().unwrap();
     let mut ssh = config(&host, &[&user], None);
     ssh.listen_address = address.to_string();
-    assert_eq!(
-        fixture.init(Some(ssh.clone())).await.unwrap_err().code(),
-        tonic::Code::FailedPrecondition
-    );
-    assert!(!fixture.guest.init_state.lock().await.initialized);
-    assert!(fixture.guest.ssh_manager.listener.lock().await.is_none());
-    drop(occupied);
+    let response = fixture
+        .init(Some(ssh.clone()))
+        .await
+        .expect("SSH bind errors must not fail Guest.Init");
+    let status = ssh_result(response.clone(), boxlite_shared::SshInitState::Failed);
+    assert!(status.error_reason.unwrap().contains("SSH listen:"));
     assert!(matches!(
-        fixture.init(Some(ssh.clone())).await.unwrap().result,
+        response.result,
         Some(guest_init_response::Result::Success(_))
     ));
+    assert!(fixture.guest.init_state.lock().await.initialized);
+    assert!(fixture.guest.ssh_manager.listener.lock().await.is_none());
+    drop(occupied);
     assert!(matches!(
         fixture.init(Some(ssh)).await.unwrap().result,
         Some(guest_init_response::Result::Error(_))
     ));
-    let _client = connect(address, &host).await;
-    fixture.stop().await;
     let _rebound = TcpListener::bind(address).await.unwrap();
+    fixture.stop().await;
 }
 
 #[tokio::test]
 async fn grpc_without_ssh_does_not_start_a_listener() {
     let mut fixture = TestGuest::new().await;
-    assert!(matches!(
-        fixture.init(None).await.unwrap().result,
-        Some(guest_init_response::Result::Success(_))
-    ));
+    ssh_result(
+        fixture.init(None).await.unwrap(),
+        boxlite_shared::SshInitState::Disabled,
+    );
     assert!(fixture.guest.ssh_manager.listener.lock().await.is_none());
     fixture.stop().await;
 }
@@ -517,12 +537,19 @@ async fn ssh_connection_and_channel_limits_remain_enforced() {
 async fn ssh_init_after_shutdown_cannot_reopen_a_listener() {
     let mut fixture = TestGuest::new().await;
     fixture.guest.ssh_manager.shutdown().await.unwrap();
-    let status = fixture
-        .init(Some(config(&private_key(), &[&private_key()], None)))
-        .await
-        .unwrap_err();
-    assert_eq!(status.code(), tonic::Code::FailedPrecondition);
-    assert!(!fixture.guest.init_state.lock().await.initialized);
+    let status = ssh_result(
+        fixture
+            .init(Some(config(&private_key(), &[&private_key()], None)))
+            .await
+            .unwrap(),
+        boxlite_shared::SshInitState::Failed,
+    );
+    assert!(status
+        .error_reason
+        .unwrap()
+        .contains("shutdown has started"));
+    assert!(fixture.guest.init_state.lock().await.initialized);
+    assert!(fixture.guest.ssh_manager.listener.lock().await.is_none());
     fixture.stop().await;
 }
 
@@ -550,4 +577,116 @@ async fn ssh_unauthenticated_connection_times_out_and_shutdown_drains_sessions()
     let _ = tokio::time::timeout(Duration::from_secs(2), authenticated)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn grpc_ssh_failure_does_not_hide_mount_or_network_errors() {
+    for network_failure in [false, true] {
+        let mut fixture = TestGuest::new().await;
+        let response = fixture
+            .client
+            .init(GuestInitRequest {
+                ssh_config: Some(boxlite_shared::SshConfig {
+                    listen_address: "invalid".into(),
+                    ..Default::default()
+                }),
+                volumes: if network_failure {
+                    vec![]
+                } else {
+                    vec![boxlite_shared::Volume {
+                        source: Some(boxlite_shared::volume::Source::BlockDevice(
+                            boxlite_shared::BlockDeviceSource {
+                                device: fixture
+                                    ._root
+                                    .path()
+                                    .join("missing-device")
+                                    .to_string_lossy()
+                                    .into_owned(),
+                                ..Default::default()
+                            },
+                        )),
+                        ..Default::default()
+                    }]
+                },
+                network: network_failure.then(|| boxlite_shared::NetworkInit {
+                    interface: "ssh-test-missing".into(),
+                    ip: None,
+                    gateway: None,
+                }),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let Some(guest_init_response::Result::Error(error)) = response.result else {
+            panic!("essential guest setup must fail");
+        };
+        assert!(error.reason.contains(if network_failure {
+            "configure network"
+        } else {
+            "mount volumes"
+        }));
+        assert!(!fixture.guest.init_state.lock().await.initialized);
+        assert!(fixture.guest.ssh_manager.listener.lock().await.is_none());
+        fixture.stop().await;
+    }
+}
+
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for CapturedLogs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn ssh_failure_logs_and_status_redact_all_configuration_inputs() {
+    use tracing::instrument::WithSubscriber;
+    let host = private_key();
+    let user = private_key();
+    let ca = private_key();
+    let secret = host.to_openssh(Default::default()).unwrap().to_string();
+    let secret_line = secret.lines().nth(1).unwrap();
+    for field in ["address", "host", "authorized", "ca", "principal"] {
+        let fixture = TestGuest::new().await;
+        let mut ssh = config(&host, &[&user], Some(&ca));
+        match field {
+            "address" => ssh.listen_address = secret.clone(),
+            "host" => ssh.host_private_key = format!("invalid-{secret}"),
+            "authorized" => ssh.authorized_keys.push(secret.clone()),
+            "ca" => ssh.ca.as_mut().unwrap().public_key = secret.clone(),
+            "principal" => ssh.ca.as_mut().unwrap().principal = secret.clone(),
+            _ => unreachable!(),
+        }
+        let logs = CapturedLogs::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_writer(move || writer.clone())
+            .finish();
+        let status = fixture
+            .guest
+            .ssh_manager
+            .configure(Some(ssh))
+            .with_subscriber(subscriber)
+            .await;
+        assert_eq!(status.state(), boxlite_shared::SshInitState::Failed);
+        let logged = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        let reason = status.error_reason.unwrap();
+        assert!(logged.contains("SSH initialization failed"));
+        assert!(logged.contains("validate"));
+        for diagnostic in [&logged, &reason] {
+            assert!(!diagnostic.contains(secret_line), "leaked {field}");
+            assert!(!diagnostic.contains("PRIVATE KEY"), "leaked {field}");
+        }
+        assert!(fixture.guest.ssh_manager.listener.lock().await.is_none());
+        fixture.stop().await;
+    }
 }

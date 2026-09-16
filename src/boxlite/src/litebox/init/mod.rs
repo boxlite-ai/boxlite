@@ -171,6 +171,12 @@ fn validate_persisted_options(
     options.sanitize_persisted()
 }
 
+pub(crate) struct BoxBuildResult {
+    pub live_state: LiveState,
+    pub cleanup_guard: types::CleanupGuard,
+    pub ssh_status: Option<crate::SshStatus>,
+}
+
 impl BoxBuilder {
     /// Create a new builder from config and state.
     ///
@@ -204,9 +210,9 @@ impl BoxBuilder {
     /// Build and initialize LiveState.
     ///
     /// Executes all initialization stages with automatic cleanup on failure.
-    /// Returns (LiveState, CleanupGuard) - caller must disarm guard after all
+    /// Returns live resources and initialization outcome; disarm the guard after all
     /// operations succeed (including DB persist).
-    pub(crate) async fn build(self) -> BoxliteResult<(LiveState, types::CleanupGuard)> {
+    pub(crate) async fn build(self) -> BoxliteResult<BoxBuildResult> {
         use std::time::Instant;
 
         let total_start = Instant::now();
@@ -305,7 +311,11 @@ impl BoxBuilder {
                 bind_mount,
             );
 
-            Ok::<(LiveState, types::CleanupGuard), BoxliteError>((live_state, guard))
+            Ok::<BoxBuildResult, BoxliteError>(BoxBuildResult {
+                live_state,
+                cleanup_guard: guard,
+                ssh_status: ctx.ssh_status.take(),
+            })
         };
 
         match inner.await {

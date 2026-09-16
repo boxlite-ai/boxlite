@@ -17,10 +17,9 @@ impl GuestService for GuestServer {
     /// Initialize guest environment.
     ///
     /// This must be called first after connection. It:
-    /// 0. Validates optional SSH configuration
     /// 1. Mounts all volumes (virtiofs + block devices)
     /// 2. Configures network (if specified)
-    /// 3. Starts SSH (if configured)
+    /// 3. Attempts SSH initialization (failure does not block the workload)
     ///
     /// Note: Rootfs setup is handled by Container.Init.
     async fn init(
@@ -40,13 +39,6 @@ impl GuestService for GuestServer {
                 })),
             }));
         }
-
-        // Parse every SSH input before initialization has side effects.
-        let ssh_config = req
-            .ssh_config
-            .map(crate::service::ssh::SshConfig::parse)
-            .transpose()
-            .map_err(|error| Status::invalid_argument(error.to_string()))?;
 
         // Step 1: Mount all volumes (virtiofs + block devices)
         // Empty mount_point = guest determines path from tag
@@ -79,19 +71,15 @@ impl GuestService for GuestServer {
             }
         }
 
-        if let Some(ssh_config) = ssh_config {
-            self.ssh_manager
-                .start(ssh_config)
-                .await
-                .map_err(|error| Status::failed_precondition(error.to_string()))?;
-        }
+        let ssh_status = self.ssh_manager.configure(req.ssh_config).await;
 
-        // Mark as initialized only after the SSH socket has bound successfully.
         init_state.initialized = true;
 
         info!("✅ Guest initialized successfully");
         Ok(Response::new(GuestInitResponse {
-            result: Some(guest_init_response::Result::Success(GuestInitSuccess {})),
+            result: Some(guest_init_response::Result::Success(GuestInitSuccess {
+                ssh_status: Some(ssh_status),
+            })),
         }))
     }
 

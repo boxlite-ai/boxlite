@@ -9,8 +9,8 @@ pub(crate) const SSH_USER: &str = "root";
 pub(crate) enum AuthorizerError {
     MissingAuthentication,
     InvalidPublicKey(usize),
-    InvalidCaKey(String),
-    UnsupportedCaAlgorithm(Algorithm),
+    InvalidCaKey,
+    UnsupportedCaAlgorithm,
     InvalidPrincipal,
 }
 
@@ -19,10 +19,10 @@ impl std::fmt::Display for AuthorizerError {
         match self {
             Self::MissingAuthentication => write!(f, "SSH requires a CA or at least one authorized key"),
             Self::InvalidPublicKey(index) => write!(f, "invalid SSH authorized key at index {index}: expected one OpenSSH public key without options"),
-            Self::InvalidCaKey(error) => write!(f, "invalid SSH CA public key: {error}"),
-            Self::UnsupportedCaAlgorithm(algorithm) => write!(
+            Self::InvalidCaKey => write!(f, "invalid SSH CA public key: expected an OpenSSH public key"),
+            Self::UnsupportedCaAlgorithm => write!(
                 f,
-                "unsupported SSH CA algorithm {algorithm}; only Ed25519 is enabled"
+                "unsupported SSH CA algorithm; only Ed25519 is enabled"
             ),
             Self::InvalidPrincipal => write!(
                 f,
@@ -129,11 +129,9 @@ impl CertificateAuthorizer {
         }
 
         let ca_public_key = PublicKey::from_openssh(ca_public_key.trim())
-            .map_err(|error| AuthorizerError::InvalidCaKey(error.to_string()))?;
+            .map_err(|_| AuthorizerError::InvalidCaKey)?;
         if ca_public_key.algorithm() != Algorithm::Ed25519 {
-            return Err(AuthorizerError::UnsupportedCaAlgorithm(
-                ca_public_key.algorithm(),
-            ));
+            return Err(AuthorizerError::UnsupportedCaAlgorithm);
         }
 
         Ok(Self {
@@ -239,7 +237,7 @@ mod tests {
     fn rejects_invalid_ca_and_unscoped_principal() {
         assert!(matches!(
             CertificateAuthorizer::new("not a key", "box_123"),
-            Err(AuthorizerError::InvalidCaKey(_))
+            Err(AuthorizerError::InvalidCaKey)
         ));
         assert!(matches!(
             CertificateAuthorizer::new(&public_key(), ""),
@@ -263,7 +261,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             CertificateAuthorizer::new(&ecdsa_ca, "box_123"),
-            Err(AuthorizerError::UnsupportedCaAlgorithm(_))
+            Err(AuthorizerError::UnsupportedCaAlgorithm)
         ));
     }
 

@@ -2320,6 +2320,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ssh_status_reaches_all_rust_info_queries() {
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config(false);
+        let mut state = BoxState::new();
+        state.ssh_status = Some(crate::SshStatus {
+            state: crate::SshState::Failed,
+            error_reason: Some("SSH listen: address in use".into()),
+        });
+        runtime.box_manager.add_box(&config, &state).unwrap();
+        let info = runtime.get_info(config.id.as_str()).await.unwrap().unwrap();
+        assert_eq!(info.ssh_status, state.ssh_status);
+        assert_eq!(
+            crate::BoxStateInfo::from(&info).ssh_status,
+            state.ssh_status
+        );
+        assert_eq!(
+            runtime.list_info().await.unwrap()[0].ssh_status,
+            state.ssh_status
+        );
+        let (handle, _) = runtime.get_or_create_box_impl(config, state.clone());
+        assert_eq!(handle.info().ssh_status, state.ssh_status);
+        let mut old = serde_json::to_value(&info).unwrap();
+        old.as_object_mut().unwrap().remove("ssh_status");
+        assert!(
+            serde_json::from_value::<crate::BoxInfo>(old)
+                .unwrap()
+                .ssh_status
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn get_info_does_not_create_cached_box_handle() {
         let (runtime, _dir) = create_test_runtime();
         let config = test_box_config(false);
