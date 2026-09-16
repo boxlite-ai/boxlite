@@ -116,6 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     GitProvenance::new(std::env::var("CARGO_MANIFEST_DIR")?.into()).emit();
 
     let mut config = tonic_build::configure()
+        .skip_debug("boxlite.v1.SshConfig")
         .build_server(true)
         .build_client(true);
 

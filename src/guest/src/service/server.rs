@@ -22,7 +22,6 @@ pub(crate) struct GuestInitState {
 ///
 /// Implements the guest's gRPC services:
 /// - Guest: Agent initialization and management
-/// - Ssh: Live embedded-SSH listener control
 /// - Container: OCI container lifecycle
 /// - Execution: Command execution with bidirectional streaming
 /// - Files: Container-rootfs file transfer
@@ -39,7 +38,7 @@ pub(crate) struct GuestServer {
     /// Execution registry for tracking running executions
     pub registry: ExecutionRegistry,
 
-    /// Independently reconfigurable embedded SSH listener.
+    /// Embedded SSH listener initialized by Guest.Init.
     pub ssh_manager: crate::service::ssh::SshManager,
 
     /// Mount points frozen by Quiesce RPC, thawed by Thaw RPC.
@@ -107,7 +106,6 @@ impl GuestServer {
         let server_builder = Server::builder()
             .add_service(boxlite_shared::ContainerServer::from_arc(server.clone()))
             .add_service(boxlite_shared::GuestServer::from_arc(server.clone()))
-            .add_service(boxlite_shared::SshServer::from_arc(server.clone()))
             .add_service(boxlite_shared::ExecutionServer::from_arc(server.clone()))
             .add_service(boxlite_shared::FilesServer::from_arc(server.clone()));
 

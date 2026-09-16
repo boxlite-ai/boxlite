@@ -47,21 +47,6 @@ service Guest {
   rpc Thaw(ThawRequest) returns (ThawResponse);
 }
 
-// Live control for the embedded SSH listener. SSH is deliberately separate
-// from Guest.Init so credentials and listener policy can be rotated without
-// rebuilding or restarting the guest.
-service Ssh {
-  // Enable SSH or replace policy for subsequent authentication attempts.
-  // Pre-auth transports close; authenticated connections retain their snapshot.
-  rpc Configure(SshConfigureRequest) returns (SshConfigureResponse);
-
-  // Return the currently active listener state.
-  rpc Status(SshStatusRequest) returns (SshStatusResponse);
-
-  // Stop accepts and close pre-auth transports. Authenticated sessions may drain.
-  rpc Disable(SshDisableRequest) returns (SshDisableResponse);
-}
-
 // Command execution
 service Execution {
   // Start execution immediately.
@@ -102,6 +87,9 @@ message GuestInitRequest {
 
   // Network configuration (optional)
   NetworkInit network = 2;
+
+  // Optional embedded SSH listener, configured once at startup.
+  SshConfig ssh_config = 3;
 }
 
 message GuestInitResponse {
@@ -220,42 +208,20 @@ message ThawResponse {
 }
 
 // ============================================================================
-// SSH Service Messages
+// SSH startup configuration
 // ============================================================================
 
-message SshConfigureRequest {
-  // Guest TCP socket address, for example "0.0.0.0:22".
+message SshConfig {
   string listen_address = 1;
-  // OpenSSH public key for the CA trusted to sign user certificates.
-  string ca_public_key = 2;
-  // Required certificate principal (normally the host-owned Box ID).
-  string principal = 3;
+  // Caller-provided, unencrypted OpenSSH private key.
+  string host_private_key = 2;
+  SshCaConfig ca = 3;
+  repeated string authorized_keys = 4;
 }
 
-message SshConfigureResponse {
-  SshStatus status = 1;
-}
-
-message SshStatusRequest {}
-
-message SshStatusResponse {
-  SshStatus status = 1;
-}
-
-message SshDisableRequest {}
-
-message SshDisableResponse {
-  SshStatus status = 1;
-}
-
-message SshStatus {
-  bool enabled = 1;
-  // Actual bound address. Empty while disabled.
-  string listen_address = 2;
-  // Increases when SSH state changes in this guest process; resets on restart.
-  uint64 generation = 3;
-  // SHA-256 fingerprint of the persistent guest host key. Empty while disabled.
-  string host_key_fingerprint = 4;
+message SshCaConfig {
+  string public_key = 1;
+  string principal = 2;
 }
 
 // ============================================================================

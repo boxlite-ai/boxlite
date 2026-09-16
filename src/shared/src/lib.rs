@@ -50,9 +50,6 @@ pub use generated::container_server::{Container, ContainerServer};
 pub use generated::guest_client::GuestClient;
 pub use generated::guest_server::{Guest, GuestServer};
 
-// SSH control service
-pub use generated::ssh_server::{Ssh, SshServer};
-
 // Execution service
 pub use generated::execution_client::ExecutionClient;
 pub use generated::execution_server::{Execution, ExecutionServer};
@@ -64,8 +61,41 @@ pub use generated::files_server::{Files, FilesServer};
 // All generated types
 pub use generated::*;
 
+impl std::fmt::Debug for generated::SshConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshConfig")
+            .field("listen_address", &self.listen_address)
+            .field("host_private_key", &"[REDACTED]")
+            .field("ca", &self.ca)
+            .field("authorized_keys", &self.authorized_keys)
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ssh_init_wire_roundtrip_redacts_private_key_debug() {
+        use prost::Message;
+        let request = super::GuestInitRequest {
+            ssh_config: Some(super::SshConfig {
+                listen_address: "0.0.0.0:22".into(),
+                host_private_key: "test-only-private-marker".into(),
+                ca: Some(super::SshCaConfig {
+                    public_key: "test-ca".into(),
+                    principal: "box_123".into(),
+                }),
+                authorized_keys: vec!["test-user comment".into()],
+            }),
+            ..Default::default()
+        };
+        let decoded = super::GuestInitRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decoded, request);
+        assert!(!format!("{decoded:?}").contains("test-only-private-marker"));
+        let legacy = super::GuestInitRequest::decode(&[][..]).unwrap();
+        assert!(legacy.ssh_config.is_none());
+    }
+
     /// A missing commit is only legitimate when there is no tracked checkout to
     /// read — the condition `build.rs` gates on.
     ///

@@ -30,6 +30,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [ExecResult](#execresult)
 - [Box Configuration](#box-configuration)
   - [BoxOptions](#boxoptions)
+  - [SshConfig](#sshconfig)
   - [AdvancedBoxOptions](#advancedoptions)
   - [RootfsSpec](#rootfsspec)
   - [VolumeSpec](#volumespec)
@@ -566,6 +567,8 @@ Options for constructing a box.
 
 ```rust
 pub struct BoxOptions {
+    /// Optional guest SSH listener, injected at startup (default: None)
+    pub ssh_config: Option<SshConfig>,
     /// Number of CPUs (default: 2)
     pub cpus: Option<u8>,
 
@@ -645,6 +648,49 @@ let options = BoxOptions {
     ..Default::default()
 };
 ```
+
+### SshConfig
+
+The local Rust runtime can configure the embedded guest SSH server at startup:
+
+```rust
+use boxlite::{BoxOptions, SshCaConfig, SshConfig};
+
+let options = BoxOptions {
+    ssh_config: Some(SshConfig {
+        listen_address: "0.0.0.0:22".into(),
+        host_private_key: std::fs::read_to_string("host_ed25519")?,
+        ca: Some(SshCaConfig {
+            public_key: std::fs::read_to_string("ca_ed25519.pub")?,
+            principal: "my_box".into(),
+        }),
+        authorized_keys: vec![std::fs::read_to_string("user_ed25519.pub")?],
+    }),
+    ..Default::default()
+};
+```
+
+Supply a CA, user public keys, or both. Either authentication method can log in
+as `root`; password and anonymous authentication are disabled. Each authorized
+key entry accepts one OpenSSH public key and an optional comment, without
+`authorized_keys` permission options. Comments do not affect key matching.
+Ordinary keys allow commands, PTY, SFTP, and TCP/Unix socket forwarding.
+Certificates must be current user certificates signed by the configured
+Ed25519 CA, contain the configured principal, and have no critical options.
+Certificate extensions control PTY and forwarding permissions. Agent and X11
+forwarding remain disabled for both methods.
+
+The host private key must be unencrypted OpenSSH text supplied by the caller.
+The guest uses the injected key in memory; it does not generate keys or read
+SSH files. `Guest.Init` validates the entire configuration before mounts and
+network setup, then binds SSH before reporting success. There is no live SSH
+configuration RPC. An absent `ssh_config` disables SSH, including for old boxes.
+
+The complete configuration, including the private key, is persisted with box
+options and retained on restart, clone, export, and import. Clones therefore
+retain the same SSH host identity and CA principal. Debug output redacts the
+private key; stored configuration and archives contain it. SSH does not add a
+host port mapping: configure an explicit mapping or use a network tunnel.
 
 ### AdvancedBoxOptions
 

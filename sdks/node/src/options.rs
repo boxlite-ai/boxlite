@@ -556,6 +556,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
         advanced.health_check = health_check;
 
         Ok(BoxOptions {
+            ssh_config: None,
             cpus: js_opts.cpus,
             memory_mib: js_opts.memory_mib,
             disk_size_gb: js_opts.disk_size_gb.map(|v| v as u64),

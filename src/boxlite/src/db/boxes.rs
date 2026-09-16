@@ -398,6 +398,27 @@ mod tests {
     }
 
     #[test]
+    fn ssh_config_survives_database_reopen() {
+        let (store, dir) = create_test_db();
+        let mut config = create_test_config(TEST_ID_1);
+        config.options.ssh_config = Some(crate::SshConfig {
+            listen_address: "0.0.0.0:22".into(),
+            host_private_key: "test-only-private-marker".into(),
+            ca: Some(crate::SshCaConfig {
+                public_key: "test-ca".into(),
+                principal: "box_123".into(),
+            }),
+            authorized_keys: vec!["test-user-one".into(), "test-user-two comment".into()],
+        });
+        store.save(&config, &BoxState::new()).unwrap();
+        drop(store);
+        let reopened = BoxStore::new(Database::open(&dir.path().join("test.db")).unwrap());
+        let loaded = reopened.load_config(TEST_ID_1).unwrap().unwrap();
+        assert_eq!(loaded.options.ssh_config, config.options.ssh_config);
+        assert!(!format!("{loaded:?}").contains("test-only-private-marker"));
+    }
+
+    #[test]
     fn test_legacy_config_rows_with_persisted_socket_paths_load() {
         // Rows written before the BoxSockets redesign persisted `transport`
         // and `ready_socket_path`. They must still deserialize (unknown

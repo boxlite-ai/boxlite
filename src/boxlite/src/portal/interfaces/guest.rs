@@ -33,6 +33,15 @@ impl GuestInterface {
         );
 
         let request = GuestInitRequest {
+            ssh_config: config.ssh_config.map(|ssh| boxlite_shared::SshConfig {
+                listen_address: ssh.listen_address,
+                host_private_key: ssh.host_private_key,
+                ca: ssh.ca.map(|ca| boxlite_shared::SshCaConfig {
+                    public_key: ca.public_key,
+                    principal: ca.principal,
+                }),
+                authorized_keys: ssh.authorized_keys,
+            }),
             volumes: config.volumes.into_iter().map(|v| v.into_proto()).collect(),
             network: config.network.map(|n| NetworkInit {
                 interface: n.interface,
@@ -178,6 +187,7 @@ mod tests {
 /// Configuration for guest initialization.
 #[derive(Debug)]
 pub struct GuestInitConfig {
+    pub ssh_config: Option<crate::SshConfig>,
     /// Volumes to mount (virtiofs + block devices)
     pub volumes: Vec<VolumeConfig>,
     /// Network configuration (optional)

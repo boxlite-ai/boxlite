@@ -82,6 +82,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             let advanced = ctx.config.options.advanced.resolve_container_security()?;
             let bootstrap = GuestBootstrapConfig {
                 guest: GuestInitConfig {
+                    ssh_config: ctx.config.options.ssh_config.clone(),
                     volumes: volume_mgr.build_guest_mounts(),
                     network,
                 },

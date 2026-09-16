@@ -1,4 +1,4 @@
-//! OpenSSH user-certificate authorization for the embedded server.
+//! Immutable SSH authorization parsed at guest initialization.
 
 use russh::keys::ssh_key::certificate::CertType;
 use russh::keys::{Algorithm, Certificate, HashAlg, PublicKey};
@@ -7,6 +7,8 @@ pub(crate) const SSH_USER: &str = "root";
 
 #[derive(Debug)]
 pub(crate) enum AuthorizerError {
+    MissingAuthentication,
+    InvalidPublicKey(usize),
     InvalidCaKey(String),
     UnsupportedCaAlgorithm(Algorithm),
     InvalidPrincipal,
@@ -15,6 +17,8 @@ pub(crate) enum AuthorizerError {
 impl std::fmt::Display for AuthorizerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::MissingAuthentication => write!(f, "SSH requires a CA or at least one authorized key"),
+            Self::InvalidPublicKey(index) => write!(f, "invalid SSH authorized key at index {index}: expected one OpenSSH public key without options"),
             Self::InvalidCaKey(error) => write!(f, "invalid SSH CA public key: {error}"),
             Self::UnsupportedCaAlgorithm(algorithm) => write!(
                 f,
@@ -30,19 +34,79 @@ impl std::fmt::Display for AuthorizerError {
 
 impl std::error::Error for AuthorizerError {}
 
-#[derive(Clone)]
-pub(crate) struct CertificateAuthorizer {
+pub(crate) struct SshAuthorizer {
+    ca: Option<CertificateAuthorizer>,
+    authorized_keys: Vec<PublicKey>,
+}
+
+impl SshAuthorizer {
+    pub(crate) fn new(config: &boxlite_shared::SshConfig) -> Result<Self, AuthorizerError> {
+        if config.ca.is_none() && config.authorized_keys.is_empty() {
+            return Err(AuthorizerError::MissingAuthentication);
+        }
+        let ca = config
+            .ca
+            .as_ref()
+            .map(|ca| CertificateAuthorizer::new(&ca.public_key, &ca.principal))
+            .transpose()?;
+        let authorized_keys = config
+            .authorized_keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| {
+                let key = key.trim();
+                if key.contains(['\r', '\n']) {
+                    return Err(AuthorizerError::InvalidPublicKey(index));
+                }
+                PublicKey::from_openssh(key).map_err(|_| AuthorizerError::InvalidPublicKey(index))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            ca,
+            authorized_keys,
+        })
+    }
+
+    pub(crate) fn authorize_public_key(
+        &self,
+        user: &str,
+        key: &PublicKey,
+    ) -> Option<AuthorizedIdentity> {
+        (user == SSH_USER
+            && self
+                .authorized_keys
+                .iter()
+                .any(|allowed| allowed.key_data() == key.key_data()))
+        .then_some(AuthorizedIdentity {
+            permissions: SessionPermissions {
+                pty: true,
+                port_forwarding: true,
+                agent_forwarding: false,
+                x11_forwarding: false,
+            },
+        })
+    }
+
+    pub(crate) fn authorize_certificate(
+        &self,
+        user: &str,
+        certificate: &Certificate,
+    ) -> Option<AuthorizedIdentity> {
+        self.ca.as_ref()?.authorize(user, certificate)
+    }
+}
+
+struct CertificateAuthorizer {
     ca_fingerprint: russh::keys::ssh_key::Fingerprint,
     principal: String,
 }
 
-/// Capabilities granted by the authenticated OpenSSH user certificate.
+/// Capabilities granted by a successfully authenticated SSH identity.
 ///
-/// OpenSSH certificates are deny-by-default: a capability is available only
-/// when its `permit-*` extension is present. Server-wide policy is applied on
-/// top of this identity at the request handler.
+/// Certificates grant capabilities through `permit-*` extensions; raw keys
+/// grant PTY and forwarding. The handler also applies server-wide limits.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CertificatePermissions {
+pub(crate) struct SessionPermissions {
     pub(crate) pty: bool,
     pub(crate) port_forwarding: bool,
     pub(crate) agent_forwarding: bool,
@@ -51,7 +115,7 @@ pub(crate) struct CertificatePermissions {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthorizedIdentity {
-    pub(crate) permissions: CertificatePermissions,
+    pub(crate) permissions: SessionPermissions,
 }
 
 impl CertificateAuthorizer {
@@ -99,7 +163,7 @@ impl CertificateAuthorizer {
 
         let extensions = certificate.extensions();
         Some(AuthorizedIdentity {
-            permissions: CertificatePermissions {
+            permissions: SessionPermissions {
                 pty: extensions.contains_key("permit-pty"),
                 port_forwarding: extensions.contains_key("permit-port-forwarding"),
                 agent_forwarding: extensions.contains_key("permit-agent-forwarding"),
@@ -304,7 +368,7 @@ mod tests {
         let identity = authorizer.authorize("root", &certificate).unwrap();
         assert_eq!(
             identity.permissions,
-            CertificatePermissions {
+            SessionPermissions {
                 pty: true,
                 port_forwarding: true,
                 agent_forwarding: false,

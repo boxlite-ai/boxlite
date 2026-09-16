@@ -1,7 +1,7 @@
 //! Per-connection russh handler and protocol policy.
 
 use crate::service::server::GuestServer;
-use crate::service::ssh::auth::{CertificateAuthorizer, CertificatePermissions, SSH_USER};
+use crate::service::ssh::auth::{AuthorizedIdentity, SessionPermissions, SshAuthorizer, SSH_USER};
 use crate::service::ssh::bridge::{signal_number, ChannelBridge, Command};
 use crate::service::ssh::forward::ForwardingManager;
 use crate::service::ssh::limits::{
@@ -17,7 +17,7 @@ use russh::{Channel, ChannelId, MethodKind, MethodSet, Pty, Sig};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 #[derive(Default)]
@@ -38,12 +38,11 @@ impl PendingChannelState {
 
 pub(crate) struct SshConnection {
     guest: Arc<GuestServer>,
-    authorizer: Arc<CertificateAuthorizer>,
-    policy_rx: watch::Receiver<Option<Arc<CertificateAuthorizer>>>,
+    authorizer: Arc<SshAuthorizer>,
     pending_channels: HashSet<ChannelId>,
     pending_state: HashMap<ChannelId, PendingChannelState>,
     bridges: HashMap<ChannelId, ChannelBridge>,
-    permissions: CertificatePermissions,
+    permissions: SessionPermissions,
     forwarding: ForwardingManager,
     reverse_streamlocal: ReverseStreamlocalManager,
     authenticated: Option<oneshot::Sender<()>>,
@@ -52,22 +51,32 @@ pub(crate) struct SshConnection {
 impl SshConnection {
     pub(crate) fn new(
         guest: Arc<GuestServer>,
-        authorizer: Arc<CertificateAuthorizer>,
-        policy_rx: watch::Receiver<Option<Arc<CertificateAuthorizer>>>,
+        authorizer: Arc<SshAuthorizer>,
         authenticated: oneshot::Sender<()>,
     ) -> Self {
         Self {
             guest,
             authorizer,
-            policy_rx,
             pending_channels: HashSet::new(),
             pending_state: HashMap::new(),
             bridges: HashMap::new(),
-            permissions: CertificatePermissions::default(),
+            permissions: SessionPermissions::default(),
             forwarding: ForwardingManager::new(),
             reverse_streamlocal: ReverseStreamlocalManager::new(),
             authenticated: Some(authenticated),
         }
+    }
+
+    fn commit_authentication(&mut self, identity: Option<AuthorizedIdentity>) -> Auth {
+        let Some(identity) = identity.filter(|_| !self.is_shutting_down()) else {
+            self.permissions = SessionPermissions::default();
+            return Auth::reject();
+        };
+        self.permissions = identity.permissions;
+        if let Some(authenticated) = self.authenticated.take() {
+            let _ = authenticated.send(());
+        }
+        Auth::Accept
     }
 
     fn open_channel_count(&self) -> usize {
@@ -140,12 +149,11 @@ impl russh::server::Handler for SshConnection {
 
     async fn auth_publickey(
         &mut self,
-        _user: &str,
-        _public_key: &PublicKey,
+        user: &str,
+        public_key: &PublicKey,
     ) -> Result<Auth, Self::Error> {
-        // Raw keys are deliberately unsupported; only CA-signed certificates
-        // can reach the container.
-        Ok(Auth::reject())
+        let identity = self.authorizer.authorize_public_key(user, public_key);
+        Ok(self.commit_authentication(identity))
     }
 
     async fn auth_openssh_certificate(
@@ -153,35 +161,8 @@ impl russh::server::Handler for SshConnection {
         user: &str,
         certificate: &Certificate,
     ) -> Result<Auth, Self::Error> {
-        let Some(identity) = self.authorizer.authorize(user, certificate) else {
-            self.permissions = CertificatePermissions::default();
-            info!(user, "SSH certificate rejected");
-            return Ok(Auth::reject());
-        };
-
-        let Some(policy_guard) =
-            super::authentication_policy_guard(&self.policy_rx, &self.authorizer)
-        else {
-            self.permissions = CertificatePermissions::default();
-            info!(
-                user,
-                "SSH certificate rejected after authentication policy changed"
-            );
-            return Ok(Auth::reject());
-        };
-
-        self.permissions = identity.permissions;
-        if let Some(authenticated) = self.authenticated.take() {
-            let _ = authenticated.send(());
-        }
-
-        // Keep the policy read lock through the authentication signal. A
-        // concurrent Configure/Disable publication therefore happens either
-        // wholly before this commit (and is rejected above) or wholly after it
-        // (and applies only to later authentication attempts).
-        drop(policy_guard);
-        info!(key_id = certificate.key_id(), "SSH certificate accepted");
-        Ok(Auth::Accept)
+        let identity = self.authorizer.authorize_certificate(user, certificate);
+        Ok(self.commit_authentication(identity))
     }
 
     async fn channel_open_session(
@@ -721,7 +702,6 @@ fn apply_pty_request(
     true
 }
 
-#[allow(dead_code)]
 pub(crate) fn build_config(host_key: PrivateKey) -> russh::server::Config {
     let mut methods = MethodSet::empty();
     methods.push(MethodKind::PublicKey);
@@ -799,57 +779,64 @@ mod tests {
         builder.sign(ca_key).unwrap()
     }
 
-    async fn test_connection(
-        authorizer: Arc<CertificateAuthorizer>,
-        policy_rx: watch::Receiver<Option<Arc<CertificateAuthorizer>>>,
-    ) -> (SshConnection, oneshot::Receiver<()>) {
-        let guest = Arc::new(GuestServer::new(GuestLayout::new()));
-        let (authenticated_tx, authenticated_rx) = oneshot::channel();
-        (
-            SshConnection::new(guest, authorizer, policy_rx, authenticated_tx),
-            authenticated_rx,
-        )
-    }
-
     #[tokio::test]
-    async fn certificate_authentication_commits_only_the_current_policy_epoch() {
-        let ca_key = {
-            let mut rng = russh::keys::key::safe_rng();
-            PrivateKey::random(&mut rng, Algorithm::Ed25519).unwrap()
-        };
-        let ca_public_key = ca_key.public_key().to_openssh().unwrap();
-        let certificate = user_certificate(&ca_key, "box_123");
-        let accepted = Arc::new(CertificateAuthorizer::new(&ca_public_key, "box_123").unwrap());
-
-        let (_policy_tx, policy_rx) = watch::channel(Some(accepted.clone()));
-        let (mut current, mut committed) = test_connection(accepted.clone(), policy_rx).await;
-        let auth = current
-            .auth_openssh_certificate(SSH_USER, &certificate)
-            .await
-            .unwrap();
-
-        assert_eq!(auth, Auth::Accept);
-        assert!(current.permissions.pty);
-        assert!(matches!(committed.try_recv(), Ok(())));
-
-        let (policy_tx, policy_rx) = watch::channel(Some(accepted.clone()));
-        let (mut stale, mut not_committed) = test_connection(accepted.clone(), policy_rx).await;
-        policy_tx.send_replace(Some(Arc::new(
-            CertificateAuthorizer::new(&ca_public_key, "box_456").unwrap(),
-        )));
-        policy_tx.send_replace(Some(accepted));
-
-        let auth = stale
-            .auth_openssh_certificate(SSH_USER, &certificate)
-            .await
-            .unwrap();
-
-        assert_eq!(auth, Auth::reject());
-        assert_eq!(stale.permissions, CertificatePermissions::default());
+    async fn ssh_authentication_commits_permissions_only_after_proof_of_possession() {
+        let mut rng = russh::keys::key::safe_rng();
+        let ca = PrivateKey::random(&mut rng, Algorithm::Ed25519).unwrap();
+        let user = PrivateKey::random(&mut rng, Algorithm::Ed25519).unwrap();
+        let authorizer = Arc::new(
+            SshAuthorizer::new(&boxlite_shared::SshConfig {
+                ca: Some(boxlite_shared::SshCaConfig {
+                    public_key: ca.public_key().to_openssh().unwrap(),
+                    principal: "box_123".into(),
+                }),
+                authorized_keys: vec![user.public_key().to_openssh().unwrap()],
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let guest = Arc::new(GuestServer::new(GuestLayout::new()));
+        let (tx, mut committed) = oneshot::channel();
+        let mut raw = SshConnection::new(guest.clone(), authorizer.clone(), tx);
+        assert_eq!(
+            raw.auth_publickey_offered(SSH_USER, user.public_key())
+                .await
+                .unwrap(),
+            Auth::Accept
+        );
+        assert_eq!(raw.permissions, SessionPermissions::default());
         assert!(matches!(
-            not_committed.try_recv(),
+            committed.try_recv(),
             Err(oneshot::error::TryRecvError::Empty)
         ));
+        assert_eq!(
+            raw.auth_publickey("nobody", user.public_key())
+                .await
+                .unwrap(),
+            Auth::reject()
+        );
+        assert_eq!(
+            raw.auth_publickey(SSH_USER, user.public_key())
+                .await
+                .unwrap(),
+            Auth::Accept
+        );
+        assert!(raw.permissions.pty && raw.permissions.port_forwarding);
+        assert!(!raw.permissions.agent_forwarding && !raw.permissions.x11_forwarding);
+        assert_eq!(committed.try_recv(), Ok(()));
+
+        let (tx, mut committed) = oneshot::channel();
+        let mut certified = SshConnection::new(guest, authorizer, tx);
+        assert_eq!(
+            certified
+                .auth_openssh_certificate(SSH_USER, &user_certificate(&ca, "box_123"))
+                .await
+                .unwrap(),
+            Auth::Accept
+        );
+        assert!(certified.permissions.pty);
+        assert!(!certified.permissions.port_forwarding);
+        assert_eq!(committed.try_recv(), Ok(()));
     }
 
     #[test]
