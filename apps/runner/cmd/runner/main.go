@@ -309,14 +309,3 @@ func migrationWorkDir(cfg *config.Config, logger *slog.Logger) string {
 
 	return filepath.Join(home, "migrate")
 }
-
-/*
-The audience to mint an ID token for, or empty for none.
-
-The endpoint itself, because Cloud Run validates a token's `aud` against the
-service's own address — a token minted for `<endpoint>/v1/traces` is refused
-with the same 403 as no token at all. Gated on an explicit flag rather than on
-"the endpoint looks like Cloud Run": the AWS path reaches an internal load
-balancer that authorises nobody, and guessing from a hostname would put a
-metadata lookup on a host that has no metadata server.
-*/
