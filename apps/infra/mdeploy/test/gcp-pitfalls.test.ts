@@ -263,10 +263,24 @@ test('the host that mounts holds a grant on the buckets it mounts', () => {
   )
 
   const buckets = grantNamed('RunnerVolumeBuckets')
+  /*
+   * `bucketViewer` rather than the `legacyBucketReader` this once named. The
+   * legacy role is the tighter of the two — beside `objectUser` it adds exactly
+   * `storage.buckets.get` — and it is still right where `storage.ts` uses it,
+   * bound on one bucket. At a *project* it is refused outright: `Role
+   * roles/storage.legacyBucketReader is not supported for this resource`, a 400
+   * that fails the whole apply rather than this one binding. A volume bucket is
+   * created per volume, so a project grant is the only shape available here.
+   */
   assert.match(
     buckets,
-    /role: 'roles\/storage\.legacyBucketReader'/,
+    /role: 'roles\/storage\.bucketViewer'/,
     'the host cannot call GetStorageLayout, so every mount fails',
+  )
+  assert.doesNotMatch(
+    buckets,
+    /legacyBucketReader/,
+    'a legacy role cannot be granted at a project; this binding would 400 the apply',
   )
   assert.match(
     buckets,

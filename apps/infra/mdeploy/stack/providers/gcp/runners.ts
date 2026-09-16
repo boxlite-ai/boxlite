@@ -245,14 +245,21 @@ udevadm trigger --name-match=kvm || true`,
      * subset of `objectUser`'s, and it is the read-only half of a pair that
      * still would not mount.
      *
-     * `legacyBucketReader` and not `bucketViewer` for that second role, which
-     * reads backwards and is not. Beside `objectUser` the legacy role adds
-     * exactly `storage.buckets.get` — everything else it carries is already in
-     * `objectUser` — while `bucketViewer` adds `storage.buckets.list` as well.
-     * It is also already this module's answer to the same need: `storage.ts`
-     * hands the API `listGrant: 'roles/storage.legacyBucketReader'` on a volume
-     * bucket, and one name for one permission is what keeps the two readable
-     * against each other.
+     * `bucketViewer` for that second role, and the tighter-looking answer is
+     * not available. `legacyBucketReader` carries exactly `storage.buckets.get`
+     * beside `objectUser` and is what `storage.ts` hands the API — but a legacy
+     * role is grantable at a resource and not at a project, so the same string
+     * here is refused outright: `Role roles/storage.legacyBucketReader is not
+     * supported for this resource`, a 400 that fails the whole apply rather
+     * than this one binding. It works there because the API's grant names one
+     * bucket; a volume bucket is created per volume, so there is nothing to
+     * name here and the grant has to be the project plus the condition.
+     *
+     * The cost is `storage.buckets.list`, which `bucketViewer` adds and the
+     * condition below cannot bound: a list names no resource for CEL to match,
+     * so it evaluates false and the permission is not reached in practice. What
+     * it would expose if it were is bucket *names* — reading one still needs
+     * the object grant above, which the prefix does bound.
      *
      * Bucket lifecycle stays the API's, exactly as on AWS: a compromised runner
      * must not be able to delete the volume it is serving.
@@ -281,7 +288,7 @@ udevadm trigger --name-match=kvm || true`,
     })
     new gcp.projects.IAMMember('RunnerVolumeBuckets', {
       project,
-      role: 'roles/storage.legacyBucketReader',
+      role: 'roles/storage.bucketViewer',
       member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
       condition: volumeConditionFor(volumePrefix),
     })
