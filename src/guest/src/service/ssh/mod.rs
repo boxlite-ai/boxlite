@@ -54,16 +54,32 @@ impl SshConfig {
                 "SSH host private key must be unencrypted".into(),
             ));
         }
-        // A key can parse and still be unusable as a host key: FIDO sk-* and
-        // DSA keypairs hold no signable material in software, so the first
-        // handshake would fail after startup already reported Ready. Probe-sign
-        // once through the same Signer path russh uses during key exchange.
-        use russh::keys::signature::Signer;
-        host_key
-            .try_sign(b"boxlite host key validation")
+        // A key can parse and still be unusable as a host key. Two cases,
+        // both invisible until the first handshake fails after startup
+        // already reported Ready:
+        // - FIDO sk-* and DSA keypairs hold no signable material in software;
+        // - an OpenSSH key file embeds both halves of the keypair verbatim,
+        //   and russh announces the stored public half during key exchange
+        //   while signing with the private half, so mismatched halves sign
+        //   fine but no client can verify the host signature.
+        // Probe once through the same sign/verify path a client uses.
+        use russh::keys::signature::{Signer, Verifier};
+        let probe = b"boxlite host key validation";
+        let signature = host_key
+            .try_sign(probe)
             .map_err(|_| {
                 BoxliteError::Config(
                     "invalid SSH host private key: unsupported algorithm; expected ed25519, ecdsa, or rsa"
+                        .into(),
+                )
+            })?;
+        host_key
+            .public_key()
+            .key_data()
+            .verify(probe, &signature)
+            .map_err(|_| {
+                BoxliteError::Config(
+                    "invalid SSH host private key: public and private key halves do not match"
                         .into(),
                 )
             })?;

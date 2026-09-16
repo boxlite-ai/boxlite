@@ -12,6 +12,41 @@ fn private_key() -> PrivateKey {
     PrivateKey::random(&mut russh::keys::key::safe_rng(), Algorithm::Ed25519).unwrap()
 }
 
+/// OpenSSH key files embed both halves of the keypair and are stored
+/// verbatim, so this file parses and signs fine, but every handshake
+/// fails: the public half announced during kex belongs to another key.
+fn mismatched_host_key() -> String {
+    let ecdsa = || {
+        PrivateKey::random(
+            &mut russh::keys::key::safe_rng(),
+            Algorithm::Ecdsa {
+                curve: russh::keys::EcdsaCurve::NistP256,
+            },
+        )
+        .unwrap()
+    };
+    let (a, b) = (ecdsa(), ecdsa());
+    let russh::keys::ssh_key::private::EcdsaKeypair::NistP256 {
+        private: a_private, ..
+    } = a.key_data().ecdsa().unwrap()
+    else {
+        panic!("expected a NIST P-256 keypair")
+    };
+    let russh::keys::ssh_key::private::EcdsaKeypair::NistP256 {
+        public: b_public, ..
+    } = b.key_data().ecdsa().unwrap()
+    else {
+        panic!("expected a NIST P-256 keypair")
+    };
+    PrivateKey::from(russh::keys::ssh_key::private::EcdsaKeypair::NistP256 {
+        public: *b_public,
+        private: a_private.clone(),
+    })
+    .to_openssh(Default::default())
+    .unwrap()
+    .to_string()
+}
+
 /// Parses as an unencrypted OpenSSH key but cannot sign: security-key
 /// (FIDO) keypairs keep the private half in hardware.
 fn unsignable_host_key() -> String {
@@ -437,6 +472,9 @@ async fn grpc_ssh_invalid_inputs_allow_init_and_leave_no_listener() {
     invalid.push(ssh);
     let mut ssh = valid.clone();
     ssh.host_private_key = unsignable_host_key();
+    invalid.push(ssh);
+    let mut ssh = valid.clone();
+    ssh.host_private_key = mismatched_host_key();
     invalid.push(ssh);
     for ssh in invalid {
         let mut fixture = TestGuest::new().await;
