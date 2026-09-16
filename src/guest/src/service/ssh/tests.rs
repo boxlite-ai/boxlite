@@ -233,7 +233,7 @@ impl TestGuest {
     }
 
     async fn stop(self) {
-        self.guest.ssh_manager.shutdown().await.unwrap();
+        self.guest.ssh_manager.disable().await.unwrap();
         assert_eq!(
             self.guest
                 .ssh_manager
@@ -621,24 +621,7 @@ async fn ssh_connection_and_channel_limits_remain_enforced() {
 }
 
 #[tokio::test]
-async fn ssh_init_after_shutdown_cannot_reopen_a_listener() {
-    let mut fixture = TestGuest::new().await;
-    fixture.init().await;
-    fixture.guest.ssh_manager.shutdown().await.unwrap();
-    assert_eq!(
-        fixture
-            .configure(config(&private_key(), &[&private_key()], None))
-            .await
-            .unwrap_err()
-            .code(),
-        tonic::Code::FailedPrecondition
-    );
-    assert!(!fixture.status().await.enabled);
-    fixture.stop().await;
-}
-
-#[tokio::test]
-async fn ssh_unauthenticated_connection_times_out_and_shutdown_drains_sessions() {
+async fn ssh_unauthenticated_connection_times_out_and_disable_drains_sessions() {
     let host = private_key();
     let user = private_key();
     let mut fixture = TestGuest::new().await;
@@ -871,57 +854,6 @@ async fn stop_timeout_retains_cleanup_and_prevents_next_generation() {
         fixture.configure(configuration).await.unwrap().generation,
         2
     );
-    fixture.stop().await;
-}
-
-#[tokio::test]
-async fn shutdown_cancels_a_configure_waiting_for_cleanup() {
-    let mut fixture = TestGuest::new().await;
-    let configuration = config(&private_key(), &[&private_key()], None);
-    fixture.start(configuration.clone()).await;
-    let cleanup = fixture
-        .guest
-        .ssh_manager
-        .state
-        .lock()
-        .await
-        .tasks
-        .as_ref()
-        .unwrap()
-        .token();
-    let cancel = fixture
-        .guest
-        .ssh_manager
-        .state
-        .lock()
-        .await
-        .tasks
-        .as_ref()
-        .unwrap()
-        .clone();
-    let guest = fixture.guest.clone();
-    let configure = tokio::spawn(async move { guest.ssh_manager.configure(configuration).await });
-    let (cancelled_tx, cancelled_rx) = oneshot::channel();
-    cancel.spawn_tracked(move |cancel| async move {
-        cancel.cancelled().await;
-        let _ = cancelled_tx.send(());
-    });
-    cancelled_rx.await.unwrap();
-    let guest = fixture.guest.clone();
-    let shutdown = guest.ssh_manager.shutdown();
-    tokio::pin!(shutdown);
-    assert!(futures::poll!(&mut shutdown).is_pending());
-    assert!(guest
-        .ssh_manager
-        .shutting_down
-        .load(std::sync::atomic::Ordering::SeqCst));
-    drop(cleanup);
-    assert_eq!(
-        configure.await.unwrap().unwrap_err().code(),
-        tonic::Code::FailedPrecondition
-    );
-    shutdown.await.unwrap();
-    assert!(!fixture.status().await.enabled);
     fixture.stop().await;
 }
 

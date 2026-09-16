@@ -22,7 +22,6 @@ use auth::SshAuthorizer;
 use backoff::Backoff;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::net::{Shutdown, SocketAddr};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 use task_group::TaskGroup;
 use tokio::net::TcpListener;
@@ -100,7 +99,6 @@ pub(crate) struct SshManager {
     guest: OnceLock<Weak<GuestServer>>,
     state: Mutex<SshState>,
     connection_permits: Arc<tokio::sync::Semaphore>,
-    shutting_down: AtomicBool,
 }
 
 #[derive(Default)]
@@ -117,7 +115,6 @@ impl Default for SshManager {
             guest: OnceLock::new(),
             state: Mutex::new(SshState::default()),
             connection_permits: Arc::new(tokio::sync::Semaphore::new(limits::MAX_CONNECTIONS)),
-            shutting_down: AtomicBool::new(false),
         }
     }
 }
@@ -139,16 +136,6 @@ impl SshManager {
             .and_then(Weak::upgrade)
             .ok_or_else(|| tonic::Status::internal("SSH manager is not attached"))?;
         let mut state = self.state.lock().await;
-        if self.shutting_down.load(Ordering::SeqCst)
-            || guest
-                .shutting_down
-                .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            return Err(tonic::Status::failed_precondition(
-                "guest shutdown has started; SSH cannot start",
-            )
-            .into());
-        }
         self.stop(&mut state).await?;
         let listener = TcpListener::bind(config.listen_addr)
             .await
@@ -158,16 +145,6 @@ impl SshManager {
         let address = listener.local_addr().map_err(|error| {
             tonic::Status::internal(format!("failed to read SSH listener address: {error}"))
         })?;
-        if self.shutting_down.load(Ordering::SeqCst)
-            || guest
-                .shutting_down
-                .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            return Err(tonic::Status::failed_precondition(
-                "guest shutdown has started; SSH cannot start",
-            )
-            .into());
-        }
         let public = config.server.keys[0].public_key();
         let host_public_key = russh::keys::PublicKey::new(public.key_data().clone(), "")
             .to_openssh()
@@ -237,11 +214,6 @@ impl SshManager {
             .map_err(|_| tonic::Status::internal("SSH listener task failed while stopping").into())
     }
 
-    pub(crate) async fn shutdown(&self) -> Result<(), Box<tonic::Status>> {
-        self.shutting_down.store(true, Ordering::SeqCst);
-        self.stop(&mut *self.state.lock().await).await
-    }
-
     #[cfg(test)]
     pub(crate) async fn pending_cleanup_for_test(
         &self,
@@ -252,7 +224,7 @@ impl SshManager {
 
     async fn spawn_connection(&self, stream: tokio::net::TcpStream, peer: SocketAddr) {
         let state = self.state.lock().await;
-        if self.shutting_down.load(Ordering::SeqCst) || !state.status.enabled {
+        if !state.status.enabled {
             return;
         }
         let (Some(config), Some(tasks)) = (&state.config, &state.tasks) else {
@@ -264,9 +236,6 @@ impl SshManager {
         let Some(guest) = self.guest.get().and_then(Weak::upgrade) else {
             return;
         };
-        if guest.shutting_down.load(Ordering::SeqCst) {
-            return;
-        }
         let Ok(permit) = self.connection_permits.clone().try_acquire_owned() else {
             warn!(%peer, "SSH connection limit reached");
             return;

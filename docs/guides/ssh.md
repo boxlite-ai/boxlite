@@ -54,4 +54,7 @@ or state. Old persisted SSH fields are ignored; existing databases and archives
 are not migrated or rewritten by this change.
 
 SSH restart terminates only SSH work. The container's main process and non-SSH
-executions continue. Guest shutdown permanently prevents SSH from starting again.
+executions continue. Guest shutdown calls Disable before cleaning up executions
+and containers, and continues cleanup even if Disable fails. SSH does not track
+guest shutdown: concurrent Configure may briefly restart it, with VM shutdown
+reclaiming any remaining resources.

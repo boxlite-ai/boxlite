@@ -74,7 +74,7 @@ impl SshConnection {
     }
 
     fn commit_authentication(&mut self, identity: Option<AuthorizedIdentity>) -> Auth {
-        let Some(identity) = identity.filter(|_| !self.is_shutting_down()) else {
+        let Some(identity) = identity.filter(|_| !self.tasks.is_cancelled()) else {
             self.permissions = SessionPermissions::default();
             return Auth::reject();
         };
@@ -89,22 +89,14 @@ impl SshConnection {
         self.pending_channels.len() + self.bridges.len()
     }
 
-    fn is_shutting_down(&self) -> bool {
-        self.tasks.is_cancelled()
-            || self
-                .guest
-                .shutting_down
-                .load(std::sync::atomic::Ordering::SeqCst)
-    }
-
     async fn start_execution(
         &mut self,
         channel_id: ChannelId,
         command: Command,
         session_handle: SessionHandle,
     ) -> Result<(), String> {
-        if self.is_shutting_down() {
-            return Err("guest shutdown has started".into());
+        if self.tasks.is_cancelled() {
+            return Err("SSH service is stopping".into());
         }
         let mut state = self.pending_state.remove(&channel_id).unwrap_or_default();
         let tty = state.tty.take();
@@ -149,7 +141,7 @@ impl russh::server::Handler for SshConnection {
     ) -> Result<Auth, Self::Error> {
         // Certificate authentication uses the publickey wire method. The
         // actual decision is made only after russh verifies the signature.
-        Ok(if user == SSH_USER && !self.is_shutting_down() {
+        Ok(if user == SSH_USER && !self.tasks.is_cancelled() {
             Auth::Accept
         } else {
             Auth::reject()
@@ -180,7 +172,7 @@ impl russh::server::Handler for SshConnection {
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if self.is_shutting_down() || self.open_channel_count() >= MAX_CHANNELS_PER_CONNECTION {
+        if self.tasks.is_cancelled() || self.open_channel_count() >= MAX_CHANNELS_PER_CONNECTION {
             warn!(
                 open_channels = self.open_channel_count(),
                 limit = MAX_CHANNELS_PER_CONNECTION,
@@ -224,7 +216,7 @@ impl russh::server::Handler for SshConnection {
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if self.is_shutting_down() || !self.permissions.port_forwarding {
+        if self.tasks.is_cancelled() || !self.permissions.port_forwarding {
             reply
                 .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
                 .await;
@@ -259,7 +251,7 @@ impl russh::server::Handler for SshConnection {
         reply: ChannelOpenHandle,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if self.is_shutting_down() {
+        if self.tasks.is_cancelled() {
             reply
                 .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
                 .await;
@@ -514,7 +506,7 @@ impl russh::server::Handler for SshConnection {
         port: &mut u32,
         session: &mut Session,
     ) -> Result<bool, Self::Error> {
-        if self.is_shutting_down() || !self.permissions.port_forwarding {
+        if self.tasks.is_cancelled() || !self.permissions.port_forwarding {
             return Ok(false);
         }
         Ok(self
@@ -540,7 +532,7 @@ impl russh::server::Handler for SshConnection {
         socket_path: &str,
         session: &mut Session,
     ) -> Result<bool, Self::Error> {
-        if self.is_shutting_down()
+        if self.tasks.is_cancelled()
             || !reverse_streamlocal_allowed(self.permissions.port_forwarding, socket_path)
         {
             return Ok(false);
