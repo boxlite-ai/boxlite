@@ -200,6 +200,19 @@ export function buildLoginPolicyBindings(actionId: string, existingBindings: Jso
   return [...preserved, { ref: { type: 'action_id', value: actionId }, display_name: RESOURCE_NAMES.action }]
 }
 
+/*
+ * Whether the tenant can send mail the login policy is allowed to depend on.
+ *
+ * The policy needs mail to leave the tenant, not a particular vendor: any
+ * enabled provider that is not Auth0's own built-in test sender qualifies.
+ * Exported because auth0-email-provider.ts reconciles against this same rule —
+ * two spellings of "usable provider" would let one command apply on a tenant
+ * the other refuses.
+ */
+export function isExternalEmailProvider(provider: JsonObject | null): boolean {
+  return Boolean(provider && provider.enabled !== false && provider.name && provider.name !== 'auth0')
+}
+
 export function emailDeliveryReadiness(
   provider: JsonObject | null,
   verifyTemplate: JsonObject | null,
@@ -212,9 +225,7 @@ export function emailDeliveryReadiness(
   resetEmailByCodeTemplate: boolean
   readyToApply: boolean
 } {
-  const externalEmailProvider = Boolean(
-    provider && provider.enabled !== false && provider.name && provider.name !== 'auth0',
-  )
+  const externalEmailProvider = isExternalEmailProvider(provider)
   const auth0BuiltInEmailProvider = Boolean(
     allowTestEmailProvider && (provider === null || (provider.name === 'auth0' && provider.enabled !== false)),
   )

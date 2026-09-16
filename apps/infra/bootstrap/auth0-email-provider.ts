@@ -6,15 +6,30 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { parseArgs } from 'node:util'
 
-import { assertJournalSnapshotSafe } from './auth0-login-policy.js'
+import { assertJournalSnapshotSafe, isExternalEmailProvider } from './auth0-login-policy.js'
 import type { Auth0ManagementClient } from './auth0-login-policy.js'
 
 type JsonObject = Record<string, any>
 
+/*
+ * Which email provider a run owns.
+ *
+ *   'ses'       create the SES provider when the tenant has none — the one
+ *               backend this repo provisions itself (stack/mail.ts)
+ *   'existing'  leave the tenant's own provider untouched and reconcile only
+ *               the code templates
+ *
+ * Separate because the templates are provider-independent: a tenant on Resend,
+ * Mailgun or a plain SMTP relay needs exactly the same checked-in verify and
+ * reset bodies, and used to be unreachable because one provider comparison
+ * gated both halves.
+ */
+export type Auth0EmailProviderTarget = { kind: 'ses'; region: string } | { kind: 'existing' }
+
 export interface Auth0EmailProviderOptions {
   tenant: string
   fromAddress: string
-  region: string
+  provider: Auth0EmailProviderTarget
   apply: boolean
 }
 
@@ -46,7 +61,9 @@ interface Auth0EmailProviderReceipt {
   createdAt: string
   provider: {
     created: boolean
-    desired: EmailProviderFingerprint
+    // Null for a run that owns no provider: there is nothing to delete on
+    // rollback, and a fingerprint would claim ownership it never took.
+    desired: EmailProviderFingerprint | null
   }
   templates: Array<{
     created: boolean
@@ -62,21 +79,38 @@ export function parseAuth0EmailProviderOptions(argv: string[]): Auth0EmailProvid
       tenant: { type: 'string' },
       from: { type: 'string' },
       region: { type: 'string' },
+      'templates-only': { type: 'boolean', default: false },
       apply: { type: 'boolean', default: false },
     },
   })
 
   const tenant = requireExactValue('--tenant', values.tenant)
   const fromAddress = requireExactValue('--from', values.from)
-  const region = requireExactValue('--region', values.region)
   if (tenant.includes('/') || !tenant.includes('.')) throw new Error('--tenant must be an exact Auth0 tenant hostname')
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromAddress) || /[\r\n]/.test(fromAddress)) {
     throw new Error('--from must be one bare email address')
   }
   if (fromAddress.toLowerCase().endsWith('@auth0.com')) throw new Error('--from must not use the auth0.com domain')
-  if (!/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/.test(region)) throw new Error('--region must be an AWS region')
 
-  return { tenant, fromAddress, region, apply: values.apply ?? false }
+  // --region is SES's own parameter, so it is the flag that says which half of
+  // the reconciler runs. Rejecting the pair keeps that unambiguous.
+  const templatesOnly = values['templates-only'] ?? false
+  if (templatesOnly && values.region !== undefined) {
+    throw new Error('--templates-only creates no provider, so --region must be omitted')
+  }
+  if (!templatesOnly && values.region === undefined) {
+    throw new Error("--region is required to create the SES provider; pass --templates-only to keep the tenant's own")
+  }
+  const provider: Auth0EmailProviderTarget = templatesOnly
+    ? { kind: 'existing' }
+    : { kind: 'ses', region: requireAwsRegion(requireExactValue('--region', values.region)) }
+
+  return { tenant, fromAddress, provider, apply: values.apply ?? false }
+}
+
+function requireAwsRegion(region: string): string {
+  if (!/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/.test(region)) throw new Error('--region must be an AWS region')
+  return region
 }
 
 function requireExactValue(flag: string, value: string | undefined): string {
@@ -85,13 +119,20 @@ function requireExactValue(flag: string, value: string | undefined): string {
   return value
 }
 
-export function buildSesEmailProvider(options: Pick<Auth0EmailProviderOptions, 'fromAddress' | 'region'>): JsonObject {
+export function buildSesEmailProvider({ fromAddress, region }: { fromAddress: string; region: string }): JsonObject {
   return {
     name: 'ses',
     enabled: true,
-    default_from_address: options.fromAddress,
-    credentials: { region: options.region },
+    default_from_address: fromAddress,
+    credentials: { region },
   }
+}
+
+/** The provider payload a run would write, or null when it owns none. */
+export function desiredEmailProvider(options: Auth0EmailProviderOptions): JsonObject | null {
+  return options.provider.kind === 'ses'
+    ? buildSesEmailProvider({ fromAddress: options.fromAddress, region: options.provider.region })
+    : null
 }
 
 export function readAuth0CodeEmailTemplates(manifestPath: string): JsonObject[] {
@@ -147,20 +188,16 @@ export class Auth0EmailProviderConfigurator {
   ) {}
 
   preview(): JsonObject {
-    const desiredProvider = buildSesEmailProvider(this.options)
+    const desiredProvider = desiredEmailProvider(this.options)
     const desiredTemplates = buildAuth0CodeEmailTemplates(this.options.fromAddress, this.sources.templates)
     const state = this.readState(desiredTemplates)
-    this.assertAdoptable(state, desiredProvider, desiredTemplates)
+    this.assertProviderAdoptable(state, desiredProvider)
+    this.assertTemplatesAdoptable(state, desiredTemplates)
 
     return {
       mode: 'preview',
       tenant: this.options.tenant,
-      provider: {
-        name: 'ses',
-        region: this.options.region,
-        from: this.options.fromAddress,
-        change: state.provider ? 'reuse' : 'create',
-      },
+      provider: this.previewProvider(state.provider, desiredProvider),
       templates: desiredTemplates.map((template) => ({
         name: template.template,
         change: state.templates.get(template.template) ? 'reuse' : 'create',
@@ -169,17 +206,30 @@ export class Auth0EmailProviderConfigurator {
     }
   }
 
+  private previewProvider(actual: JsonObject | null, desiredProvider: JsonObject | null): JsonObject {
+    if (!desiredProvider) {
+      return { name: actual?.name ?? null, from: actual?.default_from_address ?? null, change: 'keep' }
+    }
+    return {
+      name: desiredProvider.name,
+      region: desiredProvider.credentials?.region,
+      from: this.options.fromAddress,
+      change: actual ? 'reuse' : 'create',
+    }
+  }
+
   async apply(readCredentials: () => Promise<SesCredentials>): Promise<JsonObject> {
-    const desiredProvider = buildSesEmailProvider(this.options)
+    const desiredProvider = desiredEmailProvider(this.options)
     const desiredTemplates = buildAuth0CodeEmailTemplates(this.options.fromAddress, this.sources.templates)
     const state = this.readState(desiredTemplates)
-    this.assertAdoptable(state, desiredProvider, desiredTemplates)
+    this.assertProviderAdoptable(state, desiredProvider)
+    this.assertTemplatesAdoptable(state, desiredTemplates)
     this.beginReceipt(desiredProvider, desiredTemplates)
     const receipt = this.receipt
     if (!receipt) throw new Error('Auth0 email-provider receipt was not initialized')
 
     try {
-      if (!state.provider) {
+      if (desiredProvider && !state.provider) {
         const credentials = await readCredentials()
         this.client.request('post', 'emails/provider', {
           data: {
@@ -205,11 +255,12 @@ export class Auth0EmailProviderConfigurator {
       }
 
       const readBack = this.readState(desiredTemplates)
-      this.assertReady(readBack, desiredProvider, desiredTemplates)
+      this.assertProviderReady(readBack, desiredProvider)
+      this.assertTemplatesReady(readBack, desiredTemplates)
       return {
         mode: 'applied',
         tenant: this.options.tenant,
-        provider: 'ses',
+        provider: readBack.provider?.name ?? null,
         templates: desiredTemplates.map((template) => template.template),
         receipt: this.receiptPath,
       }
@@ -245,7 +296,7 @@ export class Auth0EmailProviderConfigurator {
     }
 
     let providerDeleted = false
-    if (receipt.provider.created) {
+    if (receipt.provider.created && receipt.provider.desired) {
       const current = readProvider(client)
       if (current) {
         if (!matchesProviderFingerprint(current, receipt.provider.desired)) {
@@ -280,14 +331,38 @@ export class Auth0EmailProviderConfigurator {
     }
   }
 
-  private assertAdoptable(
-    state: Auth0EmailProviderState,
-    desiredProvider: JsonObject,
-    desiredTemplates: JsonObject[],
-  ): void {
-    if (state.provider && !containsJson(state.provider, desiredProvider)) {
-      throw new Error('Auth0 has a different email provider; refusing tenant-wide credential or sender replacement')
+  private assertProviderAdoptable(state: Auth0EmailProviderState, desiredProvider: JsonObject | null): void {
+    if (desiredProvider) {
+      if (state.provider && !containsJson(state.provider, desiredProvider)) {
+        throw new Error('Auth0 has a different email provider; refusing tenant-wide credential or sender replacement')
+      }
+      return
     }
+
+    // The same predicate the login policy gates on, so a tenant this run
+    // accepts is one auth0:configure-login will accept too.
+    if (!isExternalEmailProvider(state.provider)) {
+      throw new Error(
+        '--templates-only needs an enabled non-Auth0 email provider already on the tenant; configure one first, ' +
+          'or drop --templates-only to create the SES provider',
+      )
+    }
+    // A template's `from` overrides the provider default, so a mismatch here
+    // sends the codes as an address the provider is not allowed to send as —
+    // visible only as a delivery failure on a real signup.
+    // Compared case-insensitively: Auth0 echoes the address back as it was
+    // stored, and a case-only difference addresses the same mailbox, so
+    // refusing it would be a false alarm.
+    const senderInUse = state.provider?.default_from_address
+    if (senderInUse && senderInUse.toLowerCase() !== this.options.fromAddress.toLowerCase()) {
+      throw new Error(
+        `--from '${this.options.fromAddress}' is not the tenant provider's sender '${senderInUse}'; ` +
+          'the templates would send as an address the provider cannot',
+      )
+    }
+  }
+
+  private assertTemplatesAdoptable(state: Auth0EmailProviderState, desiredTemplates: JsonObject[]): void {
     for (const desired of desiredTemplates) {
       const existing = state.templates.get(desired.template)
       if (existing && !containsJson(existing, desired)) {
@@ -296,14 +371,19 @@ export class Auth0EmailProviderConfigurator {
     }
   }
 
-  private assertReady(
-    state: Auth0EmailProviderState,
-    desiredProvider: JsonObject,
-    desiredTemplates: JsonObject[],
-  ): void {
+  private assertProviderReady(state: Auth0EmailProviderState, desiredProvider: JsonObject | null): void {
+    if (!desiredProvider) {
+      if (!isExternalEmailProvider(state.provider)) {
+        throw new Error('the tenant lost its external Auth0 email provider while the templates were applied')
+      }
+      return
+    }
     if (!state.provider || !containsJson(state.provider, desiredProvider)) {
       throw new Error('Auth0 SES email provider read-back does not match the requested configuration')
     }
+  }
+
+  private assertTemplatesReady(state: Auth0EmailProviderState, desiredTemplates: JsonObject[]): void {
     for (const desired of desiredTemplates) {
       const existing = state.templates.get(desired.template)
       if (!existing || !containsJson(existing, desired)) {
@@ -312,7 +392,7 @@ export class Auth0EmailProviderConfigurator {
     }
   }
 
-  private beginReceipt(desiredProvider: JsonObject, desiredTemplates: JsonObject[]): void {
+  private beginReceipt(desiredProvider: JsonObject | null, desiredTemplates: JsonObject[]): void {
     mkdirSync(this.sources.receiptDirectory, { recursive: true, mode: 0o700 })
     this.receiptPath = join(
       this.sources.receiptDirectory,
@@ -322,7 +402,7 @@ export class Auth0EmailProviderConfigurator {
       version: 1,
       tenant: this.options.tenant,
       createdAt: new Date().toISOString(),
-      provider: { created: false, desired: fingerprintProvider(desiredProvider) },
+      provider: { created: false, desired: desiredProvider ? fingerprintProvider(desiredProvider) : null },
       templates: desiredTemplates.map((desired) => ({ created: false, desired: structuredClone(desired) })),
     }
     this.flushReceipt()

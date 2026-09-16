@@ -148,7 +148,16 @@ attribute. Auth0 requires this one-time New Attributes Configuration activation
 before the Management API can configure email verification OTP. Preview fails
 before any writes when the activation is absent.
 
-For production, use the stack's verified SES identity described in
+The policy needs mail to leave the tenant, not a particular vendor: any enabled
+provider that is not Auth0's own built-in sender satisfies it. SES is the one
+backend this repo provisions itself, so it is the one `auth0:configure-email`
+can create; a tenant already sending through Resend, Mailgun or an SMTP relay
+keeps that provider and reconciles only the templates with `--templates-only`
+(below). A GCP-homed stage has no SES identity at all — it sends through the
+relay named by `MAIL_RELAY_HOST` and verifies nothing
+(`mdeploy/stack/providers/gcp/mail.ts`).
+
+On the AWS path, use the stack's verified SES identity described in
 [Outbound mail](#outbound-mail). The Api's stored `SMTP_PASSWORD` is
 SigV4-derived and cannot be used as the raw AWS secret required by Auth0's SES
 provider. Create a separate send-only IAM access key for Auth0, scoped to that
@@ -194,6 +203,26 @@ Its mode-`0600` receipt under `.sst/auth0-backups/` contains the SES region and
 sender but never the access key. Rollback disables templates created by the run
 and deletes the provider only when the run created it and its non-secret
 fingerprint is unchanged.
+
+For a tenant whose provider is already configured and is not SES, reconcile the
+templates alone. `--templates-only` takes no `--region`, writes nothing to
+`emails/provider`, and never asks for a credential; it refuses unless the
+tenant already has the same enabled non-Auth0 provider the login policy
+requires, and unless `--from` is that provider's own sender — a template's
+`from` overrides the provider default, so a mismatch would send the codes as an
+address the provider cannot:
+
+```bash
+# The sender to pass is the provider's own; read it back first.
+auth0 api get 'emails/provider?fields=name,enabled,default_from_address&include_fields=true' \
+  --tenant <tenant.auth0.com>
+
+npm run auth0:configure-email -- \
+  --tenant <tenant.auth0.com> \
+  --from <provider-default-from-address> \
+  --templates-only \
+  --apply
+```
 
 For a non-production canary tenant only, skip `auth0:configure-email` and add
 `--allow-test-email-provider` to both `auth0:configure-login` commands. This

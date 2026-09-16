@@ -26,9 +26,23 @@ function options(apply = false) {
   return {
     tenant: 'tenant.us.auth0.com',
     fromAddress: 'no-reply@boxlite.example',
-    region: 'us-east-1',
+    provider: { kind: 'ses' as const, region: 'us-east-1' },
     apply,
   }
+}
+
+function templatesOnlyOptions(apply = false) {
+  return {
+    tenant: 'tenant.us.auth0.com',
+    fromAddress: 'no-reply@boxlite.example',
+    provider: { kind: 'existing' as const },
+    apply,
+  }
+}
+
+/** A tenant whose provider this repo does not know how to build. */
+function resendProvider() {
+  return { name: 'resend', enabled: true, default_from_address: 'no-reply@boxlite.example', credentials: {} }
 }
 
 test('parseAuth0EmailProviderOptions requires an exact tenant, sender, and AWS region', () => {
@@ -66,6 +80,38 @@ test('parseAuth0EmailProviderOptions requires an exact tenant, sender, and AWS r
         'not-a-region',
       ]),
     /must be an AWS region/,
+  )
+})
+
+test('parseAuth0EmailProviderOptions selects the template-only half without an AWS region', () => {
+  assert.deepEqual(
+    parseAuth0EmailProviderOptions([
+      '--tenant',
+      'tenant.us.auth0.com',
+      '--from',
+      'no-reply@boxlite.example',
+      '--templates-only',
+    ]),
+    templatesOnlyOptions(),
+  )
+  // The two halves must not be requested at once: --region is SES's own
+  // parameter and would silently pick the provider half.
+  assert.throws(
+    () =>
+      parseAuth0EmailProviderOptions([
+        '--tenant',
+        'tenant.us.auth0.com',
+        '--from',
+        'no-reply@boxlite.example',
+        '--templates-only',
+        '--region',
+        'us-east-1',
+      ]),
+    /--region must be omitted/,
+  )
+  assert.throws(
+    () => parseAuth0EmailProviderOptions(['--tenant', 'tenant.us.auth0.com', '--from', 'no-reply@boxlite.example']),
+    /--region is required to create the SES provider/,
   )
 })
 
@@ -239,6 +285,101 @@ test('Auth0 email-provider apply is idempotent, keeps SES secrets out of its rec
   } finally {
     rmSync(receiptDirectory, { recursive: true, force: true })
   }
+})
+
+test('Auth0 email-provider reconciles the code templates on a tenant whose provider it cannot build', async () => {
+  const receiptDirectory = mkdtempSync(join(tmpdir(), 'boxlite-auth0-email-'))
+  const calls: Array<{ method: string; path: string }> = []
+  const templates = new Map<string, JsonObject>()
+  const client: Auth0ManagementClient = {
+    request(method, path, requestOptions = {}) {
+      calls.push({ method, path })
+      if (method === 'get' && path === 'emails/provider') return resendProvider()
+      if (method === 'get' && path.startsWith('email-templates/')) {
+        return templates.get(path.slice('email-templates/'.length)) ?? null
+      }
+      if (method === 'post' && path === 'email-templates') {
+        const template = structuredClone(requestOptions.data as JsonObject)
+        templates.set(template.template, template)
+        return template
+      }
+      if (method === 'patch' && path.startsWith('email-templates/')) {
+        const template = templates.get(path.slice('email-templates/'.length))
+        if (!template) throw new Error(`cannot patch missing template '${path}'`)
+        Object.assign(template, requestOptions.data)
+        return template
+      }
+      throw new Error(`unexpected Auth0 request ${method} ${path}`)
+    },
+  }
+
+  try {
+    const result = await new Auth0EmailProviderConfigurator(templatesOnlyOptions(true), client, {
+      templates: sourceTemplates(),
+      receiptDirectory,
+    }).apply(async () => {
+      throw new Error('a run that owns no provider must not request SES credentials')
+    })
+
+    assert.equal(result.mode, 'applied')
+    // The tenant keeps the provider it had; only the templates were written.
+    assert.equal(result.provider, 'resend')
+    assert.deepEqual([...templates.keys()].sort(), ['reset_email_by_code', 'verify_email_by_code'])
+    assert.equal(
+      [...templates.values()].every((template) => template.enabled === true),
+      true,
+    )
+    assert.deepEqual(
+      calls.filter((call) => call.path === 'emails/provider' && call.method !== 'get'),
+      [],
+    )
+    const receipt = JSON.parse(readFileSync(result.receipt as string, 'utf8'))
+    assert.equal(receipt.provider.created, false)
+    assert.equal(receipt.provider.desired, null)
+
+    // Nothing to undo on the provider side, and the templates it did create
+    // are still disabled by the same rollback.
+    const rollback = Auth0EmailProviderConfigurator.rollback(result.receipt as string, client)
+    assert.equal(rollback.providerDeleted, false)
+    assert.deepEqual((rollback.disabledTemplates as string[]).sort(), [
+      'reset_email_by_code',
+      'verify_email_by_code',
+    ])
+  } finally {
+    rmSync(receiptDirectory, { recursive: true, force: true })
+  }
+})
+
+test('Auth0 email-provider template-only runs refuse a tenant the login policy would refuse', () => {
+  const configurator = (provider: JsonObject | null, fromAddress = 'no-reply@boxlite.example') =>
+    new Auth0EmailProviderConfigurator(
+      { ...templatesOnlyOptions(), fromAddress },
+      {
+        request(method, path) {
+          if (method === 'get' && path === 'emails/provider') return provider
+          return null
+        },
+      },
+      { templates: sourceTemplates(), receiptDirectory: '/unused' },
+    )
+
+  // Exactly the states emailDeliveryReadiness rejects: absent, Auth0's own
+  // built-in test sender, and a configured-but-disabled provider.
+  assert.throws(() => configurator(null).preview(), /needs an enabled non-Auth0 email provider/)
+  assert.throws(
+    () => configurator({ name: 'auth0', enabled: true }).preview(),
+    /needs an enabled non-Auth0 email provider/,
+  )
+  assert.throws(
+    () => configurator({ ...resendProvider(), enabled: false }).preview(),
+    /needs an enabled non-Auth0 email provider/,
+  )
+  // A sender the provider cannot send as would only surface as a failed signup.
+  assert.throws(
+    () => configurator(resendProvider(), 'codes@boxlite.example').preview(),
+    /is not the tenant provider's sender/,
+  )
+  assert.equal(configurator(resendProvider()).preview().provider.change, 'keep')
 })
 
 test('Auth0 login-policy login requests the email-provider write scopes used by apply and rollback', () => {
