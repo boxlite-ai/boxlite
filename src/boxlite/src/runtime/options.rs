@@ -965,7 +965,8 @@ impl NetworkConfig {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum NetworkSpec {
     /// Network enabled. Empty `allow_net` = full access.
-    /// Non-empty = only listed hosts/IPs allowed (DNS sinkhole for others).
+    /// Non-empty = only listed hosts/IPs allowed; others are refused when the
+    /// guest connects. DNS is not filtered.
     Enabled {
         #[serde(default)]
         allow_net: Vec<String>,

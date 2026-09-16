@@ -38,6 +38,7 @@ func installAllowNetHandlers(
 	config *types.Configuration,
 	ec2MetadataAccess bool,
 	filter *AllowNetFilter,
+	dialer *egressDialer,
 	ca *BoxCA,
 	secretMatcher *SecretHostMatcher,
 ) error {
@@ -51,7 +52,7 @@ func installAllowNetHandlers(
 	nat := natTable(config)
 	var natLock sync.Mutex
 
-	tcpFwd := TCPWithFilter(s, nat, &natLock, ec2MetadataAccess, filter, ca, secretMatcher)
+	tcpFwd := TCPWithFilter(s, nat, &natLock, ec2MetadataAccess, filter, dialer, ca, secretMatcher)
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 	logrus.Info("allowNet TCP: handler overridden with SNI-inspecting forwarder")
 

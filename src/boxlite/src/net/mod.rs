@@ -60,7 +60,8 @@ pub enum NetworkBackendEndpoint {
 pub struct NetworkBackendConfig {
     /// Unix socket path for the network backend (`net.sock`).
     pub socket_path: PathBuf,
-    /// Network allowlist. When non-empty, DNS sinkhole blocks unlisted hosts.
+    /// Network allowlist. When non-empty, the gateway allows only listed
+    /// destinations and dials hostname rules by name. DNS is not filtered.
     pub allow_net: Vec<String>,
     /// Secrets for MITM proxy injection.
     pub secrets: Vec<crate::runtime::options::Secret>,
@@ -82,7 +83,8 @@ pub struct NetworkBackendConfig {
 pub struct NetworkBackendSpec {
     /// Unix socket path for the network backend.
     pub socket_path: PathBuf,
-    /// Network allowlist. When non-empty, DNS sinkhole blocks unlisted hosts.
+    /// Network allowlist. When non-empty, the gateway allows only listed
+    /// destinations and dials hostname rules by name. DNS is not filtered.
     #[serde(default)]
     pub allow_net: Vec<String>,
     /// Secrets for MITM proxy injection. Passed through to gvproxy.

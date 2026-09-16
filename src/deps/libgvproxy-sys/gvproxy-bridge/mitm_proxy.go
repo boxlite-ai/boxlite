@@ -12,11 +12,16 @@ import (
 	"golang.org/x/net/http2"
 )
 
-const upstreamDialTimeout = 30 * time.Second
+// upstreamDialTimeout bounds one upstream connection attempt end to end. A var
+// rather than a const only so tests can shorten it.
+var upstreamDialTimeout = 30 * time.Second
 
 // mitmAndForward handles a MITM'd connection: TLS termination, reverse proxy, secret substitution.
+// dial opens each upstream transport connection; the forwarder binds it to
+// the peeked hostname, so the credential travels to the host the name resolves
+// to, never to an address the guest picked.
 // upstreamTLSConfig overrides the TLS config for upstream connections (nil = system defaults).
-func mitmAndForward(guestConn net.Conn, hostname string, destAddr string, ca *BoxCA, secrets []SecretConfig, upstreamTLSConfig ...*tls.Config) {
+func mitmAndForward(guestConn net.Conn, hostname string, dial upstreamDial, ca *BoxCA, secrets []SecretConfig, upstreamTLSConfig ...*tls.Config) {
 	cert, err := ca.GenerateHostCert(hostname)
 	if err != nil {
 		logrus.WithError(err).WithField("hostname", hostname).Error("MITM: cert generation failed")
@@ -34,8 +39,8 @@ func mitmAndForward(guestConn net.Conn, hostname string, destAddr string, ca *Bo
 	upstreamTransport := &http.Transport{
 		ForceAttemptHTTP2: true,
 		TLSClientConfig:   resolveUpstreamTLS(hostname, upstreamTLSConfig...),
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return (&net.Dialer{Timeout: upstreamDialTimeout}).DialContext(ctx, network, destAddr)
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return dial(ctx)
 		},
 	}
 

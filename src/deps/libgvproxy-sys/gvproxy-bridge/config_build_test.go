@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"reflect"
 	"testing"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
@@ -32,7 +33,7 @@ func testGvproxyConfig() GvproxyConfig {
 }
 
 func TestBuildTapConfig_UsesHostAliasDNSZone(t *testing.T) {
-	tapConfig := buildTapConfig(testGvproxyConfig(), types.QemuProtocol, nil)
+	tapConfig := buildTapConfig(testGvproxyConfig(), types.QemuProtocol)
 
 	if len(tapConfig.DNS) == 0 {
 		t.Fatal("expected at least one DNS zone")
@@ -53,33 +54,31 @@ func TestBuildTapConfig_UsesHostAliasDNSZone(t *testing.T) {
 	}
 }
 
-func TestBuildTapConfig_KeepsBuiltinZonesBeforeAllowNet(t *testing.T) {
+// allow_net does not touch DNS. It is enforced when the gateway dials
+// (forked_tcp.go, egress_dialer.go), so the zones the box serves are the
+// built-ins whatever the allowlist says. An earlier design appended a root
+// sinkhole here; a zone with an empty Name suffix-matches every query, so this
+// asserts against that shape specifically and fails if it is reintroduced in
+// any form.
+func TestBuildDNSZones_DNSIsNeverFilteredByAllowNet(t *testing.T) {
+	open := buildDNSZones(testGvproxyConfig())
+
 	config := testGvproxyConfig()
-	config.AllowNet = []string{"example.com"}
+	config.AllowNet = []string{"example.com", "*.example.net"}
+	closed := buildDNSZones(config)
 
-	// Deterministic allow_net zones stand in for a real buildAllowNet call:
-	// this test only verifies zone ordering, so resolving example.com would add
-	// a flaky/offline DNS dependency without strengthening the assertions.
-	allowNetZones := []types.Zone{
-		{Name: "example.com."},
-		{Name: ""}, // root sinkhole, which buildAllowNet appends too
+	if !reflect.DeepEqual(open, closed) {
+		t.Fatalf("allow_net must not change the served zones:\n without = %+v\n with    = %+v", open, closed)
 	}
-	tapConfig := buildTapConfig(config, types.QemuProtocol, allowNetZones)
-
-	if len(tapConfig.DNS) < 2 {
-		t.Fatalf("expected built-in and allowlist DNS zones, got %d", len(tapConfig.DNS))
-	}
-	if tapConfig.DNS[0].Name != "boxlite.internal." {
-		t.Fatalf("expected built-in zone first, got %q", tapConfig.DNS[0].Name)
-	}
-	lastZone := tapConfig.DNS[len(tapConfig.DNS)-1]
-	if lastZone.Name != "" {
-		t.Fatalf("expected allowlist root sinkhole zone last, got %q", lastZone.Name)
+	for _, zone := range closed {
+		if zone.Name == "" {
+			t.Fatalf("a zone with an empty name is a sinkhole over every query; allow_net must not add one: %+v", zone)
+		}
 	}
 }
 
 func TestBuildTapConfig_RoutesHostAliasToLoopback(t *testing.T) {
-	tapConfig := buildTapConfig(testGvproxyConfig(), types.QemuProtocol, nil)
+	tapConfig := buildTapConfig(testGvproxyConfig(), types.QemuProtocol)
 
 	if got := tapConfig.NAT["192.168.127.254"]; got != "127.0.0.1" {
 		t.Fatalf("expected host IP NAT to loopback, got %q", got)
