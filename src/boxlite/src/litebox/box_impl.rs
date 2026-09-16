@@ -2054,7 +2054,7 @@ mod tests {
     #[tokio::test]
     async fn test_stop_recovered_box_kills_orphan_process() {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
-        let runtime = RuntimeImpl::new(BoxliteOptions {
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
         })
@@ -2225,7 +2225,7 @@ mod tests {
     #[tokio::test]
     async fn get_info_without_live_state_does_not_touch_running_shim() {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
-        let mut runtime = RuntimeImpl::new(BoxliteOptions {
+        let mut runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
         })
@@ -2276,7 +2276,7 @@ mod tests {
     #[tokio::test]
     async fn info_reports_live_ports_for_the_current_shim_only() {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
-        let runtime = RuntimeImpl::new(BoxliteOptions {
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
         })
@@ -2361,7 +2361,7 @@ mod tests {
     #[tokio::test]
     async fn box_watcher_records_stopped_with_exit_code_when_the_shim_dies() {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
-        let runtime = RuntimeImpl::new(BoxliteOptions {
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
         })
@@ -2404,7 +2404,7 @@ mod tests {
     #[tokio::test]
     async fn box_watcher_removes_the_box_after_its_shim_dies() {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
-        let runtime = RuntimeImpl::new(BoxliteOptions {
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
         })

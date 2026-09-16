@@ -47,6 +47,9 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/test.yml'
       - '.github/workflows/config.yml'
+      - '.github/actions/**'
+      - 'openapi/**'
+      - 'codecov.yml'
   # No path filter on pull_request: the `Test (conclusion)` job is a required
   # status check, so this workflow must run on EVERY PR and report it. A
   # path-skipped workflow leaves the required check stuck "Pending" → PR blocked.
@@ -68,6 +71,7 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
@@ -88,9 +92,11 @@ jobs:
           base: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || '' }}
           ref: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || '' }}
           # rust and cli list every local package their test builds compile
-          # (cargo tree -e normal,build,dev --target all), plus the manifests,
-          # toolchain, cargo, nextest and CI config those builds read. rust
-          # also matches src/**/*.rs: a core unit test scans every Rust source
+          # (cargo tree -e normal,build,dev --target all), plus everything else
+          # the jobs read: manifests, toolchain, cargo, nextest, Codecov and CI
+          # config, and the local composite actions they use. rust also matches
+          # the make tree it runs, the OpenAPI reference server whose tests it
+          # runs, and src/**/*.rs: a core unit test scans every Rust source
           # under src/ (no_config_json_in_tracing_sigil_workspace_wide).
           filters: |
             rust:
@@ -103,13 +109,16 @@ jobs:
               - 'src/deps/libkrun-sys/**'
               - 'src/**/*.rs'
               - '.gitmodules'
-              - 'make/test.mk'
-              - 'make/coverage.mk'
+              - 'Makefile'
+              - 'make/**'
+              - 'openapi/**'
               - '**/Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - '.cargo/**'
               - '.config/nextest.toml'
+              - 'codecov.yml'
+              - '.github/actions/setup-rust/**'
               - '.github/workflows/config.yml'
               - '.github/workflows/test.yml'
             cli:
@@ -125,6 +134,9 @@ jobs:
               - 'rust-toolchain.toml'
               - '.cargo/**'
               - '.config/nextest.toml'
+              - 'codecov.yml'
+              - '.github/actions/setup-rust/**'
+              - '.github/actions/sccache/**'
               - '.github/workflows/config.yml'
               - '.github/workflows/test.yml'
             python:
@@ -179,6 +191,7 @@ jobs:
         platform: ${{ fromJson(needs.config.outputs.platforms) }}
 
     permissions:
+      contents: read
       id-token: write
     steps:
       - name: Checkout code
@@ -249,6 +262,7 @@ jobs:
         platform: ${{ fromJson(needs.config.outputs.platforms) }}
 
     permissions:
+      contents: read
       id-token: write
     steps:
       - name: Checkout code

@@ -234,9 +234,10 @@ impl RuntimeImpl {
         Self::initialize(options, experimental_features)
     }
 
-    /// Build a runtime without host validation. Tests using this must not exercise
-    /// VM or hypervisor operations.
-    #[cfg(test)]
+    /// Build a runtime without host validation, so unit tests also run on hosts
+    /// without usable virtualization, such as CI runners. Tests using this must
+    /// not exercise VM or hypervisor operations.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn new_for_test(options: BoxliteOptions) -> BoxliteResult<SharedRuntimeImpl> {
         Self::initialize(options, ExperimentalFeatures::default())
     }
@@ -2154,18 +2155,7 @@ mod tests {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
         };
-        let runtime = RuntimeImpl::new(options).expect("Failed to create runtime");
-        (runtime, temp_dir)
-    }
-
-    fn create_test_runtime_without_host_preflight() -> (SharedRuntimeImpl, TempDir) {
-        let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
-        let options = BoxliteOptions {
-            home_dir: temp_dir.path().to_path_buf(),
-            image_registries: vec![],
-        };
-        let runtime = RuntimeImpl::initialize(options, ExperimentalFeatures::default())
-            .expect("Failed to create test runtime");
+        let runtime = RuntimeImpl::new_for_test(options).expect("Failed to create runtime");
         (runtime, temp_dir)
     }
 
@@ -3314,7 +3304,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_import_after_shutdown_returns_stopped_before_archive_validation() {
-        let (runtime, dir) = create_test_runtime_without_host_preflight();
+        let (runtime, dir) = create_test_runtime();
         runtime.shutdown_token.cancel();
 
         let result = runtime

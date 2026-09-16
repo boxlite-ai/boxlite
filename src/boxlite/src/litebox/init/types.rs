@@ -462,7 +462,7 @@ mod tests {
         use std::path::PathBuf;
 
         let home = PerTestBoxHome::isolated_in("/tmp");
-        let runtime = RuntimeImpl::new(BoxliteOptions {
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: vec![],
         })

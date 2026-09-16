@@ -101,6 +101,15 @@ impl BoxliteRuntime {
         Ok(Self::from_local(local))
     }
 
+    /// Build a local runtime without host validation, for tests on hosts without
+    /// usable virtualization, such as CI runners. Callers must not exercise VM or
+    /// hypervisor operations.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_for_test(options: BoxliteOptions) -> BoxliteResult<Self> {
+        let local = LocalRuntime(RuntimeImpl::new_for_test(options)?);
+        Ok(Self::from_local(local))
+    }
+
     fn from_local(local: LocalRuntime) -> Self {
         let backend_arc = Arc::new(local);
         let image_backend = Arc::clone(&backend_arc) as Arc<dyn ImageBackend>;
@@ -551,7 +560,7 @@ mod tests {
 
     fn local_runtime() -> (BoxliteRuntime, TempDir) {
         let temp_dir = TempDir::new_in("/tmp").expect("temp dir");
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
+        let runtime = BoxliteRuntime::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
         })

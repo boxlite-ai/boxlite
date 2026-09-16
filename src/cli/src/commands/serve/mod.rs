@@ -2885,7 +2885,7 @@ mod tests {
         expected_message: &str,
     ) {
         let home = tempfile::tempdir().expect("runtime home");
-        let runtime = BoxliteRuntime::new(boxlite::BoxliteOptions {
+        let runtime = BoxliteRuntime::new_for_test(boxlite::BoxliteOptions {
             home_dir: home.path().join("boxlite"),
             ..Default::default()
         })
