@@ -231,6 +231,11 @@ Management API provider/template resources. The built-in service sends from
 `no-reply@auth0user.net`, is limited to 10 messages per minute, and is not for
 production.
 
+Login-policy apply refuses before its first write when the Auth0 CLI's session
+for the tenant lacks a scope it writes with, naming the missing ones: apply
+spans the connection, prompts, a Form, two Flows and an Action, and a session
+short one scope stops partway with resources already created.
+
 Login-policy apply writes a mode-`0600` rollback journal under
 `.sst/auth0-backups/` without client secrets. If apply stops partway, use the
 exact rollback command printed in the error. The reconciler preserves unrelated

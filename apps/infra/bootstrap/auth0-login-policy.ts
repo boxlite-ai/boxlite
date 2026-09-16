@@ -3,6 +3,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 
@@ -66,6 +67,38 @@ const LOGIN_POLICY_MANAGEMENT_SCOPES = [
   'update:flows_vault_connections',
   'delete:flows_vault_connections',
 ]
+
+const AUTH0_CLI_CONFIG_PATH = join(homedir(), '.config', 'auth0', 'config.json')
+
+/*
+ * The login-policy scopes the Auth0 CLI's session for `tenant` does not hold.
+ *
+ * Apply writes across the connection, prompts, a Form, two Flows and an
+ * Action, so a token short one scope stops partway: the run that prompted this
+ * check had created the M2M client and its grant before the first Forms write
+ * failed, and the 403 advice below never fired because that failure carried no
+ * parsable status. The CLI records what it asked for per tenant, so the same
+ * gap is knowable before the first write.
+ *
+ * An unreadable or empty record yields no missing scopes on purpose — not
+ * knowing the session is not evidence against it, and a false refusal would
+ * block an apply that would have worked.
+ */
+export function missingLoginPolicyScopes(tenant: string, configPath: string = AUTH0_CLI_CONFIG_PATH): string[] {
+  let recorded: unknown
+  try {
+    recorded = JSON.parse(readFileSync(configPath, 'utf8'))?.tenants?.[tenant]?.scopes
+  } catch {
+    return []
+  }
+  // An empty list is what a non-interactive session leaves behind — mstage
+  // supports machine sign-in, which holds client-credential scopes rather than
+  // the user ones recorded here. Reading it as all 39 missing would refuse the
+  // apply while advising an interactive login the operator deliberately avoided.
+  if (!Array.isArray(recorded) || recorded.length === 0) return []
+  const held = new Set(recorded.filter((scope): scope is string => typeof scope === 'string'))
+  return LOGIN_POLICY_MANAGEMENT_SCOPES.filter((scope) => !held.has(scope))
+}
 
 export interface Auth0LoginPolicyOptions {
   tenant: string

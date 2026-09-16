@@ -20,6 +20,7 @@ import {
   emailDeliveryReadiness,
   hydrateEmailVerificationTemplate,
   hydrateLoginPolicyAction,
+  missingLoginPolicyScopes,
   parseAuth0LoginPolicyOptions,
 } from './auth0-login-policy.js'
 import type { Auth0ManagementClient } from './auth0-login-policy.js'
@@ -202,6 +203,54 @@ test('a disabled custom email provider never falls back to Auth0 built-in delive
   assert.equal(readiness.auth0BuiltInEmailProvider, false)
   assert.equal(readiness.readyToApply, false)
   assert.throws(() => assertEmailDeliveryReady(readiness), /enabled external Auth0 email provider is required/)
+})
+
+test('missingLoginPolicyScopes names the write scopes an apply would stop on', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'boxlite-auth0-cli-'))
+  const configPath = join(directory, 'config.json')
+  const required = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+    .scripts['auth0:login-policy-login'].split('--scopes ')[1]
+    .split(',')
+
+  try {
+    const write = (scopes: unknown) =>
+      writeFileSync(configPath, JSON.stringify({ tenants: { 'tenant.us.auth0.com': { scopes } } }))
+
+    write(required)
+    assert.deepEqual(missingLoginPolicyScopes('tenant.us.auth0.com', configPath), [])
+
+    // The exact shape that half-applied a tenant: every read scope held, the
+    // Forms and Flows writes absent.
+    const withoutFormsAndFlowsWrites = required.filter(
+      (scope: string) => !/^(?:create|update|delete):(?:forms|flows|flows_vault_connections)$/.test(scope),
+    )
+    write(withoutFormsAndFlowsWrites)
+    assert.deepEqual(missingLoginPolicyScopes('tenant.us.auth0.com', configPath), [
+      'create:forms',
+      'update:forms',
+      'delete:forms',
+      'create:flows',
+      'update:flows',
+      'delete:flows',
+      'create:flows_vault_connections',
+      'update:flows_vault_connections',
+      'delete:flows_vault_connections',
+    ])
+
+    // An unknown session is not evidence of a missing scope: refusing here
+    // would block an apply that would have worked. An empty list is the
+    // non-interactive case, not a session holding none of the 39.
+    assert.deepEqual(missingLoginPolicyScopes('other.us.auth0.com', configPath), [])
+    write([])
+    assert.deepEqual(missingLoginPolicyScopes('tenant.us.auth0.com', configPath), [])
+    write('not-a-list')
+    assert.deepEqual(missingLoginPolicyScopes('tenant.us.auth0.com', configPath), [])
+    writeFileSync(configPath, 'not json')
+    assert.deepEqual(missingLoginPolicyScopes('tenant.us.auth0.com', configPath), [])
+    assert.deepEqual(missingLoginPolicyScopes('tenant.us.auth0.com', join(directory, 'absent.json')), [])
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test('hydrateEmailVerificationTemplate wires exact resource ids and leaves no placeholders', () => {

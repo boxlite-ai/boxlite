@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import {
   Auth0CliManagementClient,
   Auth0LoginPolicyConfigurator,
+  missingLoginPolicyScopes,
   parseAuth0LoginPolicyOptions,
 } from './auth0-login-policy.js'
 
@@ -38,6 +39,18 @@ try {
     )
   } else {
     const options = parseAuth0LoginPolicyOptions(process.argv.slice(2))
+    // Checked here rather than in the configurator: the session belongs to the
+    // CLI client this entrypoint chose. Apply only — preview writes nothing, so
+    // a scope it lacks costs a failed read, not a half-applied tenant.
+    if (options.apply) {
+      const missing = missingLoginPolicyScopes(options.tenant)
+      if (missing.length > 0) {
+        throw new Error(
+          `the auth0 CLI session for ${options.tenant} lacks ${missing.length} scope(s) apply writes with ` +
+            `(${missing.join(',')}); run \`npm run auth0:login-policy-login\` and select that tenant`,
+        )
+      }
+    }
     const configurator = new Auth0LoginPolicyConfigurator(
       options,
       new Auth0CliManagementClient(options.tenant),
