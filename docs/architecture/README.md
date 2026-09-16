@@ -7,9 +7,6 @@ Container security design: [Linux capability API](./container-capabilities.md)
 Jailer network permission design:
 [guest networking, host IP grants, and AF_UNIX control plane](./jailer-network-permissions.md)
 
-Managed volume storage backends:
-[volume mounts on GCS, keeping S3 compatibility](./volume-gcs-adapter.md)
-
 ## Overview
 
 BoxLite is an embeddable virtual machine runtime that follows the SQLite philosophy: a library that
