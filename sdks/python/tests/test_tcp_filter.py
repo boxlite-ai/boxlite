@@ -110,8 +110,11 @@ def live_targets() -> LiveTargets:
     if not _iter_ipv4_addresses(SECONDARY_ALLOWED_HOST):
         raise RuntimeError(f"No IPv4 addresses resolved for {SECONDARY_ALLOWED_HOST}")
 
-    if not _iter_ipv4_addresses(BLOCKED_HOST):
-        raise RuntimeError(f"No IPv4 addresses resolved for {BLOCKED_HOST}")
+    # Connect, don't just resolve. Every negative test reads a failed
+    # connection to BLOCKED_HOST as the allowlist refusing it, and an outage or
+    # a closed port there fails exactly the same way — without this preflight
+    # those tests stay green while filtering is broken.
+    _pick_reachable_ipv4(BLOCKED_HOST)
 
     blocked_ip = None
     for candidate in BLOCKED_IP_CANDIDATES:
@@ -215,9 +218,11 @@ class TestHostnameAllowlist(TCPFilterTestBase):
         """allow_net is enforced when the gateway dials, not by DNS.
 
         A name outside the allowlist resolves normally — that is the contract
-        now — and still cannot be reached. The allowed-host probe in the middle
-        is what keeps the final assertion honest: without it this would also
-        pass on a box with no working network at all.
+        now — and still cannot be reached. Two controls keep the final
+        assertion honest: ``live_targets`` has already connected to the blocked
+        endpoint from the host, and the allowed-host probe in the middle shows
+        this box has a working network. Without them the test would also pass
+        against a dead network, or against a host that is simply down.
         """
         async with self.make_box(
             network=enabled_network(self.live_targets.allowed_host),
@@ -339,7 +344,8 @@ class TestWildcardAllowlist(TCPFilterTestBase):
         """A domain outside the wildcard must be refused when connecting.
 
         It still resolves — DNS is not filtered — so the assertion has to be
-        about reachability, with the allowed subdomain as the control.
+        about reachability, with the allowed subdomain as the in-box control
+        and the ``live_targets`` preflight showing the blocked endpoint is up.
         """
         async with self.make_box(
             network=enabled_network("*.example.com"),

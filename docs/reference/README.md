@@ -206,8 +206,11 @@ Structured network configuration for outbound connectivity.
   hard-codes another IP with an allowed SNI still reaches the allowed host. A
   name that resolves to a private, loopback or CGNAT address is not connected
   to unless an IP or CIDR rule also lists that range. Link-local (metadata,
-  `169.254.0.0/16`) and the box's own subnet are refused outright: no rule
-  re-admits them, matching how the gateway treats a guest-chosen address.
+  `169.254.0.0/16`) is refused outright on both paths: no rule re-admits it,
+  by name or by address. The box's own subnet is refused only as a resolved
+  candidate, so that a name can never route back into the virtual network — a
+  guest that addresses `192.168.127.254` itself still reaches it under an IP
+  or CIDR rule covering it, as `host.boxlite.internal` below describes.
 - **DNS inside the box is not restricted.** `allow_net` is a connection-layer
   control: `/etc/resolv.conf` points at the gateway `192.168.127.1`, which
   forwards every query, listed name or not, to the host's resolver. A denied

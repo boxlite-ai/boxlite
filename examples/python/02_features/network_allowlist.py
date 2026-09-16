@@ -34,6 +34,16 @@ async def test_default_full_access():
         assert result.exit_code == 0
         print("  result: resolved to real IP")
 
+        # Preflight for Test 2, which reads a failed connection to this host as
+        # the allowlist refusing it. That only follows if the host answers when
+        # nothing is filtering.
+        result = await sandbox.exec(
+            "wget", "-q", "-O-", "--timeout=5", "http://github.com/"
+        )
+        print(f"  wget http://github.com/: exit={result.exit_code}")
+        assert result.exit_code == 0, "github.com must be reachable with full access"
+        print("  result: connected")
+
     print("  PASS")
 
 
@@ -71,6 +81,8 @@ async def test_allowlist_filtering():
         assert result.exit_code == 0, "allowed host should be reachable"
         print("  result: connected (allowed)")
 
+        # Test 1 already reached this host with full access, so the refusal
+        # below is the allowlist and not a host that happens to be down.
         result = await sandbox.exec(
             "wget", "-q", "-O-", "--timeout=3", "http://github.com/"
         )
