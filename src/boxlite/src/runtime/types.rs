@@ -561,7 +561,10 @@ impl BoxInfo {
             auto_delete: config.options.effective_auto_delete(),
             auto_resume: config.options.auto_resume.unwrap_or(true),
             health_status: state.health_status,
-            ssh_status: state.ssh_status.clone(),
+            ssh_status: state
+                .ssh_status
+                .as_ref()
+                .map(|status| status.with_host_identity(config)),
             exit_code: state.exit_code,
             started_at: state.started_at,
             // Activity is recorded by the control plane, not by a local box.
@@ -617,21 +620,24 @@ pub struct BoxStateInfo {
 }
 
 impl BoxStateInfo {
-    /// Create BoxStateInfo from internal BoxState.
+    /// Create an initialization-only view from internal state, without host identity.
     pub fn new(state: &BoxState) -> Self {
         Self {
             status: state.status,
             running: state.status.is_running(),
             pid: state.pid,
             exit_code: state.exit_code,
-            ssh_status: state.ssh_status.clone(),
+            ssh_status: state
+                .ssh_status
+                .as_ref()
+                .map(SshStatus::initialization_status),
         }
     }
 }
 
 impl From<&BoxInfo> for BoxStateInfo {
     /// Build state view from public BoxInfo (e.g. for CLI templates).
-    /// Equivalent to `BoxStateInfo::new(state)` when the same box is BoxInfo.
+    /// Preserves the host identity derived from configuration by `BoxInfo::new`.
     fn from(info: &BoxInfo) -> Self {
         Self {
             status: info.status,

@@ -227,6 +227,14 @@ pub struct SshStatus {
     pub state: SshState,
     /// Sanitized diagnostic, present only when initialization failed.
     pub error_reason: Option<String>,
+    /// Comment-free OpenSSH host public key, derived from configuration in
+    /// `BoxInfo` only when `Ready`. Raw initialization state has no identity.
+    #[serde(default)]
+    pub host_public_key: Option<String>,
+    /// `SHA256:<base64>` fingerprint of the host public key, present only
+    /// when `Ready`.
+    #[serde(default)]
+    pub host_key_fingerprint: Option<String>,
 }
 
 impl SshStatus {
@@ -245,7 +253,52 @@ impl SshStatus {
             } else {
                 None
             },
+            host_public_key: None,
+            host_key_fingerprint: None,
         })
+    }
+
+    pub(crate) fn initialization_status(&self) -> Self {
+        Self {
+            state: self.state,
+            error_reason: self.error_reason.clone(),
+            host_public_key: None,
+            host_key_fingerprint: None,
+        }
+    }
+
+    pub(crate) fn with_host_identity(&self, config: &super::config::BoxConfig) -> Self {
+        let mut status = self.initialization_status();
+        if status.state != SshState::Ready {
+            return status;
+        }
+        let Some(ssh_config) = &config.options.ssh_config else {
+            return status;
+        };
+        match Self::host_identity(&ssh_config.host_private_key) {
+            Ok((public_key, fingerprint)) => {
+                status.host_public_key = Some(public_key);
+                status.host_key_fingerprint = Some(fingerprint);
+            }
+            // Decoder errors are not guaranteed to be free of private material.
+            Err(_) => tracing::warn!(
+                box_id = %config.id,
+                "Failed to derive SSH host identity from configured private key"
+            ),
+        }
+        status
+    }
+
+    fn host_identity(private_key: &str) -> ssh_key::Result<(String, String)> {
+        let key = ssh_key::PrivateKey::from_openssh(private_key.trim())?;
+        if key.is_encrypted() {
+            return Err(ssh_key::Error::Encrypted);
+        }
+        let public_key = ssh_key::PublicKey::new(key.public_key().key_data().clone(), "");
+        Ok((
+            public_key.to_openssh()?,
+            public_key.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
+        ))
     }
 }
 
@@ -269,7 +322,7 @@ pub struct BoxState {
     /// Health status.
     #[serde(default)]
     pub health_status: HealthStatus,
-    /// Latest SSH initialization result; absent for old guests or records.
+    /// Latest SSH initialization result, without host identity; absent before init.
     #[serde(default)]
     pub ssh_status: Option<SshStatus>,
     /// Human-readable reason the box entered `Failed` (or other terminal state).
@@ -563,12 +616,14 @@ mod tests {
                 status.error_reason.as_deref(),
                 (expected == SshState::Failed).then_some("sanitized reason")
             );
+            assert_eq!(status.host_public_key, None);
+            assert_eq!(status.host_key_fingerprint, None);
         }
         for unknown in [0, 99] {
             assert!(
                 SshStatus::from_guest(SshInitResult {
                     state: unknown,
-                    error_reason: None
+                    error_reason: None,
                 })
                 .is_none()
             );
@@ -586,9 +641,20 @@ mod tests {
                 .ssh_status
                 .is_none()
         );
+        // Initialization state does not need identity fields.
+        let initialization = serde_json::from_value::<SshStatus>(serde_json::json!({
+            "state": "ready",
+            "error_reason": null
+        }))
+        .unwrap();
+        assert_eq!(initialization.state, SshState::Ready);
+        assert_eq!(initialization.host_public_key, None);
+        assert_eq!(initialization.host_key_fingerprint, None);
         let status = SshStatus {
-            state: SshState::Failed,
-            error_reason: Some("SSH listen: address in use".into()),
+            state: SshState::Ready,
+            error_reason: None,
+            host_public_key: None,
+            host_key_fingerprint: None,
         };
         state.ssh_status = Some(status.clone());
         state.set_status(BoxStatus::Running);

@@ -22,10 +22,10 @@ async fn checked_output(mut command: Command) -> Vec<u8> {
     output.stdout
 }
 
-async fn generate_key(path: &Path) {
+async fn generate_key(path: &Path, comment: &str) {
     let mut command = Command::new("ssh-keygen");
     command
-        .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+        .args(["-q", "-t", "ed25519", "-N", "", "-C", comment, "-f"])
         .arg(path);
     checked_output(command).await;
 }
@@ -62,8 +62,8 @@ async fn guest_ssh_public_key_exec_pty_sftp_survive_vm_restart() {
     let keys = tempfile::TempDir::new_in("/tmp").unwrap();
     let host_key = keys.path().join("host");
     let user_key = keys.path().join("user");
-    generate_key(&host_key).await;
-    generate_key(&user_key).await;
+    generate_key(&host_key, "host\r\ncomment").await;
+    generate_key(&user_key, "user").await;
     let host_public = std::fs::read_to_string(host_key.with_extension("pub")).unwrap();
     let user_public = std::fs::read_to_string(user_key.with_extension("pub")).unwrap();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
@@ -93,6 +93,37 @@ async fn guest_ssh_public_key_exec_pty_sftp_survive_vm_restart() {
         let status = sandbox.info().await.unwrap().ssh_status.unwrap();
         assert_eq!(status.state, boxlite::SshState::Ready);
         assert!(status.error_reason.is_none());
+        // The API key must be safe to place on one known_hosts line even
+        // when the configured private key contains a multiline comment.
+        let reported_public = status.host_public_key.as_deref().unwrap();
+        assert!(!reported_public.contains(['\r', '\n']));
+        assert_eq!(
+            reported_public,
+            host_public
+                .split_whitespace()
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let mut keygen = Command::new("ssh-keygen");
+        keygen.arg("-lf").arg(host_key.with_extension("pub"));
+        let keygen_report = checked_output(keygen).await;
+        let keygen_fingerprint = String::from_utf8(keygen_report)
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .to_string();
+        let fingerprint = status.host_key_fingerprint.as_deref().unwrap();
+        assert_eq!(fingerprint, keygen_fingerprint);
+        let encoded = serde_json::to_string(&status).unwrap();
+        assert!(encoded.contains(fingerprint));
+        for line in std::fs::read_to_string(&host_key).unwrap().lines() {
+            assert!(
+                !encoded.contains(line),
+                "SSH status must not carry host private key material"
+            );
+        }
         let published = sandbox
             .info()
             .await
@@ -104,7 +135,11 @@ async fn guest_ssh_public_key_exec_pty_sftp_survive_vm_restart() {
         assert_eq!(published.len(), 1, "SSH must not publish additional ports");
         let port = published[0].host_port;
         let known_hosts = keys.path().join("known_hosts");
-        std::fs::write(&known_hosts, format!("[127.0.0.1]:{port} {host_public}")).unwrap();
+        std::fs::write(
+            &known_hosts,
+            format!("[127.0.0.1]:{port} {reported_public}\n"),
+        )
+        .unwrap();
 
         let mut exec = client_command("ssh", &user_key, &known_hosts, port);
         exec.args(["root@127.0.0.1", "printf ssh-exec-ok"]);
@@ -174,6 +209,8 @@ async fn guest_ssh_invalid_config_does_not_block_main_command() {
     assert_eq!(info.status, BoxStatus::Running);
     let status = info.ssh_status.unwrap();
     assert_eq!(status.state, boxlite::SshState::Failed);
+    assert_eq!(status.host_public_key, None);
+    assert_eq!(status.host_key_fingerprint, None);
     let reason = status.error_reason.as_ref().unwrap();
     assert!(reason.contains("SSH validate:"));
     assert!(!reason.contains("test-only-private-marker"));

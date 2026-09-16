@@ -390,8 +390,10 @@ mod tests {
         let config = create_test_config(TEST_ID_1);
         let mut state = BoxState::new();
         state.ssh_status = Some(crate::SshStatus {
-            state: crate::SshState::Failed,
-            error_reason: Some("SSH validate: invalid host private key".into()),
+            state: crate::SshState::Ready,
+            error_reason: None,
+            host_public_key: None,
+            host_key_fingerprint: None,
         });
         state.set_status(crate::BoxStatus::Running);
         store.save(&config, &state).unwrap();

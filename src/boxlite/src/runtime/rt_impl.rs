@@ -2319,6 +2319,236 @@ mod tests {
         }
     }
 
+    async fn ssh_test_identity(
+        algorithm: &str,
+        comment: &str,
+    ) -> (crate::SshConfig, String, String) {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("host");
+        let mut keygen = tokio::process::Command::new("ssh-keygen");
+        keygen
+            .args(["-q", "-t", algorithm, "-N", "", "-C", comment, "-f"])
+            .arg(&key_path)
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(Duration::from_secs(30), keygen.output())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(output.status.success(), "ssh-keygen failed");
+        let public = std::fs::read_to_string(key_path.with_extension("pub")).unwrap();
+        let public = public
+            .split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut fingerprint = tokio::process::Command::new("ssh-keygen");
+        fingerprint
+            .args(["-lf"])
+            .arg(key_path.with_extension("pub"))
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(Duration::from_secs(30), fingerprint.output())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(output.status.success(), "ssh-keygen fingerprint failed");
+        let fingerprint = String::from_utf8(output.stdout)
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .to_string();
+        (
+            crate::SshConfig {
+                listen_address: "0.0.0.0:2222".into(),
+                host_private_key: std::fs::read_to_string(key_path).unwrap(),
+                authorized_keys: Vec::new(),
+                ca: None,
+            },
+            public,
+            fingerprint,
+        )
+    }
+
+    fn ssh_ready_state() -> BoxState {
+        let mut state = BoxState::new();
+        state.ssh_status = Some(crate::SshStatus {
+            state: crate::SshState::Ready,
+            error_reason: None,
+            host_public_key: None,
+            host_key_fingerprint: None,
+        });
+        state
+    }
+
+    #[tokio::test]
+    async fn ssh_identity_comes_from_host_config_without_reported_key() {
+        let (ssh, public, fingerprint) = ssh_test_identity("ed25519", "").await;
+        let mut config = test_box_config(false);
+        config.options.ssh_config = Some(ssh);
+        let status = BoxInfo::new(&config, &ssh_ready_state())
+            .ssh_status
+            .unwrap();
+        assert_eq!(status.host_public_key.as_deref(), Some(public.as_str()));
+        assert_eq!(
+            status.host_key_fingerprint.as_deref(),
+            Some(fingerprint.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn ssh_identity_ignores_incorrect_state_key() {
+        let (ssh, public, fingerprint) = ssh_test_identity("ed25519", "").await;
+        let mut config = test_box_config(false);
+        config.options.ssh_config = Some(ssh);
+        let mut state = ssh_ready_state();
+        let reported = state.ssh_status.as_mut().unwrap();
+        reported.host_public_key = Some("ssh-ed25519 incorrect".into());
+        reported.host_key_fingerprint = Some("SHA256:incorrect".into());
+        let status = BoxInfo::new(&config, &state).ssh_status.unwrap();
+        assert_eq!(status.host_public_key.as_deref(), Some(public.as_str()));
+        assert_eq!(
+            status.host_key_fingerprint.as_deref(),
+            Some(fingerprint.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn ssh_identity_removes_multiline_comments() {
+        for comment in [
+            "host\nsecond line",
+            "host\r\nsecond line",
+            "host comment",
+            "",
+        ] {
+            let (ssh, public, fingerprint) = ssh_test_identity("ed25519", comment).await;
+            let mut config = test_box_config(false);
+            config.options.ssh_config = Some(ssh);
+            let mut state = ssh_ready_state();
+            let reported = state.ssh_status.as_mut().unwrap();
+            reported.host_public_key = Some(format!("{public} {comment}"));
+            reported.host_key_fingerprint = Some(fingerprint.clone());
+            let status = BoxInfo::new(&config, &state).ssh_status.unwrap();
+            let actual = status.host_public_key.unwrap();
+            assert!(
+                !actual.contains(['\r', '\n']),
+                "SSH host public key must be one line"
+            );
+            assert_eq!(actual, public);
+            assert_eq!(
+                status.host_key_fingerprint.as_deref(),
+                Some(fingerprint.as_str())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ssh_identity_supports_guest_key_algorithms() {
+        for algorithm in ["ed25519", "rsa", "ecdsa"] {
+            let (ssh, public, fingerprint) = ssh_test_identity(algorithm, "host").await;
+            let mut config = test_box_config(false);
+            config.options.ssh_config = Some(ssh);
+            let status = BoxInfo::new(&config, &ssh_ready_state())
+                .ssh_status
+                .unwrap();
+            assert_eq!(status.host_public_key.as_deref(), Some(public.as_str()));
+            assert_eq!(
+                status.host_key_fingerprint.as_deref(),
+                Some(fingerprint.as_str())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ssh_identity_is_absent_without_ready_or_valid_config() {
+        let (ssh, _, _) = ssh_test_identity("ed25519", "host").await;
+        let mut config = test_box_config(false);
+        config.options.ssh_config = Some(ssh);
+        assert!(BoxInfo::new(&config, &BoxState::new()).ssh_status.is_none());
+        for outcome in [crate::SshState::Disabled, crate::SshState::Failed] {
+            let mut state = ssh_ready_state();
+            let reported = state.ssh_status.as_mut().unwrap();
+            reported.state = outcome;
+            reported.error_reason =
+                (outcome == crate::SshState::Failed).then(|| "SSH listen: address in use".into());
+            reported.host_public_key = Some("ssh-ed25519 incorrect".into());
+            reported.host_key_fingerprint = Some("SHA256:incorrect".into());
+            let expected_reason = reported.error_reason.clone();
+            let status = BoxInfo::new(&config, &state).ssh_status.unwrap();
+            assert_eq!(status.state, outcome);
+            assert_eq!(status.error_reason, expected_reason);
+            assert_eq!(status.host_public_key, None);
+            assert_eq!(status.host_key_fingerprint, None);
+        }
+        for private_key in [None, Some("invalid private key")] {
+            config.options.ssh_config = private_key.map(|key| crate::SshConfig {
+                listen_address: "0.0.0.0:2222".into(),
+                host_private_key: key.into(),
+                authorized_keys: Vec::new(),
+                ca: None,
+            });
+            assert_eq!(
+                BoxInfo::new(&config, &ssh_ready_state()).ssh_status,
+                ssh_ready_state().ssh_status
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ssh_identity_matches_database_cache_and_list_without_writes() {
+        let (runtime, dir) = create_test_runtime();
+        let (ssh, public, fingerprint) = ssh_test_identity("ed25519", "host\r\ncomment").await;
+        let mut config = test_box_config(false);
+        config.name = Some("ssh-identity".into());
+        config.options.ssh_config = Some(ssh);
+        let state = ssh_ready_state();
+        runtime.box_manager.add_box(&config, &state).unwrap();
+        let connection = rusqlite::Connection::open(dir.path().join("db/boxlite.db")).unwrap();
+        let stored_json = || {
+            connection.query_row(
+            "SELECT box_config.json, box_state.json FROM box_config JOIN box_state USING (id)",
+            [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ).unwrap()
+        };
+        let before = stored_json();
+        let expected = Some(crate::SshStatus {
+            state: crate::SshState::Ready,
+            error_reason: None,
+            host_public_key: Some(public),
+            host_key_fingerprint: Some(fingerprint),
+        });
+        let info = runtime.get_info(config.id.as_str()).await.unwrap().unwrap();
+        assert_eq!(info.ssh_status, expected);
+        assert_eq!(crate::BoxStateInfo::from(&info).ssh_status, expected);
+        assert_eq!(runtime.list_info().await.unwrap()[0].ssh_status, expected);
+        let (handle, _) = runtime.get_or_create_box_impl(config.clone(), state.clone());
+        assert_eq!(handle.info().ssh_status, expected);
+        for lookup in [config.id.as_str(), "ssh-identity"] {
+            assert_eq!(
+                runtime.get_info(lookup).await.unwrap().unwrap().ssh_status,
+                expected
+            );
+        }
+        assert_eq!(runtime.list_info().await.unwrap()[0].ssh_status, expected);
+        assert!(
+            stored_json() == before,
+            "SSH info queries must not modify stored config or state"
+        );
+        assert_eq!(
+            crate::BoxStateInfo::new(&state).ssh_status,
+            state.ssh_status
+        );
+
+        // A raw state view cannot vouch for any identity, even if supplied one.
+        let mut state_with_identity = state;
+        state_with_identity.ssh_status = expected;
+        let raw = crate::BoxStateInfo::new(&state_with_identity)
+            .ssh_status
+            .unwrap();
+        assert_eq!(raw.host_public_key, None);
+        assert_eq!(raw.host_key_fingerprint, None);
+    }
+
     #[tokio::test]
     async fn ssh_status_reaches_all_rust_info_queries() {
         let (runtime, _dir) = create_test_runtime();
@@ -2327,6 +2557,8 @@ mod tests {
         state.ssh_status = Some(crate::SshStatus {
             state: crate::SshState::Failed,
             error_reason: Some("SSH listen: address in use".into()),
+            host_public_key: None,
+            host_key_fingerprint: None,
         });
         runtime.box_manager.add_box(&config, &state).unwrap();
         let info = runtime.get_info(config.id.as_str()).await.unwrap().unwrap();

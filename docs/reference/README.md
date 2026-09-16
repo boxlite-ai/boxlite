@@ -993,3 +993,9 @@ cp ~/.boxlite/db/boxes.db ~/backup/boxes.db.backup
 - Do not manually modify (data corruption risk)
 - Backed up automatically on box operations
 - Corruption recovery: Delete and recreate from box config files
+- Security: box configuration JSON includes any SSH host private key. Treat
+  dumps and backups as sensitive; get host public keys and fingerprints from
+  the runtime API or `boxlite inspect` (`State.Ssh.HostPublicKey`,
+  `State.Ssh.HostKeyFingerprint`) instead of the database. The guest reports
+  initialization status; the host derives public identity from configuration
+  for Ready results without persisting it.
