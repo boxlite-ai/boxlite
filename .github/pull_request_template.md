@@ -11,6 +11,7 @@ After
 ```
 
 Fixes #<n>
+<!-- bug fixes only: keep the Fixes line and the BUG marker; delete both otherwise -->
 
 ## Why
 
