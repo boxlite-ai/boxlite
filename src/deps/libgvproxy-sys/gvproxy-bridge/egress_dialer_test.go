@@ -16,20 +16,47 @@ import (
 type dialRecorder struct {
 	mu     sync.Mutex // the forwarder dials on a stack goroutine
 	dialed []string
-	fail   map[string]error // addr → error; unlisted addrs succeed
+	fail   map[string]error         // addr → error; unlisted addrs succeed
+	block  map[string]bool          // addr → blackhole: answer only when the attempt's context ends
+	slow   map[string]time.Duration // addr → connects only after this much of its window
 }
 
-func (r *dialRecorder) dial(_ context.Context, network, addr string) (net.Conn, error) {
+func (r *dialRecorder) dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	r.mu.Lock()
 	r.dialed = append(r.dialed, network+" "+addr)
 	err, failing := r.fail[addr]
+	blackholed := r.block[addr]
 	r.mu.Unlock()
+	// net.Dialer.DialContext refuses an already-expired context instead of
+	// connecting. The seam must do the same, or a starved attempt is
+	// indistinguishable from a healthy one and the test proves nothing.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if blackholed {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if after, ok := r.slowFor(addr); ok {
+		select {
+		case <-time.After(after):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if failing {
 		return nil, err
 	}
 	client, server := net.Pipe()
 	_ = server.Close()
 	return client, nil
+}
+
+func (r *dialRecorder) slowFor(addr string) (time.Duration, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.slow[addr]
+	return d, ok
 }
 
 // snapshot returns what has been dialed so far.
@@ -55,7 +82,11 @@ func newTestEgressDialer(t *testing.T, filter *AllowNetFilter, resolve resolveFu
 	if err != nil {
 		t.Fatalf("newEgressDialer: %v", err)
 	}
-	rec := &dialRecorder{fail: map[string]error{}}
+	rec := &dialRecorder{
+		fail:  map[string]error{},
+		block: map[string]bool{},
+		slow:  map[string]time.Duration{},
+	}
 	d.resolve = resolve
 	d.dial = rec.dial
 	return d, rec
@@ -73,6 +104,109 @@ func TestEgressDialer_DialsResolvedAddressesInOrderUntilOneConnects(t *testing.T
 	want := []string{"tcp4 198.51.100.1:443", "tcp4 198.51.100.2:443"}
 	if strings.Join(rec.dialed, ",") != strings.Join(want, ",") {
 		t.Fatalf("dialed %v, want %v (stop at the first success, never touch the third)", rec.dialed, want)
+	}
+}
+
+// The split itself, away from the clock: candidateDeadline is what decides
+// how much of the remaining budget one address may spend.
+func TestCandidateDeadline_SplitsTheRemainingBudget(t *testing.T) {
+	restore := minCandidateDialWindow
+	minCandidateDialWindow = 2 * time.Second
+	t.Cleanup(func() { minCandidateDialWindow = restore })
+
+	now := time.Now()
+	for _, tc := range []struct {
+		name      string
+		left      time.Duration
+		remaining int
+		wantShare time.Duration
+	}{
+		{"split across the addresses still to try", 30 * time.Second, 3, 10 * time.Second},
+		{"the last address may spend what is left", 30 * time.Second, 1, 30 * time.Second},
+		{"a share under the floor is raised to it, cutting the list short", 30 * time.Second, 60, 2 * time.Second},
+		{"a budget under the floor goes to one address", 500 * time.Millisecond, 4, 500 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			share := candidateDeadline(now, now.Add(tc.left), tc.remaining).Sub(now)
+			if share != tc.wantShare {
+				t.Fatalf("share = %v, want %v", share, tc.wantShare)
+			}
+		})
+	}
+}
+
+// One blackholed address must not spend the whole operation budget. Without a
+// per-candidate share the first dial holds the single operation-wide context
+// until it expires, and the healthy address behind it is handed a context that
+// is already done — the failure net.dialSerial avoids by splitting the
+// deadline with partialDeadline (go/src/net/dial.go:659).
+func TestEgressDialer_BlackholedAddressDoesNotStarveTheNext(t *testing.T) {
+	restoreTimeout := upstreamDialTimeout
+	restoreWindow := minCandidateDialWindow
+	upstreamDialTimeout = 200 * time.Millisecond
+	minCandidateDialWindow = 10 * time.Millisecond
+	t.Cleanup(func() {
+		upstreamDialTimeout = restoreTimeout
+		minCandidateDialWindow = restoreWindow
+	})
+
+	d, rec := newTestEgressDialer(t, testFilter("api.example.test"),
+		staticResolve("198.51.100.1", "198.51.100.2"))
+	rec.block["198.51.100.1:443"] = true
+
+	conn, err := d.DialHost(context.Background(), "api.example.test", 443)
+	if err != nil {
+		t.Fatalf("the second address is healthy and must still be reached: %v", err)
+	}
+	_ = conn.Close()
+
+	want := []string{"tcp4 198.51.100.1:443", "tcp4 198.51.100.2:443"}
+	if strings.Join(rec.snapshot(), ",") != strings.Join(want, ",") {
+		t.Fatalf("dialed %v, want %v", rec.snapshot(), want)
+	}
+}
+
+// The share is against the addresses still to try, not the whole answer, so a
+// candidate that fails fast hands its unused window to the rest. Dividing by
+// the full count instead leaves the survivor half a budget it needs all of.
+func TestEgressDialer_FastFailureHandsItsWindowToTheNext(t *testing.T) {
+	restoreTimeout := upstreamDialTimeout
+	restoreWindow := minCandidateDialWindow
+	upstreamDialTimeout = 500 * time.Millisecond
+	minCandidateDialWindow = time.Millisecond
+	t.Cleanup(func() {
+		upstreamDialTimeout = restoreTimeout
+		minCandidateDialWindow = restoreWindow
+	})
+
+	d, rec := newTestEgressDialer(t, testFilter("api.example.test"),
+		staticResolve("198.51.100.1", "198.51.100.2"))
+	rec.fail["198.51.100.1:443"] = errors.New("connection refused")
+	// More than the 250ms an even two-way split would leave, less than the
+	// ~500ms the survivor inherits once the refusal returns its share.
+	rec.slow["198.51.100.2:443"] = 300 * time.Millisecond
+
+	conn, err := d.DialHost(context.Background(), "api.example.test", 443)
+	if err != nil {
+		t.Fatalf("the refused address returned its window; the second must have it: %v", err)
+	}
+	_ = conn.Close()
+}
+
+// A caller that has gone away stops the loop instead of burning one doomed
+// attempt per remaining address.
+func TestEgressDialer_CanceledCallerDialsNothing(t *testing.T) {
+	d, rec := newTestEgressDialer(t, testFilter("api.example.test"),
+		staticResolve("198.51.100.1", "198.51.100.2"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := d.DialHost(ctx, "api.example.test", 443); err == nil {
+		t.Fatal("a canceled caller must not yield a connection")
+	}
+	if got := rec.snapshot(); len(got) != 0 {
+		t.Fatalf("dialed %v after cancellation; the loop must stop first", got)
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 
 	logrus "github.com/sirupsen/logrus"
 )
@@ -110,19 +111,62 @@ func (d *egressDialer) DialHost(ctx context.Context, hostname string, port uint1
 	ctx, cancel := context.WithTimeout(ctx, upstreamDialTimeout)
 	defer cancel()
 
+	deadline, _ := ctx.Deadline() // always set: WithTimeout above just set one
+
 	ips, err := d.candidates(ctx, hostname)
 	if err != nil {
 		return nil, err
 	}
 	var lastErr error
-	for _, ip := range ips {
-		conn, err := d.dial(ctx, "tcp4", net.JoinHostPort(ip.String(), strconv.Itoa(int(port))))
+	for i, ip := range ips {
+		// The one stop condition, as net.dialSerial checks before each
+		// address: the caller is gone, or the budget is spent — the derived
+		// context reports both. Without it a canceled MITM request walks the
+		// whole candidate list, every attempt failing on a context already
+		// done.
+		if err := ctx.Err(); err != nil {
+			if lastErr == nil {
+				lastErr = err
+			}
+			break
+		}
+		attemptCtx, cancelAttempt := context.WithDeadline(ctx,
+			candidateDeadline(time.Now(), deadline, len(ips)-i))
+		conn, err := d.dial(attemptCtx, "tcp4", net.JoinHostPort(ip.String(), strconv.Itoa(int(port))))
+		cancelAttempt()
 		if err == nil {
 			return conn, nil
 		}
 		lastErr = err
 	}
 	return nil, fmt.Errorf("dial %s:%d: %w", hostname, port, lastErr)
+}
+
+// minCandidateDialWindow is net/dial.go's saneMinimum and means the same
+// thing: below it, a few candidates with a usable window beat every candidate
+// with a hopeless one, and the deadline cuts the list short. A var so a test
+// can shrink it and observe the split without spending seconds of wall clock.
+var minCandidateDialWindow = 2 * time.Second
+
+// candidateDeadline gives one resolved address its share of what is left of
+// the operation deadline, the way net.dialSerial splits a multi-address dial
+// (go/src/net/dial.go:659, partialDeadline at :269). One deadline shared by
+// every candidate instead lets a blackholed address — accepting nothing,
+// refusing nothing — spend the whole budget, so each healthy address behind it
+// is dialed with a context that is already done.
+//
+// The share is recomputed against the addresses still to try, so a candidate
+// that fails fast hands its unused time to the rest.
+func candidateDeadline(now, deadline time.Time, remaining int) time.Time {
+	left := deadline.Sub(now)
+	share := left / time.Duration(remaining)
+	if share < minCandidateDialWindow {
+		share = minCandidateDialWindow
+		if left < minCandidateDialWindow {
+			share = left
+		}
+	}
+	return now.Add(share)
 }
 
 func (d *egressDialer) candidates(ctx context.Context, hostname string) ([]net.IP, error) {
