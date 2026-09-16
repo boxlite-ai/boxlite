@@ -1,27 +1,25 @@
-## Summary
-<!-- 1-2 sentences: what this changes and why. -->
-
 ## Call graph
-<!-- Required. The end-to-end path this PR touches, before and after; one line
-     per hop, only the hops that change. Worked example and the bug-fix markers:
-     CONTRIBUTING.md#commit--pr-messages. -->
 
+```text
 Before
-<!-- replace with the hops: fn_name (Type · path/file.rs:LOC) — role -->
+  <command, SDK call, or API request the person triggers>
+  └─ fn_name (Type · path/file.rs:LOC)  ← BUG: what goes wrong
 
 After
-<!-- replace with the same hops, post-change -->
+  <command, SDK call, or API request the person triggers>
+  └─ fn_name (Type · path/file.rs:LOC)  — new behavior; guarded by <test name>
+```
 
-Fixes #<!-- issue number — bug fixes only; delete this line otherwise -->
+Fixes #<n>
 
-## Changes
-- <!-- notable change — what changed, not a restatement of the diff -->
+## Why
 
-## How to verify
-- <!-- a command or step a reviewer can run -->
+<the problem, why this change solves it, and the alternatives rejected>
 
-## Risks / rollout
-- <!-- only if any; delete this section otherwise -->
+## User-facing change
 
-<!-- Describe the change, not the process: no pasted logs, no AI/conversation
-     narrative, no secrets. Keep it tight and delete sections that don't apply. -->
+NONE
+
+## Verification
+
+<commands run and what they showed; for a fix, the test failing on the reverted change and passing on the restored one>

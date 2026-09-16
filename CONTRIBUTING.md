@@ -96,28 +96,55 @@ Write for a reviewer skimming in ~30 seconds. Describe the change, not the proce
 **Commits** — [Conventional Commits](https://www.conventionalcommits.org):
 
 - Subject: `type(scope): summary` — imperative, ≤72 chars, no trailing period. Types: `feat` `fix` `docs` `refactor` `test` `chore` `perf` `ci` `build`.
-- Body (only when it adds value): the *why* and *what* at a high level; wrap ~72.
+- Body: the *why* — the problem, why this change solves it, alternatives rejected; wrap ~72. Squash merges here keep the PR description and drop the branch commits, so the PR body Why section is what reaches `git log`; keep the commit body consistent with it.
 
-**PRs:**
+**PRs** — title is a Conventional-Commit subject; the description follows [`.github/pull_request_template.md`](./.github/pull_request_template.md) in this order:
 
-- Title: a Conventional-Commit subject (same rule as above).
-- Description: fill in [`.github/pull_request_template.md`](./.github/pull_request_template.md); delete sections that don't apply.
-- **Call graph (required):** the end-to-end path the PR touches, *before* and *after* — one line per hop, `fn_name  (Type · path/file.rs:LOC)  — role`, flow shown by arrows or indent. Only the hops that change; elide the rest with `…`. Same shape as the graphs used to explain code elsewhere in this repo.
-- **Bug fixes** additionally mark the defect in the *Before* graph — `← BUG: <what goes wrong>` on the faulty hop — and link the issue with `Fixes #<n>`.
+| Order | Section | Content | Checked by |
+| --- | --- | --- | --- |
+| 1 | `## Call graph` | first non-blank content; one column-one `text` fence holding the end-to-end *Before* and *After* path, one line per hop `fn_name  (Type · path/file.rs:LOC)  — role`; only the hops that change, elide the rest with `…` | agent-tooling preflight hook |
+| 2 | `Fixes #<n>` | bug fixes only; first non-blank line after the fence; the faulty *Before* hop carries `← BUG: <what goes wrong>` | preflight hook |
+| 3 | `## Why` | the problem, why this change solves it, alternatives rejected | reviewer |
+| 4 | `## User-facing change` | one line: what a user, SDK caller, or agent now sees differently, or `NONE` | reviewer |
+| 5 | `## Verification` | commands run and what they showed; for a fix, the test failing on the reverted change and passing on the restored one | reviewer |
+
+- Root the graph at what a person triggers (a `boxlite` command, an SDK call, an API request) and end it at what they observe; *After* leaves may name the test that guards each changed hop.
+- Add a `sequence` fence only when ordering, retries, cancellation, or a callback is the point.
+- Paste bodies into `gh pr create --body '…'` single-quoted; the fence's backticks are command substitution inside double quotes, and the hook denies the command.
+
+````markdown
+## Call graph
 
 ```text
 Before
-  exec_box            (BoxHandle · src/boxlite/src/portal/exec.rs:88)
-    └─ open_console   (Jailer · src/boxlite/src/jailer/console.rs:41)  ← BUG: returns before the socket binds
-         └─ attach_stdio (Guest · src/guest/src/io.rs:12)              — never reached
+  boxlite exec <box> -- <cmd>                                              — user command
+  └─ exec_box            (BoxHandle · src/boxlite/src/portal/exec.rs:88)
+       └─ open_console   (Jailer · src/boxlite/src/jailer/console.rs:41)  ← BUG: returns before the socket binds
+            └─ attach_stdio (Guest · src/guest/src/io.rs:12)              — never reached; the user gets an empty prompt
 
 After
-  exec_box            (BoxHandle · src/boxlite/src/portal/exec.rs:88)
-    └─ open_console   (Jailer · src/boxlite/src/jailer/console.rs:41)  — awaits the bind future
-         └─ attach_stdio (Guest · src/guest/src/io.rs:12)
+  boxlite exec <box> -- <cmd>                                              — user command
+  └─ exec_box            (BoxHandle · src/boxlite/src/portal/exec.rs:88)
+       └─ open_console   (Jailer · src/boxlite/src/jailer/console.rs:41)  — awaits the bind future
+            └─ attach_stdio (Guest · src/guest/src/io.rs:12)              — guarded by console::binds_before_attach
+```
 
 Fixes #1042
-```
+
+## Why
+
+- `open_console` returned as soon as the bind future existed, so `attach_stdio` raced the socket and the first `exec` showed an empty prompt.
+- Awaiting the bind is the smallest change that orders the two.
+- Rejected: polling the socket path; it races the unlink the jailer performs on restart.
+
+## User-facing change
+
+`boxlite exec` no longer shows an empty prompt on the first attach.
+
+## Verification
+
+- `cargo test -p boxlite console::binds_before_attach`: fails on the reverted change with "attach before bind", passes with it restored.
+````
 
 **Never put in a commit or PR** the process that produced the change (conversation / AI / step-by-step narrative), pasted logs or tickets, or secrets.
 

@@ -23,6 +23,7 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 profile_file="$repo_root/.agent-tooling/profile.json"
 [[ -r "$profile_file" ]] || { printf 'agent-tooling: missing %s\n' "$profile_file" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { printf 'agent-tooling: jq is required\n' >&2; exit 1; }
+command -v perl >/dev/null 2>&1 || { printf 'agent-tooling: perl is required\n' >&2; exit 1; }
 
 tooling_repo="$(jq -er '.tooling.repository | select(type == "string" and length > 0)' "$profile_file")" || {
   printf 'agent-tooling: tooling.repository is required\n' >&2
@@ -105,20 +106,37 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Git exports GIT_DIR to every hook it runs in a linked worktree, pointing at
+# .git/worktrees/<name> — and the lifecycle hooks reach this bootstrap through
+# scripts/sync-installation.sh. `git -C <dir>` only changes the working directory; it
+# does not clear that environment, so an unguarded git call below would operate on the
+# CONSUMER repository instead of the cache: `init` re-initializes the hook's gitdir,
+# and because its basename is not `.git` that writes core.bare=true into the SHARED
+# config, after which every worktree refuses to operate; `remote add`, `fetch`, and
+# `checkout` retarget the consumer's own remotes and working tree; and `rev-parse HEAD`
+# answers with the consumer's HEAD, which reads as a corrupt cache. Every call against
+# the cache goes through this wrapper. Only the calls that mean the consumer's
+# repository (repo_root above) are left to inherit it.
+git_cache() {
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE -u GIT_PREFIX \
+      -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE \
+      git "$@"
+}
+
 checkout="$cache_parent/$target_sha"
 if [[ -e "$checkout" ]]; then
-  actual="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)"
+  actual="$(git_cache -C "$checkout" rev-parse HEAD 2>/dev/null || true)"
   [[ "$actual" == "$target_sha" ]] || {
     printf 'agent-tooling: cached checkout has unexpected HEAD: %s\n' "$checkout" >&2
     exit 1
   }
 else
   scratch="$(mktemp -d "$cache_parent/.install.XXXXXX")"
-  git -C "$scratch" init -q
-  git -C "$scratch" remote add origin "https://github.com/$tooling_repo.git"
-  git -C "$scratch" fetch -q --depth 1 origin "$target_sha"
-  git -C "$scratch" -c advice.detachedHead=false checkout -q --detach "$target_sha"
-  actual="$(git -C "$scratch" rev-parse HEAD)"
+  git_cache -C "$scratch" init -q
+  git_cache -C "$scratch" remote add origin "https://github.com/$tooling_repo.git"
+  git_cache -C "$scratch" fetch -q --depth 1 origin "$target_sha"
+  git_cache -C "$scratch" -c advice.detachedHead=false checkout -q --detach "$target_sha"
+  actual="$(git_cache -C "$scratch" rev-parse HEAD)"
   [[ "$actual" == "$target_sha" ]] || {
     printf 'agent-tooling: fetched %s instead of resolved %s\n' "$actual" "$target_sha" >&2
     exit 1
