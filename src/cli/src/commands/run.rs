@@ -104,8 +104,9 @@ fn build_options(
     args.process.apply_to(&mut options)?;
 
     options.detach = args.detach;
-    if args.rm {
+    if args.rm && !args.detach {
         options.auto_delete = Some(1);
+        options.auto_stop = Some(0);
     }
     if let Some(ref exec) = args.entrypoint {
         options.entrypoint = Some(vec![exec.clone()]);
