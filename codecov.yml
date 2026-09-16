@@ -19,5 +19,6 @@ comment:
 ignore:
   - "src/deps/**"         # Vendored dependencies
   - "**/tests/**"         # Test files themselves
+  - "src/test-utils/**"   # Test scaffolding pulled in by the core crate's tests
   - "src/guest/**"        # Guest agent (tested separately)
   - "sdks/**"             # SDKs (have their own test suites)

@@ -20,15 +20,24 @@ export NEXTEST_FILTER_EXPR
 NEXTEST_FILTER   = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',))
 NEXTEST_CLI_FILTER = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',-E 'not binary(stress_disk)'))
 CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),)
-# The `--features rest` pass below is the only one that compiles the `rest`
-# module at all — the two passes above build --no-default-features — so every
-# rest-gated test lives or dies by this filter. It covers the whole module:
-# scoped to one test module it silently skipped the other six.
+# The `--features rest` pass (RUST_UNIT_REST_ARGS) is the only one that compiles
+# the `rest` module at all — `rest` is not a default feature and nothing else
+# in the test build enables it — so every rest-gated test lives or dies by this
+# filter. It covers the whole module: scoped to one test module it silently
+# skipped the other six.
 REST_CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),rest::)
 PYTEST_FILTER    = $(if $(FILTER),-k '$(FILTER)',)
 VITEST_FILTER    = $(if $(FILTER),-t '$(FILTER)',)
 CTEST_FILTER     = $(if $(FILTER),-R '$(FILTER)',)
 GOTEST_FILTER    = $(if $(FILTER),-run '$(FILTER)',)
+
+# The Rust unit-test crate set, shared by test:unit:rust and the coverage
+# targets so coverage measures exactly what the unit suite runs. Test builds
+# still get boxlite's default features back through the boxlite-test-utils
+# dev-dependency, so they need the vendored submodules or BOXLITE_DEPS_STUB=1.
+RUST_UNIT_CORE_ARGS   = -p boxlite --no-default-features --lib
+RUST_UNIT_SHARED_ARGS = -p boxlite-shared --lib
+RUST_UNIT_REST_ARGS   = -p boxlite --no-default-features --features rest --lib
 
 CLI_INTEGRATION_TESTS = $(basename $(notdir $(filter-out src/cli/tests/stress_disk.rs,$(wildcard src/cli/tests/*.rs))))
 
@@ -222,7 +231,6 @@ test\:integration\:sdk:
 	$(call run_integration_suites,test:integration:python test:integration:node test:integration:c)
 
 # Rust unit tests (parallel via nextest, fallback to serial cargo test).
-# --no-default-features disables gvproxy to avoid Go runtime link issues.
 #
 # Status accumulation: both crates always run (so a `-p boxlite-shared`
 # regression isn't masked by a `-p boxlite` failure aborting first), but
@@ -232,13 +240,13 @@ test\:unit\:rust:
 	@echo "🧪 Running Rust unit tests..."
 	@rc=0; \
 	if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run --no-tests=warn -p boxlite --no-default-features --lib $(NEXTEST_FILTER) || rc=$$?; \
-		cargo nextest run --no-tests=warn -p boxlite-shared --lib $(NEXTEST_FILTER) || rc=$$?; \
+		cargo nextest run --no-tests=warn $(RUST_UNIT_CORE_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
+		cargo nextest run --no-tests=warn $(RUST_UNIT_SHARED_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
 	else \
-		cargo test -p boxlite --no-default-features --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
-		cargo test -p boxlite-shared --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
+		cargo test $(RUST_UNIT_CORE_ARGS) -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
+		cargo test $(RUST_UNIT_SHARED_ARGS) -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 	fi; \
-	cargo test -p boxlite --no-default-features --features rest --lib -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
+	cargo test $(RUST_UNIT_REST_ARGS) -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	exit $$rc
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and

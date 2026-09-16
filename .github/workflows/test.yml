@@ -19,8 +19,13 @@ on:
       - 'src/shared/**'
       - 'src/cli/**'
       - 'src/guest/**'
+      - 'src/test-utils/**'
+      - 'src/deps/bubblewrap-sys/**'
       - 'src/deps/e2fsprogs-sys/**'
+      - 'src/deps/libkrun-sys/**'
+      - 'src/**/*.rs'
       - '.cargo/**'
+      - '.config/nextest.toml'
       - '.gitmodules'
       - 'scripts/common.sh'
       - 'scripts/build/build-guest-deps.sh'
@@ -66,7 +71,7 @@ jobs:
       pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
-      cli: ${{ steps.filter.outputs.boxlite_cli }}
+      cli: ${{ steps.filter.outputs.cli }}
       python: ${{ steps.filter.outputs.python }}
       node: ${{ steps.filter.outputs.node }}
       go: ${{ steps.filter.outputs.go }}
@@ -82,16 +87,46 @@ jobs:
           # exists). Empty on pull_request/push, where paths-filter ignores them.
           base: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || '' }}
           ref: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || '' }}
+          # rust and cli list every local package their test builds compile
+          # (cargo tree -e normal,build,dev --target all), plus the manifests,
+          # toolchain, cargo, nextest and CI config those builds read. rust
+          # also matches src/**/*.rs: a core unit test scans every Rust source
+          # under src/ (no_config_json_in_tracing_sigil_workspace_wide).
           filters: |
             rust:
               - 'src/boxlite/**'
               - 'src/shared/**'
               - 'src/guest/**'
+              - 'src/test-utils/**'
+              - 'src/deps/bubblewrap-sys/**'
+              - 'src/deps/e2fsprogs-sys/**'
+              - 'src/deps/libkrun-sys/**'
+              - 'src/**/*.rs'
+              - '.gitmodules'
               - 'make/test.mk'
+              - 'make/coverage.mk'
               - '**/Cargo.toml'
               - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
+              - '.config/nextest.toml'
+              - '.github/workflows/config.yml'
+              - '.github/workflows/test.yml'
             cli:
               - 'src/cli/**'
+              - 'src/boxlite/**'
+              - 'src/shared/**'
+              - 'src/test-utils/**'
+              - 'src/deps/bubblewrap-sys/**'
+              - 'src/deps/e2fsprogs-sys/**'
+              - 'src/deps/libkrun-sys/**'
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
+              - '.config/nextest.toml'
+              - '.github/workflows/config.yml'
+              - '.github/workflows/test.yml'
             python:
               - 'sdks/python/**'
             node:
@@ -132,7 +167,7 @@ jobs:
               - 'make/test.mk'
               - '.github/workflows/test.yml'
 
-  # Rust unit tests (boxlite-shared only - boxlite requires native libs not available in CI)
+  # Rust unit tests with coverage: core, shared and rest passes via make coverage:lcov
   rust:
     name: Rust Tests (${{ matrix.platform.target }})
     needs: [config, changes]
@@ -167,9 +202,18 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      - name: Check out vendored libkrun
+        # net::socket_path's vendor-pin unit test reads the libkrun source.
+        # The libkrun build itself stays stubbed below.
+        run: git submodule update --init --depth 1 -- src/deps/libkrun-sys/vendor/libkrun
+
       - name: Run Rust unit tests with coverage
-        # Only test boxlite-shared - boxlite requires libkrun/libgvproxy not available in CI
-        run: cargo llvm-cov nextest -p boxlite-shared --lib --profile ci --lcov --output-path lcov.info
+        # The core crate's dev-dependency boxlite-test-utils re-enables its
+        # default features, which pull in the -sys crates; those build from
+        # vendored submodules this job does not check out.
+        env:
+          BOXLITE_DEPS_STUB: "1"
+        run: make coverage:lcov NEXTEST_PROFILE=ci
 
       - name: Run OpenAPI reference-server unit tests
         # Keyed on BoxliteError's Display text (src/shared/src/errors.rs, in this
@@ -188,8 +232,8 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
-          file: lcov.info
-          flags: rust-shared
+          files: target/coverage/lcov.info
+          flags: rust-unit
           use_oidc: true
           fail_ci_if_error: false
 
@@ -204,6 +248,8 @@ jobs:
       matrix:
         platform: ${{ fromJson(needs.config.outputs.platforms) }}
 
+    permissions:
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -223,13 +269,24 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - uses: ./.github/actions/sccache
 
-      - name: Run boxlite-cli unit tests
+      - name: Run boxlite-cli unit tests with coverage
         # Only run tests in src/ (name contains "::tests::"); skip integration tests in tests/ (require VM)
         env:
           BOXLITE_DEPS_STUB: "1"
-        run: cargo nextest run -p boxlite-cli --profile ci -E 'test(::tests::)'
+        run: cargo llvm-cov nextest -p boxlite-cli --profile ci -E 'test(::tests::)' --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          flags: rust-cli
+          use_oidc: true
+          fail_ci_if_error: false
 
   # Python SDK unit tests
   python:

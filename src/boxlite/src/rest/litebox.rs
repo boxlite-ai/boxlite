@@ -1473,9 +1473,12 @@ mod tests {
     /// upgrade is consumed) reply with `status_body` if provided so the
     /// `attach_ws` status fallback path can be exercised end-to-end.
     ///
-    /// The loop runs until the listener is dropped (`server.abort()` from
-    /// the test) — never `return`s on its own — so status probes that
-    /// arrive AFTER the WS connection closes still get answered.
+    /// The handler is spawned rather than awaited, so status probes are
+    /// answered while a WS session is still open — as a real server would,
+    /// and as the client's disconnect recovery assumes. The loop runs until
+    /// the listener is dropped (`server.abort()` from the test) — never
+    /// `return`s on its own — so probes that arrive AFTER the WS connection
+    /// closes still get answered too.
     // The handshake callback's Err type is tungstenite's `ErrorResponse`
     // (a full http::Response); its size is not ours to shrink.
     #[allow(clippy::result_large_err)]
@@ -1529,7 +1532,9 @@ mod tests {
                         Ok(resp)
                     };
                     match tokio_tungstenite::accept_hdr_async(chained, with_headers).await {
-                        Ok(ws) => handler(ws, state.clone()).await,
+                        Ok(ws) => {
+                            tokio::spawn(handler(ws, state.clone()));
+                        }
                         Err(_) => continue,
                     }
                 }
