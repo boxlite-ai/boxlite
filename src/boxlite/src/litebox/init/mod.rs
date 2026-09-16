@@ -204,11 +204,9 @@ impl BoxBuilder {
     /// Build and initialize LiveState.
     ///
     /// Executes all initialization stages with automatic cleanup on failure.
-    /// Returns (LiveState, CleanupGuard, SSH status); disarm the guard after all
+    /// Returns (LiveState, CleanupGuard) - caller must disarm guard after all
     /// operations succeed (including DB persist).
-    pub(crate) async fn build(
-        self,
-    ) -> BoxliteResult<(LiveState, types::CleanupGuard, Option<crate::SshStatus>)> {
+    pub(crate) async fn build(self) -> BoxliteResult<(LiveState, types::CleanupGuard)> {
         use std::time::Instant;
 
         let total_start = Instant::now();
@@ -307,7 +305,7 @@ impl BoxBuilder {
                 bind_mount,
             );
 
-            Ok::<_, BoxliteError>((live_state, guard, ctx.ssh_status.take()))
+            Ok::<(LiveState, types::CleanupGuard), BoxliteError>((live_state, guard))
         };
 
         match inner.await {

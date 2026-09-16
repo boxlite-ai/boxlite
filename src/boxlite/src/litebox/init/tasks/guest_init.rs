@@ -82,7 +82,6 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             let advanced = ctx.config.options.advanced.resolve_container_security()?;
             let bootstrap = GuestBootstrapConfig {
                 guest: GuestInitConfig {
-                    ssh_config: ctx.config.options.ssh_config.clone(),
                     volumes: volume_mgr.build_guest_mounts(),
                     network,
                 },
@@ -111,12 +110,11 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             )
         };
 
-        let ssh_status = run_guest_init(&box_id, guest_session.clone(), bootstrap)
+        run_guest_init(guest_session.clone(), bootstrap)
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         let mut ctx = ctx.lock().await;
-        ctx.ssh_status = ssh_status;
         ctx.guest_session = Some(guest_session);
         ctx.volume_mgr = Some(volume_mgr);
         ctx.rootfs_init = Some(rootfs_init);
@@ -132,10 +130,9 @@ impl PipelineTask<InitCtx> for GuestInitTask {
 
 /// Initialize the guest and create the container (init is *not* run here).
 async fn run_guest_init(
-    box_id: &crate::BoxID,
     guest_session: GuestSession,
     bootstrap: GuestBootstrapConfig,
-) -> BoxliteResult<Option<crate::SshStatus>> {
+) -> BoxliteResult<()> {
     // Step 1: Guest Init (volumes + network)
     tracing::info!("Sending guest initialization request");
     let mut guest_interface = guest_session.guest().await?;
@@ -160,11 +157,7 @@ async fn run_guest_init(
             .require_min_version(MIN_DEVICE_GUEST_VERSION)
             .await?;
     }
-    let ssh_status = guest_interface.init(bootstrap.guest).await?;
-    if let Some(crate::SshStatus::Failed(reason)) = &ssh_status {
-        tracing::warn!(%box_id, stage = "guest_ssh_init", error_reason = %reason,
-            "SSH initialization failed; continuing container startup");
-    }
+    guest_interface.init(bootstrap.guest).await?;
     tracing::info!("Guest initialized successfully");
 
     // Step 2: create the container (rootfs + image config + user mounts). This
@@ -178,7 +171,7 @@ async fn run_guest_init(
     // left standing at the gate; the host runs it with `Container.Start` after a
     // client has attached, so nothing it prints can be missed however fast it is.
 
-    Ok(ssh_status)
+    Ok(())
 }
 
 /// The guest VM's own `/dev/kvm`, republished into the OCI workload so a nested

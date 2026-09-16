@@ -19,7 +19,6 @@ impl GuestService for GuestServer {
     /// This must be called first after connection. It:
     /// 1. Mounts all volumes (virtiofs + block devices)
     /// 2. Configures network (if specified)
-    /// 3. Attempts SSH initialization (failure does not block the workload)
     ///
     /// Note: Rootfs setup is handled by Container.Init.
     async fn init(
@@ -71,15 +70,12 @@ impl GuestService for GuestServer {
             }
         }
 
-        let ssh_status = self.ssh_manager.configure(req.ssh_config).await;
-
+        // Mark as initialized
         init_state.initialized = true;
 
         info!("✅ Guest initialized successfully");
         Ok(Response::new(GuestInitResponse {
-            result: Some(guest_init_response::Result::Success(GuestInitSuccess {
-                ssh_status: Some(ssh_status),
-            })),
+            result: Some(guest_init_response::Result::Success(GuestInitSuccess {})),
         }))
     }
 

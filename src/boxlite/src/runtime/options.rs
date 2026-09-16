@@ -313,45 +313,10 @@ mod registry_options_tests {
     }
 }
 
-/// SSH authentication and host identity injected when the guest starts.
-/// At least one CA or user public key is required. No host port is published.
-#[derive(Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct SshConfig {
-    /// Guest socket address, for example `0.0.0.0:22`.
-    pub listen_address: String,
-    /// Caller-provided, unencrypted OpenSSH private key.
-    pub host_private_key: String,
-    #[serde(default)]
-    pub ca: Option<SshCaConfig>,
-    /// One OpenSSH public key per entry, with an optional comment and no options.
-    #[serde(default)]
-    pub authorized_keys: Vec<String>,
-}
-
-impl std::fmt::Debug for SshConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SshConfig")
-            .field("listen_address", &self.listen_address)
-            .field("host_private_key", &"[REDACTED]")
-            .field("ca", &self.ca)
-            .field("authorized_keys", &self.authorized_keys)
-            .finish()
-    }
-}
-
-/// Trusted Ed25519 certificate authority and required certificate principal.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct SshCaConfig {
-    pub public_key: String,
-    pub principal: String,
-}
-
 /// Options used when constructing a box.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct BoxOptions {
-    /// Optional embedded guest SSH listener, configured only at startup.
-    pub ssh_config: Option<SshConfig>,
     pub cpus: Option<u8>,
     pub memory_mib: Option<u32>,
     /// Disk size in GB for the container rootfs (sparse, grows as needed).
@@ -561,7 +526,6 @@ fn default_detach() -> bool {
 impl Default for BoxOptions {
     fn default() -> Self {
         Self {
-            ssh_config: None,
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,
@@ -1163,35 +1127,6 @@ pub struct CloneOptions {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn ssh_config_survives_options_serialization() {
-        let ssh = serde_json::json!({
-            "listen_address": "0.0.0.0:22",
-            "host_private_key": "test-only-private-key-marker",
-            "ca": {"public_key": "test-ca", "principal": "box_123"},
-            "authorized_keys": ["test-user-key first", "test-user-key second"]
-        });
-        let options: BoxOptions = serde_json::from_value(serde_json::json!({
-            "ssh_config": ssh.clone()
-        }))
-        .unwrap();
-        assert_eq!(serde_json::to_value(&options).unwrap()["ssh_config"], ssh);
-        assert!(!format!("{options:?}").contains("test-only-private-key-marker"));
-    }
-
-    #[test]
-    fn ssh_legacy_options_and_optional_authentication_fields() {
-        let legacy: BoxOptions = serde_json::from_str("{}").unwrap();
-        assert!(legacy.ssh_config.is_none());
-        let ssh: SshConfig = serde_json::from_value(serde_json::json!({
-            "listen_address": "0.0.0.0:22",
-            "host_private_key": "test-only-private-marker"
-        }))
-        .unwrap();
-        assert!(ssh.ca.is_none());
-        assert!(ssh.authorized_keys.is_empty());
-    }
-
     use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
     use crate::runtime::advanced_options::{
         ContainerCapabilities, SecurityOptions, SecurityOptionsBuilder,

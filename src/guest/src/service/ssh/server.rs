@@ -46,6 +46,8 @@ pub(crate) struct SshConnection {
     forwarding: ForwardingManager,
     reverse_streamlocal: ReverseStreamlocalManager,
     authenticated: Option<oneshot::Sender<()>>,
+    stop: tokio_util::sync::CancellationToken,
+    _lifetime: tokio_util::task::task_tracker::TaskTrackerToken,
 }
 
 impl SshConnection {
@@ -53,7 +55,10 @@ impl SshConnection {
         guest: Arc<GuestServer>,
         authorizer: Arc<SshAuthorizer>,
         authenticated: oneshot::Sender<()>,
+        stop: tokio_util::sync::CancellationToken,
+        lifetime: tokio_util::task::task_tracker::TaskTrackerToken,
     ) -> Self {
+        let tasks = guest.ssh_manager.tasks();
         Self {
             guest,
             authorizer,
@@ -61,9 +66,11 @@ impl SshConnection {
             pending_state: HashMap::new(),
             bridges: HashMap::new(),
             permissions: SessionPermissions::default(),
-            forwarding: ForwardingManager::new(),
+            forwarding: ForwardingManager::new(tasks),
             reverse_streamlocal: ReverseStreamlocalManager::new(),
             authenticated: Some(authenticated),
+            stop,
+            _lifetime: lifetime,
         }
     }
 
@@ -84,9 +91,11 @@ impl SshConnection {
     }
 
     fn is_shutting_down(&self) -> bool {
-        self.guest
-            .shutting_down
-            .load(std::sync::atomic::Ordering::SeqCst)
+        self.stop.is_cancelled()
+            || self
+                .guest
+                .shutting_down
+                .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     async fn start_execution(
@@ -140,7 +149,7 @@ impl russh::server::Handler for SshConnection {
     ) -> Result<Auth, Self::Error> {
         // Certificate authentication uses the publickey wire method. The
         // actual decision is made only after russh verifies the signature.
-        Ok(if user == SSH_USER {
+        Ok(if user == SSH_USER && !self.is_shutting_down() {
             Auth::Accept
         } else {
             Auth::reject()
@@ -797,7 +806,13 @@ mod tests {
         );
         let guest = Arc::new(GuestServer::new(GuestLayout::new()));
         let (tx, mut committed) = oneshot::channel();
-        let mut raw = SshConnection::new(guest.clone(), authorizer.clone(), tx);
+        let mut raw = SshConnection::new(
+            guest.clone(),
+            authorizer.clone(),
+            tx,
+            Default::default(),
+            guest.ssh_manager.tasks().token(),
+        );
         assert_eq!(
             raw.auth_publickey_offered(SSH_USER, user.public_key())
                 .await
@@ -826,7 +841,13 @@ mod tests {
         assert_eq!(committed.try_recv(), Ok(()));
 
         let (tx, mut committed) = oneshot::channel();
-        let mut certified = SshConnection::new(guest, authorizer, tx);
+        let mut certified = SshConnection::new(
+            guest.clone(),
+            authorizer,
+            tx,
+            Default::default(),
+            guest.ssh_manager.tasks().token(),
+        );
         assert_eq!(
             certified
                 .auth_openssh_certificate(SSH_USER, &user_certificate(&ca, "box_123"))

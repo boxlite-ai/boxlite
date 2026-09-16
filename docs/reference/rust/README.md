@@ -30,7 +30,6 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [ExecResult](#execresult)
 - [Box Configuration](#box-configuration)
   - [BoxOptions](#boxoptions)
-  - [SshConfig](#sshconfig)
   - [AdvancedBoxOptions](#advancedoptions)
   - [RootfsSpec](#rootfsspec)
   - [VolumeSpec](#volumespec)
@@ -237,9 +236,6 @@ pub struct BoxInfo {
 
     /// Current lifecycle status
     pub status: BoxStatus,
-
-    /// Latest SSH initialization result, if reported by the guest
-    pub ssh_status: Option<SshStatus>,
 
     /// Creation timestamp (UTC)
     pub created_at: DateTime<Utc>,
@@ -570,8 +566,6 @@ Options for constructing a box.
 
 ```rust
 pub struct BoxOptions {
-    /// Optional guest SSH listener, injected at startup (default: None)
-    pub ssh_config: Option<SshConfig>,
     /// Number of CPUs (default: 2)
     pub cpus: Option<u8>,
 
@@ -651,102 +645,6 @@ let options = BoxOptions {
     ..Default::default()
 };
 ```
-
-### SshConfig
-
-The local Rust runtime can configure the embedded guest SSH server at startup:
-
-```rust
-use boxlite::{BoxOptions, SshCaConfig, SshConfig};
-
-let options = BoxOptions {
-    ssh_config: Some(SshConfig {
-        listen_address: "0.0.0.0:22".into(),
-        host_private_key: std::fs::read_to_string("host_ed25519")?,
-        ca: Some(SshCaConfig {
-            public_key: std::fs::read_to_string("ca_ed25519.pub")?,
-            principal: "my_box".into(),
-        }),
-        authorized_keys: vec![std::fs::read_to_string("user_ed25519.pub")?],
-    }),
-    ..Default::default()
-};
-```
-
-Supply a CA, user public keys, or both. Either authentication method can log in
-as `root`; password and anonymous authentication are disabled. Each authorized
-key entry accepts one OpenSSH public key and an optional comment, without
-`authorized_keys` permission options. Comments do not affect key matching.
-Ordinary keys allow commands, PTY, SFTP, and TCP/Unix socket forwarding.
-Certificates must be current user certificates signed by the configured
-Ed25519 CA, contain the configured principal, and have no critical options.
-Certificate extensions control PTY and forwarding permissions. Agent and X11
-forwarding remain disabled for both methods.
-
-The host private key must be unencrypted OpenSSH text supplied by the caller.
-The guest uses the injected key in memory; it does not generate keys or read
-SSH files. After mounts and network setup succeed, `Guest.Init` validates the
-entire SSH configuration before opening a listener. Invalid configuration,
-keys, authentication settings, or a listener bind failure produce a sanitized
-SSH diagnostic and do not prevent the main workload from starting. Mount,
-network, and workload errors still fail startup. `Guest.Init` remains one-shot,
-even after SSH initialization fails; there is no live configuration or retry RPC.
-
-`LiteBox::info`, `BoxliteRuntime::get_info`, and `list_info` expose
-`ssh_status: Option<SshStatus>` (also available on `BoxState` and `BoxStateInfo`):
-
-- `SshStatus::Disabled`: this initialization had no SSH configuration.
-- `SshStatus::Ready(public_key)`: validation and listener binding succeeded;
-  contains the comment-free OpenSSH host public key (`algorithm Base64-key`).
-- `SshStatus::Failed(reason)`: SSH initialization failed; contains a sanitized
-  diagnostic.
-- `None`: no initialization result yet, or the guest did not report one.
-
-The guest reports only the initialization result. On success, the host derives
-the public key from this initialization's `ssh_config.host_private_key` and
-persists the complete `Ready` result. Missing configuration or a key derivation
-failure produces `Failed` with a fixed diagnostic, without blocking container
-startup. A guest failure without a reason also receives a fixed diagnostic.
-
-`BoxState`, `BoxInfo`, and both `BoxStateInfo` constructors retain the same
-complete result; queries do not derive keys. Rust serde and database JSON use
-`"disabled"`, `{"ready":"ssh-ed25519 ..."}`, or `{"failed":"reason"}`;
-an absent result is `null`. The previous SSH object format is not supported and
-has no migration. Build known_hosts entries from a ready result:
-
-```rust
-if let Some(boxlite::SshStatus::Ready(public)) = sandbox.info().await?.ssh_status {
-    // Use the published address of the SSH port mapping or tunnel.
-    std::fs::write(
-        "known_hosts",
-        format!("[127.0.0.1]:{published_port} {public}\n"),
-    )?;
-}
-```
-
-This records the **latest initialization**, not ongoing service health.
-Stopping and reattaching preserve the result; a new initialization replaces it.
-There is no automatic retry or background monitoring. CLI `inspect` exposes
-`State.Ssh.Status` (`disabled`, `ready`, `failed`), `State.Ssh.ErrorReason`, and
-`State.Ssh.HostPublicKey` in JSON, YAML, and templates. `ErrorReason` is `null`
-unless failed; `HostPublicKey` is `null` unless ready. `State.Ssh` is `null` when
-the result is absent. Null values render as empty strings in templates:
-
-```bash
-boxlite inspect -f '{{.State.Ssh.Status}}' mybox
-boxlite inspect -f '{{.State.Ssh.ErrorReason}}' mybox
-boxlite inspect -f '{{.State.Ssh.HostPublicKey}}' mybox
-```
-
-This status is currently exposed by the local Rust runtime and CLI; other SDKs
-and the REST contract do not expose it.
-
-The complete configuration, including the private key, is persisted with box
-options and retained on restart, clone, export, and import. Clones therefore
-retain the same SSH host identity and CA principal. The private key stays in
-that storage: Debug output redacts it, and no read API or CLI output returns
-it — callers see only the public key above. SSH does not add a
-host port mapping: configure an explicit mapping or use a network tunnel.
 
 ### AdvancedBoxOptions
 

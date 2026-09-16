@@ -1,9 +1,10 @@
 #![cfg(target_os = "linux")]
-//! SSH embedded in the guest, configured once by Guest.Init.
+//! In-memory SSH control with fully drained server generations.
 
 mod auth;
 mod backoff;
 mod bridge;
+mod control;
 mod forward;
 mod limits;
 mod reverse_streamlocal;
@@ -25,6 +26,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{debug, info, warn};
 
 /// Fully validated before any SSH listener is opened.
@@ -91,21 +93,35 @@ impl SshConfig {
     }
 }
 
-/// Owns the one startup listener and waits for all sessions during shutdown.
+/// Serializes control operations and retains timed-out cleanup until it finishes.
 pub(crate) struct SshManager {
     guest: OnceLock<Weak<GuestServer>>,
-    listener: Mutex<Option<JoinHandle<()>>>,
+    state: Mutex<SshState>,
     connection_permits: Arc<tokio::sync::Semaphore>,
     shutdown_token: CancellationToken,
+    tasks: std::sync::Mutex<TaskTracker>,
+}
+
+#[derive(Default)]
+struct SshState {
+    round: Option<SshRound>,
+    status: boxlite_shared::SshStatus,
+}
+
+struct SshRound {
+    listener: Option<JoinHandle<()>>,
+    cancel: CancellationToken,
+    tasks: TaskTracker,
 }
 
 impl Default for SshManager {
     fn default() -> Self {
         Self {
             guest: OnceLock::new(),
-            listener: Mutex::new(None),
+            state: Mutex::new(SshState::default()),
             connection_permits: Arc::new(tokio::sync::Semaphore::new(limits::MAX_CONNECTIONS)),
             shutdown_token: CancellationToken::new(),
+            tasks: std::sync::Mutex::new(TaskTracker::new()),
         }
     }
 }
@@ -115,130 +131,184 @@ struct ConnectionContext {
     authorizer: Arc<SshAuthorizer>,
     permits: Arc<tokio::sync::Semaphore>,
     shutdown_token: CancellationToken,
+    tasks: TaskTracker,
 }
 
 #[derive(Debug)]
 pub(crate) enum SshShutdownError {
     ConnectionBudgetClosed,
     TimedOut,
+    ListenerFailed,
 }
 
 impl std::fmt::Display for SshShutdownError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ConnectionBudgetClosed => {
-                write!(f, "SSH connection budget closed during guest shutdown")
-            }
-            Self::TimedOut => write!(f, "timed out waiting for SSH sessions to stop"),
-        }
+        f.write_str(match self {
+            Self::ConnectionBudgetClosed => "SSH connection budget closed",
+            Self::TimedOut => "timed out waiting for SSH sessions to stop",
+            Self::ListenerFailed => "SSH listener task failed while stopping",
+        })
     }
 }
-
 impl std::error::Error for SshShutdownError {}
 
 impl SshManager {
-    /// The weak reference avoids a server/manager ownership cycle.
     pub(crate) fn attach_guest(&self, guest: &Arc<GuestServer>) {
         let _ = self.guest.set(Arc::downgrade(guest));
     }
 
-    /// SSH is optional: return a sanitized outcome instead of failing Guest.Init.
+    // A generation cannot be replaced until every producer of SSH tasks has
+    // exited. This also covers cleanup spawned from a russh handler's Drop.
+    pub(super) fn tasks(&self) -> TaskTracker {
+        self.tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     pub(crate) async fn configure(
         &self,
-        config: Option<boxlite_shared::SshConfig>,
-    ) -> boxlite_shared::SshInitResult {
-        use boxlite_shared::{SshInitResult, SshInitState};
-        let Some(config) = config else {
-            return SshInitResult {
-                state: SshInitState::Disabled.into(),
-                error_reason: None,
-            };
-        };
-        let config = match SshConfig::parse(config) {
-            Ok(config) => config,
-            Err(error) => return Self::failure("validate", error),
-        };
-        match self.start(config).await {
-            Ok(()) => SshInitResult {
-                state: SshInitState::Ready.into(),
-                error_reason: None,
-            },
-            Err(error) => Self::failure("listen", error),
-        }
-    }
-
-    fn failure(stage: &'static str, error: BoxliteError) -> boxlite_shared::SshInitResult {
-        // All parsing errors above and in auth use fixed messages, never decoder
-        // errors or raw input. Listener errors contain only a parsed IP and port.
-        let reason = format!("SSH {stage}: {error}");
-        warn!(stage, error_reason = %reason, "SSH initialization failed; continuing guest initialization");
-        boxlite_shared::SshInitResult {
-            state: boxlite_shared::SshInitState::Failed.into(),
-            error_reason: Some(reason),
-        }
-    }
-
-    async fn start(&self, ssh: SshConfig) -> BoxliteResult<()> {
-        let guest = self.guest.get().and_then(Weak::upgrade).ok_or_else(|| {
-            BoxliteError::Internal("SSH manager is not attached to the guest server".into())
-        })?;
-        let mut state = self.listener.lock().await;
+        config: boxlite_shared::SshConfig,
+    ) -> Result<boxlite_shared::SshStatus, Box<tonic::Status>> {
+        let config = SshConfig::parse(config)
+            .map_err(|error| tonic::Status::invalid_argument(error.to_string()))?;
+        let guest = self
+            .guest
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| tonic::Status::internal("SSH manager is not attached"))?;
+        let mut state = self.state.lock().await;
         if self.shutdown_token.is_cancelled()
             || guest
                 .shutting_down
                 .load(std::sync::atomic::Ordering::SeqCst)
         {
-            return Err(BoxliteError::Config(
-                "guest shutdown has started; SSH cannot start".into(),
-            ));
+            return Err(tonic::Status::failed_precondition(
+                "guest shutdown has started; SSH cannot start",
+            )
+            .into());
         }
-        if state.is_some() {
-            return Err(BoxliteError::Config("SSH listener already started".into()));
+        self.stop(&mut state).await.map_err(stop_status)?;
+        let listener = TcpListener::bind(config.listen_addr)
+            .await
+            .map_err(|error| {
+                tonic::Status::unavailable(format!("failed to bind SSH listener: {error}"))
+            })?;
+        let address = listener.local_addr().map_err(|error| {
+            tonic::Status::internal(format!("failed to read SSH listener address: {error}"))
+        })?;
+        if self.shutdown_token.is_cancelled()
+            || guest
+                .shutting_down
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(tonic::Status::failed_precondition(
+                "guest shutdown has started; SSH cannot start",
+            )
+            .into());
         }
-        let listener = TcpListener::bind(ssh.listen_addr).await.map_err(|error| {
-            BoxliteError::Config(format!(
-                "failed to bind SSH listener at {}: {error}",
-                ssh.listen_addr
-            ))
-        })?;
-        let bound_addr = listener.local_addr().map_err(|error| {
-            BoxliteError::Internal(format!("failed to read SSH listener address: {error}"))
-        })?;
+        let public = config.server.keys[0].public_key();
+        let host_public_key = russh::keys::PublicKey::new(public.key_data().clone(), "")
+            .to_openssh()
+            .map_err(|_| tonic::Status::internal("failed to encode SSH host public key"))?;
+        let tasks = TaskTracker::new();
+        *self
+            .tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = tasks.clone();
+        let cancel = self.shutdown_token.child_token();
         let context = ConnectionContext {
             guest,
-            authorizer: ssh.authorizer,
+            authorizer: config.authorizer,
             permits: self.connection_permits.clone(),
-            shutdown_token: self.shutdown_token.clone(),
+            shutdown_token: cancel.clone(),
+            tasks: tasks.clone(),
         };
-        *state = Some(tokio::spawn(accept_loop(listener, ssh.server, context)));
-        info!(%bound_addr, "embedded SSH listener ready");
+        state.status = boxlite_shared::SshStatus {
+            enabled: true,
+            listen_address: address.to_string(),
+            generation: state.status.generation + 1,
+            host_public_key,
+            host_key_fingerprint: public.fingerprint(russh::keys::HashAlg::Sha256).to_string(),
+        };
+        state.round = Some(SshRound {
+            listener: Some(tokio::spawn(accept_loop(listener, config.server, context))),
+            cancel,
+            tasks,
+        });
+        info!(%address, generation = state.status.generation, "embedded SSH listener ready");
+        Ok(state.status.clone())
+    }
+
+    pub(crate) async fn status(&self) -> boxlite_shared::SshStatus {
+        let state = self.state.lock().await;
+        let mut status = state.status.clone();
+        if state.round.as_ref().is_some_and(|round| {
+            round.cancel.is_cancelled()
+                || round.listener.as_ref().is_none_or(JoinHandle::is_finished)
+        }) {
+            status.enabled = false;
+            status.listen_address.clear();
+            status.host_public_key.clear();
+            status.host_key_fingerprint.clear();
+        }
+        status
+    }
+
+    pub(crate) async fn disable(&self) -> Result<boxlite_shared::SshStatus, Box<tonic::Status>> {
+        let mut state = self.state.lock().await;
+        self.stop(&mut state).await.map_err(stop_status)?;
+        Ok(state.status.clone())
+    }
+
+    async fn stop(&self, state: &mut SshState) -> Result<(), SshShutdownError> {
+        state.status = boxlite_shared::SshStatus {
+            generation: state.status.generation,
+            ..Default::default()
+        };
+        let draining = async {
+            if let Some(round) = state.round.as_mut() {
+                round.cancel.cancel();
+                if let Some(listener) = round.listener.as_mut() {
+                    let result = listener.await;
+                    round.listener = None;
+                    if result.is_err() {
+                        return Err(SshShutdownError::ListenerFailed);
+                    }
+                }
+                round.tasks.close();
+                round.tasks.wait().await;
+            }
+            let _all = self
+                .connection_permits
+                .clone()
+                .acquire_many_owned(limits::MAX_CONNECTIONS as u32)
+                .await
+                .map_err(|_| SshShutdownError::ConnectionBudgetClosed)?;
+            Ok(())
+        };
+        tokio::time::timeout(limits::CONTROL_CALL_TIMEOUT, draining)
+            .await
+            .map_err(|_| SshShutdownError::TimedOut)??;
+        state.round = None;
         Ok(())
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), SshShutdownError> {
-        // Serialize with start so an accepted connection cannot escape the
-        // shutdown signal or acquire a permit after we finish draining.
-        let mut state = self.listener.lock().await;
         self.shutdown_token.cancel();
-        if let Some(listener) = state.take() {
-            if let Err(error) = listener.await {
-                warn!(%error, "SSH listener task failed while stopping");
-            }
-        }
-        let all_connections = self
-            .connection_permits
-            .clone()
-            .acquire_many_owned(limits::MAX_CONNECTIONS as u32);
-        match tokio::time::timeout(limits::CONTROL_CALL_TIMEOUT, all_connections).await {
-            Ok(Ok(_permit)) => Ok(()),
-            Ok(Err(_)) => Err(SshShutdownError::ConnectionBudgetClosed),
-            Err(_) => Err(SshShutdownError::TimedOut),
-        }
+        self.stop(&mut *self.state.lock().await).await
     }
 
     #[cfg(test)]
     pub(crate) fn close_connection_budget_for_test(&self) {
         self.connection_permits.close();
+    }
+}
+
+fn stop_status(error: SshShutdownError) -> tonic::Status {
+    match error {
+        SshShutdownError::TimedOut => tonic::Status::deadline_exceeded(error.to_string()),
+        other => tonic::Status::internal(other.to_string()),
     }
 }
 
@@ -252,11 +322,13 @@ async fn accept_loop(
         authorizer,
         permits,
         shutdown_token,
+        tasks,
     } = context;
     let mut backoff = Backoff::new();
 
     loop {
         let accepted = tokio::select! {
+            biased;
             _ = shutdown_token.cancelled() => break,
             accepted = listener.accept() => accepted,
         };
@@ -282,11 +354,16 @@ async fn accept_loop(
                 };
 
                 let (authenticated_tx, authenticated_rx) = tokio::sync::oneshot::channel();
-                let handler =
-                    server::SshConnection::new(guest.clone(), authorizer.clone(), authenticated_tx);
+                let handler = server::SshConnection::new(
+                    guest.clone(),
+                    authorizer.clone(),
+                    authenticated_tx,
+                    shutdown_token.clone(),
+                    tasks.token(),
+                );
                 let config = config.clone();
                 let connection_shutdown_token = shutdown_token.clone();
-                tokio::spawn(async move {
+                tasks.spawn(async move {
                     let _permit = permit;
                     let handshake = tokio::time::timeout(
                         limits::AUTHENTICATION_TIMEOUT,
@@ -362,15 +439,15 @@ async fn monitor_session(
                     }
                 }
                 _ = shutdown_token.cancelled() => {
-                    disconnect_transport(&handle, &shutdown_socket, "guest shutdown").await;
+                    disconnect_transport(&handle, &shutdown_socket, "SSH service stopped").await;
                     if let Err(error) = running.await {
-                        debug!(%peer_addr, %error, "SSH session ended during guest shutdown");
+                        debug!(%peer_addr, %error, "SSH session ended while stopping");
                     }
                 }
             }
         }
         _ = shutdown_token.cancelled() => {
-            disconnect_transport(&handle, &shutdown_socket, "guest shutdown").await;
+            disconnect_transport(&handle, &shutdown_socket, "SSH service stopped").await;
             if let Err(error) = running.await {
                 debug!(%peer_addr, %error, "pre-authentication SSH session ended during shutdown");
             }

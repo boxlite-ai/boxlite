@@ -575,7 +575,6 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "signal-hook",
- "ssh-key",
  "sysinfo",
  "tar",
  "tempfile",

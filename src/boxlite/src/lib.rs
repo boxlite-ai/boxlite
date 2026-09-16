@@ -57,7 +57,7 @@ pub use runtime::advanced_options::{
 pub use runtime::options::{
     BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, ImageRegistry,
     ImageRegistryAuth, NetworkMode, NetworkSpec, PortProtocol, RegistryTransport, RootfsSpec,
-    Secret, SnapshotOptions, SshCaConfig, SshConfig,
+    Secret, SnapshotOptions,
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -65,7 +65,7 @@ pub use runtime::id::{BaseDiskID, BaseDiskIDMint, BoxID, BoxIDMint};
 pub use runtime::types::ContainerID;
 pub use runtime::types::{
     BoxInfo, BoxLifecyclePolicy, BoxState, BoxStateInfo, BoxStatus, InboundNetworkInfo,
-    NetworkInfo, OutboundNetworkInfo, PublishedPort, SshStatus,
+    NetworkInfo, OutboundNetworkInfo, PublishedPort,
 };
 
 #[cfg(feature = "rest")]

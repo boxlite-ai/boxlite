@@ -24,10 +24,7 @@ impl GuestInterface {
     ///
     /// This must be called first after connection, before Container.Init.
     /// Sets up volumes (virtiofs + block devices) and network.
-    pub async fn init(
-        &mut self,
-        config: GuestInitConfig,
-    ) -> BoxliteResult<Option<crate::SshStatus>> {
+    pub async fn init(&mut self, config: GuestInitConfig) -> BoxliteResult<()> {
         tracing::debug!("Sending GuestInit request");
         tracing::trace!(
             volumes = config.volumes.len(),
@@ -36,18 +33,6 @@ impl GuestInterface {
         );
 
         let request = GuestInitRequest {
-            ssh_config: config
-                .ssh_config
-                .clone()
-                .map(|ssh| boxlite_shared::SshConfig {
-                    listen_address: ssh.listen_address,
-                    host_private_key: ssh.host_private_key,
-                    ca: ssh.ca.map(|ca| boxlite_shared::SshCaConfig {
-                        public_key: ca.public_key,
-                        principal: ca.principal,
-                    }),
-                    authorized_keys: ssh.authorized_keys,
-                }),
             volumes: config.volumes.into_iter().map(|v| v.into_proto()).collect(),
             network: config.network.map(|n| NetworkInit {
                 interface: n.interface,
@@ -59,11 +44,9 @@ impl GuestInterface {
         let response = self.client.init(request).await?.into_inner();
 
         match response.result {
-            Some(guest_init_response::Result::Success(result)) => {
+            Some(guest_init_response::Result::Success(_)) => {
                 tracing::debug!("Guest initialized");
-                Ok(result.ssh_status.and_then(|result| {
-                    crate::SshStatus::from_guest(result, config.ssh_config.as_ref())
-                }))
+                Ok(())
             }
             Some(guest_init_response::Result::Error(err)) => {
                 tracing::error!("Guest init failed: {}", err.reason);
@@ -195,7 +178,6 @@ mod tests {
 /// Configuration for guest initialization.
 #[derive(Debug)]
 pub struct GuestInitConfig {
-    pub ssh_config: Option<crate::SshConfig>,
     /// Volumes to mount (virtiofs + block devices)
     pub volumes: Vec<VolumeConfig>,
     /// Network configuration (optional)

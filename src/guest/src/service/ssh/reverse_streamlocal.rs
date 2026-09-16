@@ -424,6 +424,7 @@ impl Drop for ListenerRegistration {
 /// Owns reverse streamlocal listeners created by one authenticated connection.
 pub(crate) struct ReverseStreamlocalManager {
     listeners: ListenerRegistry,
+    cancel: tokio_util::sync::CancellationToken,
     connection_permits: Arc<Semaphore>,
 }
 
@@ -431,6 +432,7 @@ impl ReverseStreamlocalManager {
     pub(crate) fn new() -> Self {
         Self {
             listeners: ListenerRegistry::default(),
+            cancel: Default::default(),
             connection_permits: Arc::new(Semaphore::new(MAX_FORWARD_CONNECTIONS)),
         }
     }
@@ -472,14 +474,21 @@ impl ReverseStreamlocalManager {
         }
 
         let token = uuid::Uuid::new_v4().to_string();
-        let helper =
-            match RunningHelper::start(server, socket_path, ingress_address, token.clone()).await {
-                Ok(helper) => helper,
-                Err(error) => {
-                    debug!(%error, socket_path, "reverse streamlocal helper start failed");
-                    return false;
-                }
-            };
+        let helper = match RunningHelper::start(
+            server,
+            socket_path,
+            ingress_address,
+            token.clone(),
+            self.cancel.clone(),
+        )
+        .await
+        {
+            Ok(helper) => helper,
+            Err(error) => {
+                debug!(%error, socket_path, "reverse streamlocal helper start failed");
+                return false;
+            }
+        };
 
         spawn_listener(
             ingress,
@@ -503,11 +512,13 @@ impl ReverseStreamlocalManager {
 
 impl Drop for ReverseStreamlocalManager {
     fn drop(&mut self) {
+        self.cancel.cancel();
         self.listeners.cancel_all();
     }
 }
 
 struct RunningHelper {
+    cancel: tokio_util::sync::CancellationToken,
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
     execution_id: String,
@@ -523,6 +534,7 @@ impl RunningHelper {
         socket_path: &str,
         ingress: SocketAddrV4,
         token: String,
+        cancel: tokio_util::sync::CancellationToken,
     ) -> Result<Self, String> {
         let container_id = super::bridge::resolve_single_container(&server)
             .await
@@ -558,7 +570,7 @@ impl RunningHelper {
                 return Err(format!("reverse streamlocal stdin setup failed: {error}"));
             }
         };
-        let stdin_task = tokio::spawn(async move {
+        let stdin_task = server.ssh_manager.tasks().spawn(async move {
             if let Ok(Err(error)) = input.await {
                 debug!(%error, "reverse streamlocal helper stdin ended");
             }
@@ -655,6 +667,7 @@ impl RunningHelper {
         };
 
         Ok(Self {
+            cancel,
             server,
             registry,
             execution_id,
@@ -746,7 +759,8 @@ fn spawn_listener(
     mut helper: RunningHelper,
     mut registration: ListenerRegistration,
 ) {
-    tokio::spawn(async move {
+    let tasks = helper.server.ssh_manager.tasks();
+    tasks.clone().spawn(async move {
         enum End {
             Cancelled,
             HelperEnded,
@@ -803,6 +817,8 @@ fn spawn_listener(
                     let handle = session_handle.clone();
                     let path = socket_path.clone();
                     let expected_token = token.clone();
+                    let tasks = tasks.clone();
+                    let cancel = helper.cancel.clone();
                     pending_opens.spawn(async move {
                         let stream = match authenticate_ingress(stream, expected_token.as_bytes()).await {
                             Ok(stream) => stream,
@@ -817,7 +833,14 @@ fn spawn_listener(
                         )
                         .await;
                         match channel {
-                            Ok(Ok(channel)) => spawn_relay(channel, stream, permit),
+                            Ok(Ok(channel)) => {
+                                tasks.spawn(async move {
+                                    tokio::select! {
+                                        _ = cancel.cancelled() => {},
+                                        _ = relay(channel, stream, permit) => {},
+                                    }
+                                });
+                            }
                             Ok(Err(error)) => {
                                 debug!(%error, "SSH client rejected reverse streamlocal channel")
                             }
@@ -875,19 +898,17 @@ async fn authenticate_ingress(
     Ok(stream)
 }
 
-fn spawn_relay(
+async fn relay(
     channel: Channel<Msg>,
     mut stream: TcpStream,
     _permit: tokio::sync::OwnedSemaphorePermit,
 ) {
-    tokio::spawn(async move {
-        let mut channel = channel.into_stream();
-        if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut stream).await {
-            debug!(%error, "SSH reverse streamlocal relay ended with an error");
-        }
-        let _ = channel.shutdown().await;
-        let _ = stream.shutdown().await;
-    });
+    let mut channel = channel.into_stream();
+    if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut stream).await {
+        debug!(%error, "SSH reverse streamlocal relay ended with an error");
+    }
+    let _ = channel.shutdown().await;
+    let _ = stream.shutdown().await;
 }
 
 async fn finish_pending_opens(pending_opens: &mut JoinSet<()>) {
@@ -998,7 +1019,7 @@ fn spawn_execution_cleanup(
     stdin_task: Option<JoinHandle<()>>,
     force_termination: bool,
 ) {
-    tokio::spawn(async move {
+    server.ssh_manager.tasks().spawn(async move {
         let output_task = output.map(|mut output| {
             tokio::spawn(async move {
                 while let Some(message) = output.recv().await {

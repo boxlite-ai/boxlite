@@ -2170,31 +2170,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ssh_config_survives_clone_archive_import_and_runtime_restart() {
+    async fn ssh_configuration_is_absent_from_clone_archive_import_and_runtime_restart() {
         use crate::disk::{Qcow2Helper, constants::filenames::CONTAINER_DISK};
-        use crate::{CloneOptions, ExportOptions, SshCaConfig, SshConfig};
+        use crate::{CloneOptions, ExportOptions};
 
         let (runtime, dir) = create_test_runtime_without_host_preflight();
-        let ssh = SshConfig {
-            listen_address: "0.0.0.0:22".into(),
-            host_private_key: "test-only-private-marker".into(),
-            ca: Some(SshCaConfig {
-                public_key: "test-ca".into(),
-                principal: "box_123".into(),
-            }),
-            authorized_keys: vec!["test-user-one".into(), "test-user-two comment".into()],
-        };
+        let options: BoxOptions = serde_json::from_value(serde_json::json!({
+            "auto_delete": 0,
+            "ssh_config": {"listen_address": "0.0.0.0:22", "host_private_key": "test-only-private-marker", "authorized_keys": ["test-key"]}
+        })).unwrap();
         let staging = dir.path().join("ssh-staging");
         Qcow2Helper::create_disk(&staging.join("disks").join(CONTAINER_DISK), true).unwrap();
         let source = runtime
             .provision_box(
                 staging,
                 Some("ssh-source".into()),
-                BoxOptions {
-                    ssh_config: Some(ssh.clone()),
-                    auto_delete: Some(0),
-                    ..Default::default()
-                },
+                options,
                 BoxStatus::Stopped,
             )
             .await
@@ -2218,7 +2209,9 @@ mod tests {
         ];
         for id in &ids {
             let (config, _) = runtime.box_manager.box_by_id(id).unwrap().unwrap();
-            assert_eq!(config.options.ssh_config.as_ref(), Some(&ssh));
+            let encoded = serde_json::to_value(&config).unwrap();
+            assert!(encoded["options"].get("ssh_config").is_none());
+            assert!(!encoded.to_string().contains("test-only-private-marker"));
         }
         drop((source, cloned, imported, runtime));
         let reopened = RuntimeImpl::initialize(
@@ -2232,7 +2225,9 @@ mod tests {
         for id in &ids {
             assert!(reopened.get(id.as_str()).await.unwrap().is_some());
             let (config, _) = reopened.box_manager.box_by_id(id).unwrap().unwrap();
-            assert_eq!(config.options.ssh_config.as_ref(), Some(&ssh));
+            let encoded = serde_json::to_value(&config).unwrap();
+            assert!(encoded["options"].get("ssh_config").is_none());
+            assert!(!encoded.to_string().contains("test-only-private-marker"));
         }
     }
 
@@ -2316,68 +2311,6 @@ mod tests {
             },
             engine_kind: VmmKind::Libkrun,
             box_home,
-        }
-    }
-
-    #[tokio::test]
-    async fn ssh_status_matches_database_cache_and_all_info_queries_without_writes() {
-        for expected in [
-            None,
-            Some(crate::SshStatus::Disabled),
-            Some(crate::SshStatus::Ready("ssh-ed25519 AAAA".into())),
-            Some(crate::SshStatus::Failed(
-                "SSH listen: address in use".into(),
-            )),
-        ] {
-            let (runtime, dir) = create_test_runtime();
-            let mut config = test_box_config(false);
-            config.name = Some("ssh-status".into());
-            // Queries must preserve the recorded outcome even without SSH configuration.
-            config.options.ssh_config = None;
-            let mut state = BoxState::new();
-            state.ssh_status = expected.clone();
-            runtime.box_manager.add_box(&config, &state).unwrap();
-            let connection = rusqlite::Connection::open(dir.path().join("db/boxlite.db")).unwrap();
-            let stored_json = || {
-                connection.query_row(
-                    "SELECT box_config.json, box_state.json FROM box_config JOIN box_state USING (id)",
-                    [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                ).unwrap()
-            };
-            let before = stored_json();
-            let info = runtime.get_info(config.id.as_str()).await.unwrap().unwrap();
-            assert_eq!(info.ssh_status, expected);
-            assert_eq!(crate::BoxStateInfo::from(&info).ssh_status, expected);
-            assert_eq!(crate::BoxStateInfo::new(&state).ssh_status, expected);
-            assert_eq!(runtime.list_info().await.unwrap()[0].ssh_status, expected);
-            let (handle, _) = runtime.get_or_create_box_impl(config.clone(), state.clone());
-            assert_eq!(handle.info().ssh_status, expected);
-            for lookup in [config.id.as_str(), "ssh-status"] {
-                assert_eq!(
-                    runtime.get_info(lookup).await.unwrap().unwrap().ssh_status,
-                    expected
-                );
-            }
-            assert_eq!(runtime.list_info().await.unwrap()[0].ssh_status, expected);
-            assert!(
-                stored_json() == before,
-                "SSH info queries must not modify stored config or state"
-            );
-            let json = serde_json::to_value(&info).unwrap();
-            assert_eq!(
-                serde_json::from_value::<crate::BoxInfo>(json)
-                    .unwrap()
-                    .ssh_status,
-                expected
-            );
-            let mut old = serde_json::to_value(&info).unwrap();
-            old.as_object_mut().unwrap().remove("ssh_status");
-            assert!(
-                serde_json::from_value::<crate::BoxInfo>(old)
-                    .unwrap()
-                    .ssh_status
-                    .is_none()
-            );
         }
     }
 

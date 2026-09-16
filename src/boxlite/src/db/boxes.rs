@@ -385,61 +385,6 @@ mod tests {
     const TEST_ID_3: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R3";
 
     #[test]
-    fn ssh_status_survives_database_reopen_and_rejects_old_objects() {
-        for status in [
-            None,
-            Some(crate::SshStatus::Disabled),
-            Some(crate::SshStatus::Ready("ssh-ed25519 AAAA".into())),
-            Some(crate::SshStatus::Failed(
-                "SSH listen: address in use".into(),
-            )),
-        ] {
-            let (store, dir) = create_test_db();
-            let config = create_test_config(TEST_ID_1);
-            let mut state = BoxState::new();
-            state.ssh_status = status;
-            state.set_status(crate::BoxStatus::Running);
-            store.save(&config, &state).unwrap();
-            drop(store);
-            let reopened = BoxStore::new(Database::open(&dir.path().join("test.db")).unwrap());
-            let loaded = reopened.load_state(TEST_ID_1).unwrap().unwrap();
-            assert_eq!(loaded.status, crate::BoxStatus::Running);
-            assert_eq!(loaded.ssh_status, state.ssh_status);
-            let mut legacy = serde_json::to_value(&loaded).unwrap();
-            legacy.as_object_mut().unwrap().remove("ssh_status");
-            reopened
-                .db
-                .conn()
-                .execute(
-                    "UPDATE box_state SET json = ?1 WHERE id = ?2",
-                    params![legacy.to_string(), TEST_ID_1],
-                )
-                .unwrap();
-            assert!(
-                reopened
-                    .load_state(TEST_ID_1)
-                    .unwrap()
-                    .unwrap()
-                    .ssh_status
-                    .is_none()
-            );
-            legacy["ssh_status"] = serde_json::json!({"state": "ready", "error_reason": null});
-            reopened
-                .db
-                .conn()
-                .execute(
-                    "UPDATE box_state SET json = ?1 WHERE id = ?2",
-                    params![legacy.to_string(), TEST_ID_1],
-                )
-                .unwrap();
-            assert!(matches!(
-                reopened.load_state(TEST_ID_1),
-                Err(BoxliteError::Database(_))
-            ));
-        }
-    }
-
-    #[test]
     fn test_save_and_load_config() {
         let (store, _dir) = create_test_db();
         let config = create_test_config(TEST_ID_1);
@@ -450,27 +395,6 @@ mod tests {
         let loaded = store.load_config(config.id.as_str()).unwrap();
         assert!(loaded.is_some());
         assert_eq!(loaded.unwrap().id, config.id);
-    }
-
-    #[test]
-    fn ssh_config_survives_database_reopen() {
-        let (store, dir) = create_test_db();
-        let mut config = create_test_config(TEST_ID_1);
-        config.options.ssh_config = Some(crate::SshConfig {
-            listen_address: "0.0.0.0:22".into(),
-            host_private_key: "test-only-private-marker".into(),
-            ca: Some(crate::SshCaConfig {
-                public_key: "test-ca".into(),
-                principal: "box_123".into(),
-            }),
-            authorized_keys: vec!["test-user-one".into(), "test-user-two comment".into()],
-        });
-        store.save(&config, &BoxState::new()).unwrap();
-        drop(store);
-        let reopened = BoxStore::new(Database::open(&dir.path().join("test.db")).unwrap());
-        let loaded = reopened.load_config(TEST_ID_1).unwrap().unwrap();
-        assert_eq!(loaded.options.ssh_config, config.options.ssh_config);
-        assert!(!format!("{loaded:?}").contains("test-only-private-marker"));
     }
 
     #[test]

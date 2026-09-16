@@ -47,6 +47,13 @@ service Guest {
   rpc Thaw(ThawRequest) returns (ThawResponse);
 }
 
+// In-memory SSH control; requires successful Guest.Init.
+service Ssh {
+  rpc Configure(SshConfigureRequest) returns (SshConfigureResponse);
+  rpc Status(SshStatusRequest) returns (SshStatusResponse);
+  rpc Disable(SshDisableRequest) returns (SshDisableResponse);
+}
+
 // Command execution
 service Execution {
   // Start execution immediately.
@@ -88,8 +95,8 @@ message GuestInitRequest {
   // Network configuration (optional)
   NetworkInit network = 2;
 
-  // Optional embedded SSH listener, configured once at startup.
-  SshConfig ssh_config = 3;
+  reserved 3;
+
 }
 
 message GuestInitResponse {
@@ -99,24 +106,7 @@ message GuestInitResponse {
   }
 }
 
-message GuestInitSuccess {
-  // Absent for guests predating SSH initialization reporting.
-  SshInitResult ssh_status = 1;
-}
-
-// Most recent initialization result, not a continuous liveness probe.
-message SshInitResult {
-  SshInitState state = 1;
-  // Sanitized diagnostic, present only on failure.
-  optional string error_reason = 2;
-}
-
-enum SshInitState {
-  SSH_INIT_STATE_UNSPECIFIED = 0;
-  SSH_INIT_STATE_DISABLED = 1;
-  SSH_INIT_STATE_READY = 2;
-  SSH_INIT_STATE_FAILED = 3;
-}
+message GuestInitSuccess { reserved 1; }
 
 message GuestInitError {
   string reason = 1;
@@ -225,8 +215,22 @@ message ThawResponse {
 }
 
 // ============================================================================
-// SSH startup configuration
+// SSH runtime configuration
 // ============================================================================
+
+message SshConfigureRequest { SshConfig config = 1; }
+message SshConfigureResponse { SshStatus status = 1; }
+message SshStatusRequest {}
+message SshStatusResponse { SshStatus status = 1; }
+message SshDisableRequest {}
+message SshDisableResponse { SshStatus status = 1; }
+message SshStatus {
+  bool enabled = 1;
+  string listen_address = 2;
+  uint64 generation = 3;
+  string host_key_fingerprint = 4;
+  string host_public_key = 5;
+}
 
 message SshConfig {
   string listen_address = 1;

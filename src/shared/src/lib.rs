@@ -58,6 +58,9 @@ pub use generated::execution_server::{Execution, ExecutionServer};
 pub use generated::files_client::FilesClient;
 pub use generated::files_server::{Files, FilesServer};
 
+pub use generated::ssh_client::SshClient;
+pub use generated::ssh_server::{Ssh, SshServer};
+
 // All generated types
 pub use generated::*;
 
@@ -75,50 +78,20 @@ impl std::fmt::Debug for generated::SshConfig {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn ssh_init_outcome_wire_roundtrip_and_old_guest_compatibility() {
-        use super::{GuestInitSuccess, SshInitResult, SshInitState};
+    fn ssh_configuration_wire_roundtrip_redacts_private_key() {
         use prost::Message;
-        assert!(GuestInitSuccess::decode(&[][..])
-            .unwrap()
-            .ssh_status
-            .is_none());
-        for state in [
-            SshInitState::Disabled,
-            SshInitState::Ready,
-            SshInitState::Failed,
-        ] {
-            let success = GuestInitSuccess {
-                ssh_status: Some(SshInitResult {
-                    state: state.into(),
-                    error_reason: (state == SshInitState::Failed)
-                        .then(|| "SSH listen: address in use".into()),
-                }),
-            };
-            let decoded = GuestInitSuccess::decode(success.encode_to_vec().as_slice()).unwrap();
-            assert_eq!(decoded, success);
-        }
-    }
-
-    #[test]
-    fn ssh_init_wire_roundtrip_redacts_private_key_debug() {
-        use prost::Message;
-        let request = super::GuestInitRequest {
-            ssh_config: Some(super::SshConfig {
-                listen_address: "0.0.0.0:22".into(),
+        let request = super::SshConfigureRequest {
+            config: Some(super::SshConfig {
+                listen_address: "127.0.0.1:2222".into(),
                 host_private_key: "test-only-private-marker".into(),
-                ca: Some(super::SshCaConfig {
-                    public_key: "test-ca".into(),
-                    principal: "box_123".into(),
-                }),
-                authorized_keys: vec!["test-user comment".into()],
+                authorized_keys: vec!["test-key comment".into()],
+                ca: None,
             }),
-            ..Default::default()
         };
-        let decoded = super::GuestInitRequest::decode(request.encode_to_vec().as_slice()).unwrap();
-        assert_eq!(decoded, request);
+        let decoded =
+            super::SshConfigureRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(request, decoded);
         assert!(!format!("{decoded:?}").contains("test-only-private-marker"));
-        let legacy = super::GuestInitRequest::decode(&[][..]).unwrap();
-        assert!(legacy.ssh_config.is_none());
     }
 
     /// A missing commit is only legitimate when there is no tracked checkout to

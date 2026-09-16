@@ -4,6 +4,10 @@
 
 - [AutoStop、AutoResume 与 AutoDelete](./auto-stop-resume.md)
 
+## Guest SSH
+
+See [Guest SSH control](ssh.md) for in-memory configuration through `box.sock`.
+
 ## Building from Source
 
 ### Prerequisites
@@ -667,14 +671,6 @@ sqlite3 ~/.boxlite/db/boxes.db
 .tables
 SELECT * FROM boxes;
 ```
-
-> **Warning:** box configuration is stored as JSON and includes any SSH host
-> private key. Treat the database — and any dump or backup of it — as
-> sensitive. SSH host public keys are available from the runtime API and
-> `boxlite inspect` (`State.Ssh.HostPublicKey`); there is no need to read key
-> material from the database. The guest confirms initialization; the host
-> derives the public key from that initialization's configuration and persists
-> it in the complete Ready result.
 
 ## Resource Limits & Tuning
 

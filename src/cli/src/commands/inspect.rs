@@ -65,33 +65,6 @@ struct InspectStatePresenter {
     /// local boxes, which record no activity.
     #[serde(rename = "LastActivityAt")]
     last_activity_at: Option<String>,
-    #[serde(rename = "Ssh")]
-    ssh: Option<InspectSshPresenter>,
-}
-
-#[derive(Debug, Serialize)]
-struct InspectSshPresenter {
-    #[serde(rename = "Status")]
-    status: &'static str,
-    #[serde(rename = "ErrorReason")]
-    error_reason: Option<String>,
-    #[serde(rename = "HostPublicKey")]
-    host_public_key: Option<String>,
-}
-
-impl From<boxlite::SshStatus> for InspectSshPresenter {
-    fn from(status: boxlite::SshStatus) -> Self {
-        let (status, error_reason, host_public_key) = match status {
-            boxlite::SshStatus::Disabled => ("disabled", None, None),
-            boxlite::SshStatus::Ready(public_key) => ("ready", None, Some(public_key)),
-            boxlite::SshStatus::Failed(reason) => ("failed", Some(reason), None),
-        };
-        Self {
-            status,
-            error_reason,
-            host_public_key,
-        }
-    }
 }
 
 impl From<&BoxInfo> for InspectPresenter {
@@ -104,7 +77,6 @@ impl From<&BoxInfo> for InspectPresenter {
             created: info.created_at.to_rfc3339(),
             status: info.status.as_str().to_string(),
             state: InspectStatePresenter {
-                ssh: state.ssh_status.map(InspectSshPresenter::from),
                 status: state.status.as_str().to_string(),
                 running: state.running,
                 pid: state.pid.unwrap_or(0),
@@ -290,83 +262,10 @@ mod tests {
             auto_delete: 0,
             auto_resume: true,
             health_status: HealthStatus::new(),
-            ssh_status: None,
             exit_code: None,
             started_at,
             last_activity_at: None,
         }
-    }
-
-    #[test]
-    fn inspect_ssh_status_json_yaml_and_templates() {
-        for (status, expected_status, reason, public_key) in [
-            (boxlite::SshStatus::Disabled, "disabled", None, None),
-            (
-                boxlite::SshStatus::Ready("ssh-ed25519 AAAA".into()),
-                "ready",
-                None,
-                Some("ssh-ed25519 AAAA"),
-            ),
-            (
-                boxlite::SshStatus::Failed("SSH listen: address in use".into()),
-                "failed",
-                Some("SSH listen: address in use"),
-                None,
-            ),
-        ] {
-            let mut info = inspect_info(None);
-            info.ssh_status = Some(status);
-            let presenters = vec![InspectPresenter::from(&info)];
-            for format in ["json", "yaml"] {
-                let mut output = Vec::new();
-                write_inspect_output(&presenters, format, &mut output).unwrap();
-                let value: serde_json::Value = if format == "json" {
-                    serde_json::from_slice(&output).unwrap()
-                } else {
-                    serde_yaml::from_slice(&output).unwrap()
-                };
-                assert_eq!(
-                    value[0]["State"]["Ssh"],
-                    serde_json::json!({
-                        "Status": expected_status,
-                        "ErrorReason": reason,
-                        "HostPublicKey": public_key,
-                    })
-                );
-            }
-            for (template, expected) in [
-                ("{{.State.Ssh.Status}}", expected_status),
-                ("{{.State.Ssh.ErrorReason}}", reason.unwrap_or("")),
-                ("{{.State.Ssh.HostPublicKey}}", public_key.unwrap_or("")),
-            ] {
-                let mut output = Vec::new();
-                write_inspect_output(&presenters, template, &mut output).unwrap();
-                assert_eq!(String::from_utf8(output).unwrap(), format!("{expected}\n"));
-            }
-        }
-        for format in ["json", "yaml"] {
-            let mut output = Vec::new();
-            write_inspect_output(
-                &vec![InspectPresenter::from(&inspect_info(None))],
-                format,
-                &mut output,
-            )
-            .unwrap();
-            let value: serde_json::Value = if format == "json" {
-                serde_json::from_slice(&output).unwrap()
-            } else {
-                serde_yaml::from_slice(&output).unwrap()
-            };
-            assert!(value[0]["State"]["Ssh"].is_null());
-        }
-        let mut output = Vec::new();
-        write_inspect_output(
-            &vec![InspectPresenter::from(&inspect_info(None))],
-            "{{.State.Ssh}}",
-            &mut output,
-        )
-        .unwrap();
-        assert_eq!(output, b"\n");
     }
 
     #[test]

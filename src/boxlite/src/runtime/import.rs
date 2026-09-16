@@ -285,34 +285,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn ssh_archive_manifest_preserves_complete_startup_configuration() {
-        let options = BoxOptions {
-            ssh_config: Some(crate::SshConfig {
-                listen_address: "0.0.0.0:22".into(),
-                host_private_key: "test-only-private-marker".into(),
-                ca: Some(crate::SshCaConfig {
-                    public_key: "test-ca".into(),
-                    principal: "box_123".into(),
-                }),
-                authorized_keys: vec!["test-user-key comment".into()],
-            }),
-            ..Default::default()
-        };
-        let expected = options.ssh_config.clone();
-        let encoded = serde_json::to_vec(&v3_manifest(options)).unwrap();
-        let manifest: ArchiveManifest = serde_json::from_slice(&encoded).unwrap();
-        for policy in [
-            ArchiveImportPolicy::Trusted,
-            ArchiveImportPolicy::UntrustedRemote,
-        ] {
-            assert_eq!(
-                options_from_manifest(&manifest, policy).unwrap().ssh_config,
-                expected
-            );
-        }
-    }
-
     fn loopback_port() -> crate::runtime::options::PortSpec {
         crate::runtime::options::PortSpec {
             host_port: Some(18080),

@@ -137,13 +137,18 @@ impl Drop for ReverseListenerRegistration {
 pub(crate) struct ForwardingManager {
     connection_permits: Arc<Semaphore>,
     reverse_listeners: ReverseListenerRegistry,
+    tasks: RelayTasks,
 }
 
 impl ForwardingManager {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(tracker: tokio_util::task::TaskTracker) -> Self {
         Self {
             connection_permits: Arc::new(Semaphore::new(MAX_FORWARD_CONNECTIONS)),
             reverse_listeners: ReverseListenerRegistry::default(),
+            tasks: RelayTasks {
+                tracker,
+                cancel: Default::default(),
+            },
         }
     }
 
@@ -185,7 +190,7 @@ impl ForwardingManager {
             };
 
         reply.accept().await;
-        spawn_relay(channel, stream, permit);
+        spawn_relay(channel, stream, permit, self.tasks.clone());
     }
 
     /// Bind a loopback-only reverse forwarding listener.
@@ -235,6 +240,7 @@ impl ForwardingManager {
             session_handle,
             self.connection_permits.clone(),
             registration,
+            self.tasks.clone(),
         );
         true
     }
@@ -253,6 +259,7 @@ impl ForwardingManager {
 
 impl Drop for ForwardingManager {
     fn drop(&mut self) {
+        self.tasks.cancel.cancel();
         self.reverse_listeners.cancel_all();
     }
 }
@@ -277,14 +284,26 @@ fn loopback_bind_address(requested: &str) -> Option<String> {
     }
 }
 
+#[derive(Clone)]
+struct RelayTasks {
+    tracker: tokio_util::task::TaskTracker,
+    cancel: tokio_util::sync::CancellationToken,
+}
+
 fn spawn_relay(
     channel: Channel<Msg>,
     mut stream: TcpStream,
-    _permit: tokio::sync::OwnedSemaphorePermit,
+    permit: tokio::sync::OwnedSemaphorePermit,
+    tasks: RelayTasks,
 ) {
-    tokio::spawn(async move {
+    tasks.tracker.spawn(async move {
+        let _permit = permit;
         let mut channel = channel.into_stream();
-        if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut stream).await {
+        let result = tokio::select! {
+            _ = tasks.cancel.cancelled() => return,
+            result = tokio::io::copy_bidirectional(&mut channel, &mut stream) => result,
+        };
+        if let Err(error) = result {
             debug!(%error, "SSH TCP relay ended with an error");
         }
         let _ = tokio::io::AsyncWriteExt::shutdown(&mut channel).await;
@@ -299,8 +318,9 @@ fn spawn_reverse_listener(
     session_handle: SessionHandle,
     permits: Arc<Semaphore>,
     mut registration: ReverseListenerRegistration,
+    tasks: RelayTasks,
 ) {
-    tokio::spawn(async move {
+    tasks.tracker.clone().spawn(async move {
         let mut pending_opens = JoinSet::new();
         loop {
             tokio::select! {
@@ -326,6 +346,7 @@ fn spawn_reverse_listener(
 
                     let handle = session_handle.clone();
                     let address = connected_address.clone();
+                    let tasks = tasks.clone();
                     pending_opens.spawn(async move {
                         let channel = tokio::time::timeout(
                             FORWARD_CONNECT_TIMEOUT,
@@ -338,7 +359,7 @@ fn spawn_reverse_listener(
                         )
                         .await;
                         match channel {
-                            Ok(Ok(channel)) => spawn_relay(channel, stream, permit),
+                            Ok(Ok(channel)) => spawn_relay(channel, stream, permit, tasks),
                             Ok(Err(error)) => {
                                 debug!(%error, "SSH client rejected reverse TCP channel")
                             }

@@ -517,32 +517,9 @@ Display detailed information on one or more boxes (JSON, YAML, or Go-style templ
 ```bash
 boxlite inspect mybox
 boxlite inspect -f '{{.State.Status}}' mybox
-boxlite inspect -f '{{.State.Ssh.Status}}' mybox
-boxlite inspect -f '{{.State.Ssh.ErrorReason}}' mybox
-boxlite inspect -f '{{.State.Ssh.HostPublicKey}}' mybox
 boxlite inspect --latest -f yaml
 boxlite inspect box1 box2 -f json
 ```
-
-`State.Ssh` records the latest SSH initialization result: `Status` is
-`disabled`, `ready`, or `failed`; `ErrorReason` is populated only on failure.
-It is `null` before initialization or when the guest did not report a result.
-For `ready`, `HostPublicKey` contains a comment-free OpenSSH line derived from
-the configured private key during initialization and persisted with the result.
-Missing configuration or key derivation failure produces `failed` with a
-sanitized reason. `ErrorReason` is `null` unless failed; `HostPublicKey` is `null`
-unless ready. Null values render as empty strings in templates.
-Check the status and public key before writing known_hosts:
-
-```bash
-if public=$(boxlite inspect --format json mybox | jq -er \
-  '.[0].State.Ssh | select(.Status == "ready") | .HostPublicKey | select(type == "string" and length > 0)'); then
-  printf '[127.0.0.1]:2222 %s\n' "$public" > known_hosts
-fi
-```
-
-SSH failure does not block workload startup. Stop and reattach preserve this
-result; a new initialization replaces it. `ready` is not a liveness probe.
 
 ### `boxlite images`
 

@@ -179,7 +179,7 @@ impl ChannelBridge {
                 return Err(error.into());
             }
         };
-        tokio::spawn(async move {
+        server.ssh_manager.tasks().spawn(async move {
             if let Ok(Err(error)) = input_task.await {
                 warn!(%error, "SSH stdin forwarding ended with an error");
             }
@@ -217,7 +217,12 @@ impl ChannelBridge {
             output_start,
             cancel_rx,
         );
-        spawn_execution_cleanup(server.registry.clone(), execution_id.clone(), output_task);
+        spawn_execution_cleanup(
+            server.ssh_manager.tasks(),
+            server.registry.clone(),
+            execution_id.clone(),
+            output_task,
+        );
 
         Ok(Self {
             server,
@@ -272,10 +277,13 @@ impl ChannelBridge {
     }
 
     pub(crate) fn terminate_running(&mut self) {
-        let execution_id = self.execution_id.clone();
-        let server = self.server.clone();
-        tokio::spawn(terminate_process_group(server, execution_id));
         if let Some(cancel) = self.output_cancel.take() {
+            let execution_id = self.execution_id.clone();
+            let server = self.server.clone();
+            server
+                .ssh_manager
+                .tasks()
+                .spawn(terminate_process_group(server.clone(), execution_id));
             let _ = cancel.send(());
         }
     }
@@ -621,7 +629,7 @@ fn spawn_output_pump(
     output_start: OutputPumpStart,
     mut cancel_rx: oneshot::Receiver<()>,
 ) -> JoinHandle<()> {
-    tokio::spawn(async move {
+    server.ssh_manager.tasks().spawn(async move {
         let (mut output, buffered_stdout, mut stdout_offset) = match output_start {
             OutputPumpStart::Attach => {
                 let attached = tokio::select! {
@@ -858,11 +866,12 @@ fn output_gap_message(source: &str, lost_bytes: u64) -> Vec<u8> {
 /// release waits for both before closing descriptors and removing the registry
 /// entry.
 fn spawn_execution_cleanup(
+    tasks: tokio_util::task::TaskTracker,
     registry: ExecutionRegistry,
     execution_id: String,
     output_task: JoinHandle<()>,
 ) -> JoinHandle<()> {
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         let Some(state) = registry.get(&execution_id).await else {
             return;
         };
@@ -880,9 +889,17 @@ fn spawn_execution_cleanup(
 
 fn cleanup_failed_execution_start(server: Arc<GuestServer>, execution_id: String) {
     let cleanup_execution_id = execution_id.clone();
-    let output_task = tokio::spawn(async {});
-    spawn_execution_cleanup(server.registry.clone(), cleanup_execution_id, output_task);
-    tokio::spawn(terminate_process_group(server, execution_id));
+    let output_task = server.ssh_manager.tasks().spawn(async {});
+    spawn_execution_cleanup(
+        server.ssh_manager.tasks(),
+        server.registry.clone(),
+        cleanup_execution_id,
+        output_task,
+    );
+    server
+        .ssh_manager
+        .tasks()
+        .spawn(terminate_process_group(server.clone(), execution_id));
 }
 
 fn exit_notification(exit_code: i32, signal: i32, error_message: String) -> ExitNotification {
@@ -1340,8 +1357,12 @@ mod tests {
         let registry = ExecutionRegistry::new();
         let exit_tx = pending_execution(&registry, "attach-failed", 31_001).await;
         let output_task = tokio::spawn(async {});
-        let cleanup =
-            spawn_execution_cleanup(registry.clone(), "attach-failed".into(), output_task);
+        let cleanup = spawn_execution_cleanup(
+            Default::default(),
+            registry.clone(),
+            "attach-failed".into(),
+            output_task,
+        );
 
         tokio::task::yield_now().await;
         assert!(registry.exists("attach-failed").await);
@@ -1362,7 +1383,12 @@ mod tests {
         let output_task = tokio::spawn(async move {
             let _ = cancel_rx.await;
         });
-        let cleanup = spawn_execution_cleanup(registry.clone(), "cancelled".into(), output_task);
+        let cleanup = spawn_execution_cleanup(
+            Default::default(),
+            registry.clone(),
+            "cancelled".into(),
+            output_task,
+        );
 
         cancel_tx.send(()).unwrap();
         tokio::task::yield_now().await;
@@ -1386,7 +1412,12 @@ mod tests {
         let output_task = tokio::spawn(async move {
             let _ = drained_rx.await;
         });
-        let cleanup = spawn_execution_cleanup(registry.clone(), "draining".into(), output_task);
+        let cleanup = spawn_execution_cleanup(
+            Default::default(),
+            registry.clone(),
+            "draining".into(),
+            output_task,
+        );
 
         exit_tx.send(Some(ExitStatus::Code(0))).unwrap();
         tokio::task::yield_now().await;
