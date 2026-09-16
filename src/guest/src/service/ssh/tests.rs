@@ -12,6 +12,22 @@ fn private_key() -> PrivateKey {
     PrivateKey::random(&mut russh::keys::key::safe_rng(), Algorithm::Ed25519).unwrap()
 }
 
+/// Parses as an unencrypted OpenSSH key but cannot sign: security-key
+/// (FIDO) keypairs keep the private half in hardware.
+fn unsignable_host_key() -> String {
+    let ed25519 = private_key();
+    let public = russh::keys::ssh_key::public::SkEd25519::new(
+        *ed25519.public_key().key_data().ed25519().unwrap(),
+        "ssh:",
+    );
+    let sk = russh::keys::ssh_key::private::SkEd25519::new(public, 0x01, b"key-handle".to_vec())
+        .unwrap();
+    PrivateKey::from(sk)
+        .to_openssh(Default::default())
+        .unwrap()
+        .to_string()
+}
+
 fn config(
     host: &PrivateKey,
     keys: &[&PrivateKey],
@@ -418,6 +434,9 @@ async fn grpc_ssh_invalid_inputs_allow_init_and_leave_no_listener() {
         .to_openssh(Default::default())
         .unwrap()
         .to_string();
+    invalid.push(ssh);
+    let mut ssh = valid.clone();
+    ssh.host_private_key = unsignable_host_key();
     invalid.push(ssh);
     for ssh in invalid {
         let mut fixture = TestGuest::new().await;

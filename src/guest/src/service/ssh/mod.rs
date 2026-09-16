@@ -54,6 +54,19 @@ impl SshConfig {
                 "SSH host private key must be unencrypted".into(),
             ));
         }
+        // A key can parse and still be unusable as a host key: FIDO sk-* and
+        // DSA keypairs hold no signable material in software, so the first
+        // handshake would fail after startup already reported Ready. Probe-sign
+        // once through the same Signer path russh uses during key exchange.
+        use russh::keys::signature::Signer;
+        host_key
+            .try_sign(b"boxlite host key validation")
+            .map_err(|_| {
+                BoxliteError::Config(
+                    "invalid SSH host private key: unsupported algorithm; expected ed25519, ecdsa, or rsa"
+                        .into(),
+                )
+            })?;
         Ok(Self {
             listen_addr,
             authorizer: Arc::new(authorizer),
