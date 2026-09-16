@@ -254,9 +254,9 @@ test\:unit\:guest:
 	fi; \
 	echo "🧪 Running guest unit tests..."; \
 	if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run --no-tests=fail -p boxlite-guest $(NEXTEST_FILTER); \
+		cargo nextest run --no-tests=fail -p boxlite-guest; \
 	else \
-		cargo test -p boxlite-guest --bins -- --test-threads=1 $(if $(FILTER),$(FILTER),capabilit spec::tests sysctl::tests); \
+		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests sysctl::tests; \
 	fi
 
 # Keep ordinary ownership tests unprivileged. Only explicitly ignored tests

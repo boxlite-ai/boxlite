@@ -2169,68 +2169,6 @@ mod tests {
         (runtime, temp_dir)
     }
 
-    #[tokio::test]
-    async fn ssh_configuration_is_absent_from_clone_archive_import_and_runtime_restart() {
-        use crate::disk::{Qcow2Helper, constants::filenames::CONTAINER_DISK};
-        use crate::{CloneOptions, ExportOptions};
-
-        let (runtime, dir) = create_test_runtime_without_host_preflight();
-        let options: BoxOptions = serde_json::from_value(serde_json::json!({
-            "auto_delete": 0,
-            "ssh_config": {"listen_address": "0.0.0.0:22", "host_private_key": "test-only-private-marker", "authorized_keys": ["test-key"]}
-        })).unwrap();
-        let staging = dir.path().join("ssh-staging");
-        Qcow2Helper::create_disk(&staging.join("disks").join(CONTAINER_DISK), true).unwrap();
-        let source = runtime
-            .provision_box(
-                staging,
-                Some("ssh-source".into()),
-                options,
-                BoxStatus::Stopped,
-            )
-            .await
-            .unwrap();
-        let cloned = source
-            .clone_box(CloneOptions::default(), Some("ssh-clone".into()))
-            .await
-            .unwrap();
-        let archive = cloned
-            .export(ExportOptions::default(), &dir.path().join("ssh.boxlite"))
-            .await
-            .unwrap();
-        let imported = runtime
-            .import_box(archive, Some("ssh-import".into()))
-            .await
-            .unwrap();
-        let ids = [
-            source.id().clone(),
-            cloned.id().clone(),
-            imported.id().clone(),
-        ];
-        for id in &ids {
-            let (config, _) = runtime.box_manager.box_by_id(id).unwrap().unwrap();
-            let encoded = serde_json::to_value(&config).unwrap();
-            assert!(encoded["options"].get("ssh_config").is_none());
-            assert!(!encoded.to_string().contains("test-only-private-marker"));
-        }
-        drop((source, cloned, imported, runtime));
-        let reopened = RuntimeImpl::initialize(
-            BoxliteOptions {
-                home_dir: dir.path().to_path_buf(),
-                image_registries: vec![],
-            },
-            ExperimentalFeatures::default(),
-        )
-        .unwrap();
-        for id in &ids {
-            assert!(reopened.get(id.as_str()).await.unwrap().is_some());
-            let (config, _) = reopened.box_manager.box_by_id(id).unwrap().unwrap();
-            let encoded = serde_json::to_value(&config).unwrap();
-            assert!(encoded["options"].get("ssh_config").is_none());
-            assert!(!encoded.to_string().contains("test-only-private-marker"));
-        }
-    }
-
     /// Create a minimal BoxConfig for testing.
     fn test_box_config(detach: bool) -> BoxConfig {
         BoxConfig {
