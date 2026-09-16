@@ -72,13 +72,26 @@ struct InspectStatePresenter {
 #[derive(Debug, Serialize)]
 struct InspectSshPresenter {
     #[serde(rename = "Status")]
-    status: boxlite::SshState,
+    status: &'static str,
     #[serde(rename = "ErrorReason")]
     error_reason: Option<String>,
     #[serde(rename = "HostPublicKey")]
     host_public_key: Option<String>,
-    #[serde(rename = "HostKeyFingerprint")]
-    host_key_fingerprint: Option<String>,
+}
+
+impl From<boxlite::SshStatus> for InspectSshPresenter {
+    fn from(status: boxlite::SshStatus) -> Self {
+        let (status, error_reason, host_public_key) = match status {
+            boxlite::SshStatus::Disabled => ("disabled", None, None),
+            boxlite::SshStatus::Ready(public_key) => ("ready", None, Some(public_key)),
+            boxlite::SshStatus::Failed(reason) => ("failed", Some(reason), None),
+        };
+        Self {
+            status,
+            error_reason,
+            host_public_key,
+        }
+    }
 }
 
 impl From<&BoxInfo> for InspectPresenter {
@@ -91,12 +104,7 @@ impl From<&BoxInfo> for InspectPresenter {
             created: info.created_at.to_rfc3339(),
             status: info.status.as_str().to_string(),
             state: InspectStatePresenter {
-                ssh: state.ssh_status.map(|ssh| InspectSshPresenter {
-                    status: ssh.state,
-                    error_reason: ssh.error_reason,
-                    host_public_key: ssh.host_public_key,
-                    host_key_fingerprint: ssh.host_key_fingerprint,
-                }),
+                ssh: state.ssh_status.map(InspectSshPresenter::from),
                 status: state.status.as_str().to_string(),
                 running: state.running,
                 pid: state.pid.unwrap_or(0),
@@ -290,117 +298,24 @@ mod tests {
     }
 
     #[test]
-    fn inspect_ssh_identity_derived_from_host_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let key_path = dir.path().join("host");
-        assert_cmd::Command::new("ssh-keygen")
-            .timeout(std::time::Duration::from_secs(30))
-            .args([
-                "-q",
-                "-t",
-                "ed25519",
-                "-N",
-                "",
-                "-C",
-                "host\r\ncomment",
-                "-f",
-            ])
-            .arg(&key_path)
-            .assert()
-            .success();
-        let public = std::fs::read_to_string(key_path.with_extension("pub")).unwrap();
-        let public = public
-            .split_whitespace()
-            .take(2)
-            .collect::<Vec<_>>()
-            .join(" ");
-        let fingerprint_output = assert_cmd::Command::new("ssh-keygen")
-            .timeout(std::time::Duration::from_secs(30))
-            .arg("-lf")
-            .arg(key_path.with_extension("pub"))
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let fingerprint = String::from_utf8(fingerprint_output)
-            .unwrap()
-            .split_whitespace()
-            .nth(1)
-            .unwrap()
-            .to_string();
-        let config: boxlite::litebox::BoxConfig = serde_json::from_value(serde_json::json!({
-            "id": "inspect-ssh-identity",
-            "name": null,
-            "created_at": chrono::Utc::now(),
-            "container": {"id": boxlite::ContainerID::new()},
-            "engine_kind": boxlite::vmm::VmmKind::Libkrun,
-            "box_home": dir.path(),
-            "options": boxlite::BoxOptions {
-                ssh_config: Some(boxlite::SshConfig {
-                    listen_address: "0.0.0.0:2222".into(),
-                    host_private_key: std::fs::read_to_string(key_path).unwrap(),
-                    authorized_keys: Vec::new(),
-                    ca: None,
-                }),
-                ..Default::default()
-            },
-        }))
-        .unwrap();
-        let mut state = boxlite::BoxState::new();
-        state.ssh_status = Some(boxlite::SshStatus {
-            state: boxlite::SshState::Ready,
-            error_reason: None,
-            host_public_key: None,
-            host_key_fingerprint: None,
-        });
-        let info = BoxInfo::new(&config, &state);
-        let presenters = vec![InspectPresenter::from(&info)];
-        for format in ["json", "yaml"] {
-            let mut output = Vec::new();
-            write_inspect_output(&presenters, format, &mut output).unwrap();
-            let value: serde_json::Value = if format == "json" {
-                serde_json::from_slice(&output).unwrap()
-            } else {
-                serde_yaml::from_slice(&output).unwrap()
-            };
-            assert_eq!(value[0]["State"]["Ssh"]["HostPublicKey"], public);
-            assert_eq!(value[0]["State"]["Ssh"]["HostKeyFingerprint"], fingerprint);
-        }
-        for (template, expected) in [
-            ("{{.State.Ssh.HostPublicKey}}", &public),
-            ("{{.State.Ssh.HostKeyFingerprint}}", &fingerprint),
-        ] {
-            let mut output = Vec::new();
-            write_inspect_output(&presenters, template, &mut output).unwrap();
-            assert_eq!(String::from_utf8(output).unwrap(), format!("{expected}\n"));
-        }
-    }
-
-    #[test]
     fn inspect_ssh_status_json_yaml_and_templates() {
-        for state in [
-            boxlite::SshState::Disabled,
-            boxlite::SshState::Ready,
-            boxlite::SshState::Failed,
+        for (status, expected_status, reason, public_key) in [
+            (boxlite::SshStatus::Disabled, "disabled", None, None),
+            (
+                boxlite::SshStatus::Ready("ssh-ed25519 AAAA".into()),
+                "ready",
+                None,
+                Some("ssh-ed25519 AAAA"),
+            ),
+            (
+                boxlite::SshStatus::Failed("SSH listen: address in use".into()),
+                "failed",
+                Some("SSH listen: address in use"),
+                None,
+            ),
         ] {
             let mut info = inspect_info(None);
-            let reason =
-                (state == boxlite::SshState::Failed).then_some("SSH listen: address in use");
-            // Public key material exists only on the Ready outcome.
-            let host_material = (state == boxlite::SshState::Ready)
-                .then_some(("ssh-ed25519 AAAA host", "SHA256:test"));
-            info.ssh_status = Some(boxlite::SshStatus {
-                state,
-                error_reason: reason.map(str::to_string),
-                host_public_key: host_material.map(|(public, _)| public.into()),
-                host_key_fingerprint: host_material.map(|(_, fingerprint)| fingerprint.into()),
-            });
-            let expected = match state {
-                boxlite::SshState::Disabled => "disabled",
-                boxlite::SshState::Ready => "ready",
-                boxlite::SshState::Failed => "failed",
-            };
+            info.ssh_status = Some(status);
             let presenters = vec![InspectPresenter::from(&info)];
             for format in ["json", "yaml"] {
                 let mut output = Vec::new();
@@ -410,43 +325,23 @@ mod tests {
                 } else {
                     serde_yaml::from_slice(&output).unwrap()
                 };
-                assert_eq!(value[0]["State"]["Ssh"]["Status"], expected);
                 assert_eq!(
-                    value[0]["State"]["Ssh"]["ErrorReason"],
-                    serde_json::json!(reason)
-                );
-                assert_eq!(
-                    value[0]["State"]["Ssh"]["HostPublicKey"],
-                    serde_json::json!(host_material.map(|(public, _)| public))
-                );
-                assert_eq!(
-                    value[0]["State"]["Ssh"]["HostKeyFingerprint"],
-                    serde_json::json!(host_material.map(|(_, fingerprint)| fingerprint))
+                    value[0]["State"]["Ssh"],
+                    serde_json::json!({
+                        "Status": expected_status,
+                        "ErrorReason": reason,
+                        "HostPublicKey": public_key,
+                    })
                 );
             }
-            let mut output = Vec::new();
-            write_inspect_output(&presenters, "{{.State.Ssh.Status}}", &mut output).unwrap();
-            assert_eq!(String::from_utf8(output).unwrap(), format!("{expected}\n"));
-            if let Some(reason) = reason {
+            for (template, expected) in [
+                ("{{.State.Ssh.Status}}", expected_status),
+                ("{{.State.Ssh.ErrorReason}}", reason.unwrap_or("")),
+                ("{{.State.Ssh.HostPublicKey}}", public_key.unwrap_or("")),
+            ] {
                 let mut output = Vec::new();
-                write_inspect_output(&presenters, "{{.State.Ssh.ErrorReason}}", &mut output)
-                    .unwrap();
-                assert_eq!(String::from_utf8(output).unwrap(), format!("{reason}\n"));
-            }
-            if let Some((public, fingerprint)) = host_material {
-                for template in [
-                    "{{.State.Ssh.HostPublicKey}}",
-                    "{{.State.Ssh.HostKeyFingerprint}}",
-                ] {
-                    let mut output = Vec::new();
-                    write_inspect_output(&presenters, template, &mut output).unwrap();
-                    let expected = if template.contains("Fingerprint") {
-                        fingerprint
-                    } else {
-                        public
-                    };
-                    assert_eq!(String::from_utf8(output).unwrap(), format!("{expected}\n"));
-                }
+                write_inspect_output(&presenters, template, &mut output).unwrap();
+                assert_eq!(String::from_utf8(output).unwrap(), format!("{expected}\n"));
             }
         }
         for format in ["json", "yaml"] {
@@ -464,6 +359,14 @@ mod tests {
             };
             assert!(value[0]["State"]["Ssh"].is_null());
         }
+        let mut output = Vec::new();
+        write_inspect_output(
+            &vec![InspectPresenter::from(&inspect_info(None))],
+            "{{.State.Ssh}}",
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(output, b"\n");
     }
 
     #[test]

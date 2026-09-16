@@ -36,15 +36,18 @@ impl GuestInterface {
         );
 
         let request = GuestInitRequest {
-            ssh_config: config.ssh_config.map(|ssh| boxlite_shared::SshConfig {
-                listen_address: ssh.listen_address,
-                host_private_key: ssh.host_private_key,
-                ca: ssh.ca.map(|ca| boxlite_shared::SshCaConfig {
-                    public_key: ca.public_key,
-                    principal: ca.principal,
+            ssh_config: config
+                .ssh_config
+                .clone()
+                .map(|ssh| boxlite_shared::SshConfig {
+                    listen_address: ssh.listen_address,
+                    host_private_key: ssh.host_private_key,
+                    ca: ssh.ca.map(|ca| boxlite_shared::SshCaConfig {
+                        public_key: ca.public_key,
+                        principal: ca.principal,
+                    }),
+                    authorized_keys: ssh.authorized_keys,
                 }),
-                authorized_keys: ssh.authorized_keys,
-            }),
             volumes: config.volumes.into_iter().map(|v| v.into_proto()).collect(),
             network: config.network.map(|n| NetworkInit {
                 interface: n.interface,
@@ -58,7 +61,9 @@ impl GuestInterface {
         match response.result {
             Some(guest_init_response::Result::Success(result)) => {
                 tracing::debug!("Guest initialized");
-                Ok(result.ssh_status.and_then(crate::SshStatus::from_guest))
+                Ok(result.ssh_status.and_then(|result| {
+                    crate::SshStatus::from_guest(result, config.ssh_config.as_ref())
+                }))
             }
             Some(guest_init_response::Result::Error(err)) => {
                 tracing::error!("Guest init failed: {}", err.reason);

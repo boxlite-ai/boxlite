@@ -670,12 +670,11 @@ SELECT * FROM boxes;
 
 > **Warning:** box configuration is stored as JSON and includes any SSH host
 > private key. Treat the database — and any dump or backup of it — as
-> sensitive. SSH host public keys and fingerprints are available from the
-> runtime API and `boxlite inspect` (`State.Ssh.HostPublicKey`,
-> `State.Ssh.HostKeyFingerprint`); there is no need to read key material from
-> the database.
-> The guest confirms initialization; the host computes public identity from
-> configuration for Ready results, without writing that identity to the database.
+> sensitive. SSH host public keys are available from the runtime API and
+> `boxlite inspect` (`State.Ssh.HostPublicKey`); there is no need to read key
+> material from the database. The guest confirms initialization; the host
+> derives the public key from that initialization's configuration and persists
+> it in the complete Ready result.
 
 ## Resource Limits & Tuning
 

@@ -519,17 +519,19 @@ boxlite inspect mybox
 boxlite inspect -f '{{.State.Status}}' mybox
 boxlite inspect -f '{{.State.Ssh.Status}}' mybox
 boxlite inspect -f '{{.State.Ssh.ErrorReason}}' mybox
-boxlite inspect -f '{{.State.Ssh.HostKeyFingerprint}}' mybox
+boxlite inspect -f '{{.State.Ssh.HostPublicKey}}' mybox
 boxlite inspect --latest -f yaml
 boxlite inspect box1 box2 -f json
 ```
 
 `State.Ssh` records the latest SSH initialization result: `Status` is
 `disabled`, `ready`, or `failed`; `ErrorReason` is populated only on failure.
-It is `null` before initialization. The guest reports the initialization result;
-for `ready`, the host derives `HostPublicKey` and `HostKeyFingerprint` from the
-configured private key. The public key is a comment-free OpenSSH line and the
-fingerprint uses SHA256. An unexpected parsing failure leaves these fields null.
+It is `null` before initialization or when the guest did not report a result.
+For `ready`, `HostPublicKey` contains a comment-free OpenSSH line derived from
+the configured private key during initialization and persisted with the result.
+Missing configuration or key derivation failure produces `failed` with a
+sanitized reason. `ErrorReason` is `null` unless failed; `HostPublicKey` is `null`
+unless ready. Null values render as empty strings in templates.
 Check the status and public key before writing known_hosts:
 
 ```bash

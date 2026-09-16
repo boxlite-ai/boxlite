@@ -695,49 +695,47 @@ even after SSH initialization fails; there is no live configuration or retry RPC
 `LiteBox::info`, `BoxliteRuntime::get_info`, and `list_info` expose
 `ssh_status: Option<SshStatus>` (also available on `BoxState` and `BoxStateInfo`):
 
-- `SshState::Disabled`: this initialization had no SSH configuration.
-- `SshState::Ready`: validation and listener binding succeeded.
-- `SshState::Failed`: SSH initialization failed; `error_reason` contains a
-  sanitized diagnostic. Other states have no error reason.
-- `None`: no initialization result yet.
+- `SshStatus::Disabled`: this initialization had no SSH configuration.
+- `SshStatus::Ready(public_key)`: validation and listener binding succeeded;
+  contains the comment-free OpenSSH host public key (`algorithm Base64-key`).
+- `SshStatus::Failed(reason)`: SSH initialization failed; contains a sanitized
+  diagnostic.
+- `None`: no initialization result yet, or the guest did not report one.
 
-The guest reports only the initialization result. For `Ready`, the host derives
-`host_public_key` and `host_key_fingerprint` from the configured
-`ssh_config.host_private_key` on each info query. The public key contains only
-`algorithm Base64-key`, without a comment; the fingerprint uses SHA256.
-Other states have neither field. An unexpected private-key parsing failure logs
-a sanitized warning and leaves both fields absent without changing `Ready`.
+The guest reports only the initialization result. On success, the host derives
+the public key from this initialization's `ssh_config.host_private_key` and
+persists the complete `Ready` result. Missing configuration or a key derivation
+failure produces `Failed` with a fixed diagnostic, without blocking container
+startup. A guest failure without a reason also receives a fixed diagnostic.
 
-`BoxState` stores the initialization result without identity. `BoxStateInfo::new`
-provides that state-only view; `BoxStateInfo::from(&info)` preserves the identity
-derived for `BoxInfo`. Build known_hosts entries from the full info view:
+`BoxState`, `BoxInfo`, and both `BoxStateInfo` constructors retain the same
+complete result; queries do not derive keys. Rust serde and database JSON use
+`"disabled"`, `{"ready":"ssh-ed25519 ..."}`, or `{"failed":"reason"}`;
+an absent result is `null`. The previous SSH object format is not supported and
+has no migration. Build known_hosts entries from a ready result:
 
 ```rust
-if let Some(ssh) = sandbox.info().await?.ssh_status {
-    if ssh.state == boxlite::SshState::Ready {
-        if let Some(public) = ssh.host_public_key {
-            // Use the published address of the SSH port mapping or tunnel.
-            std::fs::write(
-                "known_hosts",
-                format!("[127.0.0.1]:{published_port} {public}\n"),
-            )?;
-        }
-    }
+if let Some(boxlite::SshStatus::Ready(public)) = sandbox.info().await?.ssh_status {
+    // Use the published address of the SSH port mapping or tunnel.
+    std::fs::write(
+        "known_hosts",
+        format!("[127.0.0.1]:{published_port} {public}\n"),
+    )?;
 }
 ```
 
 This records the **latest initialization**, not ongoing service health.
 Stopping and reattaching preserve the result; a new initialization replaces it.
 There is no automatic retry or background monitoring. CLI `inspect` exposes
-`State.Ssh.Status` (`disabled`, `ready`, `failed`), `State.Ssh.ErrorReason`,
-`State.Ssh.HostPublicKey`, and `State.Ssh.HostKeyFingerprint` in JSON, YAML,
-and templates. `State.Ssh` is `null` when the result is absent:
+`State.Ssh.Status` (`disabled`, `ready`, `failed`), `State.Ssh.ErrorReason`, and
+`State.Ssh.HostPublicKey` in JSON, YAML, and templates. `ErrorReason` is `null`
+unless failed; `HostPublicKey` is `null` unless ready. `State.Ssh` is `null` when
+the result is absent. Null values render as empty strings in templates:
 
 ```bash
 boxlite inspect -f '{{.State.Ssh.Status}}' mybox
 boxlite inspect -f '{{.State.Ssh.ErrorReason}}' mybox
 boxlite inspect -f '{{.State.Ssh.HostPublicKey}}' mybox
-boxlite inspect -f '{{.State.Ssh.HostKeyFingerprint}}' mybox
 ```
 
 This status is currently exposed by the local Rust runtime and CLI; other SDKs
@@ -747,7 +745,7 @@ The complete configuration, including the private key, is persisted with box
 options and retained on restart, clone, export, and import. Clones therefore
 retain the same SSH host identity and CA principal. The private key stays in
 that storage: Debug output redacts it, and no read API or CLI output returns
-it — callers see only the public key and fingerprint above. SSH does not add a
+it — callers see only the public key above. SSH does not add a
 host port mapping: configure an explicit mapping or use a network tunnel.
 
 ### AdvancedBoxOptions

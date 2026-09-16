@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 
-pub use crate::litebox::{BoxState, BoxStatus, HealthStatus, SshState, SshStatus};
+pub use crate::litebox::{BoxState, BoxStatus, HealthStatus, SshStatus};
 use crate::runtime::id::BoxID;
 use crate::runtime::options::{NetworkConfig, NetworkMode, PortProtocol};
 /// Re-exported here so the CLI can reach volume metadata the same way it
@@ -561,10 +561,7 @@ impl BoxInfo {
             auto_delete: config.options.effective_auto_delete(),
             auto_resume: config.options.auto_resume.unwrap_or(true),
             health_status: state.health_status,
-            ssh_status: state
-                .ssh_status
-                .as_ref()
-                .map(|status| status.with_host_identity(config)),
+            ssh_status: state.ssh_status.clone(),
             exit_code: state.exit_code,
             started_at: state.started_at,
             // Activity is recorded by the control plane, not by a local box.
@@ -620,24 +617,21 @@ pub struct BoxStateInfo {
 }
 
 impl BoxStateInfo {
-    /// Create an initialization-only view from internal state, without host identity.
+    /// Create a view of the complete initialization result from internal state.
     pub fn new(state: &BoxState) -> Self {
         Self {
             status: state.status,
             running: state.status.is_running(),
             pid: state.pid,
             exit_code: state.exit_code,
-            ssh_status: state
-                .ssh_status
-                .as_ref()
-                .map(SshStatus::initialization_status),
+            ssh_status: state.ssh_status.clone(),
         }
     }
 }
 
 impl From<&BoxInfo> for BoxStateInfo {
     /// Build state view from public BoxInfo (e.g. for CLI templates).
-    /// Preserves the host identity derived from configuration by `BoxInfo::new`.
+    /// Preserves the complete SSH initialization result.
     fn from(info: &BoxInfo) -> Self {
         Self {
             status: info.status,

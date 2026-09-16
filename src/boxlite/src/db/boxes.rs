@@ -385,41 +385,58 @@ mod tests {
     const TEST_ID_3: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R3";
 
     #[test]
-    fn ssh_status_survives_database_reopen_and_legacy_rows() {
-        let (store, dir) = create_test_db();
-        let config = create_test_config(TEST_ID_1);
-        let mut state = BoxState::new();
-        state.ssh_status = Some(crate::SshStatus {
-            state: crate::SshState::Ready,
-            error_reason: None,
-            host_public_key: None,
-            host_key_fingerprint: None,
-        });
-        state.set_status(crate::BoxStatus::Running);
-        store.save(&config, &state).unwrap();
-        drop(store);
-        let reopened = BoxStore::new(Database::open(&dir.path().join("test.db")).unwrap());
-        let loaded = reopened.load_state(TEST_ID_1).unwrap().unwrap();
-        assert_eq!(loaded.status, crate::BoxStatus::Running);
-        assert_eq!(loaded.ssh_status, state.ssh_status);
-        let mut legacy = serde_json::to_value(&loaded).unwrap();
-        legacy.as_object_mut().unwrap().remove("ssh_status");
-        reopened
-            .db
-            .conn()
-            .execute(
-                "UPDATE box_state SET json = ?1 WHERE id = ?2",
-                params![legacy.to_string(), TEST_ID_1],
-            )
-            .unwrap();
-        assert!(
+    fn ssh_status_survives_database_reopen_and_rejects_old_objects() {
+        for status in [
+            None,
+            Some(crate::SshStatus::Disabled),
+            Some(crate::SshStatus::Ready("ssh-ed25519 AAAA".into())),
+            Some(crate::SshStatus::Failed(
+                "SSH listen: address in use".into(),
+            )),
+        ] {
+            let (store, dir) = create_test_db();
+            let config = create_test_config(TEST_ID_1);
+            let mut state = BoxState::new();
+            state.ssh_status = status;
+            state.set_status(crate::BoxStatus::Running);
+            store.save(&config, &state).unwrap();
+            drop(store);
+            let reopened = BoxStore::new(Database::open(&dir.path().join("test.db")).unwrap());
+            let loaded = reopened.load_state(TEST_ID_1).unwrap().unwrap();
+            assert_eq!(loaded.status, crate::BoxStatus::Running);
+            assert_eq!(loaded.ssh_status, state.ssh_status);
+            let mut legacy = serde_json::to_value(&loaded).unwrap();
+            legacy.as_object_mut().unwrap().remove("ssh_status");
             reopened
-                .load_state(TEST_ID_1)
-                .unwrap()
-                .unwrap()
-                .ssh_status
-                .is_none()
-        );
+                .db
+                .conn()
+                .execute(
+                    "UPDATE box_state SET json = ?1 WHERE id = ?2",
+                    params![legacy.to_string(), TEST_ID_1],
+                )
+                .unwrap();
+            assert!(
+                reopened
+                    .load_state(TEST_ID_1)
+                    .unwrap()
+                    .unwrap()
+                    .ssh_status
+                    .is_none()
+            );
+            legacy["ssh_status"] = serde_json::json!({"state": "ready", "error_reason": null});
+            reopened
+                .db
+                .conn()
+                .execute(
+                    "UPDATE box_state SET json = ?1 WHERE id = ?2",
+                    params![legacy.to_string(), TEST_ID_1],
+                )
+                .unwrap();
+            assert!(matches!(
+                reopened.load_state(TEST_ID_1),
+                Err(BoxliteError::Database(_))
+            ));
+        }
     }
 
     #[test]

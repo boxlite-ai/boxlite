@@ -3,7 +3,7 @@
 mod common;
 
 use boxlite::runtime::options::PortSpec;
-use boxlite::{BoxliteOptions, BoxliteRuntime, PortProtocol, SshConfig};
+use boxlite::{BoxliteOptions, BoxliteRuntime, PortProtocol, SshConfig, SshStatus};
 use std::path::Path;
 use std::time::Duration;
 use tokio::process::Command;
@@ -66,12 +66,13 @@ async fn guest_ssh_public_key_exec_pty_sftp_survive_vm_restart() {
     generate_key(&user_key, "user").await;
     let host_public = std::fs::read_to_string(host_key.with_extension("pub")).unwrap();
     let user_public = std::fs::read_to_string(user_key.with_extension("pub")).unwrap();
-    let runtime = BoxliteRuntime::new(BoxliteOptions {
+    let mut runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     })
     .unwrap();
     let mut options = common::alpine_opts();
+    options.detach = true;
     options.ssh_config = Some(SshConfig {
         listen_address: "0.0.0.0:2222".into(),
         host_private_key: std::fs::read_to_string(&host_key).unwrap(),
@@ -90,40 +91,40 @@ async fn guest_ssh_public_key_exec_pty_sftp_survive_vm_restart() {
         .unwrap();
     for _ in 0..2 {
         sandbox.start().await.unwrap();
-        let status = sandbox.info().await.unwrap().ssh_status.unwrap();
-        assert_eq!(status.state, boxlite::SshState::Ready);
-        assert!(status.error_reason.is_none());
+        let info = sandbox.info().await.unwrap();
+        let status = info.ssh_status.unwrap();
+        drop(sandbox);
+        drop(runtime);
+        runtime = BoxliteRuntime::new(BoxliteOptions {
+            home_dir: home.path.clone(),
+            image_registries: common::test_registries(),
+        })
+        .unwrap();
+        sandbox = runtime.get("guest-ssh").await.unwrap().unwrap();
+        sandbox.start().await.unwrap();
+        let reattached = sandbox.info().await.unwrap();
+        assert_eq!(reattached.pid, info.pid);
+        assert_eq!(reattached.ssh_status, Some(status.clone()));
+        let SshStatus::Ready(reported_public) = &status else {
+            panic!("expected SSH Ready, got {status:?}");
+        };
         // The API key must be safe to place on one known_hosts line even
         // when the configured private key contains a multiline comment.
-        let reported_public = status.host_public_key.as_deref().unwrap();
         assert!(!reported_public.contains(['\r', '\n']));
         assert_eq!(
-            reported_public,
+            reported_public.as_str(),
             host_public
                 .split_whitespace()
                 .take(2)
                 .collect::<Vec<_>>()
                 .join(" ")
         );
-        let mut keygen = Command::new("ssh-keygen");
-        keygen.arg("-lf").arg(host_key.with_extension("pub"));
-        let keygen_report = checked_output(keygen).await;
-        let keygen_fingerprint = String::from_utf8(keygen_report)
-            .unwrap()
-            .split_whitespace()
-            .nth(1)
-            .unwrap()
-            .to_string();
-        let fingerprint = status.host_key_fingerprint.as_deref().unwrap();
-        assert_eq!(fingerprint, keygen_fingerprint);
         let encoded = serde_json::to_string(&status).unwrap();
-        assert!(encoded.contains(fingerprint));
-        for line in std::fs::read_to_string(&host_key).unwrap().lines() {
-            assert!(
-                !encoded.contains(line),
-                "SSH status must not carry host private key material"
-            );
-        }
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&encoded).unwrap(),
+            serde_json::json!({"ready": reported_public})
+        );
+        assert!(!encoded.contains("PRIVATE KEY"));
         let published = sandbox
             .info()
             .await
@@ -208,10 +209,9 @@ async fn guest_ssh_invalid_config_does_not_block_main_command() {
     let info = sandbox.info().await.unwrap();
     assert_eq!(info.status, BoxStatus::Running);
     let status = info.ssh_status.unwrap();
-    assert_eq!(status.state, boxlite::SshState::Failed);
-    assert_eq!(status.host_public_key, None);
-    assert_eq!(status.host_key_fingerprint, None);
-    let reason = status.error_reason.as_ref().unwrap();
+    let SshStatus::Failed(reason) = &status else {
+        panic!("expected SSH Failed, got {status:?}");
+    };
     assert!(reason.contains("SSH validate:"));
     assert!(!reason.contains("test-only-private-marker"));
     assert_eq!(
@@ -276,7 +276,7 @@ async fn guest_ssh_invalid_config_does_not_block_main_command() {
     connection
         .execute(
             "UPDATE box_state SET json = json_set(json, '$.ssh_status', json(?1)) WHERE id = ?2",
-            rusqlite::params![r#"{"state":"ready","error_reason":null}"#, box_id],
+            rusqlite::params![r#""disabled""#, box_id],
         )
         .unwrap();
     drop(connection);
@@ -287,8 +287,8 @@ async fn guest_ssh_invalid_config_does_not_block_main_command() {
     .unwrap();
     let sandbox = runtime.get(&box_id).await.unwrap().unwrap();
     assert_eq!(
-        sandbox.info().await.unwrap().ssh_status.unwrap().state,
-        boxlite::SshState::Ready
+        sandbox.info().await.unwrap().ssh_status,
+        Some(SshStatus::Disabled)
     );
     sandbox.start().await.unwrap();
     assert_eq!(sandbox.info().await.unwrap().ssh_status, Some(status));

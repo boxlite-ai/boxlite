@@ -203,102 +203,55 @@ impl std::fmt::Display for BoxStatus {
 }
 
 /// Result of the most recent SSH initialization, not a liveness probe.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SshState {
-    Disabled,
-    Ready,
-    Failed,
-}
-
-impl std::fmt::Display for SshState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Disabled => "disabled",
-            Self::Ready => "ready",
-            Self::Failed => "failed",
-        })
-    }
-}
-
-/// SSH initialization status. Stop and reattach preserve this result.
+/// Stop and reattach preserve this result; a new initialization replaces it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SshStatus {
-    pub state: SshState,
-    /// Sanitized diagnostic, present only when initialization failed.
-    pub error_reason: Option<String>,
-    /// Comment-free OpenSSH host public key, derived from configuration in
-    /// `BoxInfo` only when `Ready`. Raw initialization state has no identity.
-    #[serde(default)]
-    pub host_public_key: Option<String>,
-    /// `SHA256:<base64>` fingerprint of the host public key, present only
-    /// when `Ready`.
-    #[serde(default)]
-    pub host_key_fingerprint: Option<String>,
+#[serde(rename_all = "lowercase")]
+pub enum SshStatus {
+    Disabled,
+    /// Comment-free OpenSSH host public key.
+    Ready(String),
+    /// Sanitized initialization diagnostic.
+    Failed(String),
 }
 
 impl SshStatus {
-    pub(crate) fn from_guest(result: boxlite_shared::SshInitResult) -> Option<Self> {
+    pub(crate) fn from_guest(
+        result: boxlite_shared::SshInitResult,
+        config: Option<&crate::SshConfig>,
+    ) -> Option<Self> {
         use boxlite_shared::SshInitState;
-        let state = match SshInitState::try_from(result.state).ok()? {
-            SshInitState::Disabled => SshState::Disabled,
-            SshInitState::Ready => SshState::Ready,
-            SshInitState::Failed => SshState::Failed,
-            SshInitState::Unspecified => return None,
-        };
-        Some(Self {
-            state,
-            error_reason: if state == SshState::Failed {
-                result.error_reason
-            } else {
-                None
+        Some(match SshInitState::try_from(result.state).ok()? {
+            SshInitState::Disabled => Self::Disabled,
+            SshInitState::Ready => match config {
+                Some(config) => match Self::host_public_key(&config.host_private_key) {
+                    Ok(public_key) => Self::Ready(public_key),
+                    // Decoder errors may contain private material.
+                    Err(_) => Self::Failed(
+                        "Failed to derive SSH host public key from configured private key".into(),
+                    ),
+                },
+                None => Self::Failed(
+                    "SSH initialization reported ready without SSH configuration".into(),
+                ),
             },
-            host_public_key: None,
-            host_key_fingerprint: None,
+            // Guest.Init supplies sanitized diagnostics at the source.
+            SshInitState::Failed => Self::Failed(
+                result
+                    .error_reason
+                    .filter(|reason| !reason.trim().is_empty())
+                    .unwrap_or_else(|| "SSH initialization failed without a diagnostic".into()),
+            ),
+            SshInitState::Unspecified => return None,
         })
     }
 
-    pub(crate) fn initialization_status(&self) -> Self {
-        Self {
-            state: self.state,
-            error_reason: self.error_reason.clone(),
-            host_public_key: None,
-            host_key_fingerprint: None,
-        }
-    }
-
-    pub(crate) fn with_host_identity(&self, config: &super::config::BoxConfig) -> Self {
-        let mut status = self.initialization_status();
-        if status.state != SshState::Ready {
-            return status;
-        }
-        let Some(ssh_config) = &config.options.ssh_config else {
-            return status;
-        };
-        match Self::host_identity(&ssh_config.host_private_key) {
-            Ok((public_key, fingerprint)) => {
-                status.host_public_key = Some(public_key);
-                status.host_key_fingerprint = Some(fingerprint);
-            }
-            // Decoder errors are not guaranteed to be free of private material.
-            Err(_) => tracing::warn!(
-                box_id = %config.id,
-                "Failed to derive SSH host identity from configured private key"
-            ),
-        }
-        status
-    }
-
-    fn host_identity(private_key: &str) -> ssh_key::Result<(String, String)> {
+    fn host_public_key(private_key: &str) -> ssh_key::Result<String> {
         let key = ssh_key::PrivateKey::from_openssh(private_key.trim())?;
         if key.is_encrypted() {
             return Err(ssh_key::Error::Encrypted);
         }
         let public_key = ssh_key::PublicKey::new(key.public_key().key_data().clone(), "");
-        Ok((
-            public_key.to_openssh()?,
-            public_key.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
-        ))
+        public_key.to_openssh()
     }
 }
 
@@ -322,7 +275,7 @@ pub struct BoxState {
     /// Health status.
     #[serde(default)]
     pub health_status: HealthStatus,
-    /// Latest SSH initialization result, without host identity; absent before init.
+    /// Latest SSH initialization result; absent before init or if the guest did not report it.
     #[serde(default)]
     pub ssh_status: Option<SshStatus>,
     /// Human-readable reason the box entered `Failed` (or other terminal state).
@@ -599,41 +552,197 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ssh_status_serializes_as_enum() {
+        let status = SshStatus::from_guest(
+            boxlite_shared::SshInitResult {
+                state: boxlite_shared::SshInitState::Failed.into(),
+                error_reason: Some("SSH listen: address in use".into()),
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(status).unwrap(),
+            serde_json::json!({"failed": "SSH listen: address in use"})
+        );
+    }
+
+    #[test]
     fn ssh_status_maps_guest_results_and_ignores_unknown_states() {
         use boxlite_shared::{SshInitResult, SshInitState};
         for (wire, expected) in [
-            (SshInitState::Disabled, SshState::Disabled),
-            (SshInitState::Ready, SshState::Ready),
-            (SshInitState::Failed, SshState::Failed),
+            (SshInitState::Disabled, SshStatus::Disabled),
+            (
+                SshInitState::Failed,
+                SshStatus::Failed("sanitized reason".into()),
+            ),
         ] {
-            let status = SshStatus::from_guest(SshInitResult {
-                state: wire.into(),
-                error_reason: Some("sanitized reason".into()),
-            })
-            .unwrap();
-            assert_eq!(status.state, expected);
             assert_eq!(
-                status.error_reason.as_deref(),
-                (expected == SshState::Failed).then_some("sanitized reason")
+                SshStatus::from_guest(
+                    SshInitResult {
+                        state: wire.into(),
+                        error_reason: Some("sanitized reason".into()),
+                    },
+                    None
+                ),
+                Some(expected)
             );
-            assert_eq!(status.host_public_key, None);
-            assert_eq!(status.host_key_fingerprint, None);
         }
         for unknown in [0, 99] {
             assert!(
-                SshStatus::from_guest(SshInitResult {
-                    state: unknown,
-                    error_reason: None,
-                })
+                SshStatus::from_guest(
+                    SshInitResult {
+                        state: unknown,
+                        error_reason: None,
+                    },
+                    None
+                )
                 .is_none()
+            );
+        }
+        for reason in [None, Some("".into()), Some(" \n".into())] {
+            assert_eq!(
+                SshStatus::from_guest(
+                    SshInitResult {
+                        state: SshInitState::Failed.into(),
+                        error_reason: reason,
+                    },
+                    None
+                ),
+                Some(SshStatus::Failed(
+                    "SSH initialization failed without a diagnostic".into()
+                ))
             );
         }
     }
 
+    async fn ssh_test_identity(
+        algorithm: &str,
+        comment: &str,
+        passphrase: &str,
+    ) -> (crate::SshConfig, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("host");
+        let mut keygen = tokio::process::Command::new("ssh-keygen");
+        keygen
+            .args(["-q", "-t", algorithm, "-N", passphrase, "-C", comment, "-f"])
+            .arg(&key_path)
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(std::time::Duration::from_secs(30), keygen.output())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(output.status.success(), "ssh-keygen failed");
+        let public = std::fs::read_to_string(key_path.with_extension("pub")).unwrap();
+        let public = public
+            .split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ");
+        (
+            crate::SshConfig {
+                listen_address: "0.0.0.0:2222".into(),
+                host_private_key: std::fs::read_to_string(key_path).unwrap(),
+                authorized_keys: Vec::new(),
+                ca: None,
+            },
+            public,
+        )
+    }
+
+    fn ssh_ready_result(config: Option<&crate::SshConfig>) -> SshStatus {
+        SshStatus::from_guest(
+            boxlite_shared::SshInitResult {
+                state: boxlite_shared::SshInitState::Ready.into(),
+                error_reason: Some("ignored on success".into()),
+            },
+            config,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn ssh_identity_removes_comments_and_supports_guest_key_algorithms() {
+        for (algorithm, comment) in [
+            ("ed25519", "host\nsecond line"),
+            ("ed25519", "host\r\nsecond line"),
+            ("ed25519", "host comment"),
+            ("ed25519", ""),
+            ("rsa", "host"),
+            ("ecdsa", "host"),
+        ] {
+            let (mut config, public) = ssh_test_identity(algorithm, comment, "").await;
+            config.host_private_key = format!(" \n{} \n", config.host_private_key);
+            let status = ssh_ready_result(Some(&config));
+            assert_eq!(status, SshStatus::Ready(public));
+            let SshStatus::Ready(ref public) = status else {
+                unreachable!()
+            };
+            assert!(!public.contains(['\r', '\n']));
+            let encoded = serde_json::to_string(&status).unwrap();
+            assert!(!encoded.contains("PRIVATE KEY"));
+            // OpenSSH private key files also embed public bytes; individual
+            // base64 lines can legitimately occur in the public key.
+            let private_body: String = config
+                .host_private_key
+                .trim()
+                .lines()
+                .filter(|line| !line.starts_with("-----"))
+                .collect();
+            assert!(!encoded.contains(&private_body));
+        }
+    }
+
+    #[tokio::test]
+    async fn ssh_ready_without_usable_config_fails_with_sanitized_reason() {
+        assert_eq!(
+            ssh_ready_result(None),
+            SshStatus::Failed("SSH initialization reported ready without SSH configuration".into())
+        );
+        let (mut config, _) = ssh_test_identity("ed25519", "host", "test-only-passphrase").await;
+        for private_key in [
+            config.host_private_key.clone(),
+            "test-only-private-marker".into(),
+        ] {
+            config.host_private_key = private_key;
+            let status = ssh_ready_result(Some(&config));
+            assert_eq!(
+                status,
+                SshStatus::Failed(
+                    "Failed to derive SSH host public key from configured private key".into()
+                )
+            );
+            let encoded = serde_json::to_string(&status).unwrap();
+            assert!(!encoded.contains("test-only"));
+            assert!(!encoded.contains(&config.host_private_key));
+        }
+    }
+
     #[test]
-    fn ssh_status_defaults_for_old_records_and_survives_stop() {
-        let mut state = BoxState::new();
-        let mut old = serde_json::to_value(&state).unwrap();
+    fn ssh_status_roundtrips_complete_enum_and_survives_stop() {
+        for (status, encoded) in [
+            (None, serde_json::Value::Null),
+            (Some(SshStatus::Disabled), serde_json::json!("disabled")),
+            (
+                Some(SshStatus::Ready("ssh-ed25519 AAAA".into())),
+                serde_json::json!({"ready": "ssh-ed25519 AAAA"}),
+            ),
+            (
+                Some(SshStatus::Failed("SSH listen: address in use".into())),
+                serde_json::json!({"failed": "SSH listen: address in use"}),
+            ),
+        ] {
+            let mut state = BoxState::new();
+            state.ssh_status = status.clone();
+            let json = serde_json::to_value(&state).unwrap();
+            assert_eq!(json["ssh_status"], encoded);
+            let mut state: BoxState = serde_json::from_value(json).unwrap();
+            state.set_status(BoxStatus::Running);
+            state.mark_stop();
+            assert_eq!(state.ssh_status, status);
+            assert_eq!(crate::BoxStateInfo::new(&state).ssh_status, status);
+        }
+        let mut old = serde_json::to_value(BoxState::new()).unwrap();
         old.as_object_mut().unwrap().remove("ssh_status");
         assert!(
             serde_json::from_value::<BoxState>(old)
@@ -641,27 +750,12 @@ mod tests {
                 .ssh_status
                 .is_none()
         );
-        // Initialization state does not need identity fields.
-        let initialization = serde_json::from_value::<SshStatus>(serde_json::json!({
-            "state": "ready",
-            "error_reason": null
-        }))
-        .unwrap();
-        assert_eq!(initialization.state, SshState::Ready);
-        assert_eq!(initialization.host_public_key, None);
-        assert_eq!(initialization.host_key_fingerprint, None);
-        let status = SshStatus {
-            state: SshState::Ready,
-            error_reason: None,
-            host_public_key: None,
-            host_key_fingerprint: None,
-        };
-        state.ssh_status = Some(status.clone());
-        state.set_status(BoxStatus::Running);
-        state.mark_stop();
-        assert_eq!(state.ssh_status, Some(status.clone()));
-        let info = crate::BoxStateInfo::new(&state);
-        assert_eq!(info.ssh_status, Some(status));
+        for old in [
+            serde_json::json!({"state": "ready", "error_reason": null}),
+            serde_json::json!({"state": "ready", "error_reason": null, "host_public_key": "ssh-ed25519 AAAA", "host_key_fingerprint": null}),
+        ] {
+            assert!(serde_json::from_value::<SshStatus>(old).is_err());
+        }
     }
 
     #[test]

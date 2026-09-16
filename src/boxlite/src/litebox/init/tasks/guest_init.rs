@@ -161,10 +161,8 @@ async fn run_guest_init(
             .await?;
     }
     let ssh_status = guest_interface.init(bootstrap.guest).await?;
-    if let Some(status) = &ssh_status
-        && status.state == crate::SshState::Failed
-    {
-        tracing::warn!(%box_id, stage = "guest_ssh_init", error_reason = ?status.error_reason,
+    if let Some(crate::SshStatus::Failed(reason)) = &ssh_status {
+        tracing::warn!(%box_id, stage = "guest_ssh_init", error_reason = %reason,
             "SSH initialization failed; continuing container startup");
     }
     tracing::info!("Guest initialized successfully");
