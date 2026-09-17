@@ -38,6 +38,15 @@ cost paid on every table change. Search belongs to the table that owns the data;
 actions belong to the row. If an action is hard to reach, fix the page.
 
 
+## A choice says what it does, and shows which one is picked
+
+The quickstart offers two paths, so each card names its outcome ("Build an app
+online — get a public URL" against "Run untrusted code — an isolated box") and
+the picked one is drawn, not merely implied. The prompt it hands out carries the
+endpoint the reader will actually use: `getRestApiUrl` resolves production's
+origin even when the console itself is running against a mock, because the
+prompt is pasted into someone's shell, not into this app.
+
 ## Selection follows the action, not the row count
 
 A table's checkbox column exists to arm a bulk action, so a row that no bulk
