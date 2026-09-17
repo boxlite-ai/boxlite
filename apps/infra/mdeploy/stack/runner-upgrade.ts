@@ -102,7 +102,7 @@ export const ON_HOST = 'boxlite-runner-upgrade: running on the host'
  * on it would be replaced — a create and a delete — the day someone renamed a
  * runner. `resourceName` is the stable half, which is why `stack-env.ts` keeps
  * the two apart in the first place. The prefix swap also keeps the first host's
- * command at one fixed name, which is what `plan.ts` can list as a target.
+ * command at one fixed name, so the fleet's upgrades sit in the graph under it.
  */
 export const upgradeResourceName = (slot: RunnerSlot): string =>
   slot.resourceName.replace(/^Runner/, 'UpgradeRunnerBinary')

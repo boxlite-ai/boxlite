@@ -41,18 +41,11 @@ export type Engine = 'sst' | 'pulumi'
 /** One run, in the words every engine understands. */
 export type DeployRequest = {
   /**
-   * Deploy, preview, or tear down. The same environment, the same targets and
-   * the same config in every case: a preview that resolved its inputs
-   * differently would be previewing something else.
+   * Deploy, preview, or tear down. The same environment and the same config in
+   * every case: a preview that resolved its inputs differently would be
+   * previewing something else.
    */
   intent?: Intent
-  /**
-   * Component names to act on. Empty covers the whole stack, which is what a
-   * local run wants; a workflow names one module's components so a failure says
-   * which module failed. An engine that cannot select on them refuses rather
-   * than translating.
-   */
-  targets?: string[]
   /** The stage's configuration, handed to the engine rather than written anywhere. */
   stageEnvironment?: Record<string, string>
   log: (line: string) => void

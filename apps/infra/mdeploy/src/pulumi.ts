@@ -15,12 +15,6 @@
  * program keeps the engine from having to work out how to compile it. The cost
  * is that the program cannot read `process.env` for the stage's configuration,
  * which is why `gcpProgram` takes an environment instead.
- *
- * Targeting is deliberately refused here rather than translated. SST's
- * `--target` selects on logical component names and `plan.ts` lists the AWS
- * ones; Pulumi selects on URNs, and the GCP bundle's resources have different
- * names entirely (`Network`/`Subnetwork`/`Nat` where AWS has one `Vpc`). A
- * mapping invented here would silently deploy the wrong subset.
  */
 
 import { gcpProgram, type ProgramOutputs } from '../pulumi/program.ts'
@@ -258,8 +252,7 @@ export type GcpTargetInput = {
   backend: StoreBackend
   /**
    * Asked at deploy time rather than resolved when the target is built. It is a
-   * lookup against the bootstrap record, and `--plan`, a usage error or a
-   * refused `--module` should not spend one.
+   * lookup against the bootstrap record, and a usage error should not spend one.
    */
   stateBucket: () => Promise<string>
   createStackWith?: StackFactory
@@ -290,21 +283,7 @@ export const gcpTarget = ({
     PULUMI_GROUP,
   ],
 
-  async run({ intent, targets = [], stageEnvironment, log }: DeployRequest): Promise<number> {
-    /*
-     * Refused rather than translated, and refused here because it is this
-     * engine's limit rather than a fact about the cloud. `plan.ts` lists SST's
-     * logical component names and Pulumi selects on URNs; the GCP bundle's
-     * resources are not even named the same — `Network`, `Subnetwork`, `Nat`
-     * where AWS has one `Vpc`. A mapping guessed here would deploy some other
-     * subset and report success.
-     */
-    if (targets.length > 0) {
-      throw new PulumiDeployError(
-        `--module is not supported on a GCP stage yet: ${targets.join(', ')} are SST component names, ` +
-          'and mdeploy/src/plan.ts has no GCP components to select on',
-      )
-    }
+  async run({ intent, stageEnvironment, log }: DeployRequest): Promise<number> {
     return pulumiDeploy({
       intent,
       config,

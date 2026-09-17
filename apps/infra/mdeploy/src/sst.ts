@@ -70,7 +70,7 @@ export const awsTarget = ({
   // a passphrase, so there is no engine group here to add.
   environmentGroups: (intent, declaration) => (intent === 'remove' ? TEARDOWN_GROUPS : rolloutGroups(declaration)),
 
-  async run({ intent = 'deploy', targets = [], stageEnvironment = {}, log }: DeployRequest): Promise<number> {
+  async run({ intent = 'deploy', stageEnvironment = {}, log }: DeployRequest): Promise<number> {
     await identity.assertUsableFor(windowFor(intent))
 
     const { env: credentials, expiresAt } = await childEnvironment({ scope, identity })
@@ -78,14 +78,8 @@ export const awsTarget = ({
     // of keeping configuration in one place is that it wins.
     const env = { ...credentials, ...stageEnvironment }
     const cwd = join(config.root, STACK_DIRECTORY)
-    // One flag, comma separated. `--target` is a single string flag that sst
-    // splits on commas itself (`cmd/sst/deploy.go`), so repeating the flag keeps
-    // only the last value: three components in, one `--target <urn>` out, and the
-    // other two silently not deployed.
-    const targeting = targets.length > 0 ? ['--target', targets.join(',')] : []
     log(
-      `${NARRATION[intent]} ` +
-        `${targets.length > 0 ? targets.join(', ') : 'every component'} of ` +
+      `${NARRATION[intent]} every component of ` +
         `${scope.app} stage ${scope.stage} ${intent === 'remove' ? 'from' : 'into'} ${scope.region} ` +
         `from ${STACK_CONFIG}`,
     )
@@ -93,7 +87,7 @@ export const awsTarget = ({
 
     return runChild({
       command: 'npx',
-      args: ['sst', intent, '--stage', scope.stage as string, '--config', STACK_CONFIG, ...targeting],
+      args: ['sst', intent, '--stage', scope.stage as string, '--config', STACK_CONFIG],
       env,
       cwd,
       spawnProcess: spawnProcess as any,

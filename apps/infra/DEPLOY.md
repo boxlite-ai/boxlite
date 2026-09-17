@@ -24,7 +24,6 @@ apps/infra/
     globals.d.ts           what both engines inject, declared so tsc can see it
     src/deploy.ts          which engine — resolved once, from one field
     src/stack-env.ts       what one deploy reads out of the environment, for both engines
-    src/plan.ts            what each module builds, and what it needs first
     src/api-environment.ts what the control plane container reads
     stack/                 what each module needs, described without a cloud
     stack/providers/aws/   how AWS answers it
@@ -357,7 +356,6 @@ npm run runner:build   -- --stage dev                  build this commit's runne
 npm run runner:build   -- --stage dev --check          is it staged already, without building
 npm run runner:promote -- --tag <sha> --from dev --to prod
 
-npm run mdeploy -- --plan                              the batches, derived from the graph
 npm run mdeploy -- --stage dev --diff                  read this before the first apply
 npm run mdeploy -- --stage dev
 npm run mdeploy -- --stage dev --remove --confirm
@@ -369,7 +367,7 @@ npm run mdeploy -- --stage dev --remove --confirm
 |---|---|
 | mstage — sign-ins, the store, digests, object versions, state repair | 361 tests |
 | mbuild — addresses, the publish sequence, the scan gate, the workflow | 64 tests |
-| mdeploy — the plan, both configs, the environment, the wiring, both bundles | 211 tests |
+| mdeploy — both configs, the environment, the wiring, both bundles | 211 tests |
 | the incumbent stack and its release guards, plus `bootstrap/gcp.ts` | 533 tests |
 | mstage, mbuild **and mdeploy** typecheck | `tsc` clean, without `sst install` |
 | every GCP provider, applied | `dev2`, in `asia-southeast1` |
@@ -403,10 +401,6 @@ file says so.
   tsc-only image and not for this one. Until mbuild can hand the build to
   something amd64, a workstation publishes through Cloud Build into the same
   repository, at the addresses `addressesFor` resolves.
-- **The batch pipeline.** `src/plan.ts` and `--module` are complete and tested,
-  and `sst` targeting aborts with `Duplicate resource URN`
-  ([pulumi/pulumi#24303](https://github.com/pulumi/pulumi/issues/24303), open).
-  The workflow deploys one apply until that lands.
 - **Retiring the incumbent.** `deploy-infra.yml`, `deploy-release.yml` and
   `build-apps-api-image.yml` still run. Two publishers writing immutable tags
   into one repository is a race that reads as a broken build, so retiring them

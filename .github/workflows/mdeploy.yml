@@ -9,14 +9,14 @@
 # account and is not committed, so setup-infra asks `mstage config get` for this
 # stage's block and restores the file every tool below reads.
 #
-# One apply, not module by module. `mdeploy/src/plan.ts` and `--module` exist
-# and are tested, and the batch pipeline they describe is not dispatched here
-# for one upstream reason: `sst` targeting aborts with `Duplicate resource URN`
-# on a child of `sst:aws:Vpc` (pulumi/pulumi#24303, open). Pulumi still orders
-# the modules — every provider takes the handles it depends on as arguments and
-# `stack/index.ts` threads them — and an unchanged module is a no-op in the
-# diff, so a whole-stack apply does no more work. What is lost is attribution:
-# a failure names a resource rather than a module.
+# One apply, always. Deploying module by module would mean `sst --target`, which
+# aborts with `Duplicate resource URN` on a child of `sst:aws:Vpc`
+# (pulumi/pulumi#24303, open) and which this repository bans outright after
+# PR #1095 stalled a stack mid-provider-migration — a targeted update omits the
+# shared resources it still depends on. Both engines order the stack themselves:
+# every provider takes the handles it depends on as arguments and
+# `stack/index.ts` threads them, and an unchanged module is a no-op in the diff,
+# so a whole-stack apply does no more work.
 #
 # Everything that can refuse the deploy happens in the first job, and every one
 # of those checks is a read.

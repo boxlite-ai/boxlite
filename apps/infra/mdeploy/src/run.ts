@@ -12,7 +12,6 @@ import { loadConfig } from 'mstage/config'
 import { resolveScope } from 'mstage/scope'
 import { run as mstage } from 'mstage/run'
 import { resolveDeployTarget } from './deploy.ts'
-import { MODULE_NAMES, PLAN, batchName, deployBatches, type ModuleName } from './plan.ts'
 import type { Intent } from './deploy.ts'
 import { ambientEnvironment, assertAddressesAreNotSpent, fetchStageEnvironment, type StageEnvironment } from './env.ts'
 
@@ -24,14 +23,13 @@ export class UsageError extends Error {
 }
 
 const USAGE = [
-  'usage: npm run mdeploy -- --stage <stage> [--module <name>[,<name>…]] [--confirm] [--local-env]',
-  '       npm run mdeploy -- --stage <stage> --diff [--module <name>[,<name>…]]',
+  'usage: npm run mdeploy -- --stage <stage> [--confirm] [--local-env]',
+  '       npm run mdeploy -- --stage <stage> --diff',
   '       npm run mdeploy -- --stage <stage> --remove --confirm',
-  '       npm run mdeploy -- --plan',
 ].join('\n')
 
 /** mdeploy's own switches. mstage parses them but never advertises them. */
-const OWN_OPTIONS = { flags: ['local-env', 'diff', 'remove'], values: ['module'] }
+const OWN_OPTIONS = { flags: ['local-env', 'diff', 'remove'] }
 
 export type RunInput = {
   argv: string[]
@@ -58,21 +56,7 @@ export const run = async ({
     return 0
   }
 
-  // Printed rather than executed: a workflow reads this to build its own graph,
-  // and a person reads it to see what a deploy is made of.
-  if (argv[0] === '--plan' || argv[0] === 'plan') {
-    const batches = deployBatches()
-    for (const [index, batch] of batches.entries()) {
-      const targets = batch.flatMap((name) => PLAN[name].components)
-      const needs = [...new Set(batch.flatMap((name) => PLAN[name].needs))]
-      log(
-        `${index + 1}\t${batchName(batch)}\tmodules=${batch.join(',')}\tneeds=${needs.join(',') || '-'}\ttargets=${targets.join(',')}`,
-      )
-    }
-    return 0
-  }
-
-  // mdeploy takes options only. Prefixing a module keeps mstage's parser honest
+  // mdeploy takes options only. The leading word keeps mstage's parser honest
   // about what it is looking at, and is stripped before anything reads it.
   const { options, inner } = parseInvocation(['deploy', ...argv], environment, OWN_OPTIONS)
   if (inner) throw new UsageError(`mdeploy takes no inner command. ${USAGE}`)
@@ -127,28 +111,6 @@ export const run = async ({
   // produced and never asks which cloud answered.
   const target = await targetWith({ config, scope })
 
-  // One module, or the whole stack. Naming a module is what lets a workflow say
-  // which part failed instead of pointing at an hour-long run.
-  // One name or several. Several are deployed in a single apply, which is one
-  // state write — the only way two modules may be deployed at the same time.
-  const named =
-    (options.module as string | undefined)
-      ?.split(',')
-      .map((name) => name.trim())
-      .filter(Boolean) ?? []
-  const unknown = named.filter((name) => !(name in PLAN))
-  if (unknown.length > 0) {
-    throw new UsageError(`Unknown module ${unknown.join(', ')}. Known: ${MODULE_NAMES.join(', ')}`)
-  }
-  const duplicated = named.filter((name, index) => named.indexOf(name) !== index)
-  if (duplicated.length > 0) {
-    throw new UsageError(`${[...new Set(duplicated)].join(', ')} named more than once`)
-  }
-  if (intent === 'remove' && named.length > 0) {
-    throw new UsageError('--remove takes the whole stage; a module left behind is a stage nothing describes')
-  }
-  const targets = named.flatMap((name) => PLAN[name as ModuleName].components)
-
   // Before the store is read, so a declaration no workload could honour stops
   // the command rather than the deploy that spends what it fetched.
   assertAddressesAreNotSpent(config)
@@ -167,5 +129,5 @@ export const run = async ({
   // into a CI log.
   log(`environment from ${stageEnvironment.source}${names.length > 0 ? `: ${names.join(', ')}` : ''}`)
 
-  return target.run({ intent, targets, stageEnvironment: stageEnvironment.values, log })
+  return target.run({ intent, stageEnvironment: stageEnvironment.values, log })
 }

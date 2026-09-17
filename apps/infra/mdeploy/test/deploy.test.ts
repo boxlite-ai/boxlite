@@ -113,21 +113,6 @@ test('a preview does not need the window a rollout does', () => {
   assert.equal(windowFor('remove'), REQUIRED_CREDENTIAL_SECONDS, 'a teardown holds the same lock as a rollout')
 })
 
-test('targeting is refused on the Pulumi path rather than translated', async () => {
-  // `plan.ts` lists SST's logical component names and Pulumi selects on URNs;
-  // the GCP bundle's resources are not even named the same. A mapping invented
-  // at that seam would deploy some other subset and report success.
-  const target = await resolveDeployTarget({
-    config,
-    scope: scope({ home: 'gcp', project: 'boxlite-gcp-dev' }),
-    resolveHomeWith: home('gcp') as any,
-  })
-  await assert.rejects(
-    () => target.run({ targets: ['Vpc'], log: () => {} }),
-    /--module is not supported on a GCP stage/,
-  )
-})
-
 /*
  * The precondition, where it is actually wired.
  *
