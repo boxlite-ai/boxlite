@@ -214,7 +214,7 @@ info = await box.info()
 print(f"Status: {info.state.status}")
 
 metrics = await box.metrics()
-print(f"Memory: {metrics.memory_bytes / (1024**2):.2f} MB")
+print(f"Memory: {(metrics.memory_bytes or 0) / (1024**2):.2f} MB")
 ```
 
 **3. Inspect filesystem:**
@@ -691,7 +691,7 @@ chmod 755 /host/path
 2. **Check actual usage:**
    ```python
    metrics = await box.metrics()
-   print(f"Memory: {metrics.memory_bytes / (1024**2):.2f} MB")
+   print(f"Memory: {(metrics.memory_bytes or 0) / (1024**2):.2f} MB")
    ```
 
 3. **Optimize code:**

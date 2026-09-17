@@ -551,7 +551,7 @@ print(f"Created: {info.created_at}")
 metrics = await box.metrics()
 
 print(f"CPU: {metrics.cpu_percent}%")
-print(f"Memory usage: {metrics.memory_bytes / (1024**2):.2f} MB")
+print(f"Memory usage: {(metrics.memory_bytes or 0) / (1024**2):.2f} MB")
 print(f"Network sent: {metrics.network_bytes_sent}")
 print(f"Network received: {metrics.network_bytes_received}")
 ```
@@ -627,7 +627,7 @@ for info in boxes:
 1. Check resource usage:
    ```python
    metrics = await box.metrics()
-   print(f"Memory: {metrics.memory_bytes / (1024**2):.2f} MB")
+   print(f"Memory: {(metrics.memory_bytes or 0) / (1024**2):.2f} MB")
    print(f"CPU: {metrics.cpu_percent}%")
    ```
 
@@ -718,7 +718,7 @@ boxlite.BoxOptions(
 
 ```python
 metrics = await box.metrics()
-memory_mb = metrics.memory_bytes / (1024**2)
+memory_mb = (metrics.memory_bytes or 0) / (1024**2)
 print(f"Memory: {memory_mb:.2f} MB")
 ```
 
@@ -951,7 +951,7 @@ async with boxlite.SimpleBox(image="python:slim") as box:
 
 ```python
 metrics = await box.metrics()
-if metrics.memory_bytes > 0.8 * (1024**3):  # 80% of 1GB
+if (metrics.memory_bytes or 0) > 0.8 * (1024**3):  # 80% of 1GB
     print("Warning: High memory usage")
     # Consider recreating box or increasing limit
 ```

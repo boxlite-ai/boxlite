@@ -837,7 +837,7 @@ box = await runtime.create(boxlite.BoxOptions(image="alpine"))
 metrics = await box.metrics()
 
 print(f"CPU: {metrics.cpu_percent}%")
-print(f"Memory: {metrics.memory_bytes / (1024**2):.2f} MB")
+print(f"Memory: {(metrics.memory_bytes or 0) / (1024**2):.2f} MB")
 print(f"Network sent: {metrics.network_bytes_sent}")
 print(f"Network received: {metrics.network_bytes_received}")
 ```
@@ -944,7 +944,7 @@ boxlite.BoxOptions(
 
 # Check metrics
 metrics = await box.metrics()
-print(f"Memory usage: {metrics.memory_bytes / (1024**2):.2f} MB")
+print(f"Memory usage: {(metrics.memory_bytes or 0) / (1024**2):.2f} MB")
 print(f"CPU: {metrics.cpu_percent}%")
 ```
 

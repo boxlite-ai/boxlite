@@ -954,7 +954,7 @@ Per-box resource usage metrics.
 metrics = await box.metrics()
 
 print(f"CPU: {metrics.cpu_percent}%")
-print(f"Memory: {metrics.memory_bytes / (1024**2):.2f} MB")
+print(f"Memory: {(metrics.memory_bytes or 0) / (1024**2):.2f} MB")
 ```
 
 ---
