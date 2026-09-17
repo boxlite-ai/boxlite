@@ -434,7 +434,7 @@ pub struct BoxOptions {
     ///
     /// Each secret maps a placeholder string to a real value. When the box
     /// makes an HTTP(S) request to a matching host, placeholders in request
-    /// headers and body are replaced with the actual secret value.
+    /// headers are replaced with the actual secret value.
     ///
     /// The placeholder (e.g., `<BOXLITE_SECRET:openai>`) is visible to the
     /// guest; the real value never enters the VM.
@@ -445,7 +445,7 @@ pub struct BoxOptions {
 /// A secret for MITM proxy injection.
 ///
 /// When the guest sends an HTTP(S) request to one of the listed hosts,
-/// the MITM proxy replaces `placeholder` with `value` in headers and body.
+/// the MITM proxy replaces `placeholder` with `value` in request headers.
 /// The real `value` never enters the guest VM.
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Secret {
