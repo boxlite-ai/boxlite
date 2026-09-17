@@ -49,8 +49,16 @@ service Guest {
 
 // In-memory SSH control; requires successful Guest.Init.
 service Ssh {
+  // After Guest.Init, validate configuration and fully restart SSH, even when
+  // unchanged. Disconnect existing clients and wait for SSH execution and
+  // forwarding cleanup before binding. Invalid configuration preserves the
+  // current service; a bind failure leaves SSH disabled.
   rpc Configure(SshConfigureRequest) returns (SshConfigureResponse);
+  // Return current listener state and public host identity, without secrets.
   rpc Status(SshStatusRequest) returns (SshStatusResponse);
+  // Idempotently stop SSH, disconnect clients, and wait for SSH task cleanup.
+  // Configure and Disable return DeadlineExceeded if draining exceeds ten
+  // seconds; pending cleanup remains tracked for the next Configure or Disable.
   rpc Disable(SshDisableRequest) returns (SshDisableResponse);
 }
 
@@ -94,9 +102,6 @@ message GuestInitRequest {
 
   // Network configuration (optional)
   NetworkInit network = 2;
-
-  reserved 3;
-
 }
 
 message GuestInitResponse {
@@ -106,7 +111,7 @@ message GuestInitResponse {
   }
 }
 
-message GuestInitSuccess { reserved 1; }
+message GuestInitSuccess {}
 
 message GuestInitError {
   string reason = 1;
@@ -218,17 +223,28 @@ message ThawResponse {
 // SSH runtime configuration
 // ============================================================================
 
-message SshConfigureRequest { SshConfig config = 1; }
+message SshConfigureRequest {
+  // Do not reinterpret legacy string fields as a nested configuration.
+  reserved 1, 2, 3;
+  reserved "listen_address", "ca_public_key", "principal";
+
+  SshConfig config = 4;
+}
 message SshConfigureResponse { SshStatus status = 1; }
 message SshStatusRequest {}
 message SshStatusResponse { SshStatus status = 1; }
 message SshDisableRequest {}
 message SshDisableResponse { SshStatus status = 1; }
 message SshStatus {
+  // Whether the SSH listener is running.
   bool enabled = 1;
+  // Actual bound address, including the selected port; empty when disabled.
   string listen_address = 2;
+  // Successful listener starts in this VM; initially zero, retained on Disable.
   uint64 generation = 3;
+  // SHA-256 fingerprint of the host public key; empty when disabled.
   string host_key_fingerprint = 4;
+  // OpenSSH host public key without a comment; empty when disabled.
   string host_public_key = 5;
 }
 

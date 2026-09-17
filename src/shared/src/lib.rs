@@ -77,6 +77,47 @@ impl std::fmt::Debug for generated::SshConfig {
 
 #[cfg(test)]
 mod tests {
+    // Legacy string fields: listen_address (1), ca_public_key (2), principal (3).
+    const LEGACY_SSH_CONFIGURATION: &[u8] = b"\x0a\x0e127.0.0.1:2222\x12\x08test-key\x1a\x04root";
+
+    #[test]
+    fn ssh_configuration_legacy_fields_decode_without_config() {
+        use prost::Message;
+        let decoded = super::SshConfigureRequest::decode(LEGACY_SSH_CONFIGURATION)
+            .expect("legacy string fields must be ignored, not decoded as SshConfig");
+        assert!(decoded.config.is_none());
+    }
+
+    #[test]
+    fn ssh_configuration_uses_wire_tag_four() {
+        use prost::Message;
+        let request = super::SshConfigureRequest {
+            config: Some(super::SshConfig::default()),
+        };
+        assert_eq!(request.encode_to_vec(), [0x22, 0x00]);
+    }
+
+    #[test]
+    fn ssh_configuration_mixed_legacy_fields_preserve_new_config() {
+        use prost::Message;
+        // Field 4 contains SshConfig.listen_address (field 1).
+        let current = b"\x22\x10\x0a\x0e127.0.0.1:2222";
+        for wire in [
+            [LEGACY_SSH_CONFIGURATION, current].concat(),
+            [current.as_slice(), LEGACY_SSH_CONFIGURATION].concat(),
+        ] {
+            let decoded = super::SshConfigureRequest::decode(wire.as_slice())
+                .expect("new configuration must decode alongside legacy fields");
+            assert_eq!(
+                decoded.config,
+                Some(super::SshConfig {
+                    listen_address: "127.0.0.1:2222".into(),
+                    ..Default::default()
+                })
+            );
+        }
+    }
+
     #[test]
     fn ssh_configuration_wire_roundtrip_redacts_private_key() {
         use prost::Message;

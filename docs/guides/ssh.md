@@ -8,6 +8,13 @@ network forwarding separately when needed.
 `boxlite.v1.Ssh` exposes `Configure`, `Status`, and `Disable`. The complete schema
 is in `src/shared/proto/boxlite/v1/service.proto`.
 
+Callers must regenerate their protocol bindings and send `SshConfigureRequest.config`
+using field number 4. The legacy string fields `listen_address`, `ca_public_key`,
+and `principal` (field numbers 1–3) are reserved and ignored when decoding. After
+Guest.Init succeeds, a legacy-only request returns `InvalidArgument` because
+`config` is missing, without changing the current SSH service. There is no legacy
+request conversion or protocol version negotiation.
+
 ```rust,ignore
 use boxlite_shared::{SshClient, SshConfig, SshConfigureRequest, SshStatusRequest,
     SshDisableRequest};
