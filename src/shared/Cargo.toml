@@ -16,6 +16,7 @@ tonic = "0.12"
 tokio = { version = "1", features = ["io-util", "rt", "sync"] }
 tokio-stream = "0.1"
 futures = "0.3"
+ssh-key = { version = "=0.7.0-rc.11", features = ["crypto"] }
 tar = "0.4"
 
 [build-dependencies]

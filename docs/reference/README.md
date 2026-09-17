@@ -13,6 +13,8 @@ Complete API documentation for each SDK:
 | **Rust** | [Rust API Reference](rust/README.md) | Core runtime, stream APIs, security options |
 | **C** | [C API Reference](c/README.md) | FFI bindings, typed options, callback streaming |
 
+The local Rust runtime also supports [SSH configuration and forwarding](../guides/ssh.md).
+
 ## CLI Reference
 
 | Surface | Documentation | Description |

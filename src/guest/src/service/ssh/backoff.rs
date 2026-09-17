@@ -1,4 +1,4 @@
-//! Bounded retry delay for transient TCP accept failures.
+//! Bounded retry delay for transient listener accept failures.
 
 use std::time::Duration;
 

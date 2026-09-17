@@ -569,6 +569,8 @@ dependencies = [
  "regex",
  "reqwest",
  "rusqlite",
+ "russh",
+ "russh-sftp",
  "rustls",
  "seccompiler",
  "serde",
@@ -683,6 +685,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tokio-vsock",
  "tonic",
  "tracing",
@@ -726,6 +729,7 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
+ "ssh-key",
  "tar",
  "tempfile",
  "thiserror 2.0.18",
@@ -3492,6 +3496,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset 0.9.1",
 ]
 
 [[package]]

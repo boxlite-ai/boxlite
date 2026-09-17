@@ -1390,6 +1390,32 @@ mod tests {
         ApiClient::new(&opts).expect("ApiClient::new")
     }
 
+    #[tokio::test]
+    async fn ssh_rejects_rest_before_network_io() {
+        let backend = Arc::new(rest_box_for(1, "01HJK4TNRPQSXYZ8WM6NCVT9R1"));
+        let litebox = crate::LiteBox::new(backend.clone(), backend.clone(), backend);
+        let ssh = litebox.ssh();
+        assert!(matches!(
+            ssh.config().await,
+            Err(BoxliteError::Unsupported(_))
+        ));
+        assert!(matches!(
+            ssh.status().await,
+            Err(BoxliteError::Unsupported(_))
+        ));
+        let error = ssh
+            .configure(crate::SshConfig {
+                enabled: true,
+                tcp_listen_address: Some("127.0.0.1:2222".parse().unwrap()),
+                host_private_key: None,
+                auth: crate::SshAuth::NoAuth,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local Rust runtime"));
+    }
+
     /// A `RestBox` for `box_id`, pointed at the in-process server. The
     /// `BoxInfo` comes out of the production wire decoder rather than a
     /// hand-rolled literal.

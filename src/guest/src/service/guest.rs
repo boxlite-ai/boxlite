@@ -234,7 +234,7 @@ mod tests {
             ExitSlot::settled_for_test(ExitStatus::Code(7)),
         );
 
-        server.ssh_manager.close_connection_budget_for_test();
+        let _finish_cleanup = server.ssh_manager.stall_connection_cleanup_for_test().await;
         let status = server
             .shutdown(Request::new(ShutdownRequest {}))
             .await

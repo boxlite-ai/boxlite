@@ -6,6 +6,8 @@
 
 - [AutoStop、AutoResume 与 AutoDelete](./guides/auto-stop-resume.md)
 
+- [SSH access from the local Rust runtime](./guides/ssh.md)
+
 ## Reference
 
 ## Architecture

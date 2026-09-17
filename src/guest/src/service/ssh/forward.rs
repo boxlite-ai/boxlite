@@ -1,5 +1,6 @@
 //! TCP forwarding owned by one authenticated SSH connection.
 
+use super::ConnectionTasks;
 use crate::service::ssh::limits::{
     FORWARD_CONNECT_TIMEOUT, MAX_FORWARD_CONNECTIONS, MAX_FORWARD_HOST_BYTES,
     MAX_REMOTE_FORWARD_LISTENERS,
@@ -76,15 +77,19 @@ impl ReverseListenerRegistry {
         true
     }
 
-    fn cancel_all(&self) {
+    #[cfg(test)]
+    fn cancel_all(&self) -> Vec<oneshot::Receiver<()>> {
         let entries = self
             .lock()
             .drain()
             .map(|(_, entry)| entry)
             .collect::<Vec<_>>();
+        let mut stopped = Vec::with_capacity(entries.len());
         for entry in entries {
             let _ = entry.cancel.send(());
+            stopped.push(entry.stopped);
         }
+        stopped
     }
 
     fn len(&self) -> usize {
@@ -137,13 +142,15 @@ impl Drop for ReverseListenerRegistration {
 pub(crate) struct ForwardingManager {
     connection_permits: Arc<Semaphore>,
     reverse_listeners: ReverseListenerRegistry,
+    tasks: ConnectionTasks,
 }
 
 impl ForwardingManager {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(tasks: ConnectionTasks) -> Self {
         Self {
             connection_permits: Arc::new(Semaphore::new(MAX_FORWARD_CONNECTIONS)),
             reverse_listeners: ReverseListenerRegistry::default(),
+            tasks,
         }
     }
 
@@ -185,7 +192,7 @@ impl ForwardingManager {
             };
 
         reply.accept().await;
-        spawn_relay(channel, stream, permit);
+        spawn_relay(channel, stream, permit, self.tasks.clone());
     }
 
     /// Bind a loopback-only reverse forwarding listener.
@@ -235,6 +242,7 @@ impl ForwardingManager {
             session_handle,
             self.connection_permits.clone(),
             registration,
+            self.tasks.clone(),
         );
         true
     }
@@ -248,12 +256,6 @@ impl ForwardingManager {
         };
         let key = ForwardKey { address, port };
         self.reverse_listeners.cancel(&key).await
-    }
-}
-
-impl Drop for ForwardingManager {
-    fn drop(&mut self) {
-        self.reverse_listeners.cancel_all();
     }
 }
 
@@ -280,15 +282,21 @@ fn loopback_bind_address(requested: &str) -> Option<String> {
 fn spawn_relay(
     channel: Channel<Msg>,
     mut stream: TcpStream,
-    _permit: tokio::sync::OwnedSemaphorePermit,
+    permit: tokio::sync::OwnedSemaphorePermit,
+    tasks: ConnectionTasks,
 ) {
-    tokio::spawn(async move {
+    tasks.clone().spawn(async move {
+        let _permit = permit;
         let mut channel = channel.into_stream();
-        if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut stream).await {
-            debug!(%error, "SSH TCP relay ended with an error");
+        tokio::select! {
+            biased;
+            _ = tasks.cancelled() => {},
+            result = tokio::io::copy_bidirectional(&mut channel, &mut stream) => {
+                if let Err(error) = result {
+                    debug!(%error, "SSH TCP relay ended with an error");
+                }
+            }
         }
-        let _ = tokio::io::AsyncWriteExt::shutdown(&mut channel).await;
-        let _ = tokio::io::AsyncWriteExt::shutdown(&mut stream).await;
     });
 }
 
@@ -299,12 +307,14 @@ fn spawn_reverse_listener(
     session_handle: SessionHandle,
     permits: Arc<Semaphore>,
     mut registration: ReverseListenerRegistration,
+    tasks: ConnectionTasks,
 ) {
-    tokio::spawn(async move {
+    tasks.clone().spawn(async move {
         let mut pending_opens = JoinSet::new();
         loop {
             tokio::select! {
                 biased;
+                _ = tasks.cancelled() => break,
                 _ = registration.cancelled() => break,
                 completed = pending_opens.join_next(), if !pending_opens.is_empty() => {
                     if let Some(Err(error)) = completed {
@@ -326,6 +336,7 @@ fn spawn_reverse_listener(
 
                     let handle = session_handle.clone();
                     let address = connected_address.clone();
+                    let relay_tasks = tasks.clone();
                     pending_opens.spawn(async move {
                         let channel = tokio::time::timeout(
                             FORWARD_CONNECT_TIMEOUT,
@@ -338,7 +349,7 @@ fn spawn_reverse_listener(
                         )
                         .await;
                         match channel {
-                            Ok(Ok(channel)) => spawn_relay(channel, stream, permit),
+                            Ok(Ok(channel)) => spawn_relay(channel, stream, permit, relay_tasks),
                             Ok(Err(error)) => {
                                 debug!(%error, "SSH client rejected reverse TCP channel")
                             }
@@ -375,6 +386,105 @@ async fn finish_reverse_listener(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn relay_retains_its_connection_permit_until_the_task_exits() {
+        let (channel, client, client_channel, server) = super::super::tests::relay_channel().await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (_peer, _) = listener.accept().await.unwrap();
+        let permits = Arc::new(Semaphore::new(1));
+        let permit = permits.clone().acquire_owned().await.unwrap();
+        let shutdown = CancellationToken::new();
+        let tasks = super::super::ConnectionTasks::new(&shutdown);
+        spawn_relay(channel, stream, permit, tasks.clone());
+        assert_eq!(
+            permits.available_permits(),
+            0,
+            "a running relay must retain its forwarding permit"
+        );
+        shutdown.cancel();
+        tasks.finish().await;
+        let _permit = tokio::time::timeout(std::time::Duration::from_secs(1), permits.acquire())
+            .await
+            .unwrap()
+            .unwrap();
+        drop(client_channel);
+        client
+            .disconnect(russh::Disconnect::ByApplication, "test complete", "")
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), server)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn listener_cancel_preserves_relay_and_connection_stop_finishes_without_manager_drop() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (channel, client, client_channel, server) = super::super::tests::relay_channel().await;
+        let (tasks, _) = ConnectionTasks::for_test();
+        let mut manager = ForwardingManager::new(tasks.clone());
+        let mut port = 0;
+        assert!(
+            manager
+                .listen_tcpip("127.0.0.1", &mut port, server.handle())
+                .await
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        let permit = manager
+            .connection_permits
+            .clone()
+            .try_acquire_owned()
+            .unwrap();
+        spawn_relay(channel, stream, permit, tasks.clone());
+
+        assert!(manager.cancel_tcpip("127.0.0.1", port).await);
+        assert!(!tasks.is_cancelled());
+        let rebound = TcpListener::bind(("127.0.0.1", port as u16)).await.unwrap();
+        let mut client_stream = client_channel.into_stream();
+        client_stream.write_all(b"still open").await.unwrap();
+        let mut payload = [0; 10];
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            peer.read_exact(&mut payload),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(&payload, b"still open");
+        drop(rebound);
+        assert!(
+            manager
+                .listen_tcpip("127.0.0.1", &mut port, server.handle())
+                .await
+        );
+        tasks.stop();
+        tokio::time::timeout(std::time::Duration::from_secs(1), tasks.finish())
+            .await
+            .unwrap();
+        assert_eq!(manager.reverse_listeners.len(), 0);
+        assert_eq!(
+            manager.connection_permits.available_permits(),
+            MAX_FORWARD_CONNECTIONS
+        );
+        assert!(TcpListener::bind(("127.0.0.1", port as u16)).await.is_ok());
+        drop(client_stream);
+        client
+            .disconnect(russh::Disconnect::ByApplication, "test complete", "")
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), server)
+            .await
+            .unwrap();
+    }
 
     #[test]
     fn direct_targets_are_bounded_and_require_a_real_port() {

@@ -26,6 +26,7 @@ This directory contains integration tests for the BoxLite runtime. Tests run con
 | `sigstop_quiesce.rs` | Yes | SIGSTOP-based quiesce for snapshot operations |
 | `rest_integration.rs` | Yes | REST API integration tests |
 | `timing_profile.rs` | Yes | Boot latency profiling |
+| `ssh.rs` | Yes | SQLite configuration, fixed Unix SSH, optional TCP forwarding, guest authentication, limits, and lifecycle |
 | `network.rs` | No | Network configuration tests |
 | `runtime.rs` | No | Runtime initialization and configuration tests |
 | `shutdown.rs` | No | Shutdown behavior (isolated home, no VM) |
@@ -43,20 +44,25 @@ This directory contains integration tests for the BoxLite runtime. Tests run con
 
 ## Running Tests
 
-### With nextest (recommended)
+### Focused Rust suites
+
+Use the make targets, which select nextest when installed and prepare the runtime.
 
 ```bash
 # VM integration tests (uses vm profile with generous timeouts)
-cargo nextest run -p boxlite --tests --profile vm
+make test:integration:rust
 
 # Non-VM integration tests only
-cargo nextest run -p boxlite --test runtime --test shutdown --test network
+make test:integration:rust NEXTEST_FILTER_EXPR='binary(runtime) | binary(shutdown) | binary(network)'
 
 # Specific test file
-cargo nextest run -p boxlite --test lifecycle --profile vm
+make test:integration:rust RUST_TEST=lifecycle
 
 # Single test
-cargo nextest run -p boxlite --test execution_shutdown -E 'test(test_wait_behavior_on_box_stop)' --profile vm
+make test:integration:rust RUST_TEST=execution_shutdown FILTER=test_wait_behavior_on_box_stop
+
+# Complete SSH suite (the detach parent invokes its ignored subprocess helper)
+make test:integration:rust RUST_TEST=ssh
 ```
 
 ### With Makefile

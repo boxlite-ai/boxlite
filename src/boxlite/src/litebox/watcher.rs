@@ -147,7 +147,7 @@ impl BoxWatcher {
                 // down rather than race it to the same fields.
                 _ = shutdown.cancelled() => return,
                 _ = shim.wait_for_exit() => {
-                    self.on_shim_exit();
+                    self.on_shim_exit().await;
                     return;
                 }
                 // Disabled (never fires) when there is no probe, degenerating to a
@@ -159,7 +159,7 @@ impl BoxWatcher {
                     tokio::select! {
                         _ = shutdown.cancelled() => return,
                         _ = shim.wait_for_exit() => {
-                            self.on_shim_exit();
+                            self.on_shim_exit().await;
                             return;
                         }
                         flow = self.on_health_tick() => {
@@ -177,12 +177,18 @@ impl BoxWatcher {
     /// The shim exited on its own: record `Stopped` + the exit code, and (for a
     /// health-checked box) flip the last health snapshot to Unhealthy — the whole
     /// job the old exit watcher did, now the single writer of the transition.
-    fn on_shim_exit(&mut self) {
+    async fn on_shim_exit(&mut self) {
         // The runtime is gone, so it has already torn everything down (its Drop
         // runs shutdown_sync) and there is nobody left to report to.
         let Some(runtime) = self.runtime.upgrade() else {
             return;
         };
+
+        // Keep publication and deletion in one lifecycle operation: invalidating
+        // the cache must not let a fresh handle restart before auto-removal.
+        let coordinator = runtime.ssh_locks.get(&self.box_id);
+        let _guard = coordinator.updates.lock().await;
+        coordinator.drain_io().await;
 
         let stopped = {
             let mut state = self.state.write();
@@ -236,7 +242,7 @@ impl BoxWatcher {
         // completion is never cleaned up, because nobody called stop() to do it.
         runtime.invalidate_box_impl(&self.box_id, self.box_name.as_deref());
         if self.removes_on_exit
-            && let Err(e) = runtime.remove_box(&self.box_id, false)
+            && let Err(e) = runtime.remove_box_locked(&self.box_id, false).await
         {
             tracing::warn!(
                 box_id = %self.box_id,
@@ -328,5 +334,83 @@ async fn tick(interval: Option<Duration>) {
     match interval {
         Some(interval) => tokio::time::sleep(interval).await,
         None => std::future::pending().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{BoxOptions, BoxStatus, BoxliteOptions, RootfsSpec};
+
+    #[tokio::test]
+    async fn ssh_watcher_remove_waits_before_publishing_stopped() {
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_owned(),
+            image_registries: vec![],
+        })
+        .unwrap();
+        let litebox = runtime
+            .create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    auto_delete: Some(1),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        litebox
+            .ssh()
+            .configure(crate::SshConfig {
+                enabled: false,
+                tcp_listen_address: Some("127.0.0.1:2222".parse().unwrap()),
+                host_private_key: None,
+                auth: crate::SshAuth::NoAuth,
+            })
+            .await
+            .unwrap();
+        let bx = litebox
+            .box_backend
+            .clone()
+            .as_any_arc()
+            .downcast::<BoxImpl>()
+            .unwrap();
+        assert!(
+            runtime
+                .ssh_config_store
+                .load(bx.id().as_str())
+                .unwrap()
+                .is_some()
+        );
+        bx.state.write().status = BoxStatus::Running;
+        runtime
+            .box_manager
+            .save_box(bx.id(), &bx.state.read())
+            .unwrap();
+        let coordinator = runtime.ssh_locks.get(bx.id());
+        let guard = coordinator.updates.lock().await;
+        let mut watcher = BoxWatcher::new(&bx, 0, None);
+        let mut exit = Box::pin(watcher.on_shim_exit());
+        let pending = futures::poll!(&mut exit).is_pending();
+        let status_while_locked = bx.state.read().status;
+        let cached_while_locked = runtime
+            .get(bx.id().as_str())
+            .await
+            .unwrap()
+            .map(|current| Arc::ptr_eq(&current.box_backend, &litebox.box_backend));
+        drop(guard);
+        if pending {
+            tokio::time::timeout(Duration::from_secs(5), exit)
+                .await
+                .expect("watcher auto-remove must not acquire the same lock twice");
+        }
+        assert!(pending, "watcher removal must wait for SSH coordination");
+        assert_eq!(status_while_locked, BoxStatus::Running);
+        assert_eq!(cached_while_locked, Some(true));
+        assert!(runtime.box_manager.box_by_id(bx.id()).unwrap().is_none());
+        assert!(!bx.config.box_home.exists());
+        assert!(bx.shutdown_token.is_cancelled());
     }
 }

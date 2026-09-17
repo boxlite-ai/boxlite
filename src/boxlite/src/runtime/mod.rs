@@ -8,6 +8,7 @@ pub mod layout;
 pub(crate) mod lock;
 pub mod options;
 pub(crate) mod signal_handler;
+pub(crate) mod ssh;
 pub mod types;
 pub mod volumes;
 
