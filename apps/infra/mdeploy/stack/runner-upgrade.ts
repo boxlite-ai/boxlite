@@ -281,17 +281,13 @@ probe_identity() {
 `
 
 /**
- * Steps 1 and 2, parameterised by what "nothing to do" is called.
+ * Steps 1 and 2: the two checks that mean there is nothing to do, ended however
+ * the caller grades that.
  *
- * A shell command reads 0; an OS policy's `validate` reads 100 — and reads it as
- * *in the desired state*, which is what keeps `enforce` from running against a
- * host that is still bootstrapping or already serving the target.
- */
-/**
- * The two checks that mean there is nothing to do, in the caller's own grading.
- *
- * Three gradings share them: a payload exits 0, an OS policy's `validate` exits
- * 100, and the binary half of a combined payload returns so the unit
+ * Three gradings share them, and each reads "nothing to do" as *in the desired
+ * state*: a payload exits 0, an OS policy's `validate` exits 100 — which is what
+ * keeps `enforce` off a host that is still bootstrapping or already serving the
+ * target — and the binary half of a combined payload returns, so the unit
  * environment after it still runs. Passing the statement rather than a code is
  * what keeps one copy of the checks.
  */
@@ -491,11 +487,14 @@ rewrite_unit_environment() {
   next="$UNIT_ENV_FILE.next"
   for line in "\${UNIT_ENV_EXPECTED[@]}"; do
     key="\${line%%=*}"
-    if ! awk -v key="$key" -v line="$line" '
+    # In a subshell with a tight umask: this file holds the whole environment,
+    # token included, for as long as the rewrite takes — at the default umask
+    # that is a world-readable copy of it, however briefly.
+    if ! (umask 077; awk -v key="$key" -v line="$line" '
       $0 ~ "^" key "=" { print line; found = 1; next }
       { print }
       END { if (!found) print line }
-    ' "$UNIT_ENV_FILE" > "$next"; then
+    ' "$UNIT_ENV_FILE" > "$next"); then
       rm -f "$next"
       return 1
     fi

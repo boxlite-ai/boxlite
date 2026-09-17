@@ -345,6 +345,7 @@ const converge = ({ contents, work }: { contents: string; work: string }) => {
     mode: statSync(envFile).mode & 0o777,
     leftovers: readdirSync(work).filter((name) => name.startsWith('runner.env.')),
     restarts: existsSync(restarts) ? readFileSync(restarts, 'utf8').trim().split('\n').length : 0,
+    enforce,
   }
 }
 
@@ -368,6 +369,10 @@ test('a host pointed at a name this stage no longer serves is rewritten once', (
    */
   assert.deepEqual(first.leftovers, [], 'a file carrying the token was left beside it')
   assert.equal(first.mode, 0o640, 'the rewrite widened the mode the boot script set')
+  // The temporary it writes through carries the same secret, so it is created
+  // unreadable rather than at the umask's default — asserted through the shell
+  // that makes it, because a `umask` in the wrong subshell reads as correct.
+  assert.match(first.enforce, /\(umask 077; awk/, 'the temporary is written at the default umask')
   assert.equal(first.restarts, 1, 'the unit must be restarted exactly once')
 
   // And again, against what the first run produced: a converged fleet enforces
