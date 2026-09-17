@@ -38,6 +38,14 @@ cost paid on every table change. Search belongs to the table that owns the data;
 actions belong to the row. If an action is hard to reach, fix the page.
 
 
+## Two histories of the same thing go on tabs, not on top of each other
+
+Invoices and credit activity both answer "where did my money go", so stacking
+them made the Wallet tab a long scroll in which the second list was easy to miss
+entirely. They are sibling tabs now, and each is paged rather than rendered
+whole — an account with hundreds of documents must not decide how tall this page
+is.
+
 ## A choice says what it does, and shows which one is picked
 
 The quickstart offers two paths, so each card names its outcome ("Build an app

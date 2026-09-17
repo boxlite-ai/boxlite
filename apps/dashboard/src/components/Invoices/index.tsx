@@ -81,9 +81,15 @@ export function InvoicesTable({ data, loading }: InvoicesTableProps) {
   }
 
   return (
-    <div>
+    // A page holds 25 documents, which ran to roughly 1100px — the section
+    // pushed everything under it off the screen and the pager with it. Bounded
+    // here instead, with the header kept inside the scroller and stuck to its
+    // top: a header outside would drift out of alignment by the scrollbar's
+    // width the moment one appeared. `max-h` rather than a fixed height so an
+    // account with three invoices does not get a box of empty rows.
+    <div className="scrollbar-elevated max-h-[420px] overflow-y-auto">
       <div
-        className={`${ROW} border-b border-border pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
+        className={`${ROW} sticky top-0 z-10 border-b border-border bg-background pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
       >
         <span data-invoice-header>Date</span>
         <span data-invoice-header>Type</span>
