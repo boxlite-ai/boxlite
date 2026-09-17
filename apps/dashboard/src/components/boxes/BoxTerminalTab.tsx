@@ -6,7 +6,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { RoutePath } from '@/enums/RoutePath'
 import { useStartBoxMutation } from '@/hooks/mutations/useStartBoxMutation'
 import { useTerminalSessionQuery } from '@/hooks/queries/useTerminalSessionQuery'
@@ -71,13 +70,7 @@ export function BoxTerminalTab({ box, refreshSignal = 0 }: { box: Box; refreshSi
                 <TerminalSquare className="size-12 text-muted-foreground" />
               </EmptyMedia>
               <EmptyTitle>Box is not running</EmptyTitle>
-              <EmptyDescription>
-                Start the box to access the terminal.{' '}
-                <a href={`${BOXLITE_DOCS_URL}/en/web-terminal`} target="_blank" rel="noopener noreferrer">
-                  Learn more
-                </a>
-                .
-              </EmptyDescription>
+              <EmptyDescription>Start the box to access the terminal.</EmptyDescription>
             </EmptyHeader>
             {writePermitted && (
               <Button onClick={handleStart} disabled={startMutation.isPending}>
@@ -110,17 +103,7 @@ export function BoxTerminalTab({ box, refreshSignal = 0 }: { box: Box; refreshSi
             style={{ animation: 'blink 1.1s steps(1) infinite' }}
           />
         </button>
-        <p className="mt-3 text-meta text-muted-foreground/70">
-          opens an interactive shell inside the box ·{' '}
-          <a
-            href={`${BOXLITE_DOCS_URL}/en/web-terminal`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2 hover:text-foreground"
-          >
-            about the terminal
-          </a>
-        </p>
+        <p className="mt-3 text-meta text-muted-foreground/70">opens an interactive shell inside the box</p>
       </div>
     )
   }

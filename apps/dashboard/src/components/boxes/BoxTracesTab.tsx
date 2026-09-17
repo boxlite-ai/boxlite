@@ -14,7 +14,6 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { CopyButton } from '@/components/CopyButton'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { ChevronLeft, ChevronRight, RefreshCw, Activity, ChevronDown } from '@/components/ui/icon'
 import { format, subHours } from 'date-fns'
 import { TraceSummary, TraceSpan } from '@boxlite-ai/api-client'
@@ -159,13 +158,7 @@ function TracesEmptyState() {
           <Activity className="size-4" />
         </EmptyMedia>
         <EmptyTitle>No traces found</EmptyTitle>
-        <EmptyDescription>
-          Try adjusting your time range.{' '}
-          <a href={`${BOXLITE_DOCS_URL}/en/experimental/otel-collection`} target="_blank" rel="noopener noreferrer">
-            Learn more about observability
-          </a>
-          .
-        </EmptyDescription>
+        <EmptyDescription>Try adjusting your time range.</EmptyDescription>
       </EmptyHeader>
     </Empty>
   )

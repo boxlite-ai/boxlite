@@ -13,7 +13,6 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Legend } from 'recharts'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { RefreshCw, BarChart3 } from '@/components/ui/icon'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { format, subHours } from 'date-fns'
@@ -221,13 +220,7 @@ function MetricsEmptyState() {
           <BarChart3 className="size-4" />
         </EmptyMedia>
         <EmptyTitle>No metrics available</EmptyTitle>
-        <EmptyDescription>
-          Metrics may take a moment to appear after the box starts.{' '}
-          <a href={`${BOXLITE_DOCS_URL}/en/experimental/otel-collection`} target="_blank" rel="noopener noreferrer">
-            Learn more about observability
-          </a>
-          .
-        </EmptyDescription>
+        <EmptyDescription>Metrics may take a moment to appear after the box starts.</EmptyDescription>
       </EmptyHeader>
     </Empty>
   )

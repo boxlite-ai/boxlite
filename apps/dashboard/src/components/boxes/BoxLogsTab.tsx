@@ -13,7 +13,6 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { LogsQueryParams, useBoxLogs } from '@/hooks/useBoxLogs'
 import { cn } from '@/lib/utils'
 import { LogEntry } from '@boxlite-ai/api-client'
@@ -89,13 +88,7 @@ function LogsEmptyState() {
           <FileText className="size-4" />
         </EmptyMedia>
         <EmptyTitle>No logs found</EmptyTitle>
-        <EmptyDescription>
-          Try adjusting your time range or filters.{' '}
-          <a href={`${BOXLITE_DOCS_URL}/en/experimental/otel-collection`} target="_blank" rel="noopener noreferrer">
-            Learn more about observability
-          </a>
-          .
-        </EmptyDescription>
+        <EmptyDescription>Try adjusting your time range or filters.</EmptyDescription>
       </EmptyHeader>
     </Empty>
   )
