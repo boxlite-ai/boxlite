@@ -134,6 +134,17 @@ export const gcpClusterProvider =
         masterIpv4CidrBlock: MASTER_CIDR,
       },
       workloadIdentityConfig: { workloadPool: `${project}.svc.id.goog` },
+      /*
+       * Off, and named rather than dropped.
+       *
+       * The add-on installed a CSI driver for one reader, the proxy's secret
+       * volume, and that volume is gone — the stack writes the Kubernetes
+       * Secret itself. Deleting the property rather than setting it turned the
+       * diff into `-secretManagerConfig`, and the provider then sent a cluster
+       * update naming no field at all: `googleapi: Error 400: Must specify a
+       * field to update`. An update has to ask for something.
+       */
+      secretManagerConfig: { enabled: false },
       loggingConfig: { enableComponents: ['SYSTEM_COMPONENTS', 'WORKLOADS'] },
       monitoringConfig: { enableComponents: ['SYSTEM_COMPONENTS'] },
     })

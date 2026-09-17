@@ -1056,7 +1056,10 @@ test('the cluster enables Workload Identity and installs no driver nothing mount
    */
   const source = sourceOf('cluster')
   assert.match(source, /workloadIdentityConfig: \{ workloadPool: `\$\{project\}\.svc\.id\.goog` \}/)
-  assert.equal(/secretManagerConfig/.test(source), false, 'no CSI driver without a mount to serve')
+  // Named, not deleted: a removed property left the provider with nothing to
+  // send, and GKE answered `Error 400: Must specify a field to update` on the
+  // apply that followed the add-on's removal.
+  assert.match(source, /secretManagerConfig: \{ enabled: false \}/, 'no CSI driver without a mount to serve')
   // The metadata server is Autopilot's own default; what still has to be said
   // is which identity its nodes run as, or they fall back to the project's
   // default Compute account.
