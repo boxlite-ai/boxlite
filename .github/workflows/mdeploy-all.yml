@@ -181,7 +181,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
-          staged="$(npm run --silent runner:build -- --stage "${{ inputs.auto_promote_from }}" --check | sed -n 's/^staged=//p')"
+          staged="$(npm run --silent runner:build -- --stage "${{ inputs.auto_promote_from }}" --check --tag "${{ needs.ref.outputs.sha }}" | sed -n 's/^staged=//p')"
           if [ "$staged" = 'complete' ]; then
             echo 'held=yes' >> "$GITHUB_OUTPUT"
           else
@@ -263,8 +263,11 @@ jobs:
           case "$COMPONENTS" in
             *runner*)
               # `--check` reads the same answer the build itself would, without
-              # the checkout and the compile behind it.
-              staged="$(npm run --silent runner:build -- --stage "$STAGE" --check | sed -n 's/^staged=//p')"
+              # the checkout and the compile behind it. `--tag "$SHA"` for the
+              # same reason `mbuild verify` takes one: this job checks out the
+              # branch tip and the deploy installs the commit `resolve` named,
+              # so asking about HEAD answers about the wrong one.
+              staged="$(npm run --silent runner:build -- --stage "$STAGE" --check --tag "$SHA" | sed -n 's/^staged=//p')"
               if [ "$staged" = 'complete' ]; then
                 echo "$STAGE already holds a runner binary for $SHA"
               elif [ "$SOURCE_RUNNER" = 'yes' ]; then

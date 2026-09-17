@@ -61,7 +61,7 @@ export class RunnerBuildError extends Error {
 
 const USAGE = [
   'usage: npm run runner:build -- --stage <stage>',
-  '       npm run runner:build -- --stage <stage> --check',
+  '       npm run runner:build -- --stage <stage> --check [--tag <commit>]',
   '',
   'Builds a runner from this checkout and stages it for its commit, so a deploy',
   'can install an unreleased change. The checkout must be clean.',
@@ -70,6 +70,11 @@ const USAGE = [
   '`staged=complete|absent` and `address=<prefix>` on stdout, for a caller that',
   'has to decide whether to spend a build. It reaches the same bucket, so an',
   'unreachable one is still a failure rather than an "absent".',
+  '',
+  '--tag asks about a commit other than this checkout\'s, the way `mbuild verify',
+  '--tag` does. A caller that resolved which commit it deploys must pass it, or',
+  'the answer is about whatever happens to be checked out. Reading only, so it',
+  'is refused without --check: a build stages what it compiled.',
 ].join('\n')
 
 const COMMIT = /^[0-9a-f]{40}$/
@@ -421,7 +426,10 @@ export const buildRunner = async ({
     return 0
   }
 
-  const { options, inner } = parseInvocation(['build', ...argv], environment, { flags: ['check'] })
+  const { options, inner } = parseInvocation(['build', ...argv], environment, {
+    flags: ['check'],
+    values: ['tag'],
+  })
   if (inner) throw new RunnerBuildError(`runner:build takes no inner command.\n${USAGE}`)
 
   const config = loadConfig({ cwd, environment })
@@ -438,9 +446,32 @@ export const buildRunner = async ({
 
   const repository = checkoutRoot({ configuration: deployRoot({ cwd, environment }), run })
   const checking = options.check === true
-  const { ref, version } = checking
-    ? readCheckout({ root: repository, run })
-    : inspectCheckout({ root: repository, run })
+  /*
+   * Which commit is being asked about.
+   *
+   * The checkout's HEAD only by default, and that default is a trap for a
+   * caller that resolved a commit of its own: `mdeploy-all`'s plan job checks
+   * out the branch tip and deploys the ref its `resolve` job produced, so the
+   * two differ whenever main has moved. Asked about HEAD it answered `absent`
+   * for a binary the stage was holding and scheduled a build that the build
+   * job — which does check out the resolved commit — finished in 69 seconds
+   * having staged nothing.
+   *
+   * The version still comes from this checkout, so a release bump between the
+   * two commits reads as `absent`. That is the safe direction: a spurious
+   * build stages nothing, while a spurious skip deploys hosts to a binary that
+   * is not there.
+   */
+  const asked = options.tag as string | undefined
+  if (asked !== undefined && !checking) {
+    throw new RunnerBuildError(`--tag asks about a commit; a build stages the one it compiled.\n${USAGE}`)
+  }
+  if (asked !== undefined && !COMMIT.test(asked)) {
+    throw new RunnerBuildError(`--tag must be a 40-character commit, received ${JSON.stringify(asked)}`)
+  }
+  const checkout = checking ? readCheckout({ root: repository, run }) : inspectCheckout({ root: repository, run })
+  const ref = asked ?? checkout.ref
+  const version = checkout.version
   const archive = `boxlite-runner-v${version}-${ref}-linux-amd64.tar.gz`
   const names = [archive, `${archive}.sha256`]
   const identity = `${version}+${ref}`
