@@ -40,7 +40,7 @@ import {
 } from '../stack/providers/gcp/network.ts'
 import { BOOT_DISK_TYPE, MACHINE as RUNNER_MACHINE } from '../stack/providers/gcp/runners.ts'
 import { apiPrefixRouteRules } from '../stack/providers/gcp/api.ts'
-import { PROXY_API_KEY_FILE, isMissingNeg, secretProviderParameters } from '../stack/providers/gcp/edge.ts'
+import { isMissingNeg, secretProviderParameters } from '../stack/providers/gcp/edge.ts'
 import { instanceFor } from 'naming'
 
 /*
@@ -1057,14 +1057,30 @@ test('the cluster enables managed Secret Manager CSI and Workload Identity', () 
   assert.match(source, /enablePrivateNodes: true/)
 })
 
-test('the proxy key is a CSI file, never a Kubernetes Secret or secret-valued env entry', () => {
+test('the proxy key reaches the container by reference, never as a manifest value', () => {
+  /*
+   * The app reads one channel — `PROXY_API_KEY` — so the value has to arrive as
+   * a value. What must never happen is it arriving as a *literal*: the
+   * Deployment manifest is readable by anything that can describe the workload,
+   * and Pulumi would keep a copy in the checkpoint besides.
+   *
+   * So the CSI driver stays: it fetches from Secret Manager with the pod's own
+   * identity and syncs the object this container names by reference. The mount
+   * stays with it, because the driver syncs `secretObjects` only while a pod
+   * mounts the volume.
+   */
   const source = sourceOf('edge')
   assert.match(source, /kind: 'SecretProviderClass'/)
   assert.match(source, /provider: 'gke'/)
   assert.match(source, /driver: 'secrets-store-gke\.csi\.k8s\.io'/)
-  assert.match(source, /delete plainEnvironment\[PROXY_API_KEY\]/)
+  assert.match(source, /delete plainEnvironment\[PROXY_API_KEY\]/, 'the key must not reach the plain environment')
+  assert.match(source, /valueFrom: \{ secretKeyRef: \{ name: PROXY_API_KEY_SECRET, key: PROXY_API_KEY \} \}/)
+  assert.match(source, /secretObjects: \[/, 'the driver has to be told to sync it')
+  assert.match(source, /data: \[\{ objectName: PROXY_API_KEY_PATH, key: PROXY_API_KEY \}\]/)
+  assert.match(source, /volumeMounts: \[\{ name: SECRET_VOLUME/, 'the sync stops when nothing mounts it')
+  // Written by the driver from the mount, never by this stack: a Secret created
+  // here would carry the payload through Pulumi's state.
   assert.equal(/kubernetes\.core\.v1\.Secret/.test(source), false)
-  assert.equal(PROXY_API_KEY_FILE, '/var/run/secrets/boxlite/proxy-api-key')
   assert.deepEqual(JSON.parse(secretProviderParameters('projects/p/secrets/proxy/versions/7')), [
     { resourceName: 'projects/p/secrets/proxy/versions/7', path: 'proxy-api-key' },
   ])

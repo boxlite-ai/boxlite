@@ -33,7 +33,20 @@ const SECRET_VOLUME = 'proxy-secrets'
 const SECRET_MOUNT = '/var/run/secrets/boxlite'
 const PROXY_API_KEY = 'PROXY_API_KEY'
 const PROXY_API_KEY_PATH = 'proxy-api-key'
-export const PROXY_API_KEY_FILE = `${SECRET_MOUNT}/${PROXY_API_KEY_PATH}`
+/**
+ * The Kubernetes Secret the CSI driver syncs the mounted file into.
+ *
+ * The proxy reads one channel — `PROXY_API_KEY`, as every other deployment of
+ * it does — so the value has to reach the container as a value. The driver
+ * writes this object from the same mount, and `secretKeyRef` carries it into
+ * the environment; a stage that read the file instead would need a second
+ * delivery path in the app for one cloud.
+ *
+ * The cost is deliberate and worth naming: the payload exists as a Kubernetes
+ * Secret in etcd, readable by anything granted secrets in this namespace, where
+ * a mount alone would have kept it to the pod's tmpfs.
+ */
+const PROXY_API_KEY_SECRET = 'proxy-api-key'
 
 const REPLICAS = 2
 const MAX_CONNECTIONS_PER_POD = 10_000
@@ -195,6 +208,18 @@ export const gcpEdgeProvider =
         spec: {
           provider: 'gke',
           parameters: { secrets: reference.apply(secretProviderParameters) },
+          /*
+           * Synced only while a pod mounts the volume — that is the driver's
+           * rule, not a choice here, and it is why the mount below stays even
+           * though nothing reads the file any more.
+           */
+          secretObjects: [
+            {
+              secretName: PROXY_API_KEY_SECRET,
+              type: 'Opaque',
+              data: [{ objectName: PROXY_API_KEY_PATH, key: PROXY_API_KEY }],
+            },
+          ],
         },
       },
       { ...k8s, dependsOn: [...host.ready, secretAccessor, ...ownedSecretResources] },
@@ -226,6 +251,12 @@ export const gcpEdgeProvider =
       { ...k8s, dependsOn: [namespace] },
     )
 
+    /*
+     * Everything but the key, which arrives by reference below. Held out of
+     * this map rather than put in it: a value here reaches the Deployment
+     * manifest, and a manifest is readable by anything that can describe the
+     * workload.
+     */
     const plainEnvironment = { ...request.environment }
     delete plainEnvironment[PROXY_API_KEY]
     const environment: Record<string, $util.Input<string>> = {
@@ -234,7 +265,6 @@ export const gcpEdgeProvider =
       PROXY_PROTOCOL: request.protocol,
       BOXLITE_API_URL: $util.output(request.apiUrl).apply((url: string) => `${url.replace(/\/$/, '')}/api`),
       PROXY_DOMAIN: request.domain,
-      PROXY_API_KEY_FILE,
     }
 
     const labels = { 'app.kubernetes.io/name': CONTAINER, 'app.kubernetes.io/component': 'edge' }
@@ -283,7 +313,14 @@ export const gcpEdgeProvider =
                   image: request.image,
                   imagePullPolicy: 'IfNotPresent',
                   ports: [{ name: CONTAINER, containerPort: PROXY_PORT, protocol: 'TCP' }],
-                  env: Object.entries(environment).map(([name, value]) => ({ name, value })),
+                  env: [
+                    ...Object.entries(environment).map(([name, value]) => ({ name, value })),
+                    // The one value that never appears in this manifest.
+                    {
+                      name: PROXY_API_KEY,
+                      valueFrom: { secretKeyRef: { name: PROXY_API_KEY_SECRET, key: PROXY_API_KEY } },
+                    },
+                  ],
                   volumeMounts: [{ name: SECRET_VOLUME, mountPath: SECRET_MOUNT, readOnly: true }],
                   startupProbe: {
                     httpGet: { path: '/health', port: CONTAINER, scheme: 'HTTP' },

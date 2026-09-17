@@ -77,10 +77,15 @@ test('a string that is not a reference is refused, because it is a plaintext sec
   }
 })
 
-test('no provider spells a secret reference itself; they all go through the one builder', () => {
+test('no provider spells a Secret Manager reference itself; they go through the one builder', () => {
   // The class rather than its instances. The shape written out at each call site
   // is how it goes wrong four times before anyone notices — which is exactly how
   // it went wrong upstream.
+  //
+  // What is forbidden is Cloud Run's `valueSource.secretKeyRef` and a hand-split
+  // address. Kubernetes has a `secretKeyRef` of its own under `valueFrom`, and
+  // it names a Kubernetes Secret rather than a Secret Manager address — a
+  // different thing this module knows nothing about, pinned by the test below.
   //
   // Recursive: a provider moved into a subdirectory is still a provider, and a
   // guard that read only the top level would stop guarding the day one moves.
@@ -100,11 +105,32 @@ test('no provider spells a secret reference itself; they all go through the one 
         .split('\n')
         .filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line))
         .join('\n')
-      if (/secretKeyRef/.test(code) || /secrets\\\/\(\[\^\/\]\+\)/.test(code)) offenders.push(entry.name)
+      if (/valueSource:\s*\{?\s*secretKeyRef/.test(code) || /secrets\\\/\(\[\^\/\]\+\)/.test(code)) {
+        offenders.push(entry.name)
+      }
     }
   }
   walk(bundle)
   assert.deepEqual(offenders, [], 'these build a secret reference by hand instead of through secret-env.ts')
+})
+
+test('the one Kubernetes reference names a Kubernetes Secret, not a Secret Manager address', () => {
+  /*
+   * The proxy is the only workload on this cloud that is not Cloud Run, and its
+   * key arrives through Kubernetes' own `valueFrom.secretKeyRef`. What that may
+   * name is an object in the cluster — the one the CSI driver syncs from the
+   * mount. A Secret Manager address there would be read as a Secret name, and
+   * the container would start with an empty key rather than fail.
+   */
+  const edge = readFileSync(fileURLToPath(new URL('../stack/providers/gcp/edge.ts', import.meta.url)), 'utf8')
+  const references = [...edge.matchAll(/valueFrom: \{ secretKeyRef: \{ name: ([A-Za-z_]+), key: ([A-Za-z_]+) \} \}/g)]
+  assert.equal(references.length, 1, 'the proxy has one key, by one reference')
+  assert.deepEqual(
+    references[0].slice(1, 3),
+    ['PROXY_API_KEY_SECRET', 'PROXY_API_KEY'],
+    'the reference must name the synced Kubernetes Secret and the key inside it',
+  )
+  assert.match(edge, /const PROXY_API_KEY_SECRET = '[a-z-]+'/, 'and that name is a Kubernetes object name')
 })
 
 test('values and addresses arrive in one list and stay distinguishable inside it', () => {
