@@ -16,7 +16,7 @@ Guest.Init succeeds, a legacy-only request returns `InvalidArgument` because
 request conversion or protocol version negotiation.
 
 ```rust,ignore
-use boxlite_shared::{SshClient, SshConfig, SshConfigureRequest, SshStatusRequest,
+use boxlite_shared::{SshAccount, SshClient, SshConfig, SshConfigureRequest, SshStatusRequest,
     SshDisableRequest};
 
 // channel is a tonic Channel connected to the running box's box.sock.
@@ -25,8 +25,18 @@ let status = ssh.configure(SshConfigureRequest {
     config: Some(SshConfig {
         listen_address: "0.0.0.0:2222".into(),
         host_private_key: std::fs::read_to_string("host_key")?,
-        ca: None,
-        authorized_keys: vec![std::fs::read_to_string("user_key.pub")?],
+        accounts: vec![
+            SshAccount {
+                login: "alice".into(),
+                authorized_keys: vec![std::fs::read_to_string("alice.pub")?],
+                ca: None,
+            },
+            SshAccount {
+                login: "bob".into(),
+                authorized_keys: vec![std::fs::read_to_string("bob.pub")?],
+                ca: None,
+            },
+        ],
     }),
 }).await?.into_inner().status.unwrap();
 println!("{} {}", status.host_public_key, status.host_key_fingerprint);
@@ -34,11 +44,37 @@ let current = ssh.status(SshStatusRequest {}).await?.into_inner().status;
 ssh.disable(SshDisableRequest {}).await?;
 ```
 
-Configure accepts an unencrypted OpenSSH host private key and at least one user
-public key or CA configuration. A CA contains its public key and the required
-certificate principal. Existing certificate permissions apply; plain authorized
-keys allow PTY and forwarding. Login uses `root`. Each `authorized_keys` entry is
-one OpenSSH public key with an optional comment, without authorized_keys options.
+Configure accepts an unencrypted OpenSSH host private key and a non-empty
+`accounts` list. Each account has a unique `login` and at least one public key or
+CA configuration. Logins are 1–128 ASCII letters, digits, dots, underscores, or
+hyphens. Authentication selects only that login's credentials. A CA contains its
+public key and the required certificate principal; the principal need not equal
+the login. Certificate validity and permissions are checked as before; plain
+authorized keys allow PTY and forwarding. Each `authorized_keys` entry is one
+OpenSSH public key with an optional comment, without authorized_keys options.
+
+The former global `SshConfig.ca` and `SshConfig.authorized_keys` fields (3 and 4)
+are reserved, including their names. Accounts use field 5. Regenerate bindings
+and migrate credentials into explicitly named accounts. An old configuration
+decodes without accounts and returns `InvalidArgument`, leaving the existing
+service running. There is no implicit `root` account.
+
+Authentication accounts do not need entries in the container's `/etc/passwd`.
+For example, `alice` and `bob` can both execute as the container's default `app`
+user. Shell, exec, PTY, SFTP, and both directions of Unix socket forwarding
+inherit the UID/GID selected at container creation from the image `USER` or box
+user override. Accounts share that identity and its file permissions; they do
+not provide operating-system isolation from one another.
+
+After entering the container, SSH resolves the actual execution UID and sets
+`USER`, `LOGNAME`, `HOME`, and `SHELL`. Client environment requests cannot override
+these values or select an execution identity. A numeric UID without a passwd
+entry uses its numeric name, `/` as home, and `/bin/sh` as shell. An empty passwd
+shell also uses `/bin/sh`; a configured shell that is missing fails explicitly.
+Shell and SFTP start in the user's home, falling back to `/` if it cannot be
+entered. Non-root SFTP and Unix socket helpers clear effective, permitted,
+inheritable, and ambient capabilities before serving; they retain the bounding
+set. TCP forwarding remains guest-side and uses the session's authorization.
 
 Every valid Configure fully restarts SSH, even if the configuration is identical:
 validate → stop listener → disconnect all clients → wait for SSH execution and

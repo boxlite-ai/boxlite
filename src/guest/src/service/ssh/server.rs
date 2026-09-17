@@ -1,7 +1,7 @@
 //! Per-connection russh handler and protocol policy.
 
 use crate::service::server::GuestServer;
-use crate::service::ssh::auth::{AuthorizedIdentity, SessionPermissions, SshAuthorizer, SSH_USER};
+use crate::service::ssh::auth::{AuthorizedIdentity, SessionPermissions, SshAuthorizer};
 use crate::service::ssh::bridge::{signal_number, ChannelBridge, Command};
 use crate::service::ssh::forward::ForwardingManager;
 use crate::service::ssh::limits::{
@@ -141,11 +141,13 @@ impl russh::server::Handler for SshConnection {
     ) -> Result<Auth, Self::Error> {
         // Certificate authentication uses the publickey wire method. The
         // actual decision is made only after russh verifies the signature.
-        Ok(if user == SSH_USER && !self.tasks.is_cancelled() {
-            Auth::Accept
-        } else {
-            Auth::reject()
-        })
+        Ok(
+            if self.authorizer.has_account(user) && !self.tasks.is_cancelled() {
+                Auth::Accept
+            } else {
+                Auth::reject()
+            },
+        )
     }
 
     async fn auth_publickey(
@@ -788,11 +790,14 @@ mod tests {
         let user = PrivateKey::random(&mut rng, Algorithm::Ed25519).unwrap();
         let authorizer = Arc::new(
             SshAuthorizer::new(&boxlite_shared::SshConfig {
-                ca: Some(boxlite_shared::SshCaConfig {
-                    public_key: ca.public_key().to_openssh().unwrap(),
-                    principal: "box_123".into(),
-                }),
-                authorized_keys: vec![user.public_key().to_openssh().unwrap()],
+                accounts: vec![boxlite_shared::SshAccount {
+                    login: "root".into(),
+                    ca: Some(boxlite_shared::SshCaConfig {
+                        public_key: ca.public_key().to_openssh().unwrap(),
+                        principal: "box_123".into(),
+                    }),
+                    authorized_keys: vec![user.public_key().to_openssh().unwrap()],
+                }],
                 ..Default::default()
             })
             .unwrap(),
@@ -806,7 +811,7 @@ mod tests {
             super::super::TaskGroup::default(),
         );
         assert_eq!(
-            raw.auth_publickey_offered(SSH_USER, user.public_key())
+            raw.auth_publickey_offered("root", user.public_key())
                 .await
                 .unwrap(),
             Auth::Accept
@@ -823,9 +828,7 @@ mod tests {
             Auth::reject()
         );
         assert_eq!(
-            raw.auth_publickey(SSH_USER, user.public_key())
-                .await
-                .unwrap(),
+            raw.auth_publickey("root", user.public_key()).await.unwrap(),
             Auth::Accept
         );
         assert!(raw.permissions.pty && raw.permissions.port_forwarding);
@@ -841,7 +844,7 @@ mod tests {
         );
         assert_eq!(
             certified
-                .auth_openssh_certificate(SSH_USER, &user_certificate(&ca, "box_123"))
+                .auth_openssh_certificate("root", &user_certificate(&ca, "box_123"))
                 .await
                 .unwrap(),
             Auth::Accept

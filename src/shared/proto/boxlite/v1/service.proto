@@ -252,8 +252,16 @@ message SshConfig {
   string listen_address = 1;
   // Caller-provided, unencrypted OpenSSH private key.
   string host_private_key = 2;
+  reserved 3, 4;
+  reserved "ca", "authorized_keys";
+  // Authentication identities; all execute as the container's default user.
+  repeated SshAccount accounts = 5;
+}
+
+message SshAccount {
+  string login = 1;
+  repeated string authorized_keys = 2;
   SshCaConfig ca = 3;
-  repeated string authorized_keys = 4;
 }
 
 message SshCaConfig {

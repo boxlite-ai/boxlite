@@ -69,8 +69,7 @@ impl std::fmt::Debug for generated::SshConfig {
         f.debug_struct("SshConfig")
             .field("listen_address", &self.listen_address)
             .field("host_private_key", &"[REDACTED]")
-            .field("ca", &self.ca)
-            .field("authorized_keys", &self.authorized_keys)
+            .field("accounts", &self.accounts)
             .finish()
     }
 }
@@ -95,6 +94,23 @@ mod tests {
             config: Some(super::SshConfig::default()),
         };
         assert_eq!(request.encode_to_vec(), [0x22, 0x00]);
+    }
+
+    #[test]
+    fn ssh_configuration_global_credentials_do_not_create_an_account() {
+        use prost::Message;
+        // Previous SshConfig.ca (3) and authorized_keys (4) are reserved.
+        let legacy = b"\x1a\x00\x22\x08test-key";
+        let decoded = super::SshConfig::decode(legacy.as_slice()).unwrap();
+        assert!(decoded.accounts.is_empty());
+        let config = super::SshConfig {
+            accounts: vec![super::SshAccount {
+                login: "alice".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(config.encode_to_vec(), b"\x2a\x07\x0a\x05alice");
     }
 
     #[test]
@@ -125,8 +141,11 @@ mod tests {
             config: Some(super::SshConfig {
                 listen_address: "127.0.0.1:2222".into(),
                 host_private_key: "test-only-private-marker".into(),
-                authorized_keys: vec!["test-key comment".into()],
-                ca: None,
+                accounts: vec![super::SshAccount {
+                    login: "alice".into(),
+                    authorized_keys: vec!["test-key comment".into()],
+                    ca: None,
+                }],
             }),
         };
         let decoded =

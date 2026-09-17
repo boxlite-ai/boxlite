@@ -1,12 +1,15 @@
-//! Immutable SSH authorization parsed at guest initialization.
+//! Immutable, per-login SSH authorization parsed before replacing a server.
 
 use russh::keys::ssh_key::certificate::CertType;
 use russh::keys::{Algorithm, Certificate, HashAlg, PublicKey};
 
-pub(crate) const SSH_USER: &str = "root";
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub(crate) enum AuthorizerError {
+    MissingAccounts,
+    InvalidLogin,
+    DuplicateLogin,
     MissingAuthentication,
     InvalidPublicKey(usize),
     InvalidCaKey,
@@ -17,6 +20,9 @@ pub(crate) enum AuthorizerError {
 impl std::fmt::Display for AuthorizerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::MissingAccounts => write!(f, "SSH requires a non-empty accounts list; global credentials are no longer supported"),
+            Self::InvalidLogin => write!(f, "SSH login must be a non-empty identifier of at most 128 ASCII letters, digits, '.', '_', or '-'"),
+            Self::DuplicateLogin => write!(f, "duplicate SSH login"),
             Self::MissingAuthentication => write!(f, "SSH requires a CA or at least one authorized key"),
             Self::InvalidPublicKey(index) => write!(f, "invalid SSH authorized key at index {index}: expected one OpenSSH public key without options"),
             Self::InvalidCaKey => write!(f, "invalid SSH CA public key: expected an OpenSSH public key"),
@@ -35,12 +41,65 @@ impl std::fmt::Display for AuthorizerError {
 impl std::error::Error for AuthorizerError {}
 
 pub(crate) struct SshAuthorizer {
+    accounts: HashMap<String, AccountAuthorizer>,
+}
+
+struct AccountAuthorizer {
     ca: Option<CertificateAuthorizer>,
     authorized_keys: Vec<PublicKey>,
 }
 
 impl SshAuthorizer {
     pub(crate) fn new(config: &boxlite_shared::SshConfig) -> Result<Self, AuthorizerError> {
+        if config.accounts.is_empty() {
+            return Err(AuthorizerError::MissingAccounts);
+        }
+        let mut accounts = HashMap::new();
+        for account in &config.accounts {
+            if account.login.is_empty()
+                || account.login.len() > 128
+                || !account
+                    .login
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+            {
+                return Err(AuthorizerError::InvalidLogin);
+            }
+            if accounts.contains_key(&account.login) {
+                return Err(AuthorizerError::DuplicateLogin);
+            }
+            accounts.insert(account.login.clone(), AccountAuthorizer::new(account)?);
+        }
+        Ok(Self { accounts })
+    }
+
+    pub(crate) fn has_account(&self, login: &str) -> bool {
+        self.accounts.contains_key(login)
+    }
+
+    pub(crate) fn authorize_public_key(
+        &self,
+        login: &str,
+        key: &PublicKey,
+    ) -> Option<AuthorizedIdentity> {
+        self.accounts.get(login)?.authorize_public_key(key)
+    }
+
+    pub(crate) fn authorize_certificate(
+        &self,
+        login: &str,
+        certificate: &Certificate,
+    ) -> Option<AuthorizedIdentity> {
+        self.accounts
+            .get(login)?
+            .ca
+            .as_ref()?
+            .authorize(certificate)
+    }
+}
+
+impl AccountAuthorizer {
+    fn new(config: &boxlite_shared::SshAccount) -> Result<Self, AuthorizerError> {
         if config.ca.is_none() && config.authorized_keys.is_empty() {
             return Err(AuthorizerError::MissingAuthentication);
         }
@@ -67,32 +126,18 @@ impl SshAuthorizer {
         })
     }
 
-    pub(crate) fn authorize_public_key(
-        &self,
-        user: &str,
-        key: &PublicKey,
-    ) -> Option<AuthorizedIdentity> {
-        (user == SSH_USER
-            && self
-                .authorized_keys
-                .iter()
-                .any(|allowed| allowed.key_data() == key.key_data()))
-        .then_some(AuthorizedIdentity {
-            permissions: SessionPermissions {
-                pty: true,
-                port_forwarding: true,
-                agent_forwarding: false,
-                x11_forwarding: false,
-            },
-        })
-    }
-
-    pub(crate) fn authorize_certificate(
-        &self,
-        user: &str,
-        certificate: &Certificate,
-    ) -> Option<AuthorizedIdentity> {
-        self.ca.as_ref()?.authorize(user, certificate)
+    fn authorize_public_key(&self, key: &PublicKey) -> Option<AuthorizedIdentity> {
+        self.authorized_keys
+            .iter()
+            .any(|allowed| allowed.key_data() == key.key_data())
+            .then_some(AuthorizedIdentity {
+                permissions: SessionPermissions {
+                    pty: true,
+                    port_forwarding: true,
+                    agent_forwarding: false,
+                    x11_forwarding: false,
+                },
+            })
     }
 }
 
@@ -142,13 +187,8 @@ impl CertificateAuthorizer {
 
     /// Validate every security-relevant certificate field that russh leaves
     /// to the application after it verifies proof of possession.
-    pub(crate) fn authorize(
-        &self,
-        user: &str,
-        certificate: &Certificate,
-    ) -> Option<AuthorizedIdentity> {
-        if user != SSH_USER
-            || certificate.cert_type() != CertType::User
+    pub(crate) fn authorize(&self, certificate: &Certificate) -> Option<AuthorizedIdentity> {
+        if certificate.cert_type() != CertType::User
             || certificate.validate([&self.ca_fingerprint]).is_err()
             || !certificate
                 .valid_principals()
@@ -171,8 +211,8 @@ impl CertificateAuthorizer {
     }
 
     #[cfg(test)]
-    fn is_authorized(&self, user: &str, certificate: &Certificate) -> bool {
-        self.authorize(user, certificate).is_some()
+    fn is_authorized(&self, certificate: &Certificate) -> bool {
+        self.authorize(certificate).is_some()
     }
 }
 
@@ -284,8 +324,7 @@ mod tests {
             now - 60,
             now + 60,
         );
-        assert!(authorizer.is_authorized("root", &valid));
-        assert!(!authorizer.is_authorized("nobody", &valid));
+        assert!(authorizer.is_authorized(&valid));
 
         let wrong_ca = certificate(
             &other_ca,
@@ -295,7 +334,7 @@ mod tests {
             now - 60,
             now + 60,
         );
-        assert!(!authorizer.is_authorized("root", &wrong_ca));
+        assert!(!authorizer.is_authorized(&wrong_ca));
 
         let wrong_principal = certificate(
             &ca_key,
@@ -305,7 +344,7 @@ mod tests {
             now - 60,
             now + 60,
         );
-        assert!(!authorizer.is_authorized("root", &wrong_principal));
+        assert!(!authorizer.is_authorized(&wrong_principal));
 
         let host_certificate = certificate(
             &ca_key,
@@ -315,7 +354,7 @@ mod tests {
             now - 60,
             now + 60,
         );
-        assert!(!authorizer.is_authorized("root", &host_certificate));
+        assert!(!authorizer.is_authorized(&host_certificate));
     }
 
     #[test]
@@ -336,10 +375,10 @@ mod tests {
             now - 120,
             now - 60,
         );
-        assert!(!authorizer.is_authorized("root", &expired));
+        assert!(!authorizer.is_authorized(&expired));
 
         let critical = certificate(&ca_key, "box_123", CertType::User, true, now - 60, now + 60);
-        assert!(!authorizer.is_authorized("root", &critical));
+        assert!(!authorizer.is_authorized(&critical));
     }
 
     #[test]
@@ -363,7 +402,7 @@ mod tests {
         builder.extension("unknown-future-extension", "").unwrap();
         let certificate = builder.sign(&ca_key).unwrap();
 
-        let identity = authorizer.authorize("root", &certificate).unwrap();
+        let identity = authorizer.authorize(&certificate).unwrap();
         assert_eq!(
             identity.permissions,
             SessionPermissions {
@@ -399,6 +438,6 @@ mod tests {
         builder.valid_principal("box_123").unwrap();
         let certificate = builder.sign(&ca_key).unwrap();
 
-        assert!(authorizer.is_authorized("root", &certificate));
+        assert!(authorizer.is_authorized(&certificate));
     }
 }

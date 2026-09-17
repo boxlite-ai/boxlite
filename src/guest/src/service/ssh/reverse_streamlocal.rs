@@ -762,7 +762,7 @@ fn helper_execution_launch(
             workdir: "/".to_string(),
             timeout_ms: 0,
             tty: None,
-            user: Some("0:0".to_string()),
+            user: None,
         },
         workload,
     }
@@ -1279,8 +1279,8 @@ mod tests {
         assert!(request.env.values().all(|value| !value.contains(TOKEN)));
         assert!(!request.env.contains_key("HOME"));
         assert!(!request.env.contains_key("SHELL"));
-        assert_eq!(request.env.get("USER").map(String::as_str), Some("root"));
-        assert_eq!(request.user.as_deref(), Some("0:0"));
+        assert!(!request.env.contains_key("USER"));
+        assert_eq!(request.user, None);
         assert_eq!(request.workdir, "/");
         assert!(matches!(
             launch.workload,

@@ -100,14 +100,17 @@ fn config(
     boxlite_shared::SshConfig {
         listen_address: "127.0.0.1:0".into(),
         host_private_key: host.to_openssh(Default::default()).unwrap().to_string(),
-        ca: ca.map(|key| SshCaConfig {
-            public_key: key.public_key().to_openssh().unwrap(),
-            principal: "box_123".into(),
-        }),
-        authorized_keys: keys
-            .iter()
-            .map(|key| key.public_key().to_openssh().unwrap())
-            .collect(),
+        accounts: vec![boxlite_shared::SshAccount {
+            login: "root".into(),
+            ca: ca.map(|key| SshCaConfig {
+                public_key: key.public_key().to_openssh().unwrap(),
+                principal: "box_123".into(),
+            }),
+            authorized_keys: keys
+                .iter()
+                .map(|key| key.public_key().to_openssh().unwrap())
+                .collect(),
+        }],
     }
 }
 
@@ -316,7 +319,7 @@ async fn grpc_ssh_accepts_ca_keys_and_both_with_injected_host_identity() {
             vec![]
         };
         let mut ssh = config(&host, &keys, use_ca.then_some(&ca));
-        for key in &mut ssh.authorized_keys {
+        for key in &mut ssh.accounts[0].authorized_keys {
             key.push_str(" optional comment");
         }
         let address = fixture.start(ssh).await;
@@ -479,23 +482,34 @@ async fn grpc_ssh_invalid_inputs_preserve_running_listener() {
     let valid = config(&host, &[&user], Some(&ca));
     let mut invalid = Vec::new();
     let mut ssh = valid.clone();
-    ssh.ca = None;
-    ssh.authorized_keys.clear();
+    ssh.accounts.clear();
     invalid.push(ssh);
     let mut ssh = valid.clone();
-    ssh.authorized_keys.push("not a key".into());
+    ssh.accounts.push(ssh.accounts[0].clone());
+    invalid.push(ssh);
+    for login in ["", "../alice", "alice\n", "alice bob"] {
+        let mut ssh = valid.clone();
+        ssh.accounts[0].login = login.into();
+        invalid.push(ssh);
+    }
+    let mut ssh = valid.clone();
+    ssh.accounts[0].ca = None;
+    ssh.accounts[0].authorized_keys.clear();
     invalid.push(ssh);
     let mut ssh = valid.clone();
-    ssh.authorized_keys[0] = format!("no-pty {}", ssh.authorized_keys[0]);
+    ssh.accounts[0].authorized_keys.push("not a key".into());
     invalid.push(ssh);
     let mut ssh = valid.clone();
-    ssh.authorized_keys[0].push_str("\nssh-ed25519 bad");
+    ssh.accounts[0].authorized_keys[0] = format!("no-pty {}", ssh.accounts[0].authorized_keys[0]);
     invalid.push(ssh);
     let mut ssh = valid.clone();
-    ssh.ca.as_mut().unwrap().principal = "../invalid".into();
+    ssh.accounts[0].authorized_keys[0].push_str("\nssh-ed25519 bad");
     invalid.push(ssh);
     let mut ssh = valid.clone();
-    ssh.ca.as_mut().unwrap().public_key = "invalid".into();
+    ssh.accounts[0].ca.as_mut().unwrap().principal = "../invalid".into();
+    invalid.push(ssh);
+    let mut ssh = valid.clone();
+    ssh.accounts[0].ca.as_mut().unwrap().public_key = "invalid".into();
     invalid.push(ssh);
     let mut ssh = valid.clone();
     ssh.listen_address = "invalid".into();
@@ -528,6 +542,87 @@ async fn grpc_ssh_invalid_inputs_preserve_running_listener() {
         let _client = connect(address, &host).await;
         fixture.stop().await;
     }
+}
+
+#[tokio::test]
+async fn grpc_ssh_accounts_select_credentials_and_replacement_revokes_old_logins() {
+    let host = private_key();
+    let alice = Arc::new(private_key());
+    let bob = Arc::new(private_key());
+    let alice_ca = private_key();
+    let bob_ca = private_key();
+    let mut configuration = config(&host, &[&alice], Some(&alice_ca));
+    configuration.accounts[0].login = "alice".into();
+    let mut bob_account = config(&host, &[&bob], Some(&bob_ca)).accounts.remove(0);
+    bob_account.login = "bob".into();
+    bob_account.ca.as_mut().unwrap().principal = "bob_principal".into();
+    configuration.accounts.push(bob_account);
+    let mut fixture = TestGuest::new().await;
+    let address = fixture.start(configuration.clone()).await;
+    for (login, key, accepted) in [
+        ("alice", alice.clone(), true),
+        ("bob", bob.clone(), true),
+        ("alice", bob.clone(), false),
+        ("bob", alice.clone(), false),
+        ("unknown", alice.clone(), false),
+        ("root", alice.clone(), false),
+    ] {
+        let mut client = connect(address, &host).await;
+        assert_eq!(
+            client
+                .authenticate_publickey(login, PrivateKeyWithHashAlg::new(key, None))
+                .await
+                .unwrap()
+                .success(),
+            accepted,
+            "public key authentication for {login}"
+        );
+    }
+    for (login, ca, principal, accepted) in [
+        ("alice", &alice_ca, "box_123", true),
+        ("bob", &bob_ca, "bob_principal", true),
+        ("bob", &alice_ca, "bob_principal", false),
+        ("bob", &bob_ca, "box_123", false),
+        ("unknown", &alice_ca, "box_123", false),
+    ] {
+        let mut client = connect(address, &host).await;
+        let cert = certificate(ca, &alice, principal, false, true);
+        assert_eq!(
+            client
+                .authenticate_openssh_cert(login, alice.clone(), cert)
+                .await
+                .unwrap()
+                .success(),
+            accepted,
+            "certificate authentication for {login}"
+        );
+    }
+    let mut old_client = connect(address, &host).await;
+    assert!(old_client
+        .authenticate_publickey("alice", PrivateKeyWithHashAlg::new(alice.clone(), None))
+        .await
+        .unwrap()
+        .success());
+    configuration.listen_address = address.to_string();
+    configuration.accounts.remove(0);
+    fixture.configure(configuration).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), old_client)
+        .await
+        .expect("replacing accounts must disconnect old clients")
+        .ok();
+    let mut client = connect(address, &host).await;
+    assert!(!client
+        .authenticate_publickey("alice", PrivateKeyWithHashAlg::new(alice, None))
+        .await
+        .unwrap()
+        .success());
+    let mut client = connect(address, &host).await;
+    assert!(client
+        .authenticate_publickey("bob", PrivateKeyWithHashAlg::new(bob, None))
+        .await
+        .unwrap()
+        .success());
+    fixture.stop().await;
 }
 
 #[tokio::test]
@@ -722,9 +817,9 @@ async fn ssh_failure_logs_and_status_redact_all_configuration_inputs() {
         match field {
             "address" => ssh.listen_address = secret.clone(),
             "host" => ssh.host_private_key = format!("invalid-{secret}"),
-            "authorized" => ssh.authorized_keys.push(secret.clone()),
-            "ca" => ssh.ca.as_mut().unwrap().public_key = secret.clone(),
-            "principal" => ssh.ca.as_mut().unwrap().principal = secret.clone(),
+            "authorized" => ssh.accounts[0].authorized_keys.push(secret.clone()),
+            "ca" => ssh.accounts[0].ca.as_mut().unwrap().public_key = secret.clone(),
+            "principal" => ssh.accounts[0].ca.as_mut().unwrap().principal = secret.clone(),
             _ => unreachable!(),
         }
         let logs = CapturedLogs::default();

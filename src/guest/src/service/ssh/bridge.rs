@@ -4,7 +4,6 @@ use crate::service::exec::error::ExecutionError;
 use crate::service::exec::registry::ExecutionRegistry;
 use crate::service::exec::TtyResize;
 use crate::service::server::GuestServer;
-use crate::service::ssh::auth::SSH_USER;
 use crate::service::ssh::limits::{
     CONTROL_CALL_TIMEOUT, FORWARD_CONNECT_TIMEOUT, PROCESS_TERMINATION_GRACE, STDIN_QUEUE_DEPTH,
 };
@@ -22,7 +21,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 /// Starting directory for a session helper. The helper chdirs to the passwd
-/// home itself once it is inside the container (`session::enter_root_home`),
+/// home itself once it is inside the container (`session::enter_home`),
 /// which is the only place that directory can be read, so the request just
 /// needs a directory every image is guaranteed to have.
 const SESSION_WORKDIR: &str = "/";
@@ -383,19 +382,10 @@ pub(super) fn session_exec_env(
     mut env: HashMap<String, String>,
     container_id: &str,
 ) -> HashMap<String, String> {
-    // Account identity is server-owned. Apply it after client-provided env so
-    // an env request cannot rename a root login or point it at another home.
-    //
-    // HOME and SHELL are dropped rather than overwritten: neither is knowable
-    // out here, so there is no correct value to send. The session sets both
-    // once it is inside the container, from the passwd entry it can finally
-    // read, and libcontainer seeds HOME ahead of it when absent. Dropping is
-    // belt-and-braces against a future path that forwards client env without
-    // reaching that session — it is not what makes the account values win.
-    env.remove("HOME");
-    env.remove("SHELL");
-    env.insert("USER".into(), SSH_USER.into());
-    env.insert("LOGNAME".into(), SSH_USER.into());
+    // Resolve identity only after entering the container and applying its UID.
+    for name in ["HOME", "SHELL", "USER", "LOGNAME"] {
+        env.remove(name);
+    }
     container_exec_env(env, container_id)
 }
 
@@ -494,9 +484,7 @@ fn internal_helper_launch(
         program,
         args,
         env: session_exec_env(env, container_id),
-        // Server-owned SSH work always runs as container root. A numeric
-        // identity works in scratch images that deliberately omit passwd.
-        user: Some("0:0".to_string()),
+        user: None,
         workload,
     }
 }
@@ -1117,8 +1105,8 @@ mod tests {
         // session can supply the real account values.
         assert!(!launch.env.contains_key("HOME"));
         assert!(!launch.env.contains_key("SHELL"));
-        assert_eq!(launch.env.get("USER").map(String::as_str), Some("root"));
-        assert_eq!(launch.env.get("LOGNAME").map(String::as_str), Some("root"));
+        assert!(!launch.env.contains_key("USER"));
+        assert!(!launch.env.contains_key("LOGNAME"));
         assert_eq!(
             launch.env.get("TERM").map(String::as_str),
             Some("xterm-256color")
@@ -1175,8 +1163,8 @@ mod tests {
             crate::service::ssh::workload::INTERNAL_PROGRAM
         );
         assert_eq!(launch.args, [crate::service::ssh::sftp::INTERNAL_SFTP_ARG]);
-        assert_eq!(launch.user.as_deref(), Some("0:0"));
-        assert_eq!(launch.env.len(), 3);
+        assert_eq!(launch.user, None);
+        assert_eq!(launch.env.len(), 1);
         assert_eq!(
             launch.env.get(executor_const::ENV_VAR).map(String::as_str),
             Some("container=container-1")
@@ -1198,8 +1186,8 @@ mod tests {
                 "/run/service.sock"
             ]
         );
-        assert_eq!(launch.user.as_deref(), Some("0:0"));
-        assert_eq!(launch.env.len(), 3);
+        assert_eq!(launch.user, None);
+        assert_eq!(launch.env.len(), 1);
         assert_eq!(
             launch.env.get(executor_const::ENV_VAR).map(String::as_str),
             Some("container=container-1")
