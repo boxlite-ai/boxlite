@@ -49,8 +49,14 @@ export function buildMockConfig(billingApiUrl: string): BoxliteConfiguration {
     version: '0.0.0-mock',
     // OIDC values are placeholders: the mock target swaps the real AuthProvider
     // for a fake authenticated session, so no OIDC network call is ever made.
+    //
+    // The issuer is production's, though, because it is what `resolveEnvironment`
+    // reads. Mock exists to show the console as users see it, and a placeholder
+    // here made the quickstart advertise a different endpoint locally than in
+    // production — which reads as "the change did not take" rather than "this
+    // screen resolves its URL somewhere else".
     oidc: {
-      issuer: 'https://mock.local/',
+      issuer: 'https://auth.boxlite.ai/',
       clientId: 'mock-client',
       audience: 'https://mock.local/api',
     },
