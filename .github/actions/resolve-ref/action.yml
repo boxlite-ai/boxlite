@@ -1,0 +1,66 @@
+# One name for a commit, turned into the commit.
+#
+# mbuild and mdeploy both address exact bytes: a 40-character lowercase commit
+# SHA, and `mbuild/src/address.ts` refuses everything else so that one image can
+# never mean two builds. People do not carry SHAs around, though — they carry
+# `v0.10.1` — so the name is resolved here and the SHA is what reaches the tool.
+#
+# Two things are easy to get wrong and hard to diagnose on a runner:
+#
+#   An annotated tag is an object of its own. `git rev-parse v0.10.1` answers
+#   with that object's hash, which is 40 hex characters and passes every format
+#   check downstream while naming no commit and no image. `^{commit}` is what
+#   dereferences it, and leaving it out fails at the registry rather than here.
+#
+#   A shallow checkout carries no tags. `actions/checkout` defaults to depth 1,
+#   so a tag that exists resolves to nothing; the caller needs `fetch-depth: 0`.
+#   This action cannot fix that from inside, so it says so when it fails.
+name: Resolve a ref to its commit
+description: Turn a commit SHA or a git tag into the full commit SHA the deploy tools address.
+
+inputs:
+  ref:
+    description: A full commit SHA, or any ref (tag, branch) naming one. Empty resolves to nothing.
+    required: false
+    default: ''
+  fallback:
+    description: Used when `ref` is empty — normally github.sha.
+    required: false
+    default: ''
+
+outputs:
+  sha:
+    description: The 40-character lowercase commit SHA.
+    value: ${{ steps.resolve.outputs.sha }}
+  resolved-from:
+    description: The ref that was resolved, empty when the input was already a SHA.
+    value: ${{ steps.resolve.outputs.resolved-from }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      env:
+        REF: ${{ inputs.ref }}
+        FALLBACK: ${{ inputs.fallback }}
+      run: |
+        set -euo pipefail
+        candidate="${REF:-$FALLBACK}"
+        if [ -z "$candidate" ]; then
+          echo "::error title=resolve-ref::neither a ref nor a fallback was given" >&2
+          exit 1
+        fi
+        if [[ "$candidate" =~ ^[0-9a-f]{40}$ ]]; then
+          printf 'sha=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
+          printf 'resolved-from=\n' >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        sha="$(git rev-parse --verify --quiet "$candidate^{commit}" || true)"
+        if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::error title=resolve-ref::'$candidate' is not a commit SHA and this checkout cannot resolve it; a shallow checkout carries no tags, so the caller needs fetch-depth: 0" >&2
+          exit 1
+        fi
+        printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+        printf 'resolved-from=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
+        echo "resolved $candidate to $sha"

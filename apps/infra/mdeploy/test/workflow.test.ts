@@ -11,8 +11,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { parseBase } from 'mstage/config'
+import { variableNameFor } from 'mstage/config-variable'
 
 const workflow = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mdeploy.yml', import.meta.url)), 'utf8')
+const ENV_CONFIG = fileURLToPath(new URL('../../mstage.env.json', import.meta.url))
 
 /** What the workflow runs, with the commentary that discusses it removed. */
 const commands = workflow
@@ -57,7 +60,10 @@ test('both clouds can be federated, and each only when it is the one', () => {
  * active account selected`, and setting only that variable at an
  * `external_account` file — the workload-identity shape the action writes —
  * takes gcloud all the way to a real STS token exchange. `setup-gcloud` is not
- * part of the mechanism.
+ * part of *that* mechanism — where it appears, it is there for the binary
+ * itself, which `runner:build` uploads through and which the DNS-authorization
+ * check reads through. What it must never do is supply a second credential:
+ * two answers to "who am I" is the one that was resolved last, silently.
  *
  * So what is pinned here is our side of it: the action, and the two inputs that
  * would switch the export off. The action's own comment calls the variable
@@ -76,11 +82,15 @@ test('a GCP identity is federated by the action that also gives gcloud its own c
       .join('\n')
     assert.match(runs, /uses: google-github-actions\/auth@v\d/, `${name} does not federate GCP`)
     assert.match(runs, /npm run --silent mstage login/, `${name} does not ask mstage, so this test is checking nothing`)
-    assert.doesNotMatch(
-      runs,
-      /setup-gcloud/,
-      `${name}: the auth action already supplies the CLI credential, so a second step is a second answer`,
-    )
+    // Installing the CLI is allowed; authenticating it a second time is not.
+    for (const step of runs.split('setup-gcloud').slice(1)) {
+      const inputs = step.slice(0, step.indexOf('\n      - ') >= 0 ? step.indexOf('\n      - ') : undefined)
+      assert.doesNotMatch(
+        inputs,
+        /credentials_json|service_account_key|workload_identity_provider|service_account:/,
+        `${name}: setup-gcloud must install the CLI, not answer "who am I" a second time`,
+      )
+    }
     // The two inputs that turn the export off. Both default to true, so the
     // only way to lose the CLI credential from here is to ask for it.
     for (const input of ['create_credentials_file', 'export_environment_variables']) {
@@ -161,8 +171,50 @@ test('a preview is the default and an apply has to be asked for', () => {
 })
 
 test('a protected stage is confirmed, and the confirmation reaches mdeploy', () => {
-  assert.match(commands, /is protected in mstage\.config\.json/)
+  // Read through mstage's own loader, out of the declaration setup-infra
+  // restored. The gate used to `require("./mstage.config.json")` — a filename
+  // nothing writes, in a checkout that carries no declaration at all — so it
+  // refused every deploy for a reason that had nothing to do with the stage.
+  assert.match(commands, /require\('mstage\/config'\)/)
+  assert.match(commands, /stageIn\(loadConfig\(\), process\.env\.STAGE\)\.protect/)
+  assert.doesNotMatch(commands, /require\("\.\/mstage\.config\.json"\)/)
   assert.match(commands, /inputs\.confirm && '--confirm'/)
+})
+
+test('every job that reads a declaration is given one first', () => {
+  const mbuild = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mbuild.yml', import.meta.url)), 'utf8')
+  const name = variableNameFor(parseBase('mstage.env.json', readFileSync(ENV_CONFIG, 'utf8')).app)
+  const mrunner = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mrunner.yml', import.meta.url)), 'utf8')
+  for (const [file, source] of [
+    ['mdeploy.yml', workflow],
+    ['mbuild.yml', mbuild],
+    ['mrunner.yml', mrunner],
+  ] as const) {
+    /*
+     * Every tool below reads `.mstage.config.json`, and on a runner the only
+     * copy is the one setup-infra writes — from a stage it was named and a
+     * variable it was handed. A call site missing either is a job that fails on
+     * the first mstage command, several steps after the one that was wrong.
+     */
+    const calls = source.split('uses: ./.github/actions/setup-infra').slice(1)
+    assert.ok(calls.length > 0, `${file} never sets apps/infra up`)
+    for (const call of calls) {
+      const block = call.slice(0, call.indexOf('\n      - '))
+      assert.match(block, /stages: /, `${file} sets up without naming a stage`)
+      assert.match(block, /stage-config: /, `${file} sets up without the declaration to restore`)
+    }
+    // Every job that runs one of the tools has to be one of those call sites.
+    const jobs = source.match(/\n  [a-z-]+:\n/g) ?? []
+    const runners = jobs.filter((_, index) => {
+      const body = source.split(jobs[index])[1]?.split(/\n  [a-z-]+:\n/)[0] ?? ''
+      return /npm run (--silent )?(mstage|mbuild|mdeploy|runner:)/.test(body)
+    })
+    assert.equal(runners.length, calls.length, `${file} runs a tool in a job that never set apps/infra up`)
+
+    // The variable is named in full, because `vars` cannot be indexed by a
+    // computed key — so the name has to be the one mstage derives.
+    assert.ok(source.includes(`stage-config: \${{ vars.${name} }}`), `${file} does not pass ${name}`)
+  }
 })
 
 test('both mdeploy dispatches share one concurrency group, which the state requires', () => {
@@ -170,4 +222,15 @@ test('both mdeploy dispatches share one concurrency group, which the state requi
   // and write the same file, and the second to finish erases the first.
   assert.match(workflow, /group: mdeploy-\$\{\{ inputs\.stage \}\}/)
   assert.match(workflow, /cancel-in-progress: false/)
+})
+
+test('the apply can ask the project what it holds, which needs a CLI installed', () => {
+  // `src/dns-authorization.ts` refuses an apply this project cannot converge,
+  // and it asks through gcloud. The federation writes a credential and installs
+  // nothing, so without this step the check reports that it could not read and
+  // lets every apply through — a guard that never runs where it matters most.
+  const apply = workflow.indexOf('- name: Apply')
+  const install = workflow.indexOf('setup-gcloud')
+  assert.notEqual(install, -1, 'nothing installs the CLI the guard reads through')
+  assert.ok(install < apply, 'and it has to be there before the apply it guards')
 })

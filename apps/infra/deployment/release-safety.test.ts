@@ -1600,6 +1600,48 @@ test('a job calling a reusable workflow grants at least what that workflow asks 
   assert.ok(checked >= 11, `expected every local reusable call to be swept, saw ${checked}`)
 })
 
+test('every reusable workflow is called with the inputs it declares', () => {
+  /*
+   * The same class the composite-action sweep covers, one level up: a job that
+   * `uses:` another workflow passes inputs by name, and a name that workflow
+   * does not declare — or a required one it omits — fails when the run is
+   * dispatched rather than when the rename is made. Nothing typechecks either
+   * side, and the callers here are the release path.
+   */
+  const workflowDirectory = join(REPO_ROOT, '.github/workflows')
+  let checked = 0
+
+  for (const entry of readdirSync(workflowDirectory)) {
+    if (!/\.ya?ml$/.test(entry)) continue
+    const workflow = load(readFileSync(join(workflowDirectory, entry), 'utf8'))
+    for (const [jobName, job] of entries(workflow.jobs)) {
+      const uses = String(job.uses ?? '')
+      if (!uses.startsWith('./.github/workflows/')) continue
+      const where = `${entry} job '${jobName}'`
+      const calledPath = join(REPO_ROOT, uses.slice(2))
+      assert.ok(existsSync(calledPath), `${where} calls ${uses}, which does not exist`)
+
+      const called = load(readFileSync(calledPath, 'utf8'))
+      const callable = called.on?.workflow_call
+      assert.ok(callable !== undefined, `${where} calls ${uses}, which is not callable`)
+      // A callable workflow that takes nothing is fine — `config.yml` is one —
+      // so what is checked is the names, against however many it declares.
+      const declared = callable?.inputs ?? {}
+      for (const key of Object.keys(job.with ?? {})) {
+        assert.ok(key in declared, `${where} passes '${key}', which ${uses} does not declare`)
+      }
+      for (const [key, spec] of entries(declared)) {
+        if (spec?.required !== true || spec?.default !== undefined) continue
+        assert.notEqual((job.with ?? {})[key], undefined, `${where} omits required input '${key}' of ${uses}`)
+      }
+      checked += 1
+    }
+  }
+  // The four calls mdeploy-all.yml makes. A drop means a leg went inline, which
+  // is worth noticing rather than tolerating; raise it when one is added.
+  assert.ok(checked >= 4, `expected every reusable-workflow call swept, saw ${checked}`)
+})
+
 test('every workflow that selects a deployment Environment does so from an allowlist', () => {
   // The rule is stated once in .github/workflows/README.md and enforced here across every
   // workflow file, so a fourth deploy workflow cannot quietly reintroduce a free-text stage that
@@ -1645,11 +1687,20 @@ test('every workflow that selects a deployment Environment does so from an allow
 
   assert.deepEqual(
     [...swept].sort(),
-    // mbuild.yml and mdeploy.yml are the mstage/mbuild/mdeploy replacements,
-    // dispatched by hand while the incumbents above still run. Listed here
-    // deliberately: the point of pinning the set is that a fifth deploy
+    // mbuild.yml, mrunner.yml and mdeploy.yml are the mstage/mbuild/mdeploy
+    // replacements — the images, the runner binary and the stack — and
+    // mdeploy-all.yml is the one dispatch that orders the three. Listed here
+    // deliberately: the point of pinning the set is that a seventh deploy
     // workflow is a reviewed addition rather than one that appeared.
-    ['build-apps-api-image.yml', 'deploy-infra.yml', 'deploy-release.yml', 'mbuild.yml', 'mdeploy.yml'],
+    [
+      'build-apps-api-image.yml',
+      'deploy-infra.yml',
+      'deploy-release.yml',
+      'mbuild.yml',
+      'mdeploy-all.yml',
+      'mdeploy.yml',
+      'mrunner.yml',
+    ],
     'the swept set no longer matches the deployment workflows',
   )
 })

@@ -34,6 +34,11 @@
       "types": "./dist/src/config/load.d.ts",
       "default": "./dist/src/config/load.js"
     },
+    "./config-variable": {
+      "development": "./src/config/variable.ts",
+      "types": "./dist/src/config/variable.d.ts",
+      "default": "./dist/src/config/variable.js"
+    },
     "./identity": {
       "development": "./src/identity.ts",
       "types": "./dist/src/identity.d.ts",

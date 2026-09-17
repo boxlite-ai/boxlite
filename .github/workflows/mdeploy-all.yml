@@ -1,0 +1,352 @@
+# One dispatch: have the artifacts this commit needs, then deploy it.
+#
+# The three workflows beside this one each do one thing and are dispatchable on
+# their own. This is the order they go in, with the decision that sits between
+# them: what a stage already holds decides whether anything is built at all.
+#
+#   ref ──▸ source? ──▸ plan ──┬─▸ promote-api ─┐
+#                              ├─▸ build-api ───┤
+#                              ├─▸ build-runner ┴─▸ deploy
+#
+# Promotion is preferred over building, and not for speed: a promotion moves the
+# exact bytes a stage already scanned and served, while a rebuild of one commit
+# is not byte-identical — gzip alone stamps an mtime into the runner tarball, and
+# everything downstream treats version+commit as an identity and looks at no
+# content. Two stages that built the same commit hold two sets of bytes under
+# one name.
+#
+# What is deliberately not here is any cloud, registry or bucket: every job
+# below asks a stage's own declaration, exactly as the three workflows it calls
+# do.
+name: mdeploy-all
+
+on:
+  workflow_dispatch:
+    inputs:
+      # A choice rather than free text: this value selects the deployment
+      # Environment of every job below, and an Environment carries the secrets
+      # and the reviewers of the stage it names. Enforced across every workflow
+      # by apps/infra/deployment/release-safety.test.ts.
+      stage:
+        description: Stage to deploy
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - prod
+          - gcp-dev
+      components:
+        description: Which artifacts this commit needs before it is deployed
+        required: true
+        default: api+runner
+        type: choice
+        options:
+          - api+runner
+          - api
+          - runner
+      ref:
+        description: Commit SHA, or a git tag naming one (defaults to this ref)
+        required: false
+      auto_promote_from:
+        description: >-
+          Where to look when this stage does not hold an artifact. `none` builds
+          it here instead. What a promotion moves is the bytes that stage
+          already serves, which a rebuild of the same commit would not reproduce.
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - none
+          - prod
+          - gcp-dev
+      apply:
+        description: Apply the change. Off previews it and stops.
+        required: true
+        type: boolean
+        default: false
+      confirm:
+        description: Required for a stage whose declaration marks it protected
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  # One of these per stage. The workflows it calls hold their own groups — a
+  # publish per stage, an apply per stage — so two dispatches would otherwise
+  # interleave their halves rather than queue.
+  group: mdeploy-all-${{ inputs.stage }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  # The commit, resolved once. Every job below addresses bytes rather than the
+  # name they were given, and a tag that moved between two resolutions would
+  # build one commit and deploy another.
+  ref:
+    name: resolve
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: ref
+        uses: ./.github/actions/resolve-ref
+        with:
+          ref: ${{ inputs.ref }}
+          fallback: ${{ github.sha }}
+
+  # What the source stage holds, asked where it can be asked.
+  #
+  # `vars` resolves in the environment a job binds to and each stage's variable
+  # carries only its own block, so the source's declaration — and the identity
+  # that reads its registry — exist in one place and this is it. The answer
+  # travels on as outputs; nothing else in this run can reach that stage.
+  source:
+    name: read ${{ inputs.auto_promote_from }}
+    needs: [ref]
+    if: >-
+      ${{ github.ref == 'refs/heads/main'
+      && inputs.auto_promote_from != 'none' && inputs.auto_promote_from != inputs.stage }}
+    environment: ${{ inputs.auto_promote_from }}
+    runs-on: ubuntu-latest
+    outputs:
+      config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+      images: ${{ steps.images.outputs.held }}
+      runner: ${{ steps.runner.outputs.held }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-infra
+        with:
+          stages: ${{ inputs.auto_promote_from }}
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+      - name: Resolve the stage
+        id: config
+        working-directory: apps/infra
+        run: |
+          set -Eeuo pipefail
+          output="$(npm run --silent mbuild inspect -- --stage "${{ inputs.auto_promote_from }}")"
+          echo "$output" >> "$GITHUB_OUTPUT"
+      - name: Federate an AWS identity
+        if: steps.config.outputs.kind == 'ecr'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.auto_promote_from }}-github-deploy
+          aws-region: ${{ steps.config.outputs.region }}
+          role-session-name: mdeploy-all-source-${{ github.run_id }}
+      - name: Federate a GCP identity
+        if: steps.config.outputs.kind == 'artifact-registry'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER }}
+      # The runner check below reads Cloud Storage through the CLI, which the
+      # federation writes a credential for but does not install.
+      - name: Install gcloud
+        if: steps.config.outputs.kind == 'artifact-registry'
+        uses: google-github-actions/setup-gcloud@v2
+      # A read, and one whose answer is allowed to be "no": a source that does
+      # not hold this commit means the images are built here instead.
+      - name: Does it hold these images
+        id: images
+        if: contains(inputs.components, 'api')
+        working-directory: apps/infra
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          if npm run --silent mbuild verify -- --tag "${{ needs.ref.outputs.sha }}" --stage "${{ inputs.auto_promote_from }}"; then
+            echo 'held=yes' >> "$GITHUB_OUTPUT"
+          else
+            echo "${{ inputs.auto_promote_from }} does not hold these images; they will be built for the target stage"
+            echo 'held=no' >> "$GITHUB_OUTPUT"
+          fi
+
+      # The same question about the third artifact, which lives in a bucket
+      # rather than a registry. `--check` reads it without the checkout and the
+      # compile a build would need.
+      - name: Does it hold this runner
+        id: runner
+        if: contains(inputs.components, 'runner')
+        working-directory: apps/infra
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          staged="$(npm run --silent runner:build -- --stage "${{ inputs.auto_promote_from }}" --check | sed -n 's/^staged=//p')"
+          if [ "$staged" = 'complete' ]; then
+            echo 'held=yes' >> "$GITHUB_OUTPUT"
+          else
+            echo "${{ inputs.auto_promote_from }} has no runner staged for this commit; it will be built for the target stage"
+            echo 'held=no' >> "$GITHUB_OUTPUT"
+          fi
+
+  # What the target stage already holds, and therefore what has to happen.
+  plan:
+    name: plan ${{ inputs.stage }}
+    needs: [ref, source]
+    if: ${{ !cancelled() && !failure() && github.ref == 'refs/heads/main' }}
+    environment: ${{ inputs.stage }}
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.plan.outputs.api }}
+      runner: ${{ steps.plan.outputs.runner }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-infra
+        with:
+          stages: ${{ inputs.stage }}
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+      - name: Resolve the stage
+        id: config
+        working-directory: apps/infra
+        run: |
+          set -Eeuo pipefail
+          output="$(npm run --silent mbuild inspect -- --stage "${{ inputs.stage }}")"
+          echo "$output" >> "$GITHUB_OUTPUT"
+      - name: Federate an AWS identity
+        if: steps.config.outputs.kind == 'ecr'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.stage }}-github-deploy
+          aws-region: ${{ steps.config.outputs.region }}
+          role-session-name: mdeploy-all-plan-${{ github.run_id }}
+      - name: Federate a GCP identity
+        if: steps.config.outputs.kind == 'artifact-registry'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER }}
+      - name: Install gcloud
+        if: steps.config.outputs.kind == 'artifact-registry'
+        uses: google-github-actions/setup-gcloud@v2
+      # Three answers per component, and every input to them is a read: what
+      # this stage holds, and what the source said it holds. Nothing is decided
+      # twice — the jobs below run on these two values alone.
+      - name: Decide
+        id: plan
+        working-directory: apps/infra
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.ref.outputs.sha }}
+          STAGE: ${{ inputs.stage }}
+          COMPONENTS: ${{ inputs.components }}
+          SOURCE_IMAGES: ${{ needs.source.outputs.images }}
+          SOURCE_RUNNER: ${{ needs.source.outputs.runner }}
+        run: |
+          set -Eeuo pipefail
+          api=skip
+          runner=skip
+
+          case "$COMPONENTS" in
+            *api*)
+              if npm run --silent mbuild verify -- --tag "$SHA" --stage "$STAGE"; then
+                echo "$STAGE already holds the images for $SHA"
+              elif [ "$SOURCE_IMAGES" = 'yes' ]; then
+                api=promote
+              else
+                api=build
+              fi
+              ;;
+          esac
+
+          case "$COMPONENTS" in
+            *runner*)
+              # `--check` reads the same answer the build itself would, without
+              # the checkout and the compile behind it.
+              staged="$(npm run --silent runner:build -- --stage "$STAGE" --check | sed -n 's/^staged=//p')"
+              if [ "$staged" = 'complete' ]; then
+                echo "$STAGE already holds a runner binary for $SHA"
+              elif [ "$SOURCE_RUNNER" = 'yes' ]; then
+                runner=promote
+              else
+                runner=build
+              fi
+              ;;
+          esac
+
+          printf 'api=%s\n' "$api" >> "$GITHUB_OUTPUT"
+          printf 'runner=%s\n' "$runner" >> "$GITHUB_OUTPUT"
+          {
+            echo "### plan for \`$SHA\` on \`$STAGE\`"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| images | \`$api\` |"
+            echo "| runner | \`$runner\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  promote-api:
+    name: promote images
+    needs: [ref, plan]
+    if: ${{ !cancelled() && !failure() && needs.plan.outputs.api == 'promote' }}
+    uses: ./.github/workflows/mbuild.yml
+    with:
+      command: promote
+      tag: ${{ needs.ref.outputs.sha }}
+      from: ${{ inputs.auto_promote_from }}
+      to: ${{ inputs.stage }}
+    secrets: inherit
+
+  build-api:
+    name: build images
+    needs: [ref, plan]
+    if: ${{ !cancelled() && !failure() && needs.plan.outputs.api == 'build' }}
+    uses: ./.github/workflows/mbuild.yml
+    with:
+      command: publish
+      tag: ${{ needs.ref.outputs.sha }}
+      stage: ${{ inputs.stage }}
+    secrets: inherit
+
+  promote-runner:
+    name: promote runner
+    needs: [ref, plan]
+    if: ${{ !cancelled() && !failure() && needs.plan.outputs.runner == 'promote' }}
+    uses: ./.github/workflows/mrunner.yml
+    with:
+      command: promote
+      stage: ${{ inputs.stage }}
+      ref: ${{ needs.ref.outputs.sha }}
+      from: ${{ inputs.auto_promote_from }}
+    secrets: inherit
+
+  build-runner:
+    name: build runner
+    needs: [ref, plan]
+    if: ${{ !cancelled() && !failure() && needs.plan.outputs.runner == 'build' }}
+    uses: ./.github/workflows/mrunner.yml
+    with:
+      stage: ${{ inputs.stage }}
+      ref: ${{ needs.ref.outputs.sha }}
+    secrets: inherit
+
+  deploy:
+    name: ${{ inputs.apply && 'deploy' || 'preview' }}
+    needs: [ref, plan, promote-api, build-api, promote-runner, build-runner]
+    # Every artifact job is skipped when the stage already holds what it needs,
+    # and a skipped dependency skips its dependents unless this says otherwise.
+    # `!failure()` is what still stops a deploy whose artifacts did not arrive.
+    if: ${{ !cancelled() && !failure() }}
+    uses: ./.github/workflows/mdeploy.yml
+    with:
+      stage: ${{ inputs.stage }}
+      image_tag: ${{ needs.ref.outputs.sha }}
+      # Only when this run was about the runner: a deploy that named a staged
+      # binary the stage never asked for would install one over its release.
+      runner_ref: ${{ contains(inputs.components, 'runner') && needs.ref.outputs.sha || '' }}
+      apply: ${{ inputs.apply }}
+      confirm: ${{ inputs.confirm }}
+    secrets: inherit

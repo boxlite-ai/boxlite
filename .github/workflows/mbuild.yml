@@ -1,9 +1,10 @@
 # Builds and publishes BoxLite's container images, through mbuild.
 #
-# Every decision this workflow makes is read from a file rather than written
-# here: which artifacts exist and which repository receives them come from
-# mbuild.config.json, and where a stage lives comes from mstage.config.json. The
-# workflow's own job is to federate an identity for the cloud that stage
+# Every decision this workflow makes is declared rather than written here: which
+# artifacts exist comes from the committed mstage.env.json, and where a stage
+# publishes comes from that stage's own declaration — which is not in the
+# checkout either, so setup-infra reads it out of the Environment this job runs
+# in. The workflow's own job is to federate an identity for the cloud that stage
 # publishes to, and to run mbuild once. Nothing about ECR, Artifact Registry or
 # a repository name is written below.
 #
@@ -30,7 +31,7 @@ on:
         options: [publish, promote]
         default: publish
       tag:
-        description: Commit SHA to publish (defaults to this ref)
+        description: Commit SHA, or a git tag naming one (defaults to this ref)
         required: false
       # A choice rather than free text, and not for convenience: this value
       # selects the job's deployment Environment, and an Environment carries the
@@ -64,6 +65,31 @@ on:
           - prod
           - gcp-dev
 
+  # Called by an orchestrating workflow, which dispatches the same three
+  # commands in order. The allowlist above is what a person types; a caller
+  # passes a string because `workflow_call` has no choice type — and the caller
+  # is a workflow in this repository whose own input is an allowlist.
+  workflow_call:
+    inputs:
+      command:
+        required: true
+        type: string
+      tag:
+        required: false
+        type: string
+        default: ''
+      stage:
+        required: false
+        type: string
+        default: ''
+      from:
+        required: false
+        type: string
+        default: ''
+      to:
+        required: false
+        type: string
+        default: ''
 
 concurrency:
   # One publisher per stage. Two pushing the same immutable tag would have one
@@ -77,11 +103,39 @@ permissions:
   id-token: write
 
 jobs:
+  # The source stage's declaration, read where it exists.
+  #
+  # A promotion composes the source address as well as the destination's, and
+  # `vars` is scoped to the environment a job binds to — so the only way to read
+  # the source's block is a job that binds to the source's environment. Carried
+  # to the job below as an output rather than copied into the destination's own
+  # variable, so there is one copy of each stage's declaration and it cannot go
+  # stale against the environment that owns it.
+  #
+  # The block names a project, a region and a repository; no credential of
+  # either stage passes through here.
+  declaration:
+    name: read ${{ inputs.from }}
+    if: github.ref == 'refs/heads/main' && inputs.command == 'promote'
+    environment: ${{ inputs.from }}
+    runs-on: ubuntu-latest
+    outputs:
+      config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+    steps:
+      # A job is what binds an environment, and a job needs a step. The value is
+      # already in the output above; this only says which stage was read.
+      - run: echo "carrying ${{ inputs.from }}'s declaration to ${{ inputs.to }}"
+
   mbuild:
     name: ${{ inputs.command }} to ${{ inputs.stage || inputs.to }}
+    # Waits for that job only when there is one — a publish reads one stage.
+    needs: [declaration]
+    if: >-
+      ${{ !cancelled() && !failure() && github.ref == 'refs/heads/main' }}
     # The job that reaches a protected Environment reaches the cloud role behind
-    # it, so it runs from main and nowhere else.
-    if: github.ref == 'refs/heads/main'
+    # it, so it runs from main and nowhere else. `!failure()` rather than a bare
+    # `needs`, because the job above is skipped for a publish and a skipped
+    # dependency would otherwise skip this one too.
     environment: ${{ inputs.stage || inputs.to }}
     runs-on: ubuntu-latest
     env:
@@ -94,12 +148,60 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+          # Tags and the commits they name, so the step below can resolve one. A
+          # shallow checkout carries neither, and a dispatcher naming a release
+          # would get "not a ref this checkout can resolve" for a tag that does
+          # exist.
+          fetch-depth: 0
+
+      # A tag is a name; mbuild addresses bytes. The action dereferences an
+      # annotated tag and fails loudly on a ref this checkout cannot resolve.
+      - id: ref
+        uses: ./.github/actions/resolve-ref
+        with:
+          ref: ${{ inputs.tag }}
+          fallback: ${{ github.sha }}
+
+      - name: Address the commit the ref names
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'IMAGE_TAG=%s\n' '${{ steps.ref.outputs.sha }}' >> "$GITHUB_ENV"
+          printf 'RESOLVED_FROM=%s\n' '${{ steps.ref.outputs.resolved-from }}' >> "$GITHUB_ENV"
+
+      # The tree the images are built from, which is the whole point of naming a
+      # commit. `mbuild publish` passes the tag to docker as a build argument
+      # and builds whatever is on disk, so a job that stayed on this workflow's
+      # own ref would tag main's bytes with somebody else's commit — and an
+      # immutable tag makes that permanent.
+      #
+      # Switching the workspace rather than checking out beside it: the build
+      # context, the lockfiles and the tooling then all come from the commit
+      # being published. What that costs is this file's own actions — a commit
+      # older than `.github/actions/setup-infra` fails on a missing action
+      # rather than on anything about the image.
+      #
+      # A publish only. A promotion builds nothing — it copies a manifest
+      # between registries — so the commit's tree buys it nothing, and moving
+      # onto a commit that predates this tooling would leave it with no mbuild
+      # to run.
+      - if: inputs.command == 'publish'
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          ref: ${{ steps.ref.outputs.sha }}
 
       # apps/infra is not one of the root workspaces and carries its own
       # lockfile, so a root install leaves mstage, mbuild and sst unresolved and
       # every step below fails on a missing script. The action installs there,
       # from cache when the lockfile has not moved.
       - uses: ./.github/actions/setup-infra
+        with:
+          # A promotion restores the source declaration as well as the
+          # destination's, because it composes both addresses.
+          stages: ${{ inputs.command == 'promote' && format('{0} {1}', inputs.from, inputs.to) || inputs.stage }}
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+          stage-config-from: ${{ needs.declaration.outputs.config }}
 
       # docker writes the registry token to disk in cleartext, so it is written
       # outside HOME, where a cache key or an artifact upload that globs the
@@ -241,6 +343,9 @@ jobs:
             echo "| | |"
             echo "|---|---|"
             echo "| commit | \`$IMAGE_TAG\` |"
+            # Only when a ref was resolved, so the row says something rather
+            # than repeating the commit under a second name.
+            [ -n "${RESOLVED_FROM:-}" ] && echo "| resolved from | \`$RESOLVED_FROM\` |"
             echo "| stage | \`$TARGET_STAGE\` |"
             echo "| registry | \`${{ steps.config.outputs.kind }}\` in \`${{ steps.config.outputs.region }}\` |"
             echo "| repository | \`${{ steps.config.outputs.repository }}\` |"

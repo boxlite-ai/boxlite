@@ -14,7 +14,33 @@
 # The cache key is exact and carries no `restore-keys`: a partial hit would be a
 # wrong install, and paying the install is the correct outcome of a miss.
 name: Set up apps/infra
-description: Node, the apps/infra install, the pulumi CLI, and the build artefacts sst resolves without conditions.
+description: Node, the apps/infra install, the pulumi CLI, the stage declaration, and the build artefacts sst resolves without conditions.
+
+inputs:
+  stages:
+    description: >-
+      Whitespace-separated stages whose declarations to restore. One for a
+      publish or a deploy; a promotion needs both ends, and each block lives on
+      its own GitHub environment, so a job can only restore the stages of the
+      environment it runs in. Left empty by a job that reaches no stage.
+    required: false
+    default: ''
+  stage-config:
+    description: >-
+      The BOXLITE_MSTAGE_<APP>_CONFIG variable of this job's environment, which
+      is where `mstage config put` left this stage's block. Passed in rather
+      than read here, because `vars` is scoped to the job's environment and this
+      action does not choose one.
+    required: false
+    default: ''
+  stage-config-from:
+    description: >-
+      The same variable, read in another stage's environment and carried here as
+      a job output. A promotion composes two addresses and a job binds to one
+      environment, so the source's declaration can only arrive from a job that
+      did bind to it. Merged with the one above; empty for every other job.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -57,6 +83,68 @@ runs:
     - uses: pulumi/actions@v6
       with:
         pulumi-version: 3.261.0
+
+    # `.mstage.config.json` is not committed — a stage block names one account's
+    # project, region and registry. `mstage config put` sent this stage's block
+    # to the GitHub environment of the same name; this is the other end of that,
+    # and every tool below reads the file it writes.
+    #
+    # Here rather than in each workflow because all of them need it before
+    # anything else runs: mstage to resolve a cloud, mbuild to find a registry,
+    # mdeploy to read the shape. `config get` itself resolves no cloud and needs
+    # no credential, which is why it can run before any federation step.
+    #
+    # `config get` prints one stage wrapped in its own name — `{"dev": {…}}` —
+    # so the blocks are collected and wrapped in `stages` here. `jq -s add`
+    # merges them, which is what makes a two-stage restore one file.
+    - name: Restore the stage declaration
+      shell: bash
+      working-directory: apps/infra
+      env:
+        # The name `mstage config get` derives from `app` in mstage.env.json.
+        BOXLITE_MSTAGE_BOXLITE_APP_CONFIG: ${{ inputs.stage-config }}
+        FROM_CONFIG: ${{ inputs.stage-config-from }}
+        STAGES: ${{ inputs.stages }}
+      run: |
+        set -Eeuo pipefail
+        if [ -z "${STAGES// /}" ]; then
+          # Said out loud rather than passed over in silence: a job that meant
+          # to name a stage fails at its first mstage call, and this line is
+          # what tells the reader of that failure where to look.
+          echo 'No stages given, so no declaration is restored; every mstage call below will refuse'
+          exit 0
+        fi
+        # The two environments' answers, as one document.
+        #
+        # `mstage config get` reads one variable, and a job reads one
+        # environment's vars — so a promotion's source block arrives through a
+        # job that bound to that environment and is merged in here. Later wins
+        # nothing: the two name different stages, and a variable that named the
+        # same one twice would be two answers to a question with one.
+        if [ -n "${FROM_CONFIG// /}" ]; then
+          BOXLITE_MSTAGE_BOXLITE_APP_CONFIG="$(
+            printf '%s\n%s\n' "$BOXLITE_MSTAGE_BOXLITE_APP_CONFIG" "$FROM_CONFIG" | jq -cs 'add'
+          )"
+          export BOXLITE_MSTAGE_BOXLITE_APP_CONFIG
+        fi
+        # A directory of its own, so the merge below globs exactly what this
+        # loop wrote, and only its owner may list it: each block holds one
+        # account's coordinates.
+        blocks="$RUNNER_TEMP/mstage-blocks"
+        rm -rf "$blocks"
+        mkdir -p -m 700 "$blocks"
+        for stage in $STAGES; do
+          # Redirected rather than captured, so anything mstage says on stderr
+          # reaches this log instead of being parsed as part of the JSON.
+          if ! npm run --silent mstage config get -- --stage="$stage" > "$blocks/$stage.json"; then
+            echo "::error title=stage::Could not read the declaration for $stage; see the log above"
+            exit 1
+          fi
+        done
+        jq -s 'add | {stages: .}' "$blocks"/*.json > .mstage.config.json
+        rm -rf "$blocks"
+        # Named, never printed: the block holds one account's coordinates.
+        echo "Restored $(jq -r '.stages | keys | join(", ")' .mstage.config.json) into .mstage.config.json"
 
     # Both, not one: the config resolves `mstage/config` as well as
     # `mbuild/address` and `mbuild/config`, and each is resolved the same way.

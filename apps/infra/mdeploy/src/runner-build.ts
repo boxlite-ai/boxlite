@@ -61,9 +61,15 @@ export class RunnerBuildError extends Error {
 
 const USAGE = [
   'usage: npm run runner:build -- --stage <stage>',
+  '       npm run runner:build -- --stage <stage> --check',
   '',
   'Builds a runner from this checkout and stages it for its commit, so a deploy',
   'can install an unreleased change. The checkout must be clean.',
+  '',
+  '--check answers whether that commit is staged already and builds nothing:',
+  '`staged=complete|absent` and `address=<prefix>` on stdout, for a caller that',
+  'has to decide whether to spend a build. It reaches the same bucket, so an',
+  'unreachable one is still a failure rather than an "absent".',
 ].join('\n')
 
 const COMMIT = /^[0-9a-f]{40}$/
@@ -120,6 +126,20 @@ const checkoutRoot = ({ configuration, run }: { configuration: string; run: RunC
  * from a nested repository a bare `rev-parse` answers for that one, and this
  * call decides which commit the object claims to hold.
  */
+/**
+ * The commit and version this checkout describes, asking nothing of its state.
+ *
+ * `--check` reads only: it stages nothing, so the rules that make a staged
+ * object honest about its commit have nothing to protect there, and demanding a
+ * clean tree would make "is this already built?" unanswerable from the working
+ * copy someone is asking it from.
+ */
+export const readCheckout = ({ root, run }: { root: string; run: RunCommand }): { ref: string; version: string } => {
+  const ref = must(run, 'git', ['-C', root, 'rev-parse', 'HEAD'], 'reading the checkout’s commit')
+  if (!COMMIT.test(ref)) throw new RunnerBuildError(`git returned an invalid commit ${JSON.stringify(ref)}`)
+  return { ref, version: readWorkspaceVersion({ from: root }) }
+}
+
 export const inspectCheckout = ({ root, run }: { root: string; run: RunCommand }): { ref: string; version: string } => {
   const ref = must(run, 'git', ['-C', root, 'rev-parse', 'HEAD'], 'reading the checkout’s commit')
   if (!COMMIT.test(ref)) throw new RunnerBuildError(`git returned an invalid commit ${JSON.stringify(ref)}`)
@@ -168,20 +188,18 @@ const classifyStaged = ({
   )
 }
 
-/** What is already there, so a rerun is free and a half-publication is refused. */
-const publishedAlready = ({
+/** What is under the prefix, as full keys. The two questions below share it. */
+const awsListing = ({
   run,
   region,
   bucket,
   prefix,
-  names,
 }: {
   run: RunCommand
   region: string
   bucket: string
   prefix: string
-  names: string[]
-}): 'complete' | 'absent' => {
+}): Set<string> => {
   const listed = must(
     run,
     'aws',
@@ -189,8 +207,7 @@ const publishedAlready = ({
     ['s3api', 'list-objects-v2', '--region', region, '--bucket', bucket, '--prefix', `${prefix}/`, '--query', 'Contents[].Key', '--output', 'text'],
     `listing what is staged under ${prefix}/`,
   )
-  const staged = new Set(listed.split(/\s+/).filter((key) => key && key !== 'None'))
-  return classifyStaged({ staged, names, prefix })
+  return new Set(listed.split(/\s+/).filter((key) => key && key !== 'None'))
 }
 
 /**
@@ -200,29 +217,26 @@ const publishedAlready = ({
  * that holds nothing exits non-zero with `matched no objects`, which is the
  * answer rather than a failure.
  */
-const gcpPublishedAlready = ({
+const gcpListing = ({
   run,
   bucket,
   prefix,
-  names,
 }: {
   run: RunCommand
   bucket: string
   prefix: string
-  names: string[]
-}): 'complete' | 'absent' => {
+}): Set<string> => {
   const listed = run('gcloud', ['storage', 'ls', `gs://${bucket}/${prefix}/`])
   if (!listed.ok) {
-    if (/matched no objects|not found|404/i.test(`${listed.stderr}${listed.stdout}`)) return 'absent'
+    if (/matched no objects|not found|404/i.test(`${listed.stderr}${listed.stdout}`)) return new Set()
     throw new RunnerBuildError(`listing what is staged under ${prefix}/ failed: ${listed.stderr || listed.stdout}`)
   }
-  const staged = new Set(
+  return new Set(
     listed.stdout
       .split(/\s+/)
       .filter(Boolean)
       .map((line) => line.replace(`gs://${bucket}/`, '')),
   )
-  return classifyStaged({ staged, names, prefix })
 }
 
 /**
@@ -232,16 +246,32 @@ const gcpPublishedAlready = ({
  * identical, and the differences are exactly these three — how the bucket is
  * proved to exist, how it is listed, and what makes a write refuse to overwrite.
  */
-type Destination = {
+export type Destination = {
   /** How the prefix reads in a message and in the line printed at the end. */
   address: string
   /** Proved before the build, because compiling libkrun takes minutes. */
   assertReachable: () => void
   publishedAlready: () => 'complete' | 'absent'
+  /**
+   * The object names under the prefix, whatever they are.
+   *
+   * A promotion has no checkout to read a version from — the name carries one —
+   * so the source bucket is the authority on what this commit produced.
+   */
+  staged: () => string[]
   put: (name: string, file: string) => void
+  /**
+   * The same object, from another stage's bucket, without passing through here.
+   *
+   * A promotion's whole point: the bytes a stage already serves are the bytes
+   * the next one gets. A rebuild would produce different ones under the same
+   * version+commit identity — gzip alone stamps an mtime — and everything
+   * downstream compares that identity and never the content.
+   */
+  copyFrom: (sourceAddress: string, name: string) => void
 }
 
-const awsDestination = ({
+export const awsDestination = ({
   run,
   app,
   stage,
@@ -271,7 +301,16 @@ const awsDestination = ({
     assertReachable: () => {
       must(run, 'aws', ['s3api', 'head-bucket', '--region', region, '--bucket', bucket], `finding the bucket ${bucket}`)
     },
-    publishedAlready: () => publishedAlready({ run, region, bucket, prefix, names }),
+    publishedAlready: () => classifyStaged({ staged: awsListing({ run, region, bucket, prefix }), names, prefix }),
+    staged: () => [...awsListing({ run, region, bucket, prefix })].map((key) => key.slice(key.lastIndexOf('/') + 1)),
+    copyFrom: (sourceAddress, name) => {
+      must(
+        run,
+        'aws',
+        ['s3', 'cp', '--region', region, `${sourceAddress}/${name}`, `s3://${bucket}/${prefix}/${name}`],
+        `copying ${name} from ${sourceAddress}`,
+      )
+    },
     put: (name, file) => {
       must(
         run,
@@ -298,7 +337,7 @@ const awsDestination = ({
   }
 }
 
-const gcpDestination = ({
+export const gcpDestination = ({
   run,
   app,
   stage,
@@ -319,7 +358,16 @@ const gcpDestination = ({
     assertReachable: () => {
       must(run, 'gcloud', ['storage', 'buckets', 'describe', `gs://${bucket}`], `finding the bucket ${bucket}`)
     },
-    publishedAlready: () => gcpPublishedAlready({ run, bucket, prefix, names }),
+    publishedAlready: () => classifyStaged({ staged: gcpListing({ run, bucket, prefix }), names, prefix }),
+    staged: () => [...gcpListing({ run, bucket, prefix })].map((key) => key.slice(key.lastIndexOf('/') + 1)),
+    copyFrom: (sourceAddress, name) => {
+      must(
+        run,
+        'gcloud',
+        ['storage', 'cp', `${sourceAddress}/${name}`, `gs://${bucket}/${prefix}/${name}`],
+        `copying ${name} from ${sourceAddress}`,
+      )
+    },
     put: (name, file) => {
       must(
         run,
@@ -373,7 +421,7 @@ export const buildRunner = async ({
     return 0
   }
 
-  const { options, inner } = parseInvocation(['build', ...argv], environment, {})
+  const { options, inner } = parseInvocation(['build', ...argv], environment, { flags: ['check'] })
   if (inner) throw new RunnerBuildError(`runner:build takes no inner command.\n${USAGE}`)
 
   const config = loadConfig({ cwd, environment })
@@ -389,7 +437,10 @@ export const buildRunner = async ({
   const run = injectedRun ?? spawnWith({ ...environment, ...credentials })
 
   const repository = checkoutRoot({ configuration: deployRoot({ cwd, environment }), run })
-  const { ref, version } = inspectCheckout({ root: repository, run })
+  const checking = options.check === true
+  const { ref, version } = checking
+    ? readCheckout({ root: repository, run })
+    : inspectCheckout({ root: repository, run })
   const archive = `boxlite-runner-v${version}-${ref}-linux-amd64.tar.gz`
   const names = [archive, `${archive}.sha256`]
   const identity = `${version}+${ref}`
@@ -409,6 +460,19 @@ export const buildRunner = async ({
       ? awsDestination({ run, app: config.app, stage, region: scope.region as string, prefix, names })
       : gcpDestination({ run, app: config.app, stage, project: projectOf(scope, stage), prefix, names })
   destination.assertReachable()
+
+  /*
+   * The whole of `--check`: the same question the skip below asks, answered
+   * without the build behind it. Two lines rather than an exit code, because a
+   * caller deciding between "nothing to do" and "spend a build" wants the
+   * address too, and a partial publication still throws from here — it is not a
+   * state anything downstream can act on.
+   */
+  if (checking) {
+    log(`staged=${destination.publishedAlready()}`)
+    log(`address=${destination.address}`)
+    return 0
+  }
 
   if (destination.publishedAlready() === 'complete') {
     log(`${destination.address}/ is already published; leaving it untouched`)

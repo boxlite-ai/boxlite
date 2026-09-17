@@ -50,6 +50,10 @@ is *exclusively* callable; the other four can also be dispatched on their own.
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. The normal deploy path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing |
 | `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage. Run by `deploy-infra` after it applies |
+| `mdeploy-all.yml` | dispatch | yes | One dispatch: have the artifacts this commit needs, then deploy it. Calls the three below |
+| `mbuild.yml` | dispatch, `workflow_call` | yes | Every container image a commit produces: publish them, or promote them between stages |
+| `mrunner.yml` | dispatch, `workflow_call` | yes | The runner binary for a commit: build it for a stage, or promote the one another stage serves |
+| `mdeploy.yml` | dispatch, `workflow_call` | yes | Applies the stack for a commit whose artifacts are already in place |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted EC2 runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `e2e-stack.yml` | push, PR, dispatch | — | SDK → API → runner → VM on a nested-KVM runner |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds every box image flavor for both arches without publishing |
@@ -152,6 +156,14 @@ targeted by an unbootstrapped or misspelled name. Each list is independent — i
 *that* path is meant to reach. Today `deploy-infra.yml` lists `dev`, while `deploy-release.yml` and
 `build-apps-api-image.yml` (`stage` and `source_stage`) list `dev` and `prod`. Bootstrapping a
 stage means adding it to whichever lists should reach it.
+
+The `m*` workflows read that stage's declaration rather than anything written here, so adding one
+to their lists is the whole change on this side — but the declaration has to be somewhere they can
+read it. `npm run mstage config put -- --stage <stage>` puts it in that stage's Environment, and
+`.github/actions/setup-infra` restores it on the runner. A promotion reads two stages and a job
+binds to one Environment, so the source's block is read by a job bound to the source's Environment
+and carried to the other as an output — which is why `mbuild.yml`, `mrunner.yml` and
+`mdeploy-all.yml` each have a small `declaration` job.
 
 Each stage also needs its GitHub Environment to exist under exactly the stage name — the deploy
 role's trust policy pins `repo:<owner>/<repo>:environment:<stage>` — and that is where required

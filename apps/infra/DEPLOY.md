@@ -61,6 +61,17 @@ virtualization is available at all.
 Neither file holds a secret, and neither holds anything one deploy decides — an
 image tag comes from the invocation, because it is different every time.
 
+The stage file is the one a runner cannot have: it names an account, so it is not
+committed, and every tool reads a file rather than a variable. `mstage config
+put` carries one stage's block into the GitHub environment of the same name, and
+`.github/actions/setup-infra` is the other end — it asks `mstage config get` for
+each stage the job names and merges the answers back into `.mstage.config.json`,
+so a stage nobody has `put` is refused in setup, by name, rather than minutes
+later by whichever tool read for it first. `boxlite-backoffice` restores it the
+same way, with the same action. A promotion needs two declarations and restores
+both out of the destination's environment: a job is bound to one environment,
+and it is not the source's.
+
 The runner binary is the one case worth spelling out, because it is in neither
 file. Its version belongs to the *commit*: the workspace `Cargo.toml` is what the
 release workflow publishes under, so `mdeploy/stack/runner-binary.ts` reads it
@@ -283,6 +294,48 @@ and the reason it is overridable is that a machine family is stocked per zone:
 `asia-southeast1-a` answers `stockout` for an N4 while `-b` creates one, and a
 derived-only zone makes that a deploy nothing can fix without editing code.
 
+## One dispatch
+
+`mdeploy-all.yml` is the whole of it from a browser: pick a stage, pick what the
+commit needs — `api+runner`, `api` or `runner` — name a commit or a tag, and say
+whether to apply or only preview. What it does first is read: does this stage
+already hold the images for that commit, and a runner binary staged under it?
+Each answer decides one leg.
+
+```
+ref ──▸ source? ──▸ plan ──┬─▸ promote-api / build-api ───┐
+                           └─▸ promote-runner / build-runner ─┴─▸ deploy
+```
+
+`auto_promote_from` is where it looks when the stage holds neither — `dev` by
+default, `none` to switch it off. A promotion is preferred over a build for a
+reason that is not speed: it moves the bytes that stage already serves, and a
+rebuild of one commit is not byte-identical, while everything downstream treats
+version+commit as an identity and never looks inside. Two stages that each built
+the same commit hold two sets of bytes under one reported version.
+
+Each leg is also dispatchable on its own — `mbuild.yml` for the images,
+`mrunner.yml` for the runner binary, `mdeploy.yml` for the apply — and the
+orchestrator calls exactly those.
+
+**A promotion crosses two stages, and on GCP that means two projects.** One
+identity does the whole move: the destination's, because that is the one that
+has to write. So the destination's deployer needs read access on the source's
+project, granted there and not here:
+
+```
+gcloud projects add-iam-policy-binding <source project> \
+  --member=serviceAccount:<destination deployer> --role=roles/artifactregistry.reader
+gcloud storage buckets add-iam-policy-binding gs://<source artifacts bucket> \
+  --member=serviceAccount:<destination deployer> --role=roles/storage.objectViewer
+```
+
+The registry grant is what `mbuild promote` pulls with; the bucket grant is what
+`runner:promote` copies from, and it is scoped to the one bucket rather than the
+project. Without them a promotion fails at the pull with a permissions error and
+nothing is written — `bootstrap` does not make this grant, because it runs
+against one project and this one belongs to the other.
+
 ## Commands
 
 ```
@@ -292,11 +345,17 @@ npm run mstage env list     -- --stage dev --values    values, asked for explici
 npm run mstage env digest   -- --stage dev             expect: / got:
 npm run mstage env set      -- --stage dev --digest KEY=VALUE
 npm run mstage state unlock -- --stage dev             what a killed deploy left
+npm run mstage config put   -- --stage dev             this stage's block, into its GitHub environment
+npm run mstage config get   -- --stage dev             it back, from the variable or the file
 npm run mstage state edit   -- --stage dev             the checkpoint, in $EDITOR
 
 npm run mbuild publish -- --tag <sha> --stage dev      build and push every artifact
 npm run mbuild promote -- --tag <sha> --from dev --to prod
 npm run mbuild verify  -- --tag <sha> --stage dev      does this stage hold this commit
+
+npm run runner:build   -- --stage dev                  build this commit's runner and stage it
+npm run runner:build   -- --stage dev --check          is it staged already, without building
+npm run runner:promote -- --tag <sha> --from dev --to prod
 
 npm run mdeploy -- --plan                              the batches, derived from the graph
 npm run mdeploy -- --stage dev --diff                  read this before the first apply

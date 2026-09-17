@@ -289,3 +289,55 @@ test('a failing command stops the run with what it said', async () => {
     args.join(' ').includes('head-bucket') ? failed('An error occurred (403) when calling HeadBucket') : happy()(file, args)
   await assert.rejects(() => drive(denied), /finding the bucket boxlite-app-dev-artifacts-123456789012 failed: .*403/)
 })
+
+/*
+ * `--check`: the same question the skip asks, without the build behind it.
+ *
+ * What an orchestrating workflow needs before it decides whether to spend a job
+ * on compiling libkrun — and what it must not need is a pristine tree, since
+ * asking is not staging.
+ */
+test('--check answers whether the commit is staged and compiles nothing', async () => {
+  const calls: string[][] = []
+  const log: string[] = []
+  // A bucket that already holds both objects for this commit.
+  const staged = happy(calls, {
+    'list-objects-v2': ok(`runner/${REF}/${STAGED_ARCHIVE}\nrunner/${REF}/${STAGED_ARCHIVE}.sha256`),
+  })
+  assert.equal(await drive(staged, ['--stage', 'dev', '--check'], log), 0)
+  assert.ok(log.includes('staged=complete'), `expected a verdict, got ${JSON.stringify(log)}`)
+  assert.ok(log.some((line) => line.startsWith('address=')), 'a caller needs the prefix it would read')
+  assert.ok(!calls.some((call) => call[0] === 'docker'), 'a check must not build')
+  assert.ok(!calls.some((call) => call.includes('put-object')), 'and must not write')
+})
+
+test('--check on a commit nothing staged says so rather than staging it', async () => {
+  const calls: string[][] = []
+  const log: string[] = []
+  assert.equal(await drive(happy(calls), ['--stage', 'dev', '--check'], log), 0)
+  assert.ok(log.includes('staged=absent'))
+  assert.ok(!calls.some((call) => call[0] === 'docker'))
+})
+
+test('--check still proves the bucket, because "absent" would otherwise mean "unreachable"', async () => {
+  // A caller that read `absent` from an unreachable bucket would spend the
+  // build and fail on the upload at the end of it.
+  const log: string[] = []
+  await assert.rejects(
+    () => drive(happy([], { 'head-bucket': failed('Not Found') }), ['--stage', 'dev', '--check'], log),
+    RunnerBuildError,
+  )
+})
+
+test('--check does not demand the clean tree a staging build does', async () => {
+  // The rules that keep a staged object honest about its commit protect bytes
+  // being written; a read writes none, and refusing to answer from a working
+  // copy is refusing the question a person actually has.
+  const log: string[] = []
+  const dirty = happy([], { 'status --porcelain': ok(' M apps/runner/main.go') })
+  assert.equal(await drive(dirty, ['--stage', 'dev', '--check'], log), 0)
+  assert.ok(log.includes('staged=absent'))
+
+  // And a staging build still refuses it.
+  await assert.rejects(() => drive(dirty), /uncommitted changes/)
+})

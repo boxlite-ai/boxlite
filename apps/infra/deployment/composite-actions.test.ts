@@ -73,6 +73,45 @@ test('every workflow reference to a composite action resolves and passes declare
   assert.ok(checked >= 45, `expected every composite-action call site swept, saw ${checked}`)
 })
 
+test('every apps/infra step runs a script apps/infra declares', () => {
+  // `setup-infra` called `npm run build:mstage`, which this package had never
+  // declared: every job using the action failed on `Missing script`, and nothing
+  // typechecks a script name. A `run:` is the one place a name can be wrong and
+  // still look right.
+  const scripts = new Set(
+    Object.keys(JSON.parse(readFileSync(join(REPO_ROOT, 'apps/infra/package.json'), 'utf8')).scripts ?? {}),
+  )
+  assert.ok(scripts.size > 0, 'apps/infra declares no scripts; this test is reading the wrong package')
+
+  let checked = 0
+  const sources = [
+    ...readdirSync(WORKFLOWS_DIR)
+      .filter((name) => /\.ya?ml$/.test(name))
+      .map((name) => [name, join(WORKFLOWS_DIR, name)] as const),
+    ...readdirSync(ACTIONS_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => [entry.name, join(ACTIONS_DIR, entry.name, 'action.yml')] as const),
+  ]
+  for (const [name, file] of sources) {
+    const document: any = loadYaml(readFileSync(file, 'utf8'))
+    const containers = document.jobs ? Object.values<any>(document.jobs) : [document.runs ?? {}]
+    for (const container of containers) {
+      const shared = container.defaults?.run?.['working-directory'] ?? document.defaults?.run?.['working-directory']
+      for (const step of container.steps ?? []) {
+        if (step.run === undefined) continue
+        if ((step['working-directory'] ?? shared) !== 'apps/infra') continue
+        for (const [, script] of String(step.run).matchAll(/npm run (?:--silent )?([A-Za-z0-9:_-]+)/g)) {
+          assert.ok(scripts.has(script), `${name} runs 'npm run ${script}', which apps/infra does not declare`)
+          checked += 1
+        }
+      }
+    }
+  }
+  // The count today. A drop means a call site stopped going through npm, which is
+  // worth noticing rather than silently tolerating; raise it when one is added.
+  assert.ok(checked >= 12, `expected every apps/infra script call swept, saw ${checked}`)
+})
+
 test('every job using a composite action checks the repository out first', () => {
   // A `uses: ./...` action is read from the workspace, so a job without a checkout cannot find it
   // — and a job that checks out *after* downloading artifacts loses them, since checkout cleans
@@ -421,4 +460,140 @@ test('the host and the container strip the same prefix from cache keys', () => {
   const manylinux = readAction('run-in-manylinux')
   const run = String(manylinux.runs.steps[0].run)
   assert.match(run, /-e SCCACHE_BASEDIRS=\/work/, 'the container is not given a matching basedir')
+})
+
+/* ------------------------------------------------------------------ setup-infra */
+
+/** The restore step's own shell, run against a stubbed `mstage config get`. */
+const restoreDeclaration = ({
+  stages,
+  config,
+  from = '',
+}: {
+  stages: string
+  /** What this job's own environment carries, as the variable holds it. */
+  config: string
+  /** What another environment's job carried here, for a promotion. */
+  from?: string
+}) => {
+  const step = (readAction('setup-infra').runs.steps as any[]).find(
+    (candidate) => candidate.name === 'Restore the stage declaration',
+  )
+  assert.ok(step, 'setup-infra no longer restores the declaration; this test covers nothing')
+
+  const dir = mkdtempSync(join(tmpdir(), 'boxlite-setup-infra-'))
+  try {
+    const binDir = join(dir, 'bin')
+    mkdirSync(binDir)
+    /*
+     * `npm run --silent mstage config get -- --stage=<name>`, to its contract:
+     * the variable is the only copy on a runner, and the answer is that one
+     * stage's block wrapped in its own name. Reading the variable rather than
+     * answering from a fixture is what makes the merge below observable —
+     * a stub that knew the stages would pass whether or not one was carried in.
+     */
+    const npm = join(binDir, 'npm')
+    writeFileSync(
+      npm,
+      [
+        '#!/bin/sh',
+        'for argument in "$@"; do stage="${argument#--stage=}"; done',
+        'held="$BOXLITE_MSTAGE_BOXLITE_APP_CONFIG"',
+        'if printf \'%s\' "$held" | jq -e --arg s "$stage" \'has($s)\' >/dev/null 2>&1; then',
+        '  printf \'%s\' "$held" | jq -c --arg s "$stage" \'{($s): .[$s]}\'',
+        'else',
+        '  echo "the environment holds no stage $stage" >&2',
+        '  exit 1',
+        'fi',
+        '',
+      ].join('\n'),
+    )
+    chmodSync(npm, 0o755)
+    const runnerTemp = join(dir, 'runner-temp')
+    mkdirSync(runnerTemp)
+
+    const result = runShell(
+      String(step.run),
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        RUNNER_TEMP: runnerTemp,
+        STAGES: stages,
+        BOXLITE_MSTAGE_BOXLITE_APP_CONFIG: config,
+        FROM_CONFIG: from,
+      },
+      dir,
+    )
+    const declaration = join(dir, '.mstage.config.json')
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      restored: existsSync(declaration) ? JSON.parse(readFileSync(declaration, 'utf8')) : undefined,
+      blocksLeft: existsSync(join(runnerTemp, 'mstage-blocks')),
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+const block = (stage: string) => ({ home: 'aws', region: `${stage}-region` })
+const carries = (...stages: string[]) => JSON.stringify(Object.fromEntries(stages.map((s) => [s, block(s)])))
+
+test('the stage declaration is restored in the shape the loaders read', () => {
+  // `.mstage.config.json` is not committed, so the only copy a runner can have is
+  // the one this step writes. mstage and mbuild both read a document whose stages
+  // sit under `stages`, while `config get` answers with the block alone — the
+  // wrapping happens in this shell and nowhere else.
+  const { status, restored, blocksLeft } = restoreDeclaration({ stages: 'dev', config: carries('dev') })
+  assert.equal(status, 0)
+  assert.deepEqual(restored, { stages: { dev: block('dev') } })
+  // The blocks are one account's coordinates each, and the merge is the only
+  // reader they have.
+  assert.ok(!blocksLeft, 'the per-stage blocks outlived the merge')
+})
+
+test('a promotion restores both declarations into one document', () => {
+  // `mbuild promote` composes the source address as well as the destination's, and
+  // a document holding one of them resolves the other against nothing.
+  const { status, restored } = restoreDeclaration({ stages: 'dev prod', config: carries('dev', 'prod') })
+  assert.equal(status, 0)
+  assert.deepEqual(Object.keys((restored as any).stages), ['dev', 'prod'])
+})
+
+test('a promotion reads the source stage out of the environment that owns it', () => {
+  /*
+   * `vars` is scoped to the environment a job binds to, and each stage's
+   * variable carries only its own block — so a job in the destination's
+   * environment cannot see the source's. A job that did bind to the source
+   * carries it here, and the two documents become one.
+   *
+   * The stub answers only from the variable, so this passes only if the carried
+   * block actually reached it: the destination's own copy names one stage.
+   */
+  const { status, restored } = restoreDeclaration({
+    stages: 'dev prod',
+    config: carries('prod'),
+    from: carries('dev'),
+  })
+  assert.equal(status, 0)
+  assert.deepEqual(restored, { stages: { dev: block('dev'), prod: block('prod') } })
+})
+
+test('a declaration the environment does not carry stops setup, not the tool that needed it', () => {
+  // Swallowed here it becomes `declares no stage "dev"` from mbuild, minutes later
+  // and about a file whose absence is not the reader's fault.
+  const { status, stdout, stderr, restored } = restoreDeclaration({ stages: 'dev prod', config: carries('prod') })
+  assert.notEqual(status, 0)
+  assert.match(stderr, /holds no stage dev/)
+  assert.match(stdout, /Could not read the declaration for dev/)
+  assert.equal(restored, undefined, 'a half-read declaration must not be left where a tool will read it')
+})
+
+test('a job that names no stage is told so rather than left with a declaration nobody wrote', () => {
+  // The suites run without one. Silence here becomes `Could not find
+  // .mstage.config.json` several steps later, which reads as a broken checkout.
+  const { status, stdout, restored } = restoreDeclaration({ stages: '', config: '' })
+  assert.equal(status, 0)
+  assert.match(stdout, /No stages given/)
+  assert.equal(restored, undefined)
 })

@@ -1,10 +1,13 @@
 # Deploys BoxLite through mdeploy, on whichever cloud the stage lives in.
 #
-# The workflow makes no cloud decision of its own. `mstage.config.json` says
-# which cloud each stage is in — `home`, per stage or per repository — and the
-# preflight below reads it, so adding a stage on another cloud is an edit to a
-# config file rather than to this file. Nothing here names ECR, Artifact
-# Registry, a region or a repository.
+# The workflow makes no cloud decision of its own. A stage's declaration says
+# which cloud it is in — `home` — and the preflight below reads it, so adding a
+# stage on another cloud is an edit to that declaration rather than to this
+# file. Nothing here names ECR, Artifact Registry, a region or a repository.
+#
+# That declaration is not in the checkout: `.mstage.config.json` names an
+# account and is not committed, so setup-infra asks `mstage config get` for this
+# stage's block and restores the file every tool below reads.
 #
 # One apply, not module by module. `mdeploy/src/plan.ts` and `--module` exist
 # and are tested, and the batch pipeline they describe is not dispatched here
@@ -27,7 +30,7 @@ on:
       # the stage it names. Enforced across every workflow by
       # apps/infra/deployment/release-safety.test.ts.
       stage:
-        description: Stage to deploy, as declared in mstage.config.json
+        description: Stage to deploy, as declared in its .mstage.config.json block
         required: true
         default: dev
         type: choice
@@ -37,7 +40,12 @@ on:
           - gcp-dev
 
       image_tag:
-        description: Commit SHA of the images to deploy (defaults to this ref)
+        description: Commit SHA of the images to deploy, or a git tag naming one (defaults to this ref)
+        required: false
+      runner_ref:
+        description: >-
+          Commit SHA, or a git tag, of a runner binary staged for this stage.
+          Empty installs the published release instead.
         required: false
       apply:
         description: Apply the change. Off previews it and stops.
@@ -45,8 +53,34 @@ on:
         type: boolean
         default: false
       confirm:
-        description: Required for a stage mstage.config.json marks protected
+        description: Required for a stage whose declaration marks it protected
         required: true
+        type: boolean
+        default: false
+
+  # Called by an orchestrating workflow once the artifacts it names are in
+  # place. The allowlist above is what a person types; a caller passes a string
+  # because `workflow_call` has no choice type — and the caller is a workflow in
+  # this repository whose own input is an allowlist.
+  workflow_call:
+    inputs:
+      stage:
+        required: true
+        type: string
+      image_tag:
+        required: false
+        type: string
+        default: ''
+      runner_ref:
+        required: false
+        type: string
+        default: ''
+      apply:
+        required: false
+        type: boolean
+        default: false
+      confirm:
+        required: false
         type: boolean
         default: false
 
@@ -63,8 +97,8 @@ permissions:
 
 env:
   BOXLITE_IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
-  # gh is installed on a runner but never signed in, and mstage.config.json
-  # declares github a required provider — so every step that reaches mstage
+  # gh is installed on a runner but never signed in, and the stage declaration
+  # names github a required provider — so every step that reaches mstage
   # fails on the session before it fails on anything worth reading.
   GH_TOKEN: ${{ github.token }}
 
@@ -79,12 +113,42 @@ jobs:
     outputs:
       kind: ${{ steps.config.outputs.kind }}
       region: ${{ steps.config.outputs.region }}
+      image_tag: ${{ steps.image.outputs.sha }}
+      runner_ref: ${{ steps.runner.outputs.sha }}
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+          # Tags and the commits they name. A shallow checkout carries neither,
+          # and a dispatcher naming a release would be told it does not exist.
+          fetch-depth: 0
 
       - uses: ./.github/actions/setup-infra
+        with:
+          stages: ${{ inputs.stage }}
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+
+      # Both names become commits here and nowhere else. The image is verified
+      # in this job and installed in the next one; resolving in each would be
+      # two answers to "which commit", and a tag that moved between them would
+      # verify one image and deploy another.
+      - id: image
+        uses: ./.github/actions/resolve-ref
+        with:
+          ref: ${{ inputs.image_tag }}
+          fallback: ${{ github.sha }}
+
+      # No fallback: an empty input is a release-mode deploy, which addresses a
+      # version rather than a commit and needs no ref at all.
+      - id: runner
+        if: inputs.runner_ref != ''
+        uses: ./.github/actions/resolve-ref
+        with:
+          ref: ${{ inputs.runner_ref }}
+
+      - name: Address the commit the image ref names
+        shell: bash
+        run: printf 'BOXLITE_IMAGE_TAG=%s\n' '${{ steps.image.outputs.sha }}' >> "$GITHUB_ENV"
 
       # ----------------------------------------------------------- 1/5
       # Which cloud this stage deploys to, and where in it. One file says both,
@@ -158,16 +222,24 @@ jobs:
         run: npm run --silent mbuild verify -- --tag "$BOXLITE_IMAGE_TAG" --stage "${{ inputs.stage }}"
 
       # ----------------------------------------------------------- 5/5
+      # Read through mstage's own loader, out of the declaration setup-infra
+      # restored — the same reader mdeploy refuses on (src/run.ts's
+      # `scope.protect`). The point of asking here is when rather than whether:
+      # a refusal in the job that applies comes after this one has federated an
+      # identity and taken the stage's concurrency group.
       - name: Confirm a protected stage
         working-directory: apps/infra
+        env:
+          STAGE: ${{ inputs.stage }}
+          CONFIRMED: ${{ inputs.confirm }}
         run: |
           set -Eeuo pipefail
-          protected=$(node -e '
-            const config = require("./mstage.config.json")
-            process.stdout.write(String(Boolean(config.stages[process.argv[1]]?.protect)))
-          ' "${{ inputs.stage }}")
-          if [ "$protected" = "true" ] && [ "${{ inputs.confirm }}" != "true" ]; then
-            echo "::error title=protected::${{ inputs.stage }} is protected in mstage.config.json; re-dispatch with confirm"
+          protected="$(node -e "
+            const { loadConfig, stageIn } = require('mstage/config');
+            process.stdout.write(String(Boolean(stageIn(loadConfig(), process.env.STAGE).protect)))
+          ")"
+          if [ "$protected" = 'true' ] && [ "$CONFIRMED" != 'true' ]; then
+            echo "::error title=protected::$STAGE is protected; re-dispatch with confirm"
             exit 1
           fi
 
@@ -177,12 +249,27 @@ jobs:
     if: github.ref == 'refs/heads/main'
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
+    # What this job deploys, as commits rather than as the names it was given.
+    # The workflow-level BOXLITE_IMAGE_TAG still holds the raw input, which may
+    # be a tag; taking preflight's answer is what makes the image this job
+    # deploys the image preflight verified.
+    env:
+      BOXLITE_IMAGE_TAG: ${{ needs.preflight.outputs.image_tag }}
+      # A staged binary is addressed by the commit it was produced from; without
+      # one the stage installs the published release, which is the default the
+      # tool already applies. Both are named here so the mode is readable in the
+      # run rather than inferred from an absence.
+      RUNNER_ARTIFACT_SOURCE: ${{ needs.preflight.outputs.runner_ref != '' && 'build' || 'release' }}
+      RUNNER_ARTIFACT_REF: ${{ needs.preflight.outputs.runner_ref }}
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-infra
+        with:
+          stages: ${{ inputs.stage }}
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
 
       - name: Federate an AWS identity
         if: needs.preflight.outputs.kind == 'ecr'
@@ -203,6 +290,15 @@ jobs:
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER }}
+
+      # The apply asks Certificate Manager what this project already holds
+      # before it changes anything (`src/dns-authorization.ts`), and it asks
+      # through the CLI — which the federation above writes a credential for but
+      # does not install. Without it the check reports that it could not read
+      # and lets the apply through, which is the guard never running at all.
+      - name: Install gcloud
+        if: needs.preflight.outputs.kind == 'artifact-registry'
+        uses: google-github-actions/setup-gcloud@v2
 
       # Never retried. A run killed mid-apply can leave the per-stage lock held,
       # and a second attempt then fails on the lock rather than on the cause
