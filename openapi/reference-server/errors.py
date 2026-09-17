@@ -39,6 +39,12 @@ ERROR_MAP = [
     ("gRPC transport error:", 503, "UpstreamUnavailableError", "upstream_unavailable"),
     ("database error:", 500, "DatabaseError", "database_error"),
     ("metadata error:", 500, "MetadataError", "metadata_error"),
+    (
+        "default runtime already initialized",
+        409,
+        "AlreadyInitializedError",
+        "already_initialized",
+    ),
 ]
 
 UNCLASSIFIED = (500, "InternalError", "internal")
