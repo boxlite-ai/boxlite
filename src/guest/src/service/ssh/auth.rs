@@ -5,6 +5,10 @@ use russh::keys::{Algorithm, Certificate, HashAlg, PublicKey};
 
 use std::collections::HashMap;
 
+// Application configuration limits; the login limit follows the existing principal limit.
+const MAX_LOGIN_BYTES: usize = 128;
+const MAX_PRINCIPAL_BYTES: usize = 128;
+
 #[derive(Debug)]
 pub(crate) enum AuthorizerError {
     MissingAccounts,
@@ -21,7 +25,7 @@ impl std::fmt::Display for AuthorizerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MissingAccounts => write!(f, "SSH requires a non-empty accounts list; global credentials are no longer supported"),
-            Self::InvalidLogin => write!(f, "SSH login must be a non-empty identifier of at most 128 ASCII letters, digits, '.', '_', or '-'"),
+            Self::InvalidLogin => write!(f, "SSH login must be a non-empty identifier of at most {MAX_LOGIN_BYTES} ASCII letters, digits, '.', '_', or '-'"),
             Self::DuplicateLogin => write!(f, "duplicate SSH login"),
             Self::MissingAuthentication => write!(f, "SSH requires a CA or at least one authorized key"),
             Self::InvalidPublicKey(index) => write!(f, "invalid SSH authorized key at index {index}: expected one OpenSSH public key without options"),
@@ -57,7 +61,7 @@ impl SshAuthorizer {
         let mut accounts = HashMap::new();
         for account in &config.accounts {
             if account.login.is_empty()
-                || account.login.len() > 128
+                || account.login.len() > MAX_LOGIN_BYTES
                 || !account
                     .login
                     .bytes()
@@ -71,10 +75,6 @@ impl SshAuthorizer {
             accounts.insert(account.login.clone(), AccountAuthorizer::new(account)?);
         }
         Ok(Self { accounts })
-    }
-
-    pub(crate) fn has_account(&self, login: &str) -> bool {
-        self.accounts.contains_key(login)
     }
 
     pub(crate) fn authorize_public_key(
@@ -218,7 +218,7 @@ impl CertificateAuthorizer {
 
 fn is_valid_principal(principal: &str) -> bool {
     !principal.is_empty()
-        && principal.len() <= 128
+        && principal.len() <= MAX_PRINCIPAL_BYTES
         && principal
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
@@ -238,6 +238,60 @@ mod tests {
 
     fn public_key() -> String {
         private_key().public_key().to_openssh().unwrap()
+    }
+
+    #[test]
+    fn login_and_principal_enforce_separate_identifier_limits() {
+        let key = public_key();
+        for login in ["a".repeat(128), "Alice_01.test-user".into()] {
+            let config = boxlite_shared::SshConfig {
+                accounts: vec![boxlite_shared::SshAccount {
+                    login,
+                    authorized_keys: vec![key.clone()],
+                    ca: None,
+                }],
+                ..Default::default()
+            };
+            assert!(SshAuthorizer::new(&config).is_ok());
+        }
+        for login in [
+            "a".repeat(129),
+            "".into(),
+            "a/b".into(),
+            "a b".into(),
+            "é".into(),
+            "a\0b".into(),
+        ] {
+            let config = boxlite_shared::SshConfig {
+                accounts: vec![boxlite_shared::SshAccount {
+                    login,
+                    authorized_keys: vec![key.clone()],
+                    ca: None,
+                }],
+                ..Default::default()
+            };
+            assert!(matches!(
+                SshAuthorizer::new(&config),
+                Err(AuthorizerError::InvalidLogin)
+            ));
+        }
+        for principal in ["a".repeat(128), "Box_01-user".into()] {
+            assert!(CertificateAuthorizer::new(&key, principal).is_ok());
+        }
+        for principal in [
+            "a".repeat(129),
+            "".into(),
+            "a.b".into(),
+            "a/b".into(),
+            "a b".into(),
+            "é".into(),
+            "a\0b".into(),
+        ] {
+            assert!(matches!(
+                CertificateAuthorizer::new(&key, principal),
+                Err(AuthorizerError::InvalidPrincipal)
+            ));
+        }
     }
 
     fn certificate(

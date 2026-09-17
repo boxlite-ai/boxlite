@@ -69,7 +69,26 @@ impl std::fmt::Debug for generated::SshConfig {
         f.debug_struct("SshConfig")
             .field("listen_address", &self.listen_address)
             .field("host_private_key", &"[REDACTED]")
-            .field("accounts", &self.accounts)
+            .field("account_count", &self.accounts.len())
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for generated::SshAccount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshAccount")
+            .field("login", &self.login)
+            .field("authorized_key_count", &self.authorized_keys.len())
+            .field("has_ca", &self.ca.is_some())
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for generated::SshCaConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshCaConfig")
+            .field("public_key", &"[REDACTED]")
+            .field("principal", &self.principal)
             .finish()
     }
 }
@@ -135,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn ssh_configuration_wire_roundtrip_redacts_private_key() {
+    fn ssh_configuration_wire_roundtrip_redacts_credentials() {
         use prost::Message;
         let request = super::SshConfigureRequest {
             config: Some(super::SshConfig {
@@ -143,15 +162,37 @@ mod tests {
                 host_private_key: "test-only-private-marker".into(),
                 accounts: vec![super::SshAccount {
                     login: "alice".into(),
-                    authorized_keys: vec!["test-key comment".into()],
-                    ca: None,
+                    authorized_keys: vec!["test-public-body test-public-comment".into()],
+                    ca: Some(super::SshCaConfig {
+                        public_key: "test-ca-body test-ca-comment".into(),
+                        principal: "box_123".into(),
+                    }),
                 }],
             }),
         };
         let decoded =
             super::SshConfigureRequest::decode(request.encode_to_vec().as_slice()).unwrap();
         assert_eq!(request, decoded);
-        assert!(!format!("{decoded:?}").contains("test-only-private-marker"));
+        let config = decoded.config.as_ref().unwrap();
+        let account = &config.accounts[0];
+        let ca = account.ca.as_ref().unwrap();
+        for debug in [
+            format!("{decoded:?}"),
+            format!("{config:?}"),
+            format!("{account:?}"),
+            format!("{ca:?}"),
+            format!("{decoded:#?}"),
+        ] {
+            for marker in [
+                "test-only-private-marker",
+                "test-public-body",
+                "test-public-comment",
+                "test-ca-body",
+                "test-ca-comment",
+            ] {
+                assert!(!debug.contains(marker), "Debug exposed {marker}");
+            }
+        }
     }
 
     /// A missing commit is only legitimate when there is no tracked checkout to

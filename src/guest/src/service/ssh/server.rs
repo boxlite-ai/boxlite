@@ -136,18 +136,16 @@ impl russh::server::Handler for SshConnection {
 
     async fn auth_publickey_offered(
         &mut self,
-        user: &str,
+        _user: &str,
         _public_key: &PublicKey,
     ) -> Result<Auth, Self::Error> {
-        // Certificate authentication uses the publickey wire method. The
-        // actual decision is made only after russh verifies the signature.
-        Ok(
-            if self.authorizer.has_account(user) && !self.tasks.is_cancelled() {
-                Auth::Accept
-            } else {
-                Auth::reject()
-            },
-        )
+        // Uniform probes hide account existence. Raw keys and certificates
+        // are authorized only after russh verifies proof of possession.
+        Ok(if self.tasks.is_cancelled() {
+            Auth::reject()
+        } else {
+            Auth::Accept
+        })
     }
 
     async fn auth_publickey(
@@ -817,6 +815,14 @@ mod tests {
             Auth::Accept
         );
         assert_eq!(raw.permissions, SessionPermissions::default());
+        assert_eq!(
+            raw.auth_publickey_offered("nobody", user.public_key())
+                .await
+                .unwrap(),
+            Auth::Accept,
+            "public key probes must not disclose whether an account exists"
+        );
+        assert_eq!(raw.permissions, SessionPermissions::default());
         assert!(matches!(
             committed.try_recv(),
             Err(oneshot::error::TryRecvError::Empty)
@@ -825,6 +831,10 @@ mod tests {
             raw.auth_publickey("nobody", user.public_key())
                 .await
                 .unwrap(),
+            Auth::reject()
+        );
+        assert_eq!(
+            raw.auth_publickey("root", ca.public_key()).await.unwrap(),
             Auth::reject()
         );
         assert_eq!(
@@ -844,6 +854,13 @@ mod tests {
         );
         assert_eq!(
             certified
+                .auth_openssh_certificate("root", &user_certificate(&ca, "wrong_box"))
+                .await
+                .unwrap(),
+            Auth::reject()
+        );
+        assert_eq!(
+            certified
                 .auth_openssh_certificate("root", &user_certificate(&ca, "box_123"))
                 .await
                 .unwrap(),
@@ -852,6 +869,43 @@ mod tests {
         assert!(certified.permissions.pty);
         assert!(!certified.permissions.port_forwarding);
         assert_eq!(committed.try_recv(), Ok(()));
+
+        let (tx, mut committed) = oneshot::channel();
+        let mut cancelled = SshConnection::new(
+            guest,
+            certified.authorizer.clone(),
+            tx,
+            super::super::TaskGroup::default(),
+        );
+        cancelled.tasks.cancel();
+        for login in ["root", "nobody"] {
+            assert_eq!(
+                cancelled
+                    .auth_publickey_offered(login, user.public_key())
+                    .await
+                    .unwrap(),
+                Auth::reject()
+            );
+            assert_eq!(
+                cancelled
+                    .auth_publickey(login, user.public_key())
+                    .await
+                    .unwrap(),
+                Auth::reject()
+            );
+            assert_eq!(
+                cancelled
+                    .auth_openssh_certificate(login, &user_certificate(&ca, "box_123"))
+                    .await
+                    .unwrap(),
+                Auth::reject()
+            );
+        }
+        assert_eq!(cancelled.permissions, SessionPermissions::default());
+        assert!(matches!(
+            committed.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
     }
 
     #[test]
