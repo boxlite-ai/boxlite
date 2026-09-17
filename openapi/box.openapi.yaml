@@ -102,9 +102,11 @@ servers:
         default: api.boxlite.ai
       basePath:
         description: |
-          Deployment-defined hostpath prefix. Empty for local servers
-          (`boxlite serve` at `http://localhost:8100/v1/…`); typically
-          `/api` for cloud deployments (`https://api.boxlite.ai/api/v1/…`).
+          Deployment-defined hostpath prefix. Empty on every deployment:
+          `boxlite serve` answers at `http://localhost:8100/v1/…` and a cloud
+          stage at `https://api.boxlite.ai/v1/…`. Cloud stages also still
+          answer the older `/api` form, which is what clients configured before
+          the control plane had a hostname of its own hold.
         default: ""
 
 # ---------------------------------------------------------------------------

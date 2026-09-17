@@ -22,8 +22,8 @@ export type AppEnvironment = 'local' | 'development' | 'production'
 // ⚠️ EDIT HERE — the public REST API base each environment's SDK/CLI should target.
 // `local` is intentionally omitted: it falls back to the dashboard's own /api.
 const REST_API_URL_BY_ENV: Partial<Record<AppEnvironment, string>> = {
-  development: 'https://dev.boxlite.ai/api',
-  production: 'https://api.boxlite.ai/api',
+  development: 'https://api.dev.boxlite.ai',
+  production: 'https://api.boxlite.ai',
 }
 
 /** Resolve the current environment from the API issuer and browser hostname. */

@@ -24,10 +24,10 @@ describe('getRestApiUrl', () => {
   const fallback = 'http://fallback.local/api'
 
   it('uses a pinned URL for environments that define one', () => {
-    expect(getRestApiUrl(fallback, 'dev.boxlite.ai')).toBe('https://dev.boxlite.ai/api')
-    expect(getRestApiUrl(fallback, 'app.boxlite.ai')).toBe('https://api.boxlite.ai/api')
-    expect(getRestApiUrl(fallback, 'localhost', 'https://auth.dev.boxlite.ai')).toBe('https://dev.boxlite.ai/api')
-    expect(getRestApiUrl(fallback, 'localhost', 'https://auth.boxlite.ai')).toBe('https://api.boxlite.ai/api')
+    expect(getRestApiUrl(fallback, 'dev.boxlite.ai')).toBe('https://api.dev.boxlite.ai')
+    expect(getRestApiUrl(fallback, 'app.boxlite.ai')).toBe('https://api.boxlite.ai')
+    expect(getRestApiUrl(fallback, 'localhost', 'https://auth.dev.boxlite.ai')).toBe('https://api.dev.boxlite.ai')
+    expect(getRestApiUrl(fallback, 'localhost', 'https://auth.boxlite.ai')).toBe('https://api.boxlite.ai')
   })
 
   it('falls back when the environment has no pinned URL (e.g. local)', () => {

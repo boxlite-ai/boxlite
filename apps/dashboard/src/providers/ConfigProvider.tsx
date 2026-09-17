@@ -14,7 +14,19 @@ import { AuthProvider, AuthProviderProps } from 'react-oidc-context'
 import { ConfigContext } from '../contexts/ConfigContext'
 import { MockAuthProvider } from '../mocks/MockAuthProvider'
 
-const apiUrl = (import.meta.env.VITE_BASE_API_URL ?? window.location.origin) + '/api'
+/*
+ * Where the control plane is called, and why the two branches differ.
+ *
+ * A stage supplies `VITE_BASE_API_URL` — the container replaces the token at
+ * boot from `DASHBOARD_BASE_API_URL` — and that is the control plane's own
+ * origin, `api.<domain>`. The balancer puts the container's `/api` prefix back
+ * on that hostname, so routes are appended to it directly.
+ *
+ * Without it the dashboard is talking to an API on its own origin, which is
+ * `vite dev` and `boxlite serve`. Nothing rewrites there, and the container
+ * still mounts every route under `/api`, so this is the one case that adds it.
+ */
+const apiUrl = import.meta.env.VITE_BASE_API_URL ?? `${window.location.origin}/api`
 const isMocking = import.meta.env.VITE_ENABLE_MOCKING === 'true'
 
 type Props = {

@@ -285,7 +285,7 @@ Logged in as:    dev@acme.test
 Name:            Dev McAcme
 Principal:       auth0|abc123 (user)
 Path prefix:     acme
-Server:          https://api.boxlite.ai/api
+Server:          https://api.boxlite.ai
 Scopes:          box:read, box:write, box:exec
 ```
 
