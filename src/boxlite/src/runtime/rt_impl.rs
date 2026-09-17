@@ -2291,15 +2291,28 @@ mod tests {
     /// Trigger 3 of 3: the periodic sweep. A runner can go weeks without a
     /// restart (trigger 1) and days without a cold image build (trigger 2)
     /// while boxes come and go the whole time.
+    ///
+    /// The runtime is built on a plain thread so that no sweep of its own can
+    /// confuse the result: `spawn_periodic_image_disk_gc` stands down when
+    /// there is no tokio context to spawn onto, so the task started below is
+    /// the only one that can reclaim anything. Built on the test's own runtime
+    /// instead, the constructor's sweep — whose first tick is immediate — is
+    /// free to be what removes the orphan, and this assertion then greens
+    /// without the task under test ever running. `spawn_blocking` would not
+    /// do: blocking-pool threads still carry the runtime context.
     #[tokio::test]
     async fn the_periodic_sweep_reclaims_unreachable_image_disks() {
-        let (runtime, temp_dir) = create_test_runtime();
+        let (runtime, temp_dir) = std::thread::spawn(create_test_runtime)
+            .join()
+            .expect("runtime construction panicked");
+
         // After construction, so the startup sweep isn't what removes it.
         let orphan = plant_unreachable_image_disk(temp_dir.path());
+        let token = CancellationToken::new();
 
         RuntimeImpl::spawn_periodic_image_disk_gc(
             &runtime.image_disk_mgr,
-            runtime.shutdown_token.clone(),
+            token.clone(),
             Duration::from_millis(20),
         );
 
@@ -2314,7 +2327,7 @@ mod tests {
             "the periodic sweep must reclaim unreachable image disks"
         );
 
-        runtime.shutdown_token.cancel();
+        token.cancel();
     }
 
     /// Create a RuntimeImpl with isolated temp directory.
