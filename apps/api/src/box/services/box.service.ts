@@ -1483,9 +1483,6 @@ export class BoxService {
     if (!Number.isInteger(autoDelete) || autoDelete < AUTO_DELETE_DISABLED) {
       throw new BadRequestError('Auto-delete interval must be a non-negative integer number of seconds')
     }
-    if (autoDelete > 0 && autoDelete <= autoStop) {
-      throw new BadRequestError('Auto-delete interval must be greater than auto-stop interval')
-    }
 
     return { autoStop, autoDelete, autoResume }
   }
