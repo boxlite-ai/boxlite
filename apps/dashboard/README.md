@@ -29,6 +29,15 @@ Navigation is the sidebar plus the tables. There is one route per resource, and
 each resource's table is the place you act on it — filter, sort, select, and run
 per-row or bulk actions from there.
 
+There is deliberately **no command palette**. The console had a `Ctrl/Cmd-K`
+palette that re-listed the sidebar's routes, re-implemented each table's search
+against a different data source, and exposed row actions a second time through
+per-table command providers. Every command in it was a second, drifting copy of
+an affordance the page already had, and keeping the two in step was a standing
+cost paid on every table change. Search belongs to the table that owns the data;
+actions belong to the row. If an action is hard to reach, fix the page.
+
+
 ## Empty states carry the first action
 
 A resource table with no rows is not a blank page and not a takeover: it keeps
