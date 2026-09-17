@@ -29,7 +29,7 @@ import {
   readLock,
   writeCheckpoint,
 } from '../../state/store.ts'
-import type { StoreBackend } from '../../env/backend.ts'
+import type { StoreBackend } from '../../environment/backend.ts'
 import type { Scope } from '../../aws/precedence.ts'
 
 type Log = (line: string) => void

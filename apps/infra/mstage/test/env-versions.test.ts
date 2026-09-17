@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { listVersions, type Clients } from '../src/env/store.ts'
+import { listVersions, type Clients } from '../src/environment/store.ts'
 import { formatVersions, versions } from '../src/cli/handlers/env.ts'
 
 const at = (iso: string) => new Date(iso)

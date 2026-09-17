@@ -9,8 +9,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { unlock } from '../src/cli/handlers/state.ts'
-import { awsBackend } from '../src/env/aws-backend.ts'
-import type { StoreBackend } from '../src/env/backend.ts'
+import { awsBackend } from '../src/environment/aws-backend.ts'
+import type { StoreBackend } from '../src/environment/backend.ts'
 
 const LOCK_KEY = 'lock/boxlite/dev.json'
 const CHECKPOINT_KEY = 'app/boxlite/dev.json'

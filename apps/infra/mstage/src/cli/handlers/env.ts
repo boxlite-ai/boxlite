@@ -17,10 +17,10 @@ import {
   type Clients,
   type StoreBackend,
   type StoredVersion,
-} from '../../env/store.ts'
-import { compareDigest, digestOfGroup } from '../../env/digest.ts'
-import { assertSecretAddresses } from '../../env/secret-address.ts'
-import { ExportError, groupKeys, valuesOfGroup } from '../../env/select-group.ts'
+} from '../../environment/store.ts'
+import { compareDigest, digestOfGroup } from '../../environment/digest.ts'
+import { assertSecretAddresses } from '../../environment/secret-address.ts'
+import { ExportError, groupKeys, valuesOfGroup } from '../../environment/select-group.ts'
 import type { Scope } from '../../aws/precedence.ts'
 import type { MstageConfig } from '../../config/load.ts'
 import { readRedirect, readValue } from '../prompt.ts'

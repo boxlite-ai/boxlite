@@ -15,11 +15,11 @@
  * for them either.
  */
 
-import { awsBackend, clientsFor, readStateBucket as awsStateBucket } from './env/aws-backend.ts'
-import { gcpBackend, readStateBucket as gcpStateBucket, type GcpClients } from './env/gcp-backend.ts'
+import { awsBackend, clientsFor, readStateBucket as awsStateBucket } from './environment/aws-backend.ts'
+import { gcpBackend, readStateBucket as gcpStateBucket, type GcpClients } from './environment/gcp-backend.ts'
 import { resolveIdentity, type AwsIdentity } from './aws/identity.ts'
 import { resolveGcpIdentity, type GcpIdentity, type GoogleAuth } from './gcp/identity.ts'
-import type { StoreBackend } from './env/backend.ts'
+import type { StoreBackend } from './environment/backend.ts'
 import type { Scope } from './aws/precedence.ts'
 
 export class HomeError extends Error {

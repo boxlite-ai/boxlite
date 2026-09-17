@@ -11,8 +11,8 @@
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import test from 'node:test'
-import { objectKey, open, seal, type StoreBackend, type StoredVersion } from '../src/env/backend.ts'
-import { currentVersion, deleteValues, listVersions, readEnvironment, setValues } from '../src/env/store.ts'
+import { objectKey, open, seal, type StoreBackend, type StoredVersion } from '../src/environment/backend.ts'
+import { currentVersion, deleteValues, listVersions, readEnvironment, setValues } from '../src/environment/store.ts'
 
 const KEY = randomBytes(32)
 

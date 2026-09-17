@@ -16,7 +16,7 @@ import {
 import { resolveIdentity, type AwsIdentity } from '../aws/identity.ts'
 import { resolveHome } from '../home.ts'
 import type { Identity } from '../identity.ts'
-import type { StoreBackend } from '../env/backend.ts'
+import type { StoreBackend } from '../environment/backend.ts'
 import { resolveScope, type Scope } from '../aws/precedence.ts'
 import { parseInvocation, type Options } from './argv.ts'
 import { moduleUsage, type CommandSpec, type ModuleSpec } from './help.ts'

@@ -15,7 +15,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import type { StoreBackend } from '../env/backend.ts'
+import type { StoreBackend } from '../environment/backend.ts'
 
 export class StateError extends Error {
   constructor(message: string) {

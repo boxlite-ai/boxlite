@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { ExportError, valuesOfGroup } from '../src/env/select-group.ts'
+import { ExportError, valuesOfGroup } from '../src/environment/select-group.ts'
 import { ConfigError, parseBase } from '../src/config/load.ts'
 
 const config = (env: unknown) => parseBase('/repo/mstage.env.json', JSON.stringify({ app: 'a', env }))

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
-import { compareDigest, digestOf, digestOfGroup } from '../src/env/digest.ts'
+import { compareDigest, digestOf, digestOfGroup } from '../src/environment/digest.ts'
 import { parseAssignment, unescape } from '../src/cli/handlers/env.ts'
 import { ConfigError, parseBase } from '../src/config/load.ts'
 

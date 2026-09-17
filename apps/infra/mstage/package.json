@@ -45,9 +45,9 @@
       "default": "./dist/src/identity.js"
     },
     "./env": {
-      "development": "./src/env/store.ts",
-      "types": "./dist/src/env/store.d.ts",
-      "default": "./dist/src/env/store.js"
+      "development": "./src/environment/store.ts",
+      "types": "./dist/src/environment/store.d.ts",
+      "default": "./dist/src/environment/store.js"
     },
     "./home": {
       "development": "./src/home.ts",
@@ -55,14 +55,14 @@
       "default": "./dist/src/home.js"
     },
     "./secret-address": {
-      "development": "./src/env/secret-address.ts",
-      "types": "./dist/src/env/secret-address.d.ts",
-      "default": "./dist/src/env/secret-address.js"
+      "development": "./src/environment/secret-address.ts",
+      "types": "./dist/src/environment/secret-address.d.ts",
+      "default": "./dist/src/environment/secret-address.js"
     },
     "./select-group": {
-      "development": "./src/env/select-group.ts",
-      "types": "./dist/src/env/select-group.d.ts",
-      "default": "./dist/src/env/select-group.js"
+      "development": "./src/environment/select-group.ts",
+      "types": "./dist/src/environment/select-group.d.ts",
+      "default": "./dist/src/environment/select-group.js"
     },
     "./run": {
       "development": "./src/cli/run.ts",

@@ -10,9 +10,9 @@
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import test from 'node:test'
-import { EnvError, objectKey, seal } from '../src/env/backend.ts'
-import { gcpBackend, readStateBucket, type GcpClients } from '../src/env/gcp-backend.ts'
-import { readEnvironment, setValues } from '../src/env/store.ts'
+import { EnvError, objectKey, seal } from '../src/environment/backend.ts'
+import { gcpBackend, readStateBucket, type GcpClients } from '../src/environment/gcp-backend.ts'
+import { readEnvironment, setValues } from '../src/environment/store.ts'
 
 const KEY = randomBytes(32)
 const PROJECT = 'boxlite-dev'

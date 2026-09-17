@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import test from 'node:test'
 import { set } from '../src/cli/handlers/env.ts'
-import { digestOf } from '../src/env/digest.ts'
+import { digestOf } from '../src/environment/digest.ts'
 
 const KEY = randomBytes(32)
 

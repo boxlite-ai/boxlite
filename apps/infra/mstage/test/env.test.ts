@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createCipheriv, randomBytes } from 'node:crypto'
 import test from 'node:test'
 import { formatEnvironment } from '../src/cli/handlers/env.ts'
-import { EnvError, readEnvironment, readStateBucket } from '../src/env/store.ts'
+import { EnvError, readEnvironment, readStateBucket } from '../src/environment/store.ts'
 
 const KEY = randomBytes(32)
 

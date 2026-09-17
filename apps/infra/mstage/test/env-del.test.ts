@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import test from 'node:test'
 import { del } from '../src/cli/handlers/env.ts'
-import { deleteValues, readEnvironment } from '../src/env/store.ts'
+import { deleteValues, readEnvironment } from '../src/environment/store.ts'
 
 const KEY = randomBytes(32)
 

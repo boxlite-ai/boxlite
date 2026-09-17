@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createCipheriv, randomBytes } from 'node:crypto'
 import test from 'node:test'
 import { parseConfig } from '../src/config/load.ts'
-import { ExportError, selectGroup } from '../src/env/select-group.ts'
+import { ExportError, selectGroup } from '../src/environment/select-group.ts'
 
 const KEY = randomBytes(32)
 

@@ -27,7 +27,7 @@
 
 import { readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { SECRET_GROUP } from '../env/secret-address.ts'
+import { SECRET_GROUP } from '../environment/secret-address.ts'
 
 /** Committed: what the repository is, independent of any account. */
 export const ENV_FILENAME = 'mstage.env.json'

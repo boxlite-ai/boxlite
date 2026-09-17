@@ -48,7 +48,7 @@ test('every GCP shape mstage accepts is a shape this parses', () => {
   // form mstage would write and this would reject is a deploy that fails on a
   // string neither side thinks is wrong. Read from mstage's own validator rather
   // than restated here — a copy is what lets the two drift.
-  const source = readFileSync(fileURLToPath(new URL('../../mstage/src/env/secret-address.ts', import.meta.url)), 'utf8')
+  const source = readFileSync(fileURLToPath(new URL('../../mstage/src/environment/secret-address.ts', import.meta.url)), 'utf8')
   const declared = /gcp:\s*\{\s*pattern:\s*(\/.+?\/),/s.exec(source)
   assert.ok(declared, 'mstage no longer declares a gcp address pattern where this test looks for it')
 

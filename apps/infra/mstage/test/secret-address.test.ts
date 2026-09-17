@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { EnvError } from '../src/env/backend.ts'
-import { SECRET_GROUP, assertSecretAddresses, secretAddressesOf } from '../src/env/secret-address.ts'
+import { EnvError } from '../src/environment/backend.ts'
+import { SECRET_GROUP, assertSecretAddresses, secretAddressesOf } from '../src/environment/secret-address.ts'
 
 const PARAMETER = 'arn:aws:ssm:ap-southeast-1:123456789012:parameter/boxlite-backoffice/dev/oidc-client-secret'
 const SECRETS_MANAGER = 'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:boxlite-backoffice/dev/key-AbCdEf'
