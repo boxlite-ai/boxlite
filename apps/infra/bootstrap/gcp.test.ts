@@ -136,8 +136,12 @@ test('a fresh project gets every prerequisite mdeploy and mbuild cannot create f
   const result = await invoke(gcloud.run)
 
   assert.equal(gcloud.applied('services enable').length, 1, 'no APIs were enabled')
+  // One argument equal to the service, not a string containing its name: these
+  // are argv arrays, and `includes` on one is exact — spelled as a comparison so
+  // that reads the same to anything that cannot narrow the type.
+  const enabled = gcloud.applied('services enable')[0] ?? []
   assert.ok(
-    gcloud.applied('services enable')[0]?.includes('container.googleapis.com'),
+    enabled.some((argument) => argument === 'container.googleapis.com'),
     'the GKE API was not enabled',
   )
   assert.equal(gcloud.applied('storage buckets create').length, 2, 'the state and artifacts buckets')
