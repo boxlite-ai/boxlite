@@ -370,7 +370,7 @@ npm run mdeploy -- --stage dev --remove --confirm
 | mdeploy — both configs, the environment, the wiring, both bundles | 211 tests |
 | the incumbent stack and its release guards, plus `bootstrap/gcp.ts` | 533 tests |
 | mstage, mbuild **and mdeploy** typecheck | `tsc` clean, without `sst install` |
-| every GCP provider, applied | `dev2`, in `asia-southeast1` |
+| every GCP provider, applied | `dev` and `prod`, in `us-east5` |
 
 `mdeploy` being inside the typecheck is the one place this diverges from the
 repository the pattern came from, where it was left outside. `globals.d.ts`

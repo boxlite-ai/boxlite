@@ -51,8 +51,11 @@ test('the GCP path installs the CLI the upload goes through', () => {
 test('staging is not retried, because neither of its failures is transient', () => {
   // The destination is proved reachable before anything is compiled, so what is
   // left is the build itself and a refusal about what the bucket already holds.
-  const staging = commands.slice(commands.indexOf('- name: Stage the runner'))
-  assert.doesNotMatch(staging.slice(0, staging.indexOf('- name: Report')), /for attempt in/)
+  const start = commands.indexOf('- name: Build the runner')
+  assert.notEqual(start, -1, 'the step this is about is not in the workflow')
+  const staging = commands.slice(start, commands.indexOf('- name: Report'))
+  assert.ok(staging.includes('runner:promote'), 'both commands run in the region this reads')
+  assert.doesNotMatch(staging, /for attempt in/)
 })
 
 test('an orchestrator can call it and learn which commit it staged', () => {

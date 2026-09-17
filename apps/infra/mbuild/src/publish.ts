@@ -242,8 +242,12 @@ const ecrRegistrar = ({
  * Scanning is not part of a push: Artifact Analysis scans continuously and
  * answers per occurrence, so the gate reads occurrences and never reports
  * pending. With analysis disabled the query returns nothing, which reads as no
- * findings — `scanOnPush` is what keeps this gate honest. ECR instead reads a
- * missing scan as pending and fails on a spent budget.
+ * findings — and a stage's `scanOnPush` does not turn it on, because nothing
+ * here can: it is a project-wide service (`bootstrap/gcp.ts`'s `SERVICES`)
+ * rather than a property of the repository. So on a project where it is off
+ * this gate passes everything, and the declaration is the record of the intent
+ * rather than the thing enforcing it. ECR instead reads a missing scan as
+ * pending and fails on a spent budget.
  */
 const artifactRegistryRegistrar = ({
   run,
@@ -483,6 +487,15 @@ const assertNoBlockingFindings = async ({
       clock,
       log,
     })
+    // What the gate read, said out loud on the way past. An empty answer is how
+    // a clean image reads and equally how a registry whose scanner is switched
+    // off reads — on Artifact Registry that is the ordinary case, because
+    // scanning is a project-wide service nothing here turns on. Silence would
+    // make a gate that blocks nothing indistinguishable from one that passed.
+    const reported = Object.entries(counts)
+      .map(([severity, count]) => `${count} ${severity}`)
+      .join(', ')
+    log(`Scan of ${address}: ${reported || 'no findings reported'}`)
     const blocking = blockingFindings(counts, scan.blockOn)
     if (blocking.length > 0) throw new ScanRefusedError(`${address} has ${blocking.join(' and ')} findings`)
   }

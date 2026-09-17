@@ -117,9 +117,11 @@ export type StageConfig = {
   /**
    * What this stage refuses to receive, and how long it waits to find out.
    *
-   * Per stage, like the registry it reads: `scanOnPush` is already a property
-   * of the repository a stage publishes into, and a threshold that could not
-   * differ would make prod no stricter than dev.
+   * Per stage, like the registry it reads: on ECR `scanOnPush` is a property of
+   * the repository a stage publishes into, and a threshold that could not differ
+   * would make prod no stricter than dev. On Artifact Registry nothing consumes
+   * that flag — scanning is a project-wide service — so there it records the
+   * intent and `bootstrap/gcp.ts`'s `SERVICES` decides.
    */
   scan: ScanPolicy
 }

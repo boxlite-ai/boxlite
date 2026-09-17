@@ -1642,6 +1642,17 @@ test('every reusable workflow is called with the inputs it declares', () => {
   assert.ok(checked >= 4, `expected every reusable-workflow call swept, saw ${checked}`)
 })
 
+/**
+ * The deployment Environments a dispatch may bind to, plus the sentinel.
+ *
+ * Environments, not stage names: `none` is `mdeploy-all.yml`'s "build it here
+ * instead", which binds the source job to nothing, and each of the others is an
+ * Environment a bootstrap created. The distinction matters because a stage's
+ * declaration lives in its Environment — an allowlist offering a name with no
+ * Environment behind it reaches a job with no declaration to read.
+ */
+const ENVIRONMENTS = ['dev', 'prod', 'none']
+
 test('every workflow that selects a deployment Environment does so from an allowlist', () => {
   // The rule is stated once in .github/workflows/README.md and enforced here across every
   // workflow file, so a fourth deploy workflow cannot quietly reintroduce a free-text stage that
@@ -1676,6 +1687,18 @@ test('every workflow that selects a deployment Environment does so from an allow
         assert.ok(declared, `${where} selects an Environment from an undeclared input '${selected[1]}'`)
         assert.equal(declared.type, 'choice', `${where} input '${selected[1]}' must be an allowlist`)
         assert.ok(declared.options?.length > 0, `${where} input '${selected[1]}' has an empty allowlist`)
+        // And an allowlist of Environments that exist. An option naming one
+        // that was never bootstrapped runs the job against no Environment at
+        // all: no vars, no secrets, and a federation that fails on the identity
+        // rather than on the typo. Pinned rather than derived, because
+        // Environments live in GitHub rather than in this repository — the
+        // second half of "Adding a stage" in .github/workflows/README.md.
+        for (const option of declared.options) {
+          assert.ok(
+            ENVIRONMENTS.includes(option),
+            `${where} input '${selected[1]}' offers '${option}', which has no deployment Environment`,
+          )
+        }
       }
 
       // The same job that reaches a protected Environment reaches the AWS role behind it, so
@@ -1703,6 +1726,61 @@ test('every workflow that selects a deployment Environment does so from an allow
     ],
     'the swept set no longer matches the deployment workflows',
   )
+})
+
+/**
+ * The apps/infra commands that ask mstage for a session before doing anything.
+ *
+ * Named rather than derived: which of them reaches `checkLogin` is a property
+ * of the tools (`mdeploy/src/run.ts`, `runner-build.ts`, `runner-promote.ts`,
+ * `runner-update.ts`), and pinning the set is what makes a sixth one a reviewed
+ * addition rather than one that appeared.
+ */
+const SESSION_CHECKING = /npm run (?:--silent )?(?:mstage login|mdeploy|runner:build|runner:promote|runner:update)\b/
+
+test('every step that asks mstage for a session is given a token to answer with', () => {
+  /*
+   * `gh` ships on a runner and is never signed in, and a stage declaration names
+   * github a required provider — so a tool that checks the session first refuses
+   * with `Required sign-ins are missing` wherever GH_TOKEN is out of scope.
+   *
+   * What it cost: a runner build that had federated its cloud identity and
+   * passed `mstage login` one step earlier, then died on the session anyway,
+   * because the token was that step's rather than the whole workflow's. Scope is
+   * the thing asserted, not placement — a step may carry its own.
+   */
+  const workflowDirectory = join(REPO_ROOT, '.github/workflows')
+  let checked = 0
+
+  for (const entry of readdirSync(workflowDirectory)) {
+    if (!/\.ya?ml$/.test(entry)) continue
+    const workflow: any = load(readFileSync(join(workflowDirectory, entry), 'utf8'))
+
+    for (const [jobName, job] of entries(workflow.jobs ?? {})) {
+      for (const step of job.steps ?? []) {
+        // Comments and the lines that only print a command: neither runs one,
+        // and both mention these scripts where a deploy tells an operator what
+        // to rerun by hand.
+        const invoked = String(step.run ?? '')
+          .split('\n')
+          .filter((line: string) => !/^\s*(#|echo\b)/.test(line))
+          .join('\n')
+        if (!SESSION_CHECKING.test(invoked)) continue
+
+        const where = `${entry} job '${jobName}' step '${step.name ?? step.id ?? invoked.trim().slice(0, 40)}'`
+        assert.ok(
+          'GH_TOKEN' in (workflow.env ?? {}) || 'GH_TOKEN' in (job.env ?? {}) || 'GH_TOKEN' in (step.env ?? {}),
+          `${where} runs a tool that checks the mstage session with no GH_TOKEN in scope`,
+        )
+        checked += 1
+      }
+    }
+  }
+
+  // The session check in mbuild, mdeploy and mrunner; mdeploy's apply; mrunner's
+  // two commands; and mdeploy-all's two runner reads. A drop means a tool call
+  // went somewhere this sweep cannot see.
+  assert.ok(checked >= 8, `expected every session-checking step swept, saw ${checked}`)
 })
 
 test('API publishing builds once and promotes that exact image without rebuilding', () => {

@@ -14,7 +14,7 @@
  * the runner's identities, and the collector is handed all three. On AWS
  * nothing is passed, because the network already arranged it.
  *
- * Applied against a real project: the `dev2` stage in `asia-southeast1`.
+ * Applied against real projects: `dev` and `prod`, both in `us-east5`.
  */
 
 import type { StackProviders } from '../../index.ts'

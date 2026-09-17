@@ -298,6 +298,54 @@ test('a service account is granted its roles on the run that created it', async 
   assert.equal(probes.length, 4, `expected one absent probe, two retries and the answer: ${probes.length}`)
 })
 
+test('the publisher may read the findings its own scan gate blocks on', async () => {
+  /*
+   * A publish that pushed the image and then died reading it:
+   *
+   *   Permission 'containeranalysis.occurrences.list' denied on resource
+   *   'projects/...' (or it may not exist)
+   *
+   * The push and the read are two services. `artifactregistry.writer` carries
+   * the push; the gate's `gcloud artifacts docker images describe
+   * --show-package-vulnerability` lists occurrences out of Container Analysis,
+   * and nothing in the registry's role reaches them. mbuild reads that refusal
+   * as a failed publish and spends three attempts on it.
+   *
+   * Named rather than counted, and not read back from `gcp.ts`, for the reason
+   * the deployer's list above is: this is project-wide privilege, so the
+   * declaration and the assertion are two independent statements.
+   */
+  const gcloud = recorder()
+  await invoke(gcloud.run)
+
+  const grants = gcloud.applied('projects add-iam-policy-binding', 'bl-app-publish@')
+  assert.deepEqual(
+    grants.map((argv: string[]) => argv.find((arg) => arg.startsWith('--role='))?.slice('--role='.length)).sort(),
+    ['roles/artifactregistry.writer', 'roles/containeranalysis.occurrences.viewer'],
+    'the roles the publisher receives are not the roles this repository grants',
+  )
+})
+
+test('the API the scan gate reads through is on, not merely reachable by accident', async () => {
+  /*
+   * The permission above buys the read; this buys the endpoint. Enabled
+   * explicitly rather than left to Artifact Registry, which turns Container
+   * Analysis on as a side effect — a dependency that holds until it does not,
+   * and the failure then is a publish that pushed and could not finish.
+   *
+   * What writes the findings it reads is Artifact Analysis, and that is off on
+   * purpose (it bills per image), so the gate currently blocks on nothing.
+   */
+  const gcloud = recorder()
+  await invoke(gcloud.run)
+
+  const enabled = gcloud.applied('services enable')[0] ?? []
+  assert.ok(
+    enabled.some((argument: string) => argument === 'containeranalysis.googleapis.com'),
+    'the scan gate reads through an API nothing turned on',
+  )
+})
+
 test('a policy write that lost the read-modify-write race is retried, not reported', async () => {
   /*
    * What a real run answered on the first project-level grant:

@@ -157,6 +157,11 @@ targeted by an unbootstrapped or misspelled name. Each list is independent — i
 `build-apps-api-image.yml` (`stage` and `source_stage`) list `dev` and `prod`. Bootstrapping a
 stage means adding it to whichever lists should reach it.
 
+Two edits, not one: the lists above, and `ENVIRONMENTS` in
+`apps/infra/deployment/release-safety.test.ts`, which is what refuses an option with no deployment
+Environment behind it. An Environment is where a stage's declaration lives, so an option naming a
+stage that has none reaches a job with no configuration at all rather than a clear refusal.
+
 The `m*` workflows read that stage's declaration rather than anything written here, so adding one
 to their lists is the whole change on this side — but the declaration has to be somewhere they can
 read it. `npm run mstage config put -- --stage <stage>` puts it in that stage's Environment, and

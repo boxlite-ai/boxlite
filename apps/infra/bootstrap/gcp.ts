@@ -112,6 +112,13 @@ const SERVICES = [
   'storage.googleapis.com',
   // The repository a stage's images are published into.
   'artifactregistry.googleapis.com',
+  // Where mbuild's scan gate reads an image's findings from
+  // (`mbuild/src/publish.ts`, `scanReport`). Artifact Analysis, which is what
+  // would write those findings, is deliberately not enabled here: it bills per
+  // image scanned. So the gate reads an empty answer and blocks on nothing
+  // until `containerscanning.googleapis.com` joins this list — green, not
+  // absent, which is the thing to know about it.
+  'containeranalysis.googleapis.com',
   // The OS policy that lands a new runner binary on a host that already exists.
   // A deploy declares the desired state and each host's own agent converges to
   // it, which is what replaces the tunnelled ssh that needed OS Login.
@@ -225,8 +232,18 @@ const DEPLOYER_ROLES = [
   'roles/compute.osAdminLogin',
 ]
 
-/** The publisher pushes images and reads nothing else. */
-const PUBLISHER_ROLES = ['roles/artifactregistry.writer']
+/**
+ * The publisher pushes images, and reads back what was found in them.
+ *
+ * Two services, so two roles: `artifactregistry.writer` carries the push, and
+ * the scan gate's read reaches Container Analysis instead — `gcloud artifacts
+ * docker images describe --show-package-vulnerability` lists occurrences, and
+ * nothing in the registry's own role grants `containeranalysis.occurrences
+ * .list`. Without the second the publish pushes the image and then cannot read
+ * its findings, which mbuild reports as a publish failure and retries three
+ * times over an answer that never changes.
+ */
+const PUBLISHER_ROLES = ['roles/artifactregistry.writer', 'roles/containeranalysis.occurrences.viewer']
 
 /**
  * Which GitHub repository may federate in.

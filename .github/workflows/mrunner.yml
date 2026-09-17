@@ -29,7 +29,6 @@ on:
         options:
           - dev
           - prod
-          - gcp-dev
       ref:
         description: Commit SHA, or a git tag naming one (defaults to this ref)
         required: false
@@ -46,7 +45,6 @@ on:
         options:
           - dev
           - prod
-          - gcp-dev
   workflow_call:
     inputs:
       stage:
@@ -79,6 +77,15 @@ concurrency:
 permissions:
   contents: read
   id-token: write
+
+env:
+  # gh is installed on a runner but never signed in, and the stage declaration
+  # names github a required provider — so every step that reaches mstage fails
+  # on the session before it fails on anything worth reading. At the workflow
+  # rather than on the check below: `runner:build` and `runner:promote` ask the
+  # same question themselves, and a token only the check carries makes them
+  # refuse a session the check just called usable.
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
   # The source stage's declaration, read where it exists — `vars` resolves in
@@ -181,8 +188,6 @@ jobs:
 
       - name: Verify the session through mstage
         working-directory: apps/infra
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
           for attempt in 1 2 3; do
