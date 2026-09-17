@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::db::ImageIndexStore;
-use crate::disk::{BaseDiskManager, Disk, DiskFormat, create_ext4_from_dir};
+use crate::disk::{BaseDiskManager, Disk, DiskFormat, create_ext4_from_dir, failure_means_unknown};
 use crate::metrics::RuntimeMetricsStorage;
 use crate::rootfs::RootfsBuilder;
 
@@ -376,7 +376,12 @@ impl ImageDiskManager {
         let entries = match fs::read_dir(&self.cache_dir) {
             Ok(entries) => entries,
             Err(e) => {
-                if self.cache_dir.exists() {
+                // Only a missing directory is ordinary — the cache is created
+                // lazily. Anything else hid the listing, and the sweep then
+                // reclaims nothing; the one signal that says so must not be
+                // gated on a probe that reads an unopenable directory as an
+                // absent one.
+                if failure_means_unknown(e.kind()) {
                     tracing::warn!(
                         "GC: failed to read image disk cache {}: {}",
                         self.cache_dir.display(),
@@ -842,8 +847,23 @@ mod tests {
         }
 
         fn manager(&self, reserve_bytes: u64) -> ImageDiskManager {
+            self.manager_with_cache_dir_and_reserve(self.root.join("disk-images"), reserve_bytes)
+        }
+
+        /// A manager whose cache dir is somewhere other than the one this home
+        /// created — for the sweeps that must cope with not being able to read
+        /// it at all.
+        fn manager_with_cache_dir(&self, cache_dir: PathBuf) -> ImageDiskManager {
+            self.manager_with_cache_dir_and_reserve(cache_dir, 0)
+        }
+
+        fn manager_with_cache_dir_and_reserve(
+            &self,
+            cache_dir: PathBuf,
+            reserve_bytes: u64,
+        ) -> ImageDiskManager {
             ImageDiskManager::new(
-                self.root.join("disk-images"),
+                cache_dir,
                 self.root.join("temp"),
                 reserve_bytes,
                 DiskCacheReclaim::new(
@@ -1260,6 +1280,48 @@ mod tests {
             "an unknown file is not ours to delete"
         );
         assert!(subdir.is_dir(), "a directory is never a cache entry");
+    }
+
+    /// `gc_unreachable` returns `Ok(0)` whether its cache dir is absent or
+    /// merely unopenable, so the warning is the only thing that tells a sweep
+    /// with nothing to do from a sweep that could not look. Provoked without
+    /// privileges by a cache dir whose parent is a regular file, where
+    /// `read_dir` gives `ENOTDIR` and `exists()` answers `false`.
+    #[test]
+    fn a_sweep_that_could_not_read_its_cache_dir_says_so() {
+        let home = TestHome::new();
+        let not_a_dir = home.root.join("regular-file");
+        fs::write(&not_a_dir, b"x").unwrap();
+        let cache_dir = not_a_dir.join("disk-images");
+        assert!(!cache_dir.exists(), "exists() cannot see the ENOTDIR");
+        let mgr = home.manager_with_cache_dir(cache_dir);
+
+        let (removed, logged) =
+            boxlite_test_utils::tracing_capture::capture(|| mgr.gc_unreachable().unwrap());
+
+        assert_eq!(removed, 0, "a dir that could not be read reclaims nothing");
+        assert!(
+            logged.contains("failed to read image disk cache"),
+            "an unopenable cache dir must not sweep silently: {logged}"
+        );
+    }
+
+    /// The other half of that gate: the cache is created lazily, so a dir that
+    /// was never written to is ordinary and must stay quiet, or the warning
+    /// means nothing.
+    #[test]
+    fn a_sweep_is_quiet_when_its_cache_dir_is_merely_absent() {
+        let home = TestHome::new();
+        let mgr = home.manager_with_cache_dir(home.root.join("never-created"));
+
+        let (removed, logged) =
+            boxlite_test_utils::tracing_capture::capture(|| mgr.gc_unreachable().unwrap());
+
+        assert_eq!(removed, 0);
+        assert!(
+            logged.is_empty(),
+            "a cache dir that never existed is not a failure to report: {logged}"
+        );
     }
 
     /// A database error must abort the sweep. An empty reachable set reads as

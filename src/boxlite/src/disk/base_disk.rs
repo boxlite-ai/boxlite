@@ -102,7 +102,7 @@ pub(crate) struct ReferencedPaths {
 /// it would then delete the backing file under every running box: the exact
 /// conflation [`ReferencedPaths::complete`] exists to prevent. The same
 /// hazard is spelled out for the chain walk in `qcow2::read_backing_chain`.
-fn failure_means_unknown(kind: std::io::ErrorKind) -> bool {
+pub(crate) fn failure_means_unknown(kind: std::io::ErrorKind) -> bool {
     kind != std::io::ErrorKind::NotFound
 }
 
@@ -325,7 +325,12 @@ impl BaseDiskManager {
         let entries = match fs::read_dir(&self.bases_dir) {
             Ok(entries) => entries,
             Err(e) => {
-                if self.bases_dir.exists() {
+                // Only a missing directory is ordinary — the first GC runs
+                // before anything is installed. Anything else hid the listing,
+                // and the pass then reclaims nothing; the one signal that says
+                // so must not be gated on a probe that reads an unopenable
+                // directory as an absent one.
+                if failure_means_unknown(e.kind()) {
                     tracing::warn!(
                         "GC: failed to read bases dir {}: {}",
                         self.bases_dir.display(),
@@ -989,6 +994,51 @@ mod tests {
         assert!(
             !referenced.complete,
             "a boxes dir that could not be opened leaves the answer unknown"
+        );
+    }
+
+    /// `gc_orphans` returns `Ok(0)` whether its bases dir is absent or merely
+    /// unopenable, so the warning is the only thing that tells a sweep with
+    /// nothing to do from a sweep that could not look. Provoked as above, with
+    /// a bases dir whose parent is a regular file.
+    #[test]
+    fn a_sweep_that_could_not_read_its_bases_dir_says_so() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(&dir.path().join("db").join("test.db")).unwrap();
+        let not_a_dir = dir.path().join("regular-file");
+        std::fs::write(&not_a_dir, b"x").unwrap();
+        let bases_dir = not_a_dir.join("bases");
+        assert!(!bases_dir.exists(), "exists() cannot see the ENOTDIR");
+        let mgr = BaseDiskManager::new(bases_dir, BaseDiskStore::new(db));
+
+        let (removed, logged) = boxlite_test_utils::tracing_capture::capture(|| {
+            mgr.gc_orphans(&dir.path().join("boxes")).unwrap()
+        });
+
+        assert_eq!(removed, 0, "a dir that could not be read reclaims nothing");
+        assert!(
+            logged.contains("failed to read bases dir"),
+            "an unopenable bases dir must not sweep silently: {logged}"
+        );
+    }
+
+    /// The other half of that gate: a bases dir that was never created is the
+    /// ordinary case — the first sweep can precede the first install — and
+    /// must stay quiet, or the warning means nothing.
+    #[test]
+    fn a_sweep_is_quiet_when_its_bases_dir_is_merely_absent() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(&dir.path().join("db").join("test.db")).unwrap();
+        let mgr = BaseDiskManager::new(dir.path().join("never-created"), BaseDiskStore::new(db));
+
+        let (removed, logged) = boxlite_test_utils::tracing_capture::capture(|| {
+            mgr.gc_orphans(&dir.path().join("boxes")).unwrap()
+        });
+
+        assert_eq!(removed, 0);
+        assert!(
+            logged.is_empty(),
+            "a bases dir that never existed is not a failure to report: {logged}"
         );
     }
 

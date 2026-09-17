@@ -640,8 +640,12 @@ impl GuestRootfsManager {
                 path = %record.base_path(),
                 "GC: removing stale guest rootfs"
             );
+            // A file already gone is the removal succeeding by other means, so
+            // only `NotFound` is ordinary here. `exists()` cannot make that
+            // call — it reads a file whose parent denies access as an absent
+            // one, and the failure to reclaim then goes unreported.
             if let Err(e) = fs::remove_file(&base_path)
-                && base_path.exists()
+                && crate::disk::failure_means_unknown(e.kind())
             {
                 tracing::warn!("GC: failed to remove {}: {}", base_path.display(), e);
             }
@@ -1102,6 +1106,86 @@ mod tests {
         assert!(
             !unreferenced_file.exists(),
             "Unreferenced stale entry should be removed"
+        );
+    }
+
+    /// A stale entry the sweep could not delete must be reported. The DB row
+    /// goes either way, so the file is left behind with nothing pointing at
+    /// it and the warning is the only trace. Provoked without privileges by a
+    /// record whose path sits under a regular file: `remove_file` gives
+    /// `ENOTDIR` while `exists()` answers `false`.
+    #[test]
+    fn a_stale_rootfs_that_could_not_be_removed_says_so() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let bases_dir = dir.path().join("bases");
+        let boxes_dir = dir.path().join("boxes");
+        std::fs::create_dir_all(&bases_dir).unwrap();
+        std::fs::create_dir_all(&boxes_dir).unwrap();
+
+        let not_a_dir = dir.path().join("regular-file");
+        std::fs::write(&not_a_dir, b"x").unwrap();
+        let stale = not_a_dir.join("aaa11111.ext4");
+        assert!(!stale.exists(), "exists() cannot see the ENOTDIR");
+
+        let store = test_store();
+        insert_rootfs_record(
+            &store,
+            "aaa11111",
+            "img123-oldguest",
+            stale.to_str().unwrap(),
+        );
+        let mgr = GuestRootfsManager::new(
+            BaseDiskManager::new(bases_dir, store),
+            dir.path().to_path_buf(),
+        );
+
+        let (removed, logged) = boxlite_test_utils::tracing_capture::capture(|| {
+            mgr.gc_inner(&boxes_dir, None).unwrap()
+        });
+
+        assert_eq!(
+            removed, 1,
+            "the row is dropped whether the file went or not"
+        );
+        assert!(
+            logged.contains("failed to remove"),
+            "a stale rootfs left on disk must not be dropped silently: {logged}"
+        );
+    }
+
+    /// The other half of that gate: a file already gone is the removal having
+    /// succeeded by other means — a crash between unlink and the DB delete —
+    /// and must stay quiet, or the warning means nothing.
+    #[test]
+    fn a_stale_rootfs_already_gone_is_removed_quietly() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let bases_dir = dir.path().join("bases");
+        let boxes_dir = dir.path().join("boxes");
+        std::fs::create_dir_all(&bases_dir).unwrap();
+        std::fs::create_dir_all(&boxes_dir).unwrap();
+
+        // Recorded, never written: exactly the state a crash mid-GC leaves.
+        let gone = bases_dir.join("bbb22222.ext4");
+        let store = test_store();
+        insert_rootfs_record(
+            &store,
+            "bbb22222",
+            "img123-oldguest",
+            gone.to_str().unwrap(),
+        );
+        let mgr = GuestRootfsManager::new(
+            BaseDiskManager::new(bases_dir, store),
+            dir.path().to_path_buf(),
+        );
+
+        let (removed, logged) = boxlite_test_utils::tracing_capture::capture(|| {
+            mgr.gc_inner(&boxes_dir, None).unwrap()
+        });
+
+        assert_eq!(removed, 1);
+        assert!(
+            !logged.contains("failed to remove"),
+            "a file already gone is not a failure to reclaim: {logged}"
         );
     }
 
