@@ -305,14 +305,34 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
     let previousUpgrade: any
     for (const [index, instance] of instances.entries()) {
       const { slot } = assignments[index]
-      const payload = encodeUpgradePayload({
-        identity: request.binary.identity,
-        binary: request.binary,
-        port: RUNNER_PORT,
-        // Only a build-mode binary needs it, and only because it is read from
-        // S3 with the host's own role rather than fetched publicly.
-        region,
-      })
+      /*
+       * The binary and the unit environment, in one command.
+       *
+       * `userDataBase64` is ignored after first boot, so `/etc/boxlite/runner.env`
+       * is as unreachable to a deploy as the binary is — a stage that moves its
+       * domain leaves every host calling a name that no longer resolves, and
+       * the host is then unreachable from the control plane and cannot be told.
+       * GCP converges it through a second resource in the one policy
+       * assignment; here the transport carries a script, so both halves ride
+       * the same one and a host takes one turn rather than two.
+       *
+       * No backend: these hosts mount with mount-s3 and their boot script
+       * writes no `VOLUME_STORAGE_BACKEND`, so enforcing one would leave every
+       * one of them disagreeing with itself forever.
+       *
+       * `apiUrl` is an Output, so the payload is one too.
+       */
+      const payload = $util.output(request.apiUrl).apply((apiUrl: string) =>
+        encodeUpgradePayload({
+          identity: request.binary.identity,
+          binary: request.binary,
+          port: RUNNER_PORT,
+          // Only a build-mode binary needs it, and only because it is read from
+          // S3 with the host's own role rather than fetched publicly.
+          region,
+          apiUrl,
+        }),
+      )
       previousUpgrade = new command.local.Command(
         upgradeResourceName(slot),
         {
@@ -342,7 +362,17 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
            * Narrow on purpose either way: a payload that re-ran on every deploy
            * would restart a converged fleet for nothing.
            */
-          triggers: [upgradeTrigger({ identity: request.binary.identity, binary: request.binary }), instance.id],
+          /*
+           * The address is in here as well as in the payload: it is the input
+           * that changes when a stage moves its domain, which is exactly the
+           * case the unit-environment half exists for. Without it that half
+           * would be rendered and never sent.
+           */
+          triggers: [
+            upgradeTrigger({ identity: request.binary.identity, binary: request.binary }),
+            instance.id,
+            request.apiUrl,
+          ],
         },
         { dependsOn: [instance, ...(previousUpgrade ? [previousUpgrade] : [])] },
       )

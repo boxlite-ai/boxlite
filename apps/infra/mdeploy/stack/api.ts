@@ -43,10 +43,20 @@ export type ApiCapability =
   | { kind: 'read-telemetry'; clickhouse: ClickHouse }
   | { kind: 'read-secret'; ref: $util.Output<string> }
 
+/*
+ * The two public names, from the one module that composes them.
+ *
+ * Re-exported rather than defined here because `bootstrap/` needs the same
+ * answer — Auth0's callback URL is the dashboard's host — and it is type-checked
+ * by a program that has none of this file's engine globals. `hosts.ts` carries
+ * no cloud and no engine, so every caller can reach the one rule.
+ */
+export { publicHostsFor, type PublicHosts } from './hosts.ts'
+
 export type ApiRequest = {
   image: $util.Input<string>
   port: number
-  /** The hostname the dashboard and the SDKs reach it on. */
+  /** The stage's own domain. `publicHostsFor` turns it into the two names served. */
   domain: string
   /** Values the container reads, already assembled. */
   environment: Record<string, $util.Input<string>>

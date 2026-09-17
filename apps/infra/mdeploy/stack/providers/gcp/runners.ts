@@ -41,7 +41,7 @@ import {
   registrationDir,
   registrationPayload,
 } from '../../runner-registration.ts'
-import { renderPolicyScripts } from '../../runner-upgrade.ts'
+import { renderPolicyScripts, renderUnitEnvironmentPolicyScripts } from '../../runner-upgrade.ts'
 import { splitSecretRef } from './secret-env.ts'
 import { volumeConditionFor } from './storage.ts'
 
@@ -120,6 +120,19 @@ chmod +x /usr/local/bin/boxlite-runner-start.sh
 `,
       }
 
+/**
+ * What a box volume is mounted from on these hosts.
+ *
+ * One constant because two things write it and they have to agree: the boot
+ * script, once, and the OS policy that converges a host created before this
+ * key existed. A second spelling is a fleet that reads as non-compliant
+ * forever, which is the shape `runnerApiUrl` was extracted to prevent.
+ *
+ * `gcs` and not a stage's setting: `installVolumeMount` puts gcsfuse on these
+ * hosts and no mount-s3, so the machine decides this, not an operator.
+ */
+const VOLUME_BACKEND = 'gcs'
+
 export const gcpRunnerProvider =
   ({
     project,
@@ -175,6 +188,16 @@ udevadm control --reload-rules
 udevadm trigger --name-match=kvm || true`,
       startWrapper: null,
       unitEnvironment: {
+        /*
+         * The project `gcloud` resolves a bare secret id against.
+         *
+         * The start wrapper above fetches every secret with `gcloud secrets
+         * versions access --secret=<id>`, and an id names no project. gcloud on
+         * GCE falls back to the metadata server's project, which is why the
+         * hosts created before this key existed still start — but the fallback
+         * is the platform's, not this stack's, and naming it is what keeps the
+         * wrapper working off that fallback.
+         */
         CLOUDSDK_CORE_PROJECT: project,
         /*
          * Mount volumes with gcsfuse rather than mount-s3: `installVolumeMount`
@@ -194,7 +217,7 @@ udevadm trigger --name-match=kvm || true`,
          * the AWS hosts fall through to their instance role. That is what the
          * grants below are for.
          */
-        VOLUME_STORAGE_BACKEND: 'gcs',
+        VOLUME_STORAGE_BACKEND: VOLUME_BACKEND,
       },
     }
 
@@ -440,6 +463,15 @@ udevadm trigger --name-match=kvm || true`,
      * new binary" are two moments now. The report API is what closes that gap —
      * see `DEPLOY.md`.
      */
+    // `apiUrl` is an Output, so the rendered pair is one too — and each field
+    // has to be unwrapped on its own before it can be handed to a script slot.
+    const unitEnvPolicy = $util
+      .output(request.apiUrl)
+      .apply((url: string) => renderUnitEnvironmentPolicyScripts({ apiUrl: url, volumeBackend: VOLUME_BACKEND }))
+    const unitEnvScripts = {
+      validate: unitEnvPolicy.apply((rendered: { validate: string }) => rendered.validate),
+      enforce: unitEnvPolicy.apply((rendered: { enforce: string }) => rendered.enforce),
+    }
     const scripts = renderPolicyScripts({
       identity: request.binary.identity,
       binary: request.binary,
@@ -478,6 +510,30 @@ udevadm trigger --name-match=kvm || true`,
                     exec: {
                       validate: { interpreter: 'NONE', script: scripts.validate },
                       enforce: { interpreter: 'NONE', script: scripts.enforce },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+          /*
+           * The other thing a host cannot be told after first boot.
+           *
+           * In this assignment rather than its own so the two share one
+           * `disruptionBudget`: both end in `systemctl restart`, and two
+           * assignments would let a host be restarted by each at once.
+           */
+          {
+            id: 'runner-unit-env',
+            mode: 'ENFORCEMENT',
+            resourceGroups: [
+              {
+                resources: [
+                  {
+                    id: 'converge-unit-environment',
+                    exec: {
+                      validate: { interpreter: 'NONE', script: unitEnvScripts.validate },
+                      enforce: { interpreter: 'NONE', script: unitEnvScripts.enforce },
                     },
                   },
                 ],

@@ -24,6 +24,13 @@
  */
 
 import { gcpProgram, type ProgramOutputs } from '../pulumi/program.ts'
+import { publicHostsFor } from '../stack/api.ts'
+import {
+  assertAuthorizationsConverge,
+  authorizationsThroughGcloud,
+  type LookupAuthorizations,
+} from './dns-authorization.ts'
+import { spawnWith } from './upgrade-runners.ts'
 import type { Identity } from 'mstage/identity'
 import type { MstageConfig } from 'mstage/config'
 import type { StoreBackend } from 'mstage/env'
@@ -121,6 +128,13 @@ export type PulumiDeployInput = {
   stageEnvironment?: Record<string, string>
   log: (line: string) => void
   createStackWith?: StackFactory
+  /**
+   * Who answers what the project already holds for this stage's API host.
+   *
+   * Injected so the refusal can be exercised without a project: the default
+   * shells out to `gcloud` with the credentials this deploy resolved.
+   */
+  lookupAuthorizations?: LookupAuthorizations
 }
 
 /** Nothing but strings reaches a subprocess; an unset variable is not an empty one. */
@@ -136,6 +150,7 @@ export const pulumiDeploy = async ({
   stageEnvironment = {},
   log,
   createStackWith = createStack,
+  lookupAuthorizations,
 }: PulumiDeployInput): Promise<number> => {
   /*
    * The project the stage declares, which is also what the Pulumi provider has
@@ -175,6 +190,29 @@ export const pulumiDeploy = async ({
     `${NARRATION[intent]} every component of ${app} stage ${stage} ` +
       `${intent === 'remove' ? 'from' : 'into'} ${project} (${scope.region}) with pulumi`,
   )
+
+  /*
+   * Asked before the engine is handed anything, because the answer decides
+   * whether this apply can finish at all and the resources it would change
+   * first are not free to change back.
+   *
+   * An apply only. A preview creates nothing, and a stage reads the same either
+   * way — refusing the read would withhold the plan that shows the problem.
+   * Skipped without a domain, which is a stage the engine is about to refuse
+   * for that same reason, in its own words.
+   */
+  const domain = environment.STACK_DOMAIN
+  if (intent === 'deploy' && domain) {
+    assertAuthorizationsConverge({
+      app,
+      stage,
+      project,
+      apiHost: publicHostsFor({ domain, dashboardDomain: environment.DASHBOARD_DOMAIN ?? null }).api,
+      proxyDomain: environment.PROXY_DOMAIN ?? null,
+      lookup: lookupAuthorizations ?? authorizationsThroughGcloud(spawnWith({ ...process.env, ...credentials })),
+      log,
+    })
+  }
 
   const stack = await createStackWith({
     projectName: app,

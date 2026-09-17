@@ -23,8 +23,8 @@ apps/infra/
     pulumi/program.ts      GCP: the same modules, composed for Pulumi
     globals.d.ts           what both engines inject, declared so tsc can see it
     src/deploy.ts          which engine — resolved once, from one field
-    src/plan.ts            what each module builds, and what it needs first
     src/stack-env.ts       what one deploy reads out of the environment, for both engines
+    src/plan.ts            what each module builds, and what it needs first
     src/api-environment.ts what the control plane container reads
     stack/                 what each module needs, described without a cloud
     stack/providers/aws/   how AWS answers it
@@ -46,7 +46,15 @@ with nested virtualization.
 A value belongs in `mdeploy.config.json` when changing it changes the
 infrastructure, and in `mstage.config.json` when changing it changes what a
 running thing reads. `STACK_DOMAIN` is a store value: moving a stage to another
-domain changes no resource shape. `runners.size` is `mdeploy`'s: it decides
+domain changes no resource shape. `DASHBOARD_DOMAIN` is the same kind of value
+and the same key with a narrower reach — it moves where the dashboard is served
+and leaves the control plane on `api.<STACK_DOMAIN>`, which is the name a runner
+is handed at first boot and the only name the in-VPC private zone answers for.
+A stage that names neither serves both from one domain. The dashboard's host is
+also the one Auth0 has to hold: it matches a `redirect_uri` exactly, so the
+callback and logout URLs name that host and not the stage domain —
+`npm run bootstrap -- --provision-auth0` registers them from these same two
+keys, and Auth0 has no upsert to repair them with afterwards. `runners.size` is `mdeploy`'s: it decides
 which machine family a host is created from, and on GCP whether nested
 virtualization is available at all.
 
@@ -96,6 +104,15 @@ identity before the next host is touched. A failure stops the chain with the
 unvisited hosts still serving. A host running something *newer* than the target is
 refused rather than reverted, so a deliberate hand-install survives an unrelated
 deploy.
+
+The same command carries one more thing a host cannot be told after first boot:
+`/etc/boxlite/runner.env`. It is written once, by the boot script, and a stage
+that moves its domain leaves every existing host calling a name that no longer
+resolves — unreachable from the control plane, and so unable to be told. On AWS
+the convergence rides the same per-host command as the binary; on GCP it is a
+second resource in the one policy assignment, so a host still takes one turn.
+Either way a host that already agrees is left alone, which is what keeps a
+converged fleet from restarting its boxes on every deploy.
 
 Nothing in a deploy can lift that refusal, and that is deliberate: a stored flag
 would be a stage that quietly permits downgrades on every future deploy, which is
@@ -220,6 +237,44 @@ hand for a developer's own box host; `stack/providers/gcp/runners.ts` and
 `stack/runner-boot.ts` make them part of a deploy. No `minCpuPlatform`: N4 has
 one CPU platform, and naming an older one is rejected rather than read as a
 floor already met.
+
+**Only the GCP balancer strips the container's `/api` prefix.** The API mounts
+every route under `/api` so one image can serve the dashboard beside it. On GCP
+the load balancer puts that prefix back for the control plane's own hostname, so
+`https://api.<STACK_DOMAIN>/boxes` and `https://api.<STACK_DOMAIN>/api/boxes`
+reach the same route and an SDK profile needs only the host. An ALB forwards the
+path unchanged and has no rewrite to give, so on AWS the prefix is still the
+client's to supply — which is why the longer form keeps being served on both.
+
+**A DNS authorization cannot be renamed in place.** Certificate Manager admits
+one per `(project, domain, type)`, so a replacement under a new name is refused
+as a duplicate tuple before any name is compared — and the delete that would
+free it is refused in turn by the certificate issued against it and by the
+regional proxy above that. A stage whose internal chain predates the current
+naming converges only by deleting that chain — forwarding rule, target proxy,
+certificate, authorization — and letting the next apply rebuild it, with the
+in-VPC control plane unreachable in between. A stage that creates the chain
+under the current naming never meets this, and an apply no longer discovers it
+the expensive way: `mdeploy` asks the project what it already holds and refuses
+before the engine is handed anything.
+
+Both chains are asked, from opposite directions. The control plane's
+authorization carries its host in its name, so what matters is whether the
+resource proving `api.<STACK_DOMAIN>` is the one this apply creates. The proxy's
+carries the stage's name and nothing else, so what is asked of it is whether the
+domain it proves is still `PROXY_DOMAIN`.
+
+They differ because adopting the keyed name is itself the replacement the key
+exists to make possible: free while no stage holds the old name, and a wedge for
+every stage that does. The control plane's was moved on those terms; the proxy's
+stays fixed because every stage has one. The move is still available later, one
+stage at a time, whenever that stage's chain is rebuilt for another reason.
+
+**Splitting the public certificate is paid once.** The control plane and the
+dashboard each get their own managed certificate now, so a stage that still
+holds the single certificate covering both re-issues both on the first apply
+after the split, and the balancer presents neither until each is `ACTIVE`. What
+that gap buys is that no later move of one name can darken the other.
 
 **A zone is declared, not derived.** `mstage.config.json` takes an optional
 `zone` beside the region, and the two machines in the stack — the runners and a

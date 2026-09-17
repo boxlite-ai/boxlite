@@ -63,7 +63,7 @@ export type StackInputs = {
   stage: string
   /** The commit being deployed. Every container runs the same one. */
   tag: string
-  /** The hostname the dashboard and the SDKs reach the control plane on. */
+  /** The stage's own domain. The control plane answers at `api.<domain>`. */
   domain: string
   /** The zone `*.<proxyDomain>` is written into. Every box is a name under it. */
   proxyDomain: string

@@ -32,6 +32,7 @@
  * answer that repairs a host whose last upgrade half-finished.
  */
 
+import { RUNNER_ENV_FILE, runnerApiUrl } from './runner-boot.ts'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { artifactFetchCommand, verifyAgainstManifest } from './runner-binary.ts'
@@ -40,6 +41,17 @@ import type { RunnerBinary, RunnerSlot } from './runners.ts'
 /** Stable X.Y.Z, optionally carrying the commit a build was produced from. */
 const BINARY_IDENTITY = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(\+[0-9a-f]{40})?$/
 const TARBALL_NAME = /^[A-Za-z0-9._-]+\.tar\.gz$/
+/**
+ * The control plane's origin, as tight as the two places it is interpolated.
+ *
+ * It lands inside a single-quoted assignment and inside a `sed` expression
+ * delimited by `|`, both in a script that runs as root — so a quote or a pipe
+ * in it is not a malformed URL but a command. An allowlist rather than an
+ * escape, for the reason the other two here are.
+ */
+const CONTROL_PLANE_URL = /^https?:\/\/[A-Za-z0-9.-]+(:\d{1,5})?\/?$/
+/** The object store a host mounts a volume from, as this module will spell it. */
+const VOLUME_BACKEND = /^[a-z0-9]+$/
 
 export class RunnerUpgradeError extends Error {
   constructor(message: string) {
@@ -111,6 +123,24 @@ export type UpgradeTarget = {
   port: number
   /** The region an `s3://` object is read from. Null for a public asset. */
   region?: string | null
+  /**
+   * Where the control plane answers, so a host that predates a domain move can
+   * be told.
+   *
+   * Absent for two kinds of caller, and for different reasons. The OS-policy
+   * renderers describe the binary alone, because GCP converges the environment
+   * through a resource of its own. `runner:update` rolls a release by hand and
+   * never reads the stage's environment, so it has no address to enforce —
+   * inventing one there would rewrite a host from a value nobody supplied.
+   */
+  apiUrl?: string | null
+  /**
+   * Which object store a volume is mounted from, or null where the boot script
+   * writes no such key. The cloud's answer: only the GCP hosts carry gcsfuse,
+   * and an AWS host that were handed one would disagree with its own boot
+   * script forever.
+   */
+  volumeBackend?: string | null
   /** Force an older binary over a newer one. A real rollback, asked for. */
   allowDowngrade?: boolean
 }
@@ -211,6 +241,25 @@ const assertUpgradeTarget = (target: UpgradeTarget): void => {
   if (!Number.isInteger(target.port) || target.port < 1 || target.port > 65_535) {
     throw new RunnerUpgradeError(`the health port must be a whole number from 1 to 65535; got ${target.port}`)
   }
+  assertUnitEnvironment(target)
+}
+
+/**
+ * The pair the unit environment is converged onto, checked wherever it is given.
+ *
+ * Both reach a single-quoted assignment and a `sed` expression that run as root,
+ * which is the rule every other interpolated value in this module follows.
+ */
+const assertUnitEnvironment = ({ apiUrl, volumeBackend }: Pick<UpgradeTarget, 'apiUrl' | 'volumeBackend'>): void => {
+  if (apiUrl != null && !CONTROL_PLANE_URL.test(apiUrl)) {
+    throw new RunnerUpgradeError(
+      `the control plane's URL reaches a single-quoted assignment and a sed expression that run as root, ` +
+        `so it is checked here even though the stack composed it; got ${JSON.stringify(apiUrl)}`,
+    )
+  }
+  if (volumeBackend != null && !VOLUME_BACKEND.test(volumeBackend)) {
+    throw new RunnerUpgradeError(`the volume backend reaches the same two places; got ${JSON.stringify(volumeBackend)}`)
+  }
 }
 
 /** What the host is and how to ask what it is serving. Both scripts open with it. */
@@ -238,18 +287,26 @@ probe_identity() {
  * *in the desired state*, which is what keeps `enforce` from running against a
  * host that is still bootstrapping or already serving the target.
  */
-const guards = (satisfied: number): string => `if [ ! -x /usr/local/bin/boxlite-runner ] ||
+/**
+ * The two checks that mean there is nothing to do, in the caller's own grading.
+ *
+ * Three gradings share them: a payload exits 0, an OS policy's `validate` exits
+ * 100, and the binary half of a combined payload returns so the unit
+ * environment after it still runs. Passing the statement rather than a code is
+ * what keeps one copy of the checks.
+ */
+const guards = (satisfied: string): string => `if [ ! -x /usr/local/bin/boxlite-runner ] ||
   [ ! -f /etc/systemd/system/boxlite-runner.service ] ||
   ! systemctl is-enabled --quiet boxlite-runner 2>/dev/null; then
   echo "still bootstrapping (binary or unit not in place, or not enabled); the boot script installs $TARGET itself — nothing to do"
-  exit ${satisfied}
+  ${satisfied}
 fi
 
 CURRENT=$(probe_identity || true)
 echo "current identity: \${CURRENT:-<not serving>}"
 if [ "$CURRENT" = "$TARGET" ]; then
   echo "already serving $TARGET; leaving the unit untouched"
-  exit ${satisfied}
+  ${satisfied}
 fi
 
 `
@@ -306,7 +363,7 @@ fi
 
 export const renderUpgradePayload = (target: UpgradeTarget): string => {
   assertUpgradeTarget(target)
-  return `${preamble(target)}${guards(0)}${swapSequence(target)}`
+  return `${preamble(target)}${guards('exit 0')}${swapSequence(target)}`
 }
 
 /**
@@ -334,7 +391,7 @@ const SHEBANG = '#!/bin/bash\n'
 export const renderPolicyScripts = (target: UpgradeTarget): UpgradePolicyScripts => {
   assertUpgradeTarget(target)
   return {
-    validate: `${SHEBANG}${preamble(target)}${guards(100)}echo "not serving $TARGET"
+    validate: `${SHEBANG}${preamble(target)}${guards('exit 100')}echo "not serving $TARGET"
 exit 101
 `,
     /*
@@ -358,6 +415,184 @@ exit 101
 }
 
 /**
+ * The unit environment a host must converge on, for the keys a deploy moves.
+ *
+ * `BOXLITE_API_URL` is written once, at first boot, from `api.address`, and
+ * nothing rewrites it afterwards: the script that wrote it is in
+ * `ignoreChanges` on both clouds — `userDataBase64` on AWS,
+ * `metadataStartupScript` on GCP — and a `protect: true` instance is never
+ * replaced. So a stage that changes its domain leaves every existing host
+ * calling a name that no longer resolves: the public record is renamed and the
+ * private zone is rebuilt under the new one, and the host is then unreachable
+ * from the control plane and cannot be told.
+ *
+ * The work is here, once, because two transports and one desired-state engine
+ * all need it and none of them may disagree about what "converged" means. The
+ * restart is the cost and it is not hidden: boxes on the host take it, which is
+ * why nothing runs until the two checks above say the file actually disagrees.
+ */
+export const unitEnvironmentBlock = ({
+  apiUrl,
+  volumeBackend,
+}: Pick<UpgradeTarget, 'volumeBackend'> & { apiUrl: string }): string => {
+  assertUnitEnvironment({ apiUrl, volumeBackend })
+  // An array, so the optional key is absent rather than empty: an AWS host's
+  // boot script writes no backend, and enforcing one would leave every one of
+  // them disagreeing with itself forever.
+  const expected = [
+    `'BOXLITE_API_URL=${runnerApiUrl(apiUrl)}'`,
+    ...(volumeBackend ? [`'VOLUME_STORAGE_BACKEND=${volumeBackend}'`] : []),
+  ].join(' ')
+  /*
+   * Prefixed names, because this block is concatenated after the binary half,
+   * whose own `EXPECTED` holds the manifest digest — two meanings under one
+   * name in one script is a payload that reads correctly and converges the
+   * wrong thing.
+   *
+   * The path takes an override so the rewrite can be executed by a test rather
+   * than only matched as text: the shell is what runs on the host, and a
+   * pattern asserted against it proves nothing about what it does. Nothing sets
+   * that variable anywhere — an OS policy and an SSM command each start from a
+   * clean environment, so the default is what every host uses.
+   */
+  return `UNIT_ENV_FILE="\${BOXLITE_RUNNER_ENV_FILE:-${RUNNER_ENV_FILE}}"
+UNIT_ENV_EXPECTED=(${expected})
+
+unit_environment_matches() {
+  local line
+  for line in "\${UNIT_ENV_EXPECTED[@]}"; do
+    grep -qxF "$line" "$UNIT_ENV_FILE" || return 1
+  done
+}
+
+# Bail out as settled while a host is still bootstrapping: the boot script
+# writes this file itself, and enforcing against a file that does not exist yet
+# would restart a unit that has not started once.
+unit_environment_settled() {
+  if [ ! -f "$UNIT_ENV_FILE" ] || ! systemctl is-enabled --quiet boxlite-runner 2>/dev/null; then
+    echo "still bootstrapping; the boot script writes $UNIT_ENV_FILE itself — nothing to do"
+    return 0
+  fi
+  if unit_environment_matches; then
+    echo "already pointed at the current control plane, with the keys this cloud writes"
+    return 0
+  fi
+  return 1
+}
+
+# Rewrite each key the file names, in place, and append the ones it does not.
+# One awk pass per key does both and keeps the order, and the value travels as a
+# variable rather than inside the program — an address carrying a pipe or an
+# ampersand would be a sed expression that rewrote something else. Called from a
+# condition, so a failure returns here rather than ending the script with the
+# backup still on disk.
+rewrite_unit_environment() {
+  local line key next
+  next="$UNIT_ENV_FILE.next"
+  for line in "\${UNIT_ENV_EXPECTED[@]}"; do
+    key="\${line%%=*}"
+    if ! awk -v key="$key" -v line="$line" '
+      $0 ~ "^" key "=" { print line; found = 1; next }
+      { print }
+      END { if (!found) print line }
+    ' "$UNIT_ENV_FILE" > "$next"; then
+      rm -f "$next"
+      return 1
+    fi
+    # Written back into the file rather than renamed over it. The boot script
+    # ends with chmod 640 because this carries BOXLITE_RUNNER_TOKEN, and a
+    # rename would put the umask's mode on it instead — 644 under the default,
+    # which is the token readable by every account on the host. Truncating the
+    # original keeps its mode, its owner and its inode.
+    if ! cat "$next" > "$UNIT_ENV_FILE"; then
+      rm -f "$next"
+      return 1
+    fi
+    rm -f "$next"
+  done
+}
+
+converge_unit_environment() {
+  if unit_environment_settled; then return 0; fi
+  # The copy carries BOXLITE_RUNNER_TOKEN, so it is removed on every path out.
+  cp -a "$UNIT_ENV_FILE" "$UNIT_ENV_FILE.bak"
+  if ! rewrite_unit_environment || ! unit_environment_matches; then
+    echo "rewrite did not take; restoring" >&2
+    mv "$UNIT_ENV_FILE.bak" "$UNIT_ENV_FILE"
+    return 1
+  fi
+  rm -f "$UNIT_ENV_FILE.bak"
+  echo "the unit environment named something this stage no longer serves; rewritten"
+  systemctl restart boxlite-runner
+}
+`
+}
+
+/**
+ * The same convergence, as the two scripts an OS policy grades by exit code.
+ *
+ * GCP's half. Declared as desired state for the same reason the binary is, and
+ * carried by the same assignment so one host moves at a time: an OS policy is
+ * project IAM, where ssh would need a POSIX identity an account outside the
+ * instance's organization cannot be granted. What it converges, and why a host
+ * cannot be told any other way, is above `unitEnvironmentBlock`.
+ */
+export const renderUnitEnvironmentPolicyScripts = ({
+  apiUrl,
+  volumeBackend,
+}: Pick<UpgradeTarget, 'volumeBackend'> & { apiUrl: string }): UpgradePolicyScripts => {
+  const block = `set -euo pipefail
+${unitEnvironmentBlock({ apiUrl, volumeBackend })}`
+  return {
+    validate: `${SHEBANG}${block}
+if unit_environment_settled; then exit 100; fi
+echo "the unit environment names something this stage no longer serves"
+exit 101
+`,
+    /*
+     * The same block, in its own shell, with only its final status translated —
+     * the shape the binary's `enforce` already uses, and for the same reason: a
+     * second grading of the same work is a second place for the two to drift.
+     */
+    enforce: `${SHEBANG}set -u
+bash <<'BOXLITE_RUNNER_UNIT_ENV'
+${block}
+converge_unit_environment
+BOXLITE_RUNNER_UNIT_ENV
+status=$?
+if [ "$status" -eq 0 ]; then exit 100; fi
+exit 101
+`,
+  }
+}
+
+/**
+ * Everything one command has to do to a host, for the transports that send one.
+ *
+ * SSM and ssh carry a script rather than a desired state, so both halves travel
+ * together: the binary first, then the unit environment — the order GCP's two
+ * policy resources run in. One command per host is also what keeps the restarts
+ * to the host whose turn it is; two would let each restart it in its own time.
+ *
+ * The binary half becomes a function so that "already serving this identity"
+ * ends that half rather than the payload, which is the case where only the
+ * environment has moved — a stage that changed its domain and nothing else.
+ */
+export const renderHostConvergence = (target: UpgradeTarget): string => {
+  assertUpgradeTarget(target)
+  const binary = `upgrade_binary() {
+${guards('return 0')}${swapSequence(target)}}
+`
+  const environment = target.apiUrl
+    ? `${unitEnvironmentBlock({ apiUrl: target.apiUrl, volumeBackend: target.volumeBackend })}
+converge_unit_environment
+`
+    : ''
+  return `${preamble(target)}${binary}upgrade_binary
+${environment}`
+}
+
+/**
  * The payload as the launcher receives it: base64, so it is one shell token.
  *
  * Handed over encoded rather than quote-escaped because both transports put it
@@ -366,4 +601,4 @@ exit 101
  * not survive either intact.
  */
 export const encodeUpgradePayload = (target: UpgradeTarget): string =>
-  Buffer.from(renderUpgradePayload(target)).toString('base64')
+  Buffer.from(renderHostConvergence(target)).toString('base64')

@@ -21,7 +21,7 @@
  */
 
 import { API_GROUP, serviceSecretsFrom, splitServiceChannels, type Environment, type GroupDeclaration } from './env.ts'
-import { API_PORT } from '../stack/api.ts'
+import { API_PORT, publicHostsFor, type PublicHosts } from '../stack/api.ts'
 import { SECRET_GROUP } from 'mstage/secret-address'
 import type { Cloud } from 'mstage/config'
 
@@ -79,16 +79,21 @@ export const STATUS_SYNC_KEYS = [
  * The dashboard's two origins.
  *
  * They are different on purpose. Static assets are served through the CDN at
- * the root domain; the dashboard's API client talks to `api.<domain>` directly,
- * because CloudFront caps a WebSocket at ten minutes and times an origin read
- * out at sixty seconds — which breaks `/attach`, build-log streaming and file
- * uploads. Both are overridable, because a stage may put either behind
- * something else, and both have a default so a stage that overrides neither is
- * still correct.
+ * the dashboard's own host; the dashboard's API client talks to the control
+ * plane directly, because CloudFront caps a WebSocket at ten minutes and times
+ * an origin read out at sixty seconds — which breaks `/attach`, build-log
+ * streaming and file uploads. Both are overridable, because a stage may put
+ * either behind something else, and both have a default so a stage that
+ * overrides neither is still correct.
+ *
+ * The defaults are `publicHostsFor`'s answer rather than this file's own
+ * composition: the same two names are what the balancer's certificate covers
+ * and what its records point at, and a second rule here is a dashboard told to
+ * call a host nothing serves.
  */
-const dashboardFrom = (environment: Environment, domain: string): Record<string, string> => ({
-  DASHBOARD_URL: optional(environment, 'DASHBOARD_URL') ?? `https://${domain}`,
-  DASHBOARD_BASE_API_URL: optional(environment, 'DASHBOARD_BASE_API_URL') ?? `https://api.${domain}`,
+const dashboardFrom = (environment: Environment, hosts: PublicHosts): Record<string, string> => ({
+  DASHBOARD_URL: optional(environment, 'DASHBOARD_URL') ?? `https://${hosts.dashboard}`,
+  DASHBOARD_BASE_API_URL: optional(environment, 'DASHBOARD_BASE_API_URL') ?? `https://${hosts.api}`,
   ...(optional(environment, 'APP_URL') ? { APP_URL: optional(environment, 'APP_URL') as string } : {}),
 })
 
@@ -102,7 +107,7 @@ const dashboardFrom = (environment: Environment, domain: string): Record<string,
  * one would have the API fail at its first account-link rather than at boot.
  * Refusing here names the missing key.
  */
-const oidcFrom = (environment: Environment, domain: string): Record<string, string> => {
+const oidcFrom = (environment: Environment, hosts: PublicHosts): Record<string, string> => {
   const issuer = optional(environment, 'OIDC_ISSUER_BASE_URL')
   if (!issuer) {
     throw new ApiEnvironmentError(
@@ -122,8 +127,11 @@ const oidcFrom = (environment: Environment, domain: string): Record<string, stri
     // Safe to set unconditionally: the API probes the issuer's discovery
     // document at boot and only offers this fallback to the dashboard when the
     // issuer itself advertises no end_session_endpoint.
+    // On the dashboard's own origin: the browser is redirected here at the end
+    // of a logout, so it is the name it is already on rather than the control
+    // plane's — which a stage may publish somewhere else entirely.
     OIDC_END_SESSION_ENDPOINT:
-      optional(environment, 'OIDC_END_SESSION_ENDPOINT') ?? `https://${domain}/api/auth/end-session`,
+      optional(environment, 'OIDC_END_SESSION_ENDPOINT') ?? `https://${hosts.dashboard}/api/auth/end-session`,
     ...passthrough('PUBLIC_OIDC_DOMAIN'),
     ...passthrough('OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST'),
     ...(management
@@ -241,6 +249,7 @@ export const apiEnvironmentFrom = ({
 }): { environment: Record<string, string>; secrets: Record<string, string> } => {
   const domain = optional(environment, 'STACK_DOMAIN')
   if (!domain) throw new ApiEnvironmentError('STACK_DOMAIN is required — every URL the API composes starts with it')
+  const hosts = publicHostsFor({ domain, dashboardDomain: optional(environment, 'DASHBOARD_DOMAIN') })
 
   // The API's own group, before it is split by channel. Read once: `held`
   // below asks whether a credential arrived, and asking the raw environment
@@ -290,8 +299,8 @@ export const apiEnvironmentFrom = ({
        */
       ...(home === 'gcp' ? { VOLUME_STORAGE_BACKEND: 'gcs', GCS_LOCATION: region } : {}),
       OTEL_ENABLED: String(!flag(environment, 'OTEL_DISABLED')),
-      ...dashboardFrom(environment, domain),
-      ...oidcFrom(environment, domain),
+      ...dashboardFrom(environment, hosts),
+      ...oidcFrom(environment, hosts),
       ...billingFrom(environment, delivered),
       ...statusSyncFrom(environment, delivered, stage),
       ...systemImagesFrom(environment),

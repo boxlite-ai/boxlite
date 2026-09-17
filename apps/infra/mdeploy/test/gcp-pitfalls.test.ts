@@ -20,7 +20,9 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { apiEnvironmentFrom } from '../src/api-environment.ts'
+import { publicHostsFor } from '../stack/api.ts'
 import { alertPolicyFilter } from '../stack/providers/gcp/alarms.ts'
+import { certificateNameFor, internalAuthorizationNameFor } from '../stack/providers/gcp/certificate-name.ts'
 import { renderClickHouseSchema } from '../../scripts/clickhouse-host.js'
 import {
   DISK_TYPE as CLICKHOUSE_DISK,
@@ -37,6 +39,7 @@ import {
   SUBNET_CIDR,
 } from '../stack/providers/gcp/network.ts'
 import { BOOT_DISK_TYPE, MACHINE as RUNNER_MACHINE } from '../stack/providers/gcp/runners.ts'
+import { apiPrefixRouteRules } from '../stack/providers/gcp/api.ts'
 import { PROXY_API_KEY_FILE, isMissingNeg, secretProviderParameters } from '../stack/providers/gcp/edge.ts'
 import { instanceFor } from 'naming'
 
@@ -151,9 +154,13 @@ const gcpBundle = () =>
 
 const DECLARATION = { groups: { deploy: [], api: [] }, where: '/repo/mstage.config.json' }
 
-const apiEnvironment = (home: 'aws' | 'gcp') =>
+const apiEnvironment = (home: 'aws' | 'gcp', overrides: Record<string, string> = {}) =>
   apiEnvironmentFrom({
-    environment: { STACK_DOMAIN: 'dev2.boxlite.ai', OIDC_ISSUER_BASE_URL: 'https://auth.dev2.boxlite.ai' },
+    environment: {
+      STACK_DOMAIN: 'dev2.boxlite.ai',
+      OIDC_ISSUER_BASE_URL: 'https://auth.dev2.boxlite.ai',
+      ...overrides,
+    },
     declaration: DECLARATION,
     region: 'asia-southeast1',
     stage: 'dev2',
@@ -194,6 +201,21 @@ test('a GCP stage tells the API to create volume buckets on GCS, in its own regi
   assert.equal(gcp.GCS_LOCATION, 'asia-southeast1')
 })
 
+test('the runner unit names the project a bare secret id is resolved against', () => {
+  /*
+   * The start wrapper fetches every secret with
+   * `gcloud secrets versions access --secret=<id>`, and an id names no project.
+   * gcloud on GCE falls back to the metadata server's, which is the platform's
+   * answer rather than this stack's: a host whose instance metadata says one
+   * project and whose stage declares another reads the wrong secret, or none.
+   * Its sibling `VOLUME_STORAGE_BACKEND` is asserted two tests down, and this
+   * one travels in the same block for the same reason.
+   */
+  const source = sourceOf('runners')
+  assert.match(source, /gcloud secrets versions access "\$version" --secret="\$secret"/, 'the wrapper no longer fetches by id')
+  assert.match(source, /CLOUDSDK_CORE_PROJECT: project/, 'so the unit must name the project it resolves against')
+})
+
 test('an AWS stage names neither, so it keeps mount-s3 and its bucket lifecycle', () => {
   // The compatibility half: the backend switch defaults to s3 on both sides,
   // and an AWS stage reaches that default by saying nothing at all.
@@ -212,7 +234,14 @@ test('the runner is told to mount with the tool its host was actually given', ()
    */
   const source = sourceOf('runners')
   assert.match(source, /apt-get install -y gcsfuse/, 'the host is not given gcsfuse')
-  assert.match(source, /VOLUME_STORAGE_BACKEND: 'gcs'/, 'the runner is not told to use it')
+  assert.match(source, /const VOLUME_BACKEND = 'gcs'/, 'the backend this cloud mounts with is not named')
+  assert.match(source, /VOLUME_STORAGE_BACKEND: VOLUME_BACKEND/, 'the runner is not told to use it')
+  /*
+   * And the same constant reaches the policy that converges a host created
+   * before the key existed. Two spellings is a fleet that never converges —
+   * the defect `runnerApiUrl` was extracted to prevent, one key over.
+   */
+  assert.match(source, /volumeBackend: VOLUME_BACKEND/, 'the policy is told a second, separate answer')
   // The AWS provider installs it from mountpoint-s3-release; matching the
   // install rather than the name keeps this from passing on prose that merely
   // mentions mount-s3, which the comment above the variable does.
@@ -372,15 +401,171 @@ test('the control plane answers on api.<domain>, the name everything is configur
   assert.equal(derived, 'https://api.dev2.boxlite.ai')
 
   const source = sourceOf('api')
-  assert.match(source, /const apiHost = `api\.\$\{domain\}`/)
+  // One composition for both names, asked of the same function the environment
+  // above asks. Two derivations is a balancer serving one name and a dashboard
+  // told another, with nothing failing at deploy time to say so.
+  assert.match(source, /const hosts = publicHostsFor\(\{ domain, dashboardDomain \}\)/)
+  assert.match(source, /const apiHost = hosts\.api/)
   // Serving the name is two things, and one without the other is still broken:
   // a certificate that does not cover it fails the handshake, and a record that
-  // does not exist holds the whole certificate in FAILED_NOT_VISIBLE.
-  assert.match(source, /managed: \{ domains: \[domain, apiHost\] \}/)
+  // does not exist holds that certificate in FAILED_NOT_VISIBLE.
+  assert.match(source, /certificateFor\('ApiCertificate', 'api', apiHost\)/)
   assert.match(source, /name: apiHost/)
   // And `address` is what the proxy and the runner call, so it is the API's
   // hostname rather than the dashboard's.
   assert.match(source, /address: \$util\.output\(`https:\/\/\$\{apiHost\}`\)/)
+})
+
+test('a stage may serve its dashboard elsewhere, and the control plane does not follow', () => {
+  /*
+   * prod publishes the dashboard at `app.boxlite.ai` and leaves the apex to the
+   * marketing site, so its stage domain is `boxlite.ai` and its control plane
+   * `api.boxlite.ai`. What moves with the dashboard is the certificate, the
+   * public record and `DASHBOARD_URL`; what must not is `api.<domain>` — a
+   * runner is handed that at first boot, in a unit `runner-update.ts` does not
+   * rewrite, and the private zone answers for that name alone.
+   */
+  assert.deepEqual(publicHostsFor({ domain: 'boxlite.ai', dashboardDomain: 'app.boxlite.ai' }), {
+    dashboard: 'app.boxlite.ai',
+    api: 'api.boxlite.ai',
+  })
+
+  const moved = apiEnvironment('gcp', { DASHBOARD_DOMAIN: 'app.dev2.boxlite.ai' })
+  assert.equal(moved.DASHBOARD_URL, 'https://app.dev2.boxlite.ai')
+  assert.equal(moved.DASHBOARD_BASE_API_URL, 'https://api.dev2.boxlite.ai')
+  // The browser is redirected here at the end of a logout, so it is the origin
+  // it is already on rather than the control plane's.
+  assert.equal(moved.OIDC_END_SESSION_ENDPOINT, 'https://app.dev2.boxlite.ai/api/auth/end-session')
+
+  // And the balancer publishes the same name: the record it points at this
+  // address, and the origin the dashboard is served from.
+  const source = sourceOf('api')
+  assert.match(source, /name: hosts\.dashboard/)
+  assert.match(source, /url: \$util\.output\(`https:\/\/\$\{hosts\.dashboard\}`\)/)
+})
+
+/**
+ * One request through the rules, by the rule the load balancer documents: the
+ * first matching rule by priority wins, and `pathPrefixRewrite` replaces
+ * exactly the portion of the path that matched.
+ */
+const throughBalancer = (path: string): string => {
+  const rules = [...apiPrefixRouteRules('backend-1')].sort((a, b) => a.priority - b.priority)
+  for (const rule of rules) {
+    const matched = rule.matchRules
+      .map((match: { fullPathMatch?: string; prefixMatch?: string }) =>
+        match.fullPathMatch === path
+          ? match.fullPathMatch
+          : match.prefixMatch !== undefined && path.startsWith(match.prefixMatch)
+            ? match.prefixMatch
+            : null,
+      )
+      .find((portion: string | null | undefined) => typeof portion === 'string')
+    if (matched === undefined) continue
+    const rewrite = (rule as { routeAction?: { urlRewrite: { pathPrefixRewrite: string } } }).routeAction
+    return rewrite ? `${rewrite.urlRewrite.pathPrefixRewrite}${path.slice((matched as string).length)}` : path
+  }
+  throw new Error(`no rule matches ${path}`)
+}
+
+test('the control plane’s own host is called without the prefix the container mounts under', () => {
+  /*
+   * `apps/api` sets `/api` globally, which is what lets one image serve the
+   * dashboard at `/` and the control plane beside it. On a hostname that is
+   * only the control plane's, that prefix is repeated for nothing — so the
+   * balancer puts it back and the address a client holds is just the host.
+   *
+   * The rewrite value has to end in a slash, because the portion it replaces
+   * is the matched `/`. `'/api'` instead would send `/boxes` to the container
+   * as `/apiboxes`, which answers 404 with nothing in the deploy having failed.
+   */
+  assert.equal(throughBalancer('/boxes'), '/api/boxes')
+  assert.equal(throughBalancer('/'), '/api/')
+
+  /*
+   * And the long form still reaches the same route. It is what every runner
+   * booted with, what `edge.ts` hands the proxy and what every SDK profile in
+   * the field holds; rewriting it would ask for `/api/api/boxes`.
+   */
+  assert.equal(throughBalancer('/api/boxes'), '/api/boxes')
+  assert.equal(throughBalancer('/api'), '/api')
+
+  // Both forms reach the backend this balancer fronts, and only it.
+  assert.deepEqual(new Set(apiPrefixRouteRules('backend-1').map((rule) => rule.service)), new Set(['backend-1']))
+})
+
+test('no certificate carries two names a stage can move independently', () => {
+  /*
+   * A managed certificate is issued only once *every* domain on it validates,
+   * and the balancer presents nothing until then — so one certificate covering
+   * two names lets the slower one decide when the faster is served.
+   *
+   * Moving prod's dashboard onto `app.boxlite.ai` is what proved it. The two
+   * names shared a certificate; `api.boxlite.ai` validated within minutes and
+   * then sat dark behind a hostname that had never existed before, with the
+   * public control plane unreachable and nothing wrong with it. Splitting them
+   * is what keeps one name's first provisioning off the other's availability.
+   */
+  const source = sourceOf('api')
+  const covered = [...source.matchAll(/managed: \{ domains: (\[[^\]]*\])/g)].map((match) => match[1])
+  assert.ok(covered.length > 0, 'this provider declares no managed certificate at all')
+  for (const domains of covered) {
+    assert.equal(
+      domains.split(',').length,
+      1,
+      `a certificate covers ${domains}; whichever of those is slowest to validate holds the rest dark`,
+    )
+  }
+
+  // Both of them on the one proxy, or a name resolves here with nothing to
+  // present. The control plane leads, because the head of that list is what a
+  // client sending no SNI is given — an SDK or a CLI rather than a browser.
+  assert.match(source, /sslCertificates: \[certificate\.id, dashboardCertificate\.id\]/)
+})
+
+test('the regional certificate is named after the authorization it is issued against', () => {
+  /*
+   * `managed` is immutable, so replacing the DNS authorization replaces this
+   * certificate. Keyed on the host instead, its name would not move when the
+   * authorization's did — and Certificate Manager refuses a second resource
+   * under an occupied name, so the create-first replacement fails and the stage
+   * cannot deploy at all. That is not hypothetical: it is what a stage still
+   * carrying the pre-rename authorization name walks into.
+   */
+  const base = instanceFor({ app: 'boxlite-app', stage: 'dev', artifact: 'api-internal' })
+  const host = 'api.dev.boxlite.ai'
+  assert.notEqual(
+    certificateNameFor({ key: internalAuthorizationNameFor({ app: 'boxlite-app', stage: 'dev', host }), base }),
+    certificateNameFor({ key: host, base }),
+    'keying the certificate on its authorization must not collapse back to the host',
+  )
+
+  // And the provider keys it that way rather than on the host.
+  const source = sourceOf('api')
+  assert.match(source, /const internalAuthorizationName = internalAuthorizationNameFor\(/)
+  assert.match(source, /name: internalAuthorizationName,/, 'the authorization must use the name the certificate keys on')
+  assert.match(source, /key: internalAuthorizationName,/, 'the certificate must be keyed on the authorization')
+})
+
+test('a certificate is named after the domain it covers, so a move is a create first', () => {
+  /*
+   * Its domains are immutable, so changing the domain replaces the certificate
+   * — and the target proxy still references the original at that moment, which
+   * GCP refuses to delete with `RESOURCE_STILL_IN_USE`. A name that did not
+   * move with the domain would leave the replacement refused under an occupied
+   * name, and the stage with a certificate it can neither keep nor replace.
+   */
+  const base = instanceFor({ app: 'boxlite-app', stage: 'prod', artifact: 'api' })
+  assert.notEqual(
+    certificateNameFor({ key: 'api.app.boxlite.ai', base }),
+    certificateNameFor({ key: 'api.boxlite.ai', base }),
+  )
+  // And the dashboard's is a different resource, so the two cannot collide even
+  // when a stage serves both from one domain.
+  assert.notEqual(
+    certificateNameFor({ key: 'boxlite.ai', base }),
+    certificateNameFor({ key: 'boxlite.ai', base: `${base}-dashboard` }),
+  )
 })
 
 test('the collector is invocable from the network, and the ingress is the whole restriction', () => {
@@ -567,7 +752,38 @@ test('the upgrade policy selects hosts by the label those hosts actually carry',
   // And the scripts run as files, not through /bin/sh: see the shebang test in
   // `runner-upgrade.test.ts` for what dash does to the payload's first line.
   assert.equal(/interpreter: 'SHELL'/.test(source), false, 'SHELL is dash here, and the payload is bash')
-  assert.equal(source.match(/interpreter: 'NONE'/g)?.length, 2, 'both scripts have to be run directly')
+  // Every script, not a count of them: the assignment carries more than one
+  // policy now, and a rule keyed to how many would be rewritten rather than
+  // read the next time one is added.
+  const interpreters = source.match(/interpreter: '[A-Z]+'/g) ?? []
+  assert.ok(interpreters.length > 0, 'the assignment declares no exec script at all')
+  assert.deepEqual(
+    [...new Set(interpreters)],
+    ["interpreter: 'NONE'"],
+    'every policy script has to be run directly, whichever policy it belongs to',
+  )
+})
+
+test('a host that cannot be told the new control-plane name is converged to it', () => {
+  /*
+   * `BOXLITE_API_URL` is written once, at first boot. `metadataStartupScript`
+   * is in `ignoreChanges` and the instance is protected, so a stage that
+   * changes its domain strands every host it already has: the public record is
+   * renamed, the private zone is rebuilt under the new name, and the old one
+   * resolves nowhere. Without this policy the fleet is recovered by hand or
+   * recreated, and recreating one loses `/var/lib/boxlite`.
+   */
+  const source = sourceOf('runners')
+  assert.match(source, /id: 'runner-unit-env'/, 'nothing converges the unit environment')
+  assert.match(source, /renderUnitEnvironmentPolicyScripts/)
+
+  /*
+   * In the binary's assignment rather than its own. Both policies end in
+   * `systemctl restart`, and two assignments carry two `disruptionBudget`s —
+   * which is how one host gets restarted by each of them at the same time.
+   */
+  assert.equal(source.match(/new gcp\.osconfig\.OsPolicyAssignment\(/g)?.length, 1)
+  assert.match(source, /disruptionBudget: \{ fixed: 1 \}/)
 })
 
 test('the proxy Pods are denied by default, and the engine that enforces it is on', () => {

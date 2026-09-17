@@ -29,9 +29,19 @@ function requireHostname(name: any, value: any) {
  * RFC 8252 §8.3 requires to use the IPv4 loopback literal rather than
  * `localhost`.
  */
-export function spaApplicationArgs({ stackDomain, name = 'boxlite-dashboard' }: any) {
-  requireHostname('stackDomain', stackDomain)
-  const dashboardUrl = `https://${stackDomain}`
+export function spaApplicationArgs({
+  dashboardDomain,
+  name = 'boxlite-dashboard',
+}: {
+  dashboardDomain: string
+  name?: string
+}) {
+  // The dashboard's own host, which is not always the stage domain: a stage may
+  // set DASHBOARD_DOMAIN and leave that domain to something else. Auth0 matches
+  // a redirect_uri exactly, so registering the stage domain there is a login
+  // that is refused rather than one that merely looks wrong.
+  requireHostname('dashboardDomain', dashboardDomain)
+  const dashboardUrl = `https://${dashboardDomain}`
   return [
     'apps',
     'create',

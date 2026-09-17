@@ -9,18 +9,19 @@
  * the name comes to mean two different addresses depending on who asks.
  *
  * The load balancer is what makes the two front doors of the AWS side one door
- * here. There, a CDN serves the dashboard's assets at the root domain and a
- * second balancer answers `api.<domain>`, because CloudFront caps a WebSocket
- * at ten minutes. Google's global load balancer has no such cap and its CDN is
- * a flag on the same backend, so one balancer answers both names.
+ * here. There, a CDN serves the dashboard's assets on its own host and a second
+ * balancer answers `api.<domain>`, because CloudFront caps a WebSocket at ten
+ * minutes. Google's global load balancer has no such cap and its CDN is a flag
+ * on the same backend, so one balancer answers both names.
  *
- * One balancer, still two names. `api.<domain>` is not decoration: it is what
- * `DASHBOARD_BASE_API_URL` defaults to, what the SDKs are configured with, and
- * what `address` means on the other cloud. Serving only the root domain here
- * would leave every one of those pointed at a hostname nothing answers — a
- * stack that deploys green and cannot be called. So the certificate covers both
- * and both are written into DNS, and `url` and `address` keep saying the same
- * two things they say on AWS.
+ * One balancer, still two names, and `publicHostsFor` is what says which two.
+ * `api.<domain>` is not decoration: it is what `DASHBOARD_BASE_API_URL`
+ * defaults to, what the SDKs are configured with, and what `address` means on
+ * the other cloud. Serving only the dashboard's host would leave every one of
+ * those pointed at a hostname nothing answers — a stack that deploys green and
+ * cannot be called. So each name carries a certificate of its own and both are
+ * written into DNS, and `url` and `address` keep saying the same two things
+ * they say on AWS.
  *
  * Capabilities become IAM bindings rather than policy documents, and they are
  * attached at the *resource* rather than at the principal. That is the shape of
@@ -33,6 +34,7 @@
  */
 
 import type { Api, ApiCapability, ApiDependencies, ApiProvider, ApiRequest } from '../../api.ts'
+import { publicHostsFor } from '../../api.ts'
 import { basename, dirname } from 'node:path'
 import { CACHE_CA_PATH, CACHE_PASSWORD_VARIABLE, type CacheBinding } from '../../cache.ts'
 import { CLICKHOUSE_PASSWORD_VARIABLE } from '../../clickhouse.ts'
@@ -42,7 +44,7 @@ import type { StorageBinding } from '../../storage.ts'
 import { containerEnvironment, secretIdOf } from './secret-env.ts'
 import { VOLUME_OBJECT_ACCESS_ROLE } from './storage.ts'
 import { instanceFor } from 'naming'
-import { certificateNameFor } from './certificate-name.ts'
+import { certificateNameFor, internalAuthorizationNameFor } from './certificate-name.ts'
 
 const onGcp = (storage: { binding: StorageBinding }): Extract<StorageBinding, { cloud: 'gcp' }> => {
   if (storage.binding.cloud !== 'gcp') throw new Error(`The GCP API was handed ${storage.binding.cloud} storage`)
@@ -55,6 +57,41 @@ const onGcp = (storage: { binding: StorageBinding }): Extract<StorageBinding, { 
  * `Cloud SQL volume must be named 'cloudsql'`.
  */
 const CLOUD_SQL_VOLUME = 'cloudsql'
+
+/**
+ * The two rules that let `api.<domain>` be called with and without `/api`.
+ *
+ * The container mounts every route under `/api` — `apps/api` sets that prefix
+ * globally, which is what lets one image serve the dashboard at `/` and the
+ * control plane beside it. On `api.<domain>`, which serves nothing else, that
+ * prefix carries no information and is repeated in every SDK profile and every
+ * CLI URL: `https://api.<domain>/api/boxes`. The balancer puts it back instead,
+ * so the address a client is handed is the host and nothing more.
+ *
+ * Both forms are served, and that is what the first rule is for. `/api/…` is
+ * what every runner already booted with, what `edge.ts` hands the proxy, and
+ * what every profile in the field holds; retiring it in the same change that
+ * introduces the short form would break all of them at once. It also has to be
+ * the *first* rule, because `/api/boxes` matches the catch-all as well — and
+ * rewritten there it would ask the container for `/api/api/boxes`.
+ *
+ * `prefixMatch: '/'` rather than a `/*` path rule: a path rule's wildcard is
+ * documented only after a non-empty prefix, and a rewrite replaces exactly the
+ * portion that matched — so `/` becomes `/api/` and `/boxes` becomes
+ * `/api/boxes`.
+ */
+export const apiPrefixRouteRules = (service: $util.Input<string>) => [
+  { priority: 1, matchRules: [{ fullPathMatch: '/api' }, { prefixMatch: '/api/' }], service },
+  {
+    priority: 2,
+    matchRules: [{ prefixMatch: '/' }],
+    service,
+    routeAction: { urlRewrite: { pathPrefixRewrite: '/api/' } },
+  },
+]
+
+/** The path matcher those rules are attached under. */
+const API_PATH_MATCHER = 'api'
 
 /** The cache's CA: the volume that carries it, and the file inside it. */
 const CACHE_CA_VOLUME = 'cache-ca'
@@ -154,6 +191,7 @@ export const gcpApiProvider =
     project,
     region,
     domain,
+    dashboardDomain,
     callers,
     zoneId,
     network,
@@ -162,8 +200,10 @@ export const gcpApiProvider =
     dependencies: ApiDependencies
     project: string
     region: string
-    /** The hostname the dashboard and the SDKs reach it on. */
+    /** The stage's own domain. `api.<domain>` is where this answers. */
     domain: string
+    /** Where the dashboard is served, or null for the stage domain itself. */
+    dashboardDomain: string | null
     /** The identities allowed to invoke it. The proxy and the runner. */
     callers: $util.Output<string>[]
     /** The Cloudflare zone the record is written into. */
@@ -182,14 +222,15 @@ export const gcpApiProvider =
     const placement = dependencies.placement as Extract<Placement, { cloud: 'gcp' }>
     const storage = onGcp(dependencies.storage)
     /*
-     * The hostname the control plane is called on, composed the same way the
-     * AWS provider composes it. Derived rather than taken as a second setting:
-     * `api-environment.ts` derives `DASHBOARD_BASE_API_URL` from the stack
-     * domain by exactly this rule, and two places deriving it is two places
-     * they can disagree — which is a dashboard calling a name the balancer does
-     * not serve, with nothing failing at deploy time to say so.
+     * The two names this balancer answers on, asked of the one function that
+     * composes them. `api-environment.ts` asks the same function for
+     * `DASHBOARD_URL` and `DASHBOARD_BASE_API_URL`, and two places deriving
+     * them is two places they can disagree — which is a dashboard calling a
+     * name the balancer does not serve, with nothing failing at deploy time to
+     * say so.
      */
-    const apiHost = `api.${domain}`
+    const hosts = publicHostsFor({ domain, dashboardDomain })
+    const apiHost = hosts.api
 
     /*
      * Every name this container is handed by reference, in one place.
@@ -408,34 +449,68 @@ export const gcpApiProvider =
     const urlMap = new gcp.compute.URLMap('ApiUrlMap', {
       name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
       project,
+      // The dashboard's host, served exactly as the container mounts it: the
+      // SPA at `/`, and the dashboard's own calls at `/api`.
       defaultService: backend.id,
+      // The control plane's host, which is the one the prefix is put back on.
+      hostRules: [{ hosts: [apiHost], pathMatcher: API_PATH_MATCHER }],
+      pathMatchers: [
+        { name: API_PATH_MATCHER, defaultService: backend.id, routeRules: apiPrefixRouteRules(backend.id) },
+      ],
     })
     /*
-     * The name carries the domains, and the replacement is a create first.
+     * One certificate per name, both on the same proxy.
      *
-     * A managed certificate's domains are immutable, so changing one replaces
-     * the certificate — and this provider deletes before it creates. The target
+     * Not one certificate covering both, which is what this was. A managed
+     * certificate is issued only once *every* domain on it validates, and the
+     * balancer has nothing to present until then — so the slower name decides
+     * when the faster one is served. That is not a hypothetical: moving the
+     * dashboard onto `app.<domain>` took the control plane down with it. The
+     * balancer's `api.<domain>` had validated within minutes and sat unserved
+     * behind a name that had never existed before, with the public API dark the
+     * whole time and nothing wrong with it.
+     *
+     * Split, each name provisions on its own, fails on its own, and a stage that
+     * moves one of them re-issues only that one.
+     *
+     * Getting here is not free. The first apply after the split replaces the
+     * certificate that covered both names, so both re-issue once and the
+     * balancer presents neither until each is ACTIVE. That gap is paid once, by
+     * a stage that already has a combined certificate; what it buys is that no
+     * later move of one name can darken the other.
+     *
+     * The name carries the domain, and the replacement is a create first. A
+     * managed certificate's domains are immutable, so changing one replaces the
+     * certificate — and this provider deletes before it creates. The target
      * proxy below still references the old one at that moment, so the delete is
      * refused and the stage is left with a certificate it cannot remove and a
-     * replacement it cannot create. Naming it after its domains lets both exist
-     * at once, and `deleteBeforeReplace: false` is what puts the delete last.
+     * replacement it cannot create. Naming each after its domain lets both
+     * exist at once, and `deleteBeforeReplace: false` is what puts the delete
+     * last.
      */
-    const certificate = new gcp.compute.ManagedSslCertificate(
-      'ApiCertificate',
-      {
-        name: certificateNameFor({ domain, base: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }) }),
-        project,
-        // Both names this balancer answers on. A certificate covering only one of
-        // them fails the handshake for the other, which is the half every SDK uses.
-        managed: { domains: [domain, apiHost] },
-      },
-      { deleteBeforeReplace: false },
-    )
+    const certificateFor = (logical: string, artifact: string, host: string) =>
+      new gcp.compute.ManagedSslCertificate(
+        logical,
+        {
+          name: certificateNameFor({
+            key: host,
+            base: instanceFor({ app: $app.name, stage: $app.stage, artifact }),
+          }),
+          project,
+          managed: { domains: [host] },
+        },
+        { deleteBeforeReplace: false },
+      )
+    const certificate = certificateFor('ApiCertificate', 'api', apiHost)
+    const dashboardCertificate = certificateFor('ApiDashboardCertificate', 'api-dashboard', hosts.dashboard)
     const proxy = new gcp.compute.TargetHttpsProxy('ApiHttpsProxy', {
       name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
       project,
       urlMap: urlMap.id,
-      sslCertificates: [certificate.id],
+      // The control plane's first, because the head of this list is what a
+      // client that sends no SNI is given — and that client is an SDK or a CLI
+      // rather than a browser.
+      sslCertificates: [certificate.id, dashboardCertificate.id],
     })
     const address = new gcp.compute.GlobalAddress('ApiAddress', {
       name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
@@ -463,7 +538,7 @@ export const gcpApiProvider =
      */
     const record = new cloudflare.Record('ApiRecord', {
       zoneId,
-      name: domain,
+      name: hosts.dashboard,
       type: 'A',
       content: address.address,
       proxied: false,
@@ -524,6 +599,22 @@ export const gcpApiProvider =
       project,
       region,
       defaultService: internalBackend.id,
+      /*
+       * The same two forms the public balancer answers.
+       *
+       * This one serves `api.<domain>` and nothing else, so every host matches.
+       * Not decoration: inside the network that name resolves here, and leaving
+       * the rewrite off would make one hostname behave one way from a runner
+       * and another from anywhere else.
+       */
+      hostRules: [{ hosts: ['*'], pathMatcher: API_PATH_MATCHER }],
+      pathMatchers: [
+        {
+          name: API_PATH_MATCHER,
+          defaultService: internalBackend.id,
+          routeRules: apiPrefixRouteRules(internalBackend.id),
+        },
+      ],
     })
 
     /*
@@ -542,12 +633,33 @@ export const gcpApiProvider =
      * retry — which is a deploy that sits in `PROVISIONING` for no reason
      * anybody watching it can see.
      */
-    const internalAuthorization = new gcp.certificatemanager.DnsAuthorization('ApiInternalDnsAuthorization', {
-      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api-internal' }),
-      project,
-      location: region,
-      domain: apiHost,
+    /*
+     * Named after its domain, for the reason the two certificates are.
+     *
+     * `domain` is immutable here as well, so changing the stage's domain
+     * replaces this — and under a fixed name the replacement cannot be created
+     * while the original still holds it, which makes the whole chain delete
+     * first. The certificate below depends on this authorization, so a
+     * delete-first here forces a delete-first there too, and that delete is
+     * refused: the regional proxy still references the certificate. The stage
+     * is then wedged exactly as `certificate-name.ts` describes, one resource
+     * further up than the certificates it was written for.
+     */
+    const internalAuthorizationName = internalAuthorizationNameFor({
+      app: $app.name,
+      stage: $app.stage,
+      host: apiHost,
     })
+    const internalAuthorization = new gcp.certificatemanager.DnsAuthorization(
+      'ApiInternalDnsAuthorization',
+      {
+        name: internalAuthorizationName,
+        project,
+        location: region,
+        domain: apiHost,
+      },
+      { deleteBeforeReplace: false },
+    )
     const internalChallenge = new cloudflare.Record('ApiInternalDnsAuthorizationRecord', {
       zoneId,
       name: internalAuthorization.dnsResourceRecords[0].name,
@@ -561,8 +673,15 @@ export const gcpApiProvider =
     const internalCertificate = new gcp.certificatemanager.Certificate(
       'ApiInternalCertificate',
       {
+        /*
+         * Keyed on the authorization, not on the host. `managed` is immutable,
+         * so replacing that authorization replaces this certificate — and a
+         * name that moved only with the domain would leave the replacement
+         * refused under a name the original still holds, with the regional
+         * proxy refusing the delete that would free it.
+         */
         name: certificateNameFor({
-          domain: apiHost,
+          key: internalAuthorizationName,
           base: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api-internal' }),
         }),
         project,
@@ -681,7 +800,7 @@ export const gcpApiProvider =
     return {
       // The same two things they mean on AWS: where the dashboard is served
       // from, and where the control plane is called.
-      url: $util.output(`https://${domain}`),
+      url: $util.output(`https://${hosts.dashboard}`),
       address: $util.output(`https://${apiHost}`),
       identity: placement.serviceAccount,
       // A log-based metric filters on the service's own name, which is what

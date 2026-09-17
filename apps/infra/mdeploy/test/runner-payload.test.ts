@@ -15,12 +15,17 @@
  */
 
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { renderUpgradePayload, type UpgradeTarget } from '../stack/runner-upgrade.ts'
+import {
+  renderHostConvergence,
+  renderUnitEnvironmentPolicyScripts,
+  renderUpgradePayload,
+  type UpgradeTarget,
+} from '../stack/runner-upgrade.ts'
 import { renderRunnerBoot } from '../stack/runner-boot.ts'
 import { verifyAgainstManifest } from '../stack/runner-binary.ts'
 
@@ -242,4 +247,133 @@ test('the same rendered lines guard both install paths', () => {
     manifest: '$WORK/runner.sha256',
   })
   assert.ok(upgrade.includes(inUpgrade), 'the upgrade payload renders its own verification')
+})
+
+/*
+ * The unit-environment scripts, run rather than read.
+ *
+ * Every one of them opens with `set -euo pipefail`, so a name that does not
+ * exist is not a typo the reader spots — it is exit 1 from a branch whose whole
+ * job is to answer "nothing to do". A rendered script that is only matched
+ * against a pattern proves nothing about that, which is how a bare `$ENV_FILE`
+ * survived a green suite: the text read correctly and the shell refused it.
+ *
+ * The bootstrapping branch is the one a workstation can reach — no runner host
+ * here has `/etc/boxlite/runner.env` — and it is also the branch that must be
+ * cheapest to be right, because every fresh instance passes through it.
+ */
+const ENVIRONMENT = { apiUrl: 'https://api.dev.boxlite.ai', volumeBackend: 'gcs' }
+
+test('an OS policy answers "satisfied" on a host that has not written the file yet', () => {
+  const { validate, enforce } = renderUnitEnvironmentPolicyScripts(ENVIRONMENT)
+  for (const [name, script] of [
+    ['validate', validate],
+    ['enforce', enforce],
+  ] as const) {
+    const { code, out } = bash(script)
+    assert.equal(code, 100, `${name} answered ${code} instead of satisfied: ${out}`)
+    assert.match(out, /still bootstrapping/)
+  }
+})
+
+test('a payload leaves a bootstrapping host alone rather than failing on it', () => {
+  // The SSM half of the same claim. The binary part is not runnable here — it
+  // talks to systemd — so what is run is the block that follows it, which is
+  // where every name this module introduced lives.
+  const payload = renderHostConvergence({
+    identity: '0.10.0',
+    binary: {
+      tarballUrl: `https://example.invalid/${TARBALL}`,
+      checksumUrl: `https://example.invalid/${TARBALL}.sha256`,
+      tarballName: TARBALL,
+      transport: 'https',
+      source: 'release',
+      identity: '0.10.0',
+    },
+    port: 3003,
+    ...ENVIRONMENT,
+  })
+  assert.equal(bash(`bash -n <<'PAYLOAD'\n${payload}\nPAYLOAD`).code, 0, 'the whole payload must at least parse')
+
+  const block = payload.slice(payload.indexOf('UNIT_ENV_FILE='))
+  const { code, out } = bash(block)
+  assert.equal(code, 0, `the unit-environment half exited ${code}: ${out}`)
+  assert.match(out, /still bootstrapping/)
+})
+
+/*
+ * The rewrite itself, on a file, with a systemd this test supplies.
+ *
+ * Everything above proves the branch that answers "nothing to do". This is the
+ * other one: a host whose environment names a control plane the stage no longer
+ * serves. What has to be true afterwards is not only that the line changed —
+ * the file carries BOXLITE_RUNNER_TOKEN, so a converged host must be left
+ * holding no second copy of it, and a fleet already converged must not restart
+ * on the next cycle.
+ */
+const converge = ({ contents, work }: { contents: string; work: string }) => {
+  const envFile = join(work, 'runner.env')
+  writeFileSync(envFile, contents)
+  // What `renderRunnerBoot` leaves behind: the file carries
+  // BOXLITE_RUNNER_TOKEN, so it is not readable by anything else on the host.
+  chmodSync(envFile, 0o640)
+  const binDir = join(work, 'bin')
+  if (!existsSync(binDir)) {
+    mkdirSync(binDir)
+    const systemctl = join(binDir, 'systemctl')
+    // `is-enabled` answers yes; `restart` records that it was asked.
+    writeFileSync(
+      systemctl,
+      ['#!/bin/sh', 'if [ "$1" = restart ]; then echo restart >> "$RESTARTS"; fi', 'exit 0', ''].join('\n'),
+    )
+    chmodSync(systemctl, 0o755)
+  }
+  const restarts = join(work, 'restarts')
+  const { enforce } = renderUnitEnvironmentPolicyScripts({ apiUrl: 'https://api.dev.boxlite.ai', volumeBackend: 'gcs' })
+  const result = spawnSync('bash', ['-c', enforce], {
+    encoding: 'utf8',
+    env: {
+      PATH: `${binDir}:/usr/bin:/bin`,
+      BOXLITE_RUNNER_ENV_FILE: envFile,
+      RESTARTS: restarts,
+    },
+  })
+  return {
+    code: result.status,
+    out: `${result.stdout}${result.stderr}`,
+    file: readFileSync(envFile, 'utf8'),
+    mode: statSync(envFile).mode & 0o777,
+    leftovers: readdirSync(work).filter((name) => name.startsWith('runner.env.')),
+    restarts: existsSync(restarts) ? readFileSync(restarts, 'utf8').trim().split('\n').length : 0,
+  }
+}
+
+test('a host pointed at a name this stage no longer serves is rewritten once', () => {
+  const work = mkdtempSync(join(tmpdir(), 'runner-unit-env-'))
+  const stale = 'BOXLITE_API_URL=https://dev.boxlite.ai/api\nBOXLITE_RUNNER_TOKEN=secret-token\n'
+
+  const first = converge({ contents: stale, work })
+  assert.equal(first.code, 100, `enforce did not converge: ${first.out}`)
+  assert.match(first.file, /^BOXLITE_API_URL=https:\/\/api\.dev\.boxlite\.ai\/api$/m, 'the address was not rewritten')
+  assert.match(first.file, /^VOLUME_STORAGE_BACKEND=gcs$/m, 'the key the file lacked was not appended')
+  assert.match(first.file, /^BOXLITE_RUNNER_TOKEN=secret-token$/m, 'the rewrite dropped the host’s own token')
+  /*
+   * Nothing beside it, and nothing loosened.
+   *
+   * Both halves are about the same secret. A copy left behind — the backup, or
+   * the temporary the rewrite writes through — is a second readable copy of
+   * BOXLITE_RUNNER_TOKEN; and a rewrite that renamed a new file over this one
+   * would carry the umask's mode onto it, which is 644 by default and the token
+   * readable by every account on the host.
+   */
+  assert.deepEqual(first.leftovers, [], 'a file carrying the token was left beside it')
+  assert.equal(first.mode, 0o640, 'the rewrite widened the mode the boot script set')
+  assert.equal(first.restarts, 1, 'the unit must be restarted exactly once')
+
+  // And again, against what the first run produced: a converged fleet enforces
+  // nothing, which is what keeps this off every deploy.
+  const second = converge({ contents: first.file, work })
+  assert.equal(second.code, 100)
+  assert.equal(second.restarts, 1, 'a converged host was restarted a second time')
+  assert.match(second.out, /already pointed at the current control plane/)
 })

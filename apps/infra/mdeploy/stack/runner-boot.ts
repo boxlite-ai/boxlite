@@ -38,6 +38,25 @@
 
 import { artifactFetchCommand, verifyAgainstManifest, type RunnerArtifact } from './runner-binary.ts'
 
+/**
+ * Where the unit environment lives on a host.
+ *
+ * Named because two things write it: the boot script here, once, and the OS
+ * policy in `runner-upgrade.ts` that converges it afterwards. A host created
+ * before its stage changed domain has no other way to be told — the boot script
+ * runs once and `metadataStartupScript` is in `ignoreChanges`.
+ */
+export const RUNNER_ENV_FILE = '/etc/boxlite/runner.env'
+
+/**
+ * The control-plane address as the unit spells it.
+ *
+ * One rule in one place: the boot script writes it and the policy that keeps it
+ * current compares against it. A second derivation is a host that reads as
+ * non-compliant forever because the two disagree by a trailing slash.
+ */
+export const runnerApiUrl = (apiUrl: string): string => `${apiUrl.replace(/\/$/, '')}/api`
+
 /** What one cloud contributes to the boot script. */
 export type BootPlatform = {
   /** Shell that sets `HOST_IP` to the address the control plane reaches. */
@@ -114,7 +133,7 @@ export const renderRunnerBoot = (input: BootInput): string => {
   })
   const execStart = platform.startWrapper ? platform.startWrapper.path : '/usr/local/bin/boxlite-runner'
   const unitEnvironment = {
-    BOXLITE_API_URL: `${input.apiUrl.replace(/\/$/, '')}/api`,
+    BOXLITE_API_URL: runnerApiUrl(input.apiUrl),
     API_VERSION: '2',
     API_PORT: String(input.port),
     BOXLITE_HOME_DIR: '/var/lib/boxlite',
@@ -165,13 +184,13 @@ ${platform.startWrapper?.script ?? ''}
 # reads it as part of that section and the runner never sees it. A file is also
 # what makes a rotated value a rewrite and a restart rather than a redeploy.
 mkdir -p -m 750 /etc/boxlite
-cat > /etc/boxlite/runner.env << 'RUNNERENV'
+cat > ${RUNNER_ENV_FILE} << 'RUNNERENV'
 ${Object.entries(unitEnvironment)
   .map(([key, value]) => `${key}=${value}`)
   .join('\n')}
 RUNNERENV
-printf 'RUNNER_DOMAIN=%s\\n' "$HOST_IP" >> /etc/boxlite/runner.env
-chmod 640 /etc/boxlite/runner.env
+printf 'RUNNER_DOMAIN=%s\\n' "$HOST_IP" >> ${RUNNER_ENV_FILE}
+chmod 640 ${RUNNER_ENV_FILE}
 
 cat > /etc/systemd/system/boxlite-runner.service << 'UNIT'
 [Unit]
@@ -181,7 +200,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=${execStart}
-EnvironmentFile=/etc/boxlite/runner.env
+EnvironmentFile=${RUNNER_ENV_FILE}
 Restart=always
 RestartSec=5
 # The runner budgets 30s internally to stop its VMs; 60s leaves headroom for

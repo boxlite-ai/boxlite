@@ -20,12 +20,15 @@ import {
   ON_HOST,
   encodeUpgradePayload,
   renderUpgradePayload,
+  renderHostConvergence,
+  renderUnitEnvironmentPolicyScripts,
   renderPolicyScripts,
   upgradeResourceName,
   upgradeTrigger,
   type UpgradeTarget,
 } from '../stack/runner-upgrade.ts'
 import { upgradeRunner, type CommandResult } from '../src/upgrade-runners.ts'
+import { runnerApiUrl } from '../stack/runner-boot.ts'
 
 const REF = 'f'.repeat(40)
 const RELEASE = 'https://github.com/boxlite-ai/boxlite/releases/download/v0.10.0'
@@ -467,4 +470,143 @@ test('the policy scripts answer in the exit codes the agent grades them by', () 
   // reach enforce long after validate, and a host that converged in between
   // must still be left alone.
   assert.match(enforce, /already serving [$]TARGET; leaving the unit untouched/)
+})
+
+test('the control-plane URL is checked before it reaches a script that runs as root', () => {
+  /*
+   * The same rule the payload follows: the module that emits root bash is the
+   * one that has to be sure, whatever composed the value. This one lands in a
+   * single-quoted assignment and in a `sed` expression delimited by `|`, so a
+   * quote or a pipe in it is not a malformed URL but a command.
+   */
+  for (const apiUrl of [
+    "https://api.example.com'; rm -rf / #",
+    'https://api.example.com|/etc/passwd',
+    'https://api.example.com/api',
+    'https://api example.com',
+    'ftp://api.example.com',
+    '',
+  ]) {
+    assert.throws(
+      () => renderUnitEnvironmentPolicyScripts({ apiUrl, volumeBackend: 'gcs' }),
+      RunnerUpgradeError,
+      `accepted ${JSON.stringify(apiUrl)}`,
+    )
+  }
+  // And the shapes `api.address` actually composes are taken.
+  for (const apiUrl of ['https://api.boxlite.ai', 'https://api.boxlite.ai/', 'http://api.dev.boxlite.ai:8443']) {
+    assert.match(renderUnitEnvironmentPolicyScripts({ apiUrl, volumeBackend: 'gcs' }).validate, /BOXLITE_API_URL=/, `refused ${apiUrl}`)
+  }
+})
+
+test('the unit-environment policy answers the same exit codes, and keeps no copy of the token', () => {
+  const { validate, enforce } = renderUnitEnvironmentPolicyScripts({ apiUrl: 'https://api.boxlite.ai', volumeBackend: 'gcs' })
+  assert.ok(validate.startsWith('#!/bin/bash\n'), 'validate must name its own shell')
+  assert.ok(enforce.startsWith('#!/bin/bash\n'), 'enforce must name its own shell')
+
+  // Both satisfied paths — a host still bootstrapping, and one already
+  // converged — answer through the same predicate, so 100 is reached from one
+  // place and 101 is the only thing that asks the agent to enforce.
+  assert.match(validate, /if unit_environment_settled; then exit 100; fi/)
+  assert.match(validate, /still bootstrapping/)
+  assert.match(validate, /already pointed at the current control plane/)
+  assert.match(validate, /exit 101\n$/, 'validate must end by asking for enforcement')
+
+  // Replace the key the file names and append the one it does not, in one pass
+  // that keeps the order — and with the value as an awk variable rather than
+  // inside the program, so an address carrying a pipe cannot become an
+  // expression. Then put the file back when neither took.
+  assert.match(enforce, /awk -v key="\$key" -v line="\$line"/, 'enforce must rewrite through awk')
+  assert.match(enforce, /\{ print line; found = 1; next \}/, 'it must replace the line it found')
+  assert.match(enforce, /END \{ if \(!found\) print line \}/, 'and append the one it did not')
+  assert.ok(enforce.includes('mv "$UNIT_ENV_FILE.bak" "$UNIT_ENV_FILE"'), 'enforce must restore when the rewrite did not take')
+
+  // Every expected line goes through one loop and one verdict, so a failure on
+  // either reaches the restore rather than leaving the host half converged.
+  assert.match(enforce, /if ! rewrite_unit_environment \|\| ! unit_environment_matches; then/)
+
+  /*
+   * The backup is a copy of the unit environment, which carries
+   * BOXLITE_RUNNER_TOKEN. A converged host must not be left holding a second
+   * copy of it, and the removal has to come before the restart so a failure
+   * there does not leave one behind either.
+   *
+   * Removed on each path rather than trapped: `renderHostConvergence` puts this
+   * block after the binary half, whose `swapSequence` already owns the EXIT
+   * trap — and bash keeps one, so a trap here would take that one's place and
+   * leave the download directory behind instead.
+   */
+  const lines = enforce.split('\n')
+  const copied = lines.findIndex((line) => line.includes('cp -a "$UNIT_ENV_FILE" "$UNIT_ENV_FILE.bak"'))
+  const removed = lines.findIndex((line) => line.includes('rm -f "$UNIT_ENV_FILE.bak"'))
+  const restarted = lines.findIndex((line) => line.includes('systemctl restart boxlite-runner'))
+  assert.ok(copied >= 0, 'enforce must keep a backup to restore from')
+  assert.ok(removed > copied, 'and remove it once the rewrite took')
+  assert.ok(removed < restarted, 'before the restart, so a failure there leaves no copy behind')
+  assert.doesNotMatch(enforce, /trap .* EXIT/, 'the EXIT trap belongs to the half this block is concatenated after')
+
+  // A converged host is a satisfied policy, through the same status translation
+  // the binary's enforce uses: the block grades itself 0, and only the wrapper
+  // turns that into the agent's 100.
+  assert.match(
+    enforce,
+    /status=\$\?\nif \[ "\$status" -eq 0 \]; then exit 100; fi\nexit 101\n$/,
+    'enforce must translate the block\'s own status rather than grade it twice',
+  )
+})
+
+/*
+ * The other thing a host cannot be told after first boot.
+ *
+ * `/etc/boxlite/runner.env` is written once, and the instance that holds it is
+ * `protect: true` with its user data in `ignoreChanges` — so a stage that moves
+ * its domain leaves every existing host calling a name that no longer resolves.
+ * GCP converges it through a second resource in the one policy assignment; a
+ * transport that carries a script has to carry both halves itself.
+ */
+test('a payload converges the unit environment as well as the binary', () => {
+  const payload = renderHostConvergence(target({ apiUrl: 'https://api.dev.boxlite.ai', volumeBackend: 'gcs' }))
+  const binary = payload.indexOf('upgrade_binary\n')
+  const environment = payload.indexOf('converge_unit_environment\n')
+  assert.notEqual(binary, -1, 'the binary half must still be called')
+  assert.notEqual(environment, -1, 'and the unit environment after it')
+  assert.ok(binary < environment, 'the binary leads, as the two policy resources do on GCP')
+  assert.ok(
+    payload.includes(`UNIT_ENV_EXPECTED=('BOXLITE_API_URL=${runnerApiUrl('https://api.dev.boxlite.ai')}' 'VOLUME_STORAGE_BACKEND=gcs')`),
+    'the payload must pin the line the boot script writes, through the same function',
+  )
+})
+
+test('a host already serving the target still has its environment converged', () => {
+  // The case this exists for is a stage that moved its domain and nothing else:
+  // every host is on the right binary, so a payload whose "already serving"
+  // ended the script would converge nothing, on every host, forever.
+  const payload = renderHostConvergence(target({ apiUrl: 'https://api.dev.boxlite.ai' }))
+  const satisfied = payload.slice(payload.indexOf('already serving $TARGET'))
+  assert.match(satisfied.split('\n')[1], /^\s*return 0$/, 'the binary half must return rather than exit')
+  assert.ok(payload.indexOf('converge_unit_environment\n') > payload.indexOf('already serving $TARGET'))
+})
+
+test('a caller with no control-plane address converges only the binary', () => {
+  // `runner:update` rolls a release by hand and never reads the stage's
+  // environment, so it has no address to enforce — and inventing one would
+  // rewrite a host from a value nobody supplied.
+  const payload = renderHostConvergence(target())
+  assert.doesNotMatch(payload, /converge_unit_environment/)
+  assert.doesNotMatch(payload, /BOXLITE_API_URL/)
+  assert.match(payload, /upgrade_binary\n$/)
+})
+
+test('an AWS host is sent both halves, and the address is what re-sends them', () => {
+  // The payload is only as good as what triggers it: a domain move changes no
+  // identity and no tarball, so without the address in `triggers` the command
+  // that carries the fix is never re-run.
+  const aws = readFileSync(fileURLToPath(new URL('../stack/providers/aws/runners.ts', import.meta.url)), 'utf8')
+  const upgrades = aws.slice(aws.indexOf('let previousUpgrade'))
+  assert.match(upgrades, /encodeUpgradePayload\(\{[^}]*apiUrl,/, 'the AWS payload must carry the control plane address')
+  assert.match(upgrades, /triggers: \[[^\]]*request\.apiUrl,?[^\]]*\]/, 'and the address must re-send it')
+
+  // No backend here: these hosts mount with mount-s3 and their boot script
+  // writes no such key, so enforcing one would leave every host disagreeing.
+  assert.doesNotMatch(upgrades, /volumeBackend/)
 })

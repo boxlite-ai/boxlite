@@ -44,14 +44,17 @@ export const awsStackProviders = ({
   region,
   accountId,
   domain,
+  dashboardDomain = null,
   artifactsBucket,
   managedClickHouse,
 }: {
   stage: string
   region: string
   accountId: string
-  /** The root domain the CDN and the API's own hostname sit under. */
+  /** The stage's own domain. The API's hostname sits under it. */
   domain: string
+  /** Where the dashboard's CDN answers, or null for the stage domain itself. */
+  dashboardDomain?: string | null
   /** Where a build-mode runner binary is staged, for the runner's read grant. */
   artifactsBucket: string
   /**
@@ -87,7 +90,7 @@ export const awsStackProviders = ({
       awsCollectorProvider({ host: host(where), clickhouse, dependsOn }),
     // The network is ignored here: a security group already says who may reach
     // the API, and repeating it as an identity would be a second answer.
-    api: ({ dependencies }) => awsApiProvider({ dependencies, dns, domain }),
+    api: ({ dependencies }) => awsApiProvider({ dependencies, dns, domain, dashboardDomain }),
     edge: ({ host: where, network, dependsOn }) =>
       awsEdgeProvider({ host: host(where), placement: placement(network.placementFor('proxy')), dns, dependsOn }),
     // 64 alphanumeric characters: the value travels through a systemd

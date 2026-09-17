@@ -105,6 +105,7 @@ import {
 import { validateDotenvSyntax } from '../deployment/key-policy.js'
 import { promptSecret, requireNonEmptySecret } from './secret-prompt.js'
 import { customApiArgs, spaApplicationArgs, tenantSettingsArgs } from './auth0.js'
+import { publicHostsFor } from '../mdeploy/stack/hosts.js'
 import {
   environmentApiPath,
   githubEnvironmentPayload,
@@ -657,10 +658,22 @@ function requireAuth0Session() {
  * applications or APIs, so rerunning creates duplicates. Gated behind an
  * explicit flag for that reason.
  */
-function provisionAuth0({ stackDomain }: any) {
+function provisionAuth0({ stackDomain, dashboardDomain }: any) {
   requireAuth0Session()
 
-  const app = auth0Json(spaApplicationArgs({ stackDomain }))
+  /*
+   * The dashboard's own host, through the one function that composes it.
+   *
+   * Auth0 matches a redirect_uri exactly, and provisioning is not idempotent —
+   * so a stage whose dashboard is served somewhere else would be left with an
+   * application that refuses every login and no second run to repair it. The
+   * stack (`stack/api.ts`) and the API's environment (`src/api-environment.ts`)
+   * resolve the same pair from the same function, which is what keeps the URL
+   * registered here and the URL served from drifting apart.
+   */
+  const app = auth0Json(
+    spaApplicationArgs({ dashboardDomain: publicHostsFor({ domain: stackDomain, dashboardDomain }).dashboard }),
+  )
   const clientId = app.client_id ?? app.clientId
   if (!clientId) throw new Error('auth0 apps create returned no client_id')
   console.log('==> Auth0 SPA application')
@@ -1208,7 +1221,12 @@ async function main() {
     if (!stackDomain) {
       throw new Error(`STACK_DOMAIN must be set in ${ENV_PATH} before --provision-auth0 can build callback URLs`)
     }
-    provisionAuth0({ stackDomain })
+    /*
+     * From the same snapshot, for the same reason: the dashboard's host decides
+     * the callback URLs, and a shell override would register one host while
+     * every deploy served another.
+     */
+    provisionAuth0({ stackDomain, dashboardDomain: stageConfigLoad.payload.DASHBOARD_DOMAIN ?? null })
   }
 
   await ensureCloudflareCredentials({ awsCliPath, region, stage, repo, force })

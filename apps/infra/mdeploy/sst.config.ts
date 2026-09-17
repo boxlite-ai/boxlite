@@ -161,6 +161,7 @@ export default $config({
         region: AWS_REGION,
         accountId,
         domain: stackEnvironment.domain,
+        dashboardDomain: stackEnvironment.dashboardDomain,
         artifactsBucket,
         managedClickHouse: stackEnvironment.managedClickHouse,
       }),

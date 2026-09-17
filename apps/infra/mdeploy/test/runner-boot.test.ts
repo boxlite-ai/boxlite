@@ -12,7 +12,8 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { renderRunnerBoot, type BootPlatform } from '../stack/runner-boot.ts'
+import { RUNNER_ENV_FILE, renderRunnerBoot, runnerApiUrl, type BootPlatform } from '../stack/runner-boot.ts'
+import { renderUnitEnvironmentPolicyScripts } from '../stack/runner-upgrade.ts'
 
 const platform = (overrides: Partial<BootPlatform> = {}): BootPlatform => ({
   hostAddress: 'HOST_IP=$(curl -s http://metadata/ip)',
@@ -192,4 +193,43 @@ test('the platform’s own unit settings win over what the caller passed', () =>
   })
   assert.match(script, /^AWS_REGION=ap-southeast-1$/m)
   assert.doesNotMatch(script, /^AWS_REGION=us-east-1$/m)
+})
+
+test('the policy compares against the exact line the boot script wrote', () => {
+  /*
+   * The pairing that keeps a converged fleet from reading as non-compliant
+   * forever. `renderUnitEnvironmentPolicyScripts` greps the unit environment with
+   * `grep -qxF` — a whole-line, fixed-string match — so a boot script that
+   * writes the address even slightly differently (a trailing slash kept, a
+   * quote added) makes every host fail `validate`, enforce on every cycle, and
+   * restart its boxes each time while nothing ever converges.
+   *
+   * Both strings come from production code and neither is spelled here, which
+   * is the point: the test would not survive the two deriving it separately.
+   */
+  const apiUrl = 'https://api.boxlite.ai/'
+  const volumeBackend = 'gcs'
+  const script = render({ apiUrl, platform: platform({ unitEnvironment: { VOLUME_STORAGE_BACKEND: volumeBackend } }) })
+  const { validate } = renderUnitEnvironmentPolicyScripts({ apiUrl, volumeBackend })
+
+  // The array the policy compares against, and only it: the block around it
+  // carries a `printf '%s\\n'` that a looser read would pick up as a pinned line.
+  const declared = /UNIT_ENV_EXPECTED=\(([^)]*)\)/.exec(validate)?.[1] ?? ''
+  const pinned = [...declared.matchAll(/'([^']+)'/g)].map((match) => match[1])
+  assert.deepEqual(
+    pinned,
+    [`BOXLITE_API_URL=${runnerApiUrl(apiUrl)}`, `VOLUME_STORAGE_BACKEND=${volumeBackend}`],
+    'the policy pins lines the boot script does not write',
+  )
+
+  // The boot script writes each as its own line, which is what `grep -qxF` needs.
+  const lines = script.split('\n')
+  for (const line of pinned) {
+    assert.ok(lines.includes(line), `the boot script writes no line equal to ${JSON.stringify(line)}`)
+  }
+  // And both name the same file, or the policy converges something else. The
+  // policy reaches it through an override that nothing sets outside a test, so
+  // what has to match is the default behind it.
+  assert.ok(validate.includes(`UNIT_ENV_FILE="\${BOXLITE_RUNNER_ENV_FILE:-${RUNNER_ENV_FILE}}"`))
+  assert.ok(script.includes(RUNNER_ENV_FILE))
 })

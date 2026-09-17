@@ -72,6 +72,7 @@ export const gcpStackProviders = ({
   appShort,
   zone: declaredZone = null,
   domain,
+  dashboardDomain = null,
   zoneId,
   relayHost = null,
   artifactsBucket,
@@ -91,8 +92,10 @@ export const gcpStackProviders = ({
   appShort: string
   /** The zone machines are created in, or null for the region's first. */
   zone?: string | null
-  /** The hostname the dashboard and the SDKs reach the control plane on. */
+  /** The stage's own domain. `api.<domain>` is where the control plane answers. */
   domain: string
+  /** Where the dashboard is served, or null for the stage domain itself. */
+  dashboardDomain?: string | null
   /** The Cloudflare zone every public record is written into. */
   zoneId: string
   /** The SMTP relay a GCP stage sends through. Google provides none. */
@@ -170,6 +173,7 @@ export const gcpStackProviders = ({
         project,
         region,
         domain,
+        dashboardDomain,
         // The proxy resolves a box through it; a runner registers itself with
         // it. Cloud Run admits named invokers and nobody else.
         callers: [placement(network, 'proxy').serviceAccount, placement(network, 'runner').serviceAccount],

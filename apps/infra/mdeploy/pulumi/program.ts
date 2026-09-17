@@ -257,6 +257,7 @@ export const gcpProgram =
         appShort: stageConfig.appShort,
         zone,
         domain: stackEnvironment.domain,
+        dashboardDomain: stackEnvironment.dashboardDomain,
         zoneId: stackEnvironment.dnsZoneId,
         relayHost: stackEnvironment.mailRelayHost,
         artifactsBucket,

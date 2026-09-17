@@ -12,6 +12,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { resolveDeployTarget } from '../src/deploy.ts'
+import { pulumiDeploy } from '../src/pulumi.ts'
+import { DnsAuthorizationError } from '../src/dns-authorization.ts'
 import { DEPLOY_GROUP, PULUMI_GROUP, SERVICE_GROUPS } from '../src/env.ts'
 import { REQUIRED_CREDENTIAL_SECONDS, REQUIRED_PREVIEW_SECONDS, windowFor } from '../src/credential-window.ts'
 
@@ -124,4 +126,55 @@ test('targeting is refused on the Pulumi path rather than translated', async () 
     () => target.run({ targets: ['Vpc'], log: () => {} }),
     /--module is not supported on a GCP stage/,
   )
+})
+
+/*
+ * The precondition, where it is actually wired.
+ *
+ * `assertAuthorizationsConverge` has its own tests; what those cannot show is
+ * that an apply asks it at all, and asks it before the engine is handed
+ * anything. A guard that can refuse every GCP apply is worth exercising through
+ * the function that calls it rather than only beside it.
+ */
+const applying = ({ held, intent = 'deploy' as const }: { held: { name: string; domain: string }[]; intent?: 'deploy' | 'diff' }) => {
+  const started: string[] = []
+  return {
+    started,
+    run: () =>
+      pulumiDeploy({
+        intent,
+        config: { root: '/repo/apps/infra' } as any,
+        scope: scope({ home: 'gcp', project: 'boxlite-dev-project' }),
+        identity: identity('gcp') as any,
+        state: { bucket: 'boxlite-state' },
+        stageEnvironment: {
+          PULUMI_CONFIG_PASSPHRASE: 'passphrase',
+          STACK_DOMAIN: 'dev.boxlite.ai',
+          PROXY_DOMAIN: 'proxy.dev.boxlite.ai',
+        },
+        log: () => {},
+        lookupAuthorizations: () => ({ ok: true, held }),
+        createStackWith: (async () => {
+          started.push('engine')
+          return { setAllConfig: async () => {}, up: async () => ({}) } as any
+        }) as any,
+      }),
+  }
+}
+
+test('an apply asks what the project holds before the engine is handed anything', async () => {
+  const { started, run } = applying({ held: [{ name: 'boxlite-dev-api-internal', domain: 'api.dev.boxlite.ai' }] })
+  await assert.rejects(run, DnsAuthorizationError)
+  assert.deepEqual(started, [], 'the engine was started before the answer came back')
+})
+
+test('a preview is not refused, because it creates nothing to be refused about', async () => {
+  // A stage reads the same either way, and refusing the read would withhold the
+  // plan that shows the problem.
+  const { started, run } = applying({
+    held: [{ name: 'boxlite-dev-api-internal', domain: 'api.dev.boxlite.ai' }],
+    intent: 'diff',
+  })
+  await run().catch(() => {})
+  assert.deepEqual(started, ['engine'], 'a preview must still reach the engine')
 })

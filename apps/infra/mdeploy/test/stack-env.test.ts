@@ -41,6 +41,15 @@ test('a complete environment resolves everything one deploy decides', () => {
   assert.deepEqual(resolved.proxyEnvironment, { PROXY_API_KEY: 'proxy-key' })
 })
 
+test('the dashboard stays on the stage domain unless the stage names another host', () => {
+  // Absent is the common stage, which serves both halves under one domain.
+  // Named only by a stage whose domain belongs to something else — prod, whose
+  // apex is the marketing site's. The control plane is not part of the pair:
+  // it stays `api.<STACK_DOMAIN>`, which is what each runner is handed.
+  assert.equal(read(complete).dashboardDomain, null)
+  assert.equal(read({ ...complete, DASHBOARD_DOMAIN: 'app.dev.boxlite.ai' }).dashboardDomain, 'app.dev.boxlite.ai')
+})
+
 test('a key nothing supplies stops the deploy, named, before anything is built', () => {
   for (const key of ['BOXLITE_IMAGE_TAG', 'STACK_DOMAIN', 'PROXY_DOMAIN', 'CLOUDFLARE_ZONE_ID']) {
     assert.throws(() => read({ ...complete, [key]: undefined }), new RegExp(`${key} is required`), `${key} is not required`)

@@ -141,8 +141,16 @@ const clickStackConsumerFrom = (environment: NodeJS.ProcessEnv): string | null =
 export type StackEnvironment = {
   /** The commit being deployed. Every container runs the same one. */
   tag: string
-  /** The hostname the dashboard and the SDKs reach the control plane on. */
+  /** The stage's own domain. `api.<domain>` is where the control plane answers. */
   domain: string
+  /**
+   * Where the dashboard is served, or null for the stage domain itself.
+   *
+   * The raw setting rather than the resolved host: `stack/api.ts`'s
+   * `publicHostsFor` is the one place that turns the pair into two names, and
+   * this carries it there rather than answering the question a second time.
+   */
+  dashboardDomain: string | null
   proxyDomain: string
   proxyProtocol: string
   /**
@@ -274,7 +282,11 @@ export const readStackEnvironment = ({
   const proxyProtocol = optional(environment, 'PROXY_PROTOCOL') ?? 'http'
   return {
     tag,
-    domain: required(environment, 'STACK_DOMAIN', 'the hostname the dashboard and the SDKs reach this stage on'),
+    domain: required(environment, 'STACK_DOMAIN', "the stage's own domain; the control plane answers at api.<domain>"),
+    // Absent is the common stage, which serves its dashboard at the domain
+    // above. Named only by a stage that publishes it somewhere else — prod,
+    // whose apex belongs to the marketing site.
+    dashboardDomain: optional(environment, 'DASHBOARD_DOMAIN'),
     proxyDomain,
     proxyProtocol,
     // Composed from the two above when the store says nothing, which is the

@@ -2,11 +2,11 @@
  * The control plane on ECS, behind an application load balancer and a CDN.
  *
  * Two front doors, and both are deliberate. The CDN serves the dashboard's
- * static assets at the root domain; the load balancer answers `api.<domain>`
- * directly, because CloudFront caps a WebSocket at ten minutes and times an
- * origin read out at sixty seconds — which breaks `/attach`, build-log
- * streaming and file uploads. `url` is the CDN's and `address` is the load
- * balancer's, which is why the contract has both.
+ * static assets at the dashboard's own host; the load balancer answers
+ * `api.<domain>` directly, because CloudFront caps a WebSocket at ten minutes
+ * and times an origin read out at sixty seconds — which breaks `/attach`,
+ * build-log streaming and file uploads. `url` is the CDN's and `address` is the
+ * load balancer's, which is why the contract has both.
  *
  * The idle timeout is raised to an hour to match. AWS's own guidance is that a
  * target's keep-alive must be at least the balancer's idle timeout, and
@@ -21,6 +21,7 @@
  */
 
 import type { Api, ApiCapability, ApiDependencies, ApiProvider, ApiRequest } from '../../api.ts'
+import { publicHostsFor } from '../../api.ts'
 import { CACHE_PASSWORD_VARIABLE } from '../../cache.ts'
 import { CLICKHOUSE_PASSWORD_VARIABLE } from '../../clickhouse.ts'
 import type { WorkloadHost } from '../../cluster.ts'
@@ -95,16 +96,26 @@ export const awsApiProvider =
     dependencies,
     dns,
     domain,
+    dashboardDomain,
   }: {
     dependencies: ApiDependencies
     dns: ReturnType<typeof sst.cloudflare.dns>
-    /** The root domain the CDN answers on. */
+    /** The stage's own domain. `api.<domain>` is what the balancer answers on. */
     domain: string
+    /** Where the dashboard is served, or null for the stage domain itself. */
+    dashboardDomain: string | null
   }): ApiProvider =>
   (request: ApiRequest): Api => {
     const host = dependencies.host as Extract<WorkloadHost, { cloud: 'aws' }>
     const placement = dependencies.placement as Extract<Placement, { cloud: 'aws' }>
     const storage = onAws(dependencies.storage)
+    /*
+     * The CDN's name and the balancer's, from the one function that composes
+     * them. `api-environment.ts` asks the same one for the two origins it hands
+     * the dashboard, so neither front door can be published on a name the
+     * dashboard was not told about.
+     */
+    const hosts = publicHostsFor({ domain, dashboardDomain })
 
     const service = new sst.aws.Service(
       'Api',
@@ -113,7 +124,7 @@ export const awsApiProvider =
         wait: true,
         image: request.image,
         loadBalancer: {
-          domain: { name: `api.${domain}`, dns },
+          domain: { name: hosts.api, dns },
           rules: [{ listen: '443/https', forward: `${request.port}/http` }],
           // The API is mounted globally under /api, so the balancer's default
           // probe of `/` would mark every healthy task unhealthy.
@@ -198,7 +209,7 @@ export const awsApiProvider =
     )
 
     /*
-     * The CDN, which serves the dashboard's static assets at the root domain.
+     * The CDN, which serves the dashboard's static assets on its own host.
      *
      * SST's Router creates its placeholder origin as `http-only`, and that wins
      * over the per-request override its CloudFront function sets for HTTPS
@@ -206,7 +217,7 @@ export const awsApiProvider =
      * Flipping it to `https-only` is what makes the function's override take.
      */
     const cdn = new sst.aws.Router('ApiCdn', {
-      domain: { name: domain, dns },
+      domain: { name: hosts.dashboard, dns },
       transform: {
         cdn: (args: any) => {
           args.origins = $util.output(args.origins).apply((origins: any[]) =>

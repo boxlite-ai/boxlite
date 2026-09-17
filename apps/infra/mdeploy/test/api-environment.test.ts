@@ -28,6 +28,44 @@ test('the two dashboard origins are different on purpose, and both have a defaul
   assert.equal(overridden.environment.DASHBOARD_URL, 'https://console.example.com')
 })
 
+test('a stage may serve its dashboard off the stage domain, and only the dashboard moves', () => {
+  /*
+   * prod keeps `boxlite.ai` for the marketing site, so the dashboard is at
+   * `app.boxlite.ai` and the control plane at `api.boxlite.ai`. The control
+   * plane is the half that must not follow: a runner is handed `api.<domain>`
+   * at first boot, in a systemd unit an upgrade does not rewrite, and the
+   * in-VPC private zone answers for that one name.
+   */
+  const { environment } = assemble({ ...base, DASHBOARD_DOMAIN: 'app.dev.boxlite.ai' })
+  assert.equal(environment.DASHBOARD_URL, 'https://app.dev.boxlite.ai')
+  assert.equal(environment.DASHBOARD_BASE_API_URL, 'https://api.dev.boxlite.ai')
+
+  // The logout redirect lands the browser back on the origin it is already on,
+  // which is the dashboard's rather than the control plane's.
+  assert.equal(environment.OIDC_END_SESSION_ENDPOINT, 'https://app.dev.boxlite.ai/api/auth/end-session')
+
+  // A stage that puts the dashboard behind something else still wins.
+  const pinned = assemble({
+    ...base,
+    DASHBOARD_DOMAIN: 'app.dev.boxlite.ai',
+    DASHBOARD_URL: 'https://console.example.com',
+  })
+  assert.equal(pinned.environment.DASHBOARD_URL, 'https://console.example.com')
+})
+
+test('a dashboard host that is the control plane’s own is refused at the boundary', () => {
+  /*
+   * The two names become one Cloudflare record and one certificate each. Left
+   * to the apply, the provider builds one of them and then fails on the other
+   * with a resource collision, which names neither the setting nor the stage
+   * that holds it.
+   */
+  assert.throws(
+    () => assemble({ ...base, DASHBOARD_DOMAIN: 'api.dev.boxlite.ai' }),
+    /control plane answers/,
+  )
+})
+
 test('an issuer is required, because a placeholder would let the stack look healthy', () => {
   assert.throws(() => assemble({ STACK_DOMAIN: 'dev.boxlite.ai' }), /OIDC_ISSUER_BASE_URL is required/)
   assert.throws(() => assemble({ OIDC_ISSUER_BASE_URL: 'https://auth' }), /STACK_DOMAIN is required/)

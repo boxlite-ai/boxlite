@@ -526,6 +526,17 @@ export const gcpEdgeProvider =
       { dependsOn: [deployment] },
     )
 
+    /*
+     * The name is the stage's own and carries no domain, unlike every
+     * certificate around it. Keying it on the domain is the better shape and is
+     * not adopted here: an authorization's domain is immutable, so the rename
+     * would make the next apply of every stage that already holds one the
+     * replacement that cannot be created — refused as a duplicate under a name
+     * the original still holds, whose delete the certificate above it refuses
+     * in turn. `src/dns-authorization.ts` refuses a domain that no longer
+     * matches before an apply starts, which is the same protection without
+     * putting every stage through that migration to get it.
+     */
     const authorization = new gcp.certificatemanager.DnsAuthorization('ProxyDnsAuthorization', {
       name,
       project,
@@ -542,7 +553,9 @@ export const gcpEdgeProvider =
     const certificate = new gcp.certificatemanager.Certificate(
       'ProxyCertificate',
       {
-        name: certificateNameFor({ domain: request.domain, base: name }),
+        // The wildcard beside it is derived from this one name, so the name
+        // alone already changes whenever what the certificate covers does.
+        name: certificateNameFor({ key: request.domain, base: name }),
         project,
         managed: { domains: [request.domain, `*.${request.domain}`], dnsAuthorizations: [authorization.id] },
       },
