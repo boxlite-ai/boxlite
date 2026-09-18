@@ -305,24 +305,29 @@ async fn streaming_hintless_corrupt_archive_fails(bx: &LiteBox, _tmp: &Path) {
     assert!(result.is_err(), "corrupt archive must fail the copy");
 }
 
-/// A hinted (streaming) upload whose archive names an entry under a mount
-/// must be refused — post-hoc for the stream (it cannot be pre-scanned
-/// without spooling) — and the refusal must be *total*: the guest rolls the
-/// extracted payload back, so nothing is left half-applied beneath the mount.
+/// Refuse before the mounted entry writes; keep earlier overwrites and stop
+/// before later entries. The order deliberately exercises partial success.
 async fn streaming_payload_under_mount_is_refused(bx: &LiteBox, tmp: &Path) {
     let host_src = tmp.join("stream-mount-payload.txt");
     std::fs::write(&host_src, "PAYLOAD-STREAM-MOUNT\n").unwrap();
 
-    // The entry lands under the guest's /tmp tmpfs mount: destination root
-    // is reachable, only the payload entry is shadowed — exactly the case
-    // the staged arm refuses via entry_paths pre-scan. The second entry is
-    // reachable and harmless, and is what makes "nothing landed" a claim with
-    // something to be false about.
-    let mut tar_bytes = Vec::new();
-    {
-        let mut builder = tar::Builder::new(&mut tar_bytes);
+    for blocked_first in [true, false] {
+        exec_stdout(
+            bx,
+            BoxCommand::new("sh").args(["-c", "printf 'OLD' > /stream-mount-harmless.txt"]),
+        )
+        .await;
+        let mut names = [
+            "tmp/stream-mount-payload.txt",
+            "stream-mount-harmless.txt",
+            "stream-mount-after.txt",
+        ];
+        if !blocked_first {
+            names.swap(0, 1);
+        }
+        let mut builder = tar::Builder::new(Vec::new());
         let content = std::fs::read(&host_src).unwrap();
-        for name in ["tmp/stream-mount-payload.txt", "stream-mount-harmless.txt"] {
+        for name in names {
             let mut header = tar::Header::new_gnu();
             header.set_size(content.len() as u64);
             header.set_mode(0o644);
@@ -331,28 +336,41 @@ async fn streaming_payload_under_mount_is_refused(bx: &LiteBox, tmp: &Path) {
                 .append_data(&mut header, name, &content[..])
                 .unwrap();
         }
-        builder.finish().unwrap();
+        let tar_bytes = builder.into_inner().unwrap();
+        let poisoned: boxlite_shared::BoxByteStream =
+            Box::pin(tokio_stream::iter(vec![Ok(tar_bytes)]));
+
+        let err = bx
+            .copy_in_stream(poisoned, "/", CopySourceKind::Dir, CopyOptions::default())
+            .await
+            .expect_err("a payload under a mount must be refused, not silently shadowed");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("'/tmp' mount"),
+            "refusal should name the mount that blocks it, got: {msg}"
+        );
+
+        let content = exec_stdout(
+            bx,
+            BoxCommand::new("cat").args(["/stream-mount-harmless.txt"]),
+        )
+        .await;
+        assert_eq!(
+            content,
+            if blocked_first {
+                "OLD"
+            } else {
+                "PAYLOAD-STREAM-MOUNT\n"
+            }
+        );
+        let code = exec_exit_code(
+            bx,
+            BoxCommand::new("test").args(["-e", "/stream-mount-after.txt"]),
+        )
+        .await;
+        assert_eq!(code, 1, "entries after the refusal must not be written");
     }
-    let poisoned: boxlite_shared::BoxByteStream = Box::pin(tokio_stream::iter(vec![Ok(tar_bytes)]));
-
-    let err = bx
-        .copy_in_stream(poisoned, "/", CopySourceKind::Dir, CopyOptions::default())
-        .await
-        .expect_err("a payload under a mount must be refused, not silently shadowed");
-
-    let msg = err.to_string();
-    assert!(
-        msg.contains("'/tmp' mount"),
-        "refusal should name the mount that blocks it, got: {msg}"
-    );
-
-    // Same invariant the staged arm gets from refusing before it writes.
-    let code = exec_exit_code(
-        bx,
-        BoxCommand::new("test").args(["-e", "/stream-mount-harmless.txt"]),
-    )
-    .await;
-    assert_eq!(code, 1, "a refused streamed copy must leave nothing behind");
 }
 
 #[tokio::test(flavor = "multi_thread")]

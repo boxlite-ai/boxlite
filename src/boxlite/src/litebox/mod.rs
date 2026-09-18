@@ -142,6 +142,9 @@ impl LiteBox {
     }
 
     /// Copy files/directories from host into the container rootfs.
+    ///
+    /// A failed copy may leave partial writes, including replaced file contents.
+    /// Earlier writes are not rolled back.
     pub async fn copy_into(
         &self,
         host_src: impl AsRef<Path>,
@@ -170,6 +173,9 @@ impl LiteBox {
     /// `source` is the archive shape (directory tree vs single file);
     /// [`CopySourceKind::Unknown`] when the caller cannot tell — the receiver
     /// then peeks the archive to decide. Every backend supports this.
+    /// Failure may leave partial files and directories, including earlier
+    /// overwrites; their contents, ownership and permissions are not rolled back
+    /// or guaranteed to be finalized.
     ///
     /// Returns a `BoxFuture` (rather than being an `async fn`) so the future
     /// owns everything it needs and borrows no part of `self` — the FFI

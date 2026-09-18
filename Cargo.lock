@@ -680,6 +680,7 @@ dependencies = [
  "russh-sftp",
  "serde",
  "serde_json",
+ "tar",
  "tempfile",
  "tokio",
  "tokio-stream",

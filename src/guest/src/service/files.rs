@@ -6,7 +6,8 @@
 
 use crate::service::server::GuestServer;
 use boxlite_shared::{
-    files_server::Files, BoxByteStream, DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
+    files_server::Files, BoxByteStream, BoxliteError, BoxliteResult, DownloadChunk,
+    DownloadRequest, UploadChunk, UploadResponse,
 };
 use futures::StreamExt;
 use nix::fcntl::OFlag;
@@ -19,7 +20,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{info, warn};
+use tracing::info;
 
 const MAX_UPLOAD_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB safety cap
 
@@ -242,48 +243,6 @@ impl DestBefore {
     }
 }
 
-/// Undo what a refused streamed upload wrote.
-///
-/// The hinted arm extracts before it can check the mounts — the shape hint is
-/// what saves the spool, so there is no archive left to pre-scan — which used
-/// to leave a refused copy half-applied on the rootfs, invisible beneath the
-/// mount that caused the refusal. Removing exactly [`DestBefore::created`],
-/// the same set the ownership hand-off claims as "made by this copy", puts the
-/// tree back.
-///
-/// Not a perfect inverse: a file the archive *overwrote* lost its old content
-/// the moment extraction wrote it, so it is removed rather than left carrying
-/// the refused payload's bytes. Directories the image shipped are never
-/// touched — [`DestBefore::created`] excludes them.
-///
-/// Best-effort per node, and deepest-first so a directory is empty by the time
-/// it is removed. A node a workload holds or races simply stays; the refusal is
-/// what the caller sees either way.
-fn remove_extracted(dest_root: &Path, entry_paths: &[PathBuf], before: &DestBefore) {
-    let mut targets = before.created(dest_root, entry_paths);
-    targets.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
-    for target in targets {
-        let removed = if target.is_dir() {
-            std::fs::remove_dir(&target)
-        } else {
-            std::fs::remove_file(&target)
-        };
-        match removed {
-            Ok(()) => {}
-            // Already gone, or a directory still holding paths this copy did
-            // not create — both mean there is nothing here to undo.
-            Err(e)
-                if e.kind() == std::io::ErrorKind::NotFound
-                    || e.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
-            Err(e) => warn!(
-                path = %target.display(),
-                error = %e,
-                "could not roll back a refused upload's payload"
-            ),
-        }
-    }
-}
-
 // ── Refusal wording ───────────────────────────────────────────────
 //
 // A copy meets a mount in three places — the path the request names, a path an
@@ -446,14 +405,34 @@ impl CopyTarget {
     #[allow(clippy::result_large_err)]
     fn refuse_shadowed_payload(&self, entry_paths: &[PathBuf]) -> Result<(), Status> {
         for rel in entry_paths {
-            let landed = self.in_container.join(rel);
-            if let Some(mount) = deepest_covering(&landed, &self.mounts) {
-                return Err(Status::failed_precondition(unreachable_payload_message(
-                    &landed, &mount,
-                )));
-            }
+            self.refuse_shadowed_entry(rel)?;
         }
         Ok(())
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn refuse_shadowed_entry(&self, relative: &Path) -> Result<(), Status> {
+        let landed = self.in_container.join(relative);
+        if let Some(mount) = deepest_covering(&landed, &self.mounts) {
+            return Err(Status::failed_precondition(unreachable_payload_message(
+                &landed, &mount,
+            )));
+        }
+        Ok(())
+    }
+
+    /// Translate the unpacker's destination back to the container namespace.
+    /// A renamed single file is the destination itself, not its archived name.
+    fn validate_extraction_target(&self, target: &Path) -> BoxliteResult<()> {
+        let relative = target.strip_prefix(&self.on_rootfs).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "extraction target {} is outside destination {}: {e}",
+                target.display(),
+                self.on_rootfs.display(),
+            ))
+        })?;
+        self.refuse_shadowed_entry(relative)
+            .map_err(|e| BoxliteError::Unsupported(e.message().to_owned()))
     }
 
     /// Refuse a read-out whose subtree contains a mount.
@@ -554,7 +533,9 @@ impl Files for GuestServer {
                 // and are indistinguishable from ones the image shipped.
                 let dest_existed = dest_root.exists();
                 let created_dirs = missing_ancestors(&dest_root);
-                let report = boxlite_shared::tar::unpack_stream(
+                // Stop before an entry writes beneath a mount. Earlier writes
+                // are retained on failure, including overwritten files.
+                let report = boxlite_shared::tar::unpack_stream_checked(
                     tar_stream,
                     dest_root.clone(),
                     boxlite_shared::tar::UnpackContext {
@@ -562,9 +543,13 @@ impl Files for GuestServer {
                         mkdir_parents,
                         force_directory,
                     },
+                    move |target| dest.validate_extraction_target(target),
                 )
                 .await
-                .map_err(|e| Status::internal(e.to_string()))?;
+                .map_err(|e| match e {
+                    BoxliteError::Unsupported(message) => Status::failed_precondition(message),
+                    e => Status::internal(e.to_string()),
+                })?;
                 let boxlite_shared::tar::UnpackReport {
                     entry_paths,
                     preexisting_dirs,
@@ -575,16 +560,6 @@ impl Files for GuestServer {
                     .collect();
                 let entry_paths: Arc<[PathBuf]> = entry_paths.into();
                 let before = DestBefore::recorded(created_dirs, dest_existed, existing_dirs);
-
-                // The stream cannot be pre-scanned without spooling, so the
-                // mount-shadow refusal runs *after* extraction — the hintless
-                // arm refuses before writing a byte. The payload is therefore
-                // rolled back here, so a refused copy leaves nothing behind
-                // either way.
-                if let Err(refusal) = dest.refuse_shadowed_payload(&entry_paths) {
-                    remove_extracted(&dest_root, &entry_paths, &before);
-                    return Err(refusal);
-                }
 
                 // Hand the recorded paths to the box user, plus the
                 // ancestors captured above — the recording names what the
@@ -1210,63 +1185,232 @@ fn staged_tar_tolerates_missing_file() {
     // Dropping happens at end of scope; no panic is the assertion.
 }
 
-/// A refused streamed upload must undo its own writes — the payload it landed
-/// beneath the mount and the directories it conjured on the way there.
-#[test]
-fn rollback_removes_what_the_copy_wrote() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let dest_root = tmp.path().join("dest");
-    // What the archive carried: a file at the root and one a level down.
-    std::fs::create_dir_all(dest_root.join("nested")).unwrap();
-    std::fs::write(dest_root.join("landed.txt"), b"payload").unwrap();
-    std::fs::write(dest_root.join("nested/deep.txt"), b"payload").unwrap();
-    let entries = [
-        PathBuf::from("landed.txt"),
-        PathBuf::from("nested"),
-        PathBuf::from("nested/deep.txt"),
-    ];
+#[cfg(test)]
+mod upload_tests {
+    use super::*;
+    use crate::container::Container;
+    use crate::layout::GuestLayout;
+    use boxlite_shared::{FilesClient, FilesServer};
+    use tokio::net::TcpListener;
+    use tokio::sync::Mutex;
+    use tonic::transport::{Channel, Server};
 
-    // The destination and both directories are ours: nothing pre-existed.
-    let before = DestBefore::recorded(vec![dest_root.clone()], false, HashSet::new());
-    remove_extracted(&dest_root, &entries, &before);
+    struct UploadFixture {
+        client: FilesClient<Channel>,
+        rootfs: PathBuf,
+        server: tokio::task::JoinHandle<()>,
+        _temp: tempfile::TempDir,
+    }
 
-    assert!(
-        !dest_root.exists(),
-        "a destination this copy created must go with it"
-    );
-}
+    impl UploadFixture {
+        async fn new() -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let layout = GuestLayout::with_base(temp.path());
+            let rootfs = layout.shared().container("copy-test").rootfs_dir();
+            std::fs::create_dir_all(rootfs.join("tmp")).unwrap();
+            let container = Container::for_unit_test(
+                "copy-test",
+                temp.path().join("state"),
+                temp.path().join("bundle"),
+            )
+            .with_test_mounts(vec![PathBuf::from("/tmp")]);
+            let guest = GuestServer::new(layout);
+            guest
+                .containers
+                .lock()
+                .await
+                .insert("copy-test".into(), Arc::new(Mutex::new(container)));
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let incoming = async_stream::stream! {
+                loop {
+                    yield listener.accept().await.map(|(socket, _)| socket);
+                }
+            };
+            let server = tokio::spawn(async move {
+                Server::builder()
+                    .add_service(FilesServer::new(guest))
+                    .serve_with_incoming(incoming)
+                    .await
+                    .unwrap();
+            });
+            let client = FilesClient::connect(format!("http://{address}"))
+                .await
+                .unwrap();
+            Self {
+                client,
+                rootfs,
+                server,
+                _temp: temp,
+            }
+        }
 
-/// The inverse must stop at the tree's edge: a directory the image shipped is
-/// not this copy's to delete, even when the archive wrote into it.
-#[test]
-fn rollback_keeps_directories_it_did_not_create() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let dest_root = tmp.path().join("usr-local");
-    let shipped = dest_root.join("bin");
-    std::fs::create_dir_all(&shipped).unwrap();
-    std::fs::write(shipped.join("preexisting"), b"from the image").unwrap();
-    std::fs::write(shipped.join("tool"), b"payload").unwrap();
-    let entries = [PathBuf::from("bin"), PathBuf::from("bin/tool")];
+        async fn upload(
+            &mut self,
+            entries: &[(&str, &[u8])],
+        ) -> Result<Response<UploadResponse>, Status> {
+            let bytes = archive(entries);
+            self.client
+                .upload(tokio_stream::iter([UploadChunk {
+                    dest_path: "/".into(),
+                    container_id: "copy-test".into(),
+                    mkdir_parents: true,
+                    overwrite: true,
+                    source_is_dir: Some(true),
+                    data: bytes,
+                }]))
+                .await
+        }
+    }
 
-    // `dest_root` and `bin` were both already there — the recorded shape a
-    // streamed unpack reports when it extracts into an existing tree.
-    let before = DestBefore::recorded(
-        Vec::new(),
-        true,
-        HashSet::from([dest_root.clone(), shipped.clone()]),
-    );
-    remove_extracted(&dest_root, &entries, &before);
+    impl Drop for UploadFixture {
+        fn drop(&mut self) {
+            self.server.abort();
+        }
+    }
 
-    assert!(
-        shipped.is_dir(),
-        "an image directory must survive a rollback"
-    );
-    assert!(
-        shipped.join("preexisting").exists(),
-        "a file this copy never named must survive a rollback"
-    );
-    assert!(
-        !shipped.join("tool").exists(),
-        "the payload the copy wrote must be gone"
-    );
+    fn archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        for (path, content) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o644);
+            header.set_size(content.len() as u64);
+            header.set_cksum();
+            builder.append_data(&mut header, path, *content).unwrap();
+        }
+        builder.into_inner().unwrap()
+    }
+
+    #[tokio::test]
+    async fn streamed_refusal_cannot_delete_through_swapped_ancestor() {
+        use std::ffi::CString;
+        use std::io::Read;
+        use std::os::unix::fs::symlink;
+        use tokio::io::unix::AsyncFd;
+        use tokio::time::{timeout, Duration};
+
+        let fixture = UploadFixture::new().await;
+        let writable = fixture.rootfs.join("writable");
+        let outside = fixture._temp.path().join("outside-rootfs");
+        std::fs::create_dir(&writable).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("victim"), b"outside sentinel").unwrap();
+
+        // Wait for the actual unpacker's close event before replacing its
+        // ancestor. The upload remains open at the next tar header meanwhile.
+        let watch_path = CString::new(writable.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: inotify_init1 has no pointer arguments; File owns the returned fd.
+        let fd =
+            unsafe { nix::libc::inotify_init1(nix::libc::IN_CLOEXEC | nix::libc::IN_NONBLOCK) };
+        assert!(
+            fd >= 0,
+            "inotify_init1: {}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: fd is a newly opened descriptor, transferred exactly once.
+        let file = unsafe { std::fs::File::from_raw_fd(fd) };
+        // SAFETY: watch_path is a live NUL-terminated string, and file owns fd.
+        let watch = unsafe {
+            nix::libc::inotify_add_watch(fd, watch_path.as_ptr(), nix::libc::IN_CLOSE_WRITE)
+        };
+        assert!(
+            watch >= 0,
+            "inotify_add_watch: {}",
+            std::io::Error::last_os_error()
+        );
+        let events = AsyncFd::new(file).unwrap();
+
+        let (tx, rx) = mpsc::channel(1);
+        let first = archive(&[("writable/victim", b"new file")]);
+        // One 512-byte header and one padded payload block; withhold the end marker.
+        tx.send(UploadChunk {
+            dest_path: "/".into(),
+            container_id: "copy-test".into(),
+            mkdir_parents: true,
+            overwrite: true,
+            source_is_dir: Some(true),
+            data: first[..1024].to_vec(),
+        })
+        .await
+        .unwrap();
+        let mut client = fixture.client.clone();
+        let upload = tokio::spawn(async move { client.upload(ReceiverStream::new(rx)).await });
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let mut ready = events.readable().await.unwrap();
+                let mut buffer = [0_u8; 4096];
+                if let Ok(result) = ready.try_io(|inner| inner.get_ref().read(&mut buffer)) {
+                    assert!(result.unwrap() > 0);
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("unpacker must close the first file before asking for the next entry");
+        std::fs::rename(&writable, fixture.rootfs.join("saved")).unwrap();
+        symlink(&outside, &writable).unwrap();
+        tx.send(UploadChunk {
+            data: archive(&[("tmp/blocked", b"forbidden")]),
+            ..UploadChunk::default()
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        let result = timeout(Duration::from_secs(5), upload)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.unwrap_err().code(), tonic::Code::FailedPrecondition);
+        assert_eq!(
+            std::fs::read(outside.join("victim")).ok(),
+            Some(b"outside sentinel".to_vec()),
+            "refusal must not delete through an ancestor replaced by the workload"
+        );
+    }
+
+    #[tokio::test]
+    async fn streamed_refusal_preserves_completed_writes() {
+        let mut fixture = UploadFixture::new().await;
+        std::fs::write(fixture.rootfs.join("config"), b"old config").unwrap();
+        let err = fixture
+            .upload(&[
+                ("config", b"new config"),
+                ("nested/created", b"new file"),
+                ("tmp/blocked", b"forbidden"),
+                ("after", b"must not land"),
+            ])
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(err.message().contains("'/tmp' mount"), "{err}");
+        assert_eq!(
+            std::fs::read(fixture.rootfs.join("config")).ok(),
+            Some(b"new config".to_vec()),
+            "refusal must preserve an earlier overwrite instead of deleting it"
+        );
+        assert_eq!(
+            std::fs::read(fixture.rootfs.join("nested/created")).unwrap(),
+            b"new file"
+        );
+        assert!(!fixture.rootfs.join("tmp/blocked").exists());
+        assert!(!fixture.rootfs.join("after").exists());
+    }
+
+    #[tokio::test]
+    async fn streamed_refusal_never_modifies_shadowed_rootfs_file() {
+        let mut fixture = UploadFixture::new().await;
+        let blocked = fixture.rootfs.join("tmp/blocked");
+        std::fs::write(&blocked, b"original shadowed file").unwrap();
+        let err = fixture
+            .upload(&[("tmp/blocked", b"forbidden"), ("after", b"must not land")])
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(
+            std::fs::read(&blocked).ok(),
+            Some(b"original shadowed file".to_vec()),
+            "a refused entry must not overwrite or delete the file beneath the mount"
+        );
+        assert!(!fixture.rootfs.join("after").exists());
+    }
 }
