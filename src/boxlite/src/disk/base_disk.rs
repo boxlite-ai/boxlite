@@ -288,6 +288,23 @@ impl BaseDiskManager {
         match fs::read_dir(&self.bases_dir) {
             Ok(entries) => {
                 for base in listed_paths(entries, &mut referenced) {
+                    // The mirror of the box dir check above, and the same
+                    // reason. Only a file can be a base. A stray directory
+                    // would reach `has_qcow2_magic`, where `File::open`
+                    // succeeds and `read_exact` fails with `EISDIR` — not the
+                    // `UnexpectedEof` that ends a chain, so the walk reports a
+                    // truncated one and holds the answer incomplete for good.
+                    match fs::metadata(&base) {
+                        Ok(md) if md.is_file() => {}
+                        Ok(_) => continue,
+                        // Swept away between listing and stat: it backs nothing.
+                        Err(e) if proves_absence(e.kind()) => continue,
+                        Err(e) => {
+                            tracing::warn!("GC: failed to stat base {}: {}", base.display(), e);
+                            referenced.complete = false;
+                            continue;
+                        }
+                    }
                     referenced.absorb(super::read_backing_chain_checked(&base));
                 }
             }
@@ -1111,6 +1128,31 @@ mod tests {
         assert!(
             referenced.complete,
             "a file that cannot be a box says nothing about what the scan saw"
+        );
+    }
+
+    /// The mirror, one directory over: a stray *directory* under `bases_dir`
+    /// is not a base. `has_qcow2_magic` opens a directory successfully and
+    /// then fails `read_exact` with `EISDIR`, which is not the
+    /// `UnexpectedEof` that ends a chain — so the walk would report a
+    /// truncated one and pin `complete` false for good, and both image-disk
+    /// passes skip on an incomplete answer.
+    #[test]
+    fn a_stray_directory_among_the_bases_is_not_a_truncated_chain() {
+        let (dir, mgr) = setup();
+        let boxes_dir = dir.path().join("boxes");
+        std::fs::create_dir_all(&boxes_dir).unwrap();
+
+        // A real base, so the scan has something to walk.
+        std::fs::write(mgr.bases_dir().join("aaa11111.qcow2"), b"not-qcow2").unwrap();
+        // And a directory that is not one.
+        std::fs::create_dir_all(mgr.bases_dir().join("stray-dir")).unwrap();
+
+        let referenced = mgr.referenced_backing_paths_checked(&boxes_dir);
+
+        assert!(
+            referenced.complete,
+            "a directory that cannot be a base says nothing about what the scan saw"
         );
     }
 
