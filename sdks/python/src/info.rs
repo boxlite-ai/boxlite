@@ -305,6 +305,12 @@ pub struct PyBoxStateInfo {
     pub(crate) running: bool,
     #[pyo3(get)]
     pub(crate) pid: Option<u32>,
+    /// Exit code of the box's main command, set once the box has stopped
+    /// because that command exited, and `None` otherwise. `0` is a real value
+    /// — it is what tells a box that finished its work from one that crashed —
+    /// so callers must test for `None` rather than for falsiness.
+    #[pyo3(get)]
+    pub(crate) exit_code: Option<i32>,
 }
 
 #[pymethods]
@@ -314,6 +320,7 @@ impl PyBoxStateInfo {
             "status": self.status,
             "running": self.running,
             "pid": self.pid,
+            "exit_code": self.exit_code,
         }))
         .unwrap_or_default()
     }
@@ -349,6 +356,7 @@ impl From<BoxStateInfo> for PyBoxStateInfo {
             status: status_to_string(state_info.status),
             running: state_info.running,
             pid: state_info.pid,
+            exit_code: state_info.exit_code,
         }
     }
 }
@@ -401,6 +409,7 @@ impl PyBoxInfo {
                 "status": self.state.status,
                 "running": self.state.running,
                 "pid": self.state.pid,
+                "exit_code": self.state.exit_code,
             },
             "image": self.image,
             "cpus": self.cpus,
@@ -484,6 +493,21 @@ mod tests {
             started_at: None,
             last_activity_at: None,
         }
+    }
+
+    // 0 is a real exit code — it is what separates a box that finished its work
+    // from one that crashed — so the binding has to carry it as a value rather
+    // than fold it into "nothing recorded".
+    #[test]
+    fn box_info_conversion_carries_the_main_command_exit_code() {
+        for code in [0, 42] {
+            let mut info = core_info(None);
+            info.exit_code = Some(code);
+
+            assert_eq!(PyBoxInfo::from(info).state.exit_code, Some(code));
+        }
+
+        assert_eq!(PyBoxInfo::from(core_info(None)).state.exit_code, None);
     }
 
     #[test]

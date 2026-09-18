@@ -384,6 +384,7 @@ export class BoxController {
       updateStateDto.state,
       updateStateDto.recoverable,
       updateStateDto.errorReason,
+      updateStateDto.exitCode,
     )
   }
 

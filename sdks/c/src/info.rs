@@ -118,6 +118,17 @@ pub struct CBoxInfo {
     /// AutoStop measures idleness against; `0` when nothing was recorded, which
     /// is always the case for local runtimes.
     pub last_activity_at: i64,
+    /// The main command's exit code. Read it only when
+    /// [`Self::has_exit_code`] is nonzero.
+    ///
+    /// Absence cannot be a sentinel the way it is for [`Self::pid`] and
+    /// [`Self::started_at`]: `0` is the exit code of every command that
+    /// succeeded, so the flag below is the only thing separating "exited
+    /// cleanly" from "no exit code recorded".
+    pub exit_code: c_int,
+    /// Nonzero when the runtime recorded an exit code for the main command —
+    /// that is, when the box stopped because that command exited.
+    pub has_exit_code: c_int,
 }
 
 #[repr(C)]
@@ -322,6 +333,8 @@ impl CBoxInfo {
                 .last_activity_at
                 .map(|at| at.timestamp_millis())
                 .unwrap_or(0),
+            exit_code: info.exit_code.unwrap_or(0) as c_int,
+            has_exit_code: c_int::from(info.exit_code.is_some()),
         }
     }
 }
@@ -578,7 +591,7 @@ mod tests {
     use crate::options::BoxlitePortProtocol;
     use crate::{FREE_STR_CALLS, FREE_STR_LOCK};
 
-    use super::{BoxliteNetworkMode, CNetworkInfo, free_network_info, network_to_c_ptr};
+    use super::{BoxliteNetworkMode, CBoxInfo, CNetworkInfo, free_network_info, network_to_c_ptr};
     use std::ffi::c_char;
 
     /// Callers compiled against the pre-split header read `mode`,
@@ -743,5 +756,57 @@ mod tests {
 
         let after = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(after - before, 2, "nested network strings must be freed");
+    }
+    fn box_info_with_exit_code(exit_code: Option<i32>) -> boxlite::runtime::types::BoxInfo {
+        use boxlite::runtime::id::BoxID;
+        use boxlite::{BoxStatus, HealthStatus};
+        use std::collections::HashMap;
+        use std::time::SystemTime;
+
+        boxlite::runtime::types::BoxInfo {
+            id: BoxID::parse("box-c-info").unwrap(),
+            name: None,
+            status: BoxStatus::Stopped,
+            created_at: SystemTime::UNIX_EPOCH.into(),
+            last_updated: SystemTime::UNIX_EPOCH.into(),
+            pid: None,
+            image: "alpine:latest".to_string(),
+            cpus: 1,
+            memory_mib: 256,
+            network: None,
+            labels: HashMap::new(),
+            auto_stop: 0,
+            auto_delete: 0,
+            auto_resume: false,
+            health_status: HealthStatus::default(),
+            exit_code,
+            started_at: None,
+            last_activity_at: None,
+        }
+    }
+
+    // The C struct is the one layer that re-encodes `Option<i32>` as a value
+    // plus a flag, because `0` is a real exit code and cannot double as
+    // "nothing recorded". Every consumer above reads the flag, so dropping it
+    // here would report every clean exit as an absent one.
+    #[test]
+    fn box_info_encodes_exit_code_as_value_plus_flag() {
+        // Freeing the strings below moves the shared counter the event-queue
+        // tests assert exact values on; they serialize on this lock, so this
+        // test has to as well.
+        let _guard = FREE_STR_LOCK.lock().unwrap();
+
+        for (exit_code, want_code, want_flag) in [(None, 0, 0), (Some(0), 0, 1), (Some(42), 42, 1)]
+        {
+            let mut info = CBoxInfo::from_box_info(&box_info_with_exit_code(exit_code));
+
+            assert_eq!(info.exit_code, want_code, "exit_code for {exit_code:?}");
+            assert_eq!(
+                info.has_exit_code, want_flag,
+                "has_exit_code for {exit_code:?}"
+            );
+
+            unsafe { super::free_box_info(&mut info) };
+        }
     }
 }

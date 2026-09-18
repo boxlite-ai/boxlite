@@ -1791,6 +1791,19 @@ components:
           type: boolean
           default: true
           description: Whether the box automatically resumes when accessed after AutoStop
+        exit_code:
+          type: integer
+          description: |
+            Exit code of the box's main command, present once the box has
+            stopped because that command exited. Absent while the box is
+            running, and when it stopped for any other reason — a stop
+            request, AutoStop, or a failure before the command ran.
+
+            `0` is a real value here: it is how a box that finished cleanly
+            is told apart from one that crashed. Absence, not `0`, is what
+            means "no exit code recorded", so a client must distinguish the
+            missing field from a zero one.
+          example: 137
 
     BoxStatus:
       type: string

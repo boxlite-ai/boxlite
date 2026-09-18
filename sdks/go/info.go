@@ -96,6 +96,11 @@ type BoxInfo struct {
 	// measures idleness against. The zero time means no activity was
 	// recorded, which is always the case for local runtimes.
 	LastActivityAt time.Time
+	// ExitCode is the main command's exit code, set when the box stopped
+	// because that command exited, and nil otherwise. It is a pointer, not a
+	// plain int, because 0 is the exit code of every command that succeeded
+	// and so cannot double as "no exit code recorded".
+	ExitCode *int
 }
 
 // Info returns information about the box.
@@ -192,6 +197,11 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 	if ms := int64(info.last_activity_at); ms > 0 {
 		boxLastActivityAt = time.UnixMilli(ms)
 	}
+	var boxExitCode *int
+	if info.has_exit_code != 0 {
+		code := int(info.exit_code)
+		boxExitCode = &code
+	}
 	return BoxInfo{
 		ID:         cString(info.id),
 		Name:       cString(info.name),
@@ -209,6 +219,7 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 
 		StartedAt:      boxStartedAt,
 		LastActivityAt: boxLastActivityAt,
+		ExitCode:       boxExitCode,
 	}
 }
 

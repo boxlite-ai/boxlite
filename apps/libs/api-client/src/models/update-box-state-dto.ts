@@ -27,6 +27,10 @@ export interface UpdateBoxStateDto {
      * Whether the box is recoverable
      */
     'recoverable'?: boolean;
+    /**
+     * Exit code of the box\'s main command, sent with the stop that command caused. Omitted when the box stopped for any other reason.
+     */
+    'exitCode'?: number;
 }
 
 export const UpdateBoxStateDtoStateEnum = {
