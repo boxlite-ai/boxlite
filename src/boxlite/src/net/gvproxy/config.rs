@@ -88,7 +88,7 @@ pub struct GvproxyConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_net: Vec<String>,
 
-    /// Secrets for MITM proxy injection into outbound HTTP(S) requests.
+    /// Secrets for MITM proxy injection into outbound HTTPS requests.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<GvproxySecretConfig>,
 
