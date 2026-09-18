@@ -10,6 +10,7 @@ import {
   Delete,
   ForbiddenException,
   Get,
+  Header,
   HttpCode,
   NotFoundException,
   Param,
@@ -51,6 +52,10 @@ import { RequireFlagsEnabled } from '@openfeature/nestjs-sdk'
 import { OrGuard } from '../../auth/or.guard'
 import { OtelCollectorGuard } from '../../auth/otel-collector.guard'
 import { OtelConfigDto } from '../dto/otel-config.dto'
+import { OrganizationReferralService } from '../../organization-referral/organization-referral.service'
+import { OrganizationReferralCodeDto } from '../../organization-referral/organization-referral-code.dto'
+import { OrganizationReferralAccessGuard } from '../guards/organization-referral-access.guard'
+import { PrivateResponseGuard } from '../../organization-referral/private-response.guard'
 
 @ApiTags('organizations')
 @Controller('organizations')
@@ -65,6 +70,7 @@ export class OrganizationController {
     private readonly organizationInvitationService: OrganizationInvitationService,
     private readonly userService: UserService,
     private readonly configService: TypedConfigService,
+    private readonly referrals: OrganizationReferralService,
   ) {}
 
   @Get('/invitations')
@@ -300,6 +306,23 @@ export class OrganizationController {
     return organizations.map(({ organization, isDefaultForAuthenticatedUser }) =>
       OrganizationDto.fromOrganization(organization, isDefaultForAuthenticatedUser),
     )
+  }
+
+  @Get('/:organizationId/referral-code')
+  @Header('Cache-Control', 'private, no-store')
+  @ApiOperation({
+    summary: 'Get or initialize an organization invitation code',
+    description:
+      'Returns the selected organization code after membership authorization; the Dashboard builds the invitation URL.',
+    operationId: 'getOrganizationReferralCode',
+  })
+  @ApiParam({ name: 'organizationId', description: 'Selected organization ID', type: String, format: 'uuid' })
+  @ApiResponse({ status: 200, type: OrganizationReferralCodeDto })
+  @ApiResponse({ status: 403, description: 'Organization access denied or invitation_unavailable' })
+  @ApiResponse({ status: 503, description: 'referral_code_unavailable' })
+  @UseGuards(PrivateResponseGuard, CombinedAuthGuard, OrganizationReferralAccessGuard, AuthenticatedRateLimitGuard)
+  async getReferralCode(@Param('organizationId') organizationId: string): Promise<OrganizationReferralCodeDto> {
+    return this.referrals.getCode(organizationId)
   }
 
   @Get('/:organizationId')

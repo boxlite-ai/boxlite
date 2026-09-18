@@ -58,6 +58,7 @@ export * from './oidc-config';
 export * from './organization';
 export * from './organization-box-default-limited-network-egress';
 export * from './organization-invitation';
+export * from './organization-referral-code-dto';
 export * from './organization-role';
 export * from './organization-suspension';
 export * from './organization-unsuspension';

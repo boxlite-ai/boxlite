@@ -19,6 +19,7 @@ All URIs are relative to *http://localhost:3000*
 |[**getOrganizationByBoxId**](#getorganizationbyboxid) | **GET** /organizations/by-box-id/{boxId} | Get organization by box ID|
 |[**getOrganizationInvitationsCountForAuthenticatedUser**](#getorganizationinvitationscountforauthenticateduser) | **GET** /organizations/invitations/count | Get count of organization invitations for authenticated user|
 |[**getOrganizationOtelConfigByBoxAuthToken**](#getorganizationotelconfigbyboxauthtoken) | **GET** /organizations/otel-config/by-box-auth-token/{authToken} | Get organization OTEL config by box auth token|
+|[**getOrganizationReferralCode**](#getorganizationreferralcode) | **GET** /organizations/{organizationId}/referral-code | Get or initialize an organization invitation code|
 |[**getRegionById**](#getregionbyid) | **GET** /regions/{id} | Get region by ID|
 |[**leaveOrganization**](#leaveorganization) | **POST** /organizations/{organizationId}/leave | Leave organization|
 |[**listAvailableRegions**](#listavailableregions) | **GET** /regions | List all available regions for the organization|
@@ -804,6 +805,59 @@ const { status, data } = await apiInstance.getOrganizationOtelConfigByBoxAuthTok
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | OTEL Config |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **getOrganizationReferralCode**
+> OrganizationReferralCodeDto getOrganizationReferralCode()
+
+Returns the selected organization code after membership authorization; the Dashboard builds the invitation URL.
+
+### Example
+
+```typescript
+import {
+    OrganizationsApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new OrganizationsApi(configuration);
+
+let organizationId: string; //Selected organization ID
+
+const { status, data } = await apiInstance.getOrganizationReferralCode(
+    organizationId
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **organizationId** | [**string**] | Selected organization ID | |
+
+
+### Return type
+
+**OrganizationReferralCodeDto**
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
+|**403** | Organization access denied or invitation_unavailable |  -  |
+|**503** | referral_code_unavailable |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

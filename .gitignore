@@ -159,6 +159,7 @@ Cargo.lock
 /apps/.yarn/install-state.gz
 /apps/**/node_modules/
 /apps/**/dist/
+/apps/dist
 /apps/**/build/
 /apps/**/coverage/
 /apps/**/.next/

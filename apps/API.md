@@ -107,6 +107,7 @@ serves and the events it emits are catalogued below alongside its routes.
 | Method   | Path                                                                     | What it does                                             |
 | -------- | ------------------------------------------------------------------------ | -------------------------------------------------------- |
 | `GET`    | `/api/organizations`                                                     | Lists organizations available to the caller.             |
+| `GET`    | `/api/organizations/{organizationId}/referral-code`                       | Initializes or returns the selected organization's sharing code. |
 | `POST`   | `/api/organizations`                                                     | Creates an organization.                                 |
 | `GET`    | `/api/organizations/{organizationId}`                                    | Gets an organization by ID.                              |
 | `GET`    | `/api/organizations/{organizationId}/concurrency`                        | Gets a bounded concurrency timeline from usage periods.  |

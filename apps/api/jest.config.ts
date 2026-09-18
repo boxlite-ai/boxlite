@@ -8,6 +8,9 @@ export default {
   displayName: 'boxlite',
   preset: '../jest.preset.js',
   testEnvironment: 'node',
+  moduleNameMapper: {
+    '^@boxlite-ai/api-client$': '<rootDir>/../libs/api-client/src/index.ts',
+  },
   transform: {
     '^.+\\.[tj]s$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.spec.json' }],
   },

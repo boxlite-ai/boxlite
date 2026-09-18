@@ -161,6 +161,9 @@ state inline.
 | `id` | `uuid` | primary key |
 | `name` | `character varying` | |
 | `createdBy` | `character varying` | |
+| `referralCode` | `varchar(10)` | nullable, globally unique via `organization_referral_code_uq` |
+| `referredCode` | `varchar(10)` | nullable audit snapshot of the submitted invitation code; no FK |
+| `inviterOrganizationId` | `uuid` | nullable original inviting organization ID; attribution uses this ID, no FK or cascading deletion |
 | `telemetryEnabled` | `boolean` | default `true` |
 | `defaultRegionId` | `character varying` | nullable; references `region.id` |
 | `max_cpu_per_box` | `integer` | default `4` |
