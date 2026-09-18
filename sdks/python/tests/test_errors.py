@@ -140,6 +140,13 @@ class TestErrorHierarchy:
 class TestNativeErrorMapping:
     """Errors raised by the native extension carry their runtime error type."""
 
+    @pytest.fixture
+    def _require_native(self):
+        import boxlite
+
+        if not hasattr(boxlite, "Boxlite"):
+            pytest.skip("native extension not compiled (run make dev:python)")
+
     def test_every_error_type_is_a_boxlite_error(self):
         import boxlite.errors
 
@@ -153,6 +160,7 @@ class TestNativeErrorMapping:
         assert issubclass(BoxliteError, RuntimeError)
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_require_native")
     async def test_remove_unknown_box_raises_not_found(self, tmp_path):
         import boxlite
         from boxlite.errors import NotFoundError
@@ -165,6 +173,7 @@ class TestNativeErrorMapping:
             await runtime.shutdown()
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_require_native")
     async def test_create_after_shutdown_raises_stopped(self, tmp_path):
         import boxlite
         from boxlite.errors import StoppedError
@@ -175,6 +184,7 @@ class TestNativeErrorMapping:
         with pytest.raises(StoppedError, match="shut down"):
             await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
 
+    @pytest.mark.usefixtures("_require_native")
     def test_binding_argument_check_raises_invalid_argument(self):
         import boxlite
         from boxlite.errors import InvalidArgumentError
