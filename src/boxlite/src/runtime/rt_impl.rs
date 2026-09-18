@@ -258,6 +258,21 @@ impl RuntimeImpl {
         options: BoxliteOptions,
         experimental_features: ExperimentalFeatures,
     ) -> BoxliteResult<SharedRuntimeImpl> {
+        Self::initialize_with_gc_interval(options, experimental_features, IMAGE_DISK_GC_INTERVAL)
+    }
+
+    /// [`Self::initialize`] with the periodic reclaim's interval supplied.
+    ///
+    /// The interval is six hours in production, which is longer than a test
+    /// can wait, and it is the constructor's own wiring of that thread that
+    /// wants covering — the tests beside the thread drive it directly and so
+    /// cover only what it does once started. This passes the interval and
+    /// changes nothing else, in the manner of [`Self::new_for_test`].
+    fn initialize_with_gc_interval(
+        options: BoxliteOptions,
+        experimental_features: ExperimentalFeatures,
+        gc_interval: Duration,
+    ) -> BoxliteResult<SharedRuntimeImpl> {
         // Validate Early: Check preconditions before expensive work
         if !options.home_dir.is_absolute() {
             return Err(BoxliteError::Internal(format!(
@@ -396,7 +411,7 @@ impl RuntimeImpl {
         Self::spawn_periodic_image_disk_gc(
             &inner.image_disk_mgr,
             inner.shutdown_token.clone(),
-            IMAGE_DISK_GC_INTERVAL,
+            gc_interval,
         );
 
         Ok(inner)
@@ -2323,6 +2338,50 @@ mod tests {
         let settled = std::time::SystemTime::now() - Duration::from_secs(3600);
         filetime::set_file_mtime(&orphan, filetime::FileTime::from_system_time(settled)).unwrap();
         orphan
+    }
+
+    /// The constructor has to arm trigger 3, and nothing covered that: the
+    /// `spawn_periodic_image_disk_gc` call could be deleted from
+    /// `initialize` without failing a test. The three tests beside the thread
+    /// build a manager directly, so they cover what it does once started and
+    /// never that anything starts it.
+    ///
+    /// This one goes through the constructor, and plants the orphan *after*
+    /// it returns — which is what leaves the periodic thread as the only
+    /// thing able to reclaim it. `initialize` reclaims once on the way up
+    /// and finishes before returning, so anything planted earlier would be
+    /// trigger 1's work. The signal is the file, not a log line: the
+    /// thread's own heartbeat is written on the thread, and
+    /// `tracing_capture` scopes a subscriber to the calling one.
+    #[test]
+    fn initialize_arms_the_periodic_image_disk_reclaim() {
+        let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
+        let options = BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        };
+
+        let runtime = RuntimeImpl::initialize_with_gc_interval(
+            options,
+            ExperimentalFeatures::default(),
+            Duration::from_millis(20),
+        )
+        .expect("Failed to create test runtime");
+
+        let orphan = plant_unreachable_image_disk(temp_dir.path());
+        for _ in 0..100 {
+            if !orphan.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(
+            !orphan.exists(),
+            "the constructor must arm the periodic reclaim"
+        );
+
+        runtime.shutdown_token.cancel();
     }
 
     /// Trigger 1 of 3 runs the whole reclaim, not just the collector.

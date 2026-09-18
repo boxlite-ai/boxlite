@@ -1039,11 +1039,11 @@ mod tests {
     /// while boxes come and go the whole time.
     ///
     /// Driven against a manager built here rather than one reached through a
-    /// runtime: `RuntimeImpl::initialize` starts a sweep of its own, and
-    /// nothing orders that pass against this body, so a test that went
-    /// through it could green on the constructor's work instead. There is no
-    /// such sweep here, which is isolation by construction rather than by
-    /// waiting.
+    /// runtime: `RuntimeImpl::initialize` reclaims once on the way up and
+    /// finishes before it returns, so an orphan planted before construction
+    /// is already gone and a test that went through it would be watching
+    /// trigger 1's work. There is no such sweep here, which is isolation by
+    /// construction rather than by waiting.
     #[test]
     fn the_periodic_sweep_reclaims_unreachable_image_disks() {
         let home = TestHome::new();
