@@ -32,6 +32,8 @@ import LandingPage from './pages/LandingPage'
 import Logout from './pages/Logout'
 import NotFound from './pages/NotFound'
 import Boxes from './pages/Boxes'
+import Register from './pages/Register'
+import { registrationSession } from './lib/referral-session'
 
 // Code-split the heavier, not-first-paint routes out of the main bundle. They
 // load on demand under the dashboard <Outlet> Suspense boundary, so the initial
@@ -89,7 +91,7 @@ function App() {
   const config = useConfig()
   const location = useLocation()
   const posthog = usePostHog()
-  const { error: authError, isAuthenticated, user, removeUser } = useAuth()
+  const { error: authError, isAuthenticated, isLoading, user, removeUser } = useAuth()
   const boxesRedirect = `${RoutePath.BOXES}${location.search}`
 
   useEffect(() => {
@@ -121,7 +123,13 @@ function App() {
     }
   }, [location, posthog])
 
-  if (authError) {
+  if (isLoading) return <LoadingFallback />
+
+  if (location.pathname !== RoutePath.REGISTER && registrationSession.needsSignIn()) {
+    return <Navigate to="/register?resume=1" replace />
+  }
+
+  if (authError && location.pathname !== RoutePath.REGISTER) {
     return (
       <Dialog open>
         <DialogContent className="[&>button]:hidden">
@@ -147,6 +155,7 @@ function App() {
   return (
     <Routes>
       <Route path={RoutePath.LANDING} element={<LandingPage />} />
+      <Route path={RoutePath.REGISTER} element={<Register />} />
       <Route path="/lander" element={<Navigate to={RoutePath.LANDING} replace />} />
       <Route path={RoutePath.LOGOUT} element={<Logout />} />
       <Route path={RoutePath.DOCS} element={<DocsRedirect />} />

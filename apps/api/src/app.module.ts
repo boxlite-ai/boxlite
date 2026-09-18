@@ -118,7 +118,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'dashboard'),
       exclude: ['/api/{*path}'],
-      renderPath: '/',
+      renderPath: '/{*path}',
       serveStaticOptions: {
         // Disable serve-static's own default Cache-Control; setHeaders applies a
         // content-addressed policy: hashed /assets/* immutable-forever, HTML

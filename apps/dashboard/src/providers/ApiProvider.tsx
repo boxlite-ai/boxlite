@@ -11,11 +11,19 @@ import LoadingFallback from '@/components/LoadingFallback'
 import { ApiClient } from '@/api/apiClient'
 import { useLocation } from 'react-router-dom'
 import { useConfig } from '@/hooks/useConfig'
+import { registrationSession } from '@/lib/referral-session'
+import { useQueryClient } from '@tanstack/react-query'
+import { LocalStorageKey } from '@/enums/LocalStorageKey'
+
+let previousIdentity: string | undefined
 
 export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, isAuthenticated, isLoading, signinRedirect, removeUser } = useAuth()
   const config = useConfig()
   const location = useLocation()
+  const queryClient = useQueryClient()
+  const identity = user ? JSON.stringify([config.oidc.issuer, user.profile.sub]) : undefined
+  const clientIdentity = useRef<string | undefined>(undefined)
 
   const apiRef = useRef<ApiClient | null>(null)
   const [isApiReady, setIsApiReady] = useState(false)
@@ -23,7 +31,13 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Initialize API client as soon as user is available
   useEffect(() => {
     if (user) {
-      if (!apiRef.current) {
+      if (!apiRef.current || clientIdentity.current !== identity) {
+        if (previousIdentity && previousIdentity !== identity) {
+          queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== 'config' })
+          localStorage.removeItem(LocalStorageKey.SelectedOrganizationId)
+        }
+        previousIdentity = identity
+        clientIdentity.current = identity
         // On a 401 the stored token is invalid (expired, or signed by a rotated
         // Dex key). Clearing the user flips isAuthenticated false, which the
         // effect below turns into a redirect to a fresh login (preserving
@@ -39,19 +53,22 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else {
       setIsApiReady(false)
     }
-  }, [user, config, removeUser])
+  }, [user, config, removeUser, identity, queryClient])
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
+      const draft = registrationSession.read()
       void signinRedirect({
-        state: {
-          returnTo: location.pathname + location.search,
-        },
+        state: draft
+          ? registrationSession.oidcState(draft)
+          : {
+              returnTo: location.pathname + location.search,
+            },
       })
     }
   }, [isLoading, isAuthenticated, signinRedirect, location])
 
-  if (isLoading || !isApiReady) {
+  if (isLoading || !isApiReady || clientIdentity.current !== identity) {
     return <LoadingFallback />
   }
 

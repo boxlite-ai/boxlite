@@ -1,7 +1,5 @@
 # Invitation registration and reward delivery
 
-Delivery scope: Dashboard sharing is available. The registration page and OIDC handoff follow in the next change.
-
 ## Contract and ownership
 
 The [Story](https://app.notion.com/p/boxlite-Story-3db8d8d9717980709461e04a9edb49e4) and
@@ -120,6 +118,7 @@ Set `REFERRAL_ARTIFACTS_DIR` to the approved external-disk directory. Inject `DB
 | `test:apps:referral:unit` | API normalization/config/receipts; generated client call shapes; adjacent auth/organization regression |
 | `test:apps:referral:integration` | D/C/R/E/P: real migrations, signed JWT routes, two Nest API instances, lock barriers, transactions, real Redis, controllable HTTP receiver |
 | `test:apps:referral:dashboard` | F/U/I: sharing, clipboard outcomes, draft state, first-request barrier and recovery |
+| `test:apps:referral:browser` | Chromium, single worker: real OIDC code/PKCE, signed JWT API, first request, invalid/lost context, bounded service cleanup |
 | `test:apps:referral:acceptance` | Real local `COMMERCE_WORKSPACE` with its dependencies; separate fresh Commerce DB; X01–X05 and automated portion of X06 |
 | `check:apps:referral` | Regeneration consistency, affected project type checks, API/Dashboard production builds, changed-source lint/format |
 

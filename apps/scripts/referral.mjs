@@ -158,11 +158,26 @@ try {
         '--config',
         'dashboard/vite.config.mts',
         'referral',
+        'OrganizationsProvider.test.tsx',
         '--maxWorkers=1',
         '--reporter=default',
         '--reporter=json',
         '--outputFile=' + path.join(runDirectory, 'dashboard.json'),
       ])
+      break
+    case 'browser':
+      await run('yarn', [
+        'nx',
+        'run-many',
+        '--target=build',
+        '--projects=api-client,analytics-api-client',
+        '--parallel=1',
+      ])
+      await run('yarn', ['playwright', 'install', 'chromium'])
+      await run('yarn', ['playwright', 'test', '--config', 'referral-tests/playwright.config.ts'])
+      if (JSON.parse(await readFile(path.join(runDirectory, 'browser-cleanup.json'), 'utf8')).status !== 'clean') {
+        throw new Error('Browser fixture did not finish cleanup')
+      }
       break
     case 'acceptance':
       await run('yarn', [...integrationJest, '--testPathPatterns', 'referral.acceptance.spec.ts'])
