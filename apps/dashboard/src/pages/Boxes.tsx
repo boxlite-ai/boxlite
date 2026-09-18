@@ -278,8 +278,6 @@ const Boxes: React.FC = () => {
     [updateBoxInCache],
   )
 
-  // TODO(image-rewrite): template/image listing removed with the image/template subsystem.
-
   // Subscribe to Box Events
 
   useEffect(() => {

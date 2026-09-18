@@ -128,7 +128,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
           case '/api/api-keys':
             this.captureCreateApiKey(props)
             break
-          // TODO(image-rewrite): /api/templates metrics removed with box_template.
           case '/api/v1/boxes':
           case '/api/v1/:prefix/boxes':
             this.captureCreateBox(props, request.body, response)
@@ -194,7 +193,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
           case '/api/v1/:prefix/boxes/:boxId':
             this.captureDeleteBox(props, request.params.boxIdOrName || request.params.boxId)
             break
-          // TODO(image-rewrite): /api/templates delete metrics removed with box_template.
           case '/api/organizations/:organizationId':
             this.captureDeleteOrganization(props, request.params.organizationId)
             break
@@ -409,8 +407,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
   private captureCreateApiKey(props: CommonCaptureProps) {
     this.capture('api_api_key_created', props, 'api_api_key_creation_failed')
   }
-
-  // TODO(image-rewrite): template create/activate/deactivate/delete metrics removed with box_template.
 
   private captureCreateBox(props: CommonCaptureProps, request: RestCreateBoxDto, response: BoxResponseDto) {
     const envVarsLength = request.env ? Object.keys(request.env).length : 0
