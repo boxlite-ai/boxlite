@@ -7,4 +7,6 @@
 export interface CreateOrganizationInternalDto {
   name: string
   defaultRegionId?: string
+  referredCode?: string
+  inviterOrganizationId?: string
 }

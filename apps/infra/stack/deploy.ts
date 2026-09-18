@@ -104,7 +104,8 @@ export async function deployStack() {
   // constraint — its boxlite-sst-deploy policy grants secretsmanager on
   // this stage's own secrets, and it carries no boundary at all.)
   //
-  // Empty means the exporter stays off; see USAGE_EXPORT_ENABLED below.
+  // Empty keeps usage export off. Business events require this secret unless
+  // BUSINESS_EVENTS_ENABLED is explicitly false.
   const usageExportToken = new sst.Secret('USAGE_EXPORT_TOKEN', '')
 
   // SES SMTP credentials for outbound mail (stack/mail.ts). Optional, so a

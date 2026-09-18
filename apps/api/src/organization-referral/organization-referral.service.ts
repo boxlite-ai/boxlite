@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { randomInt } from 'node:crypto'
-import { DataSource } from 'typeorm'
+import { DataSource, EntityManager } from 'typeorm'
 import { Organization } from '../organization/entities/organization.entity'
 import { REFERRAL_ALPHABET, REFERRAL_UNIQUE_CONSTRAINT, RegistrationException, isLockTimeout } from './referral-code'
 
@@ -41,7 +41,17 @@ export class OrganizationReferralService {
     }
   }
 
-  private isAvailable(organization: Organization | null): organization is Organization {
+  /** Keeps an inviter from being suspended/deleted between validation and commit. */
+  async resolveInviter(em: EntityManager, referralCode: string): Promise<Organization> {
+    const inviter = await em.findOne(Organization, {
+      where: { referralCode },
+      lock: { mode: 'pessimistic_read' },
+    })
+    if (!this.isAvailable(inviter)) throw new RegistrationException(422, 'invitation_unavailable')
+    return inviter
+  }
+
+  isAvailable(organization: Organization | null): organization is Organization {
     return (
       !!organization &&
       (!organization.suspended ||

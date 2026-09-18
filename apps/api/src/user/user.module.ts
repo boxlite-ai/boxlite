@@ -9,11 +9,15 @@ import { UserController } from './user.controller'
 import { UserService } from './user.service'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { User } from './user.entity'
+import { UserRegistration } from './user-registration.entity'
+import { UserRegistrationService } from './user-registration.service'
+import { OrganizationReferralModule } from '../organization-referral/organization-referral.module'
+import { BusinessEventOutboxModule } from '../business-events/business-event-outbox.module'
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User])],
+  imports: [TypeOrmModule.forFeature([User, UserRegistration]), OrganizationReferralModule, BusinessEventOutboxModule],
   controllers: [UserController],
-  providers: [UserService],
+  providers: [UserService, UserRegistrationService],
   exports: [UserService],
 })
 export class UserModule {}

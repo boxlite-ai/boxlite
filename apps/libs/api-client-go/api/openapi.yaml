@@ -317,7 +317,16 @@ paths:
   /organizations:
     get:
       operationId: listOrganizations
-      parameters: []
+      parameters:
+      - description: "Invitation link code for first registration; trim and uppercase,\
+          \ blank means ordinary registration."
+        explode: true
+        in: query
+        name: referredCode
+        required: false
+        schema:
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -327,6 +336,18 @@ paths:
                   $ref: "#/components/schemas/Organization"
                 type: array
           description: List of organizations
+        "400":
+          description: invalid_referral_code
+        "403":
+          description: email_verification_required
+        "409":
+          description: registration_already_finalized
+        "410":
+          description: registration_unavailable
+        "422":
+          description: invitation_unavailable
+        "503":
+          description: registration_busy
       security:
       - bearer: []
       - oauth2:

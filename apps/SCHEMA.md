@@ -13,8 +13,8 @@ The model is implementation-grounded:
   entity files are the complete list of mapped tables.
 - Column types, constraints, and index definitions come from the migrations in
   [`api/src/migrations`](./api/src/migrations/): the baseline
-  `1741087887225-migration.ts` creates 17 tables, and the
-  [`pre-deploy`](./api/src/migrations/pre-deploy/) set adds 5 more.
+  `1741087887225-migration.ts` and the
+  [`pre-deploy`](./api/src/migrations/pre-deploy/) expansion migrations.
 - Satellite stores come from [`dex/config.yaml`](./dex/config.yaml),
   [`otel-collector/config.yaml`](./otel-collector/config.yaml), and the
   ClickHouse queries in
@@ -27,7 +27,7 @@ control plane only through `runner` telemetry columns and `job` results.
 
 ## Overview
 
-The 21 tables sort into three planes. **Tenancy** is who a caller is and what
+The tables sort into three planes. **Tenancy** is who a caller is and what
 they may do; **fleet** is the microVMs and the machines that run them;
 **metering** is what gets billed.
 
@@ -41,6 +41,7 @@ flowchart LR
         t_assign["organization_role_assignment"]
         t_assigninv["organization_role_assignment_invitation"]
         t_user["user"]
+        t_registration["user_registration"]
         t_apikey["api_key"]
         t_webhook["webhook_initialization"]
         t_audit["audit_log"]
@@ -61,6 +62,7 @@ flowchart LR
         t_period["box_usage_periods"]
         t_archive["box_usage_periods_archive"]
         t_outbox["box_usage_export_outbox"]
+        t_business_events["organization_business_event_outbox"]
     end
 
     t_orguser ==>|"organizationId"| t_org
@@ -74,6 +76,9 @@ flowchart LR
     t_migration ==>|"boxId"| t_box
 
     t_orguser -.->|"userId"| t_user
+    t_registration -.->|"userId (retained fact)"| t_user
+    t_registration -.->|"default / inviter organization"| t_org
+    t_business_events -.->|"inviter organization"| t_org
     t_apikey -.->|"organizationId, userId"| t_org
     t_webhook -.->|"organizationId"| t_org
     t_audit -.->|"organizationId"| t_org
@@ -96,7 +101,7 @@ box request is matched against the pool by shape, not by id.
 
 ## Referential integrity
 
-The schema declares **9 foreign keys across 21 tables**. All of them live
+Foreign keys live
 inside the tenancy cluster or on the two tables owned outright by a box.
 Every edge that crosses a plane boundary — including `box.organizationId`,
 the most widely joined column in the system — is a bare `uuid` or
@@ -199,6 +204,48 @@ Identity, keyed by the subject the IdP issues rather than a generated uuid.
 | `publicKeys` | `simple-json` | |
 | `keyPair` | `simple-json` | nullable; deprecated — written on user creation, read by nothing since the SSH gateway was removed |
 | `createdAt` | `timestamptz` | |
+
+### `user_registration`
+
+Immutable first-registration attribution. The migration backfills historical users as `none` without
+emitting events. New JIT/admin registrations and deletion-before-recording share the subject lock.
+All user/organization references deliberately have no FK and survive deletion.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, generated |
+| `userId` | `varchar` | normalized identity, unique |
+| `defaultOrganizationId` | `uuid` | nullable only for historical users without a default organization |
+| `inviterOrganizationId` | `uuid` | nullable; original inviter identity, never reassigned |
+| `referredCode` | `varchar(10)` | nullable original code snapshot |
+| `status` | `varchar(24)` | `none`, `pending_verification`, `accepted` |
+| `eventId` | `uuid` | nullable, unique; stable after acceptance |
+| `createdAt` / `acceptedAt` | `timestamptz` | acceptance is nullable until accepted |
+
+Checks require `acceptedAt` and `eventId` together exactly for accepted records; `none` has no inviter
+or code, while pending/accepted records require both. Acceptance and outbox enqueue share one transaction.
+
+### `organization_business_event_outbox`
+
+Separate from usage exports. No FK to live organizations or registrations; deletion cannot erase a
+pending event or its receipt. HTTP runs after the claim transaction commits.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `eventId` | `uuid` | primary key; same value as accepted registration |
+| `organizationId` | `uuid` | target inviter organization |
+| `payload` | `jsonb` | immutable event envelope; excludes amounts and wallet identifiers |
+| `status` | `varchar(16)` | checked `pending`, `delivered`, `blocked` |
+| `attempts` | `integer` | nonnegative failed-attempt count, default 0 |
+| `availableAt` | `timestamptz` | next retry / lease expiry, default now |
+| `claimToken` | `uuid` | nullable worker fencing token |
+| `createdAt` / `deliveredAt` | `timestamptz` | delivered timestamp nullable |
+| `lastError` | `text` | nullable sanitized diagnostic |
+| `responseSnapshot` | `jsonb` | nullable validated Commerce receipt |
+
+Partial index `business_event_outbox_pending_idx (status, availableAt) WHERE status = 'pending'`
+supports `FOR UPDATE SKIP LOCKED` claiming. Every completion write checks the current claim token.
+See the [runbook](./docs/invitation-rewards.md) before recovery or rollback; schema down refuses active data.
 
 ### `organization_user`
 

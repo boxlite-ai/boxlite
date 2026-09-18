@@ -68,7 +68,18 @@ fixed** as the `ServiceSpec.ports` literals in `services.py`.
 
 ## Validating it works
 
-There is no infra-local test suite — the stack is its own smoke test:
+Run the local configuration tests without starting services or loading the SDK:
+
+```bash
+make test PY=python3
+```
+
+Business-event publishing defaults off in the template and native launcher,
+including for existing `.env` files without the new switch. To use a local
+Commerce service, set `BUSINESS_EVENTS_ENABLED=true`, `USAGE_EXPORT_URL` and
+`USAGE_EXPORT_TOKEN` in `apps/.env` (normally linked to `apps/api/.env`).
+
+The full stack smoke test remains:
 
 ```bash
 make up && make status   # every L1 + L2 row green

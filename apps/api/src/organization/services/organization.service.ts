@@ -451,6 +451,8 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
 
     organization.name = createOrganizationDto.name
     organization.createdBy = createdBy
+    organization.referredCode = createOrganizationDto.referredCode ?? null
+    organization.inviterOrganizationId = createOrganizationDto.inviterOrganizationId ?? null
 
     if (!creatorEmailVerified && !this.configService.get('skipUserEmailVerification')) {
       organization.suspended = true
@@ -627,6 +629,8 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       {
         name: OrganizationService.DEFAULT_ORGANIZATION_NAME,
         defaultRegionId: payload.defaultOrganizationDefaultRegionId,
+        referredCode: payload.invitation?.referredCode,
+        inviterOrganizationId: payload.invitation?.inviterOrganizationId,
       },
       payload.user.id,
       payload.user.role === SystemRole.ADMIN ? true : payload.user.emailVerified,

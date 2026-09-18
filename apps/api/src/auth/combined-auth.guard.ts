@@ -7,6 +7,7 @@
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import { AuthGuard } from '@nestjs/passport'
 import { EmailVerificationRequiredException } from '../exceptions/email-verification-required.exception'
+import { RegistrationException } from '../organization-referral/referral-code'
 
 /**
  * Main authentication guard for the application.
@@ -29,7 +30,7 @@ export class CombinedAuthGuard extends AuthGuard(['api-key', 'jwt']) {
   handleRequest(err: any, user: any) {
     // Flattening this to 401 would strip the status the client branches on and re-arm its
     // stale-token recovery, bouncing an unverified user through a login that cannot help.
-    if (err instanceof EmailVerificationRequiredException) {
+    if (err instanceof EmailVerificationRequiredException || err instanceof RegistrationException) {
       throw err
     }
 

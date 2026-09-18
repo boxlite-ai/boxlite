@@ -102,11 +102,11 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Organizations, membership, and invitations</b> · 23 routes</summary>
+<summary><b>Organizations, membership, and invitations</b></summary>
 
 | Method   | Path                                                                     | What it does                                             |
 | -------- | ------------------------------------------------------------------------ | -------------------------------------------------------- |
-| `GET`    | `/api/organizations`                                                     | Lists organizations available to the caller.             |
+| `GET`    | `/api/organizations`                                                     | Lists organizations; optional `referredCode` attributes first registration. |
 | `GET`    | `/api/organizations/{organizationId}/referral-code`                       | Initializes or returns the selected organization's sharing code. |
 | `POST`   | `/api/organizations`                                                     | Creates an organization.                                 |
 | `GET`    | `/api/organizations/{organizationId}`                                    | Gets an organization by ID.                              |
@@ -131,6 +131,13 @@ serves and the events it emits are catalogued below alongside its routes.
 | `POST`   | `/api/organizations/{organizationId}/invitations`                        | Creates an organization invitation.                      |
 | `PUT`    | `/api/organizations/{organizationId}/invitations/{invitationId}`         | Changes a pending invitation.                            |
 | `POST`   | `/api/organizations/{organizationId}/invitations/{invitationId}/cancel`  | Cancels a pending invitation.                            |
+
+The list route uses JWT and returns the existing organization array. Referral-code reads use
+organization member / administrator permissions and return only `{organizationId, referralCode}`.
+Both GET routes are `private, no-store`. Registration uses 400/403/409/410/422 business errors,
+plus 503 for bounded subject-lock or code-generation contention. Links are constructed by the
+Dashboard from its current origin. See [invitation contract and recovery](./docs/invitation-rewards.md)
+for exact error codes, the Commerce event envelope, generated-client options and release order.
 
 </details>
 

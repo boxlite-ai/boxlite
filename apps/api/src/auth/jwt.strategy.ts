@@ -15,6 +15,8 @@ import { Request } from 'express'
 import { CustomHeaders } from '../common/constants/header.constants'
 import { TypedConfigService } from '../config/typed-config.service'
 import { EmailVerificationRequiredException } from '../exceptions/email-verification-required.exception'
+import { isOrganizationRegistrationRequest } from './organization-registration.guard'
+import { normalizeReferralQuery } from '../organization-referral/referral-code'
 
 interface JwtStrategyConfig {
   jwksUri: string
@@ -82,40 +84,23 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       userId = payload.uid
       email = payload.sub
     }
-    let user = await this.userService.findOne(userId)
-
-    if (user && !user.emailVerified && payload.email_verified) {
-      await this.userService.update(user.id, {
-        emailVerified: payload.email_verified,
-      })
-    }
-
-    if (!user) {
-      user = await this.userService.create({
+    const registrationRequest = isOrganizationRegistrationRequest(request)
+    const referredCode = registrationRequest ? normalizeReferralQuery(request.query) : undefined
+    const user = await this.userService.authenticate(
+      {
         id: userId,
         name: payload.name || payload.username || 'Unknown',
         email: email || '',
-        emailVerified: payload.email_verified || false,
+        emailVerified: payload.email_verified === true,
         // Anchor the auto-created default organization to the platform's
         // default region, matching the admin-seed path in AppService. Without
         // this, OrganizationService.handleUserCreatedEvent creates the org
         // with defaultRegionId=undefined and downstream callers that read
         // organization.defaultRegionId fail for every OIDC-created user.
         defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
-      })
-      this.logger.debug(`Created new user with ID: ${userId}`)
-    } else if (user.name === 'Unknown' || !user.email) {
-      await this.userService.update(user.id, {
-        name: payload.name || payload.username || 'Unknown',
-        email: email || '',
-      })
-      this.logger.debug(`Updated name and email address for existing user with ID: ${userId}`)
-    } else if (user.email !== email) {
-      await this.userService.update(user.id, {
-        email: email || '',
-      })
-      this.logger.debug(`Updated email address for existing user with ID: ${userId}`)
-    }
+      },
+      { referredCode, confirmInvitation: registrationRequest },
+    )
 
     const organizationId = request.get(CustomHeaders.ORGANIZATION_ID.name)
 

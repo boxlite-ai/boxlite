@@ -8,6 +8,7 @@ export default {
   displayName: 'boxlite',
   preset: '../jest.preset.js',
   testEnvironment: 'node',
+  testPathIgnorePatterns: ['/node_modules/', '/organization-referral/.*\\.(integration|acceptance)\\.spec\\.ts$'],
   moduleNameMapper: {
     '^@boxlite-ai/api-client$': '<rootDir>/../libs/api-client/src/index.ts',
   },

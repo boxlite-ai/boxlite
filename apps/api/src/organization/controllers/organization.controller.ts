@@ -20,7 +20,16 @@ import {
   UseGuards,
 } from '@nestjs/common'
 import { AuthGuard } from '@nestjs/passport'
-import { ApiOAuth2, ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiBearerAuth } from '@nestjs/swagger'
+import {
+  ApiOAuth2,
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiParam,
+  ApiBody,
+  ApiBearerAuth,
+  ApiQuery,
+} from '@nestjs/swagger'
 import { RequiredOrganizationMemberRole } from '../decorators/required-organization-member-role.decorator'
 import { CreateOrganizationDto } from '../dto/create-organization.dto'
 import { OrganizationDto } from '../dto/organization.dto'
@@ -52,6 +61,7 @@ import { RequireFlagsEnabled } from '@openfeature/nestjs-sdk'
 import { OrGuard } from '../../auth/or.guard'
 import { OtelCollectorGuard } from '../../auth/otel-collector.guard'
 import { OtelConfigDto } from '../dto/otel-config.dto'
+import { OrganizationRegistrationGuard } from '../../auth/organization-registration.guard'
 import { OrganizationReferralService } from '../../organization-referral/organization-referral.service'
 import { OrganizationReferralCodeDto } from '../../organization-referral/organization-referral-code.dto'
 import { OrganizationReferralAccessGuard } from '../guards/organization-referral-access.guard'
@@ -209,7 +219,12 @@ export class OrganizationController {
       throw new ForbiddenException('Please verify your email address')
     }
 
-    const organization = await this.organizationService.create(createOrganizationDto, authContext.userId, false, true)
+    const organization = await this.organizationService.create(
+      { name: createOrganizationDto.name, defaultRegionId: createOrganizationDto.defaultRegionId },
+      authContext.userId,
+      false,
+      true,
+    )
     return OrganizationDto.fromOrganization(organization)
   }
 
@@ -291,6 +306,19 @@ export class OrganizationController {
   }
 
   @Get()
+  @Header('Cache-Control', 'private, no-store')
+  @ApiQuery({
+    name: 'referredCode',
+    required: false,
+    type: String,
+    description: 'Invitation link code for first registration; trim and uppercase, blank means ordinary registration.',
+  })
+  @ApiResponse({ status: 400, description: 'invalid_referral_code' })
+  @ApiResponse({ status: 403, description: 'email_verification_required' })
+  @ApiResponse({ status: 409, description: 'registration_already_finalized' })
+  @ApiResponse({ status: 410, description: 'registration_unavailable' })
+  @ApiResponse({ status: 422, description: 'invitation_unavailable' })
+  @ApiResponse({ status: 503, description: 'registration_busy' })
   @ApiOperation({
     summary: 'List organizations',
     operationId: 'listOrganizations',
@@ -300,7 +328,7 @@ export class OrganizationController {
     description: 'List of organizations',
     type: [OrganizationDto],
   })
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(PrivateResponseGuard, OrganizationRegistrationGuard)
   async findAll(@AuthContext() authContext: IAuthContext): Promise<OrganizationDto[]> {
     const organizations = await this.organizationService.findByUserWithDefaultFlag(authContext.userId)
     return organizations.map(({ organization, isDefaultForAuthenticatedUser }) =>
