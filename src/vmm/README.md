@@ -1,9 +1,8 @@
 # boxlite-vmm
 
-Workspace skeleton for BoxLite's native VMM. The VM and vCPU loops are real Rust
-control flow with provisional event types. Backend, device, and worker operations
-remain `todo!()` placeholders that panic if called; this crate cannot create or
-boot a VM yet.
+Workspace skeleton for BoxLite's native VMM. The crate-visible VM and vCPU `run`
+entry points are `todo!()` placeholders that panic if called. Their implementation
+is deferred; this crate cannot create or boot a VM yet.
 
 ```text
 boxlite-vmm
