@@ -284,7 +284,7 @@ describe('BoxService public defaults', () => {
       toBoxDto: jest.fn((box) => box),
       imageAdmissionService: { assert: jest.fn().mockResolvedValue(undefined) },
       imageResolverService: {
-        resolve: jest.fn().mockResolvedValue({ ref: 'quay.io/acme/app@sha256:resolved' }),
+        resolve: jest.fn().mockResolvedValue({ ref: 'quay.io/acme/app@sha256:resolved', isOrgOwned: true }),
       },
       ...overrides,
     })
@@ -341,13 +341,84 @@ describe('BoxService public defaults', () => {
     )
   })
 
+  /**
+   * The pool holds boxes created with no organization, so an image one
+   * organization owns must not be served from it. Asserted on the collaborators
+   * rather than on the returned box: a fresh box is what a warm miss produces
+   * too, so the outcome alone cannot tell the two apart.
+   *
+   * The Redis key matters on its own. `warm-pool:skip:<image>` is named after
+   * the image, so reaching that line with a tenant-supplied ref would let a
+   * caller decide a key's name.
+   */
+  it('neither consults the warm pool nor names a skip key for an org image', async () => {
+    const { service, warmPoolService } = makeCreateService()
+
+    await service.create({ name: 'tenant-box', image: 'quay.io/acme/app:v1' } as any, { id: 'org-1' } as any)
+
+    expect((service as any).redis.exists).not.toHaveBeenCalled()
+    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+  })
+
+  it('still consults the warm pool for a curated image', async () => {
+    const { service, warmPoolService } = makeCreateService({
+      imageResolverService: {
+        resolve: jest
+          .fn()
+          .mockResolvedValue({ ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0', isOrgOwned: false }),
+      },
+      // No skip key: the default fixture has one, which would keep the pool
+      // out of this test for a reason that has nothing to do with the image.
+      redis: { exists: jest.fn().mockResolvedValue(0) },
+    })
+
+    await service.create({ name: 'curated-box', image: 'base' } as any, { id: 'org-1' } as any)
+
+    expect((service as any).redis.exists).toHaveBeenCalled()
+    expect(warmPoolService.fetchWarmPoolBox).toHaveBeenCalled()
+  })
+
+  /**
+   * The other side of the same rule. A pool row is filled by a background
+   * top-up, not by a request, so nothing upstream of here has checked its
+   * image — and the box it creates belongs to no organization until one claims
+   * it.
+   */
+  it('refuses to fill a warm pool row that names an image an organization owns', async () => {
+    const { service, boxRepository } = makeCreateService()
+
+    await expect(
+      service.createForWarmPool({ id: 'pool-7', image: 'quay.io/acme/app:v1', target: 'region-1' } as any),
+    ).rejects.toThrow(/pool-7/)
+    expect(boxRepository.insert).not.toHaveBeenCalled()
+  })
+
+  it('fills a warm pool row that names a curated image', async () => {
+    const { service, boxRepository } = makeCreateService()
+
+    await service.createForWarmPool({
+      id: 'pool-8',
+      image: 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0',
+      target: 'region-1',
+      class: 'small',
+      cpu: 2,
+      mem: 4,
+      disk: 10,
+      gpu: 0,
+      osUser: 'boxlite',
+      env: {},
+    } as any)
+
+    expect(boxRepository.insert).toHaveBeenCalled()
+  })
+
   it('asks admission before it asks the resolver', async () => {
     const { service } = makeCreateService()
     const order: string[] = []
     ;(service as any).imageAdmissionService.assert.mockImplementation(async () => void order.push('admission'))
     ;(service as any).imageResolverService.resolve.mockImplementation(async () => {
       order.push('resolver')
-      return { ref: 'quay.io/acme/app@sha256:resolved' }
+      return { ref: 'quay.io/acme/app@sha256:resolved', isOrgOwned: true }
     })
 
     await service.create({ name: 'ordered-box', image: 'quay.io/acme/app:v1' } as any, { id: 'org-1' } as any)

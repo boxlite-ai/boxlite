@@ -77,6 +77,7 @@ import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
+import { isCuratedSelector } from '../../image/utils/image-ref.util'
 import {
   AUTO_DELETE_DISABLED,
   AUTO_STOP_DISABLED,
@@ -168,6 +169,18 @@ export class BoxService {
   }
 
   async createForWarmPool(warmPoolItem: WarmPool): Promise<Box> {
+    // The far side of `requiresFreshBox`'s image rule. A warm box is created
+    // with no organization and handed to whichever one claims it, so a pool row
+    // naming a tenant's image would put that image's contents in front of
+    // another tenant. Logged as well as thrown: a top-up arrives as an event, and
+    // the loop that fires it collects rejections with `allSettled`, so a throw
+    // alone would leave an operator with a pool that silently never fills.
+    if (!isCuratedSelector(warmPoolItem.image)) {
+      const message = `Warm pool ${warmPoolItem.id} names '${warmPoolItem.image}', which is not a curated image`
+      this.logger.error(message)
+      throw new BoxError(message)
+    }
+
     const box = new Box(warmPoolItem.target)
 
     box.organizationId = BOX_WARM_POOL_UNASSIGNED_ORGANIZATION
@@ -222,7 +235,7 @@ export class BoxService {
       // time.
       const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
       const image = resolvedImage.ref
-      const needsFreshBox = requiresFreshBox(createBoxDto, organization)
+      const needsFreshBox = requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)

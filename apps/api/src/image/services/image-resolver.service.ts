@@ -15,10 +15,16 @@ import { isCuratedSelector, isDigestPinned, parseImageRef } from '../utils/image
 /** The tag a bare repository means. */
 const IMPLICIT_TAG = 'latest'
 
-/** What a box should boot from, and the catalog row it came from if any. */
+/** What a box should boot from, and where that answer came from. */
 export type ResolvedImage = {
   /** The ref handed to the runner. */
   ref: string
+  /**
+   * False only for the curated set, which every organization shares. A ref a
+   * tenant named is org-owned whether or not the catalog knew it — a miss means
+   * it has not been pulled yet, not that it belongs to everyone.
+   */
+  isOrgOwned: boolean
   /** The catalog row this resolved through, absent when nothing matched. */
   imageId?: string
 }
@@ -49,7 +55,7 @@ export class ImageResolverService {
 
   async resolve(organization: Organization, image: string | undefined): Promise<ResolvedImage> {
     if (isCuratedSelector(image)) {
-      return { ref: assertSupportedImage(image) }
+      return { ref: assertSupportedImage(image), isOrgOwned: false }
     }
 
     const ref = image as string
@@ -88,7 +94,7 @@ export class ImageResolverService {
       .select('version."imageId"', 'imageId')
       .getRawOne<{ imageId: string }>()
 
-    return version ? { ref, imageId: version.imageId } : { ref }
+    return version ? { ref, isOrgOwned: true, imageId: version.imageId } : { ref, isOrgOwned: true }
   }
 
   /**
@@ -122,9 +128,9 @@ export class ImageResolverService {
       // put this resolver's spelling in front of a runner that already has its
       // own. The two paths agree on that — neither touches a ref it did not
       // resolve.
-      return { ref }
+      return { ref, isOrgOwned: true }
     }
-    return { ref: `${name}@${hit.digest}`, imageId: hit.imageId }
+    return { ref: `${name}@${hit.digest}`, isOrgOwned: true, imageId: hit.imageId }
   }
 }
 

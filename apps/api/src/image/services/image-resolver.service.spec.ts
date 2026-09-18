@@ -46,6 +46,7 @@ describe('ImageResolverService', () => {
       const resolved = await new ImageResolverService(repository).resolve(organization, selector as string | undefined)
 
       expect(resolved.ref).toContain(expected)
+      expect(resolved.isOrgOwned).toBe(false)
       expect(resolved.imageId).toBeUndefined()
     })
 
@@ -67,7 +68,7 @@ describe('ImageResolverService', () => {
 
       const resolved = await new ImageResolverService(repository).resolve(organization, 'quay.io/acme/app:v1')
 
-      expect(resolved).toEqual({ ref: `quay.io/acme/app@${DIGEST}`, imageId: 'img-1' })
+      expect(resolved).toEqual({ ref: `quay.io/acme/app@${DIGEST}`, isOrgOwned: true, imageId: 'img-1' })
     })
 
     it('treats a bare repository as its latest tag', async () => {
@@ -84,7 +85,7 @@ describe('ImageResolverService', () => {
 
       const resolved = await new ImageResolverService(repository).resolve(organization, `quay.io/acme/app@${DIGEST}`)
 
-      expect(resolved).toEqual({ ref: `quay.io/acme/app@${DIGEST}`, imageId: 'img-1' })
+      expect(resolved).toEqual({ ref: `quay.io/acme/app@${DIGEST}`, isOrgOwned: true, imageId: 'img-1' })
     })
 
     /**
@@ -108,7 +109,7 @@ describe('ImageResolverService', () => {
 
       const resolved = await new ImageResolverService(repository).resolve(organization, 'quay.io/acme/app:v1')
 
-      expect(resolved).toEqual({ ref: 'quay.io/acme/app:v1' })
+      expect(resolved).toEqual({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
     })
 
     it('leaves a bare repository exactly as typed', async () => {
@@ -127,7 +128,7 @@ describe('ImageResolverService', () => {
 
       const resolved = await new ImageResolverService(repository).resolve(organization, `quay.io/acme/app@${DIGEST}`)
 
-      expect(resolved).toEqual({ ref: `quay.io/acme/app@${DIGEST}` })
+      expect(resolved).toEqual({ ref: `quay.io/acme/app@${DIGEST}`, isOrgOwned: true })
     })
   })
 
@@ -139,14 +140,16 @@ describe('ImageResolverService', () => {
    */
   describe('assertPinnedOnCatalogHit', () => {
     it('rejects a hit that is not digest-pinned', () => {
-      expect(() => assertPinnedOnCatalogHit({ ref: 'quay.io/acme/app:v1', imageId: 'img-1' })).toThrow(
-        InternalServerErrorException,
-      )
+      expect(() =>
+        assertPinnedOnCatalogHit({ ref: 'quay.io/acme/app:v1', isOrgOwned: true, imageId: 'img-1' }),
+      ).toThrow(InternalServerErrorException)
     })
 
     it('accepts a pinned hit, and a miss whatever its shape', () => {
-      expect(() => assertPinnedOnCatalogHit({ ref: `quay.io/acme/app@${DIGEST}`, imageId: 'img-1' })).not.toThrow()
-      expect(() => assertPinnedOnCatalogHit({ ref: 'quay.io/acme/app:v1' })).not.toThrow()
+      expect(() =>
+        assertPinnedOnCatalogHit({ ref: `quay.io/acme/app@${DIGEST}`, isOrgOwned: true, imageId: 'img-1' }),
+      ).not.toThrow()
+      expect(() => assertPinnedOnCatalogHit({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })).not.toThrow()
     })
   })
 })
