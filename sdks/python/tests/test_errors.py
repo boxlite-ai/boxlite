@@ -137,6 +137,64 @@ class TestErrorHierarchy:
                 assert e is error
 
 
+class TestNativeErrorMapping:
+    """Errors raised by the native extension carry their runtime error type."""
+
+    @pytest.fixture
+    def _require_native(self):
+        import boxlite
+
+        if not hasattr(boxlite, "Boxlite"):
+            pytest.skip("native extension not compiled (run make dev:python)")
+
+    def test_every_error_type_is_a_boxlite_error(self):
+        import boxlite.errors
+
+        for name in boxlite.errors.__all__:
+            assert issubclass(
+                getattr(boxlite.errors, name), boxlite.errors.BoxliteError
+            )
+
+    def test_boxlite_error_still_catches_as_runtime_error(self):
+        """Native errors were plain RuntimeError before; old handlers must still match."""
+        assert issubclass(BoxliteError, RuntimeError)
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_require_native")
+    async def test_remove_unknown_box_raises_not_found(self, tmp_path):
+        import boxlite
+        from boxlite.errors import NotFoundError
+
+        runtime = boxlite.Boxlite(boxlite.Options(home_dir=str(tmp_path)))
+        try:
+            with pytest.raises(NotFoundError, match="no-such-box"):
+                await runtime.remove("no-such-box")
+        finally:
+            await runtime.shutdown()
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_require_native")
+    async def test_create_after_shutdown_raises_stopped(self, tmp_path):
+        import boxlite
+        from boxlite.errors import StoppedError
+
+        runtime = boxlite.Boxlite(boxlite.Options(home_dir=str(tmp_path)))
+        await runtime.shutdown()
+
+        with pytest.raises(StoppedError, match="shut down"):
+            await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+
+    @pytest.mark.usefixtures("_require_native")
+    def test_binding_argument_check_raises_invalid_argument(self):
+        import boxlite
+        from boxlite.errors import InvalidArgumentError
+
+        with pytest.raises(
+            InvalidArgumentError, match="unsupported registry transport"
+        ):
+            boxlite.ImageRegistry(host="registry.local", transport="ftp")
+
+
 class TestErrorExports:
     """Test that errors are properly exported."""
 
@@ -148,6 +206,8 @@ class TestErrorExports:
         assert hasattr(boxlite, "ExecError")
         assert hasattr(boxlite, "TimeoutError")
         assert hasattr(boxlite, "ParseError")
+        assert hasattr(boxlite, "NotFoundError")
+        assert "NotFoundError" in boxlite.__all__
 
     def test_errors_from_errors_module(self):
         """Test that errors can be imported from errors module."""
