@@ -201,6 +201,37 @@ impl RestBox {
     }
 }
 
+/// Refuse the pack-side copy option a read over REST cannot carry.
+///
+/// `GET /boxes/{id}/files` takes only `path`, and the archive is packed by
+/// whichever server answers it — `boxlite serve`'s `download_files` and the
+/// runner's `BoxliteFileDownload` both hand the local backend their own
+/// default options. A caller's `follow_symlinks` therefore never reaches the
+/// packer, so it is refused rather than ignored: the same policy
+/// `CpArgs::require_supported_backend` (src/cli/src/commands/cp.rs) applies at
+/// the CLI boundary, and `copy_into` / `copy_in_stream` apply to
+/// `overwrite=false`. Answering a different question than the caller asked,
+/// silently, is the one outcome none of them allow.
+///
+/// `include_parent` is dead on this path for exactly the same reason and is
+/// deliberately *not* refused: the C ABI's `default_copy_options`
+/// (sdks/c/src/copy.rs) sets `include_parent: false` on every call it makes,
+/// so refusing it would reject every C and Go copy-out against a REST runtime.
+/// Straightening that out means changing that default, which also changes what
+/// those SDKs produce on the local backend — a decision of its own, not a side
+/// effect of this guard.
+fn refuse_server_side_pack_options(opts: &CopyOptions) -> BoxliteResult<()> {
+    if !opts.follow_symlinks {
+        return Ok(());
+    }
+    Err(BoxliteError::Unsupported(
+        "copy-out with follow_symlinks=true is not supported over the REST backend; the \
+         server packs the archive with its own defaults, so the REST copy protocol does \
+         not carry this option. It is honoured only by the embedded local runtime."
+            .into(),
+    ))
+}
+
 #[async_trait]
 impl BoxBackend for RestBox {
     fn id(&self) -> &BoxID {
@@ -405,6 +436,15 @@ impl BoxBackend for RestBox {
             ));
         }
 
+        // Same pre-flight the local backend runs (`BoxImpl::copy_into`): a
+        // directory tree with recursive=false is refused before anything is
+        // packed. Nothing downstream of here can catch it — the guest sees an
+        // archive, not the option — so a REST caller would otherwise get the
+        // recursive copy it explicitly asked not to have.
+        if host_src.is_dir() {
+            opts.validate_for_dir()?;
+        }
+
         // Stream a tar of the host source straight into the request body.
         let (source_is_dir, tar) = boxlite_shared::tar::pack_stream(
             host_src.to_path_buf(),
@@ -427,8 +467,26 @@ impl BoxBackend for RestBox {
         &self,
         container_src: &str,
         host_dst: &Path,
-        _opts: CopyOptions,
+        opts: CopyOptions,
     ) -> BoxliteResult<()> {
+        refuse_server_side_pack_options(&opts)?;
+        // Both extraction arms below overwrite unconditionally — the streaming
+        // one through `UnpackContext { overwrite: true }`, the buffered one
+        // through `extract_tar_to_path`'s `File::create` / `Archive::unpack`.
+        // `overwrite=false` therefore has to be refused here rather than passed
+        // down: honouring it would mean teaching both arms a skip-if-exists
+        // rule the write direction (`copy_into`) has already declined to
+        // invent, and ignoring it silently clobbers the very file the caller
+        // asked us to preserve.
+        if !opts.overwrite {
+            return Err(BoxliteError::Unsupported(
+                "copy_out with overwrite=false is not supported over the REST backend; \
+                 the extraction here always replaces what it lands on. Use the local \
+                 runtime, or pre-check the destination before calling."
+                    .into(),
+            ));
+        }
+
         // The archive shape is carried on the response header (newer servers);
         // absence means the peer predates it → capped buffered fallback.
         let (resp, source_is_dir) = self.open_archive(container_src).await?;
@@ -505,6 +563,11 @@ impl BoxBackend for RestBox {
                         .into(),
                 ));
             }
+            // Mirrors `BoxImpl::copy_in_stream`: a directory archive with
+            // recursive=false is rejected before a byte is streamed.
+            if source.is_dir() {
+                opts.validate_for_dir()?;
+            }
             self.upload_archive(stream, &container_dst, source).await
         })
     }
@@ -512,9 +575,15 @@ impl BoxBackend for RestBox {
     fn copy_out_stream(
         self: Arc<Self>,
         container_src: String,
-        _opts: CopyOptions,
+        opts: CopyOptions,
     ) -> futures::future::BoxFuture<'static, BoxliteResult<(BoxByteStream, CopySourceKind)>> {
         Box::pin(async move {
+            // Only the pack-side option is refused here. `overwrite` governs
+            // extraction, and this call extracts nothing — the caller is handed
+            // the bytes and decides — so it is not ours to honour or refuse,
+            // exactly as on the local backend.
+            refuse_server_side_pack_options(&opts)?;
+
             let (resp, source_is_dir) = self.open_archive(&container_src).await?;
             // No buffered fallback here, unlike `copy_out`: there is no
             // destination path to spool the archive to, so a server that omits
@@ -2727,5 +2796,186 @@ mod tests {
             "the refusal must happen before any request is sent"
         );
         server.abort();
+    }
+
+    // ── Options this backend cannot deliver ───────────────────────
+    //
+    // `CpArgs::require_supported_backend` (src/cli/src/commands/cp.rs) already
+    // bails on --follow-symlinks / --no-overwrite / --no-include-parent for a
+    // REST target. These pin the same policy one layer down, for the SDK
+    // callers that never pass through the CLI.
+
+    /// Bind a listener nobody is meant to reach, run `call`, and report
+    /// whether a connection arrived. A refusal that still sends the request
+    /// has already done the damage it was supposed to prevent.
+    async fn refusal_without_a_request<F, Fut>(call: F) -> (BoxliteError, bool)
+    where
+        F: FnOnce(Arc<RestBox>) -> Fut,
+        Fut: std::future::Future<Output = BoxliteError>,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let served = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let saw_request = Arc::clone(&served);
+        let server = tokio::spawn(async move {
+            if listener.accept().await.is_ok() {
+                saw_request.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+
+        let error = call(Arc::new(rest_box_for(port, "box1"))).await;
+        let reached = served.load(std::sync::atomic::Ordering::SeqCst);
+        server.abort();
+        (error, reached)
+    }
+
+    /// The two a copy-out over REST cannot deliver: `follow_symlinks` steers a
+    /// pack that runs on the *server* against its own defaults, and both
+    /// extraction arms here replace what they land on, so `overwrite=false`
+    /// cannot be honoured either. Ignoring them answered a different question
+    /// than the caller asked — `overwrite=false` silently clobbered the file it
+    /// was meant to protect.
+    #[tokio::test]
+    async fn copy_out_refuses_the_options_the_rest_path_cannot_honour() {
+        for (label, opts) in [
+            ("overwrite=false", CopyOptions::default().no_overwrite()),
+            (
+                "follow_symlinks=true",
+                CopyOptions::default().follow_symlinks(true),
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let dst = dir.path().join("dst");
+            let (error, reached) = refusal_without_a_request(|rest_box| async move {
+                rest_box
+                    .copy_out("/src", &dst, opts)
+                    .await
+                    .expect_err(label)
+            })
+            .await;
+
+            assert!(
+                matches!(error, BoxliteError::Unsupported(_)),
+                "{label}: {error:?}"
+            );
+            assert!(!reached, "{label}: refused only after sending the request");
+        }
+    }
+
+    /// `copy_out_stream` extracts nothing — the caller is handed the bytes and
+    /// decides — so `overwrite` is not its to refuse, and the local backend
+    /// ignores it on this path too. Only the pack-side option is refused.
+    #[tokio::test]
+    async fn copy_out_stream_refuses_only_the_pack_side_option() {
+        for (label, opts) in [(
+            "follow_symlinks=true",
+            CopyOptions::default().follow_symlinks(true),
+        )] {
+            let (error, reached) = refusal_without_a_request(|rest_box| async move {
+                // Not `expect_err`: the Ok half carries a `BoxByteStream`,
+                // which has no `Debug`.
+                match rest_box.copy_out_stream("/src".to_string(), opts).await {
+                    Ok(_) => panic!("{label} must be refused"),
+                    Err(e) => e,
+                }
+            })
+            .await;
+
+            assert!(
+                matches!(error, BoxliteError::Unsupported(_)),
+                "{label}: {error:?}"
+            );
+            assert!(!reached, "{label}: refused only after sending the request");
+        }
+
+        let (port, server) = serve_archive(Some("false")).await;
+        let (mut stream, _) = Arc::new(rest_box_for(port, "box1"))
+            .copy_out_stream("/src".to_string(), CopyOptions::default().no_overwrite())
+            .await
+            .expect("a call that never extracts must not refuse overwrite=false");
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            bytes.extend_from_slice(&chunk.expect("chunk"));
+        }
+        server.await.unwrap();
+        assert_eq!(bytes, b"abcde");
+    }
+
+    /// `include_parent` is as dead on the REST read path as `follow_symlinks`,
+    /// and is still let through on purpose: the C ABI's `default_copy_options`
+    /// (sdks/c/src/copy.rs) sets `include_parent: false` on *every* call, so
+    /// adding it to the guard would reject every C and Go copy-out against a
+    /// REST runtime. Pinned here so completing the guard has to deal with that
+    /// first — the fix belongs in the C default, which also changes what those
+    /// SDKs produce locally.
+    #[tokio::test]
+    async fn include_parent_false_still_reaches_the_wire() {
+        let flattened = CopyOptions::default().include_parent(false);
+
+        let dir = tempfile::tempdir().unwrap();
+        let dst = dir.path().join("dst");
+        let opts = flattened.clone();
+        let (error, reached) = refusal_without_a_request(|rest_box| async move {
+            rest_box
+                .copy_out("/src", &dst, opts)
+                .await
+                .expect_err("the stub server answers nothing")
+        })
+        .await;
+        assert!(!matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(reached, "copy_out must not refuse include_parent=false");
+
+        let (error, reached) = refusal_without_a_request(|rest_box| async move {
+            match rest_box
+                .copy_out_stream("/src".to_string(), flattened)
+                .await
+            {
+                Ok(_) => panic!("the stub server answers nothing"),
+                Err(e) => e,
+            }
+        })
+        .await;
+        assert!(!matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(
+            reached,
+            "copy_out_stream must not refuse include_parent=false"
+        );
+    }
+
+    /// `recursive=false` on a directory tree is refused before anything is
+    /// packed or streamed, the way `BoxImpl::copy_into` / `copy_in_stream` do
+    /// it. Nothing downstream can catch it: the guest is handed an archive,
+    /// never the option, so a REST caller got the recursive copy it had
+    /// explicitly declined.
+    #[tokio::test]
+    async fn a_directory_copy_in_without_recursive_is_refused_before_any_request() {
+        let (error, reached) = refusal_without_a_request(|rest_box| async move {
+            let archive: BoxByteStream = Box::pin(futures::stream::empty());
+            rest_box
+                .copy_in_stream(
+                    archive,
+                    "/tmp/dst".to_string(),
+                    CopySourceKind::Dir,
+                    CopyOptions::default().non_recursive(),
+                )
+                .await
+                .expect_err("a directory archive with recursive=false must be refused")
+        })
+        .await;
+        assert!(matches!(error, BoxliteError::Config(_)), "{error:?}");
+        assert!(!reached, "refused only after sending the request");
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("tree")).unwrap();
+        let tree = dir.path().join("tree");
+        let (error, reached) = refusal_without_a_request(|rest_box| async move {
+            rest_box
+                .copy_into(&tree, "/tmp/dst", CopyOptions::default().non_recursive())
+                .await
+                .expect_err("a directory source with recursive=false must be refused")
+        })
+        .await;
+        assert!(matches!(error, BoxliteError::Config(_)), "{error:?}");
+        assert!(!reached, "refused only after sending the request");
     }
 }
