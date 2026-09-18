@@ -38,7 +38,7 @@
 - High-cohesion facade (the shared Design rule's exemplar here): [`ImageManager`](src/boxlite/src/images/manager.rs) exposes `new`/`pull`/`list`/`load_from_local` and hides `Arc<ImageStore>`, blob sources, and manifest handling.
 - Facade exception — stateless utilities: [`jailer/common/`](src/boxlite/src/jailer/common/) async-signal-safe helpers.
 
-<!-- agent-tooling:guidance:begin rev=925d363d068f sha256=9904cbb4cda1 -->
+<!-- agent-tooling:guidance:begin rev=e57e694fdef5 sha256=81d6fd1777b5 -->
 
 > Managed by **boxlite-ai/agent-tooling** — do not edit between the markers. Change `plugins/boxlite-agent-tooling/guidance/workflow.md` there, then rerun `./.agent-tooling/install.sh` here.
 
@@ -49,10 +49,9 @@ Every change goes: understand → research → design → implement → test →
 **Understand**
 
 - Read this file, the nearest README/CONTRIBUTING, relevant docs, and the actual source before editing.
-- Identify the smallest behavioral change that satisfies the request.
 - Check the existing naming, module layout, test style, logging, and error-handling conventions in the affected area.
 - Look for nearby tests or scripts that already define expected behavior.
-- Reproduce-before-fix: when fixing a bug, write the failing test first, observe it fail, then fix. Do not create tests that don't actually test project code. A test that only exercises stdlib or framework code is not a real test.
+- Reproduce-before-fix: when fixing a bug, write the failing test first, observe it fail, then fix.
 - If docs and implementation disagree, capture the conflict and ask before making architectural assumptions.
 
 **Research**
@@ -66,7 +65,6 @@ Every change goes: understand → research → design → implement → test →
 - Single responsibility — one function, one reason to change.
 - One level of abstraction per function — don't mix orchestration with parsing, validation, persistence, rendering.
 - **High cohesion, loose coupling via a facade:** group related state + behavior into one type or module; expose 1–2 public entry points; keep internals and helpers private (minimizes cross-module knowledge). _Anti-pattern:_ scattered free public functions callers must stitch together — leaks call order, helper graph, and shared state into every call site; every new caller re-learns the workflow. _Exception:_ stateless utility modules of small pure helpers. Concrete in-repo exemplars belong in each repository's own instructions.
-- Co-locate related code — fields, methods, and helpers that work together stay in the same file/module.
 - DRY when it's the same rule, policy, or transformation. Tolerate small local duplication when an abstraction would hide important local behavior.
 - Validation at the boundary — untrusted inputs get checked where they enter; trust internal code.
 - Composition over inheritance / framework magic.
@@ -86,15 +84,15 @@ Every change goes: understand → research → design → implement → test →
 - No `sleep` for events — channels/waitpid/futures.
 - Concurrency: timeouts, retries, cancellation explicit for external work. No unbounded queues/concurrency/memory. Close/release files, sockets, clients, browser handles, subprocesses. Retry loops must be idempotent (or document why safe).
 - Security: no secrets in commits, logs, or test fixtures. Validate before SQL/shell/URL/path/HTML/prompt. Avoid shell execution with untrusted input.
-- Comments explain _why_, not _what_: non-obvious intent, hidden constraints, deliberate trade-offs. Delete comments that restate the code or preserve dead decisions. Update nearby comments when behavior changes. Don't paste long excerpts from books, tickets, or logs.
-- Follow the repository's existing formatter, linter, language level, and module style. Keep diffs focused — no whitespace churn outside touched lines. Add a new dependency only when it materially reduces risk or complexity.
+- Comments explain _why_, not _what_: non-obvious intent, hidden constraints, deliberate trade-offs. Delete comments that restate the code or preserve dead decisions. Don't paste long excerpts from books, tickets, or logs.
+- Follow the repository's existing formatter, linter, language level, and module style. Add a new dependency only when it materially reduces risk or complexity.
 
 **Test**
 
 - Two-side verification for reproducer tests. When you add a test alongside a fix, demonstrate it in this order, both manually run:
   1. You must revert **every** production change — every non-test file back to its pre-fix state, only the test remains. If that revert changes an API, signature, or schema so the test cannot compile or reach its defect check, keep production fully reverted and add only the smallest temporary test-only compatibility adapter needed to exercise the old contract. A test-only compatibility adapter may adapt setup or invocation only; it must not implement the fix, alter the defect check, or become the failure signal. Run the test. It must reach the defect check and fail for the original bug — log the observed failure signal (assertion text, hang, panic). **Partial reverts, mental simulation, or "it would obviously fail without the fix" are treated as cheating.** If no such adapter can preserve that signal, stop and surface the blocker.
   2. Remove any temporary compatibility adapter, restore the production change in full, and run the test. It must pass.
-     Without a complete step 1 you've only proved your code works, not that the fix was necessary or that this test would have caught the bug. Don't accept "it passes now" as evidence the test guards the right thing.
+     Without a complete step 1 you've only proved your code works, not that the fix was necessary or that this test would have caught the bug.
 - A test is only meaningful when there's something that could go wrong between the data being produced and the assertion being made. If the test builds the value it then asserts on (e.g., formatting a string and then asserting that the same string contains a substring it just put in), the assertion is tautological — nothing crossed a boundary, so nothing is being tested. The data must come from production code under test, not from the test body itself.
 - Add or update tests when behavior changes around branching, parsing, retries, security checks, or boundaries.
 - Prefer focused tests that prove the _right_ reason for the change.
@@ -110,10 +108,8 @@ Every change goes: understand → research → design → implement → test →
 **Cross-cutting** (apply at every phase)
 
 - Verify external findings against the working tree before acting. Reviews, lint, and PR comments work from a snapshot — they may name deleted code. `git grep` and `git diff` first.
-- Audit verdicts through the Stop gate: when a turn asserts something as established — a fix that works, tests that pass, a root cause, an ops/infra finding, "no issues", a factual answer — let the gate triage the final turn. When an audit is required, the Stop hook runs the independent `verdict-auditor` synchronously against the exact transcript and a session-scoped generation; the auditor (never you) writes the dossier. If a real user message is steered in while it waits, the prompt hook revokes that generation and the runner cancels its process group; the abandoned dossier cannot authorize a later turn. PASS is silent: the original answer remains the user-facing conclusion and the hook emits no feedback or audit metadata. FAIL blocks with concise findings only; revise the answer to address them and end the turn again, and the gate re-audits the revision automatically. The Stop gate triages the WHOLE final turn (every assistant text since the last real user message) straight from the transcript — triage is a three-tier cascade, cheapest first: text the _harness_ wrote into the assistant slot (API errors, quota notices) asserts nothing and is allowed with no model call; a small set of assertion-only forms ("173/173 tests pass", a line-initial "Verified …", a whole-line "done.") audits with no classifier call; everything else goes to a fast model judging "is this a conclusion the reader must take on trust, with nothing shown that produced it?" — so a turn that quotes the output, counts or file:line behind its claims ends freely, while one that just asserts the result is audited — falling back to a curated pattern list (EN+中文) when no model is reachable. Prose-ambiguous phrasings ("tests pass", "root cause is", "deploy is healthy") stay with the model on purpose, so a turn merely _discussing_ verdict wording is still allowed. Triage allows announce their decision to the human via systemMessage (invisible to the model); dossier PASS is the deliberate silent exception. A session-scoped FAIL keeps blocking unchanged retries until its findings are addressed, and a still-fresh FAIL is parked to the matching previous-dossier path when the tree moves so the next audit re-checks those findings instead of starting cold; stale/mismatched dossiers are discarded and aged-out ones dropped outright, never blocked on. Chat and question turns end freely; when the turn text has not reached the transcript yet the gate waits briefly, and if it still cannot read it the turn ends UNJUDGED under a `blind-allow` rung; a judged message is never judged twice (flush-race guard). Triage can misread — declaring remains your duty, not only the hook's.
-- An auditor still running after 30 seconds opens one interactive choice on hosts that support asynchronous re-wake: Keep waiting, or Force pass because the auditor is taking too long. No response leaves the auditor running. The host cannot dismiss an outstanding question when PASS/FAIL arrives, so a stale card may remain; its generation-bound selection is rejected after terminal completion or replacement. Other hosts publish a non-blocking typed status instead. The first non-empty line `force-pass-auditors: <required reason>` remains the headless/accessibility fallback. An override is recorded as `OVERRIDDEN BY USER`, never PASS, expires within one hour, and is revoked by the next real prompt. It bypasses only `commit-push-auditor` and `verdict-auditor`; installation/guidance checks, PR-review acknowledgement, chained hooks, push ref binding/watchers, permissions, and remote protections still run.
-- Honor scope reduction: "drop X" means drop X. Don't bundle adjacent improvements unprompted.
-- Treat every failure as a class, not an instance: when one surfaces, find and fix every sibling of the same shape in the same pass — grounded in what's actually there, not speculation. A single-site fix to a systemic bug isn't done.
+- Stay inside the ask: do and discuss only what the request needs. Anything adjacent — another bug, an unrelated cleanup, a related topic — is never a change or a section: file it for future improvement (GitHub issue, Linear issue, or a docs note) and give it one line at the end. "drop X" means drop X.
+- Treat every failure as a class, not an instance: fix every site of the same defect in the same pass — grounded in what's actually there, not speculation. A different defect nearby is adjacent work. A single-site fix to a systemic bug isn't done.
 - Supersede completely: when behavior changes, delete every artifact describing the old way in the same change — code, comments, prose, tests asserting the old contract, and cross-references that now point at nothing. Grep for what you replaced, not just the file you edited. Prose that contradicts the code is worse than none, because it is read as current.
 
 **Communication**
@@ -121,8 +117,6 @@ Every change goes: understand → research → design → implement → test →
 - Words: as concise and simple as possible, unless explicitly asked otherwise.
 - Form follows content, in docs, code comments, commit/PR text, and replies: numbered list for a sequence; bullets for 2 to 7 parallel items; description list for name plus description; table when items carry 3 or more attributes or several conditions decide an outcome; prose, message first, for reasoning and trade-offs. Never a list of one, a one-column table, or a paragraph in a cell.
 - A simple call graph (func name, class name, file name, LOC, short annotation) is the first choice when explaining code.
-- Commit/PR text: describe the change, not the process that produced it. Conventional-Commit subject ≤72; no process/AI narrative, pasted logs, or secrets. Local rules and examples live in the repository's CONTRIBUTING.
-- Every PR description carries a before/after end-to-end call graph — same shape as the graph above. Bug fixes mark the faulty hop `← BUG: …` in _Before_ and link the issue (`Fixes #<n>`). Enforced by the pinned agent-tooling preflight hook; rule and example in the repository's CONTRIBUTING.
 
 Adapted from Clean Code (Robert C. Martin) via the polygala-inc AGENTS.md distillation.
 <!-- agent-tooling:guidance:end -->
