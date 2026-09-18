@@ -144,6 +144,16 @@ export class Organization {
   })
   templateDeactivationTimeoutMinutes: number
 
+  // How many distinct images this organization may keep in its catalog. A
+  // count, not a byte budget: nothing central stores the bytes, and what fills
+  // a shared runner's disk is the number of distinct images it has to cache.
+  @Column({
+    type: 'int',
+    default: 20,
+    name: 'image_count_limit',
+  })
+  imageCountLimit: number
+
   @Column({
     default: false,
   })
