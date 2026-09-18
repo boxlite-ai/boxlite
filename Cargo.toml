@@ -42,3 +42,16 @@ edition = "2024"
 authors = ["Dorian Zheng <https://github.com/dorianzheng>"]
 license = "Apache-2.0"
 rust-version = "1.88"
+
+# Cargo's recommended dev profile: keep file:line backtraces, drop full
+# DWARF (and all dependency debuginfo). Full debugger symbols: --profile debugging.
+# https://doc.rust-lang.org/cargo/guide/build-performance.html
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.debugging]
+inherits = "dev"
+debug = true
