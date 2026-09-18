@@ -218,27 +218,28 @@ type Secret struct {
 }
 
 type boxConfig struct {
-	name       string
-	cpus       int
-	memoryMiB  int
-	diskSizeGB int
-	rootfsPath string
-	env        [][2]string
-	volumes    []volumeEntry
-	ports      []PortSpec
-	workDir    string
-	user       string
-	entrypoint []string
-	cmd        []string
-	autoRemove *bool
-	autoStop   *uint32
-	autoDelete *uint32
-	autoResume *bool
-	detach     *bool
-	network    *NetworkSpec
-	networkErr error // deferred WithNetwork validation error, surfaced at conversion
-	secrets    []Secret
-	advanced   *AdvancedBoxOptions // nil = runtime defaults; non-nil = caller-owned advanced opts applied via boxlite_options_set_advanced
+	name               string
+	cpus               int
+	memoryMiB          int
+	diskSizeGB         int
+	rootfsPath         string
+	env                [][2]string
+	volumes            []volumeEntry
+	ports              []PortSpec
+	workDir            string
+	user               string
+	entrypoint         []string
+	cmd                []string
+	autoRemove         *bool
+	autoStop           *uint32
+	autoDelete         *uint32
+	autoResume         *bool
+	detach             *bool
+	anonymousImagePull *bool
+	network            *NetworkSpec
+	networkErr         error // deferred WithNetwork validation error, surfaced at conversion
+	secrets            []Secret
+	advanced           *AdvancedBoxOptions // nil = runtime defaults; non-nil = caller-owned advanced opts applied via boxlite_options_set_advanced
 }
 
 // volumeEntry is one mount. Exactly one origin is set: managedVolume for a
@@ -416,6 +417,18 @@ func WithAutoRemove(v bool) BoxOption {
 // WithDetach sets whether the box survives parent process exit.
 func WithDetach(v bool) BoxOption {
 	return func(c *boxConfig) { c.detach = &v }
+}
+
+// WithAnonymousImagePull pulls this box's image without the registry
+// credentials the runtime was configured with.
+//
+// For a caller that boots a box from an image reference someone else chose:
+// credentials are matched by host, so without this a reference naming a host
+// the runtime holds a token for is fetched with that token and its contents
+// handed to whoever named it. A caller pulling its own images should leave it
+// off, which is the default.
+func WithAnonymousImagePull(v bool) BoxOption {
+	return func(c *boxConfig) { c.anonymousImagePull = &v }
 }
 
 // buildAndFreeCOptions runs buildCOptions, immediately frees the C
@@ -622,6 +635,9 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 	}
 	if cfg.detach != nil {
 		C.boxlite_options_set_detach(cOpts, boolToCInt(*cfg.detach))
+	}
+	if cfg.anonymousImagePull != nil {
+		C.boxlite_options_set_anonymous_image_pull(cOpts, boolToCInt(*cfg.anonymousImagePull))
 	}
 	if cfg.advanced != nil && cfg.advanced.handle != nil {
 		// Clone the caller-owned advanced options onto the box.

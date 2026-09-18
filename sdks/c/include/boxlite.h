@@ -1028,6 +1028,14 @@ void boxlite_options_set_auto_resume_enabled(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
 
+// Pull this box's image without the registry credentials the runtime holds.
+//
+// For a caller that boots a box from an image reference someone else chose:
+// credentials are matched by host, so without this a reference naming a host
+// the runtime has a token for is fetched with that token. Off by default — a
+// caller pulling its own images keeps the registries it configured.
+void boxlite_options_set_anonymous_image_pull(CBoxliteOptions *opts, int val);
+
 // Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
 // `CBoxliteOptions`. Clones the advanced configuration into the box options —
 // the caller retains ownership of `advanced_opts` and is responsible for

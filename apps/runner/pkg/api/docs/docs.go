@@ -635,6 +635,10 @@ const docTemplate = `{
                 "osUser"
             ],
             "properties": {
+                "anonymousImagePull": {
+                    "description": "Pull the image without the registry credentials this runner holds.",
+                    "type": "boolean"
+                },
                 "authToken": {
                     "type": "string"
                 },
@@ -959,20 +963,6 @@ const docTemplate = `{
                 }
             }
         },
-        "dto.VolumeDTO": {
-            "type": "object",
-            "properties": {
-                "mountPath": {
-                    "type": "string"
-                },
-                "subpath": {
-                    "type": "string"
-                },
-                "volumeId": {
-                    "type": "string"
-                }
-            }
-        },
         "dto.SecretDTO": {
             "type": "object",
             "required": [
@@ -993,6 +983,20 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.VolumeDTO": {
+            "type": "object",
+            "properties": {
+                "mountPath": {
+                    "type": "string"
+                },
+                "subpath": {
+                    "type": "string"
+                },
+                "volumeId": {
                     "type": "string"
                 }
             }

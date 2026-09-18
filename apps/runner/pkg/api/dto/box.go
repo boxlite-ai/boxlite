@@ -33,6 +33,9 @@ type CreateBoxDTO struct {
 	OtelEndpoint     *string           `json:"otelEndpoint,omitempty"`
 	SkipStart        *bool             `json:"skipStart,omitempty"`
 
+	// Pull the image without the registry credentials this runner holds.
+	AnonymousImagePull *bool `json:"anonymousImagePull,omitempty"`
+
 	// Nullable for backward compatibility
 	OrganizationId *string `json:"organizationId,omitempty"`
 	RegionId       *string `json:"regionId,omitempty"`

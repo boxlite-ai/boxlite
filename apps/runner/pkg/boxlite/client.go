@@ -161,9 +161,11 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 	insecureRegistries := normalizeRegistryHosts(config.InsecureRegistries)
 	registries := buildImageRegistries(insecureRegistries, config.GhcrUsername, config.GhcrToken)
-	// docker.io auth (local dev): boxlite-core pulls box base images (e.g. the
-	// debian base disk + public user images) from docker.io; without auth those
-	// hit the anonymous Docker Hub rate limit. Mirror the ghcr.io auth entry.
+	// docker.io auth (local dev): boxlite-core pulls the operator's own base
+	// images (e.g. the debian base disk) from docker.io; without auth those hit
+	// the anonymous Docker Hub rate limit. Mirror the ghcr.io auth entry. It no
+	// longer covers a tenant's own images — those pull anonymously and take the
+	// anonymous limit with them.
 	if config.DockerHubUsername != "" && config.DockerHubToken != "" {
 		registries = append(registries, boxlite.ImageRegistry{
 			Host:      "docker.io",
@@ -256,6 +258,14 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 	if boxDto.StorageQuota > 0 {
 		opts = append(opts, boxlite.WithDiskSize(int(boxDto.StorageQuota)))
+	}
+	// This runner holds ghcr.io and docker.io credentials for its own images
+	// (see NewClient), and core matches them by host. An image reference the
+	// control plane accepted from a tenant must not reach them, so the control
+	// plane says which pulls are anonymous — the runner cannot tell, because
+	// which references are the operator's own is the control plane's knowledge.
+	if boxDto.AnonymousImagePull != nil {
+		opts = append(opts, boxlite.WithAnonymousImagePull(*boxDto.AnonymousImagePull))
 	}
 
 	for k, v := range boxDto.Env {

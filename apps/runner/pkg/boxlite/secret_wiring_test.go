@@ -37,6 +37,28 @@ func TestCreateAppliesSecrets(t *testing.T) {
 	}
 }
 
+// TestCreateAppliesAnonymousImagePull guards the same kind of hop for the
+// credential boundary. The control plane decides which pulls may use this
+// runner's registry credentials and says so in the payload; if Create stops
+// forwarding that decision, every tenant image is pulled with the operator's
+// token again and nothing else fails.
+func TestCreateAppliesAnonymousImagePull(t *testing.T) {
+	fileSet := token.NewFileSet()
+	parsed, err := parser.ParseFile(fileSet, "client.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse client.go: %v", err)
+	}
+
+	create := findMethod(parsed, "Client", "Create")
+	if create == nil {
+		t.Fatal("Client.Create not found in client.go")
+	}
+
+	if findCall(create.Body, "boxlite", "WithAnonymousImagePull") == nil {
+		t.Fatal("Client.Create no longer calls boxlite.WithAnonymousImagePull; tenant images would be pulled with the runner's credentials")
+	}
+}
+
 // TestRecoverForwardsSecrets exercises recoverCreateDto, the hand-built
 // create request RecoverBox hands to Create: every create-carried field the
 // caller supplied, secrets included, must survive the copy or a recovered

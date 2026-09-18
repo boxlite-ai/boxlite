@@ -8,6 +8,9 @@ definitions:
     type: object
   CreateBoxDTO:
     properties:
+      anonymousImagePull:
+        description: Pull the image without the registry credentials this runner holds.
+        type: boolean
       authToken:
         type: string
       cmd:
@@ -231,15 +234,6 @@ definitions:
       networkLimitEgress:
         type: boolean
     type: object
-  dto.VolumeDTO:
-    properties:
-      mountPath:
-        type: string
-      subpath:
-        type: string
-      volumeId:
-        type: string
-    type: object
   dto.SecretDTO:
     properties:
       hosts:
@@ -255,6 +249,15 @@ definitions:
     required:
       - name
       - value
+    type: object
+  dto.VolumeDTO:
+    properties:
+      mountPath:
+        type: string
+      subpath:
+        type: string
+      volumeId:
+        type: string
     type: object
   enums.BoxState:
     enum:

@@ -393,6 +393,16 @@ pub struct BoxOptions {
     #[serde(default)]
     pub advanced: AdvancedBoxOptions,
 
+    /// Pull this box's image without the runtime's registry credentials.
+    ///
+    /// Those credentials are matched by host and belong to whoever configured
+    /// the runtime. A caller that hands over an image ref it did not choose —
+    /// a multi-tenant control plane passing a tenant's ref — sets this so the
+    /// ref cannot reach them. Default `false`: a caller pulling its own images
+    /// keeps the registries it configured.
+    #[serde(default)]
+    pub anonymous_image_pull: bool,
+
     /// Override the image's ENTRYPOINT directive.
     ///
     /// When set, completely replaces the image's ENTRYPOINT.
@@ -542,6 +552,7 @@ impl Default for BoxOptions {
             auto_resume: None,
             detach: default_detach(),
             advanced: AdvancedBoxOptions::default(),
+            anonymous_image_pull: false,
             entrypoint: None,
             cmd: None,
             user: None,

@@ -47,4 +47,38 @@ describe('RunnerAdapterV2 createBox', () => {
       }),
     )
   })
+
+  /**
+   * The runner holds the operator's registry credentials and matches them by
+   * host, so the control plane has to say which pulls may use them. It is the
+   * only side that knows: whether a ref is one of the operator's own curated
+   * images is not visible from the ref alone.
+   */
+  describe('anonymous pulls', () => {
+    function makeAdapter() {
+      const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+      const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+      return { adapter, jobService }
+    }
+
+    function payloadOf(jobService: any) {
+      return jobService.createJob.mock.calls[0][5]
+    }
+
+    it.each([
+      ['a curated short name', 'base', false],
+      ['a curated ref', 'ghcr.io/boxlite-ai/boxlite-agent-python:v0.1.0', false],
+      ['a tenant ref', 'quay.io/acme/app:v1', true],
+      // The same host the operator's own images live on. Deciding by host
+      // would send credentials here, which is the hole this closes.
+      ['a tenant ref on a credentialed host', 'ghcr.io/acme/app:v1', true],
+    ])('pulls %s anonymously: %s', async (_label, image, expected) => {
+      const { adapter, jobService } = makeAdapter()
+      await adapter.init({ id: 'runner-1' } as any)
+
+      await adapter.createBox({ id: 'box-1', image, volumes: [] } as any)
+
+      expect(payloadOf(jobService).anonymousImagePull).toBe(expected)
+    })
+  })
 })

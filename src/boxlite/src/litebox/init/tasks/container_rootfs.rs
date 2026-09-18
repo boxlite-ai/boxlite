@@ -8,7 +8,7 @@
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper};
-use crate::images::{ContainerImageConfig, ImageDiskManager};
+use crate::images::{ContainerImageConfig, ImageDiskManager, PullPolicy};
 use crate::litebox::init::types::{ContainerRootfsPrepResult, USE_DISK_ROOTFS, USE_OVERLAYFS};
 use crate::pipeline::PipelineTask;
 use crate::runtime::layout::BoxFilesystemLayout;
@@ -36,6 +36,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             cmd_override,
             user_override,
             working_dir_override,
+            pull_policy,
         ) = {
             let ctx = ctx.lock().await;
             let layout = ctx
@@ -58,6 +59,9 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
                 ctx.config.options.cmd.clone(),
                 ctx.config.options.user.clone(),
                 ctx.config.options.working_dir.clone(),
+                PullPolicy {
+                    anonymous: ctx.config.options.anonymous_image_pull,
+                },
             )
         };
 
@@ -72,6 +76,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             cmd_override.as_deref(),
             user_override.as_deref(),
             working_dir_override.as_deref(),
+            pull_policy,
         )
         .await
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -101,6 +106,7 @@ async fn run_container_rootfs(
     cmd_override: Option<&[String]>,
     user_override: Option<&str>,
     working_dir_override: Option<&str>,
+    pull_policy: PullPolicy,
 ) -> BoxliteResult<(ContainerImageConfig, Disk)> {
     let disk_path = layout.disk_path();
 
@@ -122,7 +128,7 @@ async fn run_container_rootfs(
 
         // Load container config
         let image = match rootfs_spec {
-            RootfsSpec::Image(r) => pull_image(runtime, r).await?,
+            RootfsSpec::Image(r) => pull_image(runtime, r, pull_policy).await?,
             RootfsSpec::RootfsPath(path) => {
                 let bundle_dir = std::path::Path::new(path);
 
@@ -157,7 +163,7 @@ async fn run_container_rootfs(
 
     // Fresh start: pull or load image
     let image = match rootfs_spec {
-        RootfsSpec::Image(r) => pull_image(runtime, r).await?,
+        RootfsSpec::Image(r) => pull_image(runtime, r, pull_policy).await?,
         RootfsSpec::RootfsPath(path) => {
             let bundle_dir = std::path::Path::new(path);
 
@@ -289,9 +295,10 @@ fn apply_user_overrides(
 async fn pull_image(
     runtime: &crate::runtime::SharedRuntimeImpl,
     image_ref: &str,
+    policy: PullPolicy,
 ) -> BoxliteResult<crate::images::ImageObject> {
     // ImageManager has internal locking - direct access
-    runtime.image_manager.pull(image_ref).await
+    runtime.image_manager.pull(image_ref, policy).await
 }
 
 async fn prepare_overlayfs_layers(

@@ -1,6 +1,6 @@
 use crate::db::{BoxStore, Database};
 use crate::experimental::ExperimentalFeatures;
-use crate::images::{ImageDiskManager, ImageManager};
+use crate::images::{ImageDiskManager, ImageManager, PullPolicy};
 use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
 use crate::lock::{FileLockManager, LockManager};
@@ -1852,7 +1852,12 @@ impl super::images::ImageBackend for LocalRuntime {
                 "Cannot pull image: runtime has been shut down".into(),
             ));
         }
-        self.0.image_manager.pull(image_ref).await
+        // A library caller configured the registries it is asking against, so
+        // this path keeps them. The tenant-facing path is a box's own image.
+        self.0
+            .image_manager
+            .pull(image_ref, PullPolicy::default())
+            .await
     }
 
     async fn list_images(&self) -> BoxliteResult<Vec<crate::runtime::types::ImageInfo>> {

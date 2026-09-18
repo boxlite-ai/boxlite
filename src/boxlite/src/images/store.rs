@@ -51,6 +51,24 @@ impl ImageStoreInner {
     }
 }
 
+/// How a pull authenticates.
+///
+/// Registry credentials are runtime-scoped and matched by host, so they belong
+/// to whoever configured the runtime rather than to whoever asked for the
+/// image. An image ref a tenant chose must not reach them: without this,
+/// `ghcr.io/<someone-else>/<private-image>` is fetched with the operator's
+/// token and handed to the tenant who named it.
+///
+/// It covers credentials only. Which transport to use and whether to skip
+/// certificate verification stay keyed by host, because reaching a local
+/// insecure registry is about where the bytes come from, not about whose token
+/// opens the door.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PullPolicy {
+    /// Send no credentials, whatever the registry list holds for this host.
+    pub anonymous: bool,
+}
+
 // ============================================================================
 // IMAGE STORE (thread-safe facade)
 // ============================================================================
@@ -71,7 +89,7 @@ impl ImageStoreInner {
 /// let store = Arc::new(ImageStore::new(images_dir, db, vec![])?);
 ///
 /// // Pull image (thread-safe, releases lock during download)
-/// let manifest = store.pull("python:alpine").await?;
+/// let manifest = store.pull("python:alpine", PullPolicy::default()).await?;
 ///
 /// // Create BlobSource for accessing layers
 /// let storage = store.storage().await;
@@ -152,7 +170,7 @@ impl ImageStore {
     ///
     /// Thread-safe: Multiple concurrent pulls of the same image will only
     /// download once; others will get the cached result.
-    pub async fn pull(&self, image_ref: &str) -> BoxliteResult<ImageManifest> {
+    pub async fn pull(&self, image_ref: &str, policy: PullPolicy) -> BoxliteResult<ImageManifest> {
         use super::ReferenceIter;
 
         tracing::debug!(
@@ -181,7 +199,7 @@ impl ImageStore {
 
             // Slow path: pull from registry
             tracing::info!("Pulling image from registry: {}", ref_str);
-            match self.pull_from_registry(&reference).await {
+            match self.pull_from_registry(&reference, policy).await {
                 Ok(manifest) => {
                     if !errors.is_empty() {
                         tracing::info!(
@@ -570,9 +588,15 @@ impl ImageStore {
     ///
     /// This method handles the actual network I/O - manifest pull, layer download, etc.
     /// Lock is released during network I/O to allow other operations.
-    async fn pull_from_registry(&self, reference: &Reference) -> BoxliteResult<ImageManifest> {
+    async fn pull_from_registry(
+        &self,
+        reference: &Reference,
+        policy: PullPolicy,
+    ) -> BoxliteResult<ImageManifest> {
+        // The client is still built per host: anonymity is about credentials,
+        // not about transport, so an insecure local registry stays reachable.
         let client = self.client_for(reference);
-        let auth = registry_auth_for(reference.registry(), &self.image_registries);
+        let auth = registry_auth_for(reference.registry(), &self.image_registries, policy);
 
         // Step 1: Pull manifest (no lock needed)
         let (manifest, manifest_digest_str) = client
@@ -590,7 +614,7 @@ impl ImageStore {
 
         // Step 3: Extract image manifest (may pull platform-specific manifest for multi-platform images)
         let mut image_manifest = self
-            .extract_image_manifest(&client, reference, &manifest, manifest_digest_str)
+            .extract_image_manifest(&client, reference, &manifest, manifest_digest_str, policy)
             .await?;
 
         // Step 4: Download layers (no lock during download, atomic file writes)
@@ -645,6 +669,7 @@ impl ImageStore {
         reference: &Reference,
         manifest: &oci_client::manifest::OciManifest,
         manifest_digest: String,
+        policy: PullPolicy,
     ) -> BoxliteResult<ImageManifest> {
         match manifest {
             oci_client::manifest::OciManifest::Image(img) => {
@@ -658,7 +683,7 @@ impl ImageStore {
                 })
             }
             oci_client::manifest::OciManifest::ImageIndex(index) => {
-                self.extract_platform_manifest(client, reference, index)
+                self.extract_platform_manifest(client, reference, index, policy)
                     .await
             }
         }
@@ -700,6 +725,7 @@ impl ImageStore {
         client: &oci_client::Client,
         reference: &Reference,
         index: &oci_client::manifest::OciImageIndex,
+        policy: PullPolicy,
     ) -> BoxliteResult<ImageManifest> {
         let (platform_os, platform_arch) = Self::detect_platform();
 
@@ -724,7 +750,7 @@ impl ImageStore {
         let (platform_image, platform_digest) = client
             .pull_manifest(
                 &platform_reference,
-                &registry_auth_for(reference.registry(), &self.image_registries),
+                &registry_auth_for(reference.registry(), &self.image_registries, policy),
             )
             .await
             .map_err(|e| BoxliteError::Storage(format!("failed to pull platform manifest: {e}")))?;
@@ -1058,7 +1084,21 @@ fn client_config_for_registry(host: &str, image_registries: &[ImageRegistry]) ->
     }
 }
 
-fn registry_auth_for(host: &str, image_registries: &[ImageRegistry]) -> OciRegistryAuth {
+fn registry_auth_for(
+    host: &str,
+    image_registries: &[ImageRegistry],
+    policy: PullPolicy,
+) -> OciRegistryAuth {
+    // Decided here rather than at the call sites because a pull resolves a
+    // credential in more than one place — the manifest, then the
+    // platform-specific manifest of a multi-platform image — and a credential
+    // that leaks at the second one leaks just the same. Layer and config
+    // downloads reuse whatever this returned, through the client's own auth
+    // cache, so they follow without asking again.
+    if policy.anonymous {
+        return OciRegistryAuth::Anonymous;
+    }
+
     let auth = image_registries
         .iter()
         .find(|registry| registry.host == host)
@@ -1231,11 +1271,66 @@ mod tests {
 
         for (host, expected) in cases {
             assert_eq!(
-                registry_auth_for(host, &registries),
+                registry_auth_for(host, &registries, PullPolicy::default()),
                 expected,
                 "host={host}"
             );
         }
+    }
+
+    /// The confused deputy this policy exists for: the registries a runtime
+    /// holds credentials for are exactly the ones a tenant would name to have
+    /// them spent. Matching by host is what makes the credential reachable, so
+    /// the test pins the case where the host does match.
+    #[test]
+    fn anonymous_pull_sends_no_credential_the_host_would_otherwise_match() {
+        let registries = [
+            ImageRegistry::https("ghcr.io").with_basic_auth("operator", "token"),
+            ImageRegistry::https("docker.io").with_bearer_auth("operator-token"),
+        ];
+
+        for host in ["ghcr.io", "docker.io"] {
+            assert_eq!(
+                registry_auth_for(host, &registries, PullPolicy { anonymous: true }),
+                OciRegistryAuth::Anonymous,
+                "host={host}"
+            );
+        }
+    }
+
+    /// The other half: turning anonymity on must not be the only way to get a
+    /// pull to work, or the operator's own images stop resolving.
+    #[test]
+    fn credentialed_pull_still_matches_the_host() {
+        let registries = [ImageRegistry::https("ghcr.io").with_basic_auth("operator", "token")];
+
+        assert_eq!(
+            registry_auth_for("ghcr.io", &registries, PullPolicy { anonymous: false }),
+            OciRegistryAuth::Basic("operator".to_string(), "token".to_string()),
+        );
+    }
+
+    /// Anonymity is about credentials only. A local insecure registry has to
+    /// stay reachable, and that is decided by a different function keyed by
+    /// host — this pins that the two are not the same switch.
+    #[test]
+    fn anonymous_pull_leaves_transport_and_tls_alone() {
+        let registries = [ImageRegistry::http("registry.local:5000")
+            .with_skip_verify(true)
+            .with_basic_auth("operator", "token")];
+
+        let config = client_config_for_registry("registry.local:5000", &registries);
+
+        assert!(matches!(config.protocol, ClientProtocol::Http));
+        assert!(config.accept_invalid_certificates);
+        assert_eq!(
+            registry_auth_for(
+                "registry.local:5000",
+                &registries,
+                PullPolicy { anonymous: true }
+            ),
+            OciRegistryAuth::Anonymous,
+        );
     }
 
     #[test]

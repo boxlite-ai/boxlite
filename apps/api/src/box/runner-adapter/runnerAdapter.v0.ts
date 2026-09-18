@@ -22,6 +22,7 @@ import {
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
+import { isCuratedSelector } from '../../image/utils/image-ref.util'
 
 const isDebugEnabled = process.env.DEBUG === 'true'
 
@@ -275,6 +276,12 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       authToken: box.authToken,
       organizationId: box.organizationId,
       regionId: box.region,
+      // Same rule as the v2 adapter: a ref this box did not get from the
+      // curated set was chosen by a tenant, and a runner's registry
+      // credentials are the operator's. Both adapters reach the same runner
+      // DTO, so leaving it out here would just move the hole to the older
+      // protocol — which is the one that still serves box recovery.
+      anonymousImagePull: !isCuratedSelector(box.image),
     })
 
     if (!response?.data?.daemonVersion) {

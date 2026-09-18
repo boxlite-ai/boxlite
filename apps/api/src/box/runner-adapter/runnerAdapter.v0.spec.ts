@@ -41,6 +41,24 @@ describe('RunnerAdapterV0 createBox', () => {
     )
   })
 
+  /**
+   * The older protocol reaches the same runner and the same DTO, so it needs
+   * the same credential rule. It is also the only adapter that serves box
+   * recovery, so a gap here would outlive the protocol's other uses.
+   */
+  it.each([
+    ['a curated short name', 'base', false],
+    ['a tenant ref on a credentialed host', 'ghcr.io/acme/app:v1', true],
+  ])('pulls %s anonymously: %s', async (_label, image, expected) => {
+    const adapter = new RunnerAdapterV0()
+    const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
+    ;(adapter as any).boxApiClient = { create }
+
+    await adapter.createBox({ id: 'box-1', image } as any)
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ anonymousImagePull: expected }))
+  })
+
   it('passes secrets through to the runner recover body', async () => {
     const adapter = new RunnerAdapterV0()
     const recover = jest.fn().mockResolvedValue(undefined)

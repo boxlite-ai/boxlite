@@ -582,6 +582,12 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             // BoxOptions through PyBoxOptions and the REST wire schema carries
             // `tty`; Node has no such caller yet.
             tty: false,
+            // Also not surfaced: an anonymous pull exists for a caller that
+            // passes on an image ref someone else chose. An embedded SDK pulls
+            // its own refs against registries its own process configured, so it
+            // keeps them. The multi-tenant caller is the Go runner — see
+            // `BoxOptions::anonymous_image_pull`.
+            anonymous_image_pull: false,
             secrets,
         })
     }

@@ -4,7 +4,7 @@
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::Disk;
-use crate::images::ImageDiskManager;
+use crate::images::{ImageDiskManager, PullPolicy};
 use crate::pipeline::PipelineTask;
 use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
 use crate::runtime::constants::images;
@@ -121,8 +121,13 @@ async fn prepare_guest_rootfs(
 async fn pull_guest_rootfs_image(
     runtime: &SharedRuntimeImpl,
 ) -> BoxliteResult<crate::images::ImageObject> {
-    // ImageManager has internal locking - direct access
-    runtime.image_manager.pull(images::INIT_ROOTFS).await
+    // ImageManager has internal locking - direct access.
+    // A credentialed pull: this ref is the runtime's own, not a caller's, so it
+    // is the one image that may use whatever the registry list holds.
+    runtime
+        .image_manager
+        .pull(images::INIT_ROOTFS, PullPolicy::default())
+        .await
 }
 
 #[allow(dead_code)] // OCI boot path, kept for a possible future switch back

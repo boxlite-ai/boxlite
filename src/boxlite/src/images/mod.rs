@@ -13,6 +13,7 @@ pub use config::ContainerImageConfig;
 pub use image_disk::ImageDiskManager;
 pub use manager::ImageManager;
 pub use object::ImageObject;
+pub use store::PullPolicy;
 
 use oci_client::Reference;
 

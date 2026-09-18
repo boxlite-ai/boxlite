@@ -17,6 +17,7 @@ import { JobStatus } from '../enums/job-status.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
 import { BoxRepository } from '../repositories/box.repository'
+import { isCuratedSelector } from '../../image/utils/image-ref.util'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -148,6 +149,19 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       authToken: box.authToken,
       organizationId: box.organizationId,
       regionId: box.region,
+      // A runner holds registry credentials for the hosts the curated images
+      // live on, and core matches them by host. Any other ref reached this box
+      // because a tenant named it, so it is pulled with no credentials at all —
+      // otherwise `ghcr.io/<another-org>/<private>` is fetched with the
+      // operator's token and handed to whoever asked for it.
+      //
+      // The test is the curated set, not the host. The built-in three are
+      // public, but an operator may override or append curated entries that
+      // are not — that is what the ghcr credential is for — so curated refs
+      // have to keep their credentials. Deciding by host would put every ref
+      // on those hosts back inside the operator's identity, which is the hole
+      // itself.
+      anonymousImagePull: !isCuratedSelector(box.image),
     }
 
     await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)

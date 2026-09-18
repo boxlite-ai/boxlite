@@ -252,6 +252,20 @@ pub unsafe extern "C" fn boxlite_options_set_detach(opts: *mut CBoxliteOptions, 
     options_set_detach(opts, val)
 }
 
+/// Pull this box's image without the registry credentials the runtime holds.
+///
+/// For a caller that boots a box from an image reference someone else chose:
+/// credentials are matched by host, so without this a reference naming a host
+/// the runtime has a token for is fetched with that token. Off by default — a
+/// caller pulling its own images keeps the registries it configured.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_anonymous_image_pull(
+    opts: *mut CBoxliteOptions,
+    val: c_int,
+) {
+    options_set_anonymous_image_pull(opts, val)
+}
+
 /// Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
 /// `CBoxliteOptions`. Clones the advanced configuration into the box options —
 /// the caller retains ownership of `advanced_opts` and is responsible for
@@ -582,6 +596,14 @@ pub unsafe fn options_set_detach(handle: *mut OptionsHandle, val: c_int) {
     unsafe {
         if !handle.is_null() {
             (*handle).options.detach = val != 0;
+        }
+    }
+}
+
+pub unsafe fn options_set_anonymous_image_pull(handle: *mut OptionsHandle, val: c_int) {
+    unsafe {
+        if !handle.is_null() {
+            (*handle).options.anonymous_image_pull = val != 0;
         }
     }
 }
