@@ -1896,7 +1896,7 @@ components:
           items:
             $ref: "#/components/schemas/SecretSpec"
           description: |
-            Secret placeholder rules for outbound HTTP(S) requests.
+            Secret placeholder rules for outbound HTTPS requests.
             Matching requests replace `placeholder` with `value` on the host side.
         detach:
           type: boolean
@@ -2114,6 +2114,9 @@ components:
             Optional outbound allowlist used only when `mode=enabled`.
             Empty or omitted means full outbound access.
             Supports hostnames, wildcard hostnames, IPs, and CIDRs.
+            A host matched by a configured secret is additionally reachable on
+            port 443 without a rule of its own, so this is not the only egress
+            gate.
 
     InboundNetworkSpec:
       type: object
@@ -2141,7 +2144,7 @@ components:
 
     SecretSpec:
       type: object
-      description: Outbound HTTP(S) secret substitution rule
+      description: Outbound HTTPS secret substitution rule
       required: [name, value]
       properties:
         name:

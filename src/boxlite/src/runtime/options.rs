@@ -430,10 +430,10 @@ pub struct BoxOptions {
     #[serde(default)]
     pub tty: bool,
 
-    /// Secrets for MITM proxy injection into outbound HTTP(S) requests.
+    /// Secrets for MITM proxy injection into outbound HTTPS requests.
     ///
     /// Each secret maps a placeholder string to a real value. When the box
-    /// makes an HTTP(S) request to a matching host, placeholders in request
+    /// makes an HTTPS request to a matching host, placeholders in request
     /// headers and body are replaced with the actual secret value.
     ///
     /// The placeholder (e.g., `<BOXLITE_SECRET:openai>`) is visible to the
@@ -444,7 +444,7 @@ pub struct BoxOptions {
 
 /// A secret for MITM proxy injection.
 ///
-/// When the guest sends an HTTP(S) request to one of the listed hosts,
+/// When the guest sends an HTTPS request to one of the listed hosts,
 /// the MITM proxy replaces `placeholder` with `value` in headers and body.
 /// The real `value` never enters the guest VM.
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -954,6 +954,9 @@ impl NetworkConfig {
 ///   otherwise a guest could sidestep the rule by addressing the resolved IP
 ///   directly. QUIC/HTTP3 to such a host falls back to TCP; add the IP or
 ///   CIDR to `allow_net` to keep UDP open.
+/// - A host matched by a configured [`Secret`] is additionally reachable on
+///   port 443 without a rule of its own, so `allow_net` is not the only
+///   egress gate.
 ///
 /// The gateway's DNS resolver and DHCP are unaffected: they are internal
 /// services, not egress.
