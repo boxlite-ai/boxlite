@@ -122,9 +122,20 @@ export const promoteRunner = async ({
    * prefix holding one of the two is the half-publication `runner:build`
    * refuses to complete, and copying half of it would move a manifest that
    * describes bytes the destination does not have.
+   *
+   * Listing is also the only thing asked of it, and that is a permission
+   * boundary rather than a preference. This session is the destination's, so on
+   * GCP the call lands in another project, where what reaches across is one
+   * grant on one bucket: `roles/storage.objectViewer`, object reads and nothing
+   * else. No object role carries `storage.buckets.get`, so the
+   * `assertReachable` the destination gets would be refused here against a
+   * bucket that is present and readable — and refused naming the destination's
+   * account, which reads as the wrong bucket rather than as the wrong call.
+   * Nothing is lost by leaving it out: a promotion has no build to fail ahead
+   * of, and a bucket that really is unreachable fails this listing instead,
+   * with what the service said.
    */
   const source = destinationFor({ config: config as never, stage: from, prefix, names: [], run, home: cloud })
-  source.assertReachable()
   const names = source.staged().sort()
   if (names.length === 0) {
     throw new RunnerBuildError(`${source.address}/ holds nothing; ${from} has no runner staged for ${tag}`)

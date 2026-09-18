@@ -181,14 +181,25 @@ all. With `--stage`, only that stage's block answers.
 
 A stage that is not declared is a typo, not a new environment. Stage names
 follow SST's own constraint (`[a-zA-Z0-9-]+`) because mstage reads and writes
-the same S3 keys. `region`, `project`, `zone`, `roleArn`, `protect`, `login`
-and `deploy` are each optional; `home` is not.
+the same S3 keys. `region`, `project`, `zone`, `promoteFrom`, `roleArn`,
+`protect`, `login` and `deploy` are each optional; `home` is not.
 
 `zone` names the zone inside the region a stage's machines are created in, or
 is left out for the region's first. It is declarable because that default is
 not always available: machine families are stocked per zone, and a region's
 first zone answering `stockout` for the family a runner needs is ordinary.
 Nothing on AWS reads it, where a subnet carries the zone.
+
+`promoteFrom` names the stage a promotion into this one reads from. Nothing at
+deploy time reads it: it exists so `bootstrap` can grant this stage's accounts
+the reads they make at the source, which on GCP is another project and so a
+policy neither end can write alone. A stage nothing is promoted into leaves it
+out. It is checked against the other declarations only as far as one file can
+be trusted to hold them — a stage may not promote from itself, and a named
+stage that *is* present must live in the same cloud — because a job restores
+the declarations it reaches rather than the file, and prod's block arrives
+without dev's on every ordinary deploy. `bootstrap` reads a whole file and is
+where a name that resolves to nothing is refused.
 
 No stage declares an AWS account. The account is whichever one the resolved
 credentials belong to, and a caller that has to name it in an ARN reads it back

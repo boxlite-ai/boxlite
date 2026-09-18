@@ -318,22 +318,50 @@ Each leg is also dispatchable on its own — `mbuild.yml` for the images,
 orchestrator calls exactly those.
 
 **A promotion crosses two stages, and on GCP that means two projects.** One
-identity does the whole move: the destination's, because that is the one that
-has to write. So the destination's deployer needs read access on the source's
-project, granted there and not here:
+identity does each move — the destination's, because that is the one that has to
+write — but the two legs do not run as the same account: `mbuild.yml`
+authenticates as the destination's `GCP_IMAGE_PUBLISHER`, `mrunner.yml` as its
+`GCP_DEPLOYER`. Each of those two needs read on the source, in a policy the
+source's project owns.
+
+The destination declares where it is promoted from, and `bootstrap` makes both
+grants:
+
+```json
+"prod": { "home": "gcp", "project": "boxlite-prod-project", "promoteFrom": "dev" }
+```
+
+```
+npm run bootstrap -- --stage prod --confirm
+```
+
+It is the destination's bootstrap that makes them because that is the run which
+knows both account names — it just created them — and the source has to be
+bootstrapped first, since the bucket and the repository being granted on are
+its own. An operator whose credentials do not administer the source is the
+ordinary case rather than an error: the two commands are printed instead, for
+whoever does hold that project.
 
 ```
 gcloud projects add-iam-policy-binding <source project> \
-  --member=serviceAccount:<destination deployer> --role=roles/artifactregistry.reader
+  --member=serviceAccount:<destination publisher> --role=roles/artifactregistry.reader
 gcloud storage buckets add-iam-policy-binding gs://<source artifacts bucket> \
   --member=serviceAccount:<destination deployer> --role=roles/storage.objectViewer
 ```
 
-The registry grant is what `mbuild promote` pulls with; the bucket grant is what
-`runner:promote` copies from, and it is scoped to the one bucket rather than the
-project. Without them a promotion fails at the pull with a permissions error and
-nothing is written — `bootstrap` does not make this grant, because it runs
-against one project and this one belongs to the other.
+The registry grant is what `mbuild promote` pulls with, and it goes to the
+publisher rather than the deployer because that is the account the job federates
+— each stage has its own, so the destination's must be named. The bucket grant is
+what `runner:promote` copies from, scoped to the one bucket rather than the
+project. It is object reads only: `storage.buckets.get` is in no object role,
+which is why `runner:promote` reads the source by listing it and never asks that
+bucket for its metadata. Without the grants a promotion fails at the read with a
+permissions error and nothing is written.
+
+`promoteFrom` is read by nothing at deploy time, and `mdeploy-all`'s
+`auto_promote_from` still chooses the source for a given dispatch. The two
+answer different questions: one is a standing declaration a workstation can act
+on, the other is what this run was asked to do.
 
 ## Commands
 

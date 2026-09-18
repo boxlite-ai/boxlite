@@ -73,6 +73,18 @@ export type StageConfig = {
    * subnet carries the zone.
    */
   zone: string | null
+  /**
+   * The stage a promotion into this one reads from, or null for a stage that is
+   * never promoted into.
+   *
+   * Declared because the reads a promotion makes are granted on the *source*
+   * and held by *this* stage's accounts, so `bootstrap` cannot make them
+   * without being told which stage the source is — and on GCP that is another
+   * project, which nothing else in this block names. `mdeploy-all` picks a
+   * source per dispatch in `auto_promote_from` and defaults to the same answer;
+   * this is the standing one, and the only one a bootstrap can act on.
+   */
+  promoteFrom: string | null
   roleArn: string | null
   protect: boolean
   /**
@@ -328,7 +340,7 @@ const parseStage = (name: string, raw: unknown, path: string): StageConfig => {
     throw new ConfigError(`${path}: stage "${name}" may only contain letters, digits and "-"`)
   }
   const stage = assertObject(raw, `${path}: stage "${name}"`)
-  for (const key of ['region', 'project', 'zone', 'roleArn'] as const) {
+  for (const key of ['region', 'project', 'zone', 'promoteFrom', 'roleArn'] as const) {
     if (stage[key] !== undefined) assertNonEmptyString(stage[key], `${path}: stage "${name}" ${key}`)
   }
   if (stage.protect !== undefined && typeof stage.protect !== 'boolean') {
@@ -356,6 +368,9 @@ const parseStage = (name: string, raw: unknown, path: string): StageConfig => {
     login: parseLogin(stage.login, `${path}: stage "${name}"`),
     project: (stage.project as string) ?? null,
     zone: (stage.zone as string) ?? null,
+    // Whether it names a stage that exists is not knowable here; `parseStages`
+    // asks that once every declaration has been read.
+    promoteFrom: (stage.promoteFrom as string) ?? null,
     roleArn: (stage.roleArn as string) ?? null,
     protect: (stage.protect as boolean) ?? false,
     // Checked for shape and nothing else: the keys are mdeploy's, and a list
@@ -405,6 +420,34 @@ export const parseBase = (
   }
 }
 
+/**
+ * The one field that names another stage, checked once they are all read.
+ *
+ * Here rather than in `parseStage`, which sees one declaration and cannot see a
+ * stage declared further down the same file.
+ *
+ * What is deliberately *not* checked is that the named stage is present. A CI
+ * job restores only the declarations it reaches — one for a deploy, both ends
+ * for a promotion (`.github/actions/setup-infra`) — so prod's block routinely
+ * arrives without the dev block it names, and refusing that would fail every
+ * prod deploy over a field no deploy reads. `bootstrap` reads a whole file and
+ * is where a name that resolves to nothing is refused.
+ */
+const assertPromotionSources = (stages: Record<string, StageConfig>, path: string): void => {
+  for (const [name, stage] of Object.entries(stages)) {
+    const from = stage.promoteFrom
+    if (from === null) continue
+    if (from === name) throw new ConfigError(`${path}: stage "${name}" promotes from itself, which would do nothing`)
+    const source = stages[from]
+    if (source && source.home !== stage.home) {
+      throw new ConfigError(
+        `${path}: stage "${name}" lives in ${stage.home} and promotes from "${from}", which lives in ${source.home}. ` +
+          'A promotion copies within one cloud, using one identity.',
+      )
+    }
+  }
+}
+
 /** The uncommitted half: which stages exist, and what each one costs to reach. */
 export const parseStages = (path: string, contents: string): Record<string, StageConfig> => {
   let raw: unknown
@@ -417,7 +460,9 @@ export const parseStages = (path: string, contents: string): Record<string, Stag
   const stages = assertObject(root.stages, `${path}: "stages"`)
   const names = Object.keys(stages)
   if (names.length === 0) throw new ConfigError(`${path}: "stages" must declare at least one stage`)
-  return Object.fromEntries(names.map((name) => [name, parseStage(name, stages[name], path)]))
+  const declared = Object.fromEntries(names.map((name) => [name, parseStage(name, stages[name], path)]))
+  assertPromotionSources(declared, path)
+  return declared
 }
 
 /**
