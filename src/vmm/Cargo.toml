@@ -1,0 +1,12 @@
+[package]
+name = "boxlite-vmm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+description = "Virtual machine lifecycle and device model for BoxLite"
+
+[dependencies]
+boxlite-hypervisor.workspace = true

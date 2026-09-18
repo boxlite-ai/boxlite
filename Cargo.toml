@@ -5,6 +5,8 @@ members = [
     "src/shared",
     "src/guest",
     "src/shim",
+    "src/hypervisor",
+    "src/vmm",
     "src/test-utils",
     "src/deps/bubblewrap-sys",
     "src/deps/e2fsprogs-sys",
@@ -21,6 +23,8 @@ resolver = "2"
 [workspace.dependencies]
 boxlite = { path = "src/boxlite", version = "0.10.2" }
 boxlite-shared = { path = "src/shared", version = "0.10.2" }
+boxlite-hypervisor = { path = "src/hypervisor", version = "0.10.2" }
+boxlite-vmm = { path = "src/vmm", version = "0.10.2" }
 bubblewrap-sys = { path = "src/deps/bubblewrap-sys", version = "0.10.2" }
 e2fsprogs-sys = { path = "src/deps/e2fsprogs-sys", version = "0.10.2" }
 libgvproxy-sys = { path = "src/deps/libgvproxy-sys", version = "0.10.2" }
