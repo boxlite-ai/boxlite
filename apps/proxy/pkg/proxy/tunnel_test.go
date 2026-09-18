@@ -131,3 +131,43 @@ func TestBufferedConnForwardsCloseWrite(t *testing.T) {
 		t.Fatal("CloseWrite was not forwarded")
 	}
 }
+
+func TestDialRunnerTunnelHonoursTheCallerDeadline(t *testing.T) {
+	// A runner that accepts the connection and then says nothing. Without the
+	// clamp, this attempt would run out runnerTunnelSetupTimeout (10s) no
+	// matter how little of the retry window was left.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		accepted <- conn // held open, never written to
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	conn, err := dialRunnerTunnel(ctx, &RunnerInfo{ApiUrl: "http://" + listener.Addr().String()}, "box-1", 3000)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		conn.Close()
+		t.Fatal("dialRunnerTunnel() succeeded against a silent runner")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("dialRunnerTunnel() took %v, want it bounded by the caller's 300ms deadline", elapsed)
+	}
+	select {
+	case c := <-accepted:
+		c.Close()
+	default:
+	}
+}

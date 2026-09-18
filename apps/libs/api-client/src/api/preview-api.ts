@@ -28,6 +28,39 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
     return {
         /**
          * 
+         * @summary Resume a stopped box and wait until it is running
+         * @param {string} boxId ID of the box
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        ensureBoxReady: async (boxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('ensureBoxReady', 'boxId', boxId)
+            const localVarPath = `/preview/{boxId}/ensure-ready`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Get box ID from signed preview URL token
          * @param {string} signedPreviewToken Signed preview URL token
          * @param {number} port Port number to get box ID from signed preview URL token
@@ -187,6 +220,19 @@ export const PreviewApiFp = function(configuration?: Configuration) {
     return {
         /**
          * 
+         * @summary Resume a stopped box and wait until it is running
+         * @param {string} boxId ID of the box
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async ensureBoxReady(boxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.ensureBoxReady(boxId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['PreviewApi.ensureBoxReady']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Get box ID from signed preview URL token
          * @param {string} signedPreviewToken Signed preview URL token
          * @param {number} port Port number to get box ID from signed preview URL token
@@ -250,6 +296,16 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
     return {
         /**
          * 
+         * @summary Resume a stopped box and wait until it is running
+         * @param {string} boxId ID of the box
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        ensureBoxReady(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.ensureBoxReady(boxId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Get box ID from signed preview URL token
          * @param {string} signedPreviewToken Signed preview URL token
          * @param {number} port Port number to get box ID from signed preview URL token
@@ -297,6 +353,17 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
  * PreviewApi - object-oriented interface
  */
 export class PreviewApi extends BaseAPI {
+    /**
+     * 
+     * @summary Resume a stopped box and wait until it is running
+     * @param {string} boxId ID of the box
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public ensureBoxReady(boxId: string, options?: RawAxiosRequestConfig) {
+        return PreviewApiFp(this.configuration).ensureBoxReady(boxId, options).then((request) => request(this.axios, this.basePath));
+    }
+
     /**
      * 
      * @summary Get box ID from signed preview URL token

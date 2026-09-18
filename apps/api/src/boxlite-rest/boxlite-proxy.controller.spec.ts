@@ -22,9 +22,14 @@ const activeAuth = {
 
 function makeHarness() {
   const boxService = {
-    findOneByIdOrName: jest
-      .fn()
-      .mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true, state: 'started', public: true }),
+    findOneByIdOrName: jest.fn().mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+      state: 'started',
+      desiredState: 'started',
+      public: true,
+    }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
     getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://3000-box.proxy.test'),
   }
@@ -124,6 +129,7 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: true,
       state: 'started',
+      desiredState: 'started',
       public: false,
     })
 
@@ -258,6 +264,7 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: true,
       state: 'started',
+      desiredState: 'started',
       public: false,
     })
 
@@ -448,5 +455,54 @@ describe('BoxliteProxyController', () => {
     res.emit('close')
     jest.advanceTimersByTime(900_000)
     expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('BoxliteProxyController tunnel readiness', () => {
+  beforeEach(() => jest.clearAllMocks())
+
+  it('does not resume a box that is settled running', async () => {
+    const { controller, autoResume, tunnelRes } = makeHarness()
+
+    await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, tunnelRes as never)
+
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
+  })
+
+  it('resumes a STARTED box that already has a stop submitted', async () => {
+    // Skipping the resume here hands back a URL whose runner goes away
+    // underneath the client. ensureReady waits out the stop and starts the box
+    // again, which is why this case must reach it rather than look "running".
+    const { controller, boxService, autoResume, tunnelRes } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+      state: 'started',
+      desiredState: 'stopped',
+      public: true,
+    })
+
+    await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, tunnelRes as never)
+
+    expect(autoResume.ensureReady).toHaveBeenCalledWith('box-uuid', activeAuth.organization)
+    expect(boxService.getNetworkTunnelUrl).toHaveBeenCalled()
+  })
+
+  it('refuses a stopping box whose owner turned auto-resume off', async () => {
+    const { controller, boxService, autoResume, tunnelRes } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: false,
+      state: 'started',
+      desiredState: 'stopped',
+      public: true,
+    })
+
+    await expect(
+      controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, tunnelRes as never),
+    ).rejects.toMatchObject({ status: 409 })
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
   })
 })

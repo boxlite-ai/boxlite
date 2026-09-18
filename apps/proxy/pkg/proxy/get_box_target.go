@@ -137,6 +137,9 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 			ctx.Error(common_errors.NewBadRequestError(wrappedErr))
 			return nil, wrappedErr
 		}
+		if err := p.resumeBeforeDial(ctx, boxId); err != nil {
+			return nil, err
+		}
 		target, err := url.Parse("http://" + net.JoinHostPort(boxId, targetPort) + targetPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse guest target URL: %w", err)
@@ -147,6 +150,10 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 			Headers:   headers,
 			Transport: p.guestPortTransport,
 		}, nil
+	}
+
+	if err := p.resumeBeforeDial(ctx, boxId); err != nil {
+		return nil, err
 	}
 
 	runnerInfo, err := p.getBoxRunnerInfo(ctx, boxId)
@@ -161,6 +168,44 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 	headers["X-BoxLite-Authorization"] = fmt.Sprintf("Bearer %s", runnerInfo.ApiKey)
 	return &common_proxy.RequestTarget{URL: target, Host: target.Host, Headers: headers}, nil
 }
+
+// resumeBeforeDial wakes a stopped box before the request is routed to it.
+//
+// Reached only after the access gate has accepted the caller — the box is
+// public, which is the owner's explicit opt-in since inbound is not enabled by
+// default, or the request carried a valid box key — and only once the target
+// port is known good, so a malformed request never starts a box. The proxy
+// cannot resume anything itself (no organization identity ever reaches it), so
+// it hands the decision to the API.
+func (p *Proxy) resumeBeforeDial(ctx *gin.Context, boxId string) error {
+	err := p.ensureBoxReady(ctx.Request.Context(), boxId)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, errEnsureReadyTimedOut) {
+		// Still starting. Say so in a way a client can act on, rather than
+		// letting it wait out the cold start on a dead socket.
+		ctx.Header("Retry-After", strconv.Itoa(int(ensureReadyHold.Seconds())))
+		wrapped := common_errors.NewCustomError(
+			http.StatusServiceUnavailable,
+			"box is starting, retry shortly",
+			"box_starting",
+		)
+		ctx.Error(wrapped)
+		return wrapped
+	}
+	// Anything else is not a reason to refuse the request: the box may well be
+	// running already, and the dial is the real test.
+	slog.WarnContext(ctx.Request.Context(), "ensure-ready failed", "box", boxId, "error", err)
+	return nil
+}
+
+const (
+	// Long enough for a cold-booted service to bind, short enough that a port
+	// nothing serves still fails while the client is listening.
+	guestDialRetryWindow = 15 * time.Second
+	guestDialRetryBase   = 250 * time.Millisecond
+)
 
 func (p *Proxy) dialGuestPort(ctx context.Context, network string, address string) (net.Conn, error) {
 	if network != "tcp" && network != "tcp4" && network != "tcp6" {
@@ -178,7 +223,37 @@ func (p *Proxy) dialGuestPort(ctx context.Context, network string, address strin
 	if err != nil {
 		return nil, fmt.Errorf("resolve runner for box %s: %w", boxID, err)
 	}
-	return dialRunnerTunnel(ctx, runnerInfo, boxID, uint16(port))
+
+	// A box that just resumed cold-boots: it reports running before its
+	// container init has replayed entrypoint/cmd, so the service is not
+	// listening yet and the first dial loses the race. Without memory-snapshot
+	// resume there is no way around that wait, so absorb it here instead of
+	// handing the client a 502 the moment it wakes something up. A box that is
+	// simply not serving this port still fails, just a few seconds later.
+	// The window bounds the whole wait, not just the gaps between attempts: a
+	// dial started just before the deadline would otherwise run out its own
+	// setup timeout on top of it.
+	retryCtx, cancelRetry := context.WithTimeout(ctx, guestDialRetryWindow)
+	defer cancelRetry()
+
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		conn, err := dialRunnerTunnel(retryCtx, runnerInfo, boxID, uint16(port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		if retryCtx.Err() != nil {
+			break
+		}
+		backoff := guestDialRetryBase << min(attempt, 3)
+		select {
+		case <-retryCtx.Done():
+			return nil, lastErr
+		case <-time.After(backoff):
+		}
+	}
+	return nil, lastErr
 }
 
 func requestEscapedPath(requestURL *url.URL, fallbackPath string) string {

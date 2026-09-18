@@ -2716,6 +2716,26 @@ paths:
       summary: Runner healthcheck
       tags:
       - runners
+  /preview/{boxId}/ensure-ready:
+    post:
+      operationId: ensureBoxReady
+      parameters:
+      - description: ID of the box
+        explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: Box is running
+        "408":
+          description: Box did not reach a running state before the resume timeout
+      summary: Resume a stopped box and wait until it is running
+      tags:
+      - preview
   /preview/{boxId}/public:
     get:
       operationId: isBoxPublic

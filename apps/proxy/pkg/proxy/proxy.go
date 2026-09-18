@@ -72,7 +72,9 @@ type Proxy struct {
 	boxPublicCache             common_cache.ICache[bool]
 	boxAuthKeyValidCache       common_cache.ICache[bool]
 	boxLastActivityUpdateCache common_cache.ICache[bool]
-	guestPortTransport         *http.Transport
+	// boxEnsureReadyCache suppresses repeat resume requests for one box.
+	boxEnsureReadyCache common_cache.ICache[bool]
+	guestPortTransport  *http.Transport
 }
 
 func StartProxy(ctx context.Context, config *config.Config) error {
@@ -107,6 +109,11 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 		if err != nil {
 			return err
 		}
+		proxy.boxEnsureReadyCache, err = common_cache.NewRedisCache[bool](config.Redis, "proxy:box-ensure-ready:")
+		if err != nil {
+			return err
+		}
+
 		proxy.boxLastActivityUpdateCache, err = common_cache.NewRedisCache[bool](config.Redis, "proxy:box-last-activity-update:")
 		if err != nil {
 			return err
@@ -116,6 +123,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 		proxy.runnerCache = common_cache.NewMapCache[RunnerInfo](ctx)
 		proxy.boxPublicCache = common_cache.NewMapCache[bool](ctx)
 		proxy.boxAuthKeyValidCache = common_cache.NewMapCache[bool](ctx)
+		proxy.boxEnsureReadyCache = common_cache.NewMapCache[bool](ctx)
 		proxy.boxLastActivityUpdateCache = common_cache.NewMapCache[bool](ctx)
 	}
 
