@@ -58,6 +58,12 @@ export function isCuratedSelector(image: string | undefined): boolean {
   return supportedImages().some(({ name, ref }) => image === name || image === ref)
 }
 
+/** Whether a ref names an immutable build rather than a tag that can move. */
+export function isDigestPinned(ref: string): boolean {
+  const at = ref.lastIndexOf('@')
+  return at > 0 && DIGEST_PATTERN.test(ref.slice(at + 1))
+}
+
 /**
  * Parse a tenant-supplied ref, rejecting anything malformed at the boundary.
  *

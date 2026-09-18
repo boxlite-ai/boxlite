@@ -4,15 +4,20 @@
  */
 
 import { Module } from '@nestjs/common'
+import { TypeOrmModule } from '@nestjs/typeorm'
+import { Image } from './entities/image.entity'
+import { ImageTag } from './entities/image-tag.entity'
+import { ImageVersion } from './entities/image-version.entity'
 import { ImageAdmissionService } from './services/image-admission.service'
+import { ImageResolverService } from './services/image-resolver.service'
 
-// The catalog's own module. It exports the admission gate, which the box
-// creation path is the only caller of today. The three entities are not
-// registered here yet: nothing queries them until the registrar lands, and a
-// `forFeature` for repositories no one injects would only look like they were
-// in use.
+// The catalog's own module: the gate that decides whether an image may be used
+// at all, and the resolver that turns it into the ref a runner is given. The
+// entities are registered here because the resolver queries them — the app uses
+// `autoLoadEntities`, so this is what makes the three tables mapped at runtime.
 @Module({
-  providers: [ImageAdmissionService],
-  exports: [ImageAdmissionService],
+  imports: [TypeOrmModule.forFeature([Image, ImageVersion, ImageTag])],
+  providers: [ImageAdmissionService, ImageResolverService],
+  exports: [ImageAdmissionService, ImageResolverService],
 })
 export class ImageModule {}

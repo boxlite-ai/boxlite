@@ -18,9 +18,8 @@ import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
-import { assertSupportedImage } from '../constants/curated-images.constant'
 import { ImageAdmissionService } from '../../image/services/image-admission.service'
-import { isCuratedSelector } from '../../image/utils/image-ref.util'
+import { ImageResolverService } from '../../image/services/image-resolver.service'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { WarmPoolEvents } from '../constants/warmpool-events.constants'
@@ -85,8 +84,11 @@ import {
   DEFAULT_AUTO_RESUME,
 } from '../constants/box-lifecycle.constants'
 
-// TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
-// these mirror the Box entity column defaults until image resolution is rebuilt.
+// An image does not decide how large a box is. These once stood in for values
+// the removed image subsystem supplied, and resolution is back now without
+// them changing hands — deliberately, because the alternative is that rotating
+// an image silently resizes every box booted from it. They are the contract,
+// not a stopgap.
 const DEFAULT_BOX_CPU = 1
 const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
@@ -120,6 +122,7 @@ export class BoxService {
     private readonly jobRepository: Repository<Job>,
     private readonly jobService: JobService,
     private readonly imageAdmissionService: ImageAdmissionService,
+    private readonly imageResolverService: ImageResolverService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -197,9 +200,6 @@ export class BoxService {
     try {
       const boxClass = this.getValidatedOrDefaultClass(createBoxDto.class)
 
-      // TODO(image-rewrite): image resolution removed; boxes can no
-      // longer resolve an image at create time. Resource sizing falls back to request values
-      // (or Box entity defaults). Rebuild image resolution here.
       const cpu = createBoxDto.cpu ?? DEFAULT_BOX_CPU
       const mem = createBoxDto.memory ?? DEFAULT_BOX_MEM
       const disk = createBoxDto.disk ?? DEFAULT_BOX_DISK
@@ -212,14 +212,16 @@ export class BoxService {
       // Admission decides whether this organization may boot from this image at
       // all; it is the gate that replaced "curated images only". It runs after
       // the suspension check because it spends a rate budget, and a create that
-      // was going to be refused anyway should not consume it. Curated selectors
-      // still resolve through the curated set — the catalog-backed resolver
-      // that pins a digest is a separate change, and until it lands a
-      // tenant-supplied ref is passed through exactly as given.
+      // was going to be refused anyway should not consume it.
       await this.imageAdmissionService.assert(organization, createBoxDto.image)
-      const image = isCuratedSelector(createBoxDto.image)
-        ? assertSupportedImage(createBoxDto.image)
-        : (createBoxDto.image as string)
+      // Resolution turns what the caller asked for into the ref a runner is
+      // given: the curated set answers its own selectors without a query, and
+      // anything else is looked up in this organization's catalog — pinned to
+      // the digest it first resolved to if the catalog knows it, passed through
+      // as typed if it does not, which is how an image gets pulled the first
+      // time.
+      const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
+      const image = resolvedImage.ref
       const needsFreshBox = requiresFreshBox(createBoxDto, organization)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {

@@ -10,6 +10,9 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BoxEvents } from '../constants/box-events.constants'
+import { Repository } from 'typeorm'
+import { ImageVersion } from '../../image/entities/image-version.entity'
+import { ImageResolverService } from '../../image/services/image-resolver.service'
 
 // ensureStartedForProxy only touches boxRepository + eventEmitter +
 // organizationService; every other injected dependency is irrelevant.
@@ -46,6 +49,7 @@ function makeService() {
     noop, // jobRepository
     noop, // jobService
     noop, // imageAdmissionService
+    noop, // imageResolverService
   )
   return { service, boxRepository, eventEmitter, organizationService }
 }
@@ -88,6 +92,7 @@ function makePreviewUrlService() {
     noop, // jobRepository
     noop, // jobService
     noop, // imageAdmissionService
+    noop, // imageResolverService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -238,6 +243,7 @@ function makeNetworkTunnelService() {
     noop, // jobRepository
     noop, // jobService
     noop, // imageAdmissionService
+    noop, // imageResolverService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -257,7 +263,7 @@ describe('BoxService network tunnel URLs', () => {
 })
 
 describe('BoxService public defaults', () => {
-  function makeCreateService() {
+  function makeCreateService(overrides: Record<string, unknown> = {}) {
     const boxRepository = { insert: jest.fn(async (box: any) => box) } as any
     const warmPoolService = { fetchWarmPoolBox: jest.fn().mockResolvedValue(undefined) }
     const runner = { id: 'runner-1', draining: false, state: RunnerState.READY }
@@ -277,33 +283,55 @@ describe('BoxService public defaults', () => {
       eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
       toBoxDto: jest.fn((box) => box),
       imageAdmissionService: { assert: jest.fn().mockResolvedValue(undefined) },
+      imageResolverService: {
+        resolve: jest.fn().mockResolvedValue({ ref: 'quay.io/acme/app@sha256:resolved' }),
+      },
+      ...overrides,
     })
     return { service, boxRepository, runnerService, warmPoolService }
   }
 
   /**
-   * The gate that only ever accepted curated images now accepts anything
-   * admission allows, and hands it on untouched. Until the catalog-backed
-   * resolver lands, "untouched" is the whole of the resolution step, so this is
-   * the assertion that the door actually opened rather than moved.
+   * Two collaborators now stand between the request and the box: admission
+   * decides whether this image may be used at all, and the resolver decides
+   * which ref a runner is handed. What is asserted here is the seam — both are
+   * asked, and the box records the resolver's answer rather than what the
+   * caller typed. Which ref the resolver picks is its own specification's job.
    */
-  it('passes a tenant-supplied ref through once admission accepts it', async () => {
+  it('stores the ref the resolver returned, not the selector the caller sent', async () => {
     const { service, boxRepository } = makeCreateService()
 
-    await service.create({ name: 'tenant-box', image: 'docker.io/acme/app:v1' } as any, { id: 'org-1' } as any)
+    await service.create({ name: 'tenant-box', image: 'quay.io/acme/app:v1' } as any, { id: 'org-1' } as any)
 
     expect((service as any).imageAdmissionService.assert).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'org-1' }),
-      'docker.io/acme/app:v1',
+      'quay.io/acme/app:v1',
+    )
+    expect((service as any).imageResolverService.resolve).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'org-1' }),
+      'quay.io/acme/app:v1',
     )
     expect(boxRepository.insert).toHaveBeenCalledWith(
-      expect.objectContaining({ image: 'docker.io/acme/app:v1' }),
+      expect.objectContaining({ image: 'quay.io/acme/app@sha256:resolved' }),
       undefined,
     )
   })
 
+  /**
+   * The one path every existing caller takes, and the only one asserted through
+   * the real resolver: a mocked one would make this a test of the mock. The
+   * repository throws, so a curated selector reaching the database fails here
+   * rather than merely costing a query.
+   */
   it('still resolves a curated selector to its operator-configured ref', async () => {
-    const { service, boxRepository } = makeCreateService()
+    const repository = {
+      createQueryBuilder: () => {
+        throw new Error('a curated selector must not query the catalog')
+      },
+    } as unknown as Repository<ImageVersion>
+    const { service, boxRepository } = makeCreateService({
+      imageResolverService: new ImageResolverService(repository),
+    })
 
     await service.create({ name: 'curated-box', image: 'python' } as any, { id: 'org-1' } as any)
 
@@ -311,6 +339,21 @@ describe('BoxService public defaults', () => {
       expect.objectContaining({ image: expect.stringContaining('boxlite-agent-python') }),
       undefined,
     )
+  })
+
+  it('asks admission before it asks the resolver', async () => {
+    const { service } = makeCreateService()
+    const order: string[] = []
+    ;(service as any).imageAdmissionService.assert.mockImplementation(async () => void order.push('admission'))
+    ;(service as any).imageResolverService.resolve.mockImplementation(async () => {
+      order.push('resolver')
+      return { ref: 'quay.io/acme/app@sha256:resolved' }
+    })
+
+    await service.create({ name: 'ordered-box', image: 'quay.io/acme/app:v1' } as any, { id: 'org-1' } as any)
+
+    // A refused image must not reach a catalog query.
+    expect(order).toEqual(['admission', 'resolver'])
   })
 
   it.each([
