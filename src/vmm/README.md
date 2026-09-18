@@ -15,6 +15,7 @@ boxlite-vmm
 | `error` | VMM errors |
 | `memory` | Backing-memory ownership and guest address layout |
 | `vcpu` | Worker threads, stop coordination, and exit handling |
+| `irq` | Device interrupt assignment, routing, and controller emulation |
 | `bus` | Address-range registration and device I/O dispatch |
 
 Backend implementation and guest boot follow in M1; virtio devices follow in M2.

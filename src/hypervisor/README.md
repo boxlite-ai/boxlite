@@ -17,8 +17,14 @@ machine layout and device emulation belong to `boxlite-vmm`.
 | `hvf` / `hvf::syndrome` | HVF operations and ARM exception decoding |
 | `kvm` / `kvm::memory` | KVM operations and private memory-slot allocation |
 
-The backend modules are selected by host OS and architecture. Concrete backend
-types and conformance traits will get distinct export paths when implemented.
+Two boundaries decide placement when a case is ambiguous: KVM memory-slot
+indices stay inside `kvm`, because HVF has no such concept, and ARM syndrome
+decoding stays inside `hvf`, so `boxlite-vmm` never sees a raw `ESR_EL2`.
+
+The backend modules are selected by host OS and architecture, and a host with
+neither backend fails the build rather than producing a library that exposes no
+VM operations. Concrete backend types and conformance traits will get distinct
+export paths when implemented.
 
 From the repository root, run `make vmm` or `make clippy:vmm`. See the
 [VMM README](../vmm/README.md) for cross-target build commands.
