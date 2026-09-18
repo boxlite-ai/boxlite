@@ -36,6 +36,9 @@ type CreateBoxDTO struct {
 	// Pull the image without the registry credentials this runner holds.
 	AnonymousImagePull *bool `json:"anonymousImagePull,omitempty"`
 
+	// Re-resolve the image reference instead of answering from the cache.
+	ImageRevalidate *bool `json:"imageRevalidate,omitempty"`
+
 	// Nullable for backward compatibility
 	OrganizationId *string `json:"organizationId,omitempty"`
 	RegionId       *string `json:"regionId,omitempty"`

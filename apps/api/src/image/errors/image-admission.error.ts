@@ -34,3 +34,26 @@ export class ImageColdPullRateLimitedError extends HttpException {
     this.name = 'ImageColdPullRateLimitedError'
   }
 }
+
+export const IMAGE_COUNT_LIMIT_CODE = 'image_count_limit_reached'
+
+/**
+ * This organization already has as many distinct images as it may keep.
+ *
+ * The limit counts *kinds* of image, not bytes: under pull-through every
+ * runner ends up caching every image an organization uses, so the number of
+ * distinct images is what actually grows the fleet's disk. An image already in
+ * the catalog is therefore never refused — booting it again costs nothing new.
+ */
+export class ImageCountLimitReachedError extends HttpException {
+  constructor(limit: number) {
+    super(
+      {
+        message: `This organization already holds its limit of ${limit} images. Delete one before using a new image.`,
+        code: IMAGE_COUNT_LIMIT_CODE,
+      },
+      HttpStatus.BAD_REQUEST,
+    )
+    this.name = 'ImageCountLimitReachedError'
+  }
+}

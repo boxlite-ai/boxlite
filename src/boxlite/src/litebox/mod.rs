@@ -86,6 +86,15 @@ impl LiteBox {
         &self.id
     }
 
+    /// What this box's image resolved to, when this process resolved it.
+    ///
+    /// For a caller that handed over a mutable tag and needs to know which
+    /// build it got. Read it after starting the box — nothing is resolved until
+    /// then — and expect `None` for a box this process only reattached to.
+    pub fn pulled_image(&self) -> Option<crate::images::PulledImage> {
+        self.box_backend.pulled_image()
+    }
+
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }

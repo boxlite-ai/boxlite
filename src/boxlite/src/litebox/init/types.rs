@@ -313,6 +313,9 @@ pub struct InitPipelineContext {
     pub layout: Option<BoxFilesystemLayout>,
     pub boot_assets: Option<PreparedBootAssets>,
     pub container_image_config: Option<ContainerImageConfig>,
+    /// Set by the container-rootfs task when this build pulled an image.
+    /// Absent when the box booted from a rootfs path.
+    pub pulled_image: Option<crate::images::PulledImage>,
     pub container_disk: Option<Disk>,
     pub guest_disk: Option<Disk>,
     pub volume_mgr: Option<GuestVolumeManager>,
@@ -350,6 +353,7 @@ impl InitPipelineContext {
             layout: None,
             boot_assets: None,
             container_image_config: None,
+            pulled_image: None,
             container_disk: None,
             guest_disk: None,
             volume_mgr: None,

@@ -236,6 +236,7 @@ type boxConfig struct {
 	autoResume         *bool
 	detach             *bool
 	anonymousImagePull *bool
+	imageRevalidate    *bool
 	network            *NetworkSpec
 	networkErr         error // deferred WithNetwork validation error, surfaced at conversion
 	secrets            []Secret
@@ -429,6 +430,17 @@ func WithDetach(v bool) BoxOption {
 // off, which is the default.
 func WithAnonymousImagePull(v bool) BoxOption {
 	return func(c *boxConfig) { c.anonymousImagePull = &v }
+}
+
+// WithImageRevalidate re-resolves this box's image reference against the
+// registry instead of answering from the local image cache.
+//
+// The cache is keyed by the reference string, so a tag that moved upstream
+// keeps producing the build it first resolved to. For a caller that has not
+// pinned the reference to a digest yet; layers already present are still
+// reused, because they are keyed by their own digests.
+func WithImageRevalidate(v bool) BoxOption {
+	return func(c *boxConfig) { c.imageRevalidate = &v }
 }
 
 // buildAndFreeCOptions runs buildCOptions, immediately frees the C
@@ -638,6 +650,9 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 	}
 	if cfg.anonymousImagePull != nil {
 		C.boxlite_options_set_anonymous_image_pull(cOpts, boolToCInt(*cfg.anonymousImagePull))
+	}
+	if cfg.imageRevalidate != nil {
+		C.boxlite_options_set_image_revalidate(cOpts, boolToCInt(*cfg.imageRevalidate))
 	}
 	if cfg.advanced != nil && cfg.advanced.handle != nil {
 		// Clone the caller-owned advanced options onto the box.

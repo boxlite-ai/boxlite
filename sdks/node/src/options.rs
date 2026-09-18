@@ -582,6 +582,10 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             // BoxOptions through PyBoxOptions and the REST wire schema carries
             // `tty`; Node has no such caller yet.
             tty: false,
+            // Not surfaced either, and for the same reason plus one: re-resolving
+            // a tag is a decision for a caller that pins refs to digests on the
+            // client's behalf. An embedded SDK hands core the ref it was given.
+            image_revalidate: false,
             // Also not surfaced: an anonymous pull exists for a caller that
             // passes on an image ref someone else chose. An embedded SDK pulls
             // its own refs against registries its own process configured, so it

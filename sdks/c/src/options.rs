@@ -266,6 +266,20 @@ pub unsafe extern "C" fn boxlite_options_set_anonymous_image_pull(
     options_set_anonymous_image_pull(opts, val)
 }
 
+/// Re-resolve this box's image reference instead of answering from the cache.
+///
+/// The image cache is keyed by the reference string, so a tag that moved
+/// upstream keeps resolving to the build it first named. For a caller that has
+/// not pinned the reference to a digest yet. Off by default, and deliberately
+/// not persisted with the box: a restart boots what the box already has.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_image_revalidate(
+    opts: *mut CBoxliteOptions,
+    val: c_int,
+) {
+    options_set_image_revalidate(opts, val)
+}
+
 /// Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
 /// `CBoxliteOptions`. Clones the advanced configuration into the box options —
 /// the caller retains ownership of `advanced_opts` and is responsible for
@@ -604,6 +618,14 @@ pub unsafe fn options_set_anonymous_image_pull(handle: *mut OptionsHandle, val: 
     unsafe {
         if !handle.is_null() {
             (*handle).options.anonymous_image_pull = val != 0;
+        }
+    }
+}
+
+pub unsafe fn options_set_image_revalidate(handle: *mut OptionsHandle, val: c_int) {
+    unsafe {
+        if !handle.is_null() {
+            (*handle).options.image_revalidate = val != 0;
         }
     }
 }

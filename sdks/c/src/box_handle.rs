@@ -115,6 +115,31 @@ pub unsafe extern "C" fn boxlite_box_id(handle: *mut CBoxHandle) -> *mut c_char 
     box_id(handle)
 }
 
+/// The registry digest of the image this box was created from, or null.
+///
+/// Null whenever this process did not resolve the image — a box it only
+/// reattached to, or one booted from a local rootfs path. Caller owns the
+/// string and frees it with `boxlite_free_string`.
+///
+/// Pair it with `boxlite_box_pulled_image_size` to report what a mutable tag
+/// resolved to, and read both after starting the box: nothing is resolved until
+/// the box starts.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_pulled_image_digest(handle: *mut CBoxHandle) -> *mut c_char {
+    unsafe { box_pulled_image(handle) }
+        .and_then(|pulled| CString::new(pulled.manifest_digest).ok())
+        .map_or(ptr::null_mut(), |s| s.into_raw())
+}
+
+/// Declared on-registry size, in bytes, of the image this box was started
+/// from. `-1` when this process did not resolve it, which is the same condition
+/// that makes `boxlite_box_pulled_image_digest` return null; `0` is a real
+/// answer, meaning the manifest declared no layer sizes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_pulled_image_size(handle: *mut CBoxHandle) -> i64 {
+    unsafe { box_pulled_image(handle) }.map_or(-1, |pulled| pulled.total_layer_size)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_box_free(handle: *mut CBoxHandle) {
     box_free(handle)
@@ -408,6 +433,10 @@ unsafe fn start_box(
 
         BoxliteErrorCode::Ok
     }
+}
+
+unsafe fn box_pulled_image(handle: *mut BoxHandle) -> Option<boxlite::PulledImage> {
+    unsafe { handle.as_ref() }.and_then(|handle| handle.handle.pulled_image())
 }
 
 unsafe fn box_id(handle: *mut BoxHandle) -> *mut c_char {

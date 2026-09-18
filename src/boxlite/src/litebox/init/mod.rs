@@ -38,6 +38,19 @@ mod types;
 
 pub(crate) use crate::litebox::box_impl::LiveState;
 
+/// What a completed build hands back.
+///
+/// A struct rather than a tuple because the third element is unlike the other
+/// two: `live` and `guard` are the box, `pulled_image` is something the caller
+/// may forward and may equally ignore.
+pub(crate) struct BuiltBox {
+    pub(crate) live: LiveState,
+    pub(crate) guard: types::CleanupGuard,
+    /// Present when this build pulled a registry image; see
+    /// [`crate::images::PulledImage`].
+    pub(crate) pulled_image: Option<crate::images::PulledImage>,
+}
+
 use crate::litebox::BoxStatus;
 use crate::litebox::config::BoxConfig;
 use crate::metrics::BoxMetricsStorage;
@@ -206,7 +219,7 @@ impl BoxBuilder {
     /// Executes all initialization stages with automatic cleanup on failure.
     /// Returns (LiveState, CleanupGuard) - caller must disarm guard after all
     /// operations succeed (including DB persist).
-    pub(crate) async fn build(self) -> BoxliteResult<(LiveState, types::CleanupGuard)> {
+    pub(crate) async fn build(self) -> BoxliteResult<BuiltBox> {
         use std::time::Instant;
 
         let total_start = Instant::now();
@@ -305,7 +318,11 @@ impl BoxBuilder {
                 bind_mount,
             );
 
-            Ok::<(LiveState, types::CleanupGuard), BoxliteError>((live_state, guard))
+            Ok::<BuiltBox, BoxliteError>(BuiltBox {
+                live: live_state,
+                guard,
+                pulled_image: ctx.pulled_image.take(),
+            })
         };
 
         match inner.await {

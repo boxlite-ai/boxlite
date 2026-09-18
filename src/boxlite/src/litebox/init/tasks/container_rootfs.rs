@@ -8,7 +8,7 @@
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper};
-use crate::images::{ContainerImageConfig, ImageDiskManager, PullPolicy};
+use crate::images::{ContainerImageConfig, ImageDiskManager, PullPolicy, PulledImage};
 use crate::litebox::init::types::{ContainerRootfsPrepResult, USE_DISK_ROOTFS, USE_OVERLAYFS};
 use crate::pipeline::PipelineTask;
 use crate::runtime::layout::BoxFilesystemLayout;
@@ -61,11 +61,23 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
                 ctx.config.options.working_dir.clone(),
                 PullPolicy {
                     anonymous: ctx.config.options.anonymous_image_pull,
+                    // Never on a restart, whatever the create asked for. The
+                    // box keeps its existing COW disk here, so a tag that moved
+                    // upstream would pair a new build's entrypoint and env with
+                    // the old rootfs — and a registry that happens to be
+                    // unreachable would turn a restart that used to come up
+                    // from cache into a failure. `serde(skip)` only clears the
+                    // flag for a box reloaded in a new process; one restarted
+                    // inside the process that created it still carries it.
+                    revalidate: should_revalidate(
+                        ctx.config.options.image_revalidate,
+                        ctx.reuse_rootfs,
+                    ),
                 },
             )
         };
 
-        let (container_image_config, disk) = run_container_rootfs(
+        let (container_image_config, disk, pulled_image) = run_container_rootfs(
             &rootfs_spec,
             &env,
             &runtime,
@@ -84,6 +96,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
         let mut ctx = ctx.lock().await;
         ctx.container_image_config = Some(container_image_config);
         ctx.container_disk = Some(disk);
+        ctx.pulled_image = pulled_image;
 
         Ok(())
     }
@@ -107,7 +120,7 @@ async fn run_container_rootfs(
     user_override: Option<&str>,
     working_dir_override: Option<&str>,
     pull_policy: PullPolicy,
-) -> BoxliteResult<(ContainerImageConfig, Disk)> {
+) -> BoxliteResult<(ContainerImageConfig, Disk, Option<PulledImage>)> {
     let disk_path = layout.disk_path();
 
     // For restart, reuse existing COW disk
@@ -158,7 +171,11 @@ async fn run_container_rootfs(
             working_dir_override,
         );
 
-        return Ok((container_image_config, disk));
+        return Ok((
+            container_image_config,
+            disk,
+            pulled_image_of(rootfs_spec, &image),
+        ));
     }
 
     // Fresh start: pull or load image
@@ -208,7 +225,11 @@ async fn run_container_rootfs(
 
     let disk = create_cow_disk(&rootfs_result, layout, disk_size_gb)?;
 
-    Ok((container_image_config, disk))
+    Ok((
+        container_image_config,
+        disk,
+        pulled_image_of(rootfs_spec, &image),
+    ))
 }
 
 /// Create COW disk from base rootfs.
@@ -292,6 +313,37 @@ fn apply_user_overrides(
     }
 }
 
+/// Whether this start may re-resolve the box's image reference.
+///
+/// Never when the box is reusing its rootfs. A restart keeps the COW disk it
+/// already has, so following a moved tag would pair the new build's entrypoint,
+/// env and user with the old filesystem, and a registry that happens to be
+/// unreachable would turn a restart that used to come up from cache into a
+/// failure. `BoxOptions::image_revalidate` is `serde(skip)`, which clears the
+/// flag only for a box reloaded in a new process; one restarted inside the
+/// process that created it still carries what its create asked for.
+fn should_revalidate(requested: bool, reuse_rootfs: bool) -> bool {
+    requested && !reuse_rootfs
+}
+
+/// What to report about the image this box booted from, if anything.
+///
+/// Only a registry pull produces a reportable digest. A local bundle's manifest
+/// digest is computed on this host and names nothing a registry could resolve,
+/// so it is deliberately not reported rather than reported as if it were.
+fn pulled_image_of(
+    rootfs_spec: &RootfsSpec,
+    image: &crate::images::ImageObject,
+) -> Option<PulledImage> {
+    match rootfs_spec {
+        RootfsSpec::Image(_) => Some(PulledImage {
+            manifest_digest: image.manifest_digest().to_string(),
+            total_layer_size: image.total_layer_size(),
+        }),
+        RootfsSpec::RootfsPath(_) => None,
+    }
+}
+
 async fn pull_image(
     runtime: &crate::runtime::SharedRuntimeImpl,
     image_ref: &str,
@@ -360,4 +412,20 @@ async fn prepare_disk_rootfs(
         base_disk_path: disk_path,
         disk_size,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_revalidate;
+
+    #[test]
+    fn revalidation_is_what_the_create_asked_for() {
+        assert!(should_revalidate(true, false));
+        assert!(!should_revalidate(false, false));
+    }
+
+    #[test]
+    fn a_box_reusing_its_rootfs_never_re_resolves() {
+        assert!(!should_revalidate(true, true));
+    }
 }

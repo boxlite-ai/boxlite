@@ -80,5 +80,20 @@ describe('RunnerAdapterV2 createBox', () => {
 
       expect(payloadOf(jobService).anonymousImagePull).toBe(expected)
     })
+
+    // The seam only: which refs need re-resolving is imageNeedsRevalidate's
+    // own specification, and a curated ref is the one that must not pay for it.
+    it.each([
+      ['a curated name', 'base', false],
+      ['a tenant tag', 'quay.io/acme/app:v1', true],
+      ['a ref already pinned', `quay.io/acme/app@sha256:${'a'.repeat(64)}`, false],
+    ])('asks the runner to re-resolve %s: %s', async (_label, image, expected) => {
+      const { adapter, jobService } = makeAdapter()
+      await adapter.init({ id: 'runner-1' } as any)
+
+      await adapter.createBox({ id: 'box-1', image, volumes: [] } as any)
+
+      expect(payloadOf(jobService).imageRevalidate).toBe(expected)
+    })
   })
 })

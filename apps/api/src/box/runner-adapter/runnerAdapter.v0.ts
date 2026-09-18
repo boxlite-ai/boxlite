@@ -22,7 +22,7 @@ import {
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
-import { isCuratedSelector } from '../../image/utils/image-ref.util'
+import { imageNeedsRevalidate, isCuratedSelector } from '../../image/utils/image-ref.util'
 
 const isDebugEnabled = process.env.DEBUG === 'true'
 
@@ -282,6 +282,11 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       // DTO, so leaving it out here would just move the hole to the older
       // protocol — which is the one that still serves box recovery.
       anonymousImagePull: !isCuratedSelector(box.image),
+      // And whether the runner may answer from its own image cache. Computed
+      // here rather than carried on the box row: a replayed dispatch recomputes
+      // it, and by then an earlier report may have pinned `box.image` to a
+      // digest — at which point there is nothing left to re-resolve.
+      imageRevalidate: imageNeedsRevalidate(box.image),
     })
 
     if (!response?.data?.daemonVersion) {

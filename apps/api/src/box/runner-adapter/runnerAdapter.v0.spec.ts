@@ -59,6 +59,19 @@ describe('RunnerAdapterV0 createBox', () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ anonymousImagePull: expected }))
   })
 
+  it.each([
+    ['a curated name', 'base', false],
+    ['a tenant tag', 'quay.io/acme/app:v1', true],
+  ])('asks the runner to re-resolve %s: %s', async (_label, image, expected) => {
+    const adapter = new RunnerAdapterV0()
+    const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
+    ;(adapter as any).boxApiClient = { create }
+
+    await adapter.createBox({ id: 'box-1', image } as any)
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ imageRevalidate: expected }))
+  })
+
   it('passes secrets through to the runner recover body', async () => {
     const adapter = new RunnerAdapterV0()
     const recover = jest.fn().mockResolvedValue(undefined)

@@ -67,6 +67,14 @@ impl ImageStoreInner {
 pub struct PullPolicy {
     /// Send no credentials, whatever the registry list holds for this host.
     pub anonymous: bool,
+    /// Ask the registry even when this ref is already cached.
+    ///
+    /// The cache is keyed by the ref string, so a moving tag keeps resolving to
+    /// whatever it first pointed at. A caller that wants the tag followed — one
+    /// that has not yet pinned this ref to a digest — sets this; the pull still
+    /// reuses every layer it already has, because layers are keyed by their own
+    /// digests.
+    pub revalidate: bool,
 }
 
 // ============================================================================
@@ -188,8 +196,10 @@ impl ImageStore {
         for reference in candidates {
             let ref_str = reference.whole();
 
-            // Fast path: check cache with read lock
-            {
+            // Fast path: check cache with read lock. Skipped when the caller
+            // asked for revalidation — the cache answers by ref string, which
+            // is the thing being re-checked.
+            if !policy.revalidate {
                 let inner = self.inner.read().await;
                 if let Some(manifest) = self.try_load_cached(&inner, &ref_str)? {
                     tracing::info!("Using cached image: {}", ref_str);
@@ -1291,7 +1301,14 @@ mod tests {
 
         for host in ["ghcr.io", "docker.io"] {
             assert_eq!(
-                registry_auth_for(host, &registries, PullPolicy { anonymous: true }),
+                registry_auth_for(
+                    host,
+                    &registries,
+                    PullPolicy {
+                        anonymous: true,
+                        ..Default::default()
+                    }
+                ),
                 OciRegistryAuth::Anonymous,
                 "host={host}"
             );
@@ -1305,7 +1322,14 @@ mod tests {
         let registries = [ImageRegistry::https("ghcr.io").with_basic_auth("operator", "token")];
 
         assert_eq!(
-            registry_auth_for("ghcr.io", &registries, PullPolicy { anonymous: false }),
+            registry_auth_for(
+                "ghcr.io",
+                &registries,
+                PullPolicy {
+                    anonymous: false,
+                    ..Default::default()
+                }
+            ),
             OciRegistryAuth::Basic("operator".to_string(), "token".to_string()),
         );
     }
@@ -1327,7 +1351,10 @@ mod tests {
             registry_auth_for(
                 "registry.local:5000",
                 &registries,
-                PullPolicy { anonymous: true }
+                PullPolicy {
+                    anonymous: true,
+                    ..Default::default()
+                }
             ),
             OciRegistryAuth::Anonymous,
         );
@@ -1509,6 +1536,103 @@ mod tests {
         assert_eq!(manifest.layers[0].digest, layer_digest);
         assert!(!manifest.config_digest.is_empty());
         assert!(!manifest.manifest_digest.is_empty());
+    }
+
+    /// Build a cache entry the store will actually accept: the manifest, its
+    /// config blob (whose bytes have to hash to the digest the manifest names)
+    /// and the layer file, plus the index row that points at them.
+    async fn seed_cached_image(store: &ImageStore, image_ref: &str) -> ImageManifest {
+        use sha2::{Digest, Sha256};
+
+        let config_bytes =
+            br#"{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}"#;
+        let config_digest = format!("sha256:{}", hex::encode(Sha256::digest(config_bytes)));
+        let layer_digest =
+            "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd0".to_string();
+        let manifest_digest =
+            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0".to_string();
+
+        let storage = store.storage().await;
+        for path in [
+            storage.config_path(&config_digest),
+            storage.layer_tarball_path(&layer_digest),
+        ] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        std::fs::write(storage.config_path(&config_digest), config_bytes).unwrap();
+        std::fs::write(storage.layer_tarball_path(&layer_digest), b"").unwrap();
+
+        let oci = oci_client::manifest::OciImageManifest {
+            schema_version: 2,
+            media_type: Some("application/vnd.oci.image.manifest.v1+json".to_string()),
+            config: oci_client::manifest::OciDescriptor {
+                media_type: "application/vnd.oci.image.config.v1+json".to_string(),
+                digest: config_digest.clone(),
+                size: config_bytes.len() as i64,
+                ..Default::default()
+            },
+            layers: vec![oci_client::manifest::OciDescriptor {
+                media_type: "application/vnd.oci.image.layer.v1.tar+gzip".to_string(),
+                digest: layer_digest.clone(),
+                size: 0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        storage
+            .save_manifest(
+                &oci_client::manifest::OciManifest::Image(oci),
+                &manifest_digest,
+            )
+            .unwrap();
+
+        let manifest = ImageManifest {
+            manifest_digest,
+            layers: vec![LayerInfo {
+                digest: layer_digest,
+                media_type: "application/vnd.oci.image.layer.v1.tar+gzip".to_string(),
+                size: 0,
+            }],
+            config_digest,
+            diff_ids: vec![],
+        };
+        store.update_index(image_ref, &manifest).await.unwrap();
+        manifest
+    }
+
+    /// The cache answers by ref string and never re-checks it, which is the
+    /// whole reason a caller may need to ask again. Pinned from both sides with
+    /// one cached image and an unreachable registry: without revalidation the
+    /// cached manifest comes back and nothing touches the network, with it the
+    /// pull has to go out and fails against a port nothing listens on.
+    #[tokio::test]
+    async fn revalidate_skips_the_ref_keyed_cache() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
+        let store = ImageStore::new(temp_dir.path().join("images"), db, vec![]).unwrap();
+
+        let image_ref = "127.0.0.1:1/acme/app:v1";
+        let seeded = seed_cached_image(&store, image_ref).await;
+
+        let cached = store
+            .pull(image_ref, PullPolicy::default())
+            .await
+            .expect("a complete cache entry answers without a registry");
+        assert_eq!(cached.manifest_digest, seeded.manifest_digest);
+
+        let revalidated = store
+            .pull(
+                image_ref,
+                PullPolicy {
+                    revalidate: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert!(
+            revalidated.is_err(),
+            "revalidation must reach the registry, not the cache"
+        );
     }
 
     #[tokio::test]

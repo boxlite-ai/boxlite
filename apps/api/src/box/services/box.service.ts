@@ -20,6 +20,7 @@ import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { ImageAdmissionService } from '../../image/services/image-admission.service'
 import { ImageResolverService } from '../../image/services/image-resolver.service'
+import { ImageRegistrarService, ReportedImage } from '../../image/services/image-registrar.service'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { WarmPoolEvents } from '../constants/warmpool-events.constants'
@@ -124,6 +125,7 @@ export class BoxService {
     private readonly jobService: JobService,
     private readonly imageAdmissionService: ImageAdmissionService,
     private readonly imageResolverService: ImageResolverService,
+    private readonly imageRegistrarService: ImageRegistrarService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -1351,13 +1353,40 @@ export class BoxService {
 
   // used by internal services to update the state of a box to resolve domain and runner state mismatch
   // notably, when a box instance stops or errors on the runner, the domain state needs to be updated to reflect the actual state
-  async updateState(boxId: string, newState: BoxState, recoverable = false, errorReason?: string): Promise<void> {
+  async updateState(
+    boxId: string,
+    newState: BoxState,
+    recoverable = false,
+    errorReason?: string,
+    reportedImage?: ReportedImage,
+  ): Promise<void> {
     const box = await this.boxRepository.findOne({
       where: { id: boxId },
     })
 
     if (!box) {
       throw new NotFoundException(`Box with ID ${boxId} not found`)
+    }
+
+    // Before any state handling, and deliberately not inside it: this is a fact
+    // about the box's image, not a transition. The runner may well be telling
+    // us a state we already have — the control plane also learns a box is up by
+    // polling the runner — and the early returns below would drop the report.
+    //
+    // Only a report that says the box is up: a failed pull reports ERROR, and
+    // an image that never booted must not appear in the catalog as if it had.
+    // It is the report that is filtered, not the outcome — the state machine
+    // below may still refuse this transition, and a box that pulled an image
+    // and started it did so either way.
+    if (reportedImage && newState === BoxState.STARTED && box.image) {
+      try {
+        await this.imageRegistrarService.onBoxStarted(box.organizationId, box.image, reportedImage)
+      } catch (error) {
+        // A lost registration costs the next create one re-resolution, which
+        // is the documented trade; failing the state update instead would
+        // leave the control plane believing a running box is still starting.
+        this.logger.error(`Failed to register image for box ${boxId}: ${error}`)
+      }
     }
 
     if (box.state === newState) {

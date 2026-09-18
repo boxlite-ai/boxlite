@@ -677,6 +677,10 @@ const docTemplate = `{
                 "image": {
                     "type": "string"
                 },
+                "imageRevalidate": {
+                    "description": "Re-resolve the image reference instead of answering from the cache.",
+                    "type": "boolean"
+                },
                 "memoryQuota": {
                     "type": "integer",
                     "minimum": 1

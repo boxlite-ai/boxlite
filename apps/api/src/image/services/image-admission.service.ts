@@ -5,9 +5,12 @@
 
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Injectable } from '@nestjs/common'
+import { InjectRepository } from '@nestjs/typeorm'
 import Redis from 'ioredis'
+import { IsNull, Repository } from 'typeorm'
 import { Organization } from '../../organization/entities/organization.entity'
-import { ImageColdPullRateLimitedError } from '../errors/image-admission.error'
+import { Image } from '../entities/image.entity'
+import { ImageColdPullRateLimitedError, ImageCountLimitReachedError } from '../errors/image-admission.error'
 import { assertHostIsAllowed, imageRegistryAllowlist, isCuratedSelector, parseImageRef } from '../utils/image-ref.util'
 
 /** Image pulls one organization may start per window. */
@@ -24,10 +27,10 @@ const COLD_PULL_WINDOW_SECONDS = 60
  * one at a time, each thing the blanket refusal was doing — which registries
  * may be reached, and how fast one organization may start downloads.
  *
- * The per-organization catalog limit is not here. It counts rows in a table
- * nothing writes until the registrar lands, so a check placed here would read
- * zero forever: a limit that cannot fire is worse than a missing one, because
- * it reads as enforced. It arrives with its writer.
+ * The per-organization catalog limit lives here too, and could not until the
+ * registrar existed to write the rows it counts. It counts kinds of image
+ * rather than bytes, and never refuses one the organization already holds:
+ * booting a cached image again adds nothing to any runner's disk.
  *
  * Curated selectors skip all of it and touch neither Redis nor the database:
  * they are operator-chosen refs that were already allowed, and making the
@@ -38,6 +41,8 @@ export class ImageAdmissionService {
   constructor(
     @InjectRedis()
     private readonly redis: Redis,
+    @InjectRepository(Image)
+    private readonly imageRepository: Repository<Image>,
   ) {}
 
   async assert(organization: Organization, image: string | undefined): Promise<void> {
@@ -45,11 +50,35 @@ export class ImageAdmissionService {
       return
     }
 
+    const ref = image as string
     const allowlist = imageRegistryAllowlist()
-    const { host } = parseImageRef(image as string)
+    const { host, repository } = parseImageRef(ref)
     assertHostIsAllowed(host, allowlist)
 
+    await this.assertWithinCatalogLimit(organization, `${host}/${repository}`)
     await this.assertPullBudget(organization)
+  }
+
+  /**
+   * Refuse a new image once the organization holds its limit.
+   *
+   * Ordered before the pull budget so a create that cannot succeed does not
+   * spend one: the budget has no way to give a slot back.
+   */
+  private async assertWithinCatalogLimit(organization: Organization, name: string): Promise<void> {
+    const alreadyHeld = await this.imageRepository.exists({
+      where: { organizationId: organization.id, name, deletedAt: IsNull() },
+    })
+    if (alreadyHeld) {
+      return
+    }
+
+    const held = await this.imageRepository.count({
+      where: { organizationId: organization.id, deletedAt: IsNull() },
+    })
+    if (held >= organization.imageCountLimit) {
+      throw new ImageCountLimitReachedError(organization.imageCountLimit)
+    }
   }
 
   private async assertPullBudget(organization: Organization): Promise<void> {

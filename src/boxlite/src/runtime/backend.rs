@@ -83,6 +83,18 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
     /// Return metadata for this box.
     async fn info(&self) -> BoxliteResult<BoxInfo>;
 
+    /// What this box's image resolved to, when this process resolved it.
+    ///
+    /// Deliberately not part of [`BoxInfo`]: that is persisted, mirrored by
+    /// every SDK and answered by every backend, while this is a by-product of
+    /// starting a box that only the backend which did it can have. Set on a
+    /// first start and on a restart, which resolves the same reference from
+    /// cache; `None` for a box this process merely reattached to, which runs no
+    /// rootfs stage at all, and for one booted from a local path.
+    fn pulled_image(&self) -> Option<crate::images::PulledImage> {
+        None
+    }
+
     async fn start(&self) -> BoxliteResult<()>;
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution>;

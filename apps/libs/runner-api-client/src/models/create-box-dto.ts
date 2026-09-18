@@ -37,6 +37,10 @@ export interface CreateBoxDTO {
     'gpuQuota'?: number;
     'id': string;
     'image': string;
+    /**
+     * Re-resolve the image reference instead of answering from the cache.
+     */
+    'imageRevalidate'?: boolean;
     'memoryQuota'?: number;
     'metadata'?: { [key: string]: string; };
     'networkAllowList'?: string;

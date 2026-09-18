@@ -6,15 +6,20 @@
 import { HttpStatus } from '@nestjs/common'
 import Redis from 'ioredis'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
+import { IsNull, Repository } from 'typeorm'
 import { Organization } from '../../organization/entities/organization.entity'
+import { Image } from '../entities/image.entity'
+import { ImageCountLimitReachedError } from '../errors/image-admission.error'
 import { ImageAdmissionService } from './image-admission.service'
 
 type RedisMock = { incr: jest.Mock; expire: jest.Mock; ttl: jest.Mock }
+type ImageRepositoryMock = { exists: jest.Mock; count: jest.Mock }
 
 describe('ImageAdmissionService', () => {
-  const organization = { id: 'org-1' } as Organization
+  const organization = { id: 'org-1', imageCountLimit: 20 } as Organization
 
   let redis: RedisMock
+  let images: ImageRepositoryMock
   let service: ImageAdmissionService
 
   beforeEach(() => {
@@ -24,7 +29,11 @@ describe('ImageAdmissionService', () => {
       expire: jest.fn().mockResolvedValue(1),
       ttl: jest.fn().mockResolvedValue(60),
     }
-    service = new ImageAdmissionService(redis as unknown as Redis)
+    images = {
+      exists: jest.fn().mockResolvedValue(false),
+      count: jest.fn().mockResolvedValue(0),
+    }
+    service = new ImageAdmissionService(redis as unknown as Redis, images as unknown as Repository<Image>)
   })
 
   afterEach(() => {
@@ -58,6 +67,54 @@ describe('ImageAdmissionService', () => {
       await service.assert(organization, selector)
     }
     expect(redis.incr).not.toHaveBeenCalled()
+  })
+
+  describe('catalog limit', () => {
+    it('admits an image the organization already holds, whatever the count', async () => {
+      images.exists.mockResolvedValue(true)
+      images.count.mockResolvedValue(999)
+
+      await expect(service.assert(organization, 'quay.io/acme/app:v1')).resolves.toBeUndefined()
+    })
+
+    it('refuses a new image once the organization holds its limit', async () => {
+      images.count.mockResolvedValue(20)
+
+      const error = await service.assert(organization, 'quay.io/acme/app:v1').catch((e) => e)
+
+      expect(error).toBeInstanceOf(ImageCountLimitReachedError)
+      expect(error.getResponse().message).toContain('limit of 20 images')
+    })
+
+    it('admits a new image below the limit', async () => {
+      images.count.mockResolvedValue(19)
+
+      await expect(service.assert(organization, 'quay.io/acme/app:v1')).resolves.toBeUndefined()
+    })
+
+    /**
+     * Nothing returns a pull slot: the counter has no decrement, because the
+     * API never learns a pull ended. Spending one on a create that was going to
+     * be refused would charge an organization for a box it cannot have.
+     */
+    it('spends no pull budget on a create the limit refuses', async () => {
+      images.count.mockResolvedValue(20)
+
+      await service.assert(organization, 'quay.io/acme/app:v1').catch(() => undefined)
+
+      expect(redis.incr).not.toHaveBeenCalled()
+    })
+
+    it('counts and matches only images this organization still holds', async () => {
+      await service.assert(organization, 'quay.io/acme/app:v1')
+
+      expect(images.exists).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', name: 'quay.io/acme/app', deletedAt: IsNull() },
+      })
+      expect(images.count).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', deletedAt: IsNull() },
+      })
+    })
   })
 
   describe('pull budget', () => {

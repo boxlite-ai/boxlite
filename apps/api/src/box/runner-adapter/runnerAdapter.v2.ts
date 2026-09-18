@@ -17,7 +17,7 @@ import { JobStatus } from '../enums/job-status.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
 import { BoxRepository } from '../repositories/box.repository'
-import { isCuratedSelector } from '../../image/utils/image-ref.util'
+import { imageNeedsRevalidate, isCuratedSelector } from '../../image/utils/image-ref.util'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -162,6 +162,11 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       // on those hosts back inside the operator's identity, which is the hole
       // itself.
       anonymousImagePull: !isCuratedSelector(box.image),
+      // And whether the runner may answer from its own image cache. Computed
+      // here rather than carried on the box row: a replayed dispatch recomputes
+      // it, and by then an earlier report may have pinned `box.image` to a
+      // digest — at which point there is nothing left to re-resolve.
+      imageRevalidate: imageNeedsRevalidate(box.image),
     }
 
     await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)

@@ -629,6 +629,23 @@ enum BoxliteErrorCode boxlite_start_box(CBoxHandle *handle,
 
 char *boxlite_box_id(CBoxHandle *handle);
 
+// The registry digest of the image this box was created from, or null.
+//
+// Null whenever this process did not resolve the image — a box it only
+// reattached to, or one booted from a local rootfs path. Caller owns the
+// string and frees it with `boxlite_free_string`.
+//
+// Pair it with `boxlite_box_pulled_image_size` to report what a mutable tag
+// resolved to, and read both after starting the box: nothing is resolved until
+// the box starts.
+char *boxlite_box_pulled_image_digest(CBoxHandle *handle);
+
+// Declared on-registry size, in bytes, of the image this box was started
+// from. `-1` when this process did not resolve it, which is the same condition
+// that makes `boxlite_box_pulled_image_digest` return null; `0` is a real
+// answer, meaning the manifest declared no layer sizes.
+int64_t boxlite_box_pulled_image_size(CBoxHandle *handle);
+
 void boxlite_box_free(CBoxHandle *handle);
 
 enum BoxliteErrorCode boxlite_copy_into(CBoxHandle *handle,
@@ -1035,6 +1052,14 @@ void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
 // the runtime has a token for is fetched with that token. Off by default — a
 // caller pulling its own images keeps the registries it configured.
 void boxlite_options_set_anonymous_image_pull(CBoxliteOptions *opts, int val);
+
+// Re-resolve this box's image reference instead of answering from the cache.
+//
+// The image cache is keyed by the reference string, so a tag that moved
+// upstream keeps resolving to the build it first named. For a caller that has
+// not pinned the reference to a digest yet. Off by default, and deliberately
+// not persisted with the box: a restart boots what the box already has.
+void boxlite_options_set_image_revalidate(CBoxliteOptions *opts, int val);
 
 // Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
 // `CBoxliteOptions`. Clones the advanced configuration into the box options —

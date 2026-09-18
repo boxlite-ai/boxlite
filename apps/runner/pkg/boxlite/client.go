@@ -21,24 +21,36 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 )
 
+// PulledImage is what a box's image reference resolved to on this runner: the
+// registry's own digest and the size the manifest declared.
+type PulledImage struct {
+	Digest    string
+	SizeBytes int64
+}
+
 // Client wraps the BoxLite Go SDK to provide the same interface as the Docker client.
 // It manages VMs instead of containers, providing hardware-level isolation.
 type Client struct {
-	runtime            *boxlite.Runtime
-	logger             *slog.Logger
-	homeDir            string
-	mu                 sync.RWMutex
-	boxes              map[string]*boxlite.Box
-	awsRegion          string
-	awsEndpointUrl     string
-	awsAccessKeyId     string
-	awsSecretAccessKey string
-	volumeBackend      string
-	volumeMutexes      map[string]*sync.Mutex
-	volumeMutexesMutex sync.Mutex
-	volumeCleanupMutex sync.Mutex
-	lastVolumeCleanup  time.Time
-	volumeCleanup      volumeCleanupConfig
+	runtime *boxlite.Runtime
+	logger  *slog.Logger
+	homeDir string
+	mu      sync.RWMutex
+	boxes   map[string]*boxlite.Box
+	// What each freshly created box's image resolved to, until it has been
+	// reported once. Only this process can answer, so an entry that outlives a
+	// restart is simply gone and the control plane re-resolves on the next
+	// create — see PulledImage.
+	pendingImageReports map[string]PulledImage
+	awsRegion           string
+	awsEndpointUrl      string
+	awsAccessKeyId      string
+	awsSecretAccessKey  string
+	volumeBackend       string
+	volumeMutexes       map[string]*sync.Mutex
+	volumeMutexesMutex  sync.Mutex
+	volumeCleanupMutex  sync.Mutex
+	lastVolumeCleanup   time.Time
+	volumeCleanup       volumeCleanupConfig
 }
 
 // ClientConfig holds configuration for the BoxLite client.
@@ -191,22 +203,40 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
-		runtime:            rt,
-		logger:             logger,
-		homeDir:            config.HomeDir,
-		boxes:              make(map[string]*boxlite.Box),
-		awsRegion:          config.AWSRegion,
-		awsEndpointUrl:     config.AWSEndpointUrl,
-		awsAccessKeyId:     config.AWSAccessKeyId,
-		awsSecretAccessKey: config.AWSSecretAccessKey,
-		volumeBackend:      config.VolumeStorageBackend,
-		volumeMutexes:      make(map[string]*sync.Mutex),
+		runtime:             rt,
+		logger:              logger,
+		homeDir:             config.HomeDir,
+		boxes:               make(map[string]*boxlite.Box),
+		pendingImageReports: make(map[string]PulledImage),
+		awsRegion:           config.AWSRegion,
+		awsEndpointUrl:      config.AWSEndpointUrl,
+		awsAccessKeyId:      config.AWSAccessKeyId,
+		awsSecretAccessKey:  config.AWSSecretAccessKey,
+		volumeBackend:       config.VolumeStorageBackend,
+		volumeMutexes:       make(map[string]*sync.Mutex),
 		volumeCleanup: volumeCleanupConfig{
 			interval:        config.VolumeCleanupInterval,
 			dryRun:          config.VolumeCleanupDryRun,
 			exclusionPeriod: config.VolumeCleanupExclusionPeriod,
 		},
 	}, nil
+}
+
+// PendingImageReport returns what a box's image resolved to, when this runner
+// created that box and has not yet reported it.
+func (c *Client) PendingImageReport(boxId string) (PulledImage, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	pulled, ok := c.pendingImageReports[boxId]
+	return pulled, ok
+}
+
+// ClearPendingImageReport drops a report that has been delivered. Separate from
+// reading it so a report the control plane refused is retried rather than lost.
+func (c *Client) ClearPendingImageReport(boxId string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.pendingImageReports, boxId)
 }
 
 // Shutdown gracefully stops all running boxes in the underlying BoxLite
@@ -266,6 +296,11 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// which references are the operator's own is the control plane's knowledge.
 	if boxDto.AnonymousImagePull != nil {
 		opts = append(opts, boxlite.WithAnonymousImagePull(*boxDto.AnonymousImagePull))
+	}
+	// Likewise the control plane's call: it knows whether this reference has
+	// already been pinned to a digest, and the runner does not.
+	if boxDto.ImageRevalidate != nil {
+		opts = append(opts, boxlite.WithImageRevalidate(*boxDto.ImageRevalidate))
 	}
 
 	for k, v := range boxDto.Env {
@@ -363,9 +398,29 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		if err := bx.Start(ctx); err != nil {
 			return bx.ID(), "", fmt.Errorf("failed to start box: %w", err)
 		}
+		c.recordPulledImage(boxDto.Id, bx)
 	}
 
 	return bx.ID(), "boxlite", nil
+}
+
+// recordPulledImage notes what a box's image reference resolved to, so the
+// control plane can be told once.
+//
+// Only a started box has an answer: GetOrCreate allocates a handle and
+// persists the box, and the image is not pulled until the first start
+// (rt_impl.rs — "The VM is not started until start() or exec() is called").
+// Asking any earlier reads an answer that does not exist yet. Infallible by
+// construction, so it can sit after Start without breaking the rule that
+// Start is Create's last fallible step.
+func (c *Client) recordPulledImage(boxId string, bx *boxlite.Box) {
+	digest, size, ok := bx.PulledImage()
+	if !ok {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pendingImageReports[boxId] = PulledImage{Digest: digest, SizeBytes: size}
 }
 
 // Start starts a stopped box and returns the runtime version.
@@ -381,6 +436,9 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 	if err := bx.Start(ctx); err != nil {
 		return "", err
 	}
+	// The other place a box is first started: one created with SkipStart has
+	// pulled nothing until now.
+	c.recordPulledImage(boxId, bx)
 	return "boxlite", nil
 }
 

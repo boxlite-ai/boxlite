@@ -237,6 +237,37 @@ mod registry_options_tests {
         );
     }
 
+    /// A box's options are persisted and replayed when it restarts, and a
+    /// restart must boot the image the box already has. `image_revalidate` is
+    /// therefore `skip` rather than `default`: not written out, and read back as
+    /// false even if something did write it.
+    #[test]
+    fn box_options_never_persist_image_revalidate() {
+        let options = BoxOptions {
+            image_revalidate: true,
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&options).unwrap();
+        assert!(
+            !json.contains("image_revalidate"),
+            "a re-resolution request must not outlive the create that asked for it: {json}"
+        );
+
+        let round_tripped: BoxOptions = serde_json::from_str(&json).unwrap();
+        assert!(!round_tripped.image_revalidate);
+        assert!(
+            !serde_json::from_str::<BoxOptions>("{}")
+                .unwrap()
+                .image_revalidate
+        );
+        assert!(
+            !serde_json::from_str::<BoxOptions>(r#"{"image_revalidate": true}"#)
+                .unwrap()
+                .image_revalidate
+        );
+    }
+
     #[test]
     fn options_reject_legacy_string_image_registries() {
         let result =
@@ -392,6 +423,20 @@ pub struct BoxOptions {
     /// See [`AdvancedBoxOptions`] for details.
     #[serde(default)]
     pub advanced: AdvancedBoxOptions,
+
+    /// Re-resolve this box's image reference against the registry, even if it
+    /// is already cached.
+    ///
+    /// For a caller holding a tag that it has not pinned to a digest yet: the
+    /// image cache answers by ref string, so without this a moving tag keeps
+    /// producing the build it first resolved to.
+    ///
+    /// `#[serde(skip)]` rather than `#[serde(default)]`: this is a property of
+    /// one create request, not of the box. A box's options are persisted and
+    /// replayed on restart, and a restart must not re-resolve — the ref it
+    /// booted from is the one it should keep booting from.
+    #[serde(skip)]
+    pub image_revalidate: bool,
 
     /// Pull this box's image without the runtime's registry credentials.
     ///
@@ -552,6 +597,7 @@ impl Default for BoxOptions {
             auto_resume: None,
             detach: default_detach(),
             advanced: AdvancedBoxOptions::default(),
+            image_revalidate: false,
             anonymous_image_pull: false,
             entrypoint: None,
             cmd: None,

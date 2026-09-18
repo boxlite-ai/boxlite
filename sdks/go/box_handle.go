@@ -39,6 +39,26 @@ func (b *Box) ID() string { return b.id }
 // Name returns the user-defined name of the box, if set.
 func (b *Box) Name() string { return b.name }
 
+// PulledImage reports the registry digest and declared size of the image this
+// box was started from, and whether this process is the one that resolved it.
+//
+// For a caller that started a box from a mutable tag and needs to know which
+// build it actually got. ok is false for a box this process only reattached to
+// and for one booted from a local rootfs path. Nothing is resolved until the
+// box starts, so read this after Start rather than after create.
+func (b *Box) PulledImage() (digest string, sizeBytes int64, ok bool) {
+	if b.handle == nil {
+		return "", 0, false
+	}
+	cDigest := C.boxlite_box_pulled_image_digest(b.handle)
+	if cDigest == nil {
+		return "", 0, false
+	}
+	digest = C.GoString(cDigest)
+	freeBoxliteString(cDigest)
+	return digest, int64(C.boxlite_box_pulled_image_size(b.handle)), true
+}
+
 // Start starts (or restarts) the box.
 func (b *Box) Start(ctx context.Context) error {
 	b.runtime.ensureDrainRunning()

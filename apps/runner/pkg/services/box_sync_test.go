@@ -14,6 +14,7 @@ import (
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	sdkboxlite "github.com/boxlite-ai/boxlite/sdks/go"
+	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
 )
 
 // boxStartedAt only converts BoxInfo's zero-value convention. The sync decision
@@ -56,11 +57,23 @@ func TestBoxStartedAt(t *testing.T) {
 
 // stubBoxReader serves a fixed set of boxes to the sync loop.
 type stubBoxReader struct {
-	infos []sdkboxlite.BoxInfo
+	infos   []sdkboxlite.BoxInfo
+	pending map[string]blclient.PulledImage
+	cleared []string
 }
 
 func (r *stubBoxReader) ListInfo(context.Context) ([]sdkboxlite.BoxInfo, error) {
 	return r.infos, nil
+}
+
+func (r *stubBoxReader) PendingImageReport(boxId string) (blclient.PulledImage, bool) {
+	pulled, ok := r.pending[boxId]
+	return pulled, ok
+}
+
+func (r *stubBoxReader) ClearPendingImageReport(boxId string) {
+	r.cleared = append(r.cleared, boxId)
+	delete(r.pending, boxId)
 }
 
 // remoteBox builds the wire shape the generated client requires for a Box —
@@ -93,6 +106,7 @@ type runnerAPIStub struct {
 	rejectTransitional   bool
 	startedBoxes         []map[string]any
 	updates              map[string]string
+	updateBodies         map[string]map[string]any
 	transitionalRequests int
 }
 
@@ -117,17 +131,18 @@ func (s *runnerAPIStub) handler(t *testing.T) http.Handler {
 		}
 
 		if request.Method == http.MethodPut {
-			var body struct {
-				State string `json:"state"`
-			}
-			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			var raw map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&raw); err != nil {
 				t.Errorf("decode state update: %v", err)
 			}
 			if s.updates == nil {
 				s.updates = map[string]string{}
+				s.updateBodies = map[string]map[string]any{}
 			}
 			// /box/{boxId}/state
-			s.updates[request.URL.Path] = body.State
+			state, _ := raw["state"].(string)
+			s.updates[request.URL.Path] = state
+			s.updateBodies[request.URL.Path] = raw
 			response.WriteHeader(http.StatusOK)
 			return
 		}
@@ -200,6 +215,112 @@ func TestPerformSyncConfirmsTransitionalBoxOnlyWithARecordedStart(t *testing.T) 
 
 // An API that predates the transitional-state query rejects it. The
 // long-standing STARTED reconciliation must survive that on its own.
+// The report of what a box's image resolved to cannot ride on a state
+// mismatch: the control plane also learns a box is up by polling this runner,
+// and whichever observation lands first leaves the other with nothing to say.
+// So a box that owes one is pushed even when both sides already agree, and the
+// report is dropped only once it has been delivered.
+func TestPerformSyncReportsAResolvedImageEvenWhenStatesAgree(t *testing.T) {
+	api := &runnerAPIStub{
+		startedBoxes:      []map[string]any{remoteBox("box-1", apiclient.BOXSTATE_STARTED)},
+		transitionalBoxes: []map[string]any{},
+	}
+	server := httptest.NewServer(api.handler(t))
+	defer server.Close()
+
+	reader := &stubBoxReader{
+		infos: []sdkboxlite.BoxInfo{{
+			ID:        "box-1",
+			State:     sdkboxlite.StateRunning,
+			PID:       77,
+			StartedAt: time.Now(),
+		}},
+		pending: map[string]blclient.PulledImage{
+			"box-1": {Digest: "sha256:abc", SizeBytes: 4096},
+		},
+	}
+
+	service := newSyncServiceForTest(server, reader)
+	if err := service.PerformSync(context.Background()); err != nil {
+		t.Fatalf("PerformSync: %v", err)
+	}
+
+	body, sent := api.updateBodies["/box/box-1/state"]
+	if !sent {
+		t.Fatal("a box owing an image report must be pushed even with matching states")
+	}
+	if body["imageDigest"] != "sha256:abc" {
+		t.Errorf("imageDigest = %v, want sha256:abc", body["imageDigest"])
+	}
+	if body["imageSizeBytes"] != float64(4096) {
+		t.Errorf("imageSizeBytes = %v, want 4096", body["imageSizeBytes"])
+	}
+	if len(reader.cleared) != 1 || reader.cleared[0] != "box-1" {
+		t.Errorf("a delivered report must be cleared, got %v", reader.cleared)
+	}
+}
+
+// A push that did not carry the report must not consume it. A box that reaches
+// STOPPED before anyone reported its image would otherwise lose the report to a
+// state update that never contained it.
+func TestPerformSyncKeepsAnUncarriedImageReport(t *testing.T) {
+	api := &runnerAPIStub{
+		startedBoxes:      []map[string]any{remoteBox("box-1", apiclient.BOXSTATE_STARTED)},
+		transitionalBoxes: []map[string]any{},
+	}
+	server := httptest.NewServer(api.handler(t))
+	defer server.Close()
+
+	reader := &stubBoxReader{
+		infos: []sdkboxlite.BoxInfo{{ID: "box-1", State: sdkboxlite.StateStopped}},
+		pending: map[string]blclient.PulledImage{
+			"box-1": {Digest: "sha256:abc", SizeBytes: 4096},
+		},
+	}
+
+	service := newSyncServiceForTest(server, reader)
+	if err := service.PerformSync(context.Background()); err != nil {
+		t.Fatalf("PerformSync: %v", err)
+	}
+
+	body := api.updateBodies["/box/box-1/state"]
+	if _, carried := body["imageDigest"]; carried {
+		t.Error("a stopped box must not report an image it never started")
+	}
+	if len(reader.cleared) != 0 {
+		t.Errorf("a report that was not sent must survive, got cleared %v", reader.cleared)
+	}
+}
+
+// A box nobody is waiting on a report for keeps the old behaviour: nothing is
+// pushed while the two sides agree.
+func TestPerformSyncStaysQuietWhenStatesAgreeAndNothingIsOwed(t *testing.T) {
+	api := &runnerAPIStub{
+		startedBoxes:      []map[string]any{remoteBox("box-1", apiclient.BOXSTATE_STARTED)},
+		transitionalBoxes: []map[string]any{},
+	}
+	server := httptest.NewServer(api.handler(t))
+	defer server.Close()
+
+	reader := &stubBoxReader{
+		infos: []sdkboxlite.BoxInfo{{
+			ID:        "box-1",
+			State:     sdkboxlite.StateRunning,
+			PID:       77,
+			StartedAt: time.Now(),
+		}},
+	}
+
+	service := newSyncServiceForTest(server, reader)
+	if err := service.PerformSync(context.Background()); err != nil {
+		t.Fatalf("PerformSync: %v", err)
+	}
+
+	if _, sent := api.updates["/box/box-1/state"]; sent {
+		t.Error("matching states with nothing owed must not push a state update")
+	}
+}
+
 func TestPerformSyncStillReconcilesStartedBoxesWhenTransitionalQueryIsRejected(t *testing.T) {
 	api := &runnerAPIStub{
 		rejectTransitional: true,

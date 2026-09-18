@@ -50,6 +50,7 @@ function makeService() {
     noop, // jobService
     noop, // imageAdmissionService
     noop, // imageResolverService
+    noop, // imageRegistrarService
   )
   return { service, boxRepository, eventEmitter, organizationService }
 }
@@ -93,6 +94,7 @@ function makePreviewUrlService() {
     noop, // jobService
     noop, // imageAdmissionService
     noop, // imageResolverService
+    noop, // imageRegistrarService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -244,6 +246,7 @@ function makeNetworkTunnelService() {
     noop, // jobService
     noop, // imageAdmissionService
     noop, // imageResolverService
+    noop, // imageRegistrarService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -259,6 +262,61 @@ describe('BoxService network tunnel URLs', () => {
     const result = await service.getNetworkTunnelUrl('MixedCaseBox', 'org-1', 3000)
 
     expect(result).toBe('https://3000-d-4d6978656443617365426f78.proxy.example.test')
+  })
+})
+
+describe('BoxService image reporting', () => {
+  function makeService(boxState: BoxState) {
+    const box = { id: 'box-1', organizationId: 'org-1', image: 'quay.io/acme/app:v1', state: boxState }
+    const service = Object.create(BoxService.prototype) as BoxService
+    Object.assign(service as any, {
+      // The ERROR case runs on past the image report into the real state
+      // update, so the write it ends with has to exist.
+      boxRepository: { findOne: jest.fn().mockResolvedValue(box), updateWhere: jest.fn() },
+      logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+      imageRegistrarService: { onBoxStarted: jest.fn().mockResolvedValue(undefined) },
+    })
+    return { service, registrar: (service as any).imageRegistrarService }
+  }
+
+  const reported = { digest: `sha256:${'a'.repeat(64)}`, sizeBytes: 4096 }
+
+  /**
+   * The report arrives on a state the control plane usually already has: it
+   * also learns a box is up by polling the runner, and whichever observation
+   * lands first makes the other a no-op transition. Recording the image has to
+   * survive that, or the catalog fills only when the race happens to go one way.
+   */
+  it('records the image even when the reported state is the one already stored', async () => {
+    const { service, registrar } = makeService(BoxState.STARTED)
+
+    await service.updateState('box-1', BoxState.STARTED, false, undefined, reported)
+
+    expect(registrar.onBoxStarted).toHaveBeenCalledWith('org-1', 'quay.io/acme/app:v1', reported)
+  })
+
+  /**
+   * A pull that failed reports ERROR. An image that never booted must not be in
+   * the catalog, where it would count against the organization's limit and be
+   * handed to the next box as if it had worked.
+   */
+  it('records nothing when the box is reporting an error', async () => {
+    const { service, registrar } = makeService(BoxState.STARTED)
+
+    await service.updateState('box-1', BoxState.ERROR, false, 'Failed to pull artifact image', reported)
+
+    expect(registrar.onBoxStarted).not.toHaveBeenCalled()
+  })
+
+  /**
+   * The state update is what the control plane acts on; a lost registration
+   * only costs the next create one re-resolution.
+   */
+  it('does not fail the state update when registration throws', async () => {
+    const { service, registrar } = makeService(BoxState.STARTED)
+    registrar.onBoxStarted.mockRejectedValue(new Error('conflict'))
+
+    await expect(service.updateState('box-1', BoxState.STARTED, false, undefined, reported)).resolves.toBeUndefined()
   })
 })
 
