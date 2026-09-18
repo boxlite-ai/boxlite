@@ -662,6 +662,7 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
             .unwrap();
         let mut unrelated_input = unrelated.stdin().unwrap();
         for disable in [false, true] {
+            let mut blocked_input = None;
             let mut clients = Vec::new();
             for (name, tty) in [("exec", false), ("pty", true)] {
                 let mut command = client_command("ssh", &user_key, &known_hosts, port);
@@ -680,6 +681,7 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
                 ));
                 command
                     .kill_on_drop(true)
+                    .stdin(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::null());
                 let mut child = command.spawn().unwrap();
@@ -690,6 +692,17 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
                     .unwrap()
                     .unwrap();
                 assert_eq!(ready.trim(), "ready");
+                if !tty {
+                    let mut input = child.stdin.take().unwrap();
+                    let payload = vec![b'x'; 16 * 1024 * 1024];
+                    assert!(
+                        tokio::time::timeout(Duration::from_secs(1), input.write_all(&payload))
+                            .await
+                            .is_err(),
+                        "the non-reading SSH process must apply stdin backpressure"
+                    );
+                    blocked_input = Some(input);
+                }
                 clients.push(child);
             }
             let mut sftp = client_command("ssh", &user_key, &known_hosts, port);
@@ -714,17 +727,22 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
             .unwrap();
             assert_eq!(&version[4..9], &[2, 0, 0, 0, 3]);
             clients.push(sftp);
-            if disable {
-                ssh.disable(boxlite_shared::SshDisableRequest {})
+            tokio::time::timeout(Duration::from_secs(15), async {
+                if disable {
+                    ssh.disable(boxlite_shared::SshDisableRequest {})
+                        .await
+                        .unwrap();
+                } else {
+                    ssh.configure(SshConfigureRequest {
+                        config: Some(config.clone()),
+                    })
                     .await
                     .unwrap();
-            } else {
-                ssh.configure(SshConfigureRequest {
-                    config: Some(config.clone()),
-                })
-                .await
-                .unwrap();
-            }
+                }
+            })
+            .await
+            .expect("SSH control must complete while stdin is backpressured");
+            drop(blocked_input);
             for mut client in clients {
                 assert!(
                     !tokio::time::timeout(Duration::from_secs(5), client.wait())
@@ -745,6 +763,16 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
                 reaped.wait().await.unwrap().success(),
                 "SSH processes must be reaped before control returns"
             );
+            if disable {
+                ssh.configure(SshConfigureRequest {
+                    config: Some(config.clone()),
+                })
+                .await
+                .unwrap();
+            }
+            let mut fresh = client_command("ssh", &user_key, &known_hosts, port);
+            fresh.args(["root@127.0.0.1", "printf fresh-ssh-ok"]);
+            assert_eq!(checked_output(fresh).await, b"fresh-ssh-ok");
         }
         unrelated_input.write_all(b"alive\n").await.unwrap();
         assert!(

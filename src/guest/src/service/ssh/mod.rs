@@ -167,7 +167,10 @@ impl SshManager {
     pub(crate) async fn status(&self) -> boxlite_shared::SshStatus {
         let state = self.state.lock().await;
         let mut status = state.status.clone();
-        if state.tasks.as_ref().is_some_and(|tasks| tasks.is_cancelled())
+        if state
+            .tasks
+            .as_ref()
+            .is_some_and(|tasks| tasks.is_cancelled())
             || state.listener.as_ref().is_none_or(JoinHandle::is_finished)
         {
             status.enabled = false;
@@ -245,22 +248,28 @@ impl SshManager {
         };
         let config_server = config.server.clone();
         let authorizer = config.authorizer.clone();
-        let connection_tasks = tasks.clone();
-        tasks.spawn_tracked(move |cancel| async move {
-            let _permit = permit;
-            let (authenticated_tx, authenticated_rx) = tokio::sync::oneshot::channel();
-            let handler =
-                server::SshConnection::new(guest, authorizer, authenticated_tx, connection_tasks);
-            serve_connection(
-                stream,
-                peer,
-                config_server,
-                handler,
-                authenticated_rx,
-                cancel,
-            )
-            .await;
-        });
+        let connection_tasks = tasks.child();
+        connection_tasks
+            .clone()
+            .spawn_tracked(move |cancel| async move {
+                let _permit = permit;
+                let (authenticated_tx, authenticated_rx) = tokio::sync::oneshot::channel();
+                let handler = server::SshConnection::new(
+                    guest,
+                    authorizer,
+                    authenticated_tx,
+                    connection_tasks,
+                );
+                serve_connection(
+                    stream,
+                    peer,
+                    config_server,
+                    handler,
+                    authenticated_rx,
+                    cancel,
+                )
+                .await;
+            });
     }
 }
 

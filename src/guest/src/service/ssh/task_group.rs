@@ -49,6 +49,10 @@ impl TaskGroup {
         self.cancel.cancel();
     }
 
+    pub(super) async fn cancelled(&self) {
+        self.cancel.cancelled().await;
+    }
+
     pub(super) fn is_cancelled(&self) -> bool {
         self.cancel.is_cancelled()
     }

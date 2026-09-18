@@ -621,6 +621,7 @@ impl russh::server::Handler for SshConnection {
 
 impl Drop for SshConnection {
     fn drop(&mut self) {
+        self.tasks.cancel();
         for (_, mut bridge) in self.bridges.drain() {
             bridge.terminate_running();
         }
