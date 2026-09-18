@@ -10,8 +10,8 @@ mod store;
 pub(crate) use archive::whiteout;
 pub use archive::{LayerExtractor, OverrideFileType, OverrideStat, SafeRoot};
 pub use config::ContainerImageConfig;
-pub(crate) use image_disk::DiskCacheReclaim;
 pub use image_disk::ImageDiskManager;
+pub(crate) use image_disk::{DiskCacheReclaim, InFlightLease};
 pub use manager::ImageManager;
 pub use object::ImageObject;
 

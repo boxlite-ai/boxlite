@@ -5,8 +5,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -139,6 +139,56 @@ pub(crate) struct DiskCacheReclaim {
     /// per call for the same reason as the guards themselves: the trigger that
     /// matters most is inside the manager.
     metrics: RuntimeMetricsStorage,
+    /// Disks a caller is still using, by path, refcounted because two box
+    /// creates can ask for the same image at once.
+    ///
+    /// Guard B only sees a disk once something backs onto it, which is not yet
+    /// true between `get_or_create` handing one out and its caller building
+    /// the overlay or copy that will. Eviction has no second guard, so without
+    /// this the periodic pass can delete a cache hit out from under the create
+    /// that just asked for it.
+    in_flight: Arc<Mutex<HashMap<PathBuf, usize>>>,
+}
+
+/// A caller's claim on a cached disk, held for as long as it is being used.
+///
+/// Dropping it releases the claim, so the lease has to live in the caller's
+/// scope — not in [`ImageDiskManager::get_or_create`]'s — until the disk is
+/// either copied or has an overlay backing onto it.
+#[must_use = "dropping the lease reopens the window eviction can delete the disk in"]
+pub(crate) struct InFlightLease {
+    in_flight: Arc<Mutex<HashMap<PathBuf, usize>>>,
+    path: PathBuf,
+}
+
+impl std::fmt::Debug for InFlightLease {
+    /// The registry is shared and locked; printing the path alone says what a
+    /// reader of a `ContainerRootfsPrepResult` dump needs to know.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InFlightLease")
+            .field("path", &self.path)
+            .finish()
+    }
+}
+
+impl Drop for InFlightLease {
+    fn drop(&mut self) {
+        // A poisoned lock leaks the claim rather than panicking a box teardown.
+        // It is not one disk: `remove_unless_leased` deletes nothing once the
+        // lock is poisoned, so eviction stops until the process restarts.
+        // That is still the safe direction — a cache that stops shrinking
+        // against a disk deleted under a booting box — and a panic in a `Drop`
+        // is not an option.
+        let Ok(mut in_flight) = self.in_flight.lock() else {
+            return;
+        };
+        if let Some(count) = in_flight.get_mut(&self.path) {
+            *count -= 1;
+            if *count == 0 {
+                in_flight.remove(&self.path);
+            }
+        }
+    }
 }
 
 impl DiskCacheReclaim {
@@ -154,7 +204,47 @@ impl DiskCacheReclaim {
             boxes_dir,
             last_sweep: Mutex::new(None),
             metrics,
+            in_flight: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Claim a disk for as long as the returned lease lives.
+    ///
+    /// A poisoned lock still hands back a lease. The claim goes unrecorded,
+    /// but nothing is exposed by that: [`Self::remove_unless_leased`] deletes
+    /// nothing once the lock is poisoned, so eviction has already stopped.
+    fn lease(&self, path: PathBuf) -> InFlightLease {
+        if let Ok(mut in_flight) = self.in_flight.lock() {
+            *in_flight.entry(path.clone()).or_insert(0) += 1;
+        }
+        InFlightLease {
+            in_flight: Arc::clone(&self.in_flight),
+            path,
+        }
+    }
+
+    /// Delete a disk unless a caller holds a claim on it, deciding and
+    /// deleting under the same lock.
+    ///
+    /// This is the only place eviction consults the registry, and the only
+    /// place that can be: a candidate list filtered earlier is a snapshot,
+    /// and a create that leases between building it and reaching a path
+    /// would not be in it. Checking and unlinking as two steps has the same
+    /// hole one step smaller — check(false) -> `get_or_create` leases ->
+    /// `find` sees the file -> unlink. Under one lock the two are ordered: a
+    /// lease taken first is seen, and one taken after finds the file already
+    /// gone, which is a cache miss and rebuilds. A poisoned lock deletes
+    /// nothing — a cache that stops shrinking, against a disk deleted under a
+    /// booting box.
+    fn remove_unless_leased(&self, path: &Path) -> std::io::Result<bool> {
+        let Ok(in_flight) = self.in_flight.lock() else {
+            return Ok(false);
+        };
+        if in_flight.contains_key(path) {
+            return Ok(false);
+        }
+        fs::remove_file(path)?;
+        Ok(true)
     }
 
     /// True at most once per [`gc_min_interval`], recording the sweep as it
@@ -266,8 +356,15 @@ impl ImageDiskManager {
     /// Returns a persistent `Disk` (won't be cleaned up on drop).
     /// If a cached disk exists for this image digest, returns it immediately.
     /// Otherwise: extracts layers → creates ext4 → atomically installs to cache.
-    pub async fn get_or_create(&self, image: &ImageObject) -> BoxliteResult<Disk> {
+    /// The lease comes back with the disk and must outlive the caller's use of
+    /// it. Until something backs onto the disk, guard B cannot see it and
+    /// eviction has no second guard, so a dropped lease is a disk the periodic
+    /// pass may delete while the create that asked for it is still running.
+    pub async fn get_or_create(&self, image: &ImageObject) -> BoxliteResult<(Disk, InFlightLease)> {
         let digest = image.compute_image_digest();
+        // Before the lookup, so the miss path's own reclaim cannot pick as a
+        // victim the disk it is about to build.
+        let lease = self.reclaim.lease(self.disk_path(&digest));
 
         let disk = match self.find(&digest) {
             Some(disk) => {
@@ -275,7 +372,7 @@ impl ImageDiskManager {
                 disk
             }
             None => {
-                self.reclaim_before_build(&digest);
+                self.reclaim_before_build();
                 tracing::info!("Building image disk for {} (first time)", digest);
                 self.build_and_install(image, &digest).await?
             }
@@ -287,7 +384,7 @@ impl ImageDiskManager {
         // while still carrying the stamp that made it the coldest candidate
         // goes straight back to the front of the queue.
         self.record_use(image.reference());
-        Ok(disk)
+        Ok((disk, lease))
     }
 
     /// Look up a cached disk by image digest.
@@ -307,17 +404,18 @@ impl ImageDiskManager {
     /// directory once per box, and nothing becomes unreachable in between.
     /// Failures are logged and swallowed — a sweep that can't run is a cache
     /// that keeps growing, not a box that fails to start.
-    /// `building` is the disk this call is about to install — the eviction
-    /// pass must not take it out from under the build.
-    fn reclaim_before_build(&self, building: &str) {
-        self.reclaim_before_build_with(building, &|| self.volume_used_percent());
+    /// The disk this call is about to install is already leased by
+    /// `get_or_create`, so the eviction pass below cannot take it out from
+    /// under the build that is waiting on it.
+    fn reclaim_before_build(&self) {
+        self.reclaim_before_build_with(&|| self.volume_used_percent());
     }
 
     /// [`Self::reclaim_before_build`] against an injected usage reading, which
     /// is how a test drives pressure a real filesystem will not reproduce on
     /// demand. Same split, for the same reason, as
     /// [`Self::evict_cold_down_to_low_watermark`].
-    fn reclaim_before_build_with(&self, building: &str, used_percent: &dyn Fn() -> Option<u8>) {
+    fn reclaim_before_build_with(&self, used_percent: &dyn Fn() -> Option<u8>) {
         // Free first: this deletes only what nothing can reach, so it costs
         // nothing and may make the eviction below unnecessary. Throttled,
         // because nothing new becomes unreachable between two box creates.
@@ -329,7 +427,7 @@ impl ImageDiskManager {
 
         // Not throttled: it answers "is there room for the disk I am about to
         // build", and the previous pass's answer says nothing about that.
-        if let Err(e) = self.evict_cold_down_to_low_watermark(Some(building), used_percent) {
+        if let Err(e) = self.evict_cold_down_to_low_watermark(used_percent) {
             tracing::warn!("Image disk eviction failed, continuing without it: {}", e);
         }
     }
@@ -343,7 +441,7 @@ impl ImageDiskManager {
     /// path that lets such a host recover on its own.
     pub(crate) fn reclaim_now(&self) -> BoxliteResult<Reclaimed> {
         let collected = self.gc_unreachable()?;
-        let evicted = self.evict_cold_if_low_on_space(None)?;
+        let evicted = self.evict_cold_if_low_on_space()?;
         Ok(Reclaimed { collected, evicted })
     }
 
@@ -454,6 +552,11 @@ impl ImageDiskManager {
                 size_mb = allocated_bytes(&metadata) / (1024 * 1024),
                 "GC: removing unreachable image disk (no index row, nothing backing onto it)"
             );
+            // No lease check, unlike the eviction pass: a disk `get_or_create`
+            // hands out has an index row, so guard A already spared it, and a
+            // disk it is building is younger than the grace period, so guard C
+            // did. Anything that lets a leased disk past both — a path that
+            // prunes rows, say — has to consult the registry here too.
             match fs::remove_file(&path) {
                 Ok(()) => {
                     removed += 1;
@@ -533,13 +636,11 @@ impl ImageDiskManager {
     /// cached disk is a read-only backing file, so reading one never updates
     /// its mtime, and an mtime order degrades into "oldest created first" —
     /// which evicts the most widely shared base images first.
-    /// `building` is the disk a pull is about to install, or `None` when no
-    /// build is waiting on this pass — the periodic sweep's case.
-    pub(crate) fn evict_cold_if_low_on_space(
-        &self,
-        building: Option<&str>,
-    ) -> BoxliteResult<usize> {
-        self.evict_cold_down_to_low_watermark(building, &|| self.volume_used_percent())
+    /// Disks a caller still holds a lease on are held back, which is what
+    /// makes this safe to run from the periodic sweep with no build waiting
+    /// on it.
+    pub(crate) fn evict_cold_if_low_on_space(&self) -> BoxliteResult<usize> {
+        self.evict_cold_down_to_low_watermark(&|| self.volume_used_percent())
     }
 
     /// [`Self::evict_cold_if_low_on_space`] against an injected usage reading,
@@ -548,7 +649,6 @@ impl ImageDiskManager {
     /// moment the low watermark is reached.
     fn evict_cold_down_to_low_watermark(
         &self,
-        building: Option<&str>,
         used_percent: &dyn Fn() -> Option<u8>,
     ) -> BoxliteResult<usize> {
         // A filesystem that cannot be queried is not a full one. Reading
@@ -591,7 +691,7 @@ impl ImageDiskManager {
         let mut evicted = 0;
         let mut reclaimed_bytes = 0u64;
 
-        for (last_used_at, path) in self.coldest_first(building, &referenced)? {
+        for (last_used_at, path) in self.coldest_first(&referenced)? {
             if usage <= low {
                 break;
             }
@@ -599,9 +699,16 @@ impl ImageDiskManager {
                 .as_ref()
                 .map(allocated_bytes)
                 .unwrap_or(0);
-            if let Err(e) = fs::remove_file(&path) {
-                tracing::warn!("Eviction: failed to remove {}: {}", path.display(), e);
-                continue;
+            // Not just the snapshot's check: a create that asked for this disk
+            // after `coldest_first` ran holds a lease the candidate list never
+            // saw, and deciding separately from deleting would still race it.
+            match self.reclaim.remove_unless_leased(&path) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(e) => {
+                    tracing::warn!("Eviction: failed to remove {}: {}", path.display(), e);
+                    continue;
+                }
             }
             tracing::info!(
                 path = %path.display(),
@@ -642,25 +749,23 @@ impl ImageDiskManager {
     /// row names are left out — those belong to [`Self::gc_unreachable`],
     /// which costs nothing and has already had its turn.
     ///
-    /// Two things are held back even though nothing backs onto them yet:
-    /// - `building`, the disk this pull is about to install. It is installed
-    ///   before its box overlay exists, so between those two steps it looks
-    ///   unreferenced to a *concurrent* create's eviction pass.
-    /// - anything younger than [`ORPHAN_GRACE`], which covers the same window
-    ///   for a disk another caller just landed — the reason
-    ///   [`Self::gc_unreachable`]'s guard C exists.
-    fn coldest_first(
-        &self,
-        building: Option<&str>,
-        referenced: &HashSet<PathBuf>,
-    ) -> BoxliteResult<Vec<(i64, PathBuf)>> {
-        let in_flight = building.map(|digest| self.disk_path(digest));
+    /// Anything younger than [`ORPHAN_GRACE`] is held back even though
+    /// nothing backs onto it yet, covering the window for a disk another
+    /// caller just landed — the reason [`Self::gc_unreachable`]'s guard C
+    /// exists.
+    ///
+    /// A leased disk is *not* filtered here. This list is a snapshot, and a
+    /// create that leases between its being built and the removal loop
+    /// reaching that path would not be in it; the one consultation that can
+    /// see such a lease is [`DiskCacheReclaim::remove_unless_leased`], which
+    /// decides and unlinks together.
+    fn coldest_first(&self, referenced: &HashSet<PathBuf>) -> BoxliteResult<Vec<(i64, PathBuf)>> {
         let now = SystemTime::now();
         let mut newest_use: HashMap<PathBuf, i64> = HashMap::new();
 
         for (_, cached) in self.reclaim.index.list_all()? {
             let path = self.disk_path(&image_digest_for_layers(&cached.layers));
-            if referenced.contains(&path) || in_flight.as_ref() == Some(&path) {
+            if referenced.contains(&path) {
                 continue;
             }
             let Ok(metadata) = fs::metadata(&path) else {
@@ -1209,8 +1314,7 @@ mod tests {
         // While the box exists, neither pass may touch it, at any pressure.
         assert_eq!(mgr.gc_unreachable().unwrap(), 0);
         assert_eq!(
-            mgr.evict_cold_down_to_low_watermark(None, &|| Some(99))
-                .unwrap(),
+            mgr.evict_cold_down_to_low_watermark(&|| Some(99)).unwrap(),
             0,
             "a disk a box backs onto is off limits however full the volume is"
         );
@@ -1228,7 +1332,7 @@ mod tests {
         let readings = [95u8, 70];
         let reading = std::cell::Cell::new(0usize);
         let evicted = mgr
-            .evict_cold_down_to_low_watermark(None, &|| {
+            .evict_cold_down_to_low_watermark(&|| {
                 let i = reading.get();
                 reading.set(i + 1);
                 Some(readings[i.min(readings.len() - 1)])
@@ -1381,12 +1485,12 @@ mod tests {
 
         let first = mgr.disk_path(&image_digest_for_layers(&["sha256:first"]));
         write_settled(&first);
-        mgr.reclaim_before_build("sha256:unrelated");
+        mgr.reclaim_before_build();
         assert!(!first.exists(), "the first sweep runs");
 
         let second = mgr.disk_path(&image_digest_for_layers(&["sha256:second"]));
         write_settled(&second);
-        mgr.reclaim_before_build("sha256:unrelated");
+        mgr.reclaim_before_build();
         assert!(
             second.exists(),
             "a second sweep inside the minimum interval must be skipped"
@@ -1420,9 +1524,7 @@ mod tests {
         );
 
         let cold = home.cached_disk(&mgr, "registry/cold:1", &["sha256:cold"], 100);
-        let evicted = mgr
-            .evict_cold_down_to_low_watermark(None, &|| Some(99))
-            .unwrap();
+        let evicted = mgr.evict_cold_down_to_low_watermark(&|| Some(99)).unwrap();
 
         assert_eq!(evicted, 1);
         assert!(!cold.exists());
@@ -1475,10 +1577,13 @@ mod tests {
         let cold = home.cached_disk(&mgr, "registry/cold:1", &["sha256:cold"], 100);
         let pinned = home.cached_disk(&mgr, "registry/pinned:1", &["sha256:pinned"], 200);
         home.box_backed_by("live-box", &pinned);
-        let building = image_digest_for_layers(&["sha256:building"]);
         let in_flight = home.cached_disk(&mgr, "registry/building:1", &["sha256:building"], 300);
+        // What `get_or_create` holds for the disk it is about to hand out.
+        let _lease = mgr
+            .reclaim
+            .lease(mgr.disk_path(&image_digest_for_layers(&["sha256:building"])));
 
-        mgr.reclaim_before_build_with(&building, &|| Some(99));
+        mgr.reclaim_before_build_with(&|| Some(99));
 
         assert!(!cold.exists(), "the coldest unreferenced disk makes room");
         assert!(
@@ -1518,7 +1623,7 @@ mod tests {
         let disk = home.cached_disk(&mgr, "docker.io/library/python:alpine", &["sha256:l1"], 100);
 
         let evicted = mgr
-            .evict_cold_down_to_low_watermark(None, &|| Some(evict_high_percent() - 1))
+            .evict_cold_down_to_low_watermark(&|| Some(evict_high_percent() - 1))
             .unwrap();
 
         assert_eq!(evicted, 0);
@@ -1540,7 +1645,7 @@ mod tests {
         let readings = [90u8, 88, 70];
         let reading = std::cell::Cell::new(0usize);
         let evicted = mgr
-            .evict_cold_down_to_low_watermark(None, &|| {
+            .evict_cold_down_to_low_watermark(&|| {
                 let i = reading.get();
                 reading.set(i + 1);
                 Some(readings[i.min(readings.len() - 1)])
@@ -1590,7 +1695,7 @@ mod tests {
         let readings = [95u8, 70];
         let reading = std::cell::Cell::new(0usize);
         let evicted = mgr
-            .evict_cold_down_to_low_watermark(None, &|| {
+            .evict_cold_down_to_low_watermark(&|| {
                 let i = reading.get();
                 reading.set(i + 1);
                 Some(readings[i.min(readings.len() - 1)])
@@ -1617,9 +1722,7 @@ mod tests {
         let in_use = home.cached_disk(&mgr, "registry/in-use:1", &["sha256:in-use"], 0);
         home.box_backed_by("stopped-box", &in_use);
 
-        let evicted = mgr
-            .evict_cold_down_to_low_watermark(None, &|| Some(99))
-            .unwrap();
+        let evicted = mgr.evict_cold_down_to_low_watermark(&|| Some(99)).unwrap();
 
         assert_eq!(evicted, 0);
         assert!(
@@ -1649,8 +1752,7 @@ mod tests {
 
         assert_eq!(mgr.gc_unreachable().unwrap(), 0);
         assert_eq!(
-            mgr.evict_cold_down_to_low_watermark(None, &|| Some(99))
-                .unwrap(),
+            mgr.evict_cold_down_to_low_watermark(&|| Some(99)).unwrap(),
             0
         );
         assert!(
@@ -1666,9 +1768,7 @@ mod tests {
         let mgr = home.manager(0);
         let disk = home.cached_disk(&mgr, "registry/a:1", &["sha256:a"], 0);
 
-        let evicted = mgr
-            .evict_cold_down_to_low_watermark(None, &|| None)
-            .unwrap();
+        let evicted = mgr.evict_cold_down_to_low_watermark(&|| None).unwrap();
 
         assert_eq!(evicted, 0);
         assert!(disk.exists(), "unknown free space is not zero free space");
@@ -1689,8 +1789,7 @@ mod tests {
         fs::write(&extracted, b"content").unwrap();
 
         assert_eq!(
-            mgr.evict_cold_down_to_low_watermark(None, &|| Some(99))
-                .unwrap(),
+            mgr.evict_cold_down_to_low_watermark(&|| Some(99)).unwrap(),
             1
         );
         assert!(tarball.exists(), "the layer tarball cache is not evicted");
@@ -1811,9 +1910,7 @@ mod tests {
         let fresh = mgr.disk_path(&image_digest_for_layers(&layers));
         fs::write(&fresh, vec![0u8; 4096]).unwrap();
 
-        let evicted = mgr
-            .evict_cold_down_to_low_watermark(None, &|| Some(99))
-            .unwrap();
+        let evicted = mgr.evict_cold_down_to_low_watermark(&|| Some(99)).unwrap();
 
         assert_eq!(evicted, 1, "only the settled disk is a candidate");
         assert!(!settled.exists());
@@ -1823,22 +1920,145 @@ mod tests {
         );
     }
 
-    /// The disk this very pull is about to install is held back by name, so
-    /// the guarantee does not depend on clock skew or on how long the build
-    /// between install and overlay takes.
+    /// A disk a caller still holds a lease on is held back, so the guarantee
+    /// does not depend on clock skew or on how long the caller takes between
+    /// being handed the disk and building the overlay that references it.
     #[test]
-    fn the_disk_being_built_is_not_evicted() {
+    fn a_leased_disk_is_not_evicted() {
         let home = TestHome::new();
         let mgr = home.manager(0);
         let layers = ["sha256:in-flight"];
-        let building = image_digest_for_layers(&layers);
         let disk = home.cached_disk(&mgr, "registry/in-flight:1", &layers, 0);
 
-        let evicted = mgr
-            .evict_cold_down_to_low_watermark(Some(&building), &|| Some(99))
-            .unwrap();
+        let lease = mgr
+            .reclaim
+            .lease(mgr.disk_path(&image_digest_for_layers(&layers)));
+        let evicted = mgr.evict_cold_down_to_low_watermark(&|| Some(99)).unwrap();
 
-        assert_eq!(evicted, 0, "the in-flight disk is the one being built");
+        assert_eq!(evicted, 0, "a leased disk is one someone is still using");
+        assert!(disk.exists());
+
+        // And the hold ends with the lease, or nothing would ever be evicted.
+        drop(lease);
+        let evicted = mgr.evict_cold_down_to_low_watermark(&|| Some(99)).unwrap();
+        assert_eq!(evicted, 1, "dropping the lease releases the disk");
+        assert!(!disk.exists());
+    }
+
+    /// Two box creates can ask for the same image at once, which is why the
+    /// registry counts rather than sets. The disk stays held until the last
+    /// of them is done with it — one caller finishing must not release it
+    /// for the other.
+    #[test]
+    fn a_disk_two_callers_hold_survives_the_first_of_them_leaving() {
+        let home = TestHome::new();
+        let mgr = home.manager(0);
+        let layers = ["sha256:shared"];
+        let disk = home.cached_disk(&mgr, "registry/shared:1", &layers, 0);
+        let path = mgr.disk_path(&image_digest_for_layers(&layers));
+
+        let first = mgr.reclaim.lease(path.clone());
+        let second = mgr.reclaim.lease(path);
+
+        drop(first);
+        let evicted = mgr.evict_cold_down_to_low_watermark(&|| Some(99)).unwrap();
+        assert_eq!(evicted, 0, "the second caller is still using it");
+        assert!(disk.exists());
+
+        drop(second);
+        let evicted = mgr.evict_cold_down_to_low_watermark(&|| Some(99)).unwrap();
+        assert_eq!(evicted, 1, "the last lease gone releases the disk");
+        assert!(!disk.exists());
+    }
+
+    /// The wiring, not the mechanism: the lease `get_or_create` hands back
+    /// has to be on the disk it hands back. A lease on any other path, or
+    /// none at all, leaves the caller holding a disk the next pass can take —
+    /// which is the whole defect this exists to close, and which every test
+    /// that leases directly would still pass through.
+    #[tokio::test]
+    async fn the_disk_get_or_create_hands_back_is_the_one_it_leases() {
+        let home = TestHome::new();
+        let mgr = home.manager(0);
+        let layers = ["sha256:handed-out"];
+        let asked_for = image_with_layers(&home.root, &layers);
+        let cached = home.cached_disk(
+            &mgr,
+            &crate::images::index_key(asked_for.reference()),
+            &layers,
+            0,
+        );
+
+        let (disk, lease) = mgr
+            .get_or_create(&asked_for)
+            .await
+            .expect("the cached disk must be returned as-is");
+        assert_eq!(disk.path(), cached, "the hit is the disk under test");
+
+        let evicted = mgr.evict_cold_down_to_low_watermark(&|| Some(99)).unwrap();
+        assert_eq!(evicted, 0, "a disk just handed out is still in use");
+        assert!(cached.exists());
+
+        drop(lease);
+        let evicted = mgr.evict_cold_down_to_low_watermark(&|| Some(99)).unwrap();
+        assert_eq!(evicted, 1, "and is a candidate again once released");
+        assert!(!cached.exists());
+    }
+
+    /// The candidate list is a snapshot, so by the time the removal loop
+    /// reaches a path a create may have leased it. Deciding and unlinking as
+    /// two steps would still race that; this pins the one step that cannot.
+    ///
+    /// Driven directly because a single-threaded test cannot interleave a
+    /// lease between the snapshot and the unlink. This pins the predicate's
+    /// own contract; `the_removal_loop_asks_before_it_unlinks` pins that the
+    /// loop goes through it.
+    #[test]
+    fn a_path_leased_after_the_snapshot_is_not_unlinked() {
+        let home = TestHome::new();
+        let mgr = home.manager(0);
+        let layers = ["sha256:late-lease"];
+        let disk = home.cached_disk(&mgr, "registry/late:1", &layers, 0);
+        let path = mgr.disk_path(&image_digest_for_layers(&layers));
+
+        let lease = mgr.reclaim.lease(path.clone());
+        assert!(
+            !mgr.reclaim.remove_unless_leased(&path).unwrap(),
+            "a leased path is not the evictor's to delete"
+        );
+        assert!(disk.exists());
+
+        drop(lease);
+        assert!(
+            mgr.reclaim.remove_unless_leased(&path).unwrap(),
+            "and is once the lease is gone"
+        );
+        assert!(!disk.exists());
+    }
+
+    /// And the removal loop has to go through it. Asserting the predicate
+    /// alone would leave a bare `fs::remove_file` in the loop passing, which
+    /// is exactly the two-step shape the predicate replaced.
+    ///
+    /// The lease is on the path the loop hands to the predicate, which is
+    /// reachable precisely because `coldest_first` no longer filters leases:
+    /// the candidate list carries it, and only the predicate refuses it. A
+    /// bare `fs::remove_file` here deletes it.
+    #[test]
+    fn the_removal_loop_asks_before_it_unlinks() {
+        let home = TestHome::new();
+        let mgr = home.manager(0);
+        let layers = ["sha256:loop-guard"];
+        let disk = home.cached_disk(&mgr, "registry/loop-guard:1", &layers, 0);
+
+        // Leased under the same path the loop will hand to the predicate.
+        let _lease = mgr
+            .reclaim
+            .lease(mgr.disk_path(&image_digest_for_layers(&layers)));
+
+        let evicted = mgr.evict_cold_down_to_low_watermark(&|| Some(99)).unwrap();
+
+        assert_eq!(evicted, 0, "the loop must not unlink a leased path");
         assert!(disk.exists());
     }
 
@@ -1903,7 +2123,10 @@ mod tests {
         // A second reference over the same layers, so the same cached disk.
         home.cached_disk(&mgr, "registry/other-name:1", &layers, 0);
 
-        mgr.get_or_create(&asked_for)
+        // The lease is irrelevant here — this test reads the row the call
+        // touched, not the disk it handed back.
+        let (_disk, _lease) = mgr
+            .get_or_create(&asked_for)
             .await
             .expect("the cached disk must be returned as-is");
 

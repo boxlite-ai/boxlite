@@ -154,6 +154,11 @@ pub enum ContainerRootfsPrepResult {
         base_disk_path: PathBuf,
         /// Size of the disk in bytes (for creating COW overlay)
         disk_size: u64,
+        /// Keeps the cache's eviction pass off `base_disk_path` until the COW
+        /// child that will back onto it exists. Carried here rather than
+        /// dropped in `prepare_disk_rootfs` because the overlay is created
+        /// later, by `create_cow_disk`, from this very value.
+        _image_disk_lease: crate::images::InFlightLease,
     },
 }
 

@@ -290,7 +290,10 @@ impl GuestRootfsManager {
 
         // Stage 1: ensure pure image disk exists
         let stage1_start = std::time::Instant::now();
-        let image_disk = image_disk_mgr.get_or_create(image).await?;
+        // The lease rides along until this function returns, so the disk
+        // cannot be evicted between here and the copy `build_and_install`
+        // makes from it.
+        let (image_disk, _image_disk_lease) = image_disk_mgr.get_or_create(image).await?;
         tracing::info!(
             elapsed_ms = stage1_start.elapsed().as_millis() as u64,
             "get_or_create: stage1 image_disk done"
