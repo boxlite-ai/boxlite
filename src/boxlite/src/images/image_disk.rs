@@ -1072,6 +1072,41 @@ mod tests {
         token.cancel();
     }
 
+    /// And the first pass waits out its interval instead of running at t=0.
+    /// `recover_boxes` runs this same `reclaim_now` one line before the
+    /// thread is spawned, so a pass at t=0 repeats it whole — and while that
+    /// repeat is in flight, `recover_boxes_sweeps_unreachable_image_disks`
+    /// cannot tell the sweep it means to check from this one.
+    ///
+    /// Asserting that something does *not* happen needs a window, so this is
+    /// the one place a sleep is the measurement rather than a wait for an
+    /// event: the interval is a minute against an observation of half a
+    /// second, so a pass this rejects would have to be two orders of
+    /// magnitude late to slip through. Its two siblings here cover the other
+    /// direction — that the pass does eventually run.
+    #[test]
+    fn the_first_periodic_pass_waits_out_its_interval() {
+        let home = TestHome::new();
+        let mgr = std::sync::Arc::new(home.manager(0));
+        let orphan = mgr.disk_path(&image_digest_for_layers(&["sha256:not-yet"]));
+        write_settled(&orphan);
+        let token = tokio_util::sync::CancellationToken::new();
+
+        crate::runtime::rt_impl::RuntimeImpl::spawn_periodic_image_disk_gc(
+            &mgr,
+            token.clone(),
+            Duration::from_secs(60),
+        );
+        std::thread::sleep(Duration::from_millis(500));
+
+        assert!(
+            orphan.exists(),
+            "the first pass must wait out its interval, not repeat the startup sweep"
+        );
+
+        token.cancel();
+    }
+
     /// And it has to run where the bindings put it: outside any tokio
     /// context. The C ABI builds its own runtime and never enters it before
     /// calling through; the napi and pyo3 constructors are synchronous and
