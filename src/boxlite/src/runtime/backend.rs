@@ -119,6 +119,10 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 
     async fn stop(&self) -> BoxliteResult<()>;
 
+    async fn pause(&self) -> BoxliteResult<()>;
+
+    async fn resume(&self) -> BoxliteResult<()>;
+
     async fn copy_into(
         &self,
         host_src: &Path,
