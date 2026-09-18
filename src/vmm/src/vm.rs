@@ -12,7 +12,7 @@ pub(crate) enum VmExit {
 pub(crate) struct Vm;
 
 impl Vm {
-    #[expect(unreachable_code, unused_variables, clippy::diverging_sub_expression)]
+    #[expect(unreachable_code, clippy::diverging_sub_expression)]
     pub(crate) fn run(&mut self) -> VmResult<VmExit> {
         enum Event {
             DeviceReady,
