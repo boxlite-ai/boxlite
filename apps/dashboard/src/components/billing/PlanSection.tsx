@@ -41,9 +41,12 @@ export function PlanSection() {
   const isError = organizationPlanQuery.isError || plansQuery.isError || walletQuery.isError
 
   const handleRetry = () => {
-    organizationPlanQuery.refetch()
     plansQuery.refetch()
-    walletQuery.refetch()
+    // React Query's explicit refetch bypasses enabled; preserve owner scope on retries too.
+    if (isOwner) {
+      organizationPlanQuery.refetch()
+      walletQuery.refetch()
+    }
   }
 
   return (

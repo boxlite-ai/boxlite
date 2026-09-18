@@ -8,6 +8,7 @@ import { BILLING_PAGE_CONTAINER } from '@/components/billing/billingLayout'
 import { BalanceLowBanner } from '@/components/billing/BalanceLowBanner'
 import { BillingAlerts } from '@/components/billing/BillingAlerts'
 import { PlanSection } from '@/components/billing/PlanSection'
+import { ReferralCodeSection } from '@/components/billing/ReferralCodeSection'
 import { UsageSection } from '@/components/billing/UsageSection'
 import { WalletSection } from '@/components/billing/WalletSection'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -36,7 +37,7 @@ function SegBars() {
   )
 }
 
-/** Stands in until a billing service is deployed — nothing below it can load without one. */
+/** Placeholder for Commerce-backed sections; invitation sharing remains independent. */
 function BillingComingSoon() {
   return (
     <div className="flex min-h-[calc(100svh-60px)] items-center justify-center px-6 py-14 lg:px-[40px]">
@@ -87,7 +88,14 @@ function Billing() {
   const [tab, setTab] = useState('overview')
 
   if (!config.billingApiUrl) {
-    return <BillingComingSoon />
+    return (
+      <>
+        <BillingComingSoon />
+        <div className={BILLING_PAGE_CONTAINER}>
+          <ReferralCodeSection />
+        </div>
+      </>
+    )
   }
 
   return (
@@ -110,6 +118,7 @@ function Billing() {
               <BillingAlerts />
             </div>
             <PlanSection />
+            <ReferralCodeSection />
           </div>
         </TabsContent>
         <TabsContent value="usage">

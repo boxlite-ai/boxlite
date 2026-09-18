@@ -145,6 +145,19 @@ try {
         '(auth/(jwt.strategy|combined-auth.guard)|user/user.service.default-organization-compat|organization/(controllers/organization.controller|services/organization.service))\\.spec\\.ts$',
       ])
       break
+    case 'dashboard':
+      await run('yarn', [
+        'vitest',
+        'run',
+        '--config',
+        'dashboard/vite.config.mts',
+        'referral',
+        '--maxWorkers=1',
+        '--reporter=default',
+        '--reporter=json',
+        '--outputFile=' + path.join(runDirectory, 'dashboard.json'),
+      ])
+      break
     case 'generate':
       await generateClients()
       break
