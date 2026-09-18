@@ -468,10 +468,13 @@ impl ImageDiskManager {
     ///   `reserve_bytes`, so an entry built under a different headroom budget
     ///   is unreachable by construction: `find()` can no longer produce that
     ///   name, which is exactly what makes it garbage rather than cache.
-    /// - **B** — nothing backs onto it. `referenced_backing_paths` walks the
-    ///   whole chain of both overlays every box owns, so this covers stopped
-    ///   boxes too: their `disk.qcow2` is still on disk and still pinned to
-    ///   the base it booted from.
+    /// - **B** — nothing backs onto it. `referenced_backing_paths_checked`
+    ///   walks the whole chain of both overlays every box owns, so this
+    ///   covers stopped boxes too: their `disk.qcow2` is still on disk and
+    ///   still pinned to the base it booted from. The checked form, because
+    ///   B stands alone: a scan that could not read every box leaves the
+    ///   answer unknown rather than smaller, and the pass gives up rather
+    ///   than delete on a partial one.
     /// - **C** — it has settled for [`ORPHAN_GRACE`].
     /// - **D** — it is a plain `.ext4` file directly in this manager's own
     ///   cache directory.
