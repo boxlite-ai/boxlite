@@ -215,6 +215,10 @@ const systemImagesFrom = (environment: Environment): Record<string, string> => {
     ...passthrough('BOXLITE_SYSTEM_PYTHON_IMAGE'),
     ...passthrough('BOXLITE_SYSTEM_IMAGE_TAG'),
     ...passthrough('BOXLITE_SYSTEM_IMAGES'),
+    // Registries a tenant-supplied image may be pulled from. Unset leaves the
+    // API on its built-in list, so an operator only sets this to widen or
+    // narrow it — and can do that without a deploy.
+    ...passthrough('BOXLITE_IMAGE_REGISTRY_ALLOWLIST'),
     ...(registry
       ? {
           BOXLITE_SYSTEM_SOURCE_REGISTRY_URL: registry,

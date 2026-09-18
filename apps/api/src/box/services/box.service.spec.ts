@@ -45,6 +45,7 @@ function makeService() {
     noop, // boxActivityService
     noop, // jobRepository
     noop, // jobService
+    noop, // imageAdmissionService
   )
   return { service, boxRepository, eventEmitter, organizationService }
 }
@@ -86,6 +87,7 @@ function makePreviewUrlService() {
     noop, // boxActivityService
     noop, // jobRepository
     noop, // jobService
+    noop, // imageAdmissionService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -235,6 +237,7 @@ function makeNetworkTunnelService() {
     noop,
     noop, // jobRepository
     noop, // jobService
+    noop, // imageAdmissionService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -273,9 +276,42 @@ describe('BoxService public defaults', () => {
       boxRepository,
       eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
       toBoxDto: jest.fn((box) => box),
+      imageAdmissionService: { assert: jest.fn().mockResolvedValue(undefined) },
     })
     return { service, boxRepository, runnerService, warmPoolService }
   }
+
+  /**
+   * The gate that only ever accepted curated images now accepts anything
+   * admission allows, and hands it on untouched. Until the catalog-backed
+   * resolver lands, "untouched" is the whole of the resolution step, so this is
+   * the assertion that the door actually opened rather than moved.
+   */
+  it('passes a tenant-supplied ref through once admission accepts it', async () => {
+    const { service, boxRepository } = makeCreateService()
+
+    await service.create({ name: 'tenant-box', image: 'docker.io/acme/app:v1' } as any, { id: 'org-1' } as any)
+
+    expect((service as any).imageAdmissionService.assert).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'org-1' }),
+      'docker.io/acme/app:v1',
+    )
+    expect(boxRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ image: 'docker.io/acme/app:v1' }),
+      undefined,
+    )
+  })
+
+  it('still resolves a curated selector to its operator-configured ref', async () => {
+    const { service, boxRepository } = makeCreateService()
+
+    await service.create({ name: 'curated-box', image: 'python' } as any, { id: 'org-1' } as any)
+
+    expect(boxRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ image: expect.stringContaining('boxlite-agent-python') }),
+      undefined,
+    )
+  })
 
   it.each([
     [{ networkBlockAll: true }, { boxLimitedNetworkEgress: false }, { networkBlockAll: true }],

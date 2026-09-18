@@ -19,6 +19,8 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { assertSupportedImage } from '../constants/curated-images.constant'
+import { ImageAdmissionService } from '../../image/services/image-admission.service'
+import { isCuratedSelector } from '../../image/utils/image-ref.util'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { WarmPoolEvents } from '../constants/warmpool-events.constants'
@@ -117,6 +119,7 @@ export class BoxService {
     @InjectRepository(Job)
     private readonly jobRepository: Repository<Job>,
     private readonly jobService: JobService,
+    private readonly imageAdmissionService: ImageAdmissionService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -204,12 +207,20 @@ export class BoxService {
       // Reject over-limit requests at the boundary (the "security option"
       // per-box ceilings) rather than persisting out-of-range values.
       assertWithinPerBoxLimits(cpu, mem, disk, organization)
-      // Restrict box creation to the supported pinned images; reject anything else
-      // at the request boundary (defaults undefined -> base image).
-      const image = assertSupportedImage(createBoxDto.image)
-      const needsFreshBox = requiresFreshBox(createBoxDto, organization)
-
       this.organizationService.assertOrganizationIsNotSuspended(organization)
+
+      // Admission decides whether this organization may boot from this image at
+      // all; it is the gate that replaced "curated images only". It runs after
+      // the suspension check because it spends a rate budget, and a create that
+      // was going to be refused anyway should not consume it. Curated selectors
+      // still resolve through the curated set — the catalog-backed resolver
+      // that pins a digest is a separate change, and until it lands a
+      // tenant-supplied ref is passed through exactly as given.
+      await this.imageAdmissionService.assert(organization, createBoxDto.image)
+      const image = isCuratedSelector(createBoxDto.image)
+        ? assertSupportedImage(createBoxDto.image)
+        : (createBoxDto.image as string)
+      const needsFreshBox = requiresFreshBox(createBoxDto, organization)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
