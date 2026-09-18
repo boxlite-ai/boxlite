@@ -242,7 +242,8 @@ type boxConfig struct {
 }
 
 // volumeEntry is one mount. Exactly one origin is set: managedVolume for a
-// server-side managed volume, hostPath for a bind from the local filesystem.
+// managed volume the runtime resolves (its local store, or the server),
+// hostPath for a bind from the local filesystem.
 type volumeEntry struct {
 	managedVolume string
 	hostPath      string
@@ -295,7 +296,7 @@ func WithEnv(key, value string) BoxOption {
 // WithBindMount binds a host path into the box.
 //
 // Host binds are local-runtime only; a REST runtime rejects them at create.
-// Use [WithManagedVolume] against a REST runtime.
+// [WithManagedVolume] works on either runtime.
 func WithBindMount(hostPath, guestPath string) BoxOption {
 	return func(c *boxConfig) {
 		c.volumes = append(c.volumes, volumeEntry{hostPath: hostPath, guestPath: guestPath})
@@ -314,8 +315,8 @@ func WithBindMountReadOnly(hostPath, guestPath string) BoxOption {
 // managedVolume is the volume's server-assigned id or its name — the server
 // resolves either.
 //
-// Managed volumes need a REST runtime; the local runtime has no volume backend
-// and rejects one at create.
+// A local runtime resolves it against its own volume store when the box is
+// created; a REST runtime forwards it to the server as-is.
 func WithManagedVolume(managedVolume, guestPath string) BoxOption {
 	return func(c *boxConfig) {
 		c.volumes = append(c.volumes, volumeEntry{managedVolume: managedVolume, guestPath: guestPath})
@@ -323,8 +324,9 @@ func WithManagedVolume(managedVolume, guestPath string) BoxOption {
 }
 
 // Read-only managed volumes have no WithManagedVolumeReadOnly counterpart:
-// the server rejects read_only on a managed mount, so the option could only
-// ever produce an error. Host binds keep WithBindMountReadOnly.
+// the hosted API pins read_only to false on a managed mount and the REST
+// runtime refuses it before any request, so against a server the option
+// could only ever produce an error. Host binds keep WithBindMountReadOnly.
 
 // WithPort publishes a guest port on a host port.
 //

@@ -78,7 +78,7 @@ pub unsafe extern "C" fn boxlite_options_add_env(
 /// Bind a host directory or file into the box.
 ///
 /// Host bind mounts are local-runtime only; a REST runtime rejects them at
-/// create. Use [`boxlite_options_add_managed_volume`] against a REST runtime.
+/// create. [`boxlite_options_add_managed_volume`] works on either runtime.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_add_bind_mount(
     opts: *mut CBoxliteOptions,
@@ -93,8 +93,8 @@ pub unsafe extern "C" fn boxlite_options_add_bind_mount(
 /// name — the server resolves either.
 ///
 /// `managed_volume` is the volume's id or name (`"my-data"`, `"vol_01K2…"`).
-/// Managed volumes need a REST runtime; the local runtime has no volume backend
-/// and rejects one at create.
+/// A local runtime resolves it against its own volume store when the box is
+/// created; a REST runtime forwards it to the server as-is.
 ///
 /// A NULL `opts`, `managed_volume`, or `guest_path` is ignored, matching
 /// [`boxlite_options_add_bind_mount`].

@@ -14,9 +14,21 @@
 //!   volume, addressed by id or by name.
 //!
 //! Docker's own failure mode does not carry over. There, a mistyped source
-//! silently creates an empty volume and the caller's data appears to vanish;
-//! boxlite never auto-creates, so an unknown reference is a loud "not found"
-//! from the server (`VolumeService.validateVolumes`).
+//! silently creates an empty volume and the caller's data appears to vanish.
+//! Boxlite never auto-creates, wherever the reference is resolved: the local
+//! runtime and `boxlite serve` answer "not found" from the local volume
+//! store, and the hosted API does the same
+//! (`VolumeService.validateVolumes`), so `-v data:/app` needs a prior
+//! `boxlite volume create`.
+//!
+//! Only two of the three forms reach that store. A managed volume names one
+//! and the runtime binds the mount to it while creating the box; a host path
+//! is the caller's own. The third, an anonymous `-v /data`, is still a host
+//! bind of a directory the CLI makes under `{home}/volumes/anonymous/` — it
+//! has no id, no name and no entry in `volume ls`, and no command reclaims
+//! it. `VolumeFlags::apply_to` in `cli.rs` carries the full list of what that
+//! costs; the short version is that "anonymous volume" is the docs' word for
+//! it, not the store's.
 //!
 //! Unlike Docker this classification happens exactly once. Docker re-derives it
 //! daemon-side from an untyped string (`moby/daemon/volume/mounts/linux_parser.go`,

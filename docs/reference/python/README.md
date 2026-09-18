@@ -194,8 +194,12 @@ volumes=[
 ]
 ```
 
-Managed volumes require a REST runtime; host binds are local-runtime only.
-`read_only` is rejected on a managed mount - only host binds may be read-only.
+Managed volumes work on both runtimes: the local runtime resolves the id or
+name against its own store, a REST runtime forwards it to the server; an
+unknown id or name is not found on either, so create the volume first. Host
+binds are local-runtime only.
+A REST runtime rejects `read_only` on a managed mount (the hosted API pins it
+to `false`); the local runtime mounts the volume read-only.
 
 #### Port Forwarding Format
 

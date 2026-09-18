@@ -697,16 +697,22 @@ volume, or a host bind path.
 
 ```rust
 pub struct VolumeSpec {
-    /// Managed volume, by server-assigned id or by name.
+    /// Managed volume, by server-assigned id or by name. After a local
+    /// runtime has created the box it holds the canonical id.
     pub managed_volume: Option<String>,
 
-    /// Path on host. Empty when `managed_volume` is set.
+    /// Path on host. Empty in a request that names a managed volume; a local
+    /// runtime fills in the volume's payload directory when the box is
+    /// created.
     pub host_path: String,
 
     /// Path inside guest
     pub guest_path: String,
 
-    /// Mount as read-only
+    /// Mount as read-only. Honoured for host binds. On a managed mount the
+    /// CLI and the REST client refuse it (the hosted API pins `read_only`
+    /// to `false`); a local runtime reached through this API shares the
+    /// volume read-only.
     pub read_only: bool,
 }
 ```
@@ -738,7 +744,7 @@ The two origins are not interchangeable across runtimes:
 
 | Origin | Local runtime | REST runtime |
 | --- | --- | --- |
-| `VolumeSpec::managed_volume` | rejected — no volume backend | mounted |
+| `VolumeSpec::managed_volume` | mounted — resolved against the local store at create; an unknown id or name is not found, create it first | mounted |
 | `VolumeSpec::bind_mount` | mounted | rejected — the path is the server's, not yours |
 
 ### NetworkSpec

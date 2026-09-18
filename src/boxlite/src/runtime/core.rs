@@ -305,6 +305,16 @@ impl BoxliteRuntime {
         // Reject incompatible option combinations at the create boundary (fail
         // here, not at start), uniformly for the local and REST backends.
         options.sanitize_common()?;
+
+        // Mounts are judged here as *requested* — exactly one origin — for
+        // both backends: the local one resolves them next, the REST one
+        // forwards them. FFI callers and struct literals can build shapes the
+        // constructors cannot, so this is the boundary that catches them;
+        // persisted options are judged elsewhere, by `sanitize_persisted`.
+        for volume in &options.volumes {
+            volume.validate_in_request()?;
+        }
+
         self.backend.create(options, name).await
     }
 
@@ -320,6 +330,12 @@ impl BoxliteRuntime {
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
         options.sanitize_common()?;
+
+        // Same request-shape rule as `create`.
+        for volume in &options.volumes {
+            volume.validate_in_request()?;
+        }
+
         self.backend.get_or_create(options, name).await
     }
 

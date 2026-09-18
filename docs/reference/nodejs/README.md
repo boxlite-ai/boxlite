@@ -173,7 +173,10 @@ volumes: [
 ```
 
 Setting both origins, or neither, is rejected. Host bind mounts are
-local-runtime only; a REST runtime refuses them.
+local-runtime only; a REST runtime refuses them. A managed volume works on
+either runtime — the local one resolves the id or name against its own store,
+a REST runtime forwards it — and an unknown id or name is not found on both,
+so create the volume before mounting it.
 
 #### `JsPortSpec`
 
