@@ -18,7 +18,7 @@ use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
@@ -142,7 +142,7 @@ pub struct RuntimeImpl {
     pub(crate) layout: FilesystemLayout,
     /// Pure image disk cache manager (image layers → ext4, no guest binary).
     ///
-    /// `Arc` so the periodic reclaim task can hold a `Weak` to *it* rather
+    /// `Arc` so the periodic reclaim thread can hold a `Weak` to *it* rather
     /// than to the whole runtime: a weak reference to the runtime would make
     /// `Arc::get_mut(&mut runtime)` fail for every caller that legitimately
     /// mutates a freshly built one.
@@ -414,61 +414,89 @@ impl RuntimeImpl {
     /// builds. This pass is what lets them recover unattended, which is why
     /// its first run is immediate rather than one interval away.
     ///
-    /// Started here rather than assumed: `BoxliteRuntime::new` is synchronous
-    /// and an embedded caller may build a runtime outside any tokio context,
-    /// where `tokio::spawn` panics. Without a handle the other two triggers
-    /// still run.
+    /// Runs on a thread of its own rather than a tokio task, because
+    /// `BoxliteRuntime::new` is synchronous and every binding calls it outside
+    /// any tokio context — so a task would never be scheduled on exactly the
+    /// hosts this pass exists for.
     ///
-    /// Takes the manager rather than the runtime so the task's `Weak` lands on
+    /// Takes the manager rather than the runtime so the thread's `Weak` lands on
     /// the manager's allocation: a weak reference to the runtime itself would
     /// break `Arc::get_mut` for every caller that mutates a freshly built one.
-    fn spawn_periodic_image_disk_gc(
+    pub(crate) fn spawn_periodic_image_disk_gc(
         image_disk_mgr: &Arc<ImageDiskManager>,
         shutdown: CancellationToken,
         interval: Duration,
     ) {
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            tracing::debug!("No tokio runtime at construction; periodic image disk GC not started");
-            return;
-        };
-
         // Weak: the sweep must not be the reason a cache manager stays alive.
         let image_disk_mgr = Arc::downgrade(image_disk_mgr);
 
-        handle.spawn(async move {
-            // `interval`'s first tick resolves immediately, so the first
-            // pass runs at startup — deliberately, see the doc comment.
-            let mut ticker = tokio::time::interval(interval);
-
-            loop {
-                tokio::select! {
-                    _ = shutdown.cancelled() => break,
-                    _ = ticker.tick() => {
-                        let Some(mgr) = image_disk_mgr.upgrade() else { break };
-                        // Blocking: a directory scan plus a database read.
-                        let swept = tokio::task::spawn_blocking(move || mgr.reclaim_now()).await;
-                        match swept {
-                            Ok(Err(e)) => {
-                                tracing::warn!("Periodic image disk reclaim failed: {}", e)
-                            }
-                            Err(e) => {
-                                tracing::warn!("Periodic image disk reclaim panicked: {}", e)
-                            }
-                            // A heartbeat, not just a result: this trigger
-                            // is the only reclaim a host that has stopped
-                            // receiving builds will ever run, so "the timer
-                            // is alive and found nothing" has to be
-                            // distinguishable from "the timer is dead".
-                            Ok(Ok(reclaimed)) => tracing::info!(
-                                collected = reclaimed.collected,
-                                evicted = reclaimed.evicted,
-                                "Periodic image disk reclaim complete"
-                            ),
+        // A plain thread, not a tokio task. Every binding constructs the
+        // runtime outside a tokio context — the C ABI builds one and never
+        // enters it before calling through, and the napi and pyo3
+        // constructors are synchronous and have none at all — so a task would
+        // never be scheduled there. Those are the hosts this trigger exists
+        // for: once a runner fills its disk the control plane stops giving it
+        // work, so trigger 2 never fires again and trigger 1 waits for a
+        // restart.
+        let spawned = std::thread::Builder::new()
+            .name("boxlite-image-disk-gc".into())
+            .spawn(move || {
+                loop {
+                    // The first pass runs before the first wait, so a restart
+                    // still sweeps at startup — deliberately, see the doc
+                    // comment.
+                    if shutdown.is_cancelled() {
+                        return;
+                    }
+                    let Some(mgr) = image_disk_mgr.upgrade() else {
+                        return;
+                    };
+                    // Caught, because an uncaught one unwinds this thread
+                    // and ends the pass for the life of the process —
+                    // silently, and on the hosts least able to afford it. The
+                    // tokio task this replaced got the same containment from
+                    // `spawn_blocking`'s `JoinError`.
+                    let swept = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        mgr.reclaim_now()
+                    }));
+                    match swept {
+                        Err(_) => {
+                            tracing::warn!("Periodic image disk reclaim panicked; continuing")
                         }
+                        Ok(Err(e)) => {
+                            tracing::warn!("Periodic image disk reclaim failed: {}", e)
+                        }
+                        // A heartbeat, not just a result: "the timer is alive
+                        // and found nothing" has to be distinguishable from
+                        // "the timer is dead".
+                        Ok(Ok(reclaimed)) => tracing::info!(
+                            collected = reclaimed.collected,
+                            evicted = reclaimed.evicted,
+                            "Periodic image disk reclaim complete"
+                        ),
+                    }
+                    // Dropped before the wait: holding it would keep the
+                    // manager alive across an interval that is hours long.
+                    drop(mgr);
+
+                    // Woken in slices, so a shutdown is noticed in about a
+                    // second rather than after the whole interval.
+                    let deadline = Instant::now() + interval;
+                    loop {
+                        let now = Instant::now();
+                        if now >= deadline {
+                            break;
+                        }
+                        if shutdown.is_cancelled() {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_secs(1).min(deadline - now));
                     }
                 }
-            }
-        });
+            });
+        if let Err(e) = spawned {
+            tracing::warn!("Could not start the periodic image disk GC thread: {}", e);
+        }
     }
 
     // ========================================================================
@@ -2286,48 +2314,6 @@ mod tests {
             !orphan.exists(),
             "startup recovery must sweep the image disk cache"
         );
-    }
-
-    /// Trigger 3 of 3: the periodic sweep. A runner can go weeks without a
-    /// restart (trigger 1) and days without a cold image build (trigger 2)
-    /// while boxes come and go the whole time.
-    ///
-    /// The runtime is built on a plain thread so that no sweep of its own can
-    /// confuse the result: `spawn_periodic_image_disk_gc` stands down when
-    /// there is no tokio context to spawn onto, so the task started below is
-    /// the only one that can reclaim anything. Built on the test's own runtime
-    /// instead, the constructor's sweep — whose first tick is immediate — is
-    /// free to be what removes the orphan, and this assertion then greens
-    /// without the task under test ever running. `spawn_blocking` would not
-    /// do: blocking-pool threads still carry the runtime context.
-    #[tokio::test]
-    async fn the_periodic_sweep_reclaims_unreachable_image_disks() {
-        let (runtime, temp_dir) = std::thread::spawn(create_test_runtime)
-            .join()
-            .expect("runtime construction panicked");
-
-        // After construction, so the startup sweep isn't what removes it.
-        let orphan = plant_unreachable_image_disk(temp_dir.path());
-        let token = CancellationToken::new();
-
-        RuntimeImpl::spawn_periodic_image_disk_gc(
-            &runtime.image_disk_mgr,
-            token.clone(),
-            Duration::from_millis(20),
-        );
-
-        for _ in 0..100 {
-            if !orphan.exists() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        assert!(
-            !orphan.exists(),
-            "the periodic sweep must reclaim unreachable image disks"
-        );
-
-        token.cancel();
     }
 
     /// Create a RuntimeImpl with isolated temp directory.

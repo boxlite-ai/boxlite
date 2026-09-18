@@ -1034,6 +1034,88 @@ mod tests {
         }
     }
 
+    /// Trigger 3 of 3: the periodic sweep. A runner can go weeks without a
+    /// restart (trigger 1) and days without a cold image build (trigger 2)
+    /// while boxes come and go the whole time.
+    ///
+    /// Driven against a manager built here rather than one reached through a
+    /// runtime: `RuntimeImpl::initialize` starts a sweep of its own, and
+    /// nothing orders that pass against this body, so a test that went
+    /// through it could green on the constructor's work instead. There is no
+    /// such sweep here, which is isolation by construction rather than by
+    /// waiting.
+    #[test]
+    fn the_periodic_sweep_reclaims_unreachable_image_disks() {
+        let home = TestHome::new();
+        let mgr = std::sync::Arc::new(home.manager(0));
+        let orphan = mgr.disk_path(&image_digest_for_layers(&["sha256:forgotten"]));
+        write_settled(&orphan);
+        let token = tokio_util::sync::CancellationToken::new();
+
+        crate::runtime::rt_impl::RuntimeImpl::spawn_periodic_image_disk_gc(
+            &mgr,
+            token.clone(),
+            Duration::from_millis(20),
+        );
+
+        for _ in 0..100 {
+            if !orphan.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !orphan.exists(),
+            "the periodic sweep must reclaim unreachable image disks"
+        );
+
+        token.cancel();
+    }
+
+    /// And it has to run where the bindings put it: outside any tokio
+    /// context. The C ABI builds its own runtime and never enters it before
+    /// calling through; the napi and pyo3 constructors are synchronous and
+    /// have none at all; and the production runner reaches the core through
+    /// the Go SDK, which is cgo over that C ABI. A host that has filled its
+    /// disk stops being given work, so trigger 2 never fires again and
+    /// trigger 1 waits for a restart — this is the only pass that can free
+    /// it, and on those hosts it was the only one not running.
+    ///
+    /// Not a `#[tokio::test]`: the point is that nothing here has a handle.
+    #[test]
+    fn the_periodic_sweep_runs_without_a_tokio_runtime() {
+        assert!(
+            tokio::runtime::Handle::try_current().is_err(),
+            "this test only bites outside a tokio context"
+        );
+
+        let home = TestHome::new();
+        let mgr = std::sync::Arc::new(home.manager(0));
+        let orphan = mgr.disk_path(&image_digest_for_layers(&["sha256:no-tokio"]));
+        write_settled(&orphan);
+        let token = tokio_util::sync::CancellationToken::new();
+
+        crate::runtime::rt_impl::RuntimeImpl::spawn_periodic_image_disk_gc(
+            &mgr,
+            token.clone(),
+            Duration::from_millis(20),
+        );
+
+        for _ in 0..100 {
+            if !orphan.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !orphan.exists(),
+            "the periodic sweep must reclaim unreachable image disks even \
+             with no tokio runtime anywhere"
+        );
+
+        token.cancel();
+    }
+
     /// Write a cache file and backdate it past [`ORPHAN_GRACE`], so guard C
     /// stops holding it back.
     fn write_settled(path: &Path) {
