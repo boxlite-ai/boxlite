@@ -17,8 +17,8 @@ impl Vcpu {
         }
 
         loop {
-            let stop_requested: bool = todo!("check the stop request");
-            if stop_requested {
+            let _stop_requested: bool = todo!("check the stop request");
+            if _stop_requested {
                 return Ok(VmExit::StopRequested);
             }
             let exit: VmResult<Exit> = todo!("enter the guest");

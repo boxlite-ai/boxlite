@@ -20,9 +20,9 @@ impl Vm {
             VcpuExited(VmResult<VmExit>),
         }
 
-        let outcome = loop {
-            let event: VmResult<Event> = todo!("wait for a VM event");
-            match event {
+        let _outcome = loop {
+            let _event: VmResult<Event> = todo!("wait for a VM event");
+            match _event {
                 Ok(Event::DeviceReady) => {
                     let result: VmResult<()> = todo!("process the ready device");
                     if let Err(error) = result {
@@ -35,6 +35,6 @@ impl Vm {
             }
         };
         let joined: VmResult<()> = todo!("stop and join all vCPU workers");
-        outcome.and_then(|exit| joined.map(|()| exit))
+        _outcome.and_then(|exit| joined.map(|()| exit))
     }
 }
