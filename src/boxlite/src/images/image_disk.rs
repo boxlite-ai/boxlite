@@ -139,6 +139,19 @@ pub(crate) struct DiskCacheReclaim {
     /// per call for the same reason as the guards themselves: the trigger that
     /// matters most is inside the manager.
     metrics: RuntimeMetricsStorage,
+    /// What [`ImageDiskManager::volume_used_percent`] should answer instead of
+    /// asking the filesystem.
+    ///
+    /// A test that calls [`ImageDiskManager::evict_cold_down_to_low_watermark`]
+    /// passes the reading as an argument, as most of this file's eviction
+    /// tests do. The periodic
+    /// thread cannot: it calls the no-argument
+    /// [`ImageDiskManager::evict_cold_if_low_on_space`], and the reading is
+    /// what decides whether its pass runs at all — so covering that thread
+    /// needs the answer to come from the manager instead. Compiled out of
+    /// every non-test build.
+    #[cfg(test)]
+    usage_override: Mutex<Option<u8>>,
     /// Disks a caller is still using, by path, refcounted because two box
     /// creates can ask for the same image at once.
     ///
@@ -204,6 +217,8 @@ impl DiskCacheReclaim {
             boxes_dir,
             last_sweep: Mutex::new(None),
             metrics,
+            #[cfg(test)]
+            usage_override: Mutex::new(None),
             in_flight: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -801,6 +816,11 @@ impl ImageDiskManager {
     /// `None` when the filesystem cannot be queried; callers must not read
     /// that as "full".
     fn volume_used_percent(&self) -> Option<u8> {
+        #[cfg(test)]
+        if let Some(pretended) = *self.reclaim.usage_override.lock().unwrap() {
+            return Some(pretended);
+        }
+
         let stats = match nix::sys::statvfs::statvfs(&self.cache_dir) {
             Ok(stats) => stats,
             Err(e) => {
@@ -1072,23 +1092,27 @@ mod tests {
         token.cancel();
     }
 
-    /// And the first pass waits out its interval instead of running at t=0.
-    /// `recover_boxes` runs this same `reclaim_now` one line before the
-    /// thread is spawned, so a pass at t=0 repeats it whole — and while that
-    /// repeat is in flight, `recover_boxes_sweeps_unreachable_image_disks`
-    /// cannot tell the sweep it means to check from this one.
+    /// The first pass evicts without collecting. `recover_boxes` runs the
+    /// collector on the way up and returns before the constructor does, so
+    /// repeating it here would only duplicate work and blur which of the two
+    /// freed a given file. Eviction has no such startup pass, and waiting an
+    /// interval for it is what leaves a runner that came back above the high
+    /// watermark full for six hours — the state the control plane scores it
+    /// down for, after which no build arrives to trigger 2 either.
     ///
-    /// Asserting that something does *not* happen needs a window, so this is
-    /// the one place a sleep is the measurement rather than a wait for an
-    /// event: the interval is a minute against an observation of half a
-    /// second, so a pass this rejects would have to be two orders of
-    /// magnitude late to slip through. Its two siblings here cover the other
-    /// direction — that the pass does eventually run.
+    /// Splitting them costs nothing because they cannot overlap: the
+    /// collector takes only entries no `image_index` row names, and eviction
+    /// walks that same index, so a file is a candidate for exactly one of
+    /// them. Both halves are asserted here at once — the indexed cold disk
+    /// goes, the unindexed orphan beside it stays until the interval.
     #[test]
-    fn the_first_periodic_pass_waits_out_its_interval() {
+    fn the_first_periodic_pass_evicts_without_collecting() {
         let home = TestHome::new();
         let mgr = std::sync::Arc::new(home.manager(0));
-        let orphan = mgr.disk_path(&image_digest_for_layers(&["sha256:not-yet"]));
+        mgr.reclaim.usage_override.lock().unwrap().replace(99);
+
+        let cold = home.cached_disk(&mgr, "registry/cold:1", &["sha256:cold"], 1);
+        let orphan = mgr.disk_path(&image_digest_for_layers(&["sha256:uncollected"]));
         write_settled(&orphan);
         let token = tokio_util::sync::CancellationToken::new();
 
@@ -1097,11 +1121,20 @@ mod tests {
             token.clone(),
             Duration::from_secs(60),
         );
-        std::thread::sleep(Duration::from_millis(500));
+        for _ in 0..100 {
+            if !cold.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
 
         assert!(
+            !cold.exists(),
+            "the first pass must evict before the interval"
+        );
+        assert!(
             orphan.exists(),
-            "the first pass must wait out its interval, not repeat the startup sweep"
+            "the collector is startup's job; it must not run again at t=0"
         );
 
         token.cancel();

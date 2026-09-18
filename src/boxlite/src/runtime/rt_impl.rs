@@ -428,11 +428,14 @@ impl RuntimeImpl {
     /// the hosts that most need to evict are the ones that stop getting
     /// builds. This pass is what lets them recover unattended.
     ///
-    /// Its first run is one interval away, not immediate: `initialize` calls
-    /// `recover_boxes` on the line above, and that runs this same
-    /// `reclaim_now`. A pass at t=0 would repeat it, and while it was in
-    /// flight no test of startup recovery could tell which of the two had
-    /// done the work.
+    /// Its first act is an eviction, before any wait. `initialize` calls
+    /// `recover_boxes` on the line above, and that runs the collector — but
+    /// nothing evicts there, deliberately, because eviction deletes under
+    /// disk pressure and that is not work to hand a caller of
+    /// `BoxliteRuntime::new`. The collector waits for the first interval
+    /// instead: repeating it at t=0 would duplicate the sweep just done, and
+    /// while the repeat was in flight no test of startup recovery could tell
+    /// which of the two had done the work.
     ///
     /// Runs on a thread of its own rather than a tokio task, because
     /// `BoxliteRuntime::new` is synchronous and every binding calls it outside
@@ -461,15 +464,35 @@ impl RuntimeImpl {
         let spawned = std::thread::Builder::new()
             .name("boxlite-image-disk-gc".into())
             .spawn(move || {
+                // Eviction first, before any wait. `recover_boxes` has just
+                // run the collector on the way up and there is no startup
+                // eviction anywhere, so a host that came back above the high
+                // watermark would otherwise sit full until this interval
+                // elapsed — and a host scored down for a full disk is one the
+                // control plane stops sending builds to, so trigger 2 will not
+                // arrive either. Doing only this half here keeps it off the
+                // caller's thread without repeating what startup just did.
+                if !shutdown.is_cancelled()
+                    && let Some(mgr) = image_disk_mgr.upgrade()
+                {
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        mgr.evict_cold_if_low_on_space()
+                    })) {
+                        Err(_) => tracing::warn!("Startup image disk eviction panicked"),
+                        Ok(Err(e)) => tracing::warn!("Startup image disk eviction failed: {}", e),
+                        Ok(Ok(evicted)) => {
+                            tracing::info!(evicted, "Startup image disk eviction complete")
+                        }
+                    }
+                }
+
                 loop {
-                    // The wait comes first. `recover_boxes` runs this same
-                    // `reclaim_now` one line before this thread is spawned,
-                    // so a pass at t=0 would repeat it whole
-                    // — and the repeat is not free: while it is in flight a
-                    // test of startup recovery cannot tell the sweep it means
-                    // to check from this one, and goes green either way.
-                    // Startup is trigger 1's job; this thread covers the hours
-                    // after it.
+                    // The wait comes first. The collector runs in
+                    // `recover_boxes` one line before this thread is spawned,
+                    // so a full pass at t=0 would repeat it — and the repeat is
+                    // not free: while it is in flight a test of startup
+                    // recovery cannot tell the sweep it means to check from
+                    // this one, and goes green either way.
                     //
                     // Woken in slices, so a shutdown is noticed in about a
                     // second rather than after an interval measured in hours.
@@ -1674,30 +1697,25 @@ impl RuntimeImpl {
             tracing::warn!("Orphaned base disk GC failed: {}", e);
         }
 
-        // And the image disk cache, the whole reclaim rather than only its
-        // collector. The collector handles what no `image_index` row can name
-        // any more — entries are named by content, so that is the only kind of
-        // dead one there is — and eviction handles a volume that has filled.
-        // `reclaim_now` runs them in that order and propagates the collector's
-        // error, so a collector that fails takes the eviction pass with it;
-        // that is its contract, and the periodic pass inherits the same one.
-        // The periodic thread used to run both here too, on its own thread,
-        // before its first wait: the collector ran twice at every startup and
-        // nothing ordered either pass against this one. Doing it here, once,
-        // costs the caller the eviction pass — `BoxliteRuntime::new` returns
-        // after it, and on an above-watermark host that is the pass with
-        // deletions to do — and buys a startup reclaim that has finished by
-        // the time `initialize` returns rather than one still in flight.
+        // And the image disk cache. It has no per-record collector at all —
+        // entries are named by content, so an entry no `image_index` row can
+        // name any more is the only kind of dead one there is.
         //
-        // Reported either way, for the reason the periodic pass reports: "ran
-        // and found nothing" has to be distinguishable from "did not run".
-        match self.image_disk_mgr.reclaim_now() {
-            Ok(reclaimed) => tracing::info!(
-                collected = reclaimed.collected,
-                evicted = reclaimed.evicted,
-                "Startup image disk reclaim complete"
-            ),
-            Err(e) => tracing::warn!("Startup image disk reclaim failed: {}", e),
+        // The collector only, not the eviction pass beside it in
+        // `reclaim_now`. Eviction deletes under disk pressure, which is
+        // exactly when it has the most to delete, and this runs on the thread
+        // that `BoxliteRuntime::new` returns on. The periodic thread performs
+        // it instead, immediately rather than an interval later. The two
+        // cannot collide: a file is a candidate for the collector only while
+        // no index row names it, and for eviction only while one does.
+        //
+        // Reported either way, as the periodic pass reports: "ran and found
+        // nothing" has to read differently from "did not run".
+        match self.image_disk_mgr.gc_unreachable() {
+            Ok(collected) => {
+                tracing::info!(collected, "Startup image disk collection complete")
+            }
+            Err(e) => tracing::warn!("Startup image disk collection failed: {}", e),
         }
 
         tracing::info!("Box recovery complete");
@@ -2384,16 +2402,16 @@ mod tests {
         runtime.shutdown_token.cancel();
     }
 
-    /// Trigger 1 of 3 runs the whole reclaim, not just the collector.
-    /// Eviction has no other startup path: trigger 2 fires on a cold build
-    /// and trigger 3 is an interval measured in hours, so a runner that comes
-    /// back above the high watermark and is scored down for it — the state
-    /// this pass exists for — would give nothing back until one of those
-    /// arrives. Asserted through the heartbeat rather than a deletion,
-    /// because whether eviction finds anything depends on the host's real
-    /// free space, while whether the pass ran at all does not.
+    /// And startup collects without evicting. Eviction deletes under disk
+    /// pressure, which is when it has the most to delete, and
+    /// `BoxliteRuntime::new` returns on this thread — so it belongs to the
+    /// periodic one. Read off the heartbeat, which reports what the pass did:
+    /// a collected count, and no eviction count because no eviction ran. The
+    /// periodic thread's own t=0 eviction is on the thread, and
+    /// `tracing_capture` scopes its subscriber to the calling one, so it
+    /// cannot be mistaken for this.
     #[test]
-    fn recover_boxes_runs_the_whole_image_disk_reclaim() {
+    fn recover_boxes_collects_without_evicting() {
         let (runtime, _temp_dir) = create_test_runtime();
 
         let (_, logged) = boxlite_test_utils::tracing_capture::capture(|| {
@@ -2401,8 +2419,12 @@ mod tests {
         });
 
         assert!(
-            logged.contains("evicted="),
-            "startup must run the eviction pass, not only the collector: {logged}"
+            logged.contains("collected="),
+            "startup must still run the collector: {logged}"
+        );
+        assert!(
+            !logged.contains("evicted="),
+            "eviction is the periodic thread's, not the caller's: {logged}"
         );
     }
 
