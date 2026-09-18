@@ -2,6 +2,7 @@
 
 use crate::runtime::constants::envs as const_envs;
 use crate::runtime::layout::dirs as const_dirs;
+use boxlite_shared::BoxliteError;
 use boxlite_shared::errors::BoxliteResult;
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
@@ -648,42 +649,94 @@ impl BoxOptions {
             port.validate_publishable()?;
         }
 
-        for volume in &self.volumes {
-            volume.validate()?;
-        }
-
         Ok(())
     }
 
     /// Validate a persisted box without requiring ingestion sources to remain.
+    ///
+    /// Mounts are judged in their resolved shape (`validate_in_persisted`): a
+    /// managed mount that has been through `resolve_managed_volumes` carries
+    /// both its reference and its payload path, which the request rule in
+    /// [`Self::sanitize`] would refuse as two origins. Runs at boot
+    /// (`BoxBuilder::new`) and on the options an archive carries.
     pub(crate) fn sanitize_persisted(&self) -> BoxliteResult<()> {
         self.sanitize_common()?;
+
+        for volume in &self.volumes {
+            volume.validate_in_persisted()?;
+        }
 
         if let Some(kernel) = &self.advanced.kernel {
             kernel.sanitize_persisted()?;
         }
+
         Ok(())
     }
 
-    pub fn sanitize(&mut self) -> BoxliteResult<()> {
+    /// Validate the options an archive carries: the third stance, after the
+    /// request and the persisted one. Mounts are judged in their resolved
+    /// shape, since export writes the box's config and `provision_box`
+    /// re-resolves the references against this runtime's store. A custom
+    /// kernel is judged as a *source* the way create judges it, because an
+    /// archive bundles neither the kernel file nor the box's staged copy, so
+    /// the imported box has to stage it again at its first boot; a kernel this
+    /// host cannot stage is refused here rather than at that boot. Derives the
+    /// fsize limit like `sanitize`, so an archive's own value never survives.
+    pub(crate) fn sanitize_import(&mut self) -> BoxliteResult<()> {
         self.sanitize_common()?;
+
+        for volume in &self.volumes {
+            volume.validate_in_persisted()?;
+        }
 
         if let Some(kernel) = &self.advanced.kernel {
             kernel.sanitize()?;
         }
 
-        // The jailed shim is the sole writer of this box's qcow2 disks, so its
-        // per-file RLIMIT_FSIZE caps their growth: a write past it fails with
-        // `EFBIG` and takes the guest down. `SecurityOptions::default()` cannot
-        // pick that number — it runs for a box that does not exist yet and
-        // cannot see `disk_size_gb` — which is how a fixed 1 GiB ceiling ended
-        // up contradicting every larger disk (#1152). Derive it here, next to
-        // the size it comes from.
-        //
-        // `FSIZE_DISK_MULTIPLIER` is deliberately loose: this is a
-        // runaway-write backstop, not a capacity policy. Capacity is the qcow2
-        // virtual size, where a guest that fills its disk gets a clean `ENOSPC`
-        // inside the box rather than a host-side `SIGXFSZ` that kills the VM.
+        self.rederive_fsize_limit()?;
+
+        Ok(())
+    }
+
+    /// Validate a create request and derive the settings that follow from it.
+    ///
+    /// Mounts are judged as requested (`validate_in_request`): one origin, or
+    /// none for an anonymous mount. Not for persisted options, which carry
+    /// the resolved shape — see [`Self::sanitize_persisted`].
+    pub fn sanitize(&mut self) -> BoxliteResult<()> {
+        self.sanitize_common()?;
+
+        for volume in &self.volumes {
+            volume.validate_in_request()?;
+        }
+
+        if let Some(kernel) = &self.advanced.kernel {
+            kernel.sanitize()?;
+        }
+
+        self.rederive_fsize_limit()?;
+
+        Ok(())
+    }
+
+    /// Derive the shim's `RLIMIT_FSIZE` from `disk_size_gb`.
+    ///
+    /// The jailed shim is the sole writer of this box's qcow2 disks, so its
+    /// per-file RLIMIT_FSIZE caps their growth: a write past it fails with
+    /// `EFBIG` and takes the guest down. `SecurityOptions::default()` cannot
+    /// pick that number — it runs for a box that does not exist yet and
+    /// cannot see `disk_size_gb` — which is how a fixed 1 GiB ceiling ended
+    /// up contradicting every larger disk (#1152). Derive it here, next to
+    /// the size it comes from.
+    ///
+    /// `FSIZE_DISK_MULTIPLIER` is deliberately loose: this is a
+    /// runaway-write backstop, not a capacity policy. Capacity is the qcow2
+    /// virtual size, where a guest that fills its disk gets a clean `ENOSPC`
+    /// inside the box rather than a host-side `SIGXFSZ` that kills the VM.
+    ///
+    /// Assigns outright, so running it twice is idempotent; import calls it
+    /// again after resetting an upload's security settings to the defaults.
+    pub(crate) fn rederive_fsize_limit(&mut self) -> BoxliteResult<()> {
         self.advanced.security.resource_limits.max_file_size = Some(
             Bytes::from_gib(
                 self.disk_size_gb
@@ -727,13 +780,18 @@ pub struct VolumeSpec {
     /// Managed volume to mount, addressed by its server-assigned id **or** by
     /// its name — the server resolves either.
     ///
-    /// Managed volumes need a REST runtime, since the local runtime has no
-    /// volume backend to resolve a reference against.
+    /// A local runtime resolves it against its own volume store when the box
+    /// is created; a REST runtime forwards it to the server as-is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_volume: Option<String>,
 
-    /// Host directory or file to bind into the box. Empty when
-    /// `managed_volume` is set.
+    /// Host directory or file to bind into the box.
+    ///
+    /// In a request this is empty whenever `managed_volume` is set or the
+    /// mount is anonymous: the caller names a volume, not a path. Once a local
+    /// runtime has created the box it holds the volume's payload directory,
+    /// so a persisted managed or anonymous mount carries both fields — that
+    /// is the resolved shape, not two origins.
     #[serde(default)]
     pub host_path: String,
 
@@ -742,6 +800,19 @@ pub struct VolumeSpec {
 
     /// Mount without write access.
     pub read_only: bool,
+
+    /// The mount wants a volume of its own, created by the runtime when the
+    /// box is created — `-v /data` with no source, docker's anonymous volume.
+    ///
+    /// In a request neither origin is set. After resolution the mount also
+    /// carries the created volume's id in `managed_volume` and its payload in
+    /// `host_path`; the marker stays, since nothing else then distinguishes a
+    /// volume the box asked to have made from one it merely mounted. Nothing
+    /// consumes it yet: removing a box leaves its anonymous volumes in the
+    /// store until `volume rm`. Absent from the JSON of every other mount, so
+    /// configs written before the field existed load unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub anonymous: bool,
 }
 
 impl VolumeSpec {
@@ -752,6 +823,7 @@ impl VolumeSpec {
             host_path: host_path.into(),
             guest_path: guest_path.into(),
             read_only: false,
+            anonymous: false,
         }
     }
 
@@ -762,16 +834,45 @@ impl VolumeSpec {
             host_path: String::new(),
             guest_path: guest_path.into(),
             read_only: false,
+            anonymous: false,
         }
     }
 
-    /// Reject a mount that names no origin, both origins, or an empty one.
+    /// Mount a volume the runtime creates for this box; the caller names
+    /// neither a volume nor a host path.
+    pub fn anonymous_volume(guest_path: impl Into<String>) -> Self {
+        Self {
+            managed_volume: None,
+            host_path: String::new(),
+            guest_path: guest_path.into(),
+            read_only: false,
+            anonymous: true,
+        }
+    }
+
+    /// Judge a mount as requested: exactly one origin — a managed volume or a
+    /// host path — or none at all for an anonymous mount, which asks the
+    /// runtime to make one. Refused: both origins at once, an empty
+    /// reference, and an anonymous mount that also names an origin.
     ///
-    /// FFI callers (C/Go) and hand-built literals can reach either invalid
-    /// shape, so this runs at create rather than only in the constructors.
-    pub fn validate(&self) -> BoxliteResult<()> {
+    /// FFI callers (C/Go) and hand-built literals can reach any of those
+    /// shapes, so this runs at create rather than only in the constructors.
+    /// The anonymous rule is the strict one: resolution would otherwise
+    /// replace the path or the reference the caller supplied and never say
+    /// so, and a mount that means two things cannot be one mount.
+    ///
+    /// Persisted mounts are judged by [`Self::validate_in_persisted`] instead:
+    /// after resolution a managed mount legitimately carries both fields.
+    pub fn validate_in_request(&self) -> BoxliteResult<()> {
         let guest_path = &self.guest_path;
+        if self.anonymous && (self.managed_volume.is_some() || !self.host_path.is_empty()) {
+            return Err(BoxliteError::InvalidArgument(format!(
+                "anonymous mount {guest_path:?} must not also name a managed_volume or \
+                    a host_path"
+            )));
+        }
         match &self.managed_volume {
+            None if (self.anonymous && self.host_path.is_empty()) => Ok(()),
             Some(volume) if !self.host_path.is_empty() => Err(
                 boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
                     "volume mount {guest_path:?} sets both managed_volume ({volume:?}) and \
@@ -793,6 +894,39 @@ impl VolumeSpec {
             ),
             None => Ok(()),
         }
+    }
+
+    /// Judge a mount as the runtime persisted it: the one thing boot needs is
+    /// the host path it will share, so that must be present, and a reference
+    /// beside it is the resolved shape rather than a conflict. A reference
+    /// with no path is a mount that skipped resolution and cannot boot.
+    ///
+    /// An anonymous mount is held to both halves: resolution writes the id of
+    /// the volume it created next to that volume's payload path, so a
+    /// persisted anonymous mount missing either one never went through it.
+    /// Accepting the half with a path and no id would leave the mount a plain
+    /// bind of whatever path the archive named, still marked anonymous — a
+    /// marker that then claims a volume the runtime never created.
+    ///
+    /// Archives and clones carry this shape, which is why import validates
+    /// with this rule and not the request one.
+    pub fn validate_in_persisted(&self) -> BoxliteResult<()> {
+        let managed_volume = &self.managed_volume;
+        let guest_path = &self.guest_path;
+        if self.anonymous && (self.managed_volume.is_none() || self.host_path.is_empty()) {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                format!(
+                    "persisted anonymous mount to {guest_path:?} must carry both its \
+                     volume id and its payload path; this one went unresolved"
+                ),
+            ));
+        }
+        if self.host_path.is_empty() {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                format!("volume mount {managed_volume:?} to {guest_path:?} needs a host_path"),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -1878,6 +2012,7 @@ mod tests {
                 host_path: "/tmp/data".into(),
                 guest_path: "/data".into(),
                 read_only: false,
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -1900,6 +2035,183 @@ mod tests {
         };
         let err = empty_reference.sanitize().unwrap_err().to_string();
         assert!(err.contains("empty managed_volume"), "{err}");
+    }
+
+    /// An anonymous mount asks the runtime to make a volume for it, so also
+    /// naming an origin asks for two different things in one mount. The
+    /// request boundary refuses it rather than leaving resolution to pick:
+    /// resolution would replace whatever the caller put there and say
+    /// nothing, and a constructor cannot build this shape, only an FFI
+    /// caller or a struct literal can.
+    #[test]
+    fn a_request_refuses_an_anonymous_mount_that_also_names_an_origin() {
+        VolumeSpec::anonymous_volume("/scratch")
+            .validate_in_request()
+            .expect("an anonymous mount with no origin is the valid shape");
+
+        for (what, spec) in [
+            (
+                "a host path",
+                VolumeSpec {
+                    host_path: "/home/me/data".into(),
+                    ..VolumeSpec::anonymous_volume("/scratch")
+                },
+            ),
+            (
+                "a managed volume",
+                VolumeSpec {
+                    managed_volume: Some("my-data".into()),
+                    ..VolumeSpec::anonymous_volume("/scratch")
+                },
+            ),
+            (
+                "both",
+                VolumeSpec {
+                    managed_volume: Some("my-data".into()),
+                    host_path: "/home/me/data".into(),
+                    ..VolumeSpec::anonymous_volume("/scratch")
+                },
+            ),
+        ] {
+            let error = spec
+                .validate_in_request()
+                .expect_err("an anonymous mount that names an origin must be refused");
+            assert!(
+                matches!(error, BoxliteError::InvalidArgument(_)),
+                "{what}: {error:?}"
+            );
+            assert!(
+                error.to_string().contains("anonymous mount"),
+                "{what}: {error}"
+            );
+        }
+    }
+
+    /// `anonymous` is a request-time marker most mounts never set: the
+    /// persisted and archived JSON of a host bind or a managed mount must not
+    /// grow a key for it, and configs written before it existed load as
+    /// not-anonymous.
+    #[test]
+    fn non_anonymous_volumes_omit_the_anonymous_key() {
+        let opts = BoxOptions {
+            volumes: vec![
+                VolumeSpec::bind_mount("/tmp/data", "/data"),
+                VolumeSpec::managed_volume("my-data", "/cache"),
+            ],
+            ..Default::default()
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&opts).unwrap()).unwrap();
+        for volume in json["volumes"].as_array().unwrap() {
+            assert!(
+                !volume.as_object().unwrap().contains_key("anonymous"),
+                "a non-anonymous mount must omit the key: {volume}"
+            );
+        }
+
+        let legacy: BoxOptions = serde_json::from_str(
+            r#"{"volumes":[{"host_path":"/tmp/data","guest_path":"/data","read_only":false}]}"#,
+        )
+        .unwrap();
+        assert!(!legacy.volumes[0].anonymous);
+    }
+
+    /// A resolved anonymous mount carries both the id of the volume the
+    /// runtime made for it and that volume's payload path. Half of that is
+    /// not a shape resolution can produce, so the persisted rule refuses it
+    /// either way round.
+    #[test]
+    fn sanitize_persisted_refuses_a_half_resolved_anonymous_mount() {
+        let persisted = |volume: VolumeSpec| BoxOptions {
+            volumes: vec![volume],
+            ..Default::default()
+        };
+
+        // A path with no id: the shape an archive could carry to get a host
+        // bind of its own choosing while still marked anonymous, so that a
+        // later reclaim would take it for a volume this runtime created.
+        let bind_in_disguise = persisted(VolumeSpec {
+            host_path: "/home/me/data".into(),
+            ..VolumeSpec::anonymous_volume("/scratch")
+        })
+        .sanitize_persisted()
+        .expect_err("an anonymous mount with a path but no id never resolved");
+        assert!(
+            matches!(bind_in_disguise, BoxliteError::InvalidArgument(_)),
+            "{bind_in_disguise:?}"
+        );
+        assert!(
+            bind_in_disguise.to_string().contains("anonymous"),
+            "{bind_in_disguise}"
+        );
+
+        // An id with no path is the other half: a mount that skipped
+        // resolution and has nothing for boot to share.
+        let unresolved = persisted(VolumeSpec {
+            managed_volume: Some("AbCdEfGhIjKl".into()),
+            ..VolumeSpec::anonymous_volume("/scratch")
+        })
+        .sanitize_persisted()
+        .expect_err("an anonymous mount with an id but no path never resolved");
+        assert!(
+            matches!(unresolved, BoxliteError::InvalidArgument(_)),
+            "{unresolved:?}"
+        );
+    }
+
+    /// `sanitize` judges a request, where a mount names one origin and the
+    /// runtime fills in the rest. `sanitize_persisted` judges what the runtime
+    /// wrote: every mount has the path boot will share, a managed or anonymous
+    /// mount keeps the id it holds, and a reference without a path never made
+    /// it through resolution.
+    #[test]
+    fn sanitize_persisted_accepts_resolved_mounts_and_requires_their_path() {
+        let resolved = |volumes: Vec<VolumeSpec>| BoxOptions {
+            volumes,
+            ..Default::default()
+        };
+
+        resolved(vec![VolumeSpec::bind_mount("/tmp/data", "/data")])
+            .sanitize_persisted()
+            .expect("a host bind persists as it was requested");
+        resolved(vec![VolumeSpec {
+            host_path: "/home/u/.boxlite/volumes/AbCdEfGhIjKl/_data".into(),
+            ..VolumeSpec::managed_volume("AbCdEfGhIjKl", "/data")
+        }])
+        .sanitize_persisted()
+        .expect("a resolved managed mount carries its id and its path");
+        resolved(vec![VolumeSpec {
+            managed_volume: Some("AbCdEfGhIjKl".into()),
+            host_path: "/home/u/.boxlite/volumes/AbCdEfGhIjKl/_data".into(),
+            ..VolumeSpec::anonymous_volume("/scratch")
+        }])
+        .sanitize_persisted()
+        .expect("a resolved anonymous mount carries its id and its path");
+
+        let unresolved_managed = resolved(vec![VolumeSpec::managed_volume("my-data", "/data")])
+            .sanitize_persisted()
+            .expect_err("a reference without a path cannot be booted");
+        assert!(
+            unresolved_managed.to_string().contains("my-data"),
+            "{unresolved_managed}"
+        );
+        resolved(vec![VolumeSpec::anonymous_volume("/scratch")])
+            .sanitize_persisted()
+            .expect_err("an anonymous mount without a volume cannot be booted");
+        resolved(vec![VolumeSpec {
+            guest_path: "/data".into(),
+            ..Default::default()
+        }])
+        .sanitize_persisted()
+        .expect_err("a mount with no origin at all is still invalid");
+
+        // The request-side rule is unchanged: a request may not name two origins.
+        let mut request = resolved(vec![VolumeSpec {
+            host_path: "/tmp/data".into(),
+            ..VolumeSpec::managed_volume("my-data", "/data")
+        }]);
+        let err = request.sanitize().unwrap_err().to_string();
+        assert!(err.contains("exactly one"), "{err}");
     }
 
     /// A box persisted before `managed_volume` existed carries only

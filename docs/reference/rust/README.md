@@ -692,22 +692,35 @@ impl Default for RootfsSpec {
 
 ### VolumeSpec
 
-Filesystem mount specification. A mount has exactly one origin: a managed
-volume, or a host bind path.
+Filesystem mount specification. A request names one origin — a managed volume
+or a host bind path — or none at all for an anonymous mount, which asks the
+runtime to create a volume for it.
 
 ```rust
 pub struct VolumeSpec {
-    /// Managed volume, by server-assigned id or by name.
+    /// Managed volume, by server-assigned id or by name. After a local
+    /// runtime has created the box it holds the canonical id, for anonymous
+    /// mounts too.
     pub managed_volume: Option<String>,
 
-    /// Path on host. Empty when `managed_volume` is set.
+    /// Path on host. Empty in a request that names a managed volume or an
+    /// anonymous mount; a local runtime fills in the volume's payload
+    /// directory when the box is created.
     pub host_path: String,
 
     /// Path inside guest
     pub guest_path: String,
 
-    /// Mount as read-only
+    /// Mount as read-only. Honoured for host binds. On a managed or
+    /// anonymous mount the CLI, `boxlite serve` and the REST client refuse
+    /// it (the hosted API pins `read_only` to `false`); a local runtime
+    /// reached through this API shares the volume read-only.
     pub read_only: bool,
+
+    /// The mount wants a volume of its own, created by the runtime when the
+    /// box is created (`-v /data` with no source). Absent from the JSON of
+    /// every other mount.
+    pub anonymous: bool,
 }
 ```
 
@@ -729,16 +742,20 @@ let bind = VolumeSpec {
     read_only: true,
     ..VolumeSpec::bind_mount("/tmp/data", "/data")
 };
+
+// Anonymous volume: the runtime creates one for this mount at box creation.
+let scratch = VolumeSpec::anonymous_volume("/scratch");
 ```
 
 The reference is taken verbatim and reaches the wire unchanged — nothing
 decorates or narrows it.
 
-The two origins are not interchangeable across runtimes:
+The origins are not interchangeable across runtimes:
 
 | Origin | Local runtime | REST runtime |
 | --- | --- | --- |
-| `VolumeSpec::managed_volume` | rejected — no volume backend | mounted |
+| `VolumeSpec::managed_volume` | mounted — resolved against the local store at create; an unknown id or name is not found, create it first | mounted |
+| `VolumeSpec::anonymous_volume` | mounted — the runtime creates the volume; it stays until `volume rm`, box removal does not remove it | rejected — the wire carries references only; create a volume and mount it by id or name |
 | `VolumeSpec::bind_mount` | mounted | rejected — the path is the server's, not yours |
 
 ### NetworkSpec

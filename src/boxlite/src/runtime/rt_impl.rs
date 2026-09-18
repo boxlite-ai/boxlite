@@ -9,10 +9,9 @@ use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
 use crate::runtime::id::{BoxID, BoxIDMint};
 use crate::runtime::layout::{BoxFilesystemLayout, FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
-use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
+use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions, VolumeSpec};
 use crate::runtime::signal_handler::timeout_to_duration;
-use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
-use crate::vmm::VmmKind;
+use crate::runtime::types::{BoxDraft, BoxInfo, BoxState, BoxStatus, ContainerID};
 use crate::vmm::controller::{ShimHandler, VmmHandler};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
@@ -458,47 +457,57 @@ impl RuntimeImpl {
             };
         }
 
-        // Initialize box variables with defaults
-        let (config, mut state) = self.init_box_variables(&options, name.clone());
+        let draft = self.draft_box(name.clone(), BoxStatus::Configured);
+        let requested = options.clone();
+        let runtime = self.clone();
 
-        // Allocate lock for this box
-        let lock_id = self.lock_manager.allocate()?;
-        state.set_lock_id(lock_id);
+        // One critical section does the rest: bind the mounts, allocate the
+        // lock, persist the record. It runs only for a new box -- the lookup
+        // above already returned for an existing name, so reusing a box
+        // creates no volume.
+        //
+        // A `spawn_blocking` task cannot be cancelled, and that is now a
+        // guarantee rather than a leak: a caller that drops this future (a
+        // `serve` client disconnecting mid-create) leaves a committed box
+        // whose volumes are held, not an anonymous volume nobody owns. Only
+        // the cache insert below is lost, and the next `get` reads the
+        // record back.
+        let committed = run_blocking_with_volume_store(self, "create box", move |store| {
+            let store = store.lock()?;
+            runtime.commit_box(draft, &store, options)
+        })
+        .await;
 
-        // Persist to database immediately (status = Configured)
-        if let Err(e) = self.box_manager.add_box(&config, &state) {
-            // Clean up the allocated lock on failure
-            if let Err(free_err) = self.lock_manager.free(lock_id) {
-                tracing::error!(
-                    lock_id = %lock_id,
-                    error = %free_err,
-                    "Failed to free lock after DB persist error"
-                );
+        let (config, state) = match committed {
+            Ok(record) => record,
+            Err(e) if matches!(e, BoxliteError::InvalidState(_)) => {
+                // TOCTOU race recovery: lookup_box (line ~268) and add_box are
+                // separate non-atomic operations. Between them, another concurrent
+                // caller can complete the full create path and persist first:
+                //
+                //   Task A: lookup("w") → None     Task B: lookup("w") → None
+                //   Task A: add_box() → Ok         Task B: add_box() → Err (duplicate)
+                //
+                // When reuse_existing=true, recover by re-reading the winner's box.
+                //
+                // The arm's guard is what keeps that to the one error meaning
+                // "a record with this name is already there": `add_box`
+                // answers `InvalidState` for a duplicate, while an unknown
+                // volume reference (`NotFound`) or an exhausted lock manager
+                // carries its own kind and returns below untouched, so a
+                // failed request is never answered with somebody else's box.
+                if reuse_existing
+                    && let Some(ref name) = name
+                    && let Some((config, state)) = self.box_manager.lookup_box(name)?
+                {
+                    return self.adopt_existing_box(&requested, config, state);
+                }
+                return Err(e);
             }
-
-            // TOCTOU race recovery: lookup_box (line ~268) and add_box are
-            // separate non-atomic operations. Between them, another concurrent
-            // caller can complete the full create path and persist first:
-            //
-            //   Task A: lookup("w") → None     Task B: lookup("w") → None
-            //   Task A: add_box() → Ok         Task B: add_box() → Err (duplicate)
-            //
-            // When reuse_existing=true, recover by re-reading the winner's box.
-            if reuse_existing
-                && let Some(ref name) = name
-                && let Some((config, state)) = self.box_manager.lookup_box(name)?
-            {
-                return self.adopt_existing_box(&options, config, state);
+            Err(e) => {
+                return Err(e);
             }
-
-            return Err(e);
-        }
-
-        tracing::debug!(
-            box_id = %config.id,
-            lock_id = %lock_id,
-            "Created box with Configured status"
-        );
+        };
 
         // Create LiteBox handle with shared BoxImpl
         // This also checks in-memory cache for duplicate names
@@ -1168,48 +1177,88 @@ impl RuntimeImpl {
     // INTERNAL - INITIALIZATION
     // ========================================================================
 
-    /// Initialize box variables with defaults.
+    /// Mint a box's identity: its id, its container id, its creation time
+    /// and the directory named after that id.
     ///
-    /// Creates config and state for a new box. State starts with Configured status.
-    /// Lock allocation and DB persistence happen in create() immediately after this.
-    fn init_box_variables(
-        &self,
-        options: &BoxOptions,
-        name: Option<String>,
-    ) -> (BoxConfig, BoxState) {
-        use crate::litebox::config::ContainerRuntimeConfig;
-
-        // Generate unique box ID (12-char Base62)
-        let box_id = BoxIDMint::mint();
-
-        // Generate container ID (64-char hex)
-        let container_id = ContainerID::new();
-
-        // Record creation timestamp
-        let now = Utc::now();
-
-        // Derive paths from ID (computed from layout + ID)
-        let box_home = self.layout.boxes_dir().join(box_id.as_str());
-        // Create container runtime config
-        let container = ContainerRuntimeConfig { id: container_id };
-
-        // Create config with defaults + user options. Socket paths are NOT
-        // stored — they derive from (box_home, id) at point of use via
-        // BoxConfig::sockets(), so they can never go stale.
-        let config = BoxConfig {
-            id: box_id,
+    /// Pure computation, so it runs before the volumes lock is taken.
+    /// `provision_box` needs it that early: it moves a staging directory to
+    /// `box_home` before anything is persisted, and that path comes from the
+    /// id. [`BoxDraft::into_record`] turns the draft into the record
+    /// [`Self::commit_box`] writes.
+    fn draft_box(&self, name: Option<String>, initial_status: BoxStatus) -> BoxDraft {
+        let id = BoxIDMint::mint();
+        BoxDraft {
+            box_home: self.layout.boxes_dir().join(id.as_str()),
+            id,
             name,
-            created_at: now,
-            container,
-            options: options.clone(),
-            engine_kind: VmmKind::Libkrun,
-            box_home,
+            created_at: Utc::now(),
+            container_id: ContainerID::new(),
+            initial_status,
+        }
+    }
+
+    /// Commit a box: bind its mounts to this store's volumes, allocate its
+    /// lock, persist its record. The critical section of box creation,
+    /// shared by [`Self::create_inner`] and [`Self::provision_box`].
+    ///
+    /// Synchronous on purpose. Every step is filesystem or SQLite IO and the
+    /// caller holds the volumes-directory lock for all of it, which is what
+    /// makes the two halves of the invariant hold: a record commits only
+    /// while the volumes it names exist, and `remove_volume`, which scans
+    /// holders under the same lock, cannot delete a volume in the gap
+    /// between resolution and the record that holds it.
+    ///
+    /// Either the record commits or nothing this call created remains: every
+    /// failure after resolution takes back the volumes resolution created --
+    /// never one the request merely referenced -- before returning the error
+    /// that stopped it. The box directory is the caller's: `provision_box`
+    /// moved it into place and removes it again on failure.
+    fn commit_box(
+        &self,
+        draft: BoxDraft,
+        store: &crate::volumes::LockedVolumeStore<'_>,
+        mut options: BoxOptions,
+    ) -> BoxliteResult<(BoxConfig, BoxState)> {
+        let volumes_created = resolve_managed_volumes(store, &mut options)?;
+        let (config, mut state) = draft.into_record(options);
+
+        // Allocate lock for this box. This is the first step after resolution
+        // that can fail, and the volumes resolution just created belong to no
+        // persisted box yet, so they go back before the error does.
+        let lock_id = match self.lock_manager.allocate() {
+            Ok(lock_id) => lock_id,
+            Err(e) => {
+                rollback_created_volumes(store, volumes_created);
+                return Err(e);
+            }
         };
+        state.set_lock_id(lock_id);
 
-        // Create initial state (status = Configured)
-        let state = BoxState::new();
+        // Persist to database immediately (status = Configured)
+        if let Err(e) = self.box_manager.add_box(&config, &state) {
+            // Clean up the allocated lock on failure
+            if let Err(free_err) = self.lock_manager.free(lock_id) {
+                tracing::error!(
+                    lock_id = %lock_id,
+                    error = %free_err,
+                    "Failed to free lock after DB persist error"
+                );
+            }
 
-        (config, state)
+            // The record did not commit, so the volumes made for it go back
+            // before the name race is inspected: a loser that adopts the
+            // winner's box must not keep a scratch volume of its own.
+            rollback_created_volumes(store, volumes_created);
+            return Err(e);
+        }
+
+        tracing::debug!(
+            box_id = %config.id,
+            lock_id = %lock_id,
+            "Created box with Configured status"
+        );
+
+        Ok((config, state))
     }
 
     /// Provision a new box: create identity, persist config+state, return LiteBox.
@@ -1219,7 +1268,24 @@ impl RuntimeImpl {
     /// the canonical `boxes_dir/<box_id>` path. The box is persisted with the
     /// given `initial_status` (typically `Stopped` for clone/import operations).
     ///
-    /// On failure, cleans up the allocated lock and box directory.
+    /// Mounts are resolved against this runtime's volume store: an archive or
+    /// a clone hands over the persisted shape — a reference plus a payload
+    /// path from wherever the box came from — and that path means nothing
+    /// here. Resolution happens inside [`Self::commit_box`], after the move,
+    /// because the move can be a cross-filesystem copy of gigabytes and must
+    /// not hold the volumes lock for it. A refused mount therefore takes the
+    /// moved directory back with it; a move that fails itself leaves the
+    /// staging directory to the caller, as before.
+    ///
+    /// A persisted anonymous mount is a reference like any other, so a clone,
+    /// or an import on the machine the archive came from, shares the source
+    /// box's anonymous volume rather than getting an empty one. Docker has no
+    /// clone; its anonymous volumes are per-container only because nothing
+    /// ever carries a container's config to a second container.
+    ///
+    /// On failure after the move, the moved directory goes back and so do
+    /// the volumes resolution created; the box lock and the record are
+    /// [`Self::commit_box`]'s to undo.
     pub(crate) async fn provision_box(
         self: &Arc<Self>,
         staging_dir: std::path::PathBuf,
@@ -1227,15 +1293,10 @@ impl RuntimeImpl {
         options: BoxOptions,
         initial_status: BoxStatus,
     ) -> BoxliteResult<LiteBox> {
-        use crate::litebox::config::ContainerRuntimeConfig;
-
-        let box_id = BoxIDMint::mint();
-        let container_id = ContainerID::new();
-        let now = Utc::now();
-
+        let draft = self.draft_box(name, initial_status);
+        let box_home = draft.box_home.clone();
         // Move staging dir to canonical path (cross-fs safe: staging may be on
         // a different filesystem than the boxes dir).
-        let box_home = self.layout.boxes_dir().join(box_id.as_str());
         move_dir_cross_fs(&staging_dir, &box_home).map_err(|e| {
             BoxliteError::Storage(format!(
                 "Failed to move {} to {}: {}",
@@ -1244,31 +1305,28 @@ impl RuntimeImpl {
                 e
             ))
         })?;
+        let runtime = self.clone();
+        let committed = run_blocking_with_volume_store(self, "create box", move |store| {
+            let store = store.lock()?;
+            runtime.commit_box(draft, &store, options)
+        })
+        .await;
 
-        let config = BoxConfig {
-            id: box_id.clone(),
-            name,
-            created_at: now,
-            container: ContainerRuntimeConfig { id: container_id },
-            options,
-            engine_kind: VmmKind::Libkrun,
-            box_home,
+        let (config, _) = match committed {
+            Ok(record) => record,
+            Err(e) => {
+                // The directory this moved into place goes back with the
+                // failure; `commit_box` has already undone the lock, the
+                // record and the volumes it created. No socket cleanup:
+                // the `/tmp` binding symlink is created by
+                // `BoxSockets::ensure` at start, never at provision, and
+                // the real socket directory lives under `box_home`.
+                let _ = std::fs::remove_dir_all(&box_home);
+                return Err(e);
+            }
         };
 
-        let mut state = BoxState::new();
-        state.set_status(initial_status);
-
-        let lock_id = self.lock_manager.allocate()?;
-        state.set_lock_id(lock_id);
-
-        if let Err(e) = self.box_manager.add_box(&config, &state) {
-            let _ = self.lock_manager.free(lock_id);
-            let _ = std::fs::remove_dir_all(&config.box_home);
-            config.sockets().remove();
-            return Err(e);
-        }
-
-        self.get(box_id.as_str()).await?.ok_or_else(|| {
+        self.get(config.id.as_str()).await?.ok_or_else(|| {
             BoxliteError::Internal("Provisioned box not found after persist".to_string())
         })
     }
@@ -1750,21 +1808,145 @@ fn reject_local_unsupported_options(options: &BoxOptions) -> BoxliteResult<()> {
         ));
     }
 
-    // `resolve_user_volumes` catches this too, but only once boot is under way
-    // — after the image is pulled and the box record exists. Fail here instead,
-    // mirroring `BoxOptions::sanitize_remote`'s mount rules on the REST side.
-    if let Some(volume) = options
-        .volumes
-        .iter()
-        .find_map(|volume| volume.managed_volume.as_deref())
-    {
-        return Err(BoxliteError::Unsupported(format!(
-            "managed volume {volume:?} is only supported by REST runtimes; the local runtime has \
-             no volume backend to resolve it against"
-        )));
+    Ok(())
+}
+
+/// Bind every managed or anonymous mount to a volume of this store, in place.
+///
+/// A mount arrives in one of three shapes: a request naming a volume by id or
+/// name, a request marked `anonymous` with no origin at all, or the persisted
+/// shape an archive or a clone carries — a reference plus a payload path from
+/// wherever the box came from. Resolution leaves each mount carrying both the
+/// canonical id (in `managed_volume`, so `remove_volume` can tell which boxes
+/// hold a volume) and this store's payload path (in `host_path`, the only
+/// thing boot shares). The path a mount arrived with is never trusted.
+///
+/// An unknown reference is refused with `NotFound`, as the hosted API does:
+/// a mistyped name creates nothing. An anonymous mount has a volume created
+/// here only when it arrives with neither an id nor a path, and never lands
+/// on an existing one: a request that carries either is refused by
+/// [`VolumeSpec::validate_in_request`], and a persisted anonymous mount
+/// re-resolves to the volume its id names.
+///
+/// All-or-nothing, because creating is the only side effect. Every reference
+/// is checked first; the second pass then creates anonymous volumes and binds
+/// every mount on a copy of the list, and a failure anywhere in it removes
+/// the volumes that pass created before the error is returned. A refused
+/// resolution therefore leaves both the store and the caller's mounts exactly
+/// as they were, and the ids returned on success are the only volumes
+/// [`RuntimeImpl::commit_box`] takes back when the record it resolved for
+/// does not commit.
+///
+/// Takes the locked store, not the plain one: resolution is the first half
+/// of a critical section whose second half is the `add_box` that makes those
+/// volumes held, and a removal must not fit between them. Resolving at
+/// create rather than at boot also keeps the failure where the caller still
+/// holds the error, not part-way through `resolve_user_volumes`.
+fn resolve_managed_volumes(
+    store: &crate::volumes::LockedVolumeStore<'_>,
+    options: &mut BoxOptions,
+) -> BoxliteResult<Vec<String>> {
+    let mut volumes_created = Vec::new();
+    let mut bound_volumes = options.volumes.clone();
+    // Pass 1: refuse before creating. Only reads, so a failure here leaves
+    // the store exactly as it was.
+    for volume in &options.volumes {
+        let reference = match &volume.managed_volume {
+            Some(reference) => reference,
+            None => continue,
+        };
+        store.get(reference)?;
     }
 
+    // Pass 2 binds a copy; only a fully bound list replaces the caller's, and
+    // whatever the failed pass created is taken back first. A removal that
+    // fails is logged, not returned: the error worth reporting is the one
+    // that stopped the pass.
+    if let Err(e) = bind_mounts_to_store(store, &mut bound_volumes, &mut volumes_created) {
+        for volume in volumes_created {
+            if let Err(remove_err) = store.remove(&volume, true) {
+                tracing::error!(
+                    volume_id = %volume,
+                    error = %remove_err,
+                    "Failed to remove created volume"
+                );
+            }
+        }
+        return Err(e);
+    }
+
+    options.volumes = bound_volumes;
+
+    Ok(volumes_created)
+}
+
+/// The second pass of [`resolve_managed_volumes`]: create a volume for each
+/// anonymous mount that has none yet, then rewrite every managed mount to the
+/// canonical id plus this store's payload path. Works on the caller's copy of
+/// the mounts and pushes each id it creates as it goes, so the caller can undo
+/// exactly those if this returns `Err` part-way.
+///
+/// A mount asks for a new volume only when it is anonymous, names no volume
+/// *and* carries no path. `VolumeSpec::validate_in_request` refuses the
+/// contradictory shape — anonymous plus an origin — at the request boundary,
+/// so the third condition is what keeps a persisted or hand-built shape that
+/// never passed it from turning a path the caller supplied into a volume.
+fn bind_mounts_to_store(
+    store: &crate::volumes::LockedVolumeStore<'_>,
+    volumes: &mut Vec<VolumeSpec>,
+    volumes_created: &mut Vec<String>,
+) -> BoxliteResult<()> {
+    for volume in volumes {
+        let reference =
+            if volume.anonymous && volume.managed_volume.is_none() && volume.host_path.is_empty() {
+                let volume_info = store.create(None)?;
+                volume.managed_volume = Some(volume_info.id.clone());
+                volumes_created.push(volume_info.id.clone());
+                volume_info.id
+            } else {
+                match volume.managed_volume.clone() {
+                    Some(reference) => reference,
+                    None => continue,
+                }
+            };
+
+        let id = store.get(&reference)?.id;
+        volume.host_path = store.payload_dir(&id)?.to_string_lossy().into_owned();
+
+        volume.managed_volume = Some(id);
+    }
     Ok(())
+}
+
+/// Take back the volumes a *successful* resolution created for a request
+/// whose box record then failed to commit. Only those: a volume the request
+/// merely referenced belongs to whoever created it. A removal that fails is
+/// logged rather than returned, because the caller is already holding the
+/// error that matters and the cleanup must not stop at the first volume.
+///
+/// Runs under the same lock as the resolution that created them, so nothing
+/// can adopt one of these volumes between the failure and its removal.
+fn rollback_created_volumes(
+    store: &crate::volumes::LockedVolumeStore<'_>,
+    volumes_created: Vec<String>,
+) {
+    for volume in volumes_created {
+        let volume_id = volume.clone();
+        remove_created_volume(store, volume_id);
+    }
+}
+
+/// Remove one created volume, logging instead of failing; see
+/// [`rollback_created_volumes`].
+fn remove_created_volume(store: &crate::volumes::LockedVolumeStore<'_>, volume_created: String) {
+    let volume_id = volume_created.clone();
+    if let Err(e) = store.remove(&volume_created, true) {
+        tracing::error!(
+            volume_id = %volume_id,
+            error = %e,
+            "Failed to remove created volume"
+        );
+    }
 }
 
 async fn sanitize_local_options(
@@ -1865,35 +2047,115 @@ impl super::images::ImageBackend for LocalRuntime {
     }
 }
 
-// Named-volume operations (separate from RuntimeBackend). The concrete backend
-// is not yet implemented: the local filesystem store was removed in favor of a
-// future managed volume backend, so every operation returns `Unsupported`.
+/// Run synchronous [`LocalVolumeStore`](crate::volumes::LocalVolumeStore)
+/// work off the async runtime.
+///
+/// Every store method is filesystem IO — `remove` on a multi-gigabyte volume
+/// would pin a tokio worker for the whole `remove_dir_all` — so it belongs
+/// on the blocking pool, like the DB calls elsewhere in this file. `what`
+/// names the operation in the shutdown error.
+///
+/// The closure gets the plain store and decides for itself whether to
+/// [`lock`](crate::volumes::LocalVolumeStore::lock) it: one `create` or
+/// `remove` locks on its own, a lookup needs no lock at all, and a section
+/// that must be atomic against removals — `commit_box`, the holder scan in
+/// `remove_volume` — takes the lock here, on the blocking thread, which is
+/// the only place it may be taken.
+async fn run_blocking_with_volume_store<T, F>(
+    runtime: &SharedRuntimeImpl,
+    what: &str,
+    op: F,
+) -> BoxliteResult<T>
+where
+    F: FnOnce(crate::volumes::LocalVolumeStore) -> BoxliteResult<T> + Send + 'static,
+    T: Send + 'static,
+{
+    if runtime.shutdown_token.is_cancelled() {
+        return Err(BoxliteError::Stopped(format!(
+            "Cannot {what}: runtime has been shut down"
+        )));
+    }
+    let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+    tokio::task::spawn_blocking(move || op(store))
+        .await
+        .map_err(|error| {
+            BoxliteError::Internal(format!("failed to join volume store task: {error}"))
+        })?
+}
+
+// Named-volume operations (separate from RuntimeBackend). Each volume is a
+// directory under `{home}/volumes/`, managed by `LocalVolumeStore`.
 #[async_trait::async_trait]
 impl super::volumes::VolumeBackend for LocalRuntime {
-    async fn create_volume(
-        &self,
-        _name: Option<&str>,
-    ) -> BoxliteResult<crate::volumes::VolumeInfo> {
-        Err(volumes_unsupported())
+    async fn create_volume(&self, name: Option<&str>) -> BoxliteResult<crate::volumes::VolumeInfo> {
+        let name = name.map(str::to_string);
+        run_blocking_with_volume_store(&self.0, "create volume", move |store| {
+            store.create(name.as_deref())
+        })
+        .await
     }
 
     async fn list_volumes(&self) -> BoxliteResult<Vec<crate::volumes::VolumeInfo>> {
-        Err(volumes_unsupported())
+        run_blocking_with_volume_store(&self.0, "list volumes", |store| store.list()).await
     }
 
-    async fn get_volume(&self, _id: &str) -> BoxliteResult<crate::volumes::VolumeInfo> {
-        Err(volumes_unsupported())
+    async fn get_volume(&self, reference: &str) -> BoxliteResult<crate::volumes::VolumeInfo> {
+        let reference = reference.to_string();
+        run_blocking_with_volume_store(&self.0, "get volume", move |store| store.get(&reference))
+            .await
     }
 
-    async fn remove_volume(&self, _id: &str, _force: bool) -> BoxliteResult<()> {
-        Err(volumes_unsupported())
-    }
-}
+    async fn remove_volume(&self, reference: &str, force: bool) -> BoxliteResult<()> {
+        let reference = reference.to_string();
+        let rt = self.0.clone();
+        // A volume a persisted box mounts is in use whatever the box's state:
+        // its directory is what virtiofs shares, and `force` does not change
+        // that, as it does not in docker (`volume/service/store.go`, the
+        // `hasRef` refusal). Holders are found by the canonical id resolution
+        // wrote into each mount, so a box that mounted by name is recognised
+        // too. The scan and the removal are one step under the store's lock,
+        // the same lock `commit_box` holds across resolution and `add_box`:
+        // a create that references this volume either commits before the
+        // scan and is found here, or waits and then finds the volume gone.
+        //
+        // The price is paid by every create, not only one that names this
+        // volume: `commit_box` takes the lock for the whole section, so a
+        // `remove_dir_all` of a large payload stalls creates that have no
+        // mounts at all. A per-volume lock, or taking the lock only when a
+        // request has something to resolve, would narrow that.
+        run_blocking_with_volume_store(&self.0, "remove volume", move |store| {
+            let store = store.lock()?;
+            let volume_info = match store.get(&reference) {
+                Ok(volume_info) => volume_info,
+                Err(BoxliteError::NotFound(_)) if force => return Ok(()),
+                Err(e) => return Err(e),
+            };
 
-/// Error returned by every named-volume operation until a volume backend is
-/// wired up.
-fn volumes_unsupported() -> BoxliteError {
-    BoxliteError::Unsupported("named volumes are not supported yet".to_string())
+            let id = volume_info.id.clone();
+
+            let holders: Vec<String> = rt
+                .box_manager
+                .all_boxes(true)?
+                .into_iter()
+                .filter(|(cfg, _)| {
+                    cfg.options
+                        .volumes
+                        .iter()
+                        .any(|v| v.managed_volume.as_deref() == Some(id.as_str()))
+                })
+                .map(|(cfg, _)| cfg.id.to_string())
+                .collect();
+            if !holders.is_empty() {
+                return Err(BoxliteError::InvalidState(format!(
+                    "failed to remove volume: {}, it is in-use by boxes: [{}]",
+                    reference,
+                    holders.join(", "),
+                )));
+            }
+            store.remove(&id, force)
+        })
+        .await
+    }
 }
 
 // ============================================================================
@@ -1977,34 +2239,1166 @@ mod tests {
         assert!(sanitize_local_options(&features, options).await.is_ok());
     }
 
-    /// The local runtime has no volume backend. `resolve_user_volumes` also
-    /// refuses a managed volume, but only once boot is under way — after the
-    /// image is pulled and the box record exists. This guard is the whole
-    /// reason the failure is cheap, so it needs its own test: without it every
-    /// suite still passes and the rejection silently moves back to boot time.
+    /// A managed volume names a volume, not a path; the runtime asks its store
+    /// where that volume lives while creating the box and persists the answer,
+    /// so boot never has to know the store exists.
     #[tokio::test]
-    async fn local_runtime_rejects_managed_volumes_before_boot() {
+    async fn create_resolves_managed_volumes_into_the_persisted_config() {
         use crate::runtime::options::VolumeSpec;
 
-        let features = ExperimentalFeatures::default();
-        let host_bind = BoxOptions {
-            volumes: vec![VolumeSpec::bind_mount("/tmp/data", "/data")],
-            ..Default::default()
-        };
-        assert!(sanitize_local_options(&features, host_bind).await.is_ok());
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let volume = store.create(Some("my-data")).expect("create volume");
+        let local = LocalRuntime(runtime.clone());
 
-        let managed = BoxOptions {
-            volumes: vec![VolumeSpec::managed_volume("my-data", "/data")],
-            ..Default::default()
-        };
-        let error = sanitize_local_options(&features, managed)
+        local
+            .create(
+                BoxOptions {
+                    volumes: vec![VolumeSpec::managed_volume("my-data", "/data")],
+                    ..Default::default()
+                },
+                Some("known".to_string()),
+            )
             .await
-            .expect_err("a managed volume has no local backend to resolve against");
+            .expect("a known volume resolves");
+        let (config, _) = runtime.box_manager.lookup_box("known").unwrap().unwrap();
+        assert_eq!(
+            runtime
+                .layout
+                .home_dir()
+                .join("volumes")
+                .join(&volume.id)
+                .join("_data")
+                .to_string_lossy(),
+            config.options.volumes[0].host_path,
+            "the persisted mount points at the volume's payload directory"
+        );
+        assert_eq!(
+            Some(volume.id.as_str()),
+            config.options.volumes[0].managed_volume.as_deref(),
+            "the persisted mount keeps the volume's id, not the name it was asked by, \
+             so removal can tell which volume it holds"
+        );
 
-        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
-        let message = error.to_string();
-        assert!(message.contains("my-data"), "{message}");
-        assert!(message.contains("REST runtime"), "{message}");
+        // An unknown reference is refused, as the hosted API does: nothing is
+        // created and no box is persisted for a mount that cannot be resolved.
+        let err = match local
+            .create(
+                BoxOptions {
+                    volumes: vec![VolumeSpec::managed_volume("fresh-vol", "/data")],
+                    ..Default::default()
+                },
+                Some("fresh".to_string()),
+            )
+            .await
+        {
+            Err(err) => err,
+            Ok(_) => panic!("an unknown reference must be refused, not created"),
+        };
+        assert!(matches!(err, BoxliteError::NotFound(_)), "{err:?}");
+        assert!(
+            matches!(store.get("fresh-vol"), Err(BoxliteError::NotFound(_))),
+            "resolution must not create volumes"
+        );
+        assert!(
+            runtime.box_manager.lookup_box("fresh").unwrap().is_none(),
+            "a refused create persists no box"
+        );
+    }
+
+    /// `-v /data` names no volume at all: the runtime creates one for the
+    /// mount while creating the box. The persisted mount has the same shape
+    /// as a resolved managed mount, the volume's id plus its payload
+    /// directory, and keeps `anonymous`: after resolution nothing else says
+    /// the volume was made for this box rather than merely mounted by it.
+    /// Nothing consumes the marker yet; removing the box leaves the volume
+    /// in the store until `volume rm`.
+    #[tokio::test]
+    async fn create_resolves_an_anonymous_volume() {
+        use crate::runtime::options::VolumeSpec;
+
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let local = LocalRuntime(runtime.clone());
+
+        local
+            .create(
+                BoxOptions {
+                    volumes: vec![VolumeSpec::anonymous_volume("/data")],
+                    ..Default::default()
+                },
+                Some("anon".to_string()),
+            )
+            .await
+            .expect("an anonymous mount is created by the runtime");
+
+        let volumes = store.list().unwrap();
+        assert_eq!(1, volumes.len(), "{volumes:?}");
+        let (config, _) = runtime.box_manager.lookup_box("anon").unwrap().unwrap();
+        let mount = &config.options.volumes[0];
+        assert!(
+            mount
+                .host_path
+                .ends_with(&format!("{}/_data", volumes[0].id)),
+            "the new volume backs the mount: {}",
+            mount.host_path
+        );
+        assert!(mount.anonymous, "the mount stays marked anonymous");
+        assert_eq!(
+            Some(volumes[0].id.as_str()),
+            mount.managed_volume.as_deref(),
+            "the persisted mount records which volume it holds"
+        );
+    }
+
+    /// An anonymous mount that carries a path but no id is a contradiction:
+    /// the marker asks for a volume, the path says one was already chosen.
+    /// Both validators refuse it — `validate_in_request` because a request
+    /// may name no origin beside the marker, `validate_in_persisted` because
+    /// a resolved anonymous mount carries both its id and its path — so
+    /// resolution should never meet it. If it does, the third condition on
+    /// the create branch keeps it from turning the caller's path into a
+    /// volume: nothing is created, and the mount is left for boot to judge.
+    /// That is the layer this test covers, the validators having their own.
+    #[test]
+    fn resolve_creates_nothing_for_an_anonymous_mount_that_carries_a_path() {
+        use crate::runtime::options::VolumeSpec;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store = crate::volumes::LocalVolumeStore::new(tmp.path());
+        let mut options = BoxOptions {
+            volumes: vec![VolumeSpec {
+                host_path: "/home/me/data".into(),
+                ..VolumeSpec::anonymous_volume("/scratch")
+            }],
+            ..Default::default()
+        };
+
+        let created = resolve_managed_volumes(&store.lock().unwrap(), &mut options).unwrap();
+
+        assert!(created.is_empty(), "no volume was made: {created:?}");
+        assert!(
+            store.list().unwrap().is_empty(),
+            "the store is untouched: {:?}",
+            store.list().unwrap()
+        );
+        let mount = &options.volumes[0];
+        assert_eq!(
+            "/home/me/data", mount.host_path,
+            "the path the caller supplied is neither trusted nor replaced"
+        );
+        assert!(
+            mount.managed_volume.is_none(),
+            "and no volume id was written: {:?}",
+            mount.managed_volume
+        );
+    }
+
+    /// Once the runtime has created an anonymous volume and written its id
+    /// into the mount, that mount is a reference like any other. Resolving it
+    /// again — a clone, an export imported on the same machine, a box
+    /// provisioned from its own config — binds it to the same volume: no
+    /// second id, no second directory. Otherwise the box would silently lose
+    /// the scratch it already had and the store would gain an orphan nothing
+    /// refers to. The path it arrives with is still not trusted: it is
+    /// rewritten to this store's payload directory for that id.
+    #[test]
+    fn resolve_keeps_a_persisted_anonymous_mount_on_its_own_volume() {
+        use crate::runtime::options::VolumeSpec;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store = crate::volumes::LocalVolumeStore::new(tmp.path());
+        // The persisted shape comes from a first resolution, as it would in
+        // the runtime, not from a hand-written literal.
+        let mut first = BoxOptions {
+            volumes: vec![VolumeSpec::anonymous_volume("/scratch")],
+            ..Default::default()
+        };
+        resolve_managed_volumes(&store.lock().unwrap(), &mut first).unwrap();
+        let persisted = first.volumes[0].clone();
+        let id = persisted
+            .managed_volume
+            .clone()
+            .expect("a resolved anonymous mount records its volume");
+
+        let mut again = BoxOptions {
+            volumes: vec![VolumeSpec {
+                host_path: format!("/elsewhere/volumes/{id}/_data"),
+                ..persisted
+            }],
+            ..Default::default()
+        };
+
+        let created = resolve_managed_volumes(&store.lock().unwrap(), &mut again).unwrap();
+
+        let mount = &again.volumes[0];
+        assert_eq!(
+            Some(id.as_str()),
+            mount.managed_volume.as_deref(),
+            "the mount keeps the volume it was given"
+        );
+        assert_eq!(
+            store.payload_dir(&id).unwrap().to_string_lossy(),
+            mount.host_path,
+            "the path is this store's for that id"
+        );
+        assert!(mount.anonymous, "the marker survives a second resolution");
+        assert!(created.is_empty(), "nothing was created: {created:?}");
+        let listed = store.list().unwrap();
+        assert_eq!(1, listed.len(), "one volume, not two: {listed:?}");
+        assert_eq!(id, listed[0].id);
+    }
+
+    /// The other half of the same rule: a persisted anonymous mount whose
+    /// volume this store does not have is refused like a named reference
+    /// would be, not quietly replaced by a fresh empty volume. An archive from
+    /// another machine, or a box whose volume was removed, gets `NotFound`
+    /// and creates nothing.
+    #[test]
+    fn resolve_refuses_a_persisted_anonymous_mount_whose_volume_is_missing() {
+        use crate::runtime::options::VolumeSpec;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store = crate::volumes::LocalVolumeStore::new(tmp.path());
+        let mut options = BoxOptions {
+            volumes: vec![VolumeSpec {
+                managed_volume: Some("OLDANON".into()),
+                host_path: "/elsewhere/volumes/OLDANON/_data".into(),
+                ..VolumeSpec::anonymous_volume("/scratch")
+            }],
+            ..Default::default()
+        };
+
+        let err = resolve_managed_volumes(&store.lock().unwrap(), &mut options).unwrap_err();
+
+        assert!(matches!(err, BoxliteError::NotFound(_)), "{err:?}");
+        assert!(
+            store.list().unwrap().is_empty(),
+            "a refused mount creates nothing"
+        );
+    }
+
+    /// The same through `provision_box`, the path import and clone take: a box
+    /// created with an anonymous mount, then provisioned again from its own
+    /// persisted config, holds the very same volume.
+    #[tokio::test]
+    async fn provision_box_keeps_a_persisted_anonymous_volume() {
+        use crate::runtime::options::VolumeSpec;
+
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let local = LocalRuntime(runtime.clone());
+        local
+            .create(
+                BoxOptions {
+                    volumes: vec![VolumeSpec::anonymous_volume("/scratch")],
+                    ..Default::default()
+                },
+                Some("origin".to_string()),
+            )
+            .await
+            .expect("an anonymous mount is created by the runtime");
+        let (origin, _) = runtime.box_manager.lookup_box("origin").unwrap().unwrap();
+
+        // An empty staging directory stands in for the disks a clone or an
+        // import would have installed; mounts are resolved before it is used.
+        let staging = tempfile::tempdir_in(runtime.layout.home_dir()).unwrap();
+        runtime
+            .provision_box(
+                staging.path().to_path_buf(),
+                Some("twin".to_string()),
+                origin.options.clone(),
+                BoxStatus::Stopped,
+            )
+            .await
+            .expect("a persisted anonymous mount resolves to its own volume");
+
+        let (twin, _) = runtime.box_manager.lookup_box("twin").unwrap().unwrap();
+        assert_eq!(
+            origin.options.volumes[0].managed_volume, twin.options.volumes[0].managed_volume,
+            "the twin holds the same volume"
+        );
+        assert_eq!(
+            origin.options.volumes[0].host_path,
+            twin.options.volumes[0].host_path
+        );
+        assert!(twin.options.volumes[0].anonymous);
+        let listed = store.list().unwrap();
+        assert_eq!(1, listed.len(), "no second volume: {listed:?}");
+    }
+
+    /// The mounts every rollback test below submits: one anonymous mount,
+    /// whose volume the request creates, and one mount of a volume that
+    /// already exists, which it merely references. A correct rollback takes
+    /// back the first and leaves the second alone.
+    fn one_anonymous_and_one_held_mount(held: &str) -> BoxOptions {
+        use crate::runtime::options::VolumeSpec;
+
+        BoxOptions {
+            volumes: vec![
+                VolumeSpec::anonymous_volume("/scratch"),
+                VolumeSpec::managed_volume(held, "/data"),
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// Put a plain file where the lock directory was, so the next
+    /// `FileLockManager::allocate` cannot create its lock file. That failure
+    /// lands after resolution has created the request's volumes and before
+    /// `add_box`, the one step between the two that neither test could
+    /// otherwise reach deterministically.
+    fn break_lock_allocation(runtime: &RuntimeImpl) {
+        let locks = runtime.layout.locks_dir();
+        std::fs::remove_dir_all(&locks).unwrap();
+        std::fs::write(&locks, b"").unwrap();
+    }
+
+    fn assert_only_volume(store: &crate::volumes::LocalVolumeStore, expected: &str, what: &str) {
+        let listed = store.list().unwrap();
+        let ids: Vec<&str> = listed.iter().map(|v| v.id.as_str()).collect();
+        assert_eq!(vec![expected], ids, "{what}: {listed:?}");
+    }
+
+    fn box_dir_count(runtime: &RuntimeImpl) -> usize {
+        std::fs::read_dir(runtime.layout.boxes_dir())
+            .map(|entries| entries.count())
+            .unwrap_or(0)
+    }
+
+    /// Hold the store's own lock from the test: `flock(LOCK_EX)` on the
+    /// `volumes/` directory, the very handle `lock_volumes_dir` takes, so any
+    /// store mutation on another descriptor waits until this one is dropped.
+    /// This is how a test parks a runtime operation at a known point without
+    /// a hook in production code: the store blocks there, and only there.
+    fn hold_volumes_dir_lock(runtime: &RuntimeImpl) -> std::fs::File {
+        use std::os::unix::io::AsRawFd;
+
+        // Asked of the store rather than derived again, so these tests keep
+        // parking the operation they mean to park if the layout moves.
+        let volumes_dir = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir())
+            .volumes_dir()
+            .to_path_buf();
+        std::fs::create_dir_all(&volumes_dir).unwrap();
+        let dir = std::fs::File::open(&volumes_dir).unwrap();
+        // SAFETY: `dir` is an open descriptor for the whole call; flock(2) has
+        // no other preconditions.
+        let locked = unsafe { libc::flock(dir.as_raw_fd(), libc::LOCK_EX) };
+        assert_eq!(0, locked, "{}", std::io::Error::last_os_error());
+        dir
+    }
+
+    /// Poll `probe` until it yields, or `timeout` passes. For observing a
+    /// detached blocking task the test cannot join.
+    async fn wait_for<T>(
+        timeout: std::time::Duration,
+        mut probe: impl FnMut() -> Option<T>,
+    ) -> Option<T> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if let Some(found) = probe() {
+                return Some(found);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return None;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Lock allocation sits between resolution and `add_box`, so its failure
+    /// must take back the volume resolution just created, exactly as an
+    /// `add_box` failure does. The volume the request merely referenced is
+    /// not the request's to remove.
+    #[tokio::test]
+    async fn a_create_that_cannot_allocate_a_lock_leaves_no_anonymous_volume_behind() {
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let held = store.create(Some("held")).unwrap();
+        let local = LocalRuntime(runtime.clone());
+        break_lock_allocation(&runtime);
+
+        let err = local
+            .create(
+                one_anonymous_and_one_held_mount("held"),
+                Some("unlucky".to_string()),
+            )
+            .await
+            .err()
+            .expect("lock allocation must fail");
+
+        assert!(matches!(err, BoxliteError::Storage(_)), "{err:?}");
+        assert_only_volume(
+            &store,
+            &held.id,
+            "a create refused at lock allocation keeps only the referenced volume",
+        );
+        assert!(runtime.box_manager.lookup_box("unlucky").unwrap().is_none());
+    }
+
+    /// The same step on the import/clone path. Here the staging directory
+    /// has already been moved to its final place, so the failure must take
+    /// that directory back as well as the volume, as the `add_box` failure
+    /// a few lines later already does.
+    #[tokio::test]
+    async fn a_provision_that_cannot_allocate_a_lock_leaves_no_anonymous_volume_behind() {
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let held = store.create(Some("held")).unwrap();
+        break_lock_allocation(&runtime);
+        let box_dirs_before = box_dir_count(&runtime);
+        let staging = tempfile::tempdir_in(runtime.layout.home_dir()).unwrap();
+
+        let err = runtime
+            .provision_box(
+                staging.path().to_path_buf(),
+                Some("unlucky".to_string()),
+                one_anonymous_and_one_held_mount("held"),
+                BoxStatus::Stopped,
+            )
+            .await
+            .err()
+            .expect("lock allocation must fail");
+
+        assert!(matches!(err, BoxliteError::Storage(_)), "{err:?}");
+        assert_only_volume(
+            &store,
+            &held.id,
+            "a provision refused at lock allocation keeps only the referenced volume",
+        );
+        assert!(runtime.box_manager.lookup_box("unlucky").unwrap().is_none());
+        assert_eq!(
+            box_dirs_before,
+            box_dir_count(&runtime),
+            "a provision refused at lock allocation leaves no box directory behind"
+        );
+    }
+
+    /// The earliest failure of all: the staging directory cannot be moved
+    /// into place. It happens before `commit_box` resolves anything, so the
+    /// store must be exactly as the caller left it — the request's anonymous
+    /// mount never reaches the step that would create a volume for it, and
+    /// the volume it merely references is not the request's to touch.
+    #[tokio::test]
+    async fn a_provision_that_cannot_move_its_staging_dir_creates_no_volume() {
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let held = store.create(Some("held")).unwrap();
+        let missing = runtime.layout.home_dir().join("no-such-staging");
+
+        let err = runtime
+            .provision_box(
+                missing,
+                Some("unlucky".to_string()),
+                one_anonymous_and_one_held_mount("held"),
+                BoxStatus::Stopped,
+            )
+            .await
+            .err()
+            .expect("moving a missing staging directory must fail");
+
+        assert!(matches!(err, BoxliteError::Storage(_)), "{err:?}");
+        assert_only_volume(
+            &store,
+            &held.id,
+            "a provision refused at the move creates nothing and removes nothing",
+        );
+        assert!(runtime.box_manager.lookup_box("unlucky").unwrap().is_none());
+    }
+
+    /// The last failure before the record commits: `add_box` refuses a name
+    /// another box holds. The volume goes, and so does the directory the
+    /// staging area was moved to, as it did before volumes existed.
+    #[tokio::test]
+    async fn a_provision_for_a_taken_name_leaves_no_anonymous_volume_behind() {
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let held = store.create(Some("held")).unwrap();
+        let local = LocalRuntime(runtime.clone());
+        local
+            .create(BoxOptions::default(), Some("taken".to_string()))
+            .await
+            .expect("the first box takes the name");
+        let box_dirs_before = box_dir_count(&runtime);
+        let staging = tempfile::tempdir_in(runtime.layout.home_dir()).unwrap();
+
+        let err = runtime
+            .provision_box(
+                staging.path().to_path_buf(),
+                Some("taken".to_string()),
+                one_anonymous_and_one_held_mount("held"),
+                BoxStatus::Stopped,
+            )
+            .await
+            .err()
+            .expect("a taken name must be refused by add_box");
+
+        assert!(matches!(err, BoxliteError::InvalidState(_)), "{err:?}");
+        assert_only_volume(
+            &store,
+            &held.id,
+            "a provision refused by add_box keeps only the referenced volume",
+        );
+        assert_eq!(
+            box_dirs_before,
+            box_dir_count(&runtime),
+            "the moved staging directory is removed again"
+        );
+    }
+
+    /// `create_inner` looks the name up, resolves, then persists; creates
+    /// racing on one name can all pass the lookup, and every loser's
+    /// `add_box` then fails after its anonymous volume exists. Whatever the
+    /// interleaving, one box and exactly its volume remain: the losers took
+    /// theirs back, or never made one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_creates_of_one_name_leave_exactly_the_winners_volume() {
+        use crate::runtime::options::VolumeSpec;
+
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let local = Arc::new(LocalRuntime(runtime.clone()));
+
+        let attempts: Vec<_> = (0..4)
+            .map(|_| {
+                let local = local.clone();
+                tokio::spawn(async move {
+                    local
+                        .create(
+                            BoxOptions {
+                                volumes: vec![VolumeSpec::anonymous_volume("/scratch")],
+                                ..Default::default()
+                            },
+                            Some("race".to_string()),
+                        )
+                        .await
+                })
+            })
+            .collect();
+        let mut winners = 0;
+        for attempt in attempts {
+            if attempt.await.unwrap().is_ok() {
+                winners += 1;
+            }
+        }
+
+        assert_eq!(1, winners, "exactly one create wins the name");
+        let (config, _) = runtime.box_manager.lookup_box("race").unwrap().unwrap();
+        let mount_id = config.options.volumes[0]
+            .managed_volume
+            .clone()
+            .expect("the winner's mount records its volume");
+        assert_only_volume(&store, &mount_id, "only the winner's volume remains");
+    }
+
+    /// Dropping a create future does not stop its resolution: the store runs
+    /// on the blocking pool, and tokio detaches a `spawn_blocking` task whose
+    /// handle is dropped, discarding its result. When that result is the only
+    /// record of the volume the task created, the volume is nobody's. A
+    /// `serve` client disconnecting mid-create is exactly this drop.
+    ///
+    /// The test parks the create on the store lock, aborts it there, then
+    /// lets the detached task finish: whatever it created must end up held by
+    /// a committed box record. Create commits or takes back; it never leaves
+    /// a volume without an owner.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_create_cancelled_mid_resolution_leaves_no_orphan_volume() {
+        use crate::runtime::options::VolumeSpec;
+        use crate::runtime::volumes::VolumeBackend;
+
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let local = Arc::new(LocalRuntime(runtime.clone()));
+
+        let lock = hold_volumes_dir_lock(&runtime);
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut create = {
+            let local = local.clone();
+            let started = started.clone();
+            tokio::spawn(async move {
+                started.store(true, std::sync::atomic::Ordering::SeqCst);
+                local
+                    .create(
+                        BoxOptions {
+                            volumes: vec![VolumeSpec::anonymous_volume("/scratch")],
+                            ..Default::default()
+                        },
+                        Some("cancelled".to_string()),
+                    )
+                    .await
+            })
+        };
+        // Two steps, because a create the runtime had not scheduled yet is
+        // also "not finished": first wait until the task body has run, then
+        // wait on the create itself and require it not to complete while the
+        // lock is held.
+        //
+        // That second wait cannot fail this test wrongly — a create that has
+        // to take the lock cannot finish while the test holds it, however
+        // slow the host is. Its job is the other direction: against a create
+        // that resolved before taking the lock, it makes the volume vanish
+        // under a create that had already read it, which is the interleaving
+        // this test exists to forbid.
+        wait_for(std::time::Duration::from_secs(5), || {
+            started
+                .load(std::sync::atomic::Ordering::SeqCst)
+                .then_some(())
+        })
+        .await
+        .expect("the create task must be scheduled");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(500), &mut create)
+                .await
+                .is_err(),
+            "the create must be parked on the store lock"
+        );
+        create.abort();
+        assert!(
+            create.await.err().is_some_and(|e| e.is_cancelled()),
+            "the aborted create must report cancellation"
+        );
+        drop(lock);
+
+        let volume = wait_for(std::time::Duration::from_secs(10), || {
+            store.list().unwrap().into_iter().next()
+        })
+        .await
+        .expect("the cancelled create still reaches the store and creates its volume");
+        let (config, _) = wait_for(std::time::Duration::from_secs(5), || {
+            runtime.box_manager.lookup_box("cancelled").unwrap()
+        })
+        .await
+        .unwrap_or_else(|| {
+            panic!(
+                "volume {} was created for a box that never committed: orphaned by the cancelled create",
+                volume.id
+            )
+        });
+        assert_eq!(
+            Some(volume.id.as_str()),
+            config.options.volumes[0].managed_volume.as_deref(),
+            "the committed record holds the volume the cancelled create made"
+        );
+        let err = local
+            .remove_volume(&volume.id, false)
+            .await
+            .expect_err("the volume is held by the committed box");
+        assert!(matches!(err, BoxliteError::InvalidState(_)), "{err:?}");
+    }
+
+    /// An archive or a clone hands resolution an already-resolved mount: a
+    /// reference plus a payload path from wherever the box came from. That
+    /// path means nothing here, so resolution re-resolves the reference
+    /// against this store and rewrites the path to this store's own. A
+    /// persisted anonymous mount takes the same route; see
+    /// `resolve_keeps_a_persisted_anonymous_mount_on_its_own_volume`.
+    #[test]
+    fn resolve_re_resolves_a_persisted_mount_against_the_local_store() {
+        use crate::runtime::options::VolumeSpec;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store = crate::volumes::LocalVolumeStore::new(tmp.path());
+        let shared = store.create(Some("shared")).unwrap();
+        let mut options = BoxOptions {
+            volumes: vec![VolumeSpec {
+                host_path: "/elsewhere/volumes/OLDNAMED/_data".into(),
+                ..VolumeSpec::managed_volume("shared", "/data")
+            }],
+            ..Default::default()
+        };
+
+        resolve_managed_volumes(&store.lock().unwrap(), &mut options).unwrap();
+
+        assert_eq!(
+            store.payload_dir(&shared.id).unwrap().to_string_lossy(),
+            options.volumes[0].host_path,
+            "the named mount is re-bound to this store's volume of that name"
+        );
+        assert_eq!(
+            Some(shared.id.as_str()),
+            options.volumes[0].managed_volume.as_deref()
+        );
+
+        let listed = store.list().unwrap();
+        assert_eq!(1, listed.len(), "{listed:?}");
+    }
+
+    /// A persisted reference this store has never heard of, an id minted on
+    /// another machine for instance, is refused rather than mounted from the
+    /// stale path it arrived with; nothing is created along the way.
+    #[test]
+    fn resolve_refuses_a_persisted_reference_the_local_store_does_not_have() {
+        use crate::runtime::options::VolumeSpec;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store = crate::volumes::LocalVolumeStore::new(tmp.path());
+        let mut options = BoxOptions {
+            volumes: vec![
+                VolumeSpec::anonymous_volume("/scratch"),
+                VolumeSpec {
+                    host_path: "/elsewhere/volumes/AbCdEfGhIjKl/_data".into(),
+                    ..VolumeSpec::managed_volume("AbCdEfGhIjKl", "/data")
+                },
+            ],
+            ..Default::default()
+        };
+
+        let err = resolve_managed_volumes(&store.lock().unwrap(), &mut options).unwrap_err();
+        assert!(matches!(err, BoxliteError::NotFound(_)), "{err:?}");
+        assert!(
+            store.list().unwrap().is_empty(),
+            "a refused resolution creates nothing"
+        );
+    }
+
+    /// Resolution has one side effect, creating anonymous volumes, and it must
+    /// not happen for a request that fails: an unknown reference later in the
+    /// list leaves the store as it was.
+    #[tokio::test]
+    async fn a_refused_create_leaves_no_anonymous_volume_behind() {
+        use crate::runtime::options::VolumeSpec;
+
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let local = LocalRuntime(runtime.clone());
+
+        let err = match local
+            .create(
+                BoxOptions {
+                    volumes: vec![
+                        VolumeSpec::anonymous_volume("/scratch"),
+                        VolumeSpec::managed_volume("missing", "/data"),
+                    ],
+                    ..Default::default()
+                },
+                Some("mixed".to_string()),
+            )
+            .await
+        {
+            Err(err) => err,
+            Ok(_) => panic!("an unknown reference must be refused"),
+        };
+        assert!(matches!(err, BoxliteError::NotFound(_)), "{err:?}");
+        let left_behind = store.list().unwrap();
+        assert!(
+            left_behind.is_empty(),
+            "a refused create must not leave an anonymous volume: {left_behind:?}"
+        );
+        assert!(runtime.box_manager.lookup_box("mixed").unwrap().is_none());
+    }
+
+    /// `volume rm` addresses a volume by name or by id: both refer to the same
+    /// volume, so removing by either takes the volume with both of its
+    /// references, leaves every other volume alone, and afterwards neither
+    /// reference finds anything. `force` is about that "already gone" case,
+    /// under whichever reference.
+    #[tokio::test]
+    async fn remove_volume_addresses_a_volume_by_name_or_by_id() {
+        use crate::runtime::volumes::VolumeBackend;
+        use crate::volumes::VolumeInfo;
+
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let local = LocalRuntime(runtime.clone());
+        // How the test addresses the volume under test: by its name or by its id.
+        type ReferenceOf = fn(&VolumeInfo) -> String;
+        let by: [(&str, ReferenceOf); 2] = [("name", |v| v.name.clone()), ("id", |v| v.id.clone())];
+
+        for (kind, reference_of) in by {
+            let target = store.create(Some(&format!("target-{kind}"))).unwrap();
+            let bystander = store.create(Some(&format!("bystander-{kind}"))).unwrap();
+            let reference = reference_of(&target);
+
+            local
+                .remove_volume(&reference, false)
+                .await
+                .unwrap_or_else(|e| panic!("removing by {kind} must succeed: {e:?}"));
+            assert!(
+                matches!(store.get(&target.name), Err(BoxliteError::NotFound(_))),
+                "removed by {kind}: the name must be gone"
+            );
+            assert!(
+                matches!(store.get(&target.id), Err(BoxliteError::NotFound(_))),
+                "removed by {kind}: the id must be gone"
+            );
+            assert_eq!(
+                bystander.id,
+                store.get(&bystander.name).unwrap().id,
+                "removed by {kind}: another volume is untouched"
+            );
+
+            let err = local
+                .remove_volume(&reference, false)
+                .await
+                .expect_err("nothing is left under that reference");
+            assert!(matches!(err, BoxliteError::NotFound(_)), "{err:?}");
+            local
+                .remove_volume(&reference, true)
+                .await
+                .unwrap_or_else(|e| panic!("force by {kind} tolerates a missing volume: {e:?}"));
+
+            // Tidying up between rounds, not the behaviour under test: the
+            // lock is simply how a removal is reached.
+            store.lock().unwrap().remove(&bystander.id, false).unwrap();
+        }
+    }
+
+    /// A volume that a persisted box mounts is in use, whatever the box's
+    /// state: removing it would pull the directory out from under the box's
+    /// next start. The check must hold across every way of naming the volume:
+    /// a box may have mounted it by name or by id, and the caller may remove
+    /// by name or by id; all four pairs address the same volume. `force` does
+    /// not override this; it only covers a volume that is already gone. Docker
+    /// refuses the same way and names the containers holding the reference;
+    /// the error here names the boxes.
+    #[tokio::test]
+    async fn remove_volume_rejects_a_volume_a_persisted_box_mounts() {
+        use crate::runtime::options::VolumeSpec;
+        use crate::runtime::volumes::VolumeBackend;
+
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let held = store.create(Some("held")).unwrap();
+        let local = LocalRuntime(runtime.clone());
+
+        // One holder mounts by name, the other by id: the persisted mounts
+        // must be recognised as the same volume either way.
+        for (holder, reference) in [("by-name", "held"), ("by-id", held.id.as_str())] {
+            local
+                .create(
+                    BoxOptions {
+                        volumes: vec![VolumeSpec::managed_volume(reference, "/data")],
+                        ..Default::default()
+                    },
+                    Some(holder.to_string()),
+                )
+                .await
+                .expect("a known volume resolves");
+        }
+        let (by_name, _) = runtime.box_manager.lookup_box("by-name").unwrap().unwrap();
+        let (by_id, _) = runtime.box_manager.lookup_box("by-id").unwrap().unwrap();
+
+        for reference in ["held", held.id.as_str()] {
+            for force in [false, true] {
+                let err = local
+                    .remove_volume(reference, force)
+                    .await
+                    .expect_err("a mounted volume must not be removable");
+                assert!(matches!(err, BoxliteError::InvalidState(_)), "{err:?}");
+                let message = err.to_string();
+                assert!(
+                    message.contains(&by_name.id.to_string())
+                        && message.contains(&by_id.id.to_string()),
+                    "removing {reference:?} must name both holders: {message}"
+                );
+            }
+        }
+        assert_eq!(
+            held.id,
+            store.get("held").unwrap().id,
+            "the volume survives a refused remove"
+        );
+        assert!(
+            store.payload_dir(&held.id).unwrap().is_dir(),
+            "the payload directory survives a refused remove"
+        );
+
+        // One holder gone is not enough, and the error names the one left.
+        runtime.remove("by-name", false).unwrap();
+        let err = local
+            .remove_volume(&held.id, false)
+            .await
+            .expect_err("still mounted by the box that mounted it by id");
+        assert!(matches!(err, BoxliteError::InvalidState(_)), "{err:?}");
+        let message = err.to_string();
+        assert!(message.contains(&by_id.id.to_string()), "{message}");
+        assert!(
+            !message.contains(&by_name.id.to_string()),
+            "a removed box is no longer a holder: {message}"
+        );
+
+        runtime.remove("by-id", false).unwrap();
+        local
+            .remove_volume("held", false)
+            .await
+            .expect("no box mounts it any more");
+        assert!(matches!(
+            store.get(&held.id),
+            Err(BoxliteError::NotFound(_))
+        ));
+    }
+
+    /// An anonymous volume is held by its box exactly like a named one:
+    /// `volume rm <id>` on it is refused while the box exists.
+    #[tokio::test]
+    async fn remove_volume_rejects_an_anonymous_volume_while_its_box_exists() {
+        use crate::runtime::options::VolumeSpec;
+        use crate::runtime::volumes::VolumeBackend;
+
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let local = LocalRuntime(runtime.clone());
+
+        local
+            .create(
+                BoxOptions {
+                    volumes: vec![VolumeSpec::anonymous_volume("/scratch")],
+                    ..Default::default()
+                },
+                Some("anon-holder".to_string()),
+            )
+            .await
+            .expect("an anonymous mount is created by the runtime");
+        let volumes = store.list().unwrap();
+        assert_eq!(1, volumes.len(), "{volumes:?}");
+        let (holder, _) = runtime
+            .box_manager
+            .lookup_box("anon-holder")
+            .unwrap()
+            .unwrap();
+
+        for force in [false, true] {
+            let err = local
+                .remove_volume(&volumes[0].id, force)
+                .await
+                .expect_err("an anonymous volume is in use while its box exists");
+            assert!(matches!(err, BoxliteError::InvalidState(_)), "{err:?}");
+            assert!(err.to_string().contains(&holder.id.to_string()), "{err}");
+        }
+        assert_eq!(1, store.list().unwrap().len(), "the volume survives");
+    }
+
+    /// A volume's holders live in the box DB and its directory in the store,
+    /// so "no box mounts it" and "delete the directory" must be one step under
+    /// the store lock. Otherwise a create that commits a mount between the
+    /// two leaves a box whose payload directory is gone by the time it boots.
+    ///
+    /// The test plays that create by hand: it holds the store lock while
+    /// `remove_volume` is under way, persists a holder straight into the DB,
+    /// and only then lets the removal continue. Docker closes the same window
+    /// by checking `hasRef` under the per-volume lock that `Get` registers
+    /// references under (`volume/service/store.go:662-673,799-810`).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remove_volume_rechecks_holders_under_the_store_lock() {
+        use crate::runtime::options::VolumeSpec;
+        use crate::runtime::volumes::VolumeBackend;
+
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let held = store.create(Some("held")).unwrap();
+        let payload = store.payload_dir(&held.id).unwrap();
+        let local = Arc::new(LocalRuntime(runtime.clone()));
+
+        let lock = hold_volumes_dir_lock(&runtime);
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut removal = {
+            let local = local.clone();
+            let started = started.clone();
+            tokio::spawn(async move {
+                started.store(true, std::sync::atomic::Ordering::SeqCst);
+                local.remove_volume("held", false).await
+            })
+        };
+        // Wait for the task to start, then require the removal not to finish
+        // while the lock is held; see
+        // `a_create_cancelled_mid_resolution_leaves_no_orphan_volume`. The
+        // first half matters most here: the unfixed code scanned holders
+        // before it blocked on the flock, so a task that had not started
+        // when the holder below commits would let this test pass for the
+        // wrong reason.
+        wait_for(std::time::Duration::from_secs(5), || {
+            started
+                .load(std::sync::atomic::Ordering::SeqCst)
+                .then_some(())
+        })
+        .await
+        .expect("the removal task must be scheduled");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(500), &mut removal)
+                .await
+                .is_err(),
+            "the removal must wait for the store lock"
+        );
+
+        // The racing create commits its record while the removal waits, in
+        // the resolved shape `resolve_managed_volumes` writes.
+        let (config, state) = runtime
+            .draft_box(Some("late-holder".to_string()), BoxStatus::Configured)
+            .into_record(BoxOptions {
+                volumes: vec![VolumeSpec {
+                    host_path: payload.to_string_lossy().into_owned(),
+                    ..VolumeSpec::managed_volume(held.id.as_str(), "/data")
+                }],
+                ..Default::default()
+            });
+        runtime.box_manager.add_box(&config, &state).unwrap();
+        drop(lock);
+
+        let err = removal.await.unwrap().expect_err(
+            "a volume a persisted box mounts must not be removed, however late the box came",
+        );
+        assert!(matches!(err, BoxliteError::InvalidState(_)), "{err:?}");
+        assert!(
+            err.to_string().contains(&config.id.to_string()),
+            "the refusal names the late holder: {err}"
+        );
+        assert!(
+            payload.is_dir(),
+            "the payload directory the late holder mounts survives"
+        );
+        assert_eq!(
+            held.id,
+            store.get("held").unwrap().id,
+            "the volume survives"
+        );
+    }
+
+    /// The other half of the race `remove_volume_rechecks_holders_under_the_store_lock`
+    /// pins. A create that arrives while a removal holds the store lock must
+    /// wait for it and then judge the volume as it is *after* the removal.
+    /// Resolving before the lock would read a directory that is about to go
+    /// and commit a record pointing at nothing. The test plays the removal: it
+    /// holds the lock, deletes the volume's directory the way `remove_locked`
+    /// does once its holder check found nobody, and only then lets the create
+    /// continue. The request names only the doomed volume: an anonymous mount
+    /// would take the store lock for its own `create` and make the create wait
+    /// for the wrong reason.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_create_waiting_on_a_removal_sees_the_volume_gone() {
+        use crate::runtime::options::VolumeSpec;
+
+        let (runtime, _dir) = create_test_runtime();
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        let doomed = store.create(Some("doomed")).unwrap();
+        let volume_dir = store
+            .payload_dir(&doomed.id)
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let local = Arc::new(LocalRuntime(runtime.clone()));
+
+        let lock = hold_volumes_dir_lock(&runtime);
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut create = {
+            let local = local.clone();
+            let started = started.clone();
+            tokio::spawn(async move {
+                started.store(true, std::sync::atomic::Ordering::SeqCst);
+                local
+                    .create(
+                        BoxOptions {
+                            volumes: vec![VolumeSpec::managed_volume("doomed", "/data")],
+                            ..Default::default()
+                        },
+                        Some("latecomer".to_string()),
+                    )
+                    .await
+            })
+        };
+        // Wait for the task to start, then require the create not to finish
+        // while the lock is held; see
+        // `a_create_cancelled_mid_resolution_leaves_no_orphan_volume`.
+        wait_for(std::time::Duration::from_secs(5), || {
+            started
+                .load(std::sync::atomic::Ordering::SeqCst)
+                .then_some(())
+        })
+        .await
+        .expect("the create task must be scheduled");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(500), &mut create)
+                .await
+                .is_err(),
+            "the create must wait for the store lock instead of resolving past it"
+        );
+
+        // The removal completes while the create waits.
+        std::fs::remove_dir_all(&volume_dir).unwrap();
+        drop(lock);
+
+        let err = create.await.unwrap().err().expect(
+            "a create that waited on a removal must not commit a record for the removed volume",
+        );
+        assert!(matches!(err, BoxliteError::NotFound(_)), "{err:?}");
+        assert!(
+            runtime
+                .box_manager
+                .lookup_box("latecomer")
+                .unwrap()
+                .is_none(),
+            "no record for a box whose volume is gone"
+        );
+    }
+
+    /// Reusing an existing box ignores the request's options, so it must not
+    /// create the volumes those options name.
+    #[tokio::test]
+    async fn get_or_create_of_an_existing_box_creates_no_volume() {
+        use crate::runtime::options::VolumeSpec;
+
+        let (runtime, _dir) = create_test_runtime();
+        let mut config = test_box_config_in_layout(false, &runtime);
+        config.name = Some("existing".to_string());
+        runtime
+            .box_manager
+            .add_box(&config, &BoxState::new())
+            .unwrap();
+
+        let request = BoxOptions {
+            volumes: vec![VolumeSpec::managed_volume("new-volume", "/data")],
+            ..Default::default()
+        };
+        let (_, created) = LocalRuntime(runtime.clone())
+            .get_or_create(request, Some("existing".to_string()))
+            .await
+            .unwrap();
+        assert!(!created);
+
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        assert!(matches!(
+            store.get("new-volume"),
+            Err(BoxliteError::NotFound(_))
+        ));
+        assert!(
+            store.list().unwrap().is_empty(),
+            "reuse must not create volumes"
+        );
+    }
+
+    /// A name clash is reported before any volume is touched — docker reserves
+    /// the name before it registers mounts (daemon/create.go:208 vs :249).
+    #[tokio::test]
+    async fn create_with_a_taken_name_creates_no_volume() {
+        use crate::runtime::options::VolumeSpec;
+
+        let (runtime, _dir) = create_test_runtime();
+        let mut config = test_box_config_in_layout(false, &runtime);
+        config.name = Some("taken".to_string());
+        runtime
+            .box_manager
+            .add_box(&config, &BoxState::new())
+            .unwrap();
+
+        let result = LocalRuntime(runtime.clone())
+            .create(
+                BoxOptions {
+                    volumes: vec![VolumeSpec::managed_volume("new-volume", "/data")],
+                    ..Default::default()
+                },
+                Some("taken".to_string()),
+            )
+            .await;
+        match result {
+            Err(BoxliteError::InvalidArgument(_)) => {}
+            Err(other) => panic!("expected a name clash, got {other:?}"),
+            Ok(_) => panic!("a taken name must be rejected"),
+        }
+        let store = crate::volumes::LocalVolumeStore::new(runtime.layout.home_dir());
+        assert!(
+            store.list().unwrap().is_empty(),
+            "a name clash must not create volumes"
+        );
     }
 
     #[test]
@@ -2174,7 +3568,7 @@ mod tests {
                 auto_delete: Some(0),
                 ..Default::default()
             },
-            engine_kind: VmmKind::Libkrun,
+            engine_kind: crate::vmm::VmmKind::Libkrun,
             box_home: std::path::PathBuf::from("/tmp/test-box"),
         }
     }
@@ -2237,7 +3631,7 @@ mod tests {
                 auto_delete: Some(0),
                 ..Default::default()
             },
-            engine_kind: VmmKind::Libkrun,
+            engine_kind: crate::vmm::VmmKind::Libkrun,
             box_home,
         }
     }

@@ -7,8 +7,12 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
+use std::path::PathBuf;
 
-pub use crate::litebox::{BoxState, BoxStatus, HealthStatus};
+use crate::BoxOptions;
+pub use crate::litebox::{
+    BoxConfig, BoxState, BoxStatus, HealthStatus, config::ContainerRuntimeConfig,
+};
 use crate::runtime::id::BoxID;
 use crate::runtime::options::{NetworkConfig, NetworkMode, PortProtocol};
 /// Re-exported here so the CLI can reach volume metadata the same way it
@@ -580,6 +584,49 @@ impl PartialEq for BoxInfo {
             && self.auto_delete == other.auto_delete
             && self.auto_resume == other.auto_resume
             && self.health_status == other.health_status
+    }
+}
+
+/// A box's identity, minted before anything is written.
+///
+/// `RuntimeImpl::draft_box` mints one and `RuntimeImpl::commit_box`
+/// persists it. The identity has to exist before the record does because
+/// `box_home` is named after the id: `provision_box` moves an import's or a
+/// clone's staging directory there before anything is persisted.
+#[derive(Debug, Clone)]
+pub(crate) struct BoxDraft {
+    pub id: BoxID,
+    pub container_id: ContainerID,
+    pub created_at: DateTime<Utc>,
+    pub name: Option<String>,
+    pub box_home: PathBuf,
+    pub initial_status: BoxStatus,
+}
+
+impl BoxDraft {
+    /// Turn the identity, plus the options resolution settled on, into the
+    /// record `BoxManager::add_box` persists.
+    ///
+    /// The one place a new `BoxConfig` is built, so create and provision
+    /// cannot drift apart. Socket paths are deliberately not stored: they
+    /// derive from (`box_home`, `id`) at point of use via
+    /// `BoxConfig::sockets()`, so they can never go stale.
+    pub fn into_record(self, options: BoxOptions) -> (BoxConfig, BoxState) {
+        let config = BoxConfig {
+            id: self.id,
+            container: ContainerRuntimeConfig {
+                id: self.container_id,
+            },
+            created_at: self.created_at,
+            name: self.name,
+            box_home: self.box_home,
+            options,
+            engine_kind: crate::vmm::VmmKind::Libkrun,
+        };
+        let mut state = BoxState::new();
+        state.set_status(self.initial_status);
+
+        (config, state)
     }
 }
 
