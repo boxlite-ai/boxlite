@@ -107,7 +107,7 @@ impl StdinForwarder {
 }
 
 pub(crate) struct ChannelBridge {
-    tasks: super::TaskGroup,
+    tasks: Arc<super::TaskGroup>,
     server: Arc<GuestServer>,
     execution_id: String,
     stdin: StdinForwarder,
@@ -117,7 +117,7 @@ pub(crate) struct ChannelBridge {
 
 impl ChannelBridge {
     pub(crate) async fn start(
-        tasks: super::TaskGroup,
+        tasks: Arc<super::TaskGroup>,
         server: Arc<GuestServer>,
         command: Command,
         tty: Option<TtyConfig>,
@@ -854,7 +854,7 @@ fn output_gap_message(source: &str, lost_bytes: u64) -> Vec<u8> {
 /// release waits for both before closing descriptors and removing the registry
 /// entry.
 fn spawn_execution_cleanup(
-    tasks: super::TaskGroup,
+    tasks: Arc<super::TaskGroup>,
     registry: ExecutionRegistry,
     execution_id: String,
     output_task: JoinHandle<()>,
@@ -876,7 +876,7 @@ fn spawn_execution_cleanup(
 }
 
 fn cleanup_failed_execution_start(
-    tasks: super::TaskGroup,
+    tasks: Arc<super::TaskGroup>,
     server: Arc<GuestServer>,
     execution_id: String,
 ) {

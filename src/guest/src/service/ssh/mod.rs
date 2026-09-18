@@ -104,7 +104,7 @@ pub(crate) struct SshManager {
 #[derive(Default)]
 struct SshState {
     config: Option<SshConfig>,
-    tasks: Option<TaskGroup>,
+    tasks: Option<Arc<TaskGroup>>,
     listener: Option<JoinHandle<()>>,
     status: boxlite_shared::SshStatus,
 }
@@ -149,7 +149,7 @@ impl SshManager {
         let host_public_key = russh::keys::PublicKey::new(public.key_data().clone(), "")
             .to_openssh()
             .map_err(|_| tonic::Status::internal("failed to encode SSH host public key"))?;
-        let tasks = TaskGroup::default();
+        let tasks = Arc::new(TaskGroup::default());
         state.status = boxlite_shared::SshStatus {
             enabled: true,
             listen_address: address.to_string(),
@@ -167,7 +167,7 @@ impl SshManager {
     pub(crate) async fn status(&self) -> boxlite_shared::SshStatus {
         let state = self.state.lock().await;
         let mut status = state.status.clone();
-        if state.tasks.as_ref().is_some_and(TaskGroup::is_cancelled)
+        if state.tasks.as_ref().is_some_and(|tasks| tasks.is_cancelled())
             || state.listener.as_ref().is_none_or(JoinHandle::is_finished)
         {
             status.enabled = false;
@@ -219,7 +219,10 @@ impl SshManager {
         &self,
     ) -> tokio_util::task::task_tracker::TaskTrackerToken {
         let mut state = self.state.lock().await;
-        state.tasks.get_or_insert_with(TaskGroup::default).token()
+        state
+            .tasks
+            .get_or_insert_with(|| Arc::new(TaskGroup::default()))
+            .token()
     }
 
     async fn spawn_connection(&self, stream: tokio::net::TcpStream, peer: SocketAddr) {

@@ -46,7 +46,7 @@ pub(crate) struct SshConnection {
     forwarding: ForwardingManager,
     reverse_streamlocal: ReverseStreamlocalManager,
     authenticated: Option<oneshot::Sender<()>>,
-    tasks: super::TaskGroup,
+    tasks: Arc<super::TaskGroup>,
     _lifetime: tokio_util::task::task_tracker::TaskTrackerToken,
 }
 
@@ -55,7 +55,7 @@ impl SshConnection {
         guest: Arc<GuestServer>,
         authorizer: Arc<SshAuthorizer>,
         authenticated: oneshot::Sender<()>,
-        tasks: super::TaskGroup,
+        tasks: Arc<super::TaskGroup>,
     ) -> Self {
         let lifetime = tasks.token();
         Self {
@@ -806,7 +806,7 @@ mod tests {
             guest.clone(),
             authorizer.clone(),
             tx,
-            super::super::TaskGroup::default(),
+            Arc::new(super::super::TaskGroup::default()),
         );
         assert_eq!(
             raw.auth_publickey_offered("root", user.public_key())
@@ -850,7 +850,7 @@ mod tests {
             guest.clone(),
             authorizer,
             tx,
-            super::super::TaskGroup::default(),
+            Arc::new(super::super::TaskGroup::default()),
         );
         assert_eq!(
             certified
@@ -875,7 +875,7 @@ mod tests {
             guest,
             certified.authorizer.clone(),
             tx,
-            super::super::TaskGroup::default(),
+            Arc::new(super::super::TaskGroup::default()),
         );
         cancelled.tasks.cancel();
         for login in ["root", "nobody"] {

@@ -137,12 +137,12 @@ impl Drop for ReverseListenerRegistration {
 pub(crate) struct ForwardingManager {
     connection_permits: Arc<Semaphore>,
     reverse_listeners: ReverseListenerRegistry,
-    tasks: super::TaskGroup,
+    tasks: Arc<super::TaskGroup>,
     cancel: tokio_util::sync::CancellationToken,
 }
 
 impl ForwardingManager {
-    pub(crate) fn new(tasks: super::TaskGroup) -> Self {
+    pub(crate) fn new(tasks: Arc<super::TaskGroup>) -> Self {
         Self {
             connection_permits: Arc::new(Semaphore::new(MAX_FORWARD_CONNECTIONS)),
             reverse_listeners: ReverseListenerRegistry::default(),
@@ -354,7 +354,7 @@ fn spawn_relay(
     channel: Channel<Msg>,
     mut stream: TcpStream,
     permit: tokio::sync::OwnedSemaphorePermit,
-    tasks: super::TaskGroup,
+    tasks: Arc<super::TaskGroup>,
     connection_cancel: tokio_util::sync::CancellationToken,
 ) {
     tasks.spawn(async move {

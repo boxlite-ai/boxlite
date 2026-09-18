@@ -423,14 +423,14 @@ impl Drop for ListenerRegistration {
 
 /// Owns reverse streamlocal listeners created by one authenticated connection.
 pub(crate) struct ReverseStreamlocalManager {
-    tasks: super::TaskGroup,
+    tasks: Arc<super::TaskGroup>,
     listeners: ListenerRegistry,
     cancel: tokio_util::sync::CancellationToken,
     connection_permits: Arc<Semaphore>,
 }
 
 impl ReverseStreamlocalManager {
-    pub(crate) fn new(tasks: super::TaskGroup) -> Self {
+    pub(crate) fn new(tasks: Arc<super::TaskGroup>) -> Self {
         Self {
             tasks,
             listeners: ListenerRegistry::default(),
@@ -521,7 +521,7 @@ impl Drop for ReverseStreamlocalManager {
 }
 
 struct RunningHelper {
-    tasks: super::TaskGroup,
+    tasks: Arc<super::TaskGroup>,
     cancel: tokio_util::sync::CancellationToken,
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
@@ -534,7 +534,7 @@ struct RunningHelper {
 
 impl RunningHelper {
     async fn start(
-        tasks: super::TaskGroup,
+        tasks: Arc<super::TaskGroup>,
         server: Arc<GuestServer>,
         socket_path: &str,
         ingress: SocketAddrV4,
@@ -1021,7 +1021,7 @@ fn append_stopped_marker_prefix(buffer: &mut Vec<u8>, chunk: &[u8]) -> bool {
 }
 
 fn spawn_failed_helper_cleanup(
-    tasks: super::TaskGroup,
+    tasks: Arc<super::TaskGroup>,
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
     execution_id: String,
@@ -1040,7 +1040,7 @@ fn spawn_failed_helper_cleanup(
 }
 
 fn spawn_execution_cleanup(
-    tasks: super::TaskGroup,
+    tasks: Arc<super::TaskGroup>,
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
     execution_id: String,
