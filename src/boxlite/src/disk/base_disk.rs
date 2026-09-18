@@ -103,7 +103,13 @@ pub(crate) struct ReferencedPaths {
 /// conflation [`ReferencedPaths::complete`] exists to prevent. The same
 /// hazard is spelled out for the chain walk in `qcow2::read_backing_chain`.
 pub(crate) fn failure_means_unknown(kind: std::io::ErrorKind) -> bool {
-    kind != std::io::ErrorKind::NotFound
+    !proves_absence(kind)
+}
+
+/// The other side of [`failure_means_unknown`], so a caller acting on the
+/// ordinary case says so plainly instead of negating the unknown one.
+fn proves_absence(kind: std::io::ErrorKind) -> bool {
+    kind == std::io::ErrorKind::NotFound
 }
 
 /// Paths in one directory listing, with an entry that could not be read
@@ -226,7 +232,7 @@ impl BaseDiskManager {
                         Ok(md) if md.is_dir() => {}
                         Ok(_) => continue,
                         // Raced away between listing and stat: it holds nothing.
-                        Err(e) if !failure_means_unknown(e.kind()) => continue,
+                        Err(e) if proves_absence(e.kind()) => continue,
                         Err(e) => {
                             tracing::warn!(
                                 "GC: failed to stat box dir {}: {}",
@@ -250,7 +256,7 @@ impl BaseDiskManager {
                             }
                             // A box owns at most these two overlays and often
                             // only one, so a missing file is ordinary.
-                            Err(e) if !failure_means_unknown(e.kind()) => {}
+                            Err(e) if proves_absence(e.kind()) => {}
                             Err(e) => {
                                 tracing::warn!(
                                     "GC: failed to stat overlay {}: {}",
@@ -961,8 +967,12 @@ mod tests {
     #[test]
     fn only_a_missing_directory_is_a_complete_answer() {
         assert!(
-            !failure_means_unknown(std::io::ErrorKind::NotFound),
+            proves_absence(std::io::ErrorKind::NotFound),
             "a directory that is genuinely absent holds no boxes"
+        );
+        assert!(
+            !failure_means_unknown(std::io::ErrorKind::NotFound),
+            "and is therefore not an unknown one"
         );
         for kind in [
             std::io::ErrorKind::PermissionDenied,
@@ -972,6 +982,10 @@ mod tests {
             assert!(
                 failure_means_unknown(kind),
                 "{kind:?} hides the contents rather than proving them empty"
+            );
+            assert!(
+                !proves_absence(kind),
+                "{kind:?} is not a proof of absence either"
             );
         }
     }
