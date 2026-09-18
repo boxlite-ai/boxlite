@@ -7,6 +7,8 @@ pub(crate) struct Vcpu;
 
 impl Vcpu {
     pub(crate) fn run(&mut self) -> VmResult<VmExit> {
-        todo!("run the vCPU loop")
+        loop {
+            todo!("enter the guest and handle its exit")
+        }
     }
 }

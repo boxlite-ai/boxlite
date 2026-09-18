@@ -1,8 +1,8 @@
 # boxlite-vmm
 
 Workspace skeleton for BoxLite's native VMM. The crate-visible VM and vCPU `run`
-entry points are `todo!()` placeholders that panic if called. Their implementation
-is deferred; this crate cannot create or boot a VM yet.
+entry points contain loop skeletons with `todo!()` bodies that panic if called.
+Their implementation is deferred; this crate cannot create or boot a VM yet.
 
 ```text
 boxlite-vmm

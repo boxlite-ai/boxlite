@@ -13,6 +13,8 @@ pub(crate) struct Vm;
 
 impl Vm {
     pub(crate) fn run(&mut self) -> VmResult<VmExit> {
-        todo!("run the VM event loop")
+        loop {
+            todo!("wait for and handle VM events")
+        }
     }
 }
