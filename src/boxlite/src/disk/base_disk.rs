@@ -108,7 +108,7 @@ pub(crate) fn failure_means_unknown(kind: std::io::ErrorKind) -> bool {
 
 /// The other side of [`failure_means_unknown`], so a caller acting on the
 /// ordinary case says so plainly instead of negating the unknown one.
-fn proves_absence(kind: std::io::ErrorKind) -> bool {
+pub(crate) fn proves_absence(kind: std::io::ErrorKind) -> bool {
     kind == std::io::ErrorKind::NotFound
 }
 

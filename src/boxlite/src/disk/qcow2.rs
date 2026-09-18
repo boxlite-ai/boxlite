@@ -1076,7 +1076,10 @@ pub(crate) struct BackingChain {
     pub(crate) paths: Vec<PathBuf>,
     /// False when the walk ended on anything other than a genuine end of
     /// chain — a read error, a backing file that could not be stat'd, or the
-    /// depth cap.
+    /// depth cap. A backing file that is merely *absent* is a genuine end:
+    /// a file that is not there has no backing file of its own, so nothing
+    /// beyond it is left unknown. That reading needs an absolute path to be
+    /// sound, and the walk checks for one.
     pub(crate) complete: bool,
 }
 
@@ -1103,11 +1106,13 @@ pub fn read_backing_chain(path: &Path) -> Vec<PathBuf> {
 
 /// [`read_backing_chain`] with the completeness flag a deleting caller needs.
 ///
-/// A chain ends genuinely in two ways: the next node is not a qcow2 (a raw
-/// backing file — the normal terminal for an image disk), or the node declares
-/// no backing at all. Everything else — an unreadable header, a backing path
-/// that cannot be stat'd, running out of depth — leaves the walk unable to say
-/// what else was referenced, and reports `complete: false`.
+/// A chain ends genuinely in three ways: the next node is not a qcow2 (a raw
+/// backing file — the normal terminal for an image disk), the node declares no
+/// backing at all, or the backing file it declares is not there — a file that
+/// does not exist has no backing file of its own, so nothing is left unknown.
+/// Everything else — an unreadable header, a backing path that cannot be
+/// stat'd, running out of depth — leaves the walk unable to say what else was
+/// referenced, and reports `complete: false`.
 pub(crate) fn read_backing_chain_checked(path: &Path) -> BackingChain {
     let mut paths = Vec::new();
     let mut current = path.to_path_buf();
@@ -1143,18 +1148,48 @@ pub(crate) fn read_backing_chain_checked(path: &Path) -> BackingChain {
                 let backing_path = PathBuf::from(backing);
                 // Record it either way: a path in a "referenced" set can only
                 // ever prevent a deletion, so naming one that is absent costs
-                // nothing. But `exists()` is false for a permission or I/O
-                // error too, and that case must not read as "chain ended".
+                // nothing.
                 paths.push(backing_path.clone());
-                if !backing_path.exists() {
-                    tracing::warn!(
-                        path = %backing_path.display(),
-                        "Backing file could not be stat'd — returning partial chain"
-                    );
-                    return BackingChain {
-                        paths,
-                        complete: false,
-                    };
+                // Which of the two ways the walk stops here is the whole
+                // question, and `exists()` cannot answer it: it reads a
+                // permission or I/O error exactly as it reads a file that is
+                // not there. A file that is not there has no backing file of
+                // its own, so the chain genuinely ends and ends *completely*;
+                // a file that could not be stat'd may have one, and the walk
+                // cannot say what else is referenced through it.
+                // The absent arm reads `NotFound` as a verdict about this
+                // file, which holds only for an absolute path. A relative one
+                // resolves against the process's working directory rather
+                // than the overlay's, so `NotFound` would mean "not there
+                // from here" and the chain beyond it would go unrecorded
+                // while the walk called itself complete. Everything this
+                // crate writes is canonicalized at the write site
+                // (`write_cow_child_header`, `set_backing_file_path`), so the
+                // guard costs nothing and is there for a qcow2 it did not
+                // write.
+                match std::fs::metadata(&backing_path) {
+                    Ok(_) => {}
+                    Err(e) if super::proves_absence(e.kind()) && backing_path.is_absolute() => {
+                        tracing::debug!(
+                            path = %backing_path.display(),
+                            "Backing file is absent; ending backing chain"
+                        );
+                        return BackingChain {
+                            paths,
+                            complete: true,
+                        };
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %backing_path.display(),
+                            error = %e,
+                            "Backing file could not be stat'd — returning partial chain"
+                        );
+                        return BackingChain {
+                            paths,
+                            complete: false,
+                        };
+                    }
                 }
                 current = backing_path;
             }
@@ -1651,9 +1686,56 @@ mod tests {
     /// A backing file that cannot be stat'd is indistinguishable from a
     /// permission or I/O error, so the walk must not report a short chain as
     /// the whole truth — a caller that deletes what is not in it would take
-    /// the rest of the chain with it.
+    /// the rest of the chain with it. Provoked without privileges by a
+    /// backing path under a regular file, which stats as `ENOTDIR` while
+    /// `exists()` answers `false`.
     #[test]
-    fn a_missing_backing_file_reports_incomplete() {
+    fn an_unstattable_backing_file_reports_incomplete() {
+        let dir = TempDir::new().unwrap();
+        let not_a_dir = dir.path().join("regular-file");
+        std::fs::write(&not_a_dir, b"x").unwrap();
+        let base = not_a_dir.join("base.ext4");
+        assert!(!base.exists(), "exists() cannot see the ENOTDIR");
+        let overlay = dir.path().join("overlay.qcow2");
+        write_qcow2_with_backing(&overlay, Some(&base.to_string_lossy()));
+
+        let chain = read_backing_chain_checked(&overlay);
+
+        assert!(!chain.complete, "an unstattable backing file is not an end");
+        assert!(
+            chain.paths.contains(&base),
+            "the path is still recorded: naming it can only prevent a deletion"
+        );
+    }
+
+    /// The absent arm is only as good as the path it judged. A relative
+    /// backing path resolves against the process's working directory, not the
+    /// overlay's, so `NotFound` there says nothing about what the overlay
+    /// points at — and calling the chain complete would leave whatever backs
+    /// that file unrecorded and collectable.
+    #[test]
+    fn an_absent_relative_backing_path_is_not_an_end() {
+        let dir = TempDir::new().unwrap();
+        let overlay = dir.path().join("overlay.qcow2");
+        write_qcow2_with_backing(&overlay, Some("nowhere-relative/base.ext4"));
+
+        let chain = read_backing_chain_checked(&overlay);
+
+        assert!(
+            !chain.complete,
+            "a relative path that is absent from the cwd is not an end"
+        );
+    }
+
+    /// The other half of that gate. A backing file that is merely *absent*
+    /// ends the chain and ends it completely: a file that is not there has no
+    /// backing file of its own, so there is nothing further to be unsure
+    /// about. Reporting it unknown is not the cautious reading — `complete`
+    /// travels through `ReferencedPaths::absorb`, where one such overlay
+    /// holds the whole host's answer incomplete and both image-disk passes
+    /// return `Ok(0)` on every sweep from then on.
+    #[test]
+    fn a_backing_file_that_is_merely_absent_ends_the_chain() {
         let dir = TempDir::new().unwrap();
         let base = dir.path().join("gone.ext4");
         std::fs::write(&base, vec![0u8; 1024]).unwrap();
@@ -1663,7 +1745,10 @@ mod tests {
 
         let chain = read_backing_chain_checked(&overlay);
 
-        assert!(!chain.complete, "an unstattable backing file is not an end");
+        assert!(
+            chain.complete,
+            "an absent backing file is an end, not an unknown"
+        );
         assert!(
             chain.paths.contains(&base),
             "the path is still recorded: naming it can only prevent a deletion"
