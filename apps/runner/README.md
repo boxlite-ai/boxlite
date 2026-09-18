@@ -237,12 +237,13 @@ pkg/api/controllers/boxlite_exec_attach.go
    ├─ ManagedExec.MarkConnected()             409 if slot already taken
    └─ runAttachLoop(parentCtx, conn, exec)    4 goroutines, fail-fast cancel
       ├─ conn.SetReadDeadline(now + 45s)      45s = 3 × Ping interval; trips ReadMessage on dead peer
-      ├─ conn.SetPongHandler(reset deadline)  each received Pong pushes deadline forward
+      ├─ conn.SetPongHandler(reset deadline)  each Pong pushes it out — until the loop is cancelled
       ├─ pumpSubscriberChannel() × {1,2}      stdout 0x01 / stderr 0x02 frames (subscribed to ManagedExec broadcaster)
-      ├─ readClientFrames()                   binary → stdin; text JSON → control
+      ├─ readClientFrames()                   binary → stdin; text JSON → control; drains past cancel
       │  └─ handleControlFrame()              resize | signal (whitelist) | stdin_eof
       ├─ runKeepalive()                       WS Ping every 15s
-      └─ (on exec.Done) writeJSONFrame()      sends {"type":"exit",...} + Close
+      ├─ (on exec.Done) writeJSONFrame()      sends {"type":"exit",...} + Close
+      └─ awaitPeerClose(conn, readerDone)     RFC 6455 §5.5.1: hold TCP for the peer's Close, ≤ 5 s
 
 pkg/boxlite/exec_manager.go
 ├─ ExecManager (struct)                       map[id]*ManagedExec + cleanupLoop
@@ -337,6 +338,7 @@ Text JSON {"type":"signal","sig":N}   Text JSON {"type":"exit","exit_code":N}
 Text JSON {"type":"stdin_eof"}        Text JSON {"type":"error","message":"..."}
                                       WS Ping every 15 s           ← keepalive
 WS Pong (auto)                        WS Close on normal exit
+WS Close (the answer to it)
 ```
 
 Notable properties:
@@ -353,9 +355,17 @@ Notable properties:
   sends a WS Ping every 15 seconds, well under any reasonable
   intermediary's idle timeout (CloudFront default 30 s, ALB 60 s,
   Heroku 55 s).
+- **The close is a handshake.** RFC 6455 §5.5.1 lets an endpoint drop the
+  TCP connection only once a Close has been both sent *and received*, so
+  after its own the server waits for the client's — or for the client to
+  drop the socket — bounded at 5 s. Dropping it unilaterally strands any
+  intermediary still relaying the `101`, which an external load balancer
+  reports as a failed upgrade rather than as the clean exit it was.
 - **Single-attach.** A second `/attach` to an already-attached exec
   returns HTTP 409 _before_ the WS upgrade. The client should respect
-  this and surface a "session busy" error rather than retry.
+  this and surface a "session busy" error rather than retry. The slot is
+  held until the close handshake above finishes, so it can outlive the
+  exit frame by up to that bound.
 
 #### Reaping policy
 

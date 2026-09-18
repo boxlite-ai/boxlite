@@ -5,8 +5,10 @@ package controllers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -662,5 +664,361 @@ func TestBoxliteExecAttach_NotFound(t *testing.T) {
 	}
 	if resp == nil || resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404, got %v err=%v", resp, err)
+	}
+}
+
+// A command that exits before its client attaches puts the whole session —
+// upgrade, backlog replay, exit frame, Close — inside a single round trip. The
+// server must still hold the TCP connection open for the peer's Close: an
+// intermediary mid-handshake with the client reads an immediate teardown as an
+// upgrade that never completed, and answers the client 502 (Google's external
+// ALB logs it as `websocket_handshake_failed`).
+func TestBoxliteExecAttach_HoldsConnectionForPeerClose(t *testing.T) {
+	stub := newStubAttachExec()
+	stub.exitCode = 0
+	// Finished before anyone attaches — the case that loses the race.
+	close(stub.done)
+	cleanup := withStubExec(t, "exec-already-done", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, resp, err := dialAttach(t, srv, "exec-already-done")
+	if err != nil {
+		t.Fatalf("dial attach: %v (resp=%v)", err, resp)
+	}
+	defer conn.Close()
+
+	// Say nothing back. gorilla answers a Close frame with its own by
+	// default, which would complete the handshake for us and hide what the
+	// server does when the peer stays silent.
+	conn.SetCloseHandler(func(int, string) error { return nil })
+
+	// Drain to the server's Close frame — everything this session will say.
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		_, _, rerr := conn.ReadMessage()
+		if rerr == nil {
+			continue
+		}
+		if !websocket.IsCloseError(rerr, websocket.CloseNormalClosure) {
+			t.Fatalf("expected a normal Close frame, got %v", rerr)
+		}
+		break
+	}
+
+	// Reading a Close leaves the socket alone, so the raw connection now
+	// reports only what the server does with it: still open at the deadline
+	// means the server is waiting for the Close we never sent.
+	raw := conn.UnderlyingConn()
+	_ = raw.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	_, rerr := raw.Read(make([]byte, 1))
+	var netErr net.Error
+	if !errors.As(rerr, &netErr) || !netErr.Timeout() {
+		t.Fatalf("server tore down the TCP connection without waiting for the peer's Close: raw read returned %v", rerr)
+	}
+}
+
+// The wait is worth nothing if the first frame a client sends ends it. A client
+// that still has stdin in flight when its command exits would otherwise get the
+// same instant teardown — the reader would return, close readerDone, and release
+// the wait before the peer ever answered.
+func TestBoxliteExecAttach_ClientFramesDoNotEndTheCloseWait(t *testing.T) {
+	stub := newStubAttachExec()
+	close(stub.done)
+	cleanup := withStubExec(t, "exec-chatty", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, resp, err := dialAttach(t, srv, "exec-chatty")
+	if err != nil {
+		t.Fatalf("dial attach: %v (resp=%v)", err, resp)
+	}
+	defer conn.Close()
+	conn.SetCloseHandler(func(int, string) error { return nil })
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		_, _, rerr := conn.ReadMessage()
+		if rerr == nil {
+			continue
+		}
+		if !websocket.IsCloseError(rerr, websocket.CloseNormalClosure) {
+			t.Fatalf("expected a normal Close frame, got %v", rerr)
+		}
+		break
+	}
+
+	// Keep talking, the way a client mid-upload would. None of it is answered —
+	// answering after a Close is what §5.5.1 forbids — but none of it may end
+	// the wait either.
+	for i := 0; i < 3; i++ {
+		if werr := conn.WriteMessage(websocket.BinaryMessage, []byte("more stdin\n")); werr != nil {
+			t.Fatalf("write stdin after close: %v", werr)
+		}
+	}
+
+	raw := conn.UnderlyingConn()
+	_ = raw.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	_, rerr := raw.Read(make([]byte, 1))
+	var netErr net.Error
+	if !errors.As(rerr, &netErr) || !netErr.Timeout() {
+		t.Fatalf("client frames ended the close wait: raw read returned %v", rerr)
+	}
+}
+
+// The peer answering is what the wait is for, so it has to end promptly when it
+// does — a client that closes cleanly must not pay the wsPeerCloseWait bound.
+func TestBoxliteExecAttach_PeerCloseEndsTheWaitPromptly(t *testing.T) {
+	stub := newStubAttachExec()
+	close(stub.done)
+	cleanup := withStubExec(t, "exec-polite", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, resp, err := dialAttach(t, srv, "exec-polite")
+	if err != nil {
+		t.Fatalf("dial attach: %v (resp=%v)", err, resp)
+	}
+	defer conn.Close()
+	conn.SetCloseHandler(func(int, string) error { return nil })
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		_, _, rerr := conn.ReadMessage()
+		if rerr == nil {
+			continue
+		}
+		if !websocket.IsCloseError(rerr, websocket.CloseNormalClosure) {
+			t.Fatalf("expected a normal Close frame, got %v", rerr)
+		}
+		break
+	}
+
+	started := time.Now()
+	if werr := conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		time.Now().Add(time.Second),
+	); werr != nil {
+		t.Fatalf("answer the close: %v", werr)
+	}
+
+	raw := conn.UnderlyingConn()
+	_ = raw.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, rerr := raw.Read(make([]byte, 1)); rerr == nil {
+		t.Fatal("expected the server to close the connection once answered")
+	}
+	// Far below wsPeerCloseWait: the bound covers a peer that never answers,
+	// and one that does must not wait it out.
+	if waited := time.Since(started); waited > time.Second {
+		t.Fatalf("server took %s to close after the peer answered", waited)
+	}
+}
+
+// The bound is the whole reason the wait is safe to have: a peer that answers
+// nothing must not hold the connection, the handler goroutine, or the
+// single-attach slot behind it for longer than wsPeerCloseWait.
+func TestBoxliteExecAttach_SilentPeerIsDroppedAtTheBound(t *testing.T) {
+	restore := setPeerCloseWaitForTest(300 * time.Millisecond)
+	defer restore()
+
+	stub := newStubAttachExec()
+	close(stub.done)
+	cleanup := withStubExec(t, "exec-silent", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, resp, err := dialAttach(t, srv, "exec-silent")
+	if err != nil {
+		t.Fatalf("dial attach: %v (resp=%v)", err, resp)
+	}
+	defer conn.Close()
+	conn.SetCloseHandler(func(int, string) error { return nil })
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		_, _, rerr := conn.ReadMessage()
+		if rerr == nil {
+			continue
+		}
+		if !websocket.IsCloseError(rerr, websocket.CloseNormalClosure) {
+			t.Fatalf("expected a normal Close frame, got %v", rerr)
+		}
+		break
+	}
+
+	// Say nothing at all. The server owes us no more frames, so the only thing
+	// that can end this read is the server dropping the connection.
+	raw := conn.UnderlyingConn()
+	_ = raw.SetReadDeadline(time.Now().Add(3 * time.Second))
+	started := time.Now()
+	if _, rerr := raw.Read(make([]byte, 1)); rerr == nil {
+		t.Fatal("expected the server to drop the connection at the bound")
+	}
+	if waited := time.Since(started); waited > 2*time.Second {
+		t.Fatalf("server held a silent peer for %s, well past the bound", waited)
+	}
+	// The slot is released in the deferred cleanup, after conn.Close() — so the
+	// drop we just observed strictly precedes it. Poll the same settle window
+	// the other disconnect assertions in this file use.
+	settle := time.Now().Add(2 * time.Second)
+	for time.Now().Before(settle) && stub.connected.Load() {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if stub.connected.Load() {
+		t.Fatal("the single-attach slot was still held after the bound elapsed")
+	}
+}
+
+// A client that keeps talking must not be able to hold the connection open
+// indefinitely.
+//
+// What this pins is the outcome, not the mechanism: awaitPeerClose's timer
+// enforces the bound on its own, so this still passes if the reader starts
+// pushing its read deadline again. That ordering is a race the teardown
+// usually wins, and no test here can fail for it — it is removed by
+// construction rather than proved.
+func TestBoxliteExecAttach_ChattyPeerStillHitsTheBound(t *testing.T) {
+	restore := setPeerCloseWaitForTest(300 * time.Millisecond)
+	defer restore()
+
+	stub := newStubAttachExec()
+	close(stub.done)
+	cleanup := withStubExec(t, "exec-chatty-bound", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, resp, err := dialAttach(t, srv, "exec-chatty-bound")
+	if err != nil {
+		t.Fatalf("dial attach: %v (resp=%v)", err, resp)
+	}
+	defer conn.Close()
+	conn.SetCloseHandler(func(int, string) error { return nil })
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		_, _, rerr := conn.ReadMessage()
+		if rerr == nil {
+			continue
+		}
+		if !websocket.IsCloseError(rerr, websocket.CloseNormalClosure) {
+			t.Fatalf("expected a normal Close frame, got %v", rerr)
+		}
+		break
+	}
+
+	// Keep sending past the Close, the way a client mid-upload would. Writing is
+	// not the assertion — a write to a socket whose peer is gone succeeds until
+	// a reset comes back — it is only what keeps the server's reader busy.
+	chatting := make(chan struct{})
+	defer close(chatting)
+	go func() {
+		for {
+			select {
+			case <-chatting:
+				return
+			default:
+			}
+			if werr := conn.WriteMessage(websocket.BinaryMessage, []byte("x")); werr != nil {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	// The server dropping the connection is the signal, and it has to come from
+	// the bound rather than from anything this client does.
+	raw := conn.UnderlyingConn()
+	_ = raw.SetReadDeadline(time.Now().Add(3 * time.Second))
+	started := time.Now()
+	if _, rerr := raw.Read(make([]byte, 1)); rerr != nil {
+		var netErr net.Error
+		if errors.As(rerr, &netErr) && netErr.Timeout() {
+			t.Fatal("a talking peer kept the connection open past the bound")
+		}
+	}
+	if waited := time.Since(started); waited > 2*time.Second {
+		t.Fatalf("a talking peer held the connection for %s, past the bound", waited)
+	}
+}
+
+// The same outcome for the one frame that reaches a handler of its own: gorilla
+// calls the pong handler for every Pong, the drain after our own Close
+// included.
+//
+// Read this the way the chatty case above reads. The timer bounds the wait
+// whether or not the pong handler still pushes the read deadline, so this
+// passes with that guard removed too. The guard is there because the deadline
+// is what ends the reader after the wait, and a Pong arriving in the window
+// between the teardown's near deadline and sideWg.Wait() could otherwise push
+// it out by pongWait — a race, not something a test can land on.
+func TestBoxliteExecAttach_PongingPeerStillHitsTheBound(t *testing.T) {
+	restore := setPeerCloseWaitForTest(300 * time.Millisecond)
+	defer restore()
+
+	stub := newStubAttachExec()
+	close(stub.done)
+	cleanup := withStubExec(t, "exec-ponging", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, resp, err := dialAttach(t, srv, "exec-ponging")
+	if err != nil {
+		t.Fatalf("dial attach: %v (resp=%v)", err, resp)
+	}
+	defer conn.Close()
+	conn.SetCloseHandler(func(int, string) error { return nil })
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		_, _, rerr := conn.ReadMessage()
+		if rerr == nil {
+			continue
+		}
+		if !websocket.IsCloseError(rerr, websocket.CloseNormalClosure) {
+			t.Fatalf("expected a normal Close frame, got %v", rerr)
+		}
+		break
+	}
+
+	ponging := make(chan struct{})
+	defer close(ponging)
+	go func() {
+		for {
+			select {
+			case <-ponging:
+				return
+			default:
+			}
+			if werr := conn.WriteControl(websocket.PongMessage, nil, time.Now().Add(time.Second)); werr != nil {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	raw := conn.UnderlyingConn()
+	_ = raw.SetReadDeadline(time.Now().Add(3 * time.Second))
+	started := time.Now()
+	if _, rerr := raw.Read(make([]byte, 1)); rerr != nil {
+		var netErr net.Error
+		if errors.As(rerr, &netErr) && netErr.Timeout() {
+			t.Fatal("a ponging peer kept the connection open past the bound")
+		}
+	}
+	if waited := time.Since(started); waited > 2*time.Second {
+		t.Fatalf("a ponging peer held the connection for %s, past the bound", waited)
 	}
 }

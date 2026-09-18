@@ -6,12 +6,14 @@ package controllers
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	sdkboxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/boxlite-ai/runner/pkg/shellutil"
 	"github.com/gin-gonic/gin"
@@ -125,6 +127,21 @@ window.addEventListener('resize',function(){fitAddon.fit();});
 </body>
 </html>`
 
+// startTerminalExecution is the production start; tests override it, the way
+// resolveAttachExec is overridden in boxlite_exec_attach.go. The failure branch
+// below owes its peer a closing handshake, and that is only reachable from a
+// test if the failure itself is.
+var startTerminalExecution = func(
+	ctx context.Context,
+	r *runner.Runner,
+	boxId string,
+	shellCmd string,
+	shellArgs []string,
+	out io.Writer,
+) (*sdkboxlite.Execution, error) {
+	return r.Boxlite.StartExecution(ctx, boxId, shellCmd, shellArgs, out, out, true)
+}
+
 func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, boxId string, logger *slog.Logger) {
 	ws, err := upgrader.Upgrade(ctx.Writer, ctx.Request, nil)
 	if err != nil {
@@ -146,7 +163,7 @@ func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, boxId string, l
 	go runTerminalKeepalive(keepaliveCtx, ws, &writeMu, logger)
 
 	shellCmd, shellArgs := shellutil.DefaultInteractiveShell()
-	execution, err := r.Boxlite.StartExecution(ctx.Request.Context(), boxId, shellCmd, shellArgs, wsWriter, wsWriter, true)
+	execution, err := startTerminalExecution(ctx.Request.Context(), r, boxId, shellCmd, shellArgs, wsWriter)
 	if err != nil {
 		logger.Warn("failed to start terminal execution", "box", boxId, "error", err)
 		writeMu.Lock()
@@ -156,6 +173,12 @@ func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, boxId string, l
 			time.Now().Add(terminalWriteDeadline),
 		)
 		writeMu.Unlock()
+		// Same closing handshake the attach path owes its peer: returning here
+		// runs `defer ws.Close()` in the same millisecond as the Close frame,
+		// and a connection that dies that fast reads as an upgrade that never
+		// completed to whatever is still relaying our 101 — the client then
+		// gets a generic 502 instead of the reason above. See wsPeerCloseWait.
+		drainUntilPeerClose(ws)
 		return
 	}
 	defer execution.Close()
@@ -173,6 +196,19 @@ func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, boxId string, l
 
 		if _, err := execution.Stdin.Write(msg); err != nil {
 			logger.Warn("execution stdin write failed", "error", err)
+			return
+		}
+	}
+}
+
+// drainUntilPeerClose holds the connection until the peer answers our Close
+// frame, drops the socket, or wsPeerCloseWait elapses. The attach path waits on
+// its reader goroutine instead (awaitPeerClose); here nothing else reads the
+// connection, so the wait is the read.
+func drainUntilPeerClose(conn *websocket.Conn) {
+	_ = conn.SetReadDeadline(time.Now().Add(peerCloseWait()))
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
 			return
 		}
 	}
