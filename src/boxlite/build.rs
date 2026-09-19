@@ -840,18 +840,20 @@ impl EmbeddedManifest {
 
     /// Top-level entry point for embedded manifest generation.
     ///
-    /// When `embedded-runtime` feature is enabled and deps are available (Source mode),
-    /// finds pre-built shim/guest binaries, copies them to the runtime dir, and generates
-    /// an `include_bytes!` manifest for all files in the runtime dir.
+    /// When embedding is on and deps are available (Source mode), finds
+    /// pre-built shim/guest binaries, copies them to the runtime dir, and
+    /// generates an `include_bytes!` manifest for all files in the runtime dir.
     ///
-    /// When the feature is off or in Stub mode, generates an empty manifest.
+    /// Debug builds skip embedding unless `BOXLITE_EMBED_RUNTIME=1`, so local
+    /// CLI/SDK binaries do not absorb a 100MB+ `include_bytes!` payload.
+    /// Release and `make dist:*` still embed. Feature-off and Stub stay empty.
     fn generate(&self, mode: &DepsMode, cargo: &CargoBuildContext) {
         let manifest_path = cargo.out_dir().join("embedded_manifest.rs");
 
-        let enabled = env::var("CARGO_FEATURE_EMBEDDED_RUNTIME").is_ok();
-
-        if !enabled {
-            Self::write_manifest_rs(&manifest_path, &[]);
+        if !embed_runtime_binaries() {
+            // Empty payload, but still emit hash/profile rustc-env — embedded.rs
+            // always compiles under the default feature and uses env!().
+            Self::emit_manifest(&manifest_path, &[]);
             return;
         }
 
@@ -1142,12 +1144,29 @@ fn sign_shim_with_entitlements(binary: &Path) {
         }
     }
 }
+/// Whether to `include_bytes!` shim/guest into the crate.
+///
+/// Release always embeds (self-contained dist). Debug does not, unless
+/// `BOXLITE_EMBED_RUNTIME=1`, so `make cli` can point at `target/<profile>/runtime`
+/// instead of rebuilding the host crate when those binaries change.
+fn embed_runtime_binaries() -> bool {
+    if env::var("CARGO_FEATURE_EMBEDDED_RUNTIME").is_err() {
+        return false;
+    }
+    match env::var("PROFILE").as_deref() {
+        Ok("release") => true,
+        _ => env::var("BOXLITE_EMBED_RUNTIME").as_deref() == Ok("1"),
+    }
+}
+
 /// Collects all FFI dependencies into a single runtime directory.
 /// This directory can be used by downstream crates (e.g., Python SDK) to
 /// bundle all required libraries and binaries together.
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
+    println!("cargo:rerun-if-env-changed=BOXLITE_EMBED_RUNTIME");
+    println!("cargo:rerun-if-env-changed=CARGO_TARGET_DIR");
 
     auto_detect_registry();
 
@@ -1208,7 +1227,7 @@ fn main() {
                 let names: Vec<_> = collected.iter().map(|(name, _)| name.as_str()).collect();
                 println!("cargo:warning=Bundled: {}", names.join(", "));
             }
-            if env::var("CARGO_FEATURE_EMBEDDED_RUNTIME").is_ok()
+            if embed_runtime_binaries()
                 && cargo.is_dependency_build()
                 && !prebuilt_runtime.is_complete()
             {
@@ -1242,4 +1261,21 @@ fn main() {
 
     // Generate embedded runtime manifest (include_bytes! for self-contained SDKs)
     EmbeddedManifest::new(&runtime_dir).generate(&mode, &cargo);
+
+    // Debug non-embed: bake the stable symlink dir so `./target/debug/boxlite`
+    // finds shim/guest without the caller exporting BOXLITE_RUNTIME_DIR.
+    // Process env still wins at runtime. The path string is stable, so guest
+    // rebuilds do not force a host crate rebuild.
+    if !embed_runtime_binaries() {
+        if let Some(target_dir) =
+            CargoBuildContext::target_dir_for_workspace(cargo.workspace_root())
+        {
+            let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+            let stable = target_dir.join(profile).join("runtime");
+            println!(
+                "cargo:rustc-env=BOXLITE_DEFAULT_RUNTIME_DIR={}",
+                stable.display()
+            );
+        }
+    }
 }
