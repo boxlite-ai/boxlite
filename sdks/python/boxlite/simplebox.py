@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("boxlite.simplebox")
 
-__all__ = ["BoxTunnel", "NetworkHandle", "SimpleBox"]
+__all__ = ["BoxTunnel", "GitHandle", "NetworkHandle", "SimpleBox"]
 
 
 class StreamType(IntEnum):
@@ -58,6 +58,50 @@ class NetworkHandle:
                 "or call 'await box.start()' first."
             )
         return BoxTunnel(await self._owner._create_tunnel(port))
+
+
+class GitHandle:
+    """Git config operations for a ``SimpleBox``."""
+
+    def __init__(self, box: "SimpleBox") -> None:
+        self._owner = box
+
+    def _native(self):
+        if not self._owner._started:
+            raise RuntimeError(
+                "Box not started. Use 'async with SimpleBox(...) as box:' "
+                "or call 'await box.start()' first."
+            )
+        return self._owner._box.git
+
+    async def configure_user(
+        self,
+        name: str,
+        email: str,
+        scope: str | None = None,
+        path: str | None = None,
+    ) -> None:
+        """Set `user.name` and `user.email` for commits in this box."""
+        await self._native().configure_user(name, email, scope, path)
+
+    async def set_config(
+        self,
+        key: str,
+        value: str,
+        scope: str | None = None,
+        path: str | None = None,
+    ) -> None:
+        """Write a git config value."""
+        await self._native().set_config(key, value, scope, path)
+
+    async def get_config(
+        self,
+        key: str,
+        scope: str | None = None,
+        path: str | None = None,
+    ) -> str:
+        """Read a git config value."""
+        return await self._native().get_config(key, scope, path)
 
 
 class SimpleBox:
@@ -138,6 +182,7 @@ class SimpleBox:
         self._started = False
         self._created: bool | None = None
         self._network = NetworkHandle(self)
+        self._git = GitHandle(self)
 
     async def _create_tunnel(self, port: int):
         """Establish a native tunnel handle for a service port."""
@@ -221,6 +266,13 @@ class SimpleBox:
         if not hasattr(self, "_network"):
             self._network = NetworkHandle(self)
         return self._network
+
+    @property
+    def git(self) -> GitHandle:
+        """Get the box-scoped git handle."""
+        if not hasattr(self, "_git"):
+            self._git = GitHandle(self)
+        return self._git
 
     async def exec(
         self,

@@ -22,6 +22,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [BoxStatus](#boxstatus)
   - [BoxState](#boxstate)
 - [Network Tunnels](#network-tunnels)
+- [Git config](#git-config)
 - [Command Execution](#command-execution)
   - [BoxCommand](#boxcommand)
   - [Execution](#execution)
@@ -195,6 +196,7 @@ pub struct LiteBox {
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped tunnel operations |
+| `git` | `fn git(&self) -> GitHandle` | Get box-scoped git config operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
@@ -392,6 +394,39 @@ the lifetime of the box.
 `TunnelForwarder::local_addr()` reports the canonical bound address, while
 repeatable `wait()` and `close()` share the listener's cached terminal result.
 Dropping the final handle requests cancellation.
+
+---
+
+## Git config
+
+`LiteBox::git()` returns a `GitHandle` that owns a backend clone and does not
+borrow the originating `LiteBox`. `scope` is `"global"` (default), `"local"`,
+or `"system"`; `"local"` requires `path`.
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Configure user | `async fn configure_user(&self, name, email, scope, path) -> BoxliteResult<()>` | Set `user.name` and `user.email` |
+| Set config | `async fn set_config(&self, key, value, scope, path) -> BoxliteResult<()>` | Write a git config value |
+| Get config | `async fn get_config(&self, key, scope, path) -> BoxliteResult<String>` | Read a git config value |
+
+```rust
+let git = litebox.git();
+git.configure_user("BoxLite Bot", "bot@boxlite.ai", None, None)
+    .await?;
+git.set_config(
+    "core.autocrlf",
+    "input",
+    Some("local"),
+    Some("/workspace/repo"),
+)
+.await?;
+let email = git
+    .get_config("user.email", Some("local"), Some("/workspace/repo"))
+    .await?;
+```
+
+The handle runs `git config` through the box backend, so the same methods work
+on a local runtime and against a served REST runtime.
 
 ---
 

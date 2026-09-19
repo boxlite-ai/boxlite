@@ -10,6 +10,7 @@ Complete API reference for the BoxLite Python SDK.
 - [Runtime Management](#runtime-management)
 - [Box Handle](#box-handle)
 - [Network Tunnels](#network-tunnels)
+- [Git config](#git-config)
 - [Command Execution](#command-execution)
 - [Box Types](#box-types)
 - [Sync API](#sync-api)
@@ -239,6 +240,7 @@ Handle to a running or stopped box.
 |----------|------|-------------|
 | `id` | `str` | Unique box identifier (ULID format) |
 | `network` | `NetworkHandle` | Box-scoped tunnel operations |
+| `git` | `GitHandle` | Box-scoped git config operations |
 
 #### Methods
 
@@ -340,6 +342,30 @@ provide the same operations.
 Each `BoxTunnel` is one-shot: choose `connect()` or `forward()`. This differs
 from `BoxOptions.ports`, which creates a persistent, local-only host listener
 that accepts repeated connections from ordinary host applications.
+
+---
+
+## Git config
+
+Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.git`. `scope` is
+`"global"` (default), `"local"`, or `"system"`; `"local"` requires `path`.
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Configure user | `await box.git.configure_user(name, email, scope=None, path=None)` | Set `user.name` and `user.email` |
+| Set config | `await box.git.set_config(key, value, scope=None, path=None)` | Write a git config value |
+| Get config | `await box.git.get_config(key, scope=None, path=None) -> str` | Read a git config value |
+
+```python
+await box.git.configure_user("BoxLite Bot", "bot@boxlite.ai")
+await box.git.set_config(
+    "core.autocrlf", "input", scope="local", path="/workspace/repo"
+)
+email = await box.git.get_config("user.email", scope="local", path="/workspace/repo")
+```
+
+Synchronous wrappers (`SyncBox.git`, `SyncSimpleBox.git`) expose the same
+operations without `await`.
 
 ---
 
@@ -475,6 +501,7 @@ SimpleBox(
 | Property | Type | Description |
 |----------|------|-------------|
 | `id` | `str` | Box ID (raises if not started) |
+| `git` | `GitHandle` | Box-scoped git config operations (raises if not started) |
 
 #### Methods
 
@@ -791,6 +818,7 @@ from boxlite import SyncBoxlite, SyncBox, SyncSimpleBox, SyncCodeBox
 |-----------|----------|-------|
 | `Boxlite` | `SyncBoxlite` | `get_info()` and `list_info()` are async-only |
 | `Box` | `SyncBox` | `Box.info()` is async-only and is not exposed by `SyncBox` |
+| `GitHandle` | `SyncGitHandle` | `box.git.configure_user` / `set_config` / `get_config` |
 | `Execution` | `SyncExecution` | |
 | `ExecStdout` | `SyncExecStdout` | Regular iterator |
 | `ExecStderr` | `SyncExecStderr` | Regular iterator |

@@ -6,6 +6,7 @@ use napi_derive::napi;
 
 use crate::copy::{JsCopyOptions, into_copy_options};
 use crate::exec::JsExecution;
+use crate::git::JsGitHandle;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsBoxMetrics;
 use crate::network::JsNetworkHandle;
@@ -116,6 +117,14 @@ impl JsBox {
     #[napi(getter)]
     pub fn network(&self) -> JsNetworkHandle {
         JsNetworkHandle {
+            handle: Arc::clone(&self.handle),
+        }
+    }
+
+    /// Get the git handle for this box.
+    #[napi(getter)]
+    pub fn git(&self) -> JsGitHandle {
+        JsGitHandle {
             handle: Arc::clone(&self.handle),
         }
     }

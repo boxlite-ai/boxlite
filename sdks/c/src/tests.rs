@@ -206,6 +206,76 @@ fn test_box_network_null_pointer_validation() {
 }
 
 #[test]
+fn test_box_git_null_pointer_validation() {
+    unsafe {
+        let mut error = FFIError::default();
+        let mut git: *mut CBoxGitHandle = ptr::null_mut();
+        let code = boxlite_box_git(ptr::null_mut(), &mut git, &mut error as *mut _);
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        boxlite_error_free(&mut error as *mut _);
+
+        let handle = std::ptr::NonNull::<CBoxHandle>::dangling().as_ptr();
+        let code = boxlite_box_git(handle, ptr::null_mut(), &mut error as *mut _);
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        boxlite_error_free(&mut error as *mut _);
+    }
+}
+
+#[test]
+fn test_git_methods_null_git() {
+    unsafe {
+        let mut error = FFIError::default();
+        let name = CString::new("Bot").unwrap();
+        let email = CString::new("bot@boxlite.ai").unwrap();
+        let key = CString::new("user.email").unwrap();
+        let value = CString::new("bot@boxlite.ai").unwrap();
+
+        let code = boxlite_git_configure_user(
+            ptr::null_mut(),
+            name.as_ptr(),
+            email.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            None,
+            ptr::null_mut(),
+            &mut error as *mut _,
+        );
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        boxlite_error_free(&mut error as *mut _);
+
+        let code = boxlite_git_set_config(
+            ptr::null_mut(),
+            key.as_ptr(),
+            value.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            None,
+            ptr::null_mut(),
+            &mut error as *mut _,
+        );
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        boxlite_error_free(&mut error as *mut _);
+
+        let code = boxlite_git_get_config(
+            ptr::null_mut(),
+            key.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            None,
+            ptr::null_mut(),
+            &mut error as *mut _,
+        );
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        boxlite_error_free(&mut error as *mut _);
+    }
+}
+
+#[test]
 fn test_c_string_conversion_logic() {
     let test_str = CString::new("hello").unwrap();
     unsafe {
@@ -222,6 +292,7 @@ fn test_free_functions_null_safe() {
         boxlite_image_free(ptr::null_mut());
         boxlite_box_free(ptr::null_mut());
         boxlite_network_free(ptr::null_mut());
+        boxlite_git_free(ptr::null_mut());
         boxlite_tunnel_free(ptr::null_mut());
         boxlite_free_string(ptr::null_mut());
         boxlite_error_free(ptr::null_mut());

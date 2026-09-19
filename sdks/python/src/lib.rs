@@ -3,6 +3,7 @@
 mod advanced_options;
 mod box_handle;
 mod exec;
+mod git;
 mod images;
 mod info;
 mod metrics;
@@ -19,6 +20,7 @@ use crate::advanced_options::{
 };
 use crate::box_handle::PyBox;
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
+use crate::git::PyGitHandle;
 use crate::images::{PyImageHandle, PyImageInfo, PyImagePullResult};
 use crate::info::{
     PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus, PyInboundNetworkInfo, PyNetworkInfo,
@@ -73,6 +75,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRuntimeMetrics>()?;
     m.add_class::<PyBoxMetrics>()?;
     m.add_class::<PyNetworkHandle>()?;
+    m.add_class::<PyGitHandle>()?;
     m.add_class::<PyBoxTunnel>()?;
     m.add_class::<PyBoxConnection>()?;
     m.add_class::<PySocketAddress>()?;

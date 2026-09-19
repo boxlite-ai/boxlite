@@ -402,6 +402,40 @@ export interface JsNetworkHandle {
   tunnel(port: number): Promise<NativeBoxTunnel>;
 }
 
+/** Box-scoped git config operations on the native `JsBox`. */
+export interface JsGitHandle {
+  /**
+   * Set `user.name` and `user.email` for commits in this box.
+   *
+   * `scope` is `"global"` (default), `"local"`, or `"system"`; `"local"`
+   * requires `path`.
+   */
+  configureUser(
+    name: string,
+    email: string,
+    scope?: string | null,
+    path?: string | null,
+  ): Promise<void>;
+  /**
+   * Write a git config value. Same `scope` / `path` rules as
+   * `configureUser`.
+   */
+  setConfig(
+    key: string,
+    value: string,
+    scope?: string | null,
+    path?: string | null,
+  ): Promise<void>;
+  /**
+   * Read a git config value. Same `scope` / `path` rules as `setConfig`.
+   */
+  getConfig(
+    key: string,
+    scope?: string | null,
+    path?: string | null,
+  ): Promise<string>;
+}
+
 export type SocketAddress =
   { type: "tcp"; host?: string; port: number } | { type: "unix"; path: string };
 
@@ -446,6 +480,7 @@ export interface JsBox {
   ): Promise<JsExecution>;
   readonly snapshot: JsSnapshotHandle;
   readonly network: JsNetworkHandle;
+  readonly git: JsGitHandle;
   cloneBox(
     options?: JsCloneOptions | null,
     name?: string | null,

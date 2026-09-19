@@ -20,6 +20,8 @@ extern CBoxStartBoxCb cbStartBox(void);
 extern CBoxStopBoxCb cbStopBox(void);
 extern CBoxRemoveBoxCb cbRemoveBox(void);
 extern CBoxCopyCb cbCopy(void);
+extern CGitWriteCb cbGitWrite(void);
+extern CGitGetConfigCb cbGitGetConfig(void);
 
 extern CBoxImagePullCb cbImagePull(void);
 extern CBoxImageListCb cbImageList(void);

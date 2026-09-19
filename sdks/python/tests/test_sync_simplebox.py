@@ -133,6 +133,92 @@ class TestSyncSimpleBox:
             assert "user=nobody" in result.stdout
 
 
+def _install_git_or_skip(box):
+    installed = box.exec("sh", "-c", "apk add --no-cache git")
+    if installed.exit_code != 0:
+        pytest.skip(f"apk add git failed: {installed.stderr}")
+
+
+class TestSyncSimpleBoxGit:
+    def test_rejects_invalid_config_args(self, shared_sync_runtime):
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            with pytest.raises(RuntimeError, match="path"):
+                box.git.set_config("user.email", "local@boxlite.ai", scope="local")
+            with pytest.raises(RuntimeError, match="path"):
+                box.git.get_config("user.email", scope="local")
+            with pytest.raises(RuntimeError, match="path"):
+                box.git.configure_user("BoxLite Bot", "bot@boxlite.ai", scope="local")
+            with pytest.raises(RuntimeError, match="global"):
+                box.git.set_config("user.email", "x@boxlite.ai", scope="file")
+            with pytest.raises(RuntimeError, match="global"):
+                box.git.get_config("user.email", scope="file")
+            with pytest.raises(RuntimeError, match="global"):
+                box.git.configure_user("BoxLite Bot", "x@boxlite.ai", scope="file")
+
+    def test_configure_user_writes_global_identity(self, shared_sync_runtime):
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            _install_git_or_skip(box)
+            box.git.configure_user("BoxLite Bot", "bot@boxlite.ai")
+            email = box.exec("sh", "-c", "git config --global --get user.email")
+            name = box.exec("sh", "-c", "git config --global --get user.name")
+            assert email.exit_code == 0, email.stderr
+            assert name.exit_code == 0, name.stderr
+            assert email.stdout.strip() == "bot@boxlite.ai"
+            assert name.stdout.strip() == "BoxLite Bot"
+
+    def test_commit_uses_configured_identity(self, shared_sync_runtime):
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            _install_git_or_skip(box)
+            box.git.configure_user("BoxLite Bot", "bot@boxlite.ai")
+            log = box.exec(
+                "sh",
+                "-c",
+                "set -e\n"
+                "git init /tmp/repo\n"
+                "echo hi > /tmp/repo/README\n"
+                "git -C /tmp/repo add README\n"
+                "git -C /tmp/repo -c commit.gpgsign=false commit -m init\n"
+                "git -C /tmp/repo log -1 --format='%an <%ae>'\n",
+            )
+            assert log.exit_code == 0, log.stderr
+            assert "BoxLite Bot <bot@boxlite.ai>" in log.stdout
+
+    def test_local_config_does_not_change_global(self, shared_sync_runtime):
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            _install_git_or_skip(box)
+            box.git.configure_user("BoxLite Bot", "bot@boxlite.ai")
+            init = box.exec("git", "init", "/tmp/repo")
+            assert init.exit_code == 0, init.stderr
+            box.git.set_config(
+                "user.email",
+                "local@boxlite.ai",
+                scope="local",
+                path="/tmp/repo",
+            )
+            local = box.exec(
+                "sh", "-c", "git -C /tmp/repo config --local --get user.email"
+            )
+            global_email = box.exec("sh", "-c", "git config --global --get user.email")
+            assert local.exit_code == 0, local.stderr
+            assert global_email.exit_code == 0, global_email.stderr
+            assert local.stdout.strip() == "local@boxlite.ai"
+            assert global_email.stdout.strip() == "bot@boxlite.ai"
+            assert (
+                box.git.get_config("user.email", scope="local", path="/tmp/repo")
+                == "local@boxlite.ai"
+            )
+            assert box.git.get_config("user.email") == "bot@boxlite.ai"
+
+    def test_get_config_reads_guest(self, shared_sync_runtime):
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            _install_git_or_skip(box)
+            written = box.exec(
+                "sh", "-c", "git config --global user.email other@boxlite.ai"
+            )
+            assert written.exit_code == 0, written.stderr
+            assert box.git.get_config("user.email") == "other@boxlite.ai"
+
+
 class TestSyncSimpleBoxConcurrentStreams:
     """Test that stdout and stderr are read concurrently in sync API.
 

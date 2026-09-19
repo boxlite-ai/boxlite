@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from ..boxlite import Box, BoxMetrics
     from ._boxlite import SyncBoxlite
     from ._execution import SyncExecution
+    from ._git import SyncGitHandle
     from ._network import SyncNetworkHandle
 
 __all__ = ["SyncBox"]
@@ -56,6 +57,7 @@ class SyncBox:
         # Create a SyncBase helper for _sync() method
         self._sync_helper = SyncBase(box, runtime.loop, runtime.dispatcher_fiber)
         self._network = None
+        self._git = None
 
     def _sync(self, coro):
         """Run async operation synchronously."""
@@ -135,6 +137,15 @@ class SyncBox:
 
             self._network = SyncNetworkHandle(self)
         return self._network
+
+    @property
+    def git(self) -> "SyncGitHandle":
+        """Get the box-scoped git handle."""
+        if self._git is None:
+            from ._git import SyncGitHandle
+
+            self._git = SyncGitHandle(self)
+        return self._git
 
     def tunnel(self, port: int):
         """Establish and return a one-shot tunnel for a port inside this box."""

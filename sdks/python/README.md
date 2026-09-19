@@ -320,6 +320,7 @@ Handle to a running or stopped box.
 **Properties:**
 
 - `id: str` - Unique box identifier (ULID format)
+- `git: GitHandle` - Box-scoped git config operations
 
 **Methods:**
 
@@ -360,6 +361,35 @@ print(f"Box {info.id}: {info.state.status}")
 await box.stop()
 await box.remove()
 ```
+
+### Git config
+
+Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.git`. `scope` is
+`"global"` (default), `"local"`, or `"system"`; `"local"` requires `path`.
+
+**Methods:**
+
+- `configure_user(name, email, scope=None, path=None)`
+  Set `user.name` and `user.email` for commits in this box (async)
+
+- `set_config(key, value, scope=None, path=None)`
+  Write a git config value (async)
+
+- `get_config(key, scope=None, path=None) -> str`
+  Read a git config value (async)
+
+**Example:**
+
+```python
+await box.git.configure_user("BoxLite Bot", "bot@boxlite.ai")
+await box.git.set_config(
+    "core.autocrlf", "input", scope="local", path="/workspace/repo"
+)
+email = await box.git.get_config("user.email", scope="local", path="/workspace/repo")
+```
+
+Synchronous wrappers (`SyncBox.git`, `SyncSimpleBox.git`) expose the same
+operations without `await`.
 
 ### Command Execution
 
@@ -429,6 +459,10 @@ async for line in stderr:
 Context manager for basic execution with automatic cleanup.
 
 **Parameters:** Same as `BoxOptions`
+
+**Properties:**
+
+- `git: GitHandle` - Box-scoped git config operations
 
 **Methods:**
 
