@@ -4,13 +4,11 @@
 
 ## Guides
 
-- [AutoStop、AutoResume 与 AutoDelete](./guides/auto-stop-resume.md)
+- [AutoStop, AutoResume, and AutoDelete](./guides/auto-stop-resume.md)
 
 ## Reference
 
 ## Architecture
-
-- [AutoStop / AutoResume / AutoDelete 设计](./architecture/auto-stop-resume-design.md)
 
 ## CI / Infrastructure
 

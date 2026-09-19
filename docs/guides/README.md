@@ -2,7 +2,7 @@
 
 ## Lifecycle
 
-- [AutoStop、AutoResume 与 AutoDelete](./auto-stop-resume.md)
+- [AutoStop, AutoResume, and AutoDelete](./auto-stop-resume.md)
 
 ## Guest SSH
 
