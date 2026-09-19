@@ -118,6 +118,12 @@ boxlite pull alpine:latest
 boxlite images
 ```
 
+When another local Runtime owns the same home, `list`, `images`, and `info`
+read its committed database metadata. Box status may lag live VM state; these
+queries do not probe VMs, recover boxes, clean temporary files, or migrate the
+database. An incompatible schema returns an error. Without lock contention,
+normal Runtime initialization and recovery still apply.
+
 ## Connecting to a remote server
 
 To target a remote BoxLite REST server instead of the local runtime, sign in
