@@ -193,7 +193,8 @@ func TestMitmProxy_HTTP1_PostWithBody(t *testing.T) {
 	}
 
 	got := string(body)
-	expected := `{"key":"real-value"}`
+	// Body passes through unchanged: the placeholder is not substituted.
+	expected := `{"key":"<BOXLITE_SECRET:k>"}`
 	if got != expected {
 		t.Errorf("expected body %q, got %q", expected, got)
 	}
@@ -383,7 +384,7 @@ func TestMitmProxy_ChunkedRequestBody(t *testing.T) {
 		t.Fatal("failed to read response:", err)
 	}
 
-	expected := "chunk1-real-value-chunk2"
+	expected := "chunk1-<BOXLITE_SECRET:k>-chunk2"
 	if string(got) != expected {
 		t.Errorf("expected %q, got %q", expected, string(got))
 	}
@@ -433,7 +434,7 @@ func TestMitmProxy_StreamingRequestBody(t *testing.T) {
 
 	select {
 	case got := <-received:
-		expected := "prefix-real-value-suffix"
+		expected := "prefix-<BOXLITE_SECRET:k>-suffix"
 		if got != expected {
 			t.Errorf("expected %q, got %q", expected, got)
 		}
@@ -491,48 +492,6 @@ func TestMitmProxy_LargeResponseStreaming(t *testing.T) {
 
 	if n != int64(responseSize) {
 		t.Errorf("expected %d bytes, got %d", responseSize, n)
-	}
-}
-
-// --- Content-Length Tests ---
-
-func TestMitmProxy_ContentLengthAdjustment(t *testing.T) {
-	ca := newTestCA(t)
-
-	secrets := testSecrets()
-
-	addr, cleanup := startTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		// Echo the body and the Content-Length the upstream saw
-		fmt.Fprintf(w, "body=%s;cl=%d", string(b), r.ContentLength)
-	})
-	defer cleanup()
-
-	client := dialThroughMITM(t, ca, "api.example.com", addr, secrets)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Body with placeholder - after substitution length changes
-	bodyStr := `{"token":"<BOXLITE_SECRET:k>"}`
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.example.com/data", strings.NewReader(bodyStr))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatal("request failed:", err)
-	}
-	defer resp.Body.Close()
-
-	got, _ := io.ReadAll(resp.Body)
-	gotStr := string(got)
-
-	// Upstream should have received the substituted body completely
-	if !strings.Contains(gotStr, `body={"token":"real-value"}`) {
-		t.Errorf("expected substituted body at upstream, got: %s", gotStr)
 	}
 }
 
@@ -687,5 +646,49 @@ func TestMitmProxy_NoSecretHost_Passthrough(t *testing.T) {
 	// random.example.com is NOT in any secret's Hosts list
 	if matcher.Matches("random.example.com") {
 		t.Error("expected random.example.com to NOT match as a secret host")
+	}
+}
+
+func TestMitmProxy_SecretNotSubstitutedInBody(t *testing.T) {
+	ca := newTestCA(t)
+
+	secrets := testSecrets()
+
+	// Upstream reflects the request body back verbatim.
+	addr, cleanup := startTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		w.Write(b)
+	})
+	defer cleanup()
+
+	client := dialThroughMITM(t, ca, "api.example.com", addr, secrets)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	bodyStr := `{"model":"x-<BOXLITE_SECRET:k>"}`
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.example.com/echo", strings.NewReader(bodyStr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal("request failed:", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal("failed to read response:", err)
+	}
+
+	got := string(body)
+	// Body passes through unchanged: the placeholder is not substituted, so
+	// the real secret never reaches the guest (issue #1500).
+	expected := `{"model":"x-<BOXLITE_SECRET:k>"}`
+	if got != expected {
+		t.Errorf("expected body %q, got %q", expected, got)
 	}
 }
