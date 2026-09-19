@@ -1,7 +1,8 @@
 # boxlite-hypervisor
 
 Workspace skeleton for the HVF (macOS arm64) and KVM (Linux x86_64/arm64)
-backends. No hypervisor operations or public API are implemented yet.
+backends. The shared `VcpuExit` type defines the exit and MMIO completion
+contract; no hypervisor operations are implemented yet.
 
 This crate will own host VM/vCPU handles, memory registration, interrupt
 injection, and decoding host exits. It is a leaf among the BoxLite crates;

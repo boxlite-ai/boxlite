@@ -2,8 +2,9 @@
 
 Workspace skeleton for BoxLite's native VMM. The crate-visible VM and vCPU `run`
 entry points sketch event dispatch, guest exits, and worker cleanup with inline
-`todo!()` operations that panic if called. Provisional event and exit labels stay
-local to each method; this crate cannot create or boot a VM yet.
+`todo!()` operations that panic if called. VM event labels stay local to the VM
+loop; vCPU exits use `boxlite_hypervisor::VcpuExit`. This crate cannot create or
+boot a VM yet.
 
 ```text
 boxlite-vmm

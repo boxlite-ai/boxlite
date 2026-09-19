@@ -15,6 +15,8 @@ mod memory;
 mod vcpu;
 mod vm;
 
+pub use exit::VcpuExit;
+
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod hvf;
 
