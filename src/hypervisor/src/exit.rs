@@ -10,8 +10,9 @@
 /// Buffer length is the access width in bytes; bytes follow guest address order.
 ///
 /// Handling MMIO supplies the device response but does not complete the guest
-/// instruction. The backend must finish pending I/O on re-entry. Before saving
-/// vCPU state, it must finish pending I/O without executing further instructions.
+/// instruction. The backend must finish pending I/O on re-entry. Before stopping
+/// the vCPU or saving its state, it must finish pending I/O without executing
+/// further instructions.
 #[derive(Debug)]
 pub enum VcpuExit<'a> {
     /// Read from an emulated device; fill the entire buffer before re-entry.

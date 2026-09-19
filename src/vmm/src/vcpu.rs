@@ -13,6 +13,9 @@ impl Vcpu {
         loop {
             let _stop_requested: bool = todo!("check the stop request");
             if _stop_requested {
+                let _completion: VmResult<()> =
+                    todo!("finish pending I/O without executing another guest instruction");
+                _completion?;
                 return Ok(VmExit::StopRequested);
             }
             let exit: VmResult<VcpuExit<'_>> = todo!("finish pending I/O and enter the guest");
