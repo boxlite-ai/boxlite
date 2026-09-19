@@ -767,6 +767,8 @@ dependencies = [
  "paste",
  "tempfile",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -290,7 +290,10 @@ impl GuestRootfsManager {
 
         // Stage 1: ensure pure image disk exists
         let stage1_start = std::time::Instant::now();
-        let image_disk = image_disk_mgr.get_or_create(image).await?;
+        // The lease rides along until this function returns, so the disk
+        // cannot be evicted between here and the copy `build_and_install`
+        // makes from it.
+        let (image_disk, _image_disk_lease) = image_disk_mgr.get_or_create(image).await?;
         tracing::info!(
             elapsed_ms = stage1_start.elapsed().as_millis() as u64,
             "get_or_create: stage1 image_disk done"
@@ -584,8 +587,8 @@ impl GuestRootfsManager {
     /// Queries the DB for all rootfs entries, then determines which to keep:
     /// - The current minimal rootfs entry (name == `current_minimal_key`)
     /// - Entries whose base_path any box overlay backs onto (see
-    ///   [`BaseDiskManager::referenced_backing_paths`], which covers both
-    ///   `disk.qcow2` and `disks/guest-rootfs.qcow2`)
+    ///   [`BaseDiskManager::referenced_backing_paths_checked`], which covers
+    ///   both `disk.qcow2` and `disks/guest-rootfs.qcow2`)
     fn gc_inner(
         &self,
         boxes_dir: &Path,
@@ -601,7 +604,24 @@ impl GuestRootfsManager {
         }
 
         // Collect all referenced backing file paths from box qcow2 overlays.
-        let referenced = self.base_disk_mgr.referenced_backing_paths(boxes_dir);
+        // Every record above came from `list_by_box`, so each one has an index
+        // row and the "no row names it" guard that lets `gc_orphans` take the
+        // lenient scan cannot help here; `current_minimal_key` covers exactly
+        // one entry. This scan is the only thing standing between a live box
+        // and its own rootfs, so it has to be the checked one: a scan that
+        // could not read a box under-reports, and an entry missing from an
+        // under-reported set is unknown, not unreferenced.
+        let referenced = self
+            .base_disk_mgr
+            .referenced_backing_paths_checked(boxes_dir);
+        if !referenced.complete {
+            tracing::warn!(
+                total_records = records.len(),
+                "GC: box scan was incomplete — reclaiming nothing this pass"
+            );
+            return Ok(0);
+        }
+        let referenced = referenced.paths;
 
         tracing::info!(
             referenced_count = referenced.len(),
@@ -640,8 +660,12 @@ impl GuestRootfsManager {
                 path = %record.base_path(),
                 "GC: removing stale guest rootfs"
             );
+            // A file already gone is the removal succeeding by other means, so
+            // only `NotFound` is ordinary here. `exists()` cannot make that
+            // call — it reads a file whose parent denies access as an absent
+            // one, and the failure to reclaim then goes unreported.
             if let Err(e) = fs::remove_file(&base_path)
-                && base_path.exists()
+                && crate::disk::failure_means_unknown(e.kind())
             {
                 tracing::warn!("GC: failed to remove {}: {}", base_path.display(), e);
             }
@@ -1102,6 +1126,133 @@ mod tests {
         assert!(
             !unreferenced_file.exists(),
             "Unreferenced stale entry should be removed"
+        );
+    }
+
+    /// The sweep's reference scan is its only guard. Every record it walks
+    /// came from `list_by_box`, so each one *has* an index row and the "no
+    /// row names it" guard that protects `gc_orphans` cannot help here;
+    /// `current_minimal_key` covers exactly one entry. A scan that could not
+    /// read one box therefore under-reports, and the entry that box is
+    /// running on reads as unreferenced and is deleted out from under it.
+    ///
+    /// Provoked without privileges the same way as elsewhere: the box's
+    /// `disks` is a regular file, so the overlay path stats as `ENOTDIR`
+    /// while `exists()` answers `false`.
+    #[test]
+    fn a_scan_that_could_not_read_a_box_deletes_nothing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let bases_dir = dir.path().join("bases");
+        let boxes_dir = dir.path().join("boxes");
+        std::fs::create_dir_all(&bases_dir).unwrap();
+
+        let store = test_store();
+
+        // The rootfs the unreadable box is running on. Nothing else names it,
+        // so a complete scan would report it unreferenced — which is exactly
+        // why the scan being incomplete has to be what stops the deletion.
+        let in_use = bases_dir.join("aaa11111.ext4");
+        std::fs::write(&in_use, "a live box is running on this").unwrap();
+        insert_rootfs_record(
+            &store,
+            "aaa11111",
+            "img123-oldguest",
+            in_use.to_str().unwrap(),
+        );
+
+        // A box whose overlay cannot be stat'd.
+        std::fs::create_dir_all(boxes_dir.join("live-box")).unwrap();
+        std::fs::write(boxes_dir.join("live-box").join("disks"), b"x").unwrap();
+
+        let base_disk_mgr = BaseDiskManager::new(bases_dir, store);
+        let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
+
+        let removed = mgr.gc_inner(&boxes_dir, None).unwrap();
+
+        assert_eq!(removed, 0, "a scan that could not look reclaims nothing");
+        assert!(
+            in_use.exists(),
+            "an unreadable box is not a box that references nothing"
+        );
+    }
+
+    /// A stale entry the sweep could not delete must be reported. The DB row
+    /// goes either way, so the file is left behind with nothing pointing at
+    /// it and the warning is the only trace. Provoked without privileges by a
+    /// record whose path sits under a regular file: `remove_file` gives
+    /// `ENOTDIR` while `exists()` answers `false`.
+    #[test]
+    fn a_stale_rootfs_that_could_not_be_removed_says_so() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let bases_dir = dir.path().join("bases");
+        let boxes_dir = dir.path().join("boxes");
+        std::fs::create_dir_all(&bases_dir).unwrap();
+        std::fs::create_dir_all(&boxes_dir).unwrap();
+
+        let not_a_dir = dir.path().join("regular-file");
+        std::fs::write(&not_a_dir, b"x").unwrap();
+        let stale = not_a_dir.join("aaa11111.ext4");
+        assert!(!stale.exists(), "exists() cannot see the ENOTDIR");
+
+        let store = test_store();
+        insert_rootfs_record(
+            &store,
+            "aaa11111",
+            "img123-oldguest",
+            stale.to_str().unwrap(),
+        );
+        let mgr = GuestRootfsManager::new(
+            BaseDiskManager::new(bases_dir, store),
+            dir.path().to_path_buf(),
+        );
+
+        let (removed, logged) = boxlite_test_utils::tracing_capture::capture(|| {
+            mgr.gc_inner(&boxes_dir, None).unwrap()
+        });
+
+        assert_eq!(
+            removed, 1,
+            "the row is dropped whether the file went or not"
+        );
+        assert!(
+            logged.contains("failed to remove"),
+            "a stale rootfs left on disk must not be dropped silently: {logged}"
+        );
+    }
+
+    /// The other half of that gate: a file already gone is the removal having
+    /// succeeded by other means — a crash between unlink and the DB delete —
+    /// and must stay quiet, or the warning means nothing.
+    #[test]
+    fn a_stale_rootfs_already_gone_is_removed_quietly() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let bases_dir = dir.path().join("bases");
+        let boxes_dir = dir.path().join("boxes");
+        std::fs::create_dir_all(&bases_dir).unwrap();
+        std::fs::create_dir_all(&boxes_dir).unwrap();
+
+        // Recorded, never written: exactly the state a crash mid-GC leaves.
+        let gone = bases_dir.join("bbb22222.ext4");
+        let store = test_store();
+        insert_rootfs_record(
+            &store,
+            "bbb22222",
+            "img123-oldguest",
+            gone.to_str().unwrap(),
+        );
+        let mgr = GuestRootfsManager::new(
+            BaseDiskManager::new(bases_dir, store),
+            dir.path().to_path_buf(),
+        );
+
+        let (removed, logged) = boxlite_test_utils::tracing_capture::capture(|| {
+            mgr.gc_inner(&boxes_dir, None).unwrap()
+        });
+
+        assert_eq!(removed, 1);
+        assert!(
+            !logged.contains("failed to remove"),
+            "a file already gone is not a failure to reclaim: {logged}"
         );
     }
 

@@ -132,8 +132,11 @@ pub mod constants;
 pub(crate) mod ext4;
 pub(crate) mod qcow2;
 
-pub(crate) use base_disk::{BaseDisk, BaseDiskKind, BaseDiskManager};
+pub(crate) use base_disk::{
+    BaseDisk, BaseDiskKind, BaseDiskManager, failure_means_unknown, proves_absence,
+};
 pub use ext4::{create_ext4_from_dir, inject_file_into_ext4};
+pub(crate) use qcow2::{BackingChain, read_backing_chain_checked};
 pub use qcow2::{
     BackingFormat, Qcow2Helper, is_backing_dependency, read_backing_chain, read_backing_file_path,
 };

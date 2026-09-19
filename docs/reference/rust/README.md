@@ -1019,7 +1019,7 @@ Runtime-wide metrics (aggregate across all boxes).
 ```rust
 let metrics = runtime.metrics().await;
 println!("Boxes created: {}", metrics.boxes_created_total());
-println!("Commands run: {}", metrics.total_commands_run());
+println!("Commands run: {}", metrics.total_commands_executed());
 ```
 
 #### Methods
@@ -1028,9 +1028,12 @@ println!("Commands run: {}", metrics.total_commands_run());
 |--------|--------|-------------|
 | `boxes_created_total()` | `u64` | Total boxes created |
 | `boxes_failed_total()` | `u64` | Total boxes that failed to start |
+| `boxes_stopped_total()` | `u64` | Total boxes stopped |
 | `num_running_boxes()` | `u64` | Currently running boxes |
-| `total_commands_run()` | `u64` | Total run() calls |
-| `total_run_errors()` | `u64` | Total run errors |
+| `total_commands_executed()` | `u64` | Total command executions |
+| `total_exec_errors()` | `u64` | Total command executions that returned an error |
+| `image_disks_evicted_total()` | `u64` | Cached image disks given up under disk pressure |
+| `image_disk_bytes_reclaimed_total()` | `u64` | Bytes the image disk cache has freed, by either reclaim pass |
 
 ### BoxMetrics
 

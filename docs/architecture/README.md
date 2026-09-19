@@ -537,18 +537,18 @@ BoxLite provides comprehensive metrics at runtime and per-Box levels.
 │  ┌─────────────────────────────────┐   │
 │  │  AtomicU64 counters (lock-free) │   │
 │  │  - boxes_created                │   │
-│  │  - boxes_destroyed              │   │
-│  │  - total_exec_calls             │   │
-│  │  - total_bytes_transferred      │   │
+│  │  - boxes_stopped                │   │
+│  │  - total_commands               │   │
+│  │  - total_exec_errors            │   │
 │  └─────────────────────────────────┘   │
 └─────────────────────────────────────────┘
            │
            ▼
 ┌─────────────────────────────────────────┐
 │            BoxMetrics (per-Box)         │
-│  - cpu_time_ms                          │
-│  - memory_usage_bytes                   │
-│  - exec_count                           │
+│  - cpu_percent                          │
+│  - memory_bytes                         │
+│  - commands_executed_total              │
 │  - network_bytes_sent                   │
 │  - network_bytes_received               │
 └─────────────────────────────────────────┘
