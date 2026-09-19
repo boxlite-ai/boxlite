@@ -35,8 +35,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # boxlite-ai/agent-tooling, fix(ci): decide a fork pull request by who opened it (#45)
-  AGENT_TOOLING_REV: e57e694fdef5e47b929d3ee7ed3a2740cdf3904c
+  # boxlite-ai/agent-tooling, plugin 0.1.11 (#53)
+  AGENT_TOOLING_REV: 8f6c409b9d0032ae1eb422ebc856dbaf5545c2b4
 
 jobs:
   unreviewed-file:
