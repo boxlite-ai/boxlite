@@ -336,7 +336,7 @@ async def require_auth(
 
 
 def box_info_to_dict(info) -> dict:
-    return {
+    box = {
         "box_id": info.id,
         "name": info.name,
         "status": info.state.status,
@@ -348,6 +348,11 @@ def box_info_to_dict(info) -> dict:
         "memory_mib": info.memory_mib,
         "labels": {},
     }
+    # Absent, not null, when nothing was recorded: 0 is a real exit code, so
+    # the field's presence is what says the main command has exited.
+    if info.state.exit_code is not None:
+        box["exit_code"] = info.state.exit_code
+    return box
 
 
 def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:

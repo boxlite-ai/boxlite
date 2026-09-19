@@ -129,6 +129,10 @@ export interface Box {
      */
     'lastActivityAt'?: string;
     /**
+     * Exit code of the box\'s main command, present when the box stopped because that command exited
+     */
+    'exitCode'?: number;
+    /**
      * The class of the box
      * @deprecated
      */

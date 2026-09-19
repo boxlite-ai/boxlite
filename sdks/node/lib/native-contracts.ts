@@ -269,6 +269,12 @@ export interface JsBoxStateInfo {
   status: string;
   running: boolean;
   pid?: number;
+  /**
+   * Exit code of the box's main command, present once the box has stopped
+   * because that command exited. `0` is a real value; check for `undefined`,
+   * not falsiness.
+   */
+  exitCode?: number;
 }
 
 export interface JsPublishedPort {

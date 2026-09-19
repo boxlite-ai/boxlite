@@ -9,26 +9,30 @@ import { JobStatus } from '../enums/job-status.enum'
 import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
+import { Box } from '../entities/box.entity'
+import { BoxState } from '../enums/box-state.enum'
+import { BoxDesiredState } from '../enums/box-desired-state.enum'
+
+function makeService() {
+  const boxRepository = {
+    findOne: jest.fn().mockResolvedValue(null),
+    update: jest.fn().mockResolvedValue(undefined),
+  } as any
+  const redisLockProvider = {
+    unlock: jest.fn().mockResolvedValue(undefined),
+  } as any
+  const boxMigrationJobReceiver = {
+    handleJobCompletion: jest.fn().mockResolvedValue(undefined),
+  } as any
+  return {
+    service: new JobStateHandlerService(boxRepository, redisLockProvider, boxMigrationJobReceiver),
+    boxRepository,
+    redisLockProvider,
+    boxMigrationJobReceiver,
+  }
+}
 
 describe('JobStateHandlerService migration job routing', () => {
-  function makeService() {
-    const boxRepository = {
-      findOne: jest.fn().mockResolvedValue(null),
-      update: jest.fn().mockResolvedValue(undefined),
-    } as any
-    const redisLockProvider = {
-      unlock: jest.fn().mockResolvedValue(undefined),
-    } as any
-    const boxMigrationJobReceiver = {
-      handleJobCompletion: jest.fn().mockResolvedValue(undefined),
-    } as any
-    return {
-      service: new JobStateHandlerService(boxRepository, redisLockProvider, boxMigrationJobReceiver),
-      redisLockProvider,
-      boxMigrationJobReceiver,
-    }
-  }
-
   // A migration job holds its own per-job lock and never the box's state-change
   // lock, so releasing that lock here would drop one a concurrent start or stop
   // of the same box is holding.
@@ -71,4 +75,39 @@ describe('JobStateHandlerService migration job routing', () => {
     expect(h.boxMigrationJobReceiver.handleJobCompletion).not.toHaveBeenCalled()
     expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getStateChangeLockKey('box-1'))
   })
+})
+
+// The third writer of box state, and the one a resumed box actually goes
+// through: the start job's completion is where it becomes STARTED. A code
+// recorded for the run that ended must not survive that transition, or a box
+// serving traffic keeps reporting the exit code of its previous life.
+describe('JobStateHandlerService main command exit code', () => {
+  it.each([JobType.CREATE_BOX, JobType.START_BOX])(
+    'clears the previous run exit code when %s completes',
+    async (type) => {
+      const h = makeService()
+      const box = new Box('us', 'loader')
+      box.id = 'box-1'
+      box.state = BoxState.STARTING
+      box.desiredState = BoxDesiredState.STARTED
+      box.exitCode = 137
+      h.boxRepository.findOne.mockResolvedValue(box)
+
+      await h.service.handleJobCompletion(
+        new Job({
+          id: 'job-1',
+          type,
+          status: JobStatus.COMPLETED,
+          runnerId: 'runner-1',
+          resourceType: ResourceType.BOX,
+          resourceId: 'box-1',
+        }),
+      )
+
+      expect(h.boxRepository.update).toHaveBeenCalledTimes(1)
+      const { updateData } = h.boxRepository.update.mock.calls[0][1]
+      expect(updateData.state).toBe(BoxState.STARTED)
+      expect(updateData.exitCode).toBeNull()
+    },
+  )
 })

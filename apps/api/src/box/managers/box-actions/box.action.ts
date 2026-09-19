@@ -11,6 +11,7 @@ import { Box } from '../../entities/box.entity'
 import { BoxRepository } from '../../repositories/box.repository'
 import { BoxState } from '../../enums/box-state.enum'
 import { getStateChangeLockKey } from '../../utils/lock-key.util'
+import { beginsNewRun } from '../../utils/exit-code.util'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
 
 export const SYNC_AGAIN = 'sync-again'
@@ -65,6 +66,12 @@ export abstract class BoxAction {
 
     const updateData: Partial<Box> = {
       state,
+    }
+
+    // Same rule as the runner-reported path in BoxService.updateState: a code
+    // recorded for the run that ended must not survive into the next one.
+    if (beginsNewRun(state)) {
+      updateData.exitCode = null
     }
 
     if (runnerId !== undefined) {

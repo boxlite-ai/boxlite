@@ -80,3 +80,34 @@ func cNetworkInfoTraversalTestFixtures() [4]*NetworkInfo {
 		cNetworkInfoToGo(&populated),
 	}
 }
+
+// cBoxInfoExitCodeTestFixtures runs the value-plus-flag pair the C struct
+// carries back through the real decode. `0` and "not recorded" are the two the
+// design turns on, and nothing above this layer can tell them apart if the flag
+// is dropped here.
+func cBoxInfoExitCodeTestFixtures() [3]*int {
+	id := C.CString("box-1")
+	defer C.free(unsafe.Pointer(id))
+	image := C.CString("alpine:latest")
+	defer C.free(unsafe.Pointer(image))
+	status := C.CString("stopped")
+	defer C.free(unsafe.Pointer(status))
+
+	withCode := func(code C.int, has C.int) *int {
+		info := C.CBoxInfo{
+			id:            id,
+			image:         image,
+			status:        status,
+			exit_code:     code,
+			has_exit_code: has,
+		}
+		boxInfo := cBoxInfoToGo(&info)
+		return boxInfo.ExitCode
+	}
+
+	return [3]*int{
+		withCode(0, 0),
+		withCode(0, 1),
+		withCode(42, 1),
+	}
+}

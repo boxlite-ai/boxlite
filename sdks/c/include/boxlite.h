@@ -388,6 +388,17 @@ typedef struct CBoxInfo {
   // AutoStop measures idleness against; `0` when nothing was recorded, which
   // is always the case for local runtimes.
   int64_t last_activity_at;
+  // The main command's exit code. Read it only when
+  // [`Self::has_exit_code`] is nonzero.
+  //
+  // Absence cannot be a sentinel the way it is for [`Self::pid`] and
+  // [`Self::started_at`]: `0` is the exit code of every command that
+  // succeeded, so the flag below is the only thing separating "exited
+  // cleanly" from "no exit code recorded".
+  int exit_code;
+  // Nonzero when the runtime recorded an exit code for the main command —
+  // that is, when the box stopped because that command exited.
+  int has_exit_code;
 } CBoxInfo;
 
 // Box info completion. On success the callback owns the non-null metadata and

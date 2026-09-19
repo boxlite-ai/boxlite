@@ -30,6 +30,9 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     auto_stop: box.autoStop ?? DEFAULT_AUTO_STOP_SECONDS,
     auto_delete: box.autoDelete ?? AUTO_DELETE_DISABLED,
     auto_resume: box.autoResume ?? DEFAULT_AUTO_RESUME,
+    // 0 is a real exit code, so `?? undefined` — not a falsy check — is what
+    // keeps a clean exit from being reported as "no exit code".
+    exit_code: box.exitCode ?? undefined,
   }
 }
 

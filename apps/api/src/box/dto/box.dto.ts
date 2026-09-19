@@ -258,6 +258,15 @@ export class BoxDto {
   lastActivityAt?: string
 
   @ApiPropertyOptional({
+    description: "Exit code of the box's main command, present when the box stopped because that command exited",
+    example: 137,
+    type: 'integer',
+    required: false,
+  })
+  @IsOptional()
+  exitCode?: number | null
+
+  @ApiPropertyOptional({
     description: 'The class of the box',
     enum: BoxClass,
     example: Object.values(BoxClass)[0],
@@ -317,6 +326,10 @@ export class BoxDto {
       desiredState: box.desiredState,
       errorReason: box.errorReason,
       recoverable: box.recoverable,
+      // Absent, not null, when nothing was recorded — the same rule the REST
+      // mapper applies, and the one the generated clients type against. `0` is
+      // a real exit code, so `?? undefined` rather than a falsy check.
+      exitCode: box.exitCode ?? undefined,
       autoStop: box.autoStop,
       autoDelete: box.autoDelete,
       autoResume: box.autoResume,

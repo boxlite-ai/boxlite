@@ -11,6 +11,7 @@ import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
+import { beginsNewRun } from '../utils/exit-code.util'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { GetRunnerParams, RunnerService } from './runner.service'
@@ -1325,7 +1326,13 @@ export class BoxService {
 
   // used by internal services to update the state of a box to resolve domain and runner state mismatch
   // notably, when a box instance stops or errors on the runner, the domain state needs to be updated to reflect the actual state
-  async updateState(boxId: string, newState: BoxState, recoverable = false, errorReason?: string): Promise<void> {
+  async updateState(
+    boxId: string,
+    newState: BoxState,
+    recoverable = false,
+    errorReason?: string,
+    exitCode?: number,
+  ): Promise<void> {
     const box = await this.boxRepository.findOne({
       where: { id: boxId },
     })
@@ -1379,6 +1386,16 @@ export class BoxService {
     const updateData: Partial<Box> = {
       state: newState,
       recoverable: false,
+    }
+
+    // The runner reports the main command's exit code with the stop that
+    // command caused — this is the only moment it can, since the box is gone
+    // by the time anyone could ask again. A start clears it instead: that code
+    // belongs to the run that ended.
+    if (beginsNewRun(newState)) {
+      updateData.exitCode = null
+    } else if (exitCode !== undefined) {
+      updateData.exitCode = exitCode
     }
 
     if (errorReason !== undefined) {

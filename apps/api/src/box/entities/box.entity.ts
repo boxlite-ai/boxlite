@@ -120,6 +120,14 @@ export class Box {
   @Column({ nullable: true })
   errorReason?: string
 
+  // Exit code of the box's main command, recorded when the box stopped because
+  // that command exited. Null when the box has not stopped that way — which
+  // includes every box that is currently up, since starting one clears it
+  // (see beginsNewRun). 0 is a real value here, so null is the only way to say
+  // "no exit code", and the column has to be nullable for that.
+  @Column({ type: 'int', nullable: true })
+  exitCode?: number | null
+
   @Column({ default: false, type: 'boolean' })
   recoverable = false
 

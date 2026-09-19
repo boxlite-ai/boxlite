@@ -93,6 +93,14 @@ export class BoxResponseDto {
     example: true,
   })
   auto_resume: boolean
+
+  @ApiPropertyOptional({
+    description:
+      "Exit code of the box's main command, present once the box has stopped because that command " +
+      'exited. Absent while the box is running and when it stopped for any other reason.',
+    example: 137,
+  })
+  exit_code?: number
 }
 
 @ApiSchema({ name: 'ListBoxesResponse' })
