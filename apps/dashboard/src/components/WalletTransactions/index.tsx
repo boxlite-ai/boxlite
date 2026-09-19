@@ -65,9 +65,13 @@ export function WalletTransactionsTable({ data, loading }: WalletTransactionsTab
   }
 
   return (
-    <div>
+    // Bounded like its sibling in Billing history, and for the same reason: a
+    // page holds 25 rows, and an unbounded one pushes whatever follows it off
+    // the screen. Header inside the scroller and stuck to its top, so it cannot
+    // drift out of alignment by the scrollbar's width.
+    <div className="scrollbar-elevated max-h-[420px] overflow-y-auto">
       <div
-        className={`${ROW} border-b border-border pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
+        className={`${ROW} sticky top-0 z-10 border-b border-border bg-background pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
       >
         <span data-transaction-header>Date</span>
         <span data-transaction-header>Type</span>

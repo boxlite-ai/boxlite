@@ -71,7 +71,10 @@ const SCENARIOS = [
     id: 'publish',
     tab: 'Build an app online',
     promise: 'Get a public URL',
-    title: 'Hand the job to your coding agent.',
+    // Not "deploy": preview traffic keeps a running box alive but cannot wake a
+    // stopped one, and boxes stop themselves after 15 idle minutes. "Online" is
+    // the weaker word, and the weaker word is the true one.
+    title: "Put your agent's app online.",
     sub: 'One prompt. Your agent builds it, BoxLite puts it online.',
   },
   {
@@ -169,6 +172,28 @@ const SCENARIO_ART: Record<ScenarioId, () => ReactElement> = {
 }
 
 /**
+ * The four corners of a selected frame, the way a terminal draws one.
+ *
+ * `foreground`, not `brand`: brand marks what is live in this console — a
+ * running box, a rising cost — and a card the user clicked is not that.
+ * `aria-hidden` because the tab already announces itself through
+ * `aria-selected`; these corners are that same fact, drawn.
+ */
+function CornerMarks() {
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute inset-0 font-mono text-[11px] leading-none text-foreground"
+    >
+      <span className="absolute -left-px -top-px">┌</span>
+      <span className="absolute -right-px -top-px">┐</span>
+      <span className="absolute -bottom-px -left-px">└</span>
+      <span className="absolute -bottom-px -right-px">┘</span>
+    </span>
+  )
+}
+
+/**
  * The chosen job is the headline, so the biggest text on the screen is the
  * user's own decision; the two cards beneath stay equal peers. Radix Tabs
  * underneath, so keyboard and screen-reader behaviour is the console's own.
@@ -233,7 +258,7 @@ function ScenarioHeader({
                 key={sc.id}
                 value={sc.id}
                 className={cn(
-                  'h-auto flex-col items-stretch gap-0 overflow-hidden border border-border p-0 text-left hover:bg-transparent',
+                  'relative h-auto flex-col items-stretch gap-0 border border-border p-0 text-left hover:bg-transparent',
                   // One rule across the console: the chosen thing is the
                   // surface that differs from its container, and the ones not
                   // chosen recede into it. Here the container is the dialog,
@@ -244,12 +269,22 @@ function ScenarioHeader({
                     : 'bg-transparent text-muted-foreground',
                 )}
               >
+                {/* Corner marks, the way a terminal draws a selected frame. The
+                    plain 1px rule alone was the one piece of this screen with no
+                    accent of the console's own language on it. */}
+                {sc.id === scenario && <CornerMarks />}
                 {/* Thumbnail on a dotted field, flush to the card's edges — the
                     drawing is the card's first line, not an icon beside its title. */}
                 <span
                   className={cn(
-                    'flex h-[104px] items-center justify-center border-b border-border/60',
-                    sc.id === scenario ? 'text-foreground' : 'text-muted-foreground',
+                    'flex h-[104px] items-center justify-center border-b border-border/60 transition-[filter,color]',
+                    // `text-muted-foreground` only reaches the strokes drawn in
+                    // `currentColor`. Each drawing also spends brand once, on the
+                    // detail that names the job, and that stayed fully saturated
+                    // on the card the user did not choose — the brightest thing
+                    // in the pair sat on the one meant to recede. `grayscale` is
+                    // how this dialog already dims the interface marks above.
+                    sc.id === scenario ? 'text-foreground' : 'text-muted-foreground grayscale',
                   )}
                 >
                   <Art />

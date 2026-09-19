@@ -9,81 +9,23 @@ import { Outlet } from 'react-router-dom'
 import { Skeleton } from '@/components/ui/skeleton'
 
 import { AnnouncementBanner } from '@/components/AnnouncementBanner'
-import { CommandPalette, useRegisterCommands, type CommandConfig } from '@/components/CommandPalette'
 import { OnboardingDialogHost } from '@/components/OnboardingDialogHost'
 import { Sidebar } from '@/components/Sidebar'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { Toaster } from '@/components/ui/sonner'
 import { VerifyEmailDialog } from '@/components/VerifyEmailDialog'
-import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
-import { useTheme } from '@/contexts/ThemeContext'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
 import { useConfig } from '@/hooks/useConfig'
-import { useDocsSearchCommands } from '@/hooks/useDocsSearchCommands'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useSuspensionBanner } from '@/hooks/useSuspensionBanner'
 import { cn } from '@/lib/utils'
-import { BookOpen, BookSearchIcon, MessageCircle, SunMoon } from '@/components/ui/icon'
-
-function useDashboardCommands() {
-  const { theme, setTheme } = useTheme()
-
-  const helpCommands: CommandConfig[] = useMemo(
-    () => [
-      {
-        id: 'open-slack',
-        label: 'Open Discord',
-        icon: <MessageCircle className="w-4 h-4" />,
-        onSelect: () => window.open(BOXLITE_SLACK_URL, '_blank'),
-      },
-      {
-        id: 'open-docs',
-        label: 'Open Docs',
-        icon: <BookOpen className="w-4 h-4" />,
-        onSelect: () => window.open(BOXLITE_DOCS_URL, '_blank'),
-      },
-      {
-        id: 'search-docs',
-        label: 'Search Docs',
-        icon: <BookSearchIcon className="w-4 h-4" />,
-        page: 'search-docs',
-      },
-    ],
-    [],
-  )
-  useRegisterCommands(helpCommands, {
-    groupId: 'help',
-    groupLabel: 'Help',
-    groupOrder: 2,
-  })
-
-  const globalCommands: CommandConfig[] = useMemo(
-    () => [
-      {
-        id: 'toggle-theme',
-        label: 'Cycle Theme',
-        icon: <SunMoon className="w-4 h-4" />,
-        onSelect: () => setTheme(theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system'),
-      },
-    ],
-    [theme, setTheme],
-  )
-  useRegisterCommands(globalCommands, {
-    groupId: 'global',
-    groupLabel: 'Global',
-    groupOrder: 5,
-  })
-}
 
 const Dashboard: React.FC = () => {
   const { selectedOrganization } = useSelectedOrganization()
   const [showVerifyEmailDialog, setShowVerifyEmailDialog] = useState(false)
   const config = useConfig()
   useOwnerWalletQuery() // prefetch wallet
-
-  useDashboardCommands()
-  useDocsSearchCommands()
 
   useSuspensionBanner(selectedOrganization)
 
@@ -154,7 +96,6 @@ const Dashboard: React.FC = () => {
             >
               <Outlet />
             </Suspense>
-            <CommandPalette />
           </div>
         </SidebarInset>
         <OnboardingDialogHost />
