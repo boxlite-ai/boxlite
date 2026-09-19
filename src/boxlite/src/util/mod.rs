@@ -3,6 +3,7 @@ mod diagnostic;
 mod pid_file;
 pub mod process;
 
+pub(crate) use binary_finder::configured_runtime_dirs;
 pub use binary_finder::{RuntimeBinaryFinder, find_binary};
 pub(crate) use diagnostic::HostDiagnostic;
 #[cfg(test)]
@@ -105,13 +106,17 @@ pub fn configure_library_env(cmd: &mut Command, addr: *const libc::c_void) {
         lib_dirs.push(dylibs.to_path_buf());
     }
 
-    // 2. Explicit runtime override or embedded runtime cache.
-    let explicit_runtime = std::env::var("BOXLITE_RUNTIME_DIR")
-        .ok()
-        .filter(|value| !value.is_empty());
-    if let Some(runtime_dir) = explicit_runtime {
-        cmd.env("BOXLITE_RUNTIME_DIR", &runtime_dir);
-        lib_dirs.extend(std::env::split_paths(&runtime_dir));
+    // 2. Process override, debug compile-time default, or embedded extract.
+    // Pass the same dir to the shim so it does not re-resolve independently.
+    let configured = configured_runtime_dirs();
+    if !configured.is_empty() {
+        let joined = configured
+            .iter()
+            .map(|dir| dir.display().to_string())
+            .collect::<Vec<_>>()
+            .join(":");
+        cmd.env("BOXLITE_RUNTIME_DIR", &joined);
+        lib_dirs.extend(configured);
     } else {
         #[cfg(feature = "embedded-runtime")]
         if let Some(runtime) = crate::runtime::embedded::EmbeddedRuntime::get() {
