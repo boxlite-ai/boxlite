@@ -27,6 +27,10 @@ type UpdateBoxStateDto struct {
 	ErrorReason *string `json:"errorReason,omitempty"`
 	// Whether the box is recoverable
 	Recoverable *bool `json:"recoverable,omitempty"`
+	// Registry digest of the image the box booted from
+	ImageDigest *string `json:"imageDigest,omitempty"`
+	// Declared on-registry size of that image, in bytes
+	ImageSizeBytes *int64 `json:"imageSizeBytes,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -138,6 +142,70 @@ func (o *UpdateBoxStateDto) SetRecoverable(v bool) {
 	o.Recoverable = &v
 }
 
+// GetImageDigest returns the ImageDigest field value if set, zero value otherwise.
+func (o *UpdateBoxStateDto) GetImageDigest() string {
+	if o == nil || IsNil(o.ImageDigest) {
+		var ret string
+		return ret
+	}
+	return *o.ImageDigest
+}
+
+// GetImageDigestOk returns a tuple with the ImageDigest field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *UpdateBoxStateDto) GetImageDigestOk() (*string, bool) {
+	if o == nil || IsNil(o.ImageDigest) {
+		return nil, false
+	}
+	return o.ImageDigest, true
+}
+
+// HasImageDigest returns a boolean if a field has been set.
+func (o *UpdateBoxStateDto) HasImageDigest() bool {
+	if o != nil && !IsNil(o.ImageDigest) {
+		return true
+	}
+
+	return false
+}
+
+// SetImageDigest gets a reference to the given string and assigns it to the ImageDigest field.
+func (o *UpdateBoxStateDto) SetImageDigest(v string) {
+	o.ImageDigest = &v
+}
+
+// GetImageSizeBytes returns the ImageSizeBytes field value if set, zero value otherwise.
+func (o *UpdateBoxStateDto) GetImageSizeBytes() int64 {
+	if o == nil || IsNil(o.ImageSizeBytes) {
+		var ret int64
+		return ret
+	}
+	return *o.ImageSizeBytes
+}
+
+// GetImageSizeBytesOk returns a tuple with the ImageSizeBytes field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *UpdateBoxStateDto) GetImageSizeBytesOk() (*int64, bool) {
+	if o == nil || IsNil(o.ImageSizeBytes) {
+		return nil, false
+	}
+	return o.ImageSizeBytes, true
+}
+
+// HasImageSizeBytes returns a boolean if a field has been set.
+func (o *UpdateBoxStateDto) HasImageSizeBytes() bool {
+	if o != nil && !IsNil(o.ImageSizeBytes) {
+		return true
+	}
+
+	return false
+}
+
+// SetImageSizeBytes gets a reference to the given int64 and assigns it to the ImageSizeBytes field.
+func (o *UpdateBoxStateDto) SetImageSizeBytes(v int64) {
+	o.ImageSizeBytes = &v
+}
+
 func (o UpdateBoxStateDto) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -154,6 +222,12 @@ func (o UpdateBoxStateDto) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.Recoverable) {
 		toSerialize["recoverable"] = o.Recoverable
+	}
+	if !IsNil(o.ImageDigest) {
+		toSerialize["imageDigest"] = o.ImageDigest
+	}
+	if !IsNil(o.ImageSizeBytes) {
+		toSerialize["imageSizeBytes"] = o.ImageSizeBytes
 	}
 
 	for key, value := range o.AdditionalProperties {
@@ -201,6 +275,8 @@ func (o *UpdateBoxStateDto) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "state")
 		delete(additionalProperties, "errorReason")
 		delete(additionalProperties, "recoverable")
+		delete(additionalProperties, "imageDigest")
+		delete(additionalProperties, "imageSizeBytes")
 		o.AdditionalProperties = additionalProperties
 	}
 

@@ -236,7 +236,7 @@ func TestPerformSyncReportsAResolvedImageEvenWhenStatesAgree(t *testing.T) {
 			StartedAt: time.Now(),
 		}},
 		pending: map[string]blclient.PulledImage{
-			"box-1": {Digest: "sha256:abc", SizeBytes: 4096},
+			"box-1": {Digest: "sha256:abc", SizeBytes: 987654321},
 		},
 	}
 
@@ -252,8 +252,12 @@ func TestPerformSyncReportsAResolvedImageEvenWhenStatesAgree(t *testing.T) {
 	if body["imageDigest"] != "sha256:abc" {
 		t.Errorf("imageDigest = %v, want sha256:abc", body["imageDigest"])
 	}
-	if body["imageSizeBytes"] != float64(4096) {
-		t.Errorf("imageSizeBytes = %v, want 4096", body["imageSizeBytes"])
+	// A real image size, and deliberately one no 32-bit float can hold: a byte
+	// count travels as int64 end to end, so anything that narrows it — the
+	// field's own type or a cast at the call site — changes the number. 4 KiB
+	// would have survived both and proved nothing.
+	if body["imageSizeBytes"] != float64(987654321) {
+		t.Errorf("imageSizeBytes = %v, want 987654321", body["imageSizeBytes"])
 	}
 	if len(reader.cleared) != 1 || reader.cleared[0] != "box-1" {
 		t.Errorf("a delivered report must be cleared, got %v", reader.cleared)
@@ -274,7 +278,7 @@ func TestPerformSyncKeepsAnUncarriedImageReport(t *testing.T) {
 	reader := &stubBoxReader{
 		infos: []sdkboxlite.BoxInfo{{ID: "box-1", State: sdkboxlite.StateStopped}},
 		pending: map[string]blclient.PulledImage{
-			"box-1": {Digest: "sha256:abc", SizeBytes: 4096},
+			"box-1": {Digest: "sha256:abc", SizeBytes: 987654321},
 		},
 	}
 

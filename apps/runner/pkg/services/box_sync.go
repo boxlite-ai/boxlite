@@ -163,17 +163,12 @@ func (s *BoxSyncService) SyncBoxState(ctx context.Context, boxId string, localSt
 	dto := apiclient.NewUpdateBoxStateDto(string(s.convertToApiState(localState)))
 
 	// Carry what the image resolved to, on the one report that says the box is
-	// up. Sent through AdditionalProperties because the committed client is a
-	// version behind the server here: the API gains these two optional fields in
-	// this same change, and the clients are regenerated once, at the end of the
-	// PR — the bytes on the wire are the same either way.
+	// up.
 	pulled, owed := s.boxlite.PendingImageReport(boxId)
 	carriesReport := owed && localState == enums.BoxStateStarted
 	if carriesReport {
-		dto.AdditionalProperties = map[string]interface{}{
-			"imageDigest":    pulled.Digest,
-			"imageSizeBytes": pulled.SizeBytes,
-		}
+		dto.SetImageDigest(pulled.Digest)
+		dto.SetImageSizeBytes(pulled.SizeBytes)
 	}
 
 	_, err := s.client.BoxAPI.UpdateBoxState(ctx, boxId).UpdateBoxStateDto(*dto).Execute()

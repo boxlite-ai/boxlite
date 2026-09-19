@@ -16,19 +16,18 @@ const RETIRED_NAMES = ['template_deactivation_timeout_minutes', 'templateDeactiv
 /**
  * Where the name may still appear, and why.
  *
- * The generated clients and the dashboard fixture typed against them are debts
- * with a payer: they come off this list when the clients are regenerated at the
- * end of this change's pull request. The two migrations never do — one created
- * the column and one drops it, and a migration is a record of what happened
- * rather than a statement about the schema today.
+ * What is left is the two migrations, which stay forever — one created the
+ * column and one drops it, and a migration is a record of what happened rather
+ * than a statement about the schema today — and this file, which cannot search
+ * for a name without containing it. The generated clients and the
+ * dashboard fixture typed against them were here until the clients were
+ * regenerated — the allowance test below is what made that debt impossible to
+ * leave behind.
  */
 const STILL_ALLOWED = [
   'apps/api/src/migrations/1741087887225-migration.ts',
   'apps/api/src/migrations/post-deploy/1787200000000-drop-template-deactivation-timeout-migration',
   'apps/api/src/organization/retired-template-column.spec.ts',
-  'apps/libs/api-client/',
-  'apps/libs/api-client-go/',
-  'apps/dashboard/src/mocks/fixtures.ts',
 ]
 
 /**

@@ -52,7 +52,15 @@ export class UpdateBoxStateDto {
   @IsOptional()
   @IsInt()
   @Min(0)
+  // `integer`/`int64`, not the `number` a bare `@ApiPropertyOptional` infers: a
+  // generator reading `number` picks a 32-bit float, and no size above 2^24
+  // bytes is reliable after that — 1 GiB arrives as 1073741800, while some
+  // neighbours survive exactly, which is what makes it hard to notice. The
+  // rounded value is still an integer, so it passes `@IsInt` here and lands in
+  // a bigint column.
   @ApiPropertyOptional({
+    type: 'integer',
+    format: 'int64',
     description: 'Declared on-registry size of that image, in bytes',
     example: 123456789,
   })
