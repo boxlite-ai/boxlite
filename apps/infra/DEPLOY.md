@@ -344,9 +344,11 @@ whoever does hold that project.
 
 ```
 gcloud projects add-iam-policy-binding <source project> \
-  --member=serviceAccount:<destination publisher> --role=roles/artifactregistry.reader
+  --member=serviceAccount:<destination publisher> --role=roles/artifactregistry.reader \
+  --condition=None
 gcloud storage buckets add-iam-policy-binding gs://<source artifacts bucket> \
-  --member=serviceAccount:<destination deployer> --role=roles/storage.objectViewer
+  --member=serviceAccount:<destination deployer> --role=roles/storage.objectViewer \
+  --condition=None
 ```
 
 The registry grant is what `mbuild promote` pulls with, and it goes to the
@@ -357,6 +359,15 @@ project. It is object reads only: `storage.buckets.get` is in no object role,
 which is why `runner:promote` reads the source by listing it and never asks that
 bucket for its metadata. Without the grants a promotion fails at the read with a
 permissions error and nothing is written.
+
+`--condition=None` is not decoration. `add-iam-policy-binding` reads the policy,
+edits it and writes it back, and it refuses to edit in a binding carrying no
+condition when the policy it just read holds one — unless the command says that
+is what it means. Neither command above can know which case it is in before it
+runs, and a refusal leaves the policy untouched. The bucket grant meets such a policy whenever the source stage
+stages its runner binary rather than installing a release: the deploy attaches
+`runner-artifacts-only` to that bucket. Against one, a line without the flag is
+refused outright where no prompt can be answered, and prompts where one can.
 
 `promoteFrom` is read by nothing at deploy time, and `mdeploy-all`'s
 `auto_promote_from` still chooses the source for a given dispatch. The two

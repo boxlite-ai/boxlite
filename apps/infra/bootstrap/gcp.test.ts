@@ -37,7 +37,18 @@ const QUERIES = [
  * existence questions are answered; every change succeeds, which is what
  * makes a failing change its own test below.
  */
-const recorder = ({ existing = false, readsBeforeVisible = 0, etagConflicts = 0 } = {}) => {
+const recorder = ({
+  existing = false,
+  readsBeforeVisible = 0,
+  etagConflicts = 0,
+  conditioned = [],
+}: {
+  existing?: boolean
+  readsBeforeVisible?: number
+  etagConflicts?: number
+  /** Policies this fixture says already hold a condition, by the name the binding names them. */
+  conditioned?: string[]
+} = {}) => {
   const calls: string[][] = []
   const stdin: string[] = []
   /*
@@ -80,6 +91,27 @@ const recorder = ({ existing = false, readsBeforeVisible = 0, etagConflicts = 0 
      * the account the line above created.
      */
     if (asked.includes('add-iam-policy-binding')) {
+      /*
+       * gcloud's own refusal, raised between the read and the write.
+       *
+       * A policy that already holds a condition will not take a binding that
+       * says nothing about having one: a terminal prompts for it, and `--quiet`
+       * over a closed stdin — what `execRun` gives every call — is this error.
+       * First in this branch because that is where gcloud raises it: no policy
+       * is written, so neither the propagation window below nor an ETag
+       * conflict can be what a caller sees.
+       */
+      const target = args[args.indexOf('add-iam-policy-binding') + 1] as string
+      if (conditioned.includes(target) && !args.some((argument) => argument.startsWith('--condition'))) {
+        return {
+          code: 1,
+          stdout: '',
+          stderr:
+            `ERROR: (gcloud.${args.slice(0, args.indexOf('add-iam-policy-binding') + 1).join('.')}) Adding a ` +
+            'binding without specifying a condition to a policy containing conditions is prohibited in ' +
+            'non-interactive mode. Run the command again with `--condition=None`',
+        }
+      }
       const member = args.find((argument) => argument.startsWith('--member=serviceAccount:'))
       const email = member?.replace('--member=serviceAccount:', '') ?? ''
       if ((pending.get(email) ?? 0) > 0) {
@@ -579,6 +611,52 @@ test('a stage promoted into lets both of its accounts read the source', async ()
   assert.ok(bucket[0]!.includes('--role=roles/storage.objectViewer'), 'the bucket grant is wider than the reads it serves')
 })
 
+/*
+ * The refusal that made this grant a no-op for a whole promotion.
+ *
+ * A source stage that stages its runner binary rather than installing a release
+ * holds a condition on the very bucket a promotion reads from — the deploy
+ * attaches `runner-artifacts-only` to it so a runner host reads the staged
+ * binary and nothing else of that bucket — and `add-iam-policy-binding` will
+ * not add an unconditioned binding to such a policy unless the command says
+ * that is what it means. Refused between reading that policy and writing it
+ * back, so the bucket keeps the policy it had and the admin-activity log a made
+ * grant would appear in stays empty — and the promotion fails days later at
+ * `storage.objects.get`.
+ */
+test('a source bucket whose policy already holds a condition still takes the grant', async () => {
+  const gcloud = recorder({ conditioned: [`gs://${SOURCE.bucket}`] })
+  const lines: string[] = []
+  await invoke(gcloud.run, { promotionSource: SOURCE, log: (line) => lines.push(line) })
+  assert.match(lines.join('\n'), /both grants applied/, 'the bucket grant never reached the source')
+})
+
+/*
+ * The same rule one policy earlier.
+ *
+ * Service-account policies carry no conditions today, so this site cannot fail
+ * against a real project yet — which is the reason to pin it rather than wait:
+ * the binding that decides who may act as the deployer is a poor place to
+ * discover that someone added a condition upstream.
+ */
+test('a deployer whose policy already holds a condition still takes its impersonation binding', async () => {
+  const deployer = 'bl-app-gcp-dev-deploy@boxlite-gcp-dev.iam.gserviceaccount.com'
+  const gcloud = recorder({ conditioned: [deployer] })
+  const lines: string[] = []
+  await invoke(gcloud.run, { log: (line) => lines.push(line) })
+  /*
+   * The line `bootstrapGcp` prints once the grant returns, rather than the call
+   * having been made: the refusal happens after the argv is composed, so a
+   * recorded call proves only that the attempt was spelled, not that it landed.
+   * Refused, this run throws out of `allowImpersonation` before printing it.
+   */
+  assert.match(
+    lines.join('\n'),
+    /environment gcp-dev may act as it/,
+    'the binding that lets the stage environment act as the deployer never landed',
+  )
+})
+
 test('a stage with no source reaches no project but its own', async () => {
   const gcloud = recorder()
   await invoke(gcloud.run)
@@ -612,7 +690,16 @@ test('a source that refuses the grant is reported with the command, not thrown',
   )
   const printed = lines.join('\n')
   assert.match(printed, /gcloud projects add-iam-policy-binding boxlite-gcp-src/, 'the registry grant to run by hand')
-  assert.match(printed, /gcloud storage buckets add-iam-policy-binding gs:\/\/boxlite-gcp-src-artifacts/, 'and the bucket one')
+  /*
+   * With `--condition=None`, which is what makes it a command rather than a
+   * shape: without it an operator pasting this is prompted for a condition, and
+   * a non-interactive rerun is refused by the same rule that sent it here.
+   */
+  assert.match(
+    printed,
+    /gcloud storage buckets add-iam-policy-binding gs:\/\/boxlite-gcp-src-artifacts\S+ [^\n]*--condition=None/,
+    'and the bucket one, runnable as printed',
+  )
   assert.match(printed, /PERMISSION_DENIED/, 'why it could not be made here')
 })
 
