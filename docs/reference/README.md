@@ -218,6 +218,11 @@ Structured network configuration for outbound connectivity.
   **connects**, not when it looks the name up. A denied name previously
   resolved to `0.0.0.0`, so code that detected the block by inspecting a
   lookup result must check for a failed connection instead.
+- A host named by `secrets` below is reachable on port 443 without an
+  `allow_net` rule of its own. Substitution runs in front of the allowlist, and
+  the connection is dialed by name like any hostname rule, so the guest cannot
+  steer it elsewhere by choosing an address. Only 443 is covered: plain HTTP,
+  any other port, and UDP to that same host still need a rule.
 - The gateway's DNS resolver and DHCP are internal services and stay reachable
   regardless of `allow_net`.
 - `host.boxlite.internal` is a built-in hostname that resolves to
@@ -225,15 +230,17 @@ Structured network configuration for outbound connectivity.
   always served, but egress to that address is governed by `allow_net`: add
   `"192.168.127.254"`, or a CIDR covering it, to reach it under a non-empty
   allowlist.
-- Security: with an empty or omitted `allow_net`, any service bound to host
-  loopback is reachable from inside the box via `host.boxlite.internal` or
-  `192.168.127.254`; allowing that address opens all of them. And `allow_net`
-  bounds where the guest can **connect**, not what it can look up: every query
-  it makes reaches the host's resolver, denied names included, so a query name
-  is a channel out of the box. Earlier versions answered denied names
-  `0.0.0.0` locally, which narrowed that channel for A queries but never
-  closed it, since other record types were forwarded regardless. Treat
-  `allow_net` as a routing control, not a containment boundary.
+- Security: `allow_net` is not the only egress gate — declaring a secret for a
+  host opens port 443 to it, as above. With an empty or omitted `allow_net`,
+  any service bound to host loopback is reachable from inside the box via
+  `host.boxlite.internal` or `192.168.127.254`; allowing that address opens all
+  of them. And `allow_net` bounds where the guest can **connect**, not what it
+  can look up: every query it makes reaches the host's resolver, denied names
+  included, so a query name is a channel out of the box. Earlier versions
+  answered denied names `0.0.0.0` locally, which narrowed that channel for A
+  queries but never closed it, since other record types were forwarded
+  regardless. Treat `allow_net` as a routing control, not a containment
+  boundary.
 
 **Supported patterns:**
 - Exact hostname: `"api.openai.com"`
@@ -243,7 +250,7 @@ Structured network configuration for outbound connectivity.
 
 #### `secrets`
 
-Host-side secret substitution rules for outbound HTTP(S) requests.
+Host-side secret substitution rules for outbound HTTPS requests.
 
 **Shape:**
 - `name`: human-readable secret name
@@ -254,6 +261,17 @@ Host-side secret substitution rules for outbound HTTP(S) requests.
 **Notes:**
 - The guest sees only the placeholder, never the real secret value.
 - The placeholder is also exposed as `BOXLITE_SECRET_<NAME>` inside the guest.
+- **A secret is an egress grant as well as a credential.** Every host this
+  matches becomes reachable on port 443 under a non-empty `allow_net` without a
+  rule of its own — declaring that a credential is used at a host already says
+  the host must be reachable. A wildcard entry grants its subdomains the same
+  way it matches them, one level deep. The grant is still a by-name dial, so a
+  host that answers with a private, loopback or CGNAT address is refused unless
+  an IP or CIDR rule covers that range. Nothing else opens: those hosts on port
+  80, on any other port, or over UDP are still governed by `allow_net` alone.
+- Substitution is HTTPS-only. A plain-HTTP request would carry the placeholder
+  rather than the real value, which is the other reason port 80 is not opened
+  here.
 - C SDK users configure secrets with `boxlite_options_add_secret()`.
 
 #### `advanced.capabilities`
