@@ -17,6 +17,7 @@ Diagrams of this design:
 
 - [macOS Hypervisor.framework](./hvf.md)
 - [Linux KVM](./kvm.md)
+- [Windows Hypervisor Platform](./whp.md)
 - [Guest memory](./memory.md)
 
 Repository line references are to commit `42ec1a2a6`. `libkrun/` is the vendored
@@ -29,16 +30,16 @@ copy at `src/deps/libkrun-sys/vendor/libkrun/` (upstream `e12b9b3`).
     on Linux x86_64 and arm64 (KVM);
   - boxes that work as they do on libkrun (M0–M5); the
     [guest boot contract](#guest-boot-contract) lists what changes underneath;
-  - room for hot-plug mounts, dynamic resources, memory snapshots and GPUs
-    (M6–M9).
+  - room for hot-plug mounts, dynamic resources, memory snapshots, GPUs (M6–M9)
+    and Windows x86_64 hosts on WHP, the Windows Hypervisor Platform (M10).
 - **Out of scope:** more than one VM per process, confidential computing, live
-  migration, Intel Macs, Windows hosts (M10), and changes to libkrun.
+  migration, Intel Macs, and changes to libkrun.
 
 ## Decisions
 
 | Decision | Choice | Why | Rejected |
 | --- | --- | --- | --- |
-| Minimum macOS | 15, using HVF's in-kernel GICv3 | `hv_gic_create` and `hv_gic_set_spi` exist from macOS 15.0 (`hv_gic.h`), so no host needs an emulated interrupt controller, and libkrun already prefers the in-kernel GIC wherever the host has it | macOS 12 with a userspace GICv3, which libkrun falls back to below macOS 15 (`libkrun/src/vmm/src/builder.rs:892-894`), at about 3–4 engineer-weeks in M1 |
+| Minimum macOS | 15, using HVF's in-kernel GICv3 | `hv_gic_create` and `hv_gic_set_spi` exist from macOS 15.0 (`hv_gic.h`), so no HVF or KVM host needs an emulated interrupt controller, and libkrun already prefers the in-kernel GIC wherever the host has it | macOS 12 with a userspace GICv3, which libkrun falls back to below macOS 15 (`libkrun/src/vmm/src/builder.rs:892-894`), at about 3–4 engineer-weeks in M1 |
 | SHARED share | virtio-fs in two stages: a FUSE server core for the SHARED share in M2, full passthrough for user volumes in M3 | Every box mounts the SHARED share, and guest file copy stages through it, so the first box already needs virtio-fs | Moving container layout and file copy off the SHARED share first, which changes the guest agent before the first box boots |
 | Threads | One thread per vCPU, worker threads per device, and a poller on the thread that calls `run()` | HVF binds a vCPU to the thread that created it, and per-device workers keep a slow device, such as a blocking virtio-fs request, from stalling the others | One event loop for all devices (Firecracker), where one slow device stalls the rest; an async runtime inside the jailed shim, which complicates per-thread seccomp |
 
@@ -54,7 +55,7 @@ boxlite-shim                    one jailed process per box
       ├─ vcpuN threads          Vcpu::run → VcpuExit → bus dispatch → run again
       ├─ device workers         virtqueues and host backends: disk, fs, vsock, net, console
       ├─ the run() thread       one poller: stop requests, vCPU outcomes, device failures
-      └─ boxlite_hypervisor     Vm and Vcpu traits; hvf (macOS arm64) or kvm (Linux)
+      └─ boxlite_hypervisor     Vm and Vcpu traits; hvf (macOS arm64), kvm (Linux) or whp (Windows, M10)
 guest
 └─ pinned LTS kernel → boxlite-guest as PID 1
 ```
@@ -66,27 +67,27 @@ The two crates split the work as follows:
 - **`boxlite-vmm`** owns the guest machine: configuration, memory layout,
   devices, threads, and lifecycle.
 
-KVM memory slots stay inside the KVM backend and ARM exception syndromes stay
-inside the HVF backend, so `boxlite-vmm` never sees either.
+KVM memory slots stay in the KVM backend, ARM exception syndromes in the HVF
+backend and x86 instruction decoding in the WHP one; `boxlite-vmm` sees none.
 
 ## Hypervisor backend interface
 
-The backend is chosen at compile time, because HVF and KVM never coexist on one
-host. M1 adds one concrete type per backend, `HvfVm` and `KvmVm`, and both
-implement the traits in `src/hypervisor/src/`. `boxlite-vmm` is written against
-those traits, so its tests can drive a fake backend, and M4's fault-injection
-tests need no hypervisor.
+The backend is chosen at compile time, because no host has more than one of HVF,
+KVM and WHP. M1 adds `HvfVm` and `KvmVm`, M10 adds `WhpVm`, and each implements
+the traits in `src/hypervisor/src/`. `boxlite-vmm` is written against those
+traits, so its tests can drive a fake backend, and M4's fault-injection tests
+need no hypervisor.
 
-| Operation | Contract | HVF | KVM |
-| --- | --- | --- | --- |
-| Map guest memory | `Vm::map_memory` (`unsafe`) | `hv_vm_map` | `KVM_SET_USER_MEMORY_REGION`; the backend picks the slot |
-| Unmap guest memory | `Vm::unmap_memory` | `hv_vm_unmap` | the same slot, set to size 0 |
-| Create a vCPU | `Vm::create_vcpu`, on the thread that will run it | `hv_vcpu_create` | `KVM_CREATE_VCPU` |
-| Run to the next exit | `Vcpu::run` → `VcpuExit` | `hv_vcpu_run` | `KVM_RUN` |
-| Kick from another thread | `VcpuHandle::kick` | `hv_vcpus_exit` | set `immediate_exit`, then signal the vCPU thread |
-| Set an interrupt line | `Vm::set_irq_line` | `hv_gic_set_spi` | `KVM_IRQ_LINE` |
+| Operation | Contract | HVF | KVM | WHP (M10) |
+| --- | --- | --- | --- | --- |
+| Map guest memory | `Vm::map_memory` (`unsafe`) | `hv_vm_map` | `KVM_SET_USER_MEMORY_REGION`; the backend picks the slot | `WHvMapGpaRange` |
+| Unmap guest memory | `Vm::unmap_memory` | `hv_vm_unmap` | the same slot, set to size 0 | `WHvUnmapGpaRange` |
+| Create a vCPU | `Vm::create_vcpu`, on the thread that will run it | `hv_vcpu_create` | `KVM_CREATE_VCPU` | `WHvCreateVirtualProcessor` |
+| Run to the next exit | `Vcpu::run` → `VcpuExit` | `hv_vcpu_run` | `KVM_RUN` | `WHvRunVirtualProcessor` |
+| Kick from another thread | `VcpuHandle::kick` | `hv_vcpus_exit` | set `immediate_exit`, then signal the vCPU thread | `WHvCancelRunVirtualProcessor` |
+| Set an interrupt line | `Vm::set_irq_line` | `hv_gic_set_spi` | `KVM_IRQ_LINE` | a userspace IOAPIC, in a crate M10 picks, then `WHvRequestInterrupt` |
 
-Every backend keeps these rules:
+HVF and KVM keep these rules; [M10](#room-for-later-milestones) covers WHP:
 
 - **Creation.**
   - The backend's constructor creates the VM and the host's in-kernel
@@ -206,7 +207,7 @@ On x86_64 the layout uses the values most surveyed VMMs share.
 | `0xC000_0000`–`0xD000_0000` | 32-bit PCI BAR window, reserved for M9 | Firecracker, cloud-hypervisor and alioth give PCI BARs space in the hole |
 | `0xD000_0000`–`0xE000_0000` | virtio-mmio devices, 4 KiB each, with interrupts from GSI 5 | device window: libkrun, crosvm; GSI 5: Firecracker, libkrun, dragonball |
 | `0xE000_0000`–`0xF000_0000` | PCI ECAM, reserved for M9 | alioth |
-| `0xFEC0_0000`, `0xFEE0_0000` | IOAPIC and local APIC, both in the kernel | architectural |
+| `0xFEC0_0000`, `0xFEE0_0000` | IOAPIC and local APIC, both in the kernel on KVM; WHP (M10) emulates only the local APIC | architectural |
 | above RAM | hotplug memory (M7), then a 64-bit PCI BAR window (M9) | as on arm64 |
 | ports `0x3F8`, `0x70`–`0x71`, `0x60` and `0x64` | 8250 UART on GSI 4, CMOS RTC, i8042 | PC standard |
 
@@ -230,8 +231,8 @@ today.
 
 ### Interrupts
 
-- **No emulated controller.** Every host provides an in-kernel interrupt
-  controller, so the VMM emulates none.
+- **No emulated controller.** HVF and KVM provide in-kernel interrupt
+  controllers, so the VMM emulates none. WHP (M10) emulates only local APICs.
 - **Line assignment.** The VMM gives each device a line when it builds the
   machine. It declares virtio-mmio interrupts edge-triggered, as Firecracker,
   libkrun and dragonball do.
@@ -426,15 +427,28 @@ Leaving libkrunfw drops three kinds of kernel patch:
     windows the layout reserves. On arm64, 32-bit BARs come from the unused
     part of the device window.
   - M9 adds an MSI call to `Vm` for those devices.
+- **M10, Windows hosts.** `boxlite-hypervisor` reserves a `whp` module for WHP
+  on Windows x86_64, and the [backend table](#hypervisor-backend-interface)
+  lists its calls. It differs from HVF and KVM in two ways:
+  - WHP emulates only local APICs, so the IOAPIC, PIC and PIT run in userspace
+    and a raised line ends in `WHvRequestInterrupt`. M10 decides which crate
+    owns them. OpenVMM keeps them in its chipset crate, which programs MSI
+    routes into the backend (`vmm_core/virt/src/irqcon.rs:24-29`).
+  - A memory-access exit gives the instruction bytes and the guest address,
+    not the access width or data. The backend's `emulator` decodes the
+    instruction, as OpenVMM does with its `x86emu` crate, so `MmioRead` and
+    `MmioWrite` keep their shape.
 
 ## References
 
-The survey behind the names and the layout used these pinned sources:
+The survey behind the names and the layout, and the M10 notes, used these
+pinned sources:
 
 | Project | Pin | Files |
 | --- | --- | --- |
 | [Firecracker](https://github.com/firecracker-microvm/firecracker/tree/68698adfee9b252df130b7a98e3ba04eb81f0f54) | `68698ad` | `src/vmm/src/vstate/`, `src/vmm/src/arch/*/layout.rs` |
 | [crosvm](https://github.com/google/crosvm/tree/4c88690f44c382e34bdff7ad18ca10f8f9de6aa2) | `4c88690` | `hypervisor/src/lib.rs`, `devices/src/bus.rs`, `aarch64/src/lib.rs` |
+| [OpenVMM](https://github.com/microsoft/openvmm/tree/998904f2debee98416c5d007a17f05be1b7dad34) | `998904f` | `vmm_core/virt_whp/src/`, `vmm_core/virt/src/irqcon.rs`, `vm/x86/x86emu/` |
 | [cloud-hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor/tree/c24527002473dec810ef98fe3befb558ff2d5ede) | `c245270` | `hypervisor/src/`, `vm-device/src/bus.rs`, `arch/src/*/layout.rs` |
 | [libkrun](https://github.com/libkrun/libkrun/tree/e12b9b3780ffa8df9f3e1797b217d13453479167) | `e12b9b3` | `src/hvf/src/lib.rs`, `src/vmm/src/builder.rs`, `init/init.c` |
 | [alioth](https://github.com/google/alioth/tree/9d39a5d288fcd8630a24c5e762e4c31e97f1840f) | `9d39a5d` | `alioth/src/hv/hv.rs`, `alioth/src/arch/*/layout.rs` |
@@ -449,3 +463,5 @@ Host APIs:
 - **HVF:** the Hypervisor.framework headers `hv_vcpu.h`, `hv_vm.h` and
   `hv_gic.h`, in the macOS SDK.
 - **KVM:** the [KVM API](https://docs.kernel.org/virt/kvm/api.html).
+- **WHP:** the
+  [Windows Hypervisor Platform API](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/hypervisor-platform).

@@ -11,13 +11,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// A failed host hypervisor operation.
 ///
 /// Each variant names the operation and the resource it acted on. The host
-/// cause is an `io::Error`: `errno` on KVM, and the `hv_return_t` on HVF.
+/// cause is an `io::Error`: `errno` on KVM, the `hv_return_t` on HVF, and the
+/// `HRESULT` on WHP.
 /// Backends report a host that cannot run VMs as
 /// [`io::ErrorKind::Unsupported`], and missing access to the hypervisor as
 /// [`io::ErrorKind::PermissionDenied`].
 #[derive(Debug)]
 pub enum Error {
-    /// Creating the VM or its in-kernel interrupt controller failed.
+    /// Creating the VM or its interrupt controller failed.
     CreateVm(io::Error),
     /// Mapping host memory into the guest failed.
     MapMemory {

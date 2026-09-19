@@ -27,7 +27,7 @@ flowchart TB
   hvf_vcpu e_hv_vcpu_run@-->|"hv_vcpu_run"| hvf_api
   hvf_api e_enter_guest@-->|"enters the guest"| guest_kernel
   run_thread e_kick@-->|"VcpuHandle::kick · hv_vcpus_exit"| hvf_vcpu
-  run_thread e_map_memory@-->|"Vm::map_memory"| hvf_vm
+  run_thread e_map_memory@-->|"Vm::map_memory in Vm::new"| hvf_vm
   hvf_vm e_hv_vm_map@-->|"hv_vm_map"| hvf_api
   device_worker e_set_irq_line@-->|"Vm::set_irq_line"| hvf_vm
   hvf_vm e_gic_set_spi@-->|"hv_gic_set_spi"| gic

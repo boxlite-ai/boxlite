@@ -27,7 +27,7 @@ flowchart TB
   kvm_vcpu e_kvm_run@-->|"KVM_RUN"| kvm_module
   kvm_module e_enter_guest@-->|"enters the guest"| guest_kernel
   run_thread e_kick@-->|"VcpuHandle::kick · immediate_exit + signal"| kvm_vcpu
-  run_thread e_map_memory@-->|"Vm::map_memory"| kvm_vm
+  run_thread e_map_memory@-->|"Vm::map_memory in Vm::new"| kvm_vm
   kvm_vm e_set_memslot@-->|"KVM_SET_USER_<br/>MEMORY_REGION"| kvm_module
   device_worker e_set_irq_line@-->|"Vm::set_irq_line"| kvm_vm
   kvm_vm e_irq_line@-->|"KVM_IRQ_LINE"| irqchip

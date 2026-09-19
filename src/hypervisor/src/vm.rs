@@ -7,10 +7,11 @@ use crate::{MemoryRegion, Result, Vcpu};
 
 /// A VM on the host hypervisor.
 ///
-/// Each backend's constructor creates the VM and the host's in-kernel
-/// interrupt controller, since creation differs per host. Callers create every
-/// vCPU before running any: KVM on arm64 initialises its interrupt controller
-/// only once all vCPUs exist.
+/// Each backend's constructor creates the VM and the host's interrupt
+/// controller, since creation differs per host. HVF and KVM provide the whole
+/// controller in-kernel; WHP (M10) provides only local APICs. Callers create
+/// every vCPU before running any: KVM on arm64 initialises its interrupt
+/// controller only once all vCPUs exist.
 pub trait Vm: Send + Sync {
     /// The backend's vCPU type.
     type Vcpu: Vcpu;
