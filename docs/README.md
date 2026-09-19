@@ -4,8 +4,6 @@
 
 ## Guides
 
-- [AutoStop, AutoResume, and AutoDelete](./guides/auto-stop-resume.md)
-
 ## Reference
 
 ## Architecture
