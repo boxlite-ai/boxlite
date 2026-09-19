@@ -76,11 +76,11 @@ export type ArtifactConfig = {
  * Where the dependencies that ship are locked, and what locks them.
  *
  * Declared rather than assumed, because "the repository root is an npm
- * workspace" is true of the repository mbuild was written in and false of this
- * one: the images here build from `apps/`, whose lockfile is a Yarn 4 one, and
- * the root holds no JavaScript lockfile at all. `npm audit` against it exits
- * non-zero with ENOLOCK — a gate that can never pass, which is the same as no
- * gate once someone routes around it.
+ * workspace" is a property of the repository mbuild was written in, not of
+ * every repository that uses it. Where the lockfile lives under a
+ * subdirectory, or is a Yarn one, `npm audit` against the root exits non-zero
+ * with ENOLOCK — a gate that can never pass, which is the same as no gate once
+ * someone routes around it.
  *
  * Absent means what it has always meant: npm, at the repository root.
  */
@@ -478,10 +478,3 @@ export const stageIn = (config: BuildConfig, stage: string): StageConfig => {
 
 /** One stage's registry. */
 export const registryFor = (config: BuildConfig, stage: string): RegistryConfig => stageIn(config, stage).registry
-
-/** The region a stage's registry is addressed in, which every address needs. */
-export const regionFor = (config: BuildConfig, stage: string): string => {
-  const { region } = stageIn(config, stage)
-  if (!region) throw new BuildConfigError(`${config.path} gives stage "${stage}" no region`)
-  return region
-}

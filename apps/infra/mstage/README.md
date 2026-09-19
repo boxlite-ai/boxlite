@@ -664,21 +664,21 @@ region` calls nothing at all, resolving the region locally from the table below.
 
 `mstage login` applies the same rule to GitHub and Auth0 — it reads the session
 `gh auth login` and `auth0 login` left behind, and repeats those CLIs' own
-message when there isn't one. All three providers are documented in `--help`
+message when there isn't one. All four providers are documented in `--help`
 whether or not this repository declares them, because mstage is shared and does
 not define the set; naming one no stage declares is refused,
 and a missing session for a declared, required provider is what fails the
 command.
 
 It signs nobody in unless asked. `-f` / `--force` runs a full sign-in first —
-`aws login`, `gcloud auth login --update-adc`, `gh auth login`, `auth0 login` —
-for whichever provider was named, or for every one this repository declares when
-none was, and then reports the session that now exists. `--logout` ends a session
-instead of checking it; asking for both at once is refused. Those commands prompt
-or open a browser, so they inherit the terminal: where there is a terminal and a
-required provider is not ready, mstage offers to run the sign-in and re-checks
-the result rather than trusting the exit status. Where there is none — CI — it
-reports and exits.
+`aws login`, `gcloud auth login` and `gcloud auth application-default login`,
+`gh auth login`, `auth0 login` — for whichever provider was named, or for every
+one this repository declares when none was, and then reports the session that
+now exists. `--logout` ends a session instead of checking it; asking for both at
+once is refused. Those commands prompt or open a browser, so they inherit the
+terminal: where there is a terminal and a required provider is not ready, mstage
+offers to run the sign-in and re-checks the result rather than trusting the exit
+status. Where there is none — CI — it reports and exits.
 
 `--stage` narrows what is required to the cloud that stage lives in. Without it
 every declared provider is required, because `mstage login` on its own asks
@@ -690,15 +690,23 @@ machine that needed no AWS credential to perform it. Only the clouds narrow —
 GitHub and Auth0 are nobody's home, and stay required wherever they are
 declared.
 
-GCP's `--update-adc` is load-bearing rather than decorative. gcloud keeps two
-credentials and this repository authenticates from both: the CLI's own session,
-which every plain `gcloud` subcommand uses — `iam/bootstrap` and mbuild's
-Artifact Registry calls spawn those — and Application Default Credentials, which
-the Google SDKs and the Pulumi provider resolve. One flag writes both, and
-`mstage login` proves both can mint a token, naming whichever one is stale.
-Signing in with `gcloud auth application-default login` alone leaves the CLI's
-session at whatever it was, which reported a ready session and then failed the
+GCP takes two sign-ins, run in order. gcloud keeps two credentials and this
+repository authenticates from both: the CLI's own session, which every plain
+`gcloud` subcommand uses — `iam/bootstrap` and mbuild's Artifact Registry calls
+spawn those — and Application Default Credentials, which the Google SDKs and the
+Pulumi provider resolve. `gcloud auth login` writes the first,
+`gcloud auth application-default login` the second, and `mstage login` proves
+both can mint a token, naming whichever one is stale. Either alone leaves the
+other at whatever it was, which reported a ready session and then failed the
 first `gcloud projects describe` a bootstrap ran.
+
+`auth login --update-adc` looks like the one command that covers both, and is
+the wrong fix: it writes ADC through a path that omits `quota_project_id`, so
+the SDKs and the Pulumi provider would send no `x-goog-user-project`, and a
+token mint succeeds either way — nothing here would notice. `auth/sessions.ts`
+cites where gcloud decides that. The cost is two browser round-trips for one
+`mstage login`, accepted over a credential that is present, mints, and then
+bills or refuses somewhere else.
 
 `--logout` runs two commands there for the same reason: `gcloud auth revoke`
 revokes the account and leaves the ADC file behind, `gcloud auth

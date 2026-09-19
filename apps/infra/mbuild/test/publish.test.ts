@@ -289,9 +289,10 @@ test('the dependencies that ship are audited once, before anything is built', as
 test('a repository whose lockfile is yarn is audited with yarn, in the directory holding it', async () => {
   /*
    * `npm --prefix <root> audit` is only an audit where the root is an npm
-   * workspace. Here it is not — the images build from `apps/`, locked by Yarn 4
-   * — so that command exits ENOLOCK and the gate can never pass, which is the
-   * same as no gate at all once someone works around it.
+   * workspace. Where it is not — a repository whose images build from a
+   * subdirectory locked by Yarn 4 — that command exits ENOLOCK and the gate
+   * can never pass, which is the same as no gate at all once someone works
+   * around it.
    *
    * yarn takes no directory flag that survives corepack, and corepack resolves
    * the version from where it is launched, so the directory has to be the

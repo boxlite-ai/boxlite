@@ -133,6 +133,9 @@ const LOGIN_PROVIDERS: Record<string, { check: ProviderCheck; summary: string }>
   auth0: { check: checkAuth0 as ProviderCheck, summary: 'The auth0 CLI session, and its active tenant' },
 }
 
+/** Every provider `login` can check, named once so nothing keeps a second list. */
+export const LOGIN_PROVIDER_NAMES = Object.keys(LOGIN_PROVIDERS)
+
 const LOGIN_CHECKS: Record<string, ProviderCheck> = Object.fromEntries(
   Object.entries(LOGIN_PROVIDERS).map(([key, provider]) => [key, provider.check]),
 )
