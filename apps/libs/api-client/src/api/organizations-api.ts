@@ -38,6 +38,8 @@ import type { OrganizationBoxDefaultLimitedNetworkEgress } from '../models';
 // @ts-ignore
 import type { OrganizationInvitation } from '../models';
 // @ts-ignore
+import type { OrganizationReferralCodeDto } from '../models';
+// @ts-ignore
 import type { OrganizationRole } from '../models';
 // @ts-ignore
 import type { OrganizationSuspension } from '../models';
@@ -691,6 +693,46 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
+         * Returns the selected organization code after membership authorization; the Dashboard builds the invitation URL.
+         * @summary Get or initialize an organization invitation code
+         * @param {string} organizationId Selected organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        getOrganizationReferralCode: async (organizationId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('getOrganizationReferralCode', 'organizationId', organizationId)
+            const localVarPath = `/organizations/{organizationId}/referral-code`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
          * 
          * @summary Get region by ID
          * @param {string} id Region ID
@@ -972,10 +1014,11 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
         /**
          * 
          * @summary List organizations
+         * @param {string} [referredCode] Invitation link code for first registration; trim and uppercase, blank means ordinary registration.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        listOrganizations: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        listOrganizations: async (referredCode?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             const localVarPath = `/organizations`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -993,6 +1036,10 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
+
+            if (referredCode !== undefined) {
+                localVarQueryParameter['referredCode'] = referredCode;
+            }
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
@@ -1714,6 +1761,19 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
+         * Returns the selected organization code after membership authorization; the Dashboard builds the invitation URL.
+         * @summary Get or initialize an organization invitation code
+         * @param {string} organizationId Selected organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async getOrganizationReferralCode(organizationId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<OrganizationReferralCodeDto>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getOrganizationReferralCode(organizationId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.getOrganizationReferralCode']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
          * 
          * @summary Get region by ID
          * @param {string} id Region ID
@@ -1807,11 +1867,12 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
         /**
          * 
          * @summary List organizations
+         * @param {string} [referredCode] Invitation link code for first registration; trim and uppercase, blank means ordinary registration.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async listOrganizations(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<Organization>>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.listOrganizations(options);
+        async listOrganizations(referredCode?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<Organization>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.listOrganizations(referredCode, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.listOrganizations']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -2140,6 +2201,16 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.getOrganizationOtelConfigByBoxAuthToken(authToken, options).then((request) => request(axios, basePath));
         },
         /**
+         * Returns the selected organization code after membership authorization; the Dashboard builds the invitation URL.
+         * @summary Get or initialize an organization invitation code
+         * @param {string} organizationId Selected organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        getOrganizationReferralCode(organizationId: string, options?: RawAxiosRequestConfig): AxiosPromise<OrganizationReferralCodeDto> {
+            return localVarFp.getOrganizationReferralCode(organizationId, options).then((request) => request(axios, basePath));
+        },
+        /**
          * 
          * @summary Get region by ID
          * @param {string} id Region ID
@@ -2212,11 +2283,12 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
         /**
          * 
          * @summary List organizations
+         * @param {string} [referredCode] Invitation link code for first registration; trim and uppercase, blank means ordinary registration.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        listOrganizations(options?: RawAxiosRequestConfig): AxiosPromise<Array<Organization>> {
-            return localVarFp.listOrganizations(options).then((request) => request(axios, basePath));
+        listOrganizations(referredCode?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<Organization>> {
+            return localVarFp.listOrganizations(referredCode, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -2522,6 +2594,17 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
+     * Returns the selected organization code after membership authorization; the Dashboard builds the invitation URL.
+     * @summary Get or initialize an organization invitation code
+     * @param {string} organizationId Selected organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public getOrganizationReferralCode(organizationId: string, options?: RawAxiosRequestConfig) {
+        return OrganizationsApiFp(this.configuration).getOrganizationReferralCode(organizationId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
      * 
      * @summary Get region by ID
      * @param {string} id Region ID
@@ -2601,11 +2684,12 @@ export class OrganizationsApi extends BaseAPI {
     /**
      * 
      * @summary List organizations
+     * @param {string} [referredCode] Invitation link code for first registration; trim and uppercase, blank means ordinary registration.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public listOrganizations(options?: RawAxiosRequestConfig) {
-        return OrganizationsApiFp(this.configuration).listOrganizations(options).then((request) => request(this.axios, this.basePath));
+    public listOrganizations(referredCode?: string, options?: RawAxiosRequestConfig) {
+        return OrganizationsApiFp(this.configuration).listOrganizations(referredCode, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

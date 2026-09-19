@@ -8,7 +8,7 @@
 VENV ?= ../../.venv-infra
 PY ?= $(VENV)/bin/python
 
-.PHONY: help install up down status logs restart reset nuke
+.PHONY: help install up down status logs restart reset nuke test
 
 help:      ## show this help
 	@awk -F':.*## ' '/^[a-zA-Z][a-zA-Z0-9_-]*:.*## / { printf "  %-9s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -22,6 +22,9 @@ $(VENV)/bin/python:
 	$(VENV)/bin/pip install -q -e .
 
 install: $(VENV)/bin/python   ## create the venv + install the package (editable)
+
+test:   ## test local configuration without starting services (PY=python3 if no venv)
+	$(PY) -m unittest discover -s tests -v
 
 up: $(VENV)/bin/python   ## ensure L1 boxes + start L2 (COMPONENTS="api runner")
 	$(PY) -m compose up $(COMPONENTS)

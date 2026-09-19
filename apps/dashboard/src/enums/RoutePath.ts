@@ -11,6 +11,7 @@
 export enum RoutePath {
   // Main routes
   LANDING = '/',
+  REGISTER = '/register',
   LOGOUT = '/logout',
   DASHBOARD = '/dashboard',
   DOCS = '/docs',

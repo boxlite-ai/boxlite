@@ -492,6 +492,7 @@ jobs:
           --health-retries 5
     env: # Service connection values are non-secret CI-local defaults.
       REDIS_HOST: "localhost"
+      BUSINESS_EVENTS_ENABLED: "false"
       DB_HOST: localhost
       DB_PORT: 5432
       DB_USERNAME: postgres

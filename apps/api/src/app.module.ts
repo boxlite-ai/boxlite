@@ -21,6 +21,7 @@ import { RedisModule, getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import { ScheduleModule } from '@nestjs/schedule'
 import { EventEmitterModule } from '@nestjs/event-emitter'
 import { UsageModule } from './usage/usage.module'
+import { BusinessEventPublisherModule } from './business-events/business-event-publisher.module'
 import { AnalyticsModule } from './analytics/analytics.module'
 import { OrganizationModule } from './organization/organization.module'
 import { EmailModule } from './email/email.module'
@@ -117,7 +118,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'dashboard'),
       exclude: ['/api/{*path}'],
-      renderPath: '/',
+      renderPath: '/{*path}',
       serveStaticOptions: {
         // Disable serve-static's own default Cache-Control; setHeaders applies a
         // content-addressed policy: hashed /assets/* immutable-forever, HTML
@@ -176,6 +177,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     BoxModule,
     ScheduleModule.forRoot(),
     UsageModule,
+    BusinessEventPublisherModule,
     AnalyticsModule,
     OrganizationModule,
     RegionModule,

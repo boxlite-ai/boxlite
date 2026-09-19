@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { businessEventsConfig } from '../business-events/business-events.config'
+
 /**
  * A whole number at least 1, or a hard failure.
  *
@@ -520,6 +522,7 @@ const configuration = {
   billingApiUrl: billingApiUrlConfig(),
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
   usageExport: usageExportConfig(),
+  businessEvents: businessEventsConfig(),
   incidentIo: incidentIoConfig(),
   defaultRunner: {
     domain: process.env.DEFAULT_RUNNER_DOMAIN,

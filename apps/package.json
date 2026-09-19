@@ -251,6 +251,7 @@
     "@nx/workspace": "21.4.1",
     "@openapitools/openapi-generator-cli": "^2.16.3",
     "@opencode-ai/plugin": "^1.1.42",
+    "@playwright/test": "^1.55.0",
     "@storybook/addon-essentials": "8",
     "@storybook/blocks": "8",
     "@storybook/react": "8",

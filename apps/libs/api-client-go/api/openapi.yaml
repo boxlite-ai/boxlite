@@ -317,7 +317,16 @@ paths:
   /organizations:
     get:
       operationId: listOrganizations
-      parameters: []
+      parameters:
+      - description: "Invitation link code for first registration; trim and uppercase,\
+          \ blank means ordinary registration."
+        explode: true
+        in: query
+        name: referredCode
+        required: false
+        schema:
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -327,6 +336,18 @@ paths:
                   $ref: "#/components/schemas/Organization"
                 type: array
           description: List of organizations
+        "400":
+          description: invalid_referral_code
+        "403":
+          description: email_verification_required
+        "409":
+          description: registration_already_finalized
+        "410":
+          description: registration_unavailable
+        "422":
+          description: invitation_unavailable
+        "503":
+          description: registration_busy
       security:
       - bearer: []
       - oauth2:
@@ -423,6 +444,41 @@ paths:
         - profile
         - email
       summary: Set default region for organization
+      tags:
+      - organizations
+  /organizations/{organizationId}/referral-code:
+    get:
+      description: Returns the selected organization code after membership authorization;
+        the Dashboard builds the invitation URL.
+      operationId: getOrganizationReferralCode
+      parameters:
+      - description: Selected organization ID
+        explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationReferralCodeDto"
+          description: ""
+        "403":
+          description: Organization access denied or invitation_unavailable
+        "503":
+          description: referral_code_unavailable
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get or initialize an organization invitation code
       tags:
       - organizations
   /organizations/{organizationId}:
@@ -5026,6 +5082,23 @@ components:
           type: string
       required:
       - defaultRegionId
+      type: object
+    OrganizationReferralCodeDto:
+      example:
+        organizationId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        referralCode: referralCode
+      properties:
+        organizationId:
+          format: uuid
+          type: string
+        referralCode:
+          maxLength: 10
+          minLength: 10
+          pattern: "^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$"
+          type: string
+      required:
+      - organizationId
+      - referralCode
       type: object
     OrganizationSuspension:
       example:
