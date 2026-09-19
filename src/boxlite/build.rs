@@ -1266,16 +1266,15 @@ fn main() {
     // finds shim/guest without the caller exporting BOXLITE_RUNTIME_DIR.
     // Process env still wins at runtime. The path string is stable, so guest
     // rebuilds do not force a host crate rebuild.
-    if !embed_runtime_binaries() {
-        if let Some(target_dir) =
+    if !embed_runtime_binaries()
+        && let Some(target_dir) =
             CargoBuildContext::target_dir_for_workspace(cargo.workspace_root())
-        {
-            let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-            let stable = target_dir.join(profile).join("runtime");
-            println!(
-                "cargo:rustc-env=BOXLITE_DEFAULT_RUNTIME_DIR={}",
-                stable.display()
-            );
-        }
+    {
+        let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+        let stable = target_dir.join(profile).join("runtime");
+        println!(
+            "cargo:rustc-env=BOXLITE_DEFAULT_RUNTIME_DIR={}",
+            stable.display()
+        );
     }
 }
