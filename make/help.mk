@@ -42,6 +42,7 @@ help:
 	@echo "    make test:unit:sdk          - Run SDK unit suites (Python + Node + C + Go)"
 	@echo "    make test:integration:sdk   - Run SDK integration suites (Python + Node + C)"
 	@echo "    make test:unit:rust         - Run Rust unit tests (nextest when available)"
+	@echo "    make test:unit:vmm          - Run only the hypervisor and VMM crate unit tests"
 	@echo "    make test:guest-perms       - Run guest ownership tests (privileged cases use sudo)"
 	@echo "    make test:guest-artifacts   - Build and qualify the standalone guest artifacts"
 	@echo "    make test:warm-cache:rust   - Pre-warm Rust integration image cache"
