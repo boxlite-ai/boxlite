@@ -179,7 +179,7 @@ jobs:
               - 'make/test.mk'
               - '.github/workflows/test.yml'
 
-  # Rust unit tests with coverage: core, shared and rest passes via make coverage:lcov
+  # Rust unit tests with coverage via make coverage:lcov, over the crate sets in RUST_UNIT_*_ARGS (make/test.mk)
   rust:
     name: Rust Tests (${{ matrix.platform.target }})
     needs: [config, changes]

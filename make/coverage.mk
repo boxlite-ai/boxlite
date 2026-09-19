@@ -14,6 +14,7 @@ define run_unit_coverage
 	@rc=0; \
 	cargo llvm-cov nextest --no-report --no-tests=warn $(NEXTEST_PROFILE_FLAG) $(RUST_UNIT_CORE_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
 	cargo llvm-cov nextest --no-report --no-tests=warn $(NEXTEST_PROFILE_FLAG) $(RUST_UNIT_SHARED_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
+	cargo llvm-cov nextest --no-report --no-tests=warn $(NEXTEST_PROFILE_FLAG) $(RUST_UNIT_VMM_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
 	cargo llvm-cov test --no-report $(RUST_UNIT_REST_ARGS) -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	exit $$rc
 endef

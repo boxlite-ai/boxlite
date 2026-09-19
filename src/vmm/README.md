@@ -2,9 +2,12 @@
 
 Workspace skeleton for BoxLite's native VMM. The crate-visible VM and vCPU `run`
 entry points sketch event dispatch, guest exits, and worker cleanup with inline
-`todo!()` operations that panic if called. VM event labels stay local to the VM
-loop; vCPU exits use `boxlite_hypervisor::VcpuExit`. This crate cannot create or
-boot a VM yet.
+`todo!()` operations that panic if called. VM event labels stay local to
+`Vm::run`; vCPU exits use `boxlite_hypervisor::VcpuExit`, and `Error` wraps
+`boxlite_hypervisor::Error` with its cause chain intact. This crate cannot
+create or boot a VM yet. The [VMM design](../../docs/architecture/vmm-design.md)
+specifies the lifecycle API, memory layout, buses, interrupts, and threads it
+will implement.
 
 ```text
 boxlite-vmm
@@ -15,16 +18,16 @@ boxlite-vmm
 | --- | --- |
 | `vm` | VM facade and lifecycle coordination |
 | `config` | Machine configuration and boundary validation |
-| `error` | VMM errors |
+| `error` | VMM errors that keep the hypervisor's cause chain |
 | `memory` | Backing-memory ownership and guest address layout |
 | `vcpu` | Worker threads, stop coordination, and exit handling |
-| `irq` | Device interrupt assignment, routing, and controller emulation |
+| `irq` | Device interrupt assignment and routing; hosts provide the controller |
 | `bus` | Address-range registration and device I/O dispatch |
 
-Backend implementation and guest boot follow in M1; virtio devices follow in M2.
-The BoxLite engine adapter, engine selection, and `native` feature wiring are
-separate work. Neither new crate depends on `boxlite-shared`, and both are
-unpublished while their interfaces are being established.
+Backend implementation and guest boot follow in M1. Virtio devices, the BoxLite
+engine adapter, engine selection, and `native` feature wiring follow in M2.
+Neither new crate depends on `boxlite-shared`, and both are unpublished while
+their interfaces are being established.
 
 ## Build
 
@@ -33,6 +36,7 @@ From the repository root:
 ```sh
 make vmm
 make clippy:vmm
+make test:unit:vmm
 make fmt:check:rust
 ```
 

@@ -1,7 +1,9 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Host hypervisor backend skeleton. No VM operations are implemented yet.
+//! Host hypervisor backends. The [`Vm`] and [`Vcpu`] traits are the contract
+//! every backend implements; vCPU register access and the HVF and KVM backends
+//! themselves are not implemented yet.
 //!
 //! This crate owns host-specific mechanisms; `boxlite-vmm` owns the guest
 //! machine configuration, memory backing, execution policy, and devices.
@@ -15,7 +17,11 @@ mod memory;
 mod vcpu;
 mod vm;
 
+pub use error::{Error, Result};
 pub use exit::VcpuExit;
+pub use memory::MemoryRegion;
+pub use vcpu::{Vcpu, VcpuHandle};
+pub use vm::Vm;
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod hvf;
