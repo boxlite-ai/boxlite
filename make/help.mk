@@ -24,7 +24,7 @@ help:
 	@echo "    make lint:apps             - Lint the apps workspace TypeScript (eslint)"
 	@echo ""
 	@echo "  Build:"
-	@echo "    make cli            - Build the CLI (boxlite command)"
+	@echo "    make cli            - Build the CLI (debug; uses ./target/debug/runtime, EMBED=1 to embed)"
 	@echo "    make guest          - Build the guest binary and static filesystem tools"
 	@echo "    make runtime        - Build runtime artifacts (release)"
 	@echo "    make runtime:debug  - Build runtime artifacts (debug)"

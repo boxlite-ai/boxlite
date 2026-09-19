@@ -22,8 +22,14 @@ runtime\:debug:
 
 cli: runtime\:debug
 	@echo "🔨 Building boxlite CLI..."
-	@cargo build -p boxlite-cli
+	@if [ "$(EMBED)" = "1" ]; then \
+		echo "   Embedding runtime (BOXLITE_EMBED_RUNTIME=1)"; \
+		BOXLITE_EMBED_RUNTIME=1 cargo build -p boxlite-cli; \
+	else \
+		cargo build -p boxlite-cli; \
+	fi
 	@echo "✅ CLI built: ./target/debug/boxlite"
+	@echo "   Runtime: ./target/debug/runtime"
 
 cli\:release: runtime
 	@echo "🔨 Building boxlite CLI (release)..."
