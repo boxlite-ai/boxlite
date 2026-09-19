@@ -1,7 +1,5 @@
 # Architecture
 
-Related design: [AutoStop / AutoResume / AutoDelete](./auto-stop-resume-design.md)
-
 Container security design: [Linux capability API](./container-capabilities.md)
 
 Jailer network permission design:
