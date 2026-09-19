@@ -137,13 +137,6 @@ export class Organization {
   })
   suspendedUntil?: Date
 
-  @Column({
-    type: 'int',
-    default: 20160,
-    name: 'template_deactivation_timeout_minutes',
-  })
-  templateDeactivationTimeoutMinutes: number
-
   // How many distinct images this organization may keep in its catalog. A
   // count, not a byte budget: nothing central stores the bytes, and what fills
   // a shared runner's disk is the number of distinct images it has to cache.

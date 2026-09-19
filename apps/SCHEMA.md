@@ -189,7 +189,6 @@ state inline.
 | `suspendedUntil` | `timestamptz` | nullable |
 | `suspensionReason` | `character varying` | nullable |
 | `suspensionCleanupGracePeriodHours` | `integer` | default `24` |
-| `template_deactivation_timeout_minutes` | `integer` | default `20160` |
 | `image_count_limit` | `integer` | default `20`; catalog entries an organization may keep |
 | `boxLimitedNetworkEgress` | `boolean` | default `false` |
 | `experimentalConfig` | `jsonb` | nullable |
