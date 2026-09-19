@@ -34,11 +34,27 @@ import { PULUMI_GROUP, TEARDOWN_GROUPS, rolloutGroups } from './env.ts'
 import type { DeployRequest, DeployTarget, Intent } from './deploy.ts'
 
 /** What each intent is called while it runs, and which engine call performs it. */
-const NARRATION: Record<Intent, string> = { deploy: 'deploying', diff: 'comparing', remove: 'removing' }
+const NARRATION: Record<Intent, string> = {
+  deploy: 'deploying',
+  diff: 'comparing',
+  remove: 'removing',
+  refresh: 'reconciling the state of',
+}
 const ACT: Record<Intent, (stack: PulumiStack, options: { onOutput: (output: string) => void }) => Promise<unknown>> = {
   deploy: (stack, options) => stack.up(options),
   diff: (stack, options) => stack.preview(options),
   remove: (stack, options) => stack.destroy(options),
+  /*
+   * What an interrupted run leaves behind, and the only way to clear it.
+   *
+   * Pulumi records an operation before it starts one and clears it when it
+   * finishes; a driver killed in between leaves the record, and every later
+   * run then opens with `2 pending operations from previous deployment` over
+   * resources it calls unknown. The engine's own advice is a refresh, and
+   * until this existed the only way to take it was a script outside the
+   * repository holding the backend URL and the passphrase by hand.
+   */
+  refresh: (stack, options) => stack.refresh(options),
 }
 
 /**
@@ -85,6 +101,7 @@ export type PulumiStack = {
   up: (options: { onOutput?: (output: string) => void }) => Promise<unknown>
   preview: (options: { onOutput?: (output: string) => void }) => Promise<unknown>
   destroy: (options: { onOutput?: (output: string) => void }) => Promise<unknown>
+  refresh: (options: { onOutput?: (output: string) => void }) => Promise<unknown>
 }
 
 export type StackFactory = (input: {

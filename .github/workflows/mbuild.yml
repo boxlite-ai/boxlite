@@ -113,7 +113,7 @@ jobs:
   # either stage passes through here.
   declaration:
     name: read ${{ inputs.from }}
-    if: github.ref == 'refs/heads/main' && inputs.command == 'promote'
+    if: ${{ (github.ref == 'refs/heads/main' || (inputs.stage || inputs.to) == 'dev') && inputs.command == 'promote' }}
     environment: ${{ inputs.from }}
     runs-on: ubuntu-latest
     outputs:
@@ -128,7 +128,8 @@ jobs:
     # Waits for that job only when there is one — a publish reads one stage.
     needs: [declaration]
     if: >-
-      ${{ !cancelled() && !failure() && github.ref == 'refs/heads/main' }}
+      ${{ !cancelled() && !failure()
+      && (github.ref == 'refs/heads/main' || (inputs.stage || inputs.to) == 'dev') }}
     # The job that reaches a protected Environment reaches the cloud role behind
     # it, so it runs from main and nowhere else. `!failure()` rather than a bare
     # `needs`, because the job above is skipped for a publish and a skipped
@@ -158,6 +159,7 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
           fallback: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
 
       - name: Address the commit the ref names
         shell: bash

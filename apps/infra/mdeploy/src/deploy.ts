@@ -33,7 +33,7 @@ import { gcpTarget } from './pulumi.ts'
  * identity and the same stage configuration, and every guard a deploy passes is
  * one a teardown has more reason to.
  */
-export type Intent = 'deploy' | 'diff' | 'remove'
+export type Intent = 'deploy' | 'diff' | 'remove' | 'refresh'
 
 /** Which engine drives a run. One per cloud, and not a preference. */
 export type Engine = 'sst' | 'pulumi'

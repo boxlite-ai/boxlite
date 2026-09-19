@@ -27,7 +27,12 @@ import { TEARDOWN_GROUPS, rolloutGroups } from './env.ts'
 import type { DeployRequest, DeployTarget, Intent } from './deploy.ts'
 
 /** What each intent is called while it runs. */
-const NARRATION: Record<Intent, string> = { deploy: 'deploying', diff: 'comparing', remove: 'removing' }
+const NARRATION: Record<Intent, string> = {
+  deploy: 'deploying',
+  diff: 'comparing',
+  remove: 'removing',
+  refresh: 'reconciling the state of',
+}
 
 /** Relative to mstage.config.json, which sits at the root of apps/infra. */
 const STACK_DIRECTORY = '.'

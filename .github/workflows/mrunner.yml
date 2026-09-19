@@ -93,7 +93,7 @@ jobs:
   # own block. Same shape as mbuild.yml's, and for the same reason.
   declaration:
     name: read ${{ inputs.from }}
-    if: github.ref == 'refs/heads/main' && inputs.command == 'promote'
+    if: ${{ (github.ref == 'refs/heads/main' || inputs.stage == 'dev') && inputs.command == 'promote' }}
     environment: ${{ inputs.from }}
     runs-on: ubuntu-latest
     outputs:
@@ -108,7 +108,7 @@ jobs:
     # it, so it runs from main and nowhere else. `!failure()` rather than a bare
     # `needs`, because the job above is skipped for a build and a skipped
     # dependency would otherwise skip this one too.
-    if: ${{ !cancelled() && !failure() && github.ref == 'refs/heads/main' }}
+    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
     outputs:
@@ -125,6 +125,7 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           fallback: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
 
       # The tree the binary is built from, and the submodules it is built with:
       # `runner:build` refuses a checkout whose submodules are missing or do not

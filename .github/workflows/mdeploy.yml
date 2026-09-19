@@ -102,18 +102,19 @@ env:
   GH_TOKEN: ${{ github.token }}
 
 jobs:
-  preflight:
-    name: preflight
+  deploy:
+    name: ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }}
+    # One job, which is why the reads below run before the apply rather than
+    # beside it. They used to be a `preflight` job of their own, and a second
+    # job meant a second wait on this Environment's reviewers — the checks that
+    # decide whether an apply can succeed cost an approval to perform.
+    #
     # The job that reaches a protected Environment reaches the cloud role behind
-    # it, so it runs from main and nowhere else.
-    if: github.ref == 'refs/heads/main'
+    # it, so every stage but dev runs from main and nowhere else. dev is shaken
+    # out from the branch that is changing it.
+    if: ${{ (github.ref == 'refs/heads/main' || inputs.stage == 'dev') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
-    outputs:
-      kind: ${{ steps.config.outputs.kind }}
-      region: ${{ steps.config.outputs.region }}
-      image_tag: ${{ steps.image.outputs.sha }}
-      runner_ref: ${{ steps.runner.outputs.sha }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -136,6 +137,7 @@ jobs:
         with:
           ref: ${{ inputs.image_tag }}
           fallback: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
 
       # No fallback: an empty input is a release-mode deploy, which addresses a
       # version rather than a commit and needs no ref at all.
@@ -144,10 +146,26 @@ jobs:
         uses: ./.github/actions/resolve-ref
         with:
           ref: ${{ inputs.runner_ref }}
+          branch: ${{ github.ref_name }}
 
-      - name: Address the commit the image ref names
+      # What this job deploys, as commits rather than as the names it was given.
+      # The workflow-level BOXLITE_IMAGE_TAG still holds the raw input, which may
+      # be a tag; writing the resolved one here is what makes the image the apply
+      # installs the image the check below verified.
+      #
+      # A staged runner binary is addressed by the commit it was produced from;
+      # without one the stage installs the published release, which is the
+      # default the tool already applies. Both are named so the mode is readable
+      # in the run rather than inferred from an absence.
+      - name: Address the commits the refs name
         shell: bash
-        run: printf 'BOXLITE_IMAGE_TAG=%s\n' '${{ steps.image.outputs.sha }}' >> "$GITHUB_ENV"
+        run: |
+          set -Eeuo pipefail
+          {
+            printf 'BOXLITE_IMAGE_TAG=%s\n' '${{ steps.image.outputs.sha }}'
+            printf 'RUNNER_ARTIFACT_SOURCE=%s\n' '${{ steps.runner.outputs.sha != '' && 'build' || 'release' }}'
+            printf 'RUNNER_ARTIFACT_REF=%s\n' '${{ steps.runner.outputs.sha }}'
+          } >> "$GITHUB_ENV"
 
       # ----------------------------------------------------------- 1/5
       # Which cloud this stage deploys to, and where in it. One file says both,
@@ -187,6 +205,18 @@ jobs:
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER }}
+
+      # The apply asks Certificate Manager what this project already holds
+      # before it changes anything (`src/dns-authorization.ts`), and it asks
+      # through the CLI — which the federation above writes a credential for but
+      # does not install. Without it the check reports that it could not read
+      # and lets the apply through, which is the guard never running at all.
+      #
+      # Before the reads and the apply shared one job this sat beside the apply.
+      # It belongs here now, because the checks below shell out to the same CLI.
+      - name: Install gcloud
+        if: steps.config.outputs.kind == 'artifact-registry'
+        uses: google-github-actions/setup-gcloud@v2
 
       # ----------------------------------------------------------- 3/5
       # A read, so a transient failure says nothing about the answer: retried.
@@ -242,63 +272,6 @@ jobs:
             exit 1
           fi
 
-  deploy:
-    name: ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }}
-    needs: preflight
-    if: github.ref == 'refs/heads/main'
-    environment: ${{ inputs.stage }}
-    runs-on: ubuntu-latest
-    # What this job deploys, as commits rather than as the names it was given.
-    # The workflow-level BOXLITE_IMAGE_TAG still holds the raw input, which may
-    # be a tag; taking preflight's answer is what makes the image this job
-    # deploys the image preflight verified.
-    env:
-      BOXLITE_IMAGE_TAG: ${{ needs.preflight.outputs.image_tag }}
-      # A staged binary is addressed by the commit it was produced from; without
-      # one the stage installs the published release, which is the default the
-      # tool already applies. Both are named here so the mode is readable in the
-      # run rather than inferred from an absence.
-      RUNNER_ARTIFACT_SOURCE: ${{ needs.preflight.outputs.runner_ref != '' && 'build' || 'release' }}
-      RUNNER_ARTIFACT_REF: ${{ needs.preflight.outputs.runner_ref }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-
-      - uses: ./.github/actions/setup-infra
-        with:
-          stages: ${{ inputs.stage }}
-          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
-
-      - name: Federate an AWS identity
-        if: needs.preflight.outputs.kind == 'ecr'
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          # Composed from the stage's AWS_ACCOUNT_ID, not a stored role ARN: the
-          # role name is fixed per stage (bootstrap/environment.ts's
-          # githubDeployRoleName, the same name bootstrap/aws.ts creates the role
-          # under), so only the account id has to be configured. Every other
-          # deploy workflow in this repository composes it the same way.
-          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.stage }}-github-deploy
-          aws-region: ${{ needs.preflight.outputs.region }}
-          role-session-name: mdeploy-${{ github.run_id }}
-
-      - name: Federate a GCP identity
-        if: needs.preflight.outputs.kind == 'artifact-registry'
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_DEPLOYER }}
-
-      # The apply asks Certificate Manager what this project already holds
-      # before it changes anything (`src/dns-authorization.ts`), and it asks
-      # through the CLI — which the federation above writes a credential for but
-      # does not install. Without it the check reports that it could not read
-      # and lets the apply through, which is the guard never running at all.
-      - name: Install gcloud
-        if: needs.preflight.outputs.kind == 'artifact-registry'
-        uses: google-github-actions/setup-gcloud@v2
-
       # Never retried. A run killed mid-apply can leave the per-stage lock held,
       # and a second attempt then fails on the lock rather than on the cause
       # worth reading. Clearing it by hand is a first-class command:
@@ -323,7 +296,7 @@ jobs:
             echo "| | |"
             echo "|---|---|"
             echo "| commit | \`$BOXLITE_IMAGE_TAG\` |"
-            echo "| cloud | \`${{ needs.preflight.outputs.kind == 'ecr' && 'aws' || 'gcp' }}\` in \`${{ needs.preflight.outputs.region }}\` |"
+            echo "| cloud | \`${{ steps.config.outputs.kind == 'ecr' && 'aws' || 'gcp' }}\` in \`${{ steps.config.outputs.region }}\` |"
             echo "| intent | \`${{ inputs.apply && 'apply' || 'preview' }}\` |"
             echo "| result | \`${{ job.status }}\` |"
             echo

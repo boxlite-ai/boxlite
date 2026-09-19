@@ -87,7 +87,10 @@ jobs:
   # build one commit and deploy another.
   ref:
     name: resolve
-    if: github.ref == 'refs/heads/main'
+    # dev is shaken out from the branch that is changing it; every other stage
+    # runs from main. Named as an allow rather than a deny so a stage added
+    # later is main-only until someone says otherwise.
+    if: ${{ (github.ref == 'refs/heads/main' || inputs.stage == 'dev') }}
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.ref.outputs.sha }}
@@ -101,6 +104,7 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           fallback: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
 
   # What the source stage holds, asked where it can be asked.
   #
@@ -112,7 +116,7 @@ jobs:
     name: read ${{ inputs.auto_promote_from }}
     needs: [ref]
     if: >-
-      ${{ github.ref == 'refs/heads/main'
+      ${{ (github.ref == 'refs/heads/main' || inputs.stage == 'dev')
       && inputs.auto_promote_from != 'none' && inputs.auto_promote_from != inputs.stage }}
     environment: ${{ inputs.auto_promote_from }}
     runs-on: ubuntu-latest
@@ -193,7 +197,7 @@ jobs:
   plan:
     name: plan ${{ inputs.stage }}
     needs: [ref, source]
-    if: ${{ !cancelled() && !failure() && github.ref == 'refs/heads/main' }}
+    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
     outputs:

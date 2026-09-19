@@ -25,11 +25,16 @@ export class UsageError extends Error {
 const USAGE = [
   'usage: npm run mdeploy -- --stage <stage> [--confirm] [--local-env]',
   '       npm run mdeploy -- --stage <stage> --diff',
+  '       npm run mdeploy -- --stage <stage> --refresh',
   '       npm run mdeploy -- --stage <stage> --remove --confirm',
+  '',
+  '--refresh reconciles the state with the cloud and clears the operations an',
+  'interrupted run left pending. It changes no resource; it rewrites what this',
+  'stage believes about them.',
 ].join('\n')
 
 /** mdeploy's own switches. mstage parses them but never advertises them. */
-const OWN_OPTIONS = { flags: ['local-env', 'diff', 'remove'] }
+const OWN_OPTIONS = { flags: ['local-env', 'diff', 'remove', 'refresh'] }
 
 export type RunInput = {
   argv: string[]
@@ -81,12 +86,19 @@ export const run = async ({
     log,
   })
   if (signedIn !== 0) throw new UsageError('Required sign-ins are missing; run `npm run mstage login -- -f` first')
-  if (options.diff === true && options.remove === true) {
-    throw new UsageError('--diff and --remove ask for opposite things; name one')
+  // One intent, named once. Three switches rather than two, so the pair test
+  // this replaces would have let `--diff --refresh` through.
+  const named = [options.diff === true && 'diff', options.remove === true && 'remove', options.refresh === true && 'refresh'].filter(
+    Boolean,
+  ) as Intent[]
+  if (named.length > 1) throw new UsageError(`${named.map((one) => `--${one}`).join(' and ')} ask for different things; name one`)
+  const intent: Intent = named[0] ?? 'deploy'
+  // A protected stage is asked before its state is rewritten, for the reason it
+  // is asked before a rollout: the resources are the same ones, and a refresh
+  // that reads a resource as gone is the first half of recreating it.
+  if (intent === 'refresh' && scope.protect && options.confirm !== true) {
+    throw new UsageError(`Stage "${scope.stage}" is protected in ${config.path}. Add --confirm to refresh it.`)
   }
-  // A preview reads. `--confirm` guards a change, so asking for it before
-  // showing one what a change would be is a gate with nothing behind it.
-  const intent: Intent = options.diff === true ? 'diff' : options.remove === true ? 'remove' : 'deploy'
   if (intent === 'deploy' && scope.protect && options.confirm !== true) {
     throw new UsageError(`Stage "${scope.stage}" is protected in ${config.path}. Add --confirm to deploy it.`)
   }

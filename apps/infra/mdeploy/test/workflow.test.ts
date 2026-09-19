@@ -255,3 +255,80 @@ test('every staged-runner question names the commit, the way the image question 
     assert.match(call, /--tag "\$\{\{ needs\.ref\.outputs\.sha \}\}"|--tag "\$SHA"/, `asks about the checkout: ${call}`)
   }
 })
+
+test('every deploy-path ref is pinned to the branch it was dispatched from', () => {
+  /*
+   * `resolve-ref` took a 40-character string on trust: it matched the shape and
+   * became the deploy's commit without anything asking whether this repository
+   * had ever held it. A typo then travelled as far as the registry, which
+   * answered that the images were missing — true, and about the wrong commit.
+   *
+   * The branch is the second half. A commit on an abandoned branch, or on one
+   * force-pushed away, still resolves and still names bytes, and deploying it
+   * puts a stage on something no branch here will produce again. Asserted
+   * across every call in the deploy workflows, because the guard is only worth
+   * as much as the call site that forgets it.
+   */
+  const workflows = ['mdeploy-all.yml', 'mdeploy.yml', 'mbuild.yml', 'mrunner.yml']
+  for (const name of workflows) {
+    const text = readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)), 'utf8')
+    const uses = [...text.matchAll(/uses: \.\/\.github\/actions\/resolve-ref\n\s*with:\n((?:\s{10}\S[^\n]*\n)+)/g)]
+    assert.ok(uses.length > 0, `${name} resolves no ref`)
+    for (const [, block] of uses) {
+      assert.match(block, /branch: \$\{\{ github\.ref_name \}\}/, `${name} resolves a ref against no branch:\n${block}`)
+    }
+  }
+})
+
+test('the only stage a deploy workflow runs for off main is dev', () => {
+  /*
+   * dev is shaken out from the branch that is changing it, so its jobs run
+   * wherever they were dispatched. Every other stage reaches a protected
+   * Environment and the cloud role behind it, and runs from main alone.
+   *
+   * Written as an allow-list on the escape rather than a deny-list on prod: a
+   * stage added to the choice list later is main-only until an edit here says
+   * otherwise, where `!= 'prod'` would have admitted it silently.
+   */
+  const workflows = ['mdeploy-all.yml', 'mdeploy.yml', 'mbuild.yml', 'mrunner.yml']
+  for (const name of workflows) {
+    const text = readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)), 'utf8')
+    const guards = [...text.matchAll(/^\s*if: [^\n]*(?:\n\s{6}[^\n]*)*/gm)]
+      .map((match) => match[0])
+      .filter((guard) => guard.includes('refs/heads/main'))
+    assert.ok(guards.length > 0, `${name} guards no job by branch`)
+    for (const guard of guards) {
+      assert.match(guard, /== 'dev'/, `${name} leaves main for a stage it does not name:\n${guard}`)
+      assert.equal(
+        /!= 'prod'/.test(guard),
+        false,
+        `${name} denies prod instead of allowing dev, so the next stage added is admitted:\n${guard}`,
+      )
+    }
+  }
+})
+
+test('the checks that decide an apply run in the job that applies, not beside it', () => {
+  /*
+   * One job, because a second one costs a second approval. The reads — which
+   * commit the refs name, whether the stage holds those images, whether its
+   * configuration still matches its own fingerprint, whether a protected stage
+   * was confirmed — used to be a `preflight` job binding the same Environment,
+   * so a dispatch waited on this stage's reviewers twice to perform checks that
+   * change nothing.
+   *
+   * Asserted as a count rather than by name: splitting them out again under any
+   * name brings the second wait back.
+   */
+  const jobs = [...workflow.matchAll(/^ {2}([a-z][a-z-]*):$/gm)].map((match) => match[1])
+  assert.deepEqual(jobs, ['deploy'], 'a second job binding this Environment is a second approval')
+
+  // And the order that makes one job equivalent to the two: every check still
+  // runs before the apply it guards.
+  const apply = workflow.indexOf('- name: Apply')
+  for (const check of ['Verify the stage configuration', 'Verify the images', 'Confirm a protected stage']) {
+    const at = workflow.indexOf(check)
+    assert.notEqual(at, -1, `${check} is gone rather than moved`)
+    assert.ok(at < apply, `${check} runs after the apply it guards`)
+  }
+})

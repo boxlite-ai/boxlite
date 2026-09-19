@@ -21,5 +21,8 @@ export const REQUIRED_PREVIEW_SECONDS = 60
  * A teardown runs as long as a rollout and holds the same lock, so it needs the
  * same window; only the preview is cheap enough to do without one.
  */
-export const windowFor = (intent: 'deploy' | 'diff' | 'remove'): number =>
+export const windowFor = (intent: 'deploy' | 'diff' | 'remove' | 'refresh'): number =>
+  // A refresh holds the lock and rewrites the state it read, so it is asked for
+  // the same session a rollout is. Only a preview, which holds nothing and
+  // writes nothing, gets the short one.
   intent === 'diff' ? REQUIRED_PREVIEW_SECONDS : REQUIRED_CREDENTIAL_SECONDS
