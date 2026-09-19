@@ -5,7 +5,7 @@ and arm64. The `Vm`, `Vcpu` and `VcpuHandle` traits, with `VcpuExit`,
 `MemoryRegion` and `Error`, are the contract every backend implements; M1 adds
 the vCPU register access that boot needs, and the backends themselves. The
 rules each backend keeps are in the
-[VMM design](../../docs/architecture/vmm-design.md#hypervisor-backend-interface).
+[VMM design](../../docs/architecture/vmm/README.md#hypervisor-backend-interface).
 
 This crate owns host VM/vCPU handles, memory registration, interrupt
 injection, and decoding host exits. It is a leaf among the BoxLite crates;

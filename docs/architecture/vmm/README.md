@@ -13,6 +13,12 @@ hypervisor backend interface, the device model, the VM lifecycle and its
 errors, and the guest boot contract. libkrun ships unchanged until the new VMM
 becomes the default in M5.
 
+Diagrams of this design:
+
+- [macOS Hypervisor.framework](./hvf.md)
+- [Linux KVM](./kvm.md)
+- [Guest memory](./memory.md)
+
 Repository line references are to commit `42ec1a2a6`. `libkrun/` is the vendored
 copy at `src/deps/libkrun-sys/vendor/libkrun/` (upstream `e12b9b3`).
 
@@ -37,7 +43,7 @@ copy at `src/deps/libkrun-sys/vendor/libkrun/` (upstream `e12b9b3`).
 | Threads | One thread per vCPU, worker threads per device, and a poller on the thread that calls `run()` | HVF binds a vCPU to the thread that created it, and per-device workers keep a slow device, such as a blocking virtio-fs request, from stalling the others | One event loop for all devices (Firecracker), where one slow device stalls the rest; an async runtime inside the jailed shim, which complicates per-thread seccomp |
 
 macOS 12–14 keep running boxes on libkrun until M5. When M5 removes libkrun,
-the support matrix in `README.md:241` changes from "macOS 12+" to macOS 15.
+the support matrix in the root `README.md:241` changes from "macOS 12+" to macOS 15.
 
 ## Architecture
 
