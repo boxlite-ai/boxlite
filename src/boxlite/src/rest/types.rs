@@ -380,6 +380,10 @@ pub(crate) struct BoxResponse {
     pub image: String,
     pub cpus: u8,
     pub memory_mib: u32,
+    /// Reuse-relevant security metadata. Older servers omit this field; callers
+    /// may inspect such boxes, but cannot safely adopt them by name.
+    #[serde(default)]
+    pub advanced: Option<crate::AdvancedBoxInfo>,
     #[serde(default)]
     pub labels: HashMap<String, String>,
     /// Absent while the box's main command is still running. An older server
@@ -437,6 +441,7 @@ impl BoxResponse {
             image: self.image.clone(),
             cpus: self.cpus,
             memory_mib: self.memory_mib,
+            advanced: self.advanced.clone(),
             // The remote REST surface intentionally does not publish local
             // host bindings. Missing network metadata is therefore distinct
             // from a locally verified, resolved-empty publication list.
@@ -1083,6 +1088,14 @@ mod tests {
             image: "python:3.11".to_string(),
             cpus: 2,
             memory_mib: 512,
+            advanced: Some(crate::AdvancedBoxInfo {
+                capabilities: crate::ContainerCapabilities {
+                    add: vec!["SYS_ADMIN".to_string()],
+                    drop: Vec::new(),
+                },
+                privileged: false,
+                nested_virtualization: false,
+            }),
             labels: HashMap::new(),
             exit_code: None,
             auto_stop: 1800,
@@ -1094,6 +1107,7 @@ mod tests {
         assert_eq!(info.image, "python:3.11");
         assert_eq!(info.cpus, 2);
         assert_eq!(info.memory_mib, 512);
+        assert_eq!(info.advanced, resp.advanced);
         assert!(info.network.is_none());
         assert_eq!(info.auto_stop, 1800);
         assert_eq!(info.auto_delete, 604800);
@@ -1117,6 +1131,7 @@ mod tests {
             auto_stop: 1800,
             auto_delete: 0,
             auto_resume: true,
+            advanced: None,
         };
 
         let info = resp.to_box_info().expect("valid box_id should parse");
@@ -1148,6 +1163,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 1,
             memory_mib: 256,
+            advanced: None,
             labels: HashMap::new(),
             exit_code: None,
             auto_stop: 900,
@@ -1177,6 +1193,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 1,
             memory_mib: 256,
+            advanced: None,
             labels: HashMap::new(),
             exit_code: None,
             auto_stop: 900,
@@ -1250,6 +1267,7 @@ mod tests {
             image: "python:3.11".to_string(),
             cpus: 2,
             memory_mib: 512,
+            advanced: None,
             labels: HashMap::new(),
             exit_code: None,
             auto_stop: 900,

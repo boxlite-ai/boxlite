@@ -50,6 +50,10 @@ impl From<PublishedPort> for JsPublishedPort {
     }
 }
 
+/// Outbound network policy for traffic from the guest to external hosts.
+///
+/// With `mode` set to `enabled`, `allowNet` lists permitted destinations.
+/// An empty list permits unrestricted outbound access.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsOutboundNetworkInfo {
@@ -67,6 +71,10 @@ impl From<OutboundNetworkInfo> for JsOutboundNetworkInfo {
     }
 }
 
+/// Inbound reachability policy for exposed guest ports and previews.
+///
+/// `mode` records whether these endpoints are publicly reachable.
+/// `allowNet` is reserved for inbound filtering and is currently empty.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsInboundNetworkInfo {
@@ -323,6 +331,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 2,
             memory_mib: 512,
+            advanced: None,
             network,
             labels: HashMap::new(),
             auto_stop: 0,
