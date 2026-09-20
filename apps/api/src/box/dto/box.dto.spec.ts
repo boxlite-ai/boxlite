@@ -21,29 +21,28 @@ describe('BoxDto public identity', () => {
 })
 
 describe('BoxDto main command exit code', () => {
-  function boxWith(exitCode: number | null | undefined): Box {
+  function box(): Box {
     const box = new Box('us', 'loader')
     box.id = 'box-1'
-    box.exitCode = exitCode
     return box
   }
 
-  // 0 is what tells a box that finished its work from one that crashed, so it
-  // has to survive the conversion as a value.
+  // The code is read from the runner and handed in, so this conversion's only
+  // job is to keep 0 a value: it is what tells a box that finished its work
+  // from one that crashed.
   it.each([
     ['a failing main command', 137, 137],
     ['a main command that succeeded', 0, 0],
-  ])('reports the exit code of %s', (_case, stored, expected) => {
-    expect(BoxDto.fromBox(boxWith(stored), 'https://proxy.invalid').exitCode).toBe(expected)
+  ])('reports the exit code of %s', (_case, read, expected) => {
+    expect(BoxDto.fromBox(box(), 'https://proxy.invalid', null, read).exitCode).toBe(expected)
   })
 
-  // Absent, never null: the generated clients type this as an optional number,
-  // and every other layer says absence is what "not recorded" looks like.
-  it.each([
-    ['a box that never stopped that way', null],
-    ['a box from before the column existed', undefined],
-  ])('omits the exit code for %s', (_case, stored) => {
-    const dto = BoxDto.fromBox(boxWith(stored), 'https://proxy.invalid')
+  // Absence is the only way to say "not recorded", and it has to survive
+  // serialization as a missing field — that is what the generated clients type
+  // against. A runtime that recorded none and a runner that could not be read
+  // both arrive here the same way, as nothing.
+  it('omits the exit code when there is none', () => {
+    const dto = BoxDto.fromBox(box(), 'https://proxy.invalid', null, undefined)
 
     expect(dto.exitCode).toBeUndefined()
     expect(JSON.parse(JSON.stringify(dto))).not.toHaveProperty('exitCode')

@@ -6,7 +6,6 @@
 
 import { Injectable, Logger } from '@nestjs/common'
 import { BoxState } from '../enums/box-state.enum'
-import { beginsNewRun } from '../utils/exit-code.util'
 import { JobStatus } from '../enums/job-status.enum'
 import { JobType } from '../enums/job-type.enum'
 import { Job } from '../entities/job.entity'
@@ -109,9 +108,6 @@ export class JobStateHandlerService {
         this.logger.debug(`CREATE_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
         updateData.state = BoxState.STARTED
         updateData.errorReason = null
-        if (beginsNewRun(updateData.state)) {
-          updateData.exitCode = null
-        }
         const metadata = job.getResultMetadata()
         if (metadata?.daemonVersion && typeof metadata.daemonVersion === 'string') {
           updateData.daemonVersion = metadata.daemonVersion
@@ -154,12 +150,6 @@ export class JobStateHandlerService {
         this.logger.debug(`START_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
         updateData.state = BoxState.STARTED
         updateData.errorReason = null
-        // This is where a resumed box actually becomes STARTED, so it is where
-        // the previous run's exit code stops being true. Routed through the
-        // shared rule rather than hardcoded, so the three writers cannot drift.
-        if (beginsNewRun(updateData.state)) {
-          updateData.exitCode = null
-        }
         const metadata = job.getResultMetadata()
         if (metadata?.daemonVersion && typeof metadata.daemonVersion === 'string') {
           updateData.daemonVersion = metadata.daemonVersion

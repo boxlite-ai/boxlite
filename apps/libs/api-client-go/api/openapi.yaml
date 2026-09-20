@@ -5817,7 +5817,10 @@ components:
           type: string
         exitCode:
           description: "Exit code of the box's main command, present when the box\
-            \ stopped because that command exited"
+            \ stopped because that command exited. `0` is a real value, so a client\
+            \ must tell the missing field from a zero one. Only reading a single box\
+            \ carries it: this schema is shared with the box list and with the replies\
+            \ that change a box, which leave it out whether or not one was recorded."
           example: 137
           type: integer
         class:
@@ -5980,7 +5983,6 @@ components:
         state: started
         errorReason: Failed to pull artifact image
         recoverable: true
-        exitCode: 137
       properties:
         state:
           description: The new state for the box
@@ -6008,11 +6010,6 @@ components:
           description: Whether the box is recoverable
           example: true
           type: boolean
-        exitCode:
-          description: "Exit code of the box's main command, sent with the stop that\
-            \ command caused. Omitted when the box stopped for any other reason."
-          example: 137
-          type: integer
       required:
       - state
       type: object

@@ -129,7 +129,7 @@ export interface Box {
      */
     'lastActivityAt'?: string;
     /**
-     * Exit code of the box\'s main command, present when the box stopped because that command exited
+     * Exit code of the box\'s main command, present when the box stopped because that command exited. `0` is a real value, so a client must tell the missing field from a zero one. Only reading a single box carries it: this schema is shared with the box list and with the replies that change a box, which leave it out whether or not one was recorded.
      */
     'exitCode'?: number;
     /**

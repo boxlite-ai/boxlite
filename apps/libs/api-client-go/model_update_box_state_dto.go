@@ -27,8 +27,6 @@ type UpdateBoxStateDto struct {
 	ErrorReason *string `json:"errorReason,omitempty"`
 	// Whether the box is recoverable
 	Recoverable *bool `json:"recoverable,omitempty"`
-	// Exit code of the box's main command, sent with the stop that command caused. Omitted when the box stopped for any other reason.
-	ExitCode *int32 `json:"exitCode,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -140,38 +138,6 @@ func (o *UpdateBoxStateDto) SetRecoverable(v bool) {
 	o.Recoverable = &v
 }
 
-// GetExitCode returns the ExitCode field value if set, zero value otherwise.
-func (o *UpdateBoxStateDto) GetExitCode() int32 {
-	if o == nil || IsNil(o.ExitCode) {
-		var ret int32
-		return ret
-	}
-	return *o.ExitCode
-}
-
-// GetExitCodeOk returns a tuple with the ExitCode field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *UpdateBoxStateDto) GetExitCodeOk() (*int32, bool) {
-	if o == nil || IsNil(o.ExitCode) {
-		return nil, false
-	}
-	return o.ExitCode, true
-}
-
-// HasExitCode returns a boolean if a field has been set.
-func (o *UpdateBoxStateDto) HasExitCode() bool {
-	if o != nil && !IsNil(o.ExitCode) {
-		return true
-	}
-
-	return false
-}
-
-// SetExitCode gets a reference to the given int32 and assigns it to the ExitCode field.
-func (o *UpdateBoxStateDto) SetExitCode(v int32) {
-	o.ExitCode = &v
-}
-
 func (o UpdateBoxStateDto) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -188,9 +154,6 @@ func (o UpdateBoxStateDto) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.Recoverable) {
 		toSerialize["recoverable"] = o.Recoverable
-	}
-	if !IsNil(o.ExitCode) {
-		toSerialize["exitCode"] = o.ExitCode
 	}
 
 	for key, value := range o.AdditionalProperties {
@@ -238,7 +201,6 @@ func (o *UpdateBoxStateDto) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "state")
 		delete(additionalProperties, "errorReason")
 		delete(additionalProperties, "recoverable")
-		delete(additionalProperties, "exitCode")
 		o.AdditionalProperties = additionalProperties
 	}
 

@@ -5,7 +5,7 @@
  */
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
-import { IsBoolean, IsEnum, IsInt, IsOptional, IsString } from 'class-validator'
+import { IsBoolean, IsEnum, IsOptional, IsString } from 'class-validator'
 import { BoxState } from '../enums/box-state.enum'
 
 export class UpdateBoxStateDto {
@@ -32,15 +32,4 @@ export class UpdateBoxStateDto {
     example: true,
   })
   recoverable?: boolean
-
-  @IsOptional()
-  @IsInt()
-  @ApiPropertyOptional({
-    description:
-      "Exit code of the box's main command, sent with the stop that command caused. " +
-      'Omitted when the box stopped for any other reason.',
-    example: 137,
-    type: 'integer',
-  })
-  exitCode?: number
 }

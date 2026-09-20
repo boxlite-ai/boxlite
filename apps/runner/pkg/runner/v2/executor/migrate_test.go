@@ -21,7 +21,7 @@ import (
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
-	"github.com/boxlite-ai/runner/pkg/models/enums"
+	"github.com/boxlite-ai/runner/pkg/models"
 )
 
 const (
@@ -112,8 +112,8 @@ func (f *fakeBackend) UpdateNetworkSettings(context.Context, string, dto.UpdateN
 	return fmt.Errorf("UpdateNetworkSettings must not be called by a migration job")
 }
 
-func (f *fakeBackend) GetBoxState(context.Context, string) (enums.BoxState, error) {
-	return enums.BoxStateUnknown, fmt.Errorf("GetBoxState must not be called by a migration job")
+func (f *fakeBackend) GetBoxInfo(context.Context, string) (models.BoxInfo, error) {
+	return models.BoxInfo{}, fmt.Errorf("GetBoxInfo must not be called by a migration job")
 }
 
 func (f *fakeBackend) Ping(context.Context) error {

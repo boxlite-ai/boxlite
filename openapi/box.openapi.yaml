@@ -1803,6 +1803,13 @@ components:
             is told apart from one that crashed. Absence, not `0`, is what
             means "no exit code recorded", so a client must distinguish the
             missing field from a zero one.
+
+            A server may leave it out of any response other than a direct
+            read of one box — listing boxes, and the replies to create, start,
+            stop, clone and import — because the code lives with the runner
+            that owns the box, and fetching it per box does not scale to a
+            list. So absence in those responses says nothing either way: read
+            the box itself to find out.
           example: 137
 
     BoxStatus:

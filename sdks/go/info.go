@@ -197,9 +197,12 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 	if ms := int64(info.last_activity_at); ms > 0 {
 		boxLastActivityAt = time.UnixMilli(ms)
 	}
+	// Null is the absence, so `0` needs no special handling here: the C side
+	// allocates only when the runtime recorded a code. Testing the value
+	// instead would drop every clean exit.
 	var boxExitCode *int
-	if info.has_exit_code != 0 {
-		code := int(info.exit_code)
+	if info.exit_code != nil {
+		code := int(*info.exit_code)
 		boxExitCode = &code
 	}
 	return BoxInfo{

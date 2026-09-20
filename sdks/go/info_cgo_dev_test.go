@@ -80,8 +80,8 @@ func TestCBoxInfoToGoCarriesTheMainCommandExitCode(t *testing.T) {
 		want *int
 	}{
 		{name: "no exit code recorded", got: fixtures[0]},
-		// A clean exit and an unrecorded one are the same C int; only the flag
-		// separates them, which is the whole reason it exists.
+		// A clean exit and an unrecorded one would be the same C int; only the
+		// pointer being non-null separates them, which is why it is a pointer.
 		{name: "main command succeeded", got: fixtures[1], want: intPtr(0)},
 		{name: "main command failed", got: fixtures[2], want: intPtr(42)},
 	}

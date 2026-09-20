@@ -3,6 +3,13 @@ definitions:
     properties:
       daemonVersion:
         type: string
+      exitCode:
+        description: |-
+          ExitCode is the main command's exit code, present only when the box
+          stopped because that command exited. Absence, not 0, is what says "not
+          recorded": 0 is the exit code of every command that succeeded, so a
+          reader has to tell a missing field from a zero one.
+        type: integer
       state:
         $ref: '#/definitions/enums.BoxState'
     type: object
@@ -231,15 +238,6 @@ definitions:
       networkLimitEgress:
         type: boolean
     type: object
-  dto.VolumeDTO:
-    properties:
-      mountPath:
-        type: string
-      subpath:
-        type: string
-      volumeId:
-        type: string
-    type: object
   dto.SecretDTO:
     properties:
       hosts:
@@ -255,6 +253,15 @@ definitions:
     required:
       - name
       - value
+    type: object
+  dto.VolumeDTO:
+    properties:
+      mountPath:
+        type: string
+      subpath:
+        type: string
+      volumeId:
+        type: string
     type: object
   enums.BoxState:
     enum:

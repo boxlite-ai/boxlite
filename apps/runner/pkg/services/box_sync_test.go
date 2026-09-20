@@ -93,7 +93,6 @@ type runnerAPIStub struct {
 	rejectTransitional   bool
 	startedBoxes         []map[string]any
 	updates              map[string]string
-	exitCodes            map[string]*int32
 	transitionalRequests int
 }
 
@@ -119,8 +118,7 @@ func (s *runnerAPIStub) handler(t *testing.T) http.Handler {
 
 		if request.Method == http.MethodPut {
 			var body struct {
-				State    string `json:"state"`
-				ExitCode *int32 `json:"exitCode"`
+				State string `json:"state"`
 			}
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Errorf("decode state update: %v", err)
@@ -128,12 +126,8 @@ func (s *runnerAPIStub) handler(t *testing.T) http.Handler {
 			if s.updates == nil {
 				s.updates = map[string]string{}
 			}
-			if s.exitCodes == nil {
-				s.exitCodes = map[string]*int32{}
-			}
 			// /box/{boxId}/state
 			s.updates[request.URL.Path] = body.State
-			s.exitCodes[request.URL.Path] = body.ExitCode
 			response.WriteHeader(http.StatusOK)
 			return
 		}
@@ -232,62 +226,3 @@ func TestPerformSyncStillReconcilesStartedBoxesWhenTransitionalQueryIsRejected(t
 		t.Fatalf("stopped box reported as %q, want %q", got, apiclient.BOXSTATE_STOPPED)
 	}
 }
-
-// A box stops on its own when its main command exits, and the exit code is the
-// only thing separating a clean finish from a crash. The control plane learns
-// about that stop from this sync, so the code has to travel with it — nothing
-// else reports it, and re-reading it later is impossible once the VM is gone.
-func TestPerformSyncReportsMainCommandExitCode(t *testing.T) {
-	crashExit := 42
-	cleanExit := 0
-
-	tests := []struct {
-		name     string
-		exitCode *int
-		want     *int32
-	}{
-		{name: "main command failed", exitCode: &crashExit, want: int32Ptr(42)},
-		{name: "main command succeeded", exitCode: &cleanExit, want: int32Ptr(0)},
-		{name: "no exit code recorded", exitCode: nil, want: nil},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			api := &runnerAPIStub{
-				startedBoxes:      []map[string]any{remoteBox("box-1", apiclient.BOXSTATE_STARTED)},
-				transitionalBoxes: []map[string]any{},
-			}
-			server := httptest.NewServer(api.handler(t))
-			defer server.Close()
-
-			reader := &stubBoxReader{
-				infos: []sdkboxlite.BoxInfo{{
-					ID:       "box-1",
-					State:    sdkboxlite.StateStopped,
-					ExitCode: tt.exitCode,
-				}},
-			}
-
-			service := newSyncServiceForTest(server, reader)
-			if err := service.PerformSync(context.Background()); err != nil {
-				t.Fatalf("PerformSync: %v", err)
-			}
-
-			if sentState := api.updates["/box/box-1/state"]; sentState != string(apiclient.BOXSTATE_STOPPED) {
-				t.Fatalf("reported state = %q, want %q", sentState, apiclient.BOXSTATE_STOPPED)
-			}
-
-			sentExitCode := api.exitCodes["/box/box-1/state"]
-			switch {
-			case tt.want == nil && sentExitCode != nil:
-				t.Fatalf("reported exit code = %d, want it absent", *sentExitCode)
-			case tt.want != nil && sentExitCode == nil:
-				t.Fatalf("reported exit code absent, want %d", *tt.want)
-			case tt.want != nil && *sentExitCode != *tt.want:
-				t.Fatalf("reported exit code = %d, want %d", *sentExitCode, *tt.want)
-			}
-		})
-	}
-}
-
-func int32Ptr(v int32) *int32 { return &v }

@@ -44,10 +44,6 @@ type localContainerState struct {
 	// the current or most recently ended lifecycle. Callers combine it with state
 	// before treating it as evidence that the box is running now.
 	startedAt *time.Time
-	// exitCode is non-nil when the box stopped because its main command exited
-	// and BoxLite recorded that command's code. It travels with the state it was
-	// read beside, so the two always describe the same lifecycle.
-	exitCode *int
 }
 
 func NewBoxSyncService(config BoxSyncServiceConfig) *BoxSyncService {
@@ -74,7 +70,6 @@ func (s *BoxSyncService) GetLocalContainerStates(ctx context.Context) (map[strin
 		boxStates[boxId] = localContainerState{
 			state:     blclient.ToBoxState(box.State),
 			startedAt: boxStartedAt(box),
-			exitCode:  box.ExitCode,
 		}
 	}
 
@@ -161,24 +156,10 @@ func (s *BoxSyncService) fetchRunnerBoxes(
 	return remoteBoxes, nil
 }
 
-// SyncBoxState reports this runner's view of a box to the control plane.
-//
-// exitCode is the main command's code when the box stopped because that command
-// exited, and nil otherwise. It is sent with the state rather than on its own
-// because this sync is the only moment the control plane hears about a
-// self-stop: the box is already gone by the time anyone could ask again.
-func (s *BoxSyncService) SyncBoxState(
-	ctx context.Context,
-	boxId string,
-	localState enums.BoxState,
-	exitCode *int,
-) error {
-	dto := apiclient.NewUpdateBoxStateDto(string(s.convertToApiState(localState)))
-	if exitCode != nil {
-		dto.SetExitCode(int32(*exitCode))
-	}
-
-	_, err := s.client.BoxAPI.UpdateBoxState(ctx, boxId).UpdateBoxStateDto(*dto).Execute()
+func (s *BoxSyncService) SyncBoxState(ctx context.Context, boxId string, localState enums.BoxState) error {
+	_, err := s.client.BoxAPI.UpdateBoxState(ctx, boxId).UpdateBoxStateDto(*apiclient.NewUpdateBoxStateDto(
+		string(s.convertToApiState(localState)),
+	)).Execute()
 	if err != nil {
 		return fmt.Errorf("failed to get box %s: %w", boxId, err)
 	}
@@ -213,7 +194,7 @@ func (s *BoxSyncService) PerformSync(ctx context.Context) error {
 
 			s.log.InfoContext(ctx, "State mismatch for box", "boxId", boxId, "localState", local.state, "remoteState", convertedRemoteState)
 
-			err := s.SyncBoxState(ctx, boxId, local.state, local.exitCode)
+			err := s.SyncBoxState(ctx, boxId, local.state)
 			if err != nil {
 				s.log.ErrorContext(ctx, "Failed to sync state for box", "boxId", boxId, "error", err)
 				continue

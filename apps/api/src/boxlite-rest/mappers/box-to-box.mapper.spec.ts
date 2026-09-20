@@ -143,28 +143,26 @@ describe('BoxLite container process options mapper', () => {
   it.each([
     ['a failing main command', 137, 137],
     ['a main command that succeeded', 0, 0],
-  ])('reports the exit code of %s', (_case, stored, expected) => {
+  ])('reports the exit code of %s', (_case, read, expected) => {
     const response = boxToBoxResponse({
       id: 'box-1',
       state: BoxState.STOPPED,
       labels: {},
-      exitCode: stored,
+      exitCode: read,
     } as any)
 
     expect(response.exit_code).toBe(expected)
   })
 
-  it.each([
-    ['a box that never stopped that way', null],
-    ['a box from before the column existed', undefined],
-  ])('omits exit_code for %s', (_case, stored) => {
+  it('omits exit_code when the box has none', () => {
     const response = boxToBoxResponse({
       id: 'box-1',
       state: BoxState.STARTED,
       labels: {},
-      exitCode: stored,
+      exitCode: undefined,
     } as any)
 
     expect(response.exit_code).toBeUndefined()
+    expect(JSON.parse(JSON.stringify(response))).not.toHaveProperty('exit_code')
   })
 })

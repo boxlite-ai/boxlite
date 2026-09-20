@@ -97,7 +97,10 @@ export class BoxResponseDto {
   @ApiPropertyOptional({
     description:
       "Exit code of the box's main command, present once the box has stopped because that command " +
-      'exited. Absent while the box is running and when it stopped for any other reason.',
+      'exited. Absent while the box is running and when it stopped for any other reason. `0` is a ' +
+      'real value, so a client must tell the missing field from a zero one. Only reading a single ' +
+      'box carries it: this schema is shared with the box list and with every other reply built ' +
+      'from it, which leave it out whether or not one was recorded.',
     example: 137,
   })
   exit_code?: number

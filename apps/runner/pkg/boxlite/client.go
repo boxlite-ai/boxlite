@@ -17,6 +17,7 @@ import (
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/models"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
 	"go.opentelemetry.io/otel/propagation"
 )
@@ -414,7 +415,7 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 // neutral default: the API counts it as compute-consuming while Error is not,
 // so Failed must map explicitly to Error.
 //
-// Exported apart from GetBoxState because a caller that already holds a
+// Exported apart from GetBoxInfo because a caller that already holds a
 // BoxInfo must not fetch a second one: BoxSync pairs the state with the box's
 // StartedAt, and reading the two at different moments is what lets a stale
 // timestamp meet a fresh state.
@@ -441,24 +442,32 @@ func ToBoxState(state boxlite.State) enums.BoxState {
 	}
 }
 
-// GetBoxState returns the current state of a box.
+// GetBoxInfo returns a box's current state together with the main command's
+// exit code, when the runtime recorded one.
 //
-// It reads through the runtime rather than the handle cache. The box sync loop
-// calls this for every box on a 10s ticker (services/box_sync.go), and a state
-// read needs no bootable handle — only the persisted record. Routing it through
-// getOrFetchBox would evict and re-fetch a handle for every non-running box on
-// every tick, and eviction cannot free the old one (see evictBox), so the
-// runner would accumulate dead handles for as long as it ran.
-func (c *Client) GetBoxState(ctx context.Context, boxId string) (enums.BoxState, error) {
+// Both come from a single GetInfo snapshot on purpose. Read apart, a state
+// from one moment could meet an exit code from another, and the pair would
+// describe two different lifecycles — the same trap ToBoxState's comment
+// describes for StartedAt.
+//
+// It reads through the runtime rather than the handle cache: a state read
+// needs no bootable handle, only the persisted record. Routing it through
+// getOrFetchBox would evict and re-fetch a handle for every non-running box,
+// and eviction cannot free the old one (see evictBox), so the runner would
+// accumulate dead handles for as long as it ran.
+func (c *Client) GetBoxInfo(ctx context.Context, boxId string) (models.BoxInfo, error) {
 	info, err := c.runtime.GetInfo(ctx, boxId)
 	if err != nil {
 		if boxlite.IsNotFound(err) {
-			return enums.BoxStateUnknown, nil
+			return models.BoxInfo{BoxState: enums.BoxStateUnknown}, nil
 		}
-		return enums.BoxStateUnknown, err
+		return models.BoxInfo{BoxState: enums.BoxStateUnknown}, err
 	}
 
-	return ToBoxState(info.State), nil
+	return models.BoxInfo{
+		BoxState: ToBoxState(info.State),
+		ExitCode: info.ExitCode,
+	}, nil
 }
 
 // StartExecution starts an interactive execution in a box.
@@ -626,8 +635,8 @@ func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box,
 // frees what is still in the map. The cost is one handle per request that finds
 // its box down: calls that go on to boot it stop there, while ones that refuse a
 // stopped box (metrics, a guest-port dial) pay it again on every retry. That is
-// affordable only because it tracks request volume — which is why GetBoxState,
-// run for every box on a timer, deliberately does not come through here.
+// affordable only because it tracks request volume — which is why GetBoxInfo
+// reads through the runtime rather than coming through here.
 // Ref-counting the wrapper is the real fix, and it belongs in the SDK.
 func (c *Client) evictBox(boxId string, stale *boxlite.Box) {
 	c.mu.Lock()

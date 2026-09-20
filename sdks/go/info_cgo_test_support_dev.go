@@ -81,10 +81,10 @@ func cNetworkInfoTraversalTestFixtures() [4]*NetworkInfo {
 	}
 }
 
-// cBoxInfoExitCodeTestFixtures runs the value-plus-flag pair the C struct
-// carries back through the real decode. `0` and "not recorded" are the two the
-// design turns on, and nothing above this layer can tell them apart if the flag
-// is dropped here.
+// cBoxInfoExitCodeTestFixtures runs the owned pointer the C struct carries
+// back through the real decode. `0` and "not recorded" are the two the design
+// turns on, and nothing above this layer can tell them apart if this hop ever
+// derives presence from the value instead of the pointer.
 func cBoxInfoExitCodeTestFixtures() [3]*int {
 	id := C.CString("box-1")
 	defer C.free(unsafe.Pointer(id))
@@ -93,21 +93,30 @@ func cBoxInfoExitCodeTestFixtures() [3]*int {
 	status := C.CString("stopped")
 	defer C.free(unsafe.Pointer(status))
 
-	withCode := func(code C.int, has C.int) *int {
+	withCode := func(code *C.int) *int {
 		info := C.CBoxInfo{
-			id:            id,
-			image:         image,
-			status:        status,
-			exit_code:     code,
-			has_exit_code: has,
+			id:        id,
+			image:     image,
+			status:    status,
+			exit_code: code,
 		}
 		boxInfo := cBoxInfoToGo(&info)
 		return boxInfo.ExitCode
 	}
 
+	// Allocated the way the real struct's owner does, so the decode sees a
+	// genuine pointer rather than the address of a Go local.
+	cleanExit := (*C.int)(C.malloc(C.sizeof_int))
+	defer C.free(unsafe.Pointer(cleanExit))
+	*cleanExit = 0
+
+	crashExit := (*C.int)(C.malloc(C.sizeof_int))
+	defer C.free(unsafe.Pointer(crashExit))
+	*crashExit = 42
+
 	return [3]*int{
-		withCode(0, 0),
-		withCode(0, 1),
-		withCode(42, 1),
+		withCode(nil),
+		withCode(cleanExit),
+		withCode(crashExit),
 	}
 }

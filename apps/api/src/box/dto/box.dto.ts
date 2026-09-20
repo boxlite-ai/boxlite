@@ -258,13 +258,17 @@ export class BoxDto {
   lastActivityAt?: string
 
   @ApiPropertyOptional({
-    description: "Exit code of the box's main command, present when the box stopped because that command exited",
+    description:
+      "Exit code of the box's main command, present when the box stopped because that command " +
+      'exited. `0` is a real value, so a client must tell the missing field from a zero one. Only ' +
+      'reading a single box carries it: this schema is shared with the box list and with the ' +
+      'replies that change a box, which leave it out whether or not one was recorded.',
     example: 137,
     type: 'integer',
     required: false,
   })
   @IsOptional()
-  exitCode?: number | null
+  exitCode?: number
 
   @ApiPropertyOptional({
     description: 'The class of the box',
@@ -304,7 +308,15 @@ export class BoxDto {
   // same-named relation is a `BoxLastActivity` row that read paths do not join.
   // It is reported raw, without the auto-stop sweeper's fallback to
   // `updatedAt` — that fallback is a stop policy, not recorded activity.
-  static fromBox(box: Box, toolboxProxyUrl: string, lastActivityAt?: Date | null): BoxDto {
+  // `exitCode` arrives as an argument for the same reason `lastActivityAt`
+  // does: the control plane does not store it. It is read from the runner that
+  // owns the box, and an unreadable one degrades to absent.
+  static fromBox(
+    box: Box,
+    toolboxProxyUrl: string,
+    lastActivityAt?: Date | null,
+    exitCode?: number,
+  ): BoxDto {
     return {
       id: box.id,
       organizationId: box.organizationId,
@@ -326,10 +338,10 @@ export class BoxDto {
       desiredState: box.desiredState,
       errorReason: box.errorReason,
       recoverable: box.recoverable,
-      // Absent, not null, when nothing was recorded — the same rule the REST
-      // mapper applies, and the one the generated clients type against. `0` is
-      // a real exit code, so `?? undefined` rather than a falsy check.
-      exitCode: box.exitCode ?? undefined,
+      // Absent, never null: the runner read yields a number or nothing, and
+      // that is what the generated clients type against. `0` is a real exit
+      // code, so this passes the value through rather than testing it.
+      exitCode,
       autoStop: box.autoStop,
       autoDelete: box.autoDelete,
       autoResume: box.autoResume,

@@ -388,17 +388,19 @@ typedef struct CBoxInfo {
   // AutoStop measures idleness against; `0` when nothing was recorded, which
   // is always the case for local runtimes.
   int64_t last_activity_at;
-  // The main command's exit code. Read it only when
-  // [`Self::has_exit_code`] is nonzero.
+  // Owned exit code of the box's main command; null when the runtime
+  // recorded none — that is, when the box did not stop because that command
+  // exited.
   //
   // Absence cannot be a sentinel the way it is for [`Self::pid`] and
   // [`Self::started_at`]: `0` is the exit code of every command that
-  // succeeded, so the flag below is the only thing separating "exited
-  // cleanly" from "no exit code recorded".
-  int exit_code;
-  // Nonzero when the runtime recorded an exit code for the main command —
-  // that is, when the box stopped because that command exited.
-  int has_exit_code;
+  // succeeded, so a reader that took `0` for "nothing recorded" would
+  // report every clean exit as an absent one. A pointer makes that reading
+  // impossible rather than merely wrong — there is no value to mistake —
+  // and follows [`Self::network`], the struct's other owned optional.
+  //
+  // [`free_box_info`] releases it.
+  int *exit_code;
 } CBoxInfo;
 
 // Box info completion. On success the callback owns the non-null metadata and
