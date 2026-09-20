@@ -39,7 +39,7 @@ is *exclusively* callable; the other four can also be dispatched on their own.
 | `test.yml` | push, PR, merge_group | — | Unit tests for every SDK. No VM tests — hosted runners have no nested virtualization |
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
 | `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs |
-| `unreviewed-pr.yml` | PR (target) | — | Commits `UNREVIEWED.md` and drafts a pull request until its author deletes the file and marks it ready. `Author reviewed the PR` is the check |
+| `author-review.yml` | PR (target), issue_comment, merge_group, dispatch | — | Posts author instructions and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
 | `warm-caches.yml` | push, weekly, dispatch | — | Populates the sccache the other Rust builds read |
 | `build-runtime.yml` | `workflow_run`, release, dispatch | — | Core runtime and CLI; publishes crates |
 | `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
@@ -62,6 +62,21 @@ is *exclusively* callable; the other four can also be dispatched on their own.
 
 Longer treatments live with their subject rather than here: [E2E local
 runbook](../../docs/ci/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
+
+## Author review gate rollout
+
+Require the commit status `Author reviewed the PR` from GitHub Actions on the target
+branch after this workflow is deployed. The handler job `Update author review status`
+only reports whether event processing succeeded; it is not the acknowledgment.
+
+Use a manual run with `pr_number` to initialize existing PRs or retry a failed handler.
+The bot comment includes the exact command the author must post. No fork branch writes,
+extra GitHub App, or personal token are needed. The workflow runs only the immutable
+upstream revision in `AGENT_TOOLING_REV`; update that pin through a reviewed PR.
+
+Merge queues must require the same PR status before admission. Queue commits carry
+that result forward; authors acknowledge their own PR head, not the temporary merge.
+Existing draft PRs remain draft until a person marks them ready.
 
 ## Composite actions
 
