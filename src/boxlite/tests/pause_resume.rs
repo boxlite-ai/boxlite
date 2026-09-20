@@ -275,7 +275,7 @@ async fn copy_into_rejected_while_paused() {
 
     // copy_into should fail while paused
     let err = match litebox
-        .copy_into(tmp.path(), "/tmp/test", Default::default())
+        .copy_into(tmp.path(), "/root/pause-test", Default::default())
         .await
     {
         Err(e) => e,
@@ -289,7 +289,7 @@ async fn copy_into_rejected_while_paused() {
     // Resume and verify copy works
     litebox.resume().await.expect("resume box");
     litebox
-        .copy_into(tmp.path(), "/tmp/test", Default::default())
+        .copy_into(tmp.path(), "/root/pause-test", Default::default())
         .await
         .expect("copy_into after resume");
 
@@ -309,7 +309,7 @@ async fn copy_out_rejected_while_paused() {
     litebox.start().await.expect("start box");
 
     // Create a file inside the box to copy out
-    let cmd = BoxCommand::new("sh").args(["-c", "echo test > /tmp/testfile"]);
+    let cmd = BoxCommand::new("sh").args(["-c", "echo test > /root/pause-testfile"]);
     let exec = litebox.exec(cmd).await.expect("create file");
     exec.wait().await.expect("wait create file");
 
@@ -319,7 +319,7 @@ async fn copy_out_rejected_while_paused() {
 
     // copy_out should fail while paused
     let err = match litebox
-        .copy_out("/tmp/testfile", host_dst.path(), Default::default())
+        .copy_out("/root/pause-testfile", host_dst.path(), Default::default())
         .await
     {
         Err(e) => e,
@@ -333,7 +333,7 @@ async fn copy_out_rejected_while_paused() {
     // Resume and verify copy works
     litebox.resume().await.expect("resume box");
     litebox
-        .copy_out("/tmp/testfile", host_dst.path(), Default::default())
+        .copy_out("/root/pause-testfile", host_dst.path(), Default::default())
         .await
         .expect("copy_out after resume");
 

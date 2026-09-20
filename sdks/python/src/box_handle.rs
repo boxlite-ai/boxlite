@@ -166,7 +166,7 @@ impl PyBox {
 
     /// Resume the box from paused state.
     ///
-    /// Sends SIGCONT to resume vCPUs and thaws guest filesystems.
+    /// Resumes VM execution and thaws guest filesystems.
     /// Idempotent: calling resume() on a Running box is a no-op.
     fn resume<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);

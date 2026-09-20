@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 /// ```text
 /// create()  → Configured (persisted to DB, no VM)
 /// start()   → Running (VM initialized)
-/// pause()   → Paused (VM frozen via SIGSTOP — zero CPU, memory preserved)
-/// resume()  → Running (VM resumed via SIGCONT)
+/// pause()   → Paused (VM execution frozen — zero CPU, memory preserved)
+/// resume()  → Running (VM execution resumed)
 /// stop()    → Stopped (VM terminated, can restart)
 /// init err  → Failed (record preserved with error_reason)
 /// ```
@@ -46,7 +46,7 @@ pub enum BoxStatus {
     /// Rootfs is preserved, box can be restarted.
     Stopped,
 
-    /// Box VM is frozen via SIGSTOP (all vCPUs and virtio backends paused).
+    /// Box VM execution is frozen (all vCPUs and virtio backends paused).
     /// Used by user-facing `pause()`/`resume()` API and internally during
     /// export/snapshot for point-in-time consistency.
     /// Equivalent to Docker's cgroup freezer pause.
@@ -161,7 +161,7 @@ impl BoxStatus {
             (Configured, Stopped) |
             (Configured, Failed) |
             (Configured, Unknown) |
-            // Running → Stopping (graceful), Stopped (crash), Paused (SIGSTOP), or Failed (runtime crash)
+            // Running → Stopping (graceful), Stopped (crash), Paused (execution frozen), or Failed (runtime crash)
             (Running, Stopping) |
             (Running, Stopped) |
             (Running, Paused) |
@@ -175,7 +175,7 @@ impl BoxStatus {
             (Stopped, Running) |
             (Stopped, Failed) |
             (Stopped, Unknown) |
-            // Paused → Running (SIGCONT resume), Stopping (graceful stop), or Stopped (killed while paused)
+            // Paused → Running (resume), Stopping (graceful stop), or Stopped (killed while paused)
             (Paused, Running) |
             (Paused, Stopping) |
             (Paused, Stopped) |
@@ -280,10 +280,9 @@ pub struct BoxState {
     /// Serde default keeps existing DB rows readable without migration.
     #[serde(default)]
     pub started_at: Option<DateTime<Utc>>,
-    /// Whether guest I/O was successfully quiesced (FIFREEZE) during pause().
-    /// Runtime-only: not persisted to DB. Used by `with_quiesce_async` to decide
-    /// whether to skip its own quiesce when the box is already paused.
-    #[serde(skip)]
+    /// Whether guest I/O may still need FITHAW (including an unconfirmed freeze RPC).
+    /// Persisted so a recovered handle can thaw the guest before resuming I/O.
+    #[serde(default)]
     pub quiesced: bool,
 }
 
@@ -405,11 +404,15 @@ impl BoxState {
     /// clears it. This keeps the PID and timestamp safe to read together as one
     /// snapshot.
     pub fn adopt_recovered_shim(&mut self, pid: u32) {
+        let same_paused_shim = self.pid == Some(pid) && self.status.is_paused();
         if self.pid != Some(pid) {
             self.started_at = None;
+            self.quiesced = false;
         }
         self.set_pid(Some(pid));
-        self.set_status(BoxStatus::Running);
+        if !same_paused_shim {
+            self.set_status(BoxStatus::Running);
+        }
     }
 
     /// Set lock ID and update timestamp.
@@ -1275,6 +1278,25 @@ mod tests {
     fn test_new_state_quiesced_is_false() {
         let state = BoxState::new();
         assert!(!state.quiesced);
+    }
+
+    #[test]
+    fn pause_regression_recovery_preserves_paused_status() {
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Paused;
+        state.pid = Some(4242);
+        state.adopt_recovered_shim(4242);
+        assert_eq!(state.status, BoxStatus::Paused);
+    }
+
+    #[test]
+    fn pause_regression_persistence_preserves_quiesce() {
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Paused;
+        state.quiesced = true;
+        let saved = serde_json::to_string(&state).unwrap();
+        let recovered: BoxState = serde_json::from_str(&saved).unwrap();
+        assert!(recovered.quiesced, "recovered guest still needs FITHAW");
     }
 
     #[test]

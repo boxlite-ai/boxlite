@@ -141,10 +141,12 @@ impl LiteBox {
         self.box_backend.stop().await
     }
 
-    /// Pause the box (freeze VM via SIGSTOP).
+    /// Pause the box (freeze VM execution).
     ///
-    /// Quiesces guest filesystems, then sends SIGSTOP to freeze all vCPUs.
+    /// Quiesces guest filesystems, then freezes all vCPUs and sandbox processes.
     /// The box keeps its memory and state but consumes zero CPU.
+    /// Linux sandboxing requires a writable cgroup v2 freezer; otherwise pause
+    /// returns an error without freezing the guest.
     ///
     /// This is idempotent - calling pause() on a Paused box is a no-op.
     /// Use resume() to continue execution.
@@ -152,9 +154,9 @@ impl LiteBox {
         self.box_backend.pause().await
     }
 
-    /// Resume a paused box (SIGCONT + thaw).
+    /// Resume a paused box and thaw its filesystems.
     ///
-    /// Sends SIGCONT to resume vCPUs and thaws guest filesystems.
+    /// Resumes VM execution and thaws guest filesystems.
     /// The box continues from exactly where it was paused.
     ///
     /// This is idempotent - calling resume() on a Running box is a no-op.

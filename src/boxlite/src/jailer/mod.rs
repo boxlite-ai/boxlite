@@ -58,6 +58,7 @@ mod builder;
 mod command;
 mod common;
 mod error;
+mod execution;
 mod pre_exec;
 pub(crate) mod sandbox;
 pub(crate) mod shim_copy;
@@ -84,6 +85,7 @@ pub mod seccomp;
 pub use crate::runtime::advanced_options::{ResourceLimits, SecurityOptions};
 pub use builder::JailerBuilder;
 pub use error::{ConfigError, IsolationError, JailerError, SystemError};
+pub(crate) use execution::ExecutionControl;
 pub use sandbox::{
     CompositeSandbox, NoopSandbox, PathAccess, PlatformSandbox, Sandbox, SandboxContext,
     UnixSocketAccess,

@@ -868,7 +868,7 @@ export class SimpleBox {
   /**
    * Pause the box (freeze VM, zero CPU, state preserved).
    *
-   * Quiesces guest filesystems, then sends SIGSTOP to freeze all vCPUs.
+   * Quiesces guest filesystems, then freezes all vCPUs and sandbox processes.
    * The box keeps its memory and state but consumes zero CPU.
    *
    * Idempotent: calling pause() on a Paused box is a no-op.
@@ -893,7 +893,7 @@ export class SimpleBox {
   /**
    * Resume the box from paused state.
    *
-   * Sends SIGCONT to resume vCPUs and thaws guest filesystems.
+   * Resumes VM execution and thaws guest filesystems.
    * The box continues from exactly where it was paused.
    *
    * Idempotent: calling resume() on a Running box is a no-op.

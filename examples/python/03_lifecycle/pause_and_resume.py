@@ -3,8 +3,8 @@
 Pause and Resume Example - Zero-CPU VM Freezing
 
 Demonstrates the pause/resume API:
-- pause(): Freezes VM (SIGSTOP) — zero CPU, memory preserved
-- resume(): Thaws VM (SIGCONT) — continues from exact point
+- pause(): Freezes VM execution — zero CPU, memory preserved
+- resume(): Resumes VM execution — continues from exact point
 - Idempotent: pause on paused = no-op, resume on running = no-op
 - Exec rejected while paused (InvalidState)
 - Stop works directly from paused state

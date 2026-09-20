@@ -42,10 +42,10 @@ pub enum AuditEventKind {
     /// Box VM stopped.
     BoxStopped { exit_code: Option<i32> },
 
-    /// Box VM paused (SIGSTOP).
+    /// Box VM paused.
     BoxPaused,
 
-    /// Box VM resumed from pause (SIGCONT).
+    /// Box VM resumed from pause.
     BoxResumed,
 
     /// Box removed.
