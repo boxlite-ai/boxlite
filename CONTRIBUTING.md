@@ -41,6 +41,68 @@ Key test entry points:
 - `make test:all:python` - Python unit + integration suites
 - `make test:all:c` - C SDK suite via CMake/CTest
 
+### Coverage
+
+`make codecov` collects fresh Rust coverage. Codecov requires **90% coverage
+of changed lines**, with no tolerance below that target. Total project coverage
+is reported as an informational status. The local collection command checks
+test success; Codecov evaluates changed lines against the pull request's base.
+
+The Rust report combines core, shared, REST, CLI (including authentication
+integration tests), C/Node/Python native bindings, native VMM, and the
+runtime/shutdown/network tests that need no VM. Hosted runtime and C unit tests
+use the existing test-only runtime constructor; production runtime creation
+still validates the host. Linux also collects guest unit coverage. Vendored
+dependencies, standalone tests, and test scaffolding are excluded; production guest and SDK
+paths are not ignored by Codecov. SDK language wrappers, cloud apps, and shim
+subprocess execution are separate from the Rust unit report.
+
+The Test workflow also uploads Python and Node.js SDK coverage, Go SDK and
+networking bridge coverage, and cloud API coverage. Each reporter includes
+unvisited production files. Codecov carries forward reports for unchanged
+components when their path-filtered jobs are skipped.
+
+| Command | Report under `target/coverage/` | Requirements |
+| --- | --- | --- |
+| `make coverage:python` | `python/coverage.xml` | Python development dependencies |
+| `make coverage:node` | `node/lcov.info` | Node.js 20+ and SDK dependencies |
+| `make coverage:go` | `go-sdk.out`, `gvproxy.out` | Native runtime and Go toolchain |
+| `make coverage:api` | `api/lcov.info` | App dependencies, Postgres, Redis |
+
+On a VM-capable host, `make coverage:python:integration` and
+`make coverage:node:integration` build the native SDKs and run both unit and
+integration tests, replacing their reports with the combined results. Python
+tests marked `e2e` still require separate external services and credentials.
+
+These collectors produce fresh reports, bypassing Nx's result cache for API
+coverage. Codecov combines them to evaluate the 90% changed-line gate and report
+total coverage. A report does not establish coverage for components that
+have not been instrumented: shim subprocesses, the cloud runner/proxy, and
+dashboard still require additional collection.
+
+```bash
+# Unit and non-VM coverage, using the same dependency stubs as CI.
+BOXLITE_DEPS_STUB=1 make codecov
+
+# Generate the same LCOV report directly while investigating gaps.
+BOXLITE_DEPS_STUB=1 make coverage:lcov
+
+# On a VM-capable host, add runtime and CLI integration coverage to it.
+# Leave BOXLITE_DEPS_STUB unset for the real runtime build and execution.
+make coverage:integration
+```
+
+LCOV is written to `target/coverage/lcov.info`; `make coverage` and
+`make coverage:integration` also write `target/coverage/html/index.html`.
+Collection starts clean for unit coverage; integration coverage appends to
+those profiles. Do not run Rust collectors concurrently in one checkout.
+Use `make coverage:report` to inspect partial Rust profiles after a test failure;
+such a report does not make the failed test run successful.
+
+The accumulation uses cargo-llvm-cov's `--no-report` followed by `report`, as
+in its [upstream CI workflow](https://github.com/taiki-e/cargo-llvm-cov/blob/main/.github/workflows/ci.yml#L448-L450).
+Threshold behavior follows [Codecov's status configuration](https://docs.codecov.com/docs/commit-status).
+
 ## How to Contribute
 
 ### Reporting Issues
@@ -52,13 +114,13 @@ Key test entry points:
 
 ### Pull Requests
 
-1. Fork the repository, unless you can push here: CI cannot mark a pull request opened from a fork, so it refuses one from an owner, member or collaborator and asks for a branch in this repository instead
+1. Fork the repository or create a branch here if you have push access
 2. Create a feature branch (`git checkout -b feature/my-feature`)
 3. Make your changes
 4. Run quality and tests (`make lint && make fmt:check && make test`)
 5. Commit with clear messages — see [Commit & PR messages](#commit--pr-messages)
 6. Open a Pull Request
-7. CI commits `UNREVIEWED.md` and converts the pull request to a draft. Read the diff, delete that file in a commit, and mark the pull request ready; merged with the file still there, it lands on the default branch and says so. From a fork nothing is committed and the check passes, since the workflow cannot write your branch — if it happens to carry `UNREVIEWED.md`, delete it anyway, or merging puts that file on the default branch
+7. CI converts unacknowledged PRs to draft. Read the current diff, then post the exact `/reviewed <full-head-SHA>` command from the bot comment. Only a new, unedited comment from the PR author counts. Once `Author reviewed the PR` passes, click **Ready for review**. A new commit, or editing/deleting the only acknowledgment, returns the PR to draft and requires a fresh comment. Forks use the same flow. Maintainer approval remains separate
 8. Sign the [BoxLite Contributor License Agreement](./docs/legal/CLA.md) when CLA Assistant asks you to do so
 
 ### Watching CI and PR feedback

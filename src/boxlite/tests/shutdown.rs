@@ -10,7 +10,6 @@
 
 mod common;
 
-use boxlite::BoxliteRuntime;
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
 
 // ============================================================================
@@ -21,7 +20,7 @@ use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
 #[tokio::test]
 async fn shutdown_is_idempotent() {
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
-    let runtime = BoxliteRuntime::new(BoxliteOptions {
+    let runtime = common::non_vm_runtime(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     })
@@ -38,7 +37,7 @@ async fn shutdown_is_idempotent() {
 #[tokio::test]
 async fn shutdown_with_timeout() {
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
-    let runtime = BoxliteRuntime::new(BoxliteOptions {
+    let runtime = common::non_vm_runtime(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     })
@@ -52,7 +51,7 @@ async fn shutdown_with_timeout() {
 #[tokio::test]
 async fn shutdown_empty_runtime() {
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
-    let runtime = BoxliteRuntime::new(BoxliteOptions {
+    let runtime = common::non_vm_runtime(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     })
@@ -70,14 +69,14 @@ async fn shutdown_empty_runtime() {
 #[tokio::test]
 async fn shutdown_does_not_affect_other_runtimes() {
     let home1 = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
-    let runtime1 = BoxliteRuntime::new(BoxliteOptions {
+    let runtime1 = common::non_vm_runtime(BoxliteOptions {
         home_dir: home1.path.clone(),
         image_registries: common::test_registries(),
     })
     .expect("create runtime");
 
     let home2 = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
-    let runtime2 = BoxliteRuntime::new(BoxliteOptions {
+    let runtime2 = common::non_vm_runtime(BoxliteOptions {
         home_dir: home2.path.clone(),
         image_registries: common::test_registries(),
     })
@@ -97,7 +96,7 @@ async fn shutdown_does_not_affect_other_runtimes() {
 #[tokio::test]
 async fn read_operations_work_after_shutdown() {
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
-    let runtime = BoxliteRuntime::new(BoxliteOptions {
+    let runtime = common::non_vm_runtime(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     })
@@ -126,7 +125,7 @@ fn drop_releases_lock() {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
         };
-        let _rt = BoxliteRuntime::new(options).unwrap();
+        let _rt = common::non_vm_runtime(options).unwrap();
     } // Drop fires here
 
     // Should be able to create a new runtime on the same directory
@@ -134,7 +133,7 @@ fn drop_releases_lock() {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     };
-    let _rt2 = BoxliteRuntime::new(options2).unwrap();
+    let _rt2 = common::non_vm_runtime(options2).unwrap();
 }
 
 /// Cloned runtimes share the same state — shutting down one affects clones.
@@ -142,7 +141,7 @@ fn drop_releases_lock() {
 #[tokio::test]
 async fn cloned_runtime_shares_shutdown_state() {
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
-    let runtime = BoxliteRuntime::new(BoxliteOptions {
+    let runtime = common::non_vm_runtime(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     })
@@ -169,7 +168,7 @@ async fn cloned_runtime_shares_shutdown_state() {
 async fn shutdown_timeout_edge_values() {
     // Some(0) — zero timeout
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
-    let runtime = BoxliteRuntime::new(BoxliteOptions {
+    let runtime = common::non_vm_runtime(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     })
@@ -178,7 +177,7 @@ async fn shutdown_timeout_edge_values() {
 
     // Some(-1) — infinite timeout
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
-    let runtime = BoxliteRuntime::new(BoxliteOptions {
+    let runtime = common::non_vm_runtime(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     })
@@ -187,7 +186,7 @@ async fn shutdown_timeout_edge_values() {
 
     // Some(30) — explicit 30s
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
-    let runtime = BoxliteRuntime::new(BoxliteOptions {
+    let runtime = common::non_vm_runtime(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     })
@@ -196,7 +195,7 @@ async fn shutdown_timeout_edge_values() {
 
     // Some(-5) — negative value
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
-    let runtime = BoxliteRuntime::new(BoxliteOptions {
+    let runtime = common::non_vm_runtime(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     })
@@ -212,7 +211,7 @@ async fn shutdown_timeout_edge_values() {
 #[tokio::test]
 async fn concurrent_shutdown_is_safe() {
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
-    let runtime = BoxliteRuntime::new(BoxliteOptions {
+    let runtime = common::non_vm_runtime(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     })
@@ -243,7 +242,7 @@ async fn concurrent_shutdown_is_safe() {
 #[tokio::test]
 async fn create_after_shutdown_is_rejected() {
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
-    let runtime = BoxliteRuntime::new(BoxliteOptions {
+    let runtime = common::non_vm_runtime(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     })

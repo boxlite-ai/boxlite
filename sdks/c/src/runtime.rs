@@ -231,7 +231,13 @@ unsafe fn runtime_new(
         // Executable-owned logging init (the library no longer auto-installs a subscriber).
         let _ = boxlite::init_logging_for(&options.home_dir);
 
-        let runtime = match BoxliteRuntime::new(options) {
+        // Unit tests exercise FFI validation and lifecycle without a hypervisor.
+        // The exported library keeps host validation for C integration tests.
+        #[cfg(test)]
+        let runtime_result = BoxliteRuntime::new_for_test(options);
+        #[cfg(not(test))]
+        let runtime_result = BoxliteRuntime::new(options);
+        let runtime = match runtime_result {
             Ok(rt) => rt,
             Err(e) => {
                 let code = error_to_code(&e);

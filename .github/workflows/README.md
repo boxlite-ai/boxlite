@@ -36,10 +36,10 @@ is *exclusively* callable; the other four can also be dispatched on their own.
 | --- | --- | --- | --- |
 | `config.yml` | `workflow_call` | call-only | Single source of the platform matrix and language versions |
 | `lint.yml` | push, PR, merge_group | — | Format and lint per language, plus the infra suite. `Lint (conclusion)` is the required check |
-| `test.yml` | push, PR, merge_group | — | Unit tests for every SDK. No VM tests — hosted runners have no nested virtualization |
+| `test.yml` | push, PR, merge_group | — | SDK unit tests and Rust coverage, including guest tests on Linux and non-VM integration tests. Codecov requires 90% coverage of changed lines and reports total coverage |
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
 | `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs |
-| `unreviewed-pr.yml` | PR (target) | — | Commits `UNREVIEWED.md` and drafts a pull request until its author deletes the file and marks it ready. `Author reviewed the PR` is the check |
+| `author-review.yml` | PR (target), issue_comment, merge_group | — | Converts unacknowledged PRs to draft, posts author instructions, and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
 | `warm-caches.yml` | push, weekly, dispatch | — | Populates the sccache the other Rust builds read |
 | `build-runtime.yml` | `workflow_run`, release, dispatch | — | Core runtime and CLI; publishes crates |
 | `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
@@ -63,6 +63,26 @@ is *exclusively* callable; the other four can also be dispatched on their own.
 Longer treatments live with their subject rather than here: [E2E local
 runbook](../../docs/ci/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
 
+## Author review gate rollout
+
+Require the commit status `Author reviewed the PR` from GitHub Actions on the target
+branch after this workflow is deployed. The handler job `Update author review status`
+only reports whether event processing succeeded; it is not the acknowledgment.
+
+Post `/recheck-author-review` as a PR comment to initialize existing PRs or retry a failed
+handler. Any new non-bot PR comment rechecks live state without acknowledging the diff.
+Comment events run the default-branch workflow; rechecks cannot select a modified branch
+workflow. Bot instruction edits and deletions are reconciled too.
+The bot comment includes the exact command the author must post. No fork branch writes,
+extra GitHub App, or personal token are needed. The workflow runs only the immutable
+upstream revision in `AGENT_TOOLING_REV`; update that pin through a reviewed PR.
+
+Merge queues must require the same PR status before admission. Queue commits carry
+that result forward; authors acknowledge their own PR head, not the temporary merge.
+Unacknowledged PRs are converted to draft. After the author acknowledgment passes,
+click **Ready for review** when reviews are wanted; acknowledgment preserves the draft
+state. A new commit or editing/deleting the only acknowledgment returns the PR to draft.
+
 ## Composite actions
 
 In [`.github/actions/`](../actions). Each replaces a step bundle that was previously copied into
@@ -70,13 +90,13 @@ every consumer.
 
 | Action | Sites | Used by |
 | --- | --- | --- |
-| `setup-rust` | 13 | build-c, build-node, build-runtime ×2, build-wheels, lint ×3, test ×4, warm-caches |
-| `sccache` | 9 | build-c, build-node, build-runtime, build-wheels, lint ×2, test ×2, warm-caches |
+| `setup-rust` | 12 | build-c, build-node, build-runtime ×2, build-wheels, lint ×3, test ×3, warm-caches |
+| `sccache` | 8 | build-c, build-node, build-runtime, build-wheels, lint ×2, test, warm-caches |
 | `build-guest` | 5 | build-c, build-node, build-runtime, build-wheels, warm-caches |
 | `upload-to-release` | 5 | build-c, build-node, build-runner-binary, build-runtime, build-wheels |
 | `run-in-manylinux` | 4 | build-c, build-node, build-runtime, warm-caches |
 | `setup-go` | 4 | build-go, build-runner-binary, lint, test |
-| `setup-python` | 3 | build-wheels, lint, test |
+| `setup-python` | 4 | build-wheels, lint, test ×2 |
 | `setup-buildx` | 2 | build-box-images, release-box-images |
 
 Two ordering rules, stated in each action's own header: `sccache` runs after `setup-rust`, and
