@@ -81,7 +81,7 @@ describe('RunnerAdapterV2 createBox', () => {
       expect(payloadOf(jobService).anonymousImagePull).toBe(expected)
     })
 
-    // The seam only: which refs need re-resolving is imageNeedsRevalidate's
+    // The seam only: which refs need re-resolving is boxImageNeedsRevalidate's
     // own specification, and a curated ref is the one that must not pay for it.
     it.each([
       ['a curated name', 'base', false],

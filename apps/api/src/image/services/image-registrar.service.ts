@@ -10,7 +10,7 @@ import { Image } from '../entities/image.entity'
 import { ImageTag } from '../entities/image-tag.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { ImageSourceKind } from '../enums/image-source-kind.enum'
-import { IMPLICIT_TAG, isCuratedSelector, isSha256Digest, parseImageRef } from '../utils/image-ref.util'
+import { IMPLICIT_TAG, isSha256Digest, parseImageRef } from '../utils/image-ref.util'
 
 /** What a runner reported about the image a box actually booted from. */
 export type ReportedImage = {
@@ -18,6 +18,22 @@ export type ReportedImage = {
   digest: string
   /** Declared on-registry size in bytes, as the manifest summed to. */
   sizeBytes: number
+}
+
+/**
+ * The image a box booted from, and whose it is.
+ *
+ * Ownership travels with the ref rather than being derived from it here. The
+ * curated set is env-driven and an operator can rotate it, so asking "is this
+ * curated?" now answers about the set as it is now, not the set the box was
+ * created against — and the caller is the one holding the answer recorded when
+ * the box was created.
+ */
+export type BootedImage = {
+  /** The ref the box was dispatched with. */
+  ref: string
+  /** False for the operator's curated set, which no tenant catalog may hold. */
+  isOrgOwned: boolean
 }
 
 /**
@@ -44,11 +60,17 @@ export class ImageRegistrarService {
    * Curated images are skipped: they are the operator's, shared by every
    * organization, and putting them in a tenant's catalog would count them
    * against that tenant's limit and let one tenant delete what everyone uses.
+   *
+   * Which it is comes from the box rather than from a fresh look at the curated
+   * set, because that set moves: an operator who rotates a curated reference
+   * would otherwise have every box still running the old one file an image into
+   * its organization's catalog, against that organization's limit.
    */
-  async onBoxStarted(organizationId: string, imageRef: string, reported: ReportedImage): Promise<void> {
-    if (isCuratedSelector(imageRef)) {
+  async onBoxStarted(organizationId: string, image: BootedImage, reported: ReportedImage): Promise<void> {
+    if (!image.isOrgOwned) {
       return
     }
+    const imageRef = image.ref
 
     // Refused here rather than by the column, which would take a short bad
     // digest without complaint. The reason is downstream: this value becomes a

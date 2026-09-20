@@ -80,29 +80,6 @@ export function isDigestPinned(ref: string): boolean {
 }
 
 /**
- * Whether a runner should ask the registry again rather than trust its cache.
- *
- * True only for a reference that can still move and that this deployment has
- * not pinned yet. Both exclusions are load-bearing:
- *
- * - a curated selector is the operator's own, resolved from the curated set
- *   without a catalog lookup, and asking the registry for it would put a round
- *   trip on the path every create took before any of this existed;
- * - a digest already names one build, so re-resolving it cannot return
- *   anything else.
- *
- * Which leaves exactly the case worth paying for: a tag whose digest nobody has
- * recorded. Once the first box reports one, the resolver hands out the pinned
- * ref and this stops being true on its own.
- */
-export function imageNeedsRevalidate(image: string | undefined): boolean {
-  if (isCuratedSelector(image)) {
-    return false
-  }
-  return !isDigestPinned(image as string)
-}
-
-/**
  * Parse a tenant-supplied ref, rejecting anything malformed at the boundary.
  *
  * Everything downstream — the catalog key, the route parameter, the ref handed

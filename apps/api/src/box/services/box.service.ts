@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
+import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
@@ -189,6 +190,9 @@ export class BoxService {
 
     box.class = warmPoolItem.class
     box.image = warmPoolItem.image
+    // Asserted curated a few lines up, so this is not a second opinion — it is
+    // the same one, written down before the curated set can move under it.
+    box.imageIsOrgOwned = false
     //  TODO: default user should be configurable
     box.osUser = 'boxlite'
     box.env = warmPoolItem.env || {}
@@ -302,6 +306,9 @@ export class BoxService {
       box.labels = createBoxDto.labels || {}
 
       box.image = image
+      // The resolver decided this, against the curated set as it stood when the
+      // caller asked. Recomputing it later answers a different question.
+      box.imageIsOrgOwned = resolvedImage.isOrgOwned
       box.cpu = cpu
       box.gpu = gpu
       box.mem = mem
@@ -1380,7 +1387,11 @@ export class BoxService {
     // and started it did so either way.
     if (reportedImage && newState === BoxState.STARTED && box.image) {
       try {
-        await this.imageRegistrarService.onBoxStarted(box.organizationId, box.image, reportedImage)
+        await this.imageRegistrarService.onBoxStarted(
+          box.organizationId,
+          { ref: box.image, isOrgOwned: boxImageIsOrgOwned(box) },
+          reportedImage,
+        )
       } catch (error) {
         // A lost registration costs the next create one re-resolution, which
         // is the documented trade; failing the state update instead would

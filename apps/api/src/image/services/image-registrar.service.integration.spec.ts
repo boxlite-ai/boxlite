@@ -9,6 +9,7 @@ import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { Image } from '../entities/image.entity'
 import { ImageTag } from '../entities/image-tag.entity'
 import { ImageVersion } from '../entities/image-version.entity'
+import { isCuratedSelector } from '../utils/image-ref.util'
 import { ImageRegistrarService } from './image-registrar.service'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
@@ -66,7 +67,7 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
   })
 
   function report(ref: string, digest = DIGEST, sizeBytes = 4096) {
-    return registrar.onBoxStarted(ORG, ref, { digest, sizeBytes })
+    return registrar.onBoxStarted(ORG, { ref, isOrgOwned: true }, { digest, sizeBytes })
   }
 
   function countOf(table: string): Promise<number> {
@@ -161,19 +162,25 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
   })
 
   /**
-   * Curated images belong to the operator and are shared by every
-   * organization; a row would count against a tenant's limit and let one
-   * tenant delete what everyone boots from.
+   * An operator's image belongs to no tenant catalog: it is shared by every
+   * organization, and a row would count against one tenant's limit and let
+   * that tenant delete what everyone boots from.
+   *
+   * The ref here is deliberately one the curated set no longer holds — an
+   * operator rotated past it while this box kept running. That is the case
+   * this signature exists for: working ownership out from the ref would call
+   * it the organization's and file it, because the set moved and `box.image`
+   * did not. Only the box knows, and the box was told at create.
    */
-  it.each([['base'], ['ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0']])(
-    'records nothing for the curated selector %s',
-    async (ref) => {
-      await report(ref)
+  it('records nothing for an operator image the curated set has moved past', async () => {
+    const rotatedAway = 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.0.1'
+    expect(isCuratedSelector(rotatedAway)).toBe(false)
 
-      expect(await countOf('image')).toBe(0)
-      expect(await countOf('image_version')).toBe(0)
-    },
-  )
+    await registrar.onBoxStarted(ORG, { ref: rotatedAway, isOrgOwned: false }, { digest: DIGEST, sizeBytes: 4096 })
+
+    expect(await countOf('image')).toBe(0)
+    expect(await countOf('image_version')).toBe(0)
+  })
 
   /**
    * Deleting an image is how a tenant will pick up a tag that moved. Using it
@@ -212,7 +219,11 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
 
   it('keeps one organization out of another catalog', async () => {
     await report('quay.io/acme/app:v1')
-    await registrar.onBoxStarted(OTHER_ORG, 'quay.io/acme/app:v1', { digest: DIGEST, sizeBytes: 4096 })
+    await registrar.onBoxStarted(
+      OTHER_ORG,
+      { ref: 'quay.io/acme/app:v1', isOrgOwned: true },
+      { digest: DIGEST, sizeBytes: 4096 },
+    )
 
     const images = await dataSource.getRepository(Image).find()
     expect(images).toHaveLength(2)

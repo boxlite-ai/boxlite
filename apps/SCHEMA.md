@@ -356,6 +356,7 @@ or `archived`.
 | `name` | `character varying` | unique per organization |
 | `region` | `character varying` | holds `region.id` |
 | `image` | `character varying` | nullable |
+| `imageIsOrgOwned` | `boolean` | nullable; false for the operator's curated set. Null means the row predates the column, and the reader falls back to matching `image` against the curated set as it stands now — which is what every row used to do, and why the column exists |
 | `runnerId` | `uuid` | nullable |
 | `prevRunnerId` | `uuid` | nullable; the runner to revert to if reassignment fails |
 | `class` | `enum` | `small` \| `medium` \| `large`, default `small` |

@@ -266,8 +266,14 @@ describe('BoxService network tunnel URLs', () => {
 })
 
 describe('BoxService image reporting', () => {
-  function makeService(boxState: BoxState) {
-    const box = { id: 'box-1', organizationId: 'org-1', image: 'quay.io/acme/app:v1', state: boxState }
+  function makeService(boxState: BoxState, imageIsOrgOwned: boolean | null = true) {
+    const box = {
+      id: 'box-1',
+      organizationId: 'org-1',
+      image: 'quay.io/acme/app:v1',
+      imageIsOrgOwned,
+      state: boxState,
+    }
     const service = Object.create(BoxService.prototype) as BoxService
     Object.assign(service as any, {
       // The ERROR case runs on past the image report into the real state
@@ -292,7 +298,29 @@ describe('BoxService image reporting', () => {
 
     await service.updateState('box-1', BoxState.STARTED, false, undefined, reported)
 
-    expect(registrar.onBoxStarted).toHaveBeenCalledWith('org-1', 'quay.io/acme/app:v1', reported)
+    expect(registrar.onBoxStarted).toHaveBeenCalledWith(
+      'org-1',
+      { ref: 'quay.io/acme/app:v1', isOrgOwned: true },
+      reported,
+    )
+  })
+
+  /**
+   * The registrar is told whose image this is rather than deciding, and what it
+   * is told is what the box recorded when it was created. Passing the recorded
+   * `false` through is the whole fix: recomputing here would ask the curated
+   * set as it stands now, which is not the set this box was created against.
+   */
+  it("passes on the ownership the box recorded, not a fresh look at the curated set", async () => {
+    const { service, registrar } = makeService(BoxState.STARTED, false)
+
+    await service.updateState('box-1', BoxState.STARTED, false, undefined, reported)
+
+    expect(registrar.onBoxStarted).toHaveBeenCalledWith(
+      'org-1',
+      { ref: 'quay.io/acme/app:v1', isOrgOwned: false },
+      reported,
+    )
   })
 
   /**

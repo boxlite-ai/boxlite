@@ -6,7 +6,6 @@
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import {
   assertHostIsAllowed,
-  imageNeedsRevalidate,
   imageRegistryAllowlist,
   isCuratedSelector,
   parseImageRef,
@@ -105,25 +104,6 @@ describe('image ref utilities', () => {
       ['acme/app', false],
     ])('isCuratedSelector(%s) is %s', (image, expected) => {
       expect(isCuratedSelector(image as string | undefined)).toBe(expected)
-    })
-  })
-
-  /**
-   * The four quadrants, because each one is a different reason. Getting the
-   * curated ones wrong puts a registry round trip on the path every create took
-   * before the catalog existed; getting the digest one wrong asks a registry to
-   * re-resolve something that can only answer with itself.
-   */
-  describe('imageNeedsRevalidate', () => {
-    it.each([
-      ['a curated short name', 'python', false],
-      ['a curated full ref', 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0', false],
-      ['an unset image', undefined, false],
-      ['an org tag', 'quay.io/acme/app:v1', true],
-      ['an org bare repository', 'quay.io/acme/app', true],
-      ['an org digest', `quay.io/acme/app@sha256:${'a'.repeat(64)}`, false],
-    ])('%s ⇒ %s', (_label, image, expected) => {
-      expect(imageNeedsRevalidate(image as string | undefined)).toBe(expected)
     })
   })
 })

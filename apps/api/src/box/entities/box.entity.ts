@@ -58,6 +58,22 @@ export class Box {
   @Column({ nullable: true })
   image?: string
 
+  /**
+   * Whether this box's image is the organization's rather than the operator's
+   * curated set, decided once when the box was created.
+   *
+   * Recorded instead of recomputed because the curated set is env-driven and
+   * mutable: `isCuratedSelector` answers against the set as it is *now*, so an
+   * operator who rotates a curated reference turns every box already running
+   * the old one into a box whose image reads as tenant-owned. `box.image` is
+   * fixed at create and never rewritten, so the answer has to be fixed with it.
+   *
+   * Null on rows that predate the column. Recomputing is still the best answer
+   * available for those, which is what the reader does.
+   */
+  @Column({ type: 'boolean', nullable: true })
+  imageIsOrgOwned?: boolean | null
+
   @Column({
     type: 'uuid',
     nullable: true,
