@@ -305,10 +305,11 @@ pub struct PyBoxStateInfo {
     pub(crate) running: bool,
     #[pyo3(get)]
     pub(crate) pid: Option<u32>,
-    /// Exit code of the box's main command, set once the box has stopped
-    /// because that command exited, and `None` otherwise. `0` is a real value
-    /// — it is what tells a box that finished its work from one that crashed —
-    /// so callers must test for `None` rather than for falsiness.
+    /// How the box's main command ended, set once the runtime recorded it and
+    /// `None` otherwise. Stopping a box signals that command, so this also
+    /// carries what the stop produced. `0` is a real value — it is what
+    /// separates a command that succeeded from one that did not — so callers
+    /// must test for `None` rather than for falsiness.
     #[pyo3(get)]
     pub(crate) exit_code: Option<i32>,
 }
@@ -495,8 +496,8 @@ mod tests {
         }
     }
 
-    // 0 is a real exit code — it is what separates a box that finished its work
-    // from one that crashed — so the binding has to carry it as a value rather
+    // 0 is a real exit code — it is what separates a command that succeeded
+    // from one that did not — so the binding has to carry it as a value rather
     // than fold it into "nothing recorded".
     #[test]
     fn box_info_conversion_carries_the_main_command_exit_code() {

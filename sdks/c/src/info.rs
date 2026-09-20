@@ -118,9 +118,9 @@ pub struct CBoxInfo {
     /// AutoStop measures idleness against; `0` when nothing was recorded, which
     /// is always the case for local runtimes.
     pub last_activity_at: i64,
-    /// Owned exit code of the box's main command; null when the runtime
-    /// recorded none — that is, when the box did not stop because that command
-    /// exited.
+    /// Owned record of how the box's main command ended; null when the runtime
+    /// recorded none. Stopping a box signals that command, so this carries what
+    /// the stop produced as well as a self-chosen exit.
     ///
     /// Absence cannot be a sentinel the way it is for [`Self::pid`] and
     /// [`Self::started_at`]: `0` is the exit code of every command that
@@ -818,23 +818,12 @@ mod tests {
         for (exit_code, want) in [(None, None), (Some(0), Some(0)), (Some(42), Some(42))] {
             let mut info = CBoxInfo::from_box_info(&box_info_with_exit_code(exit_code));
 
-            match want {
-                None => assert!(
-                    info.exit_code.is_null(),
-                    "exit_code should be null for {exit_code:?}"
-                ),
-                Some(code) => {
-                    assert!(
-                        !info.exit_code.is_null(),
-                        "exit_code should be non-null for {exit_code:?}"
-                    );
-                    assert_eq!(
-                        unsafe { *info.exit_code },
-                        code,
-                        "exit_code value for {exit_code:?}"
-                    );
-                }
-            }
+            // SAFETY: `from_box_info` either allocated this pointer or left it
+            // null, and nothing has freed it yet. `as_ref` maps both cases onto
+            // an Option, so one assertion compares what crossed the boundary
+            // against what went in — null against `None` included.
+            let got = unsafe { info.exit_code.as_ref() }.copied();
+            assert_eq!(got, want, "exit_code for {exit_code:?}");
 
             // Frees the exit code too; running under Miri or a leak checker is
             // what makes this line load-bearing rather than incidental.

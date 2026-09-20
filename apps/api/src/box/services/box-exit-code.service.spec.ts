@@ -44,7 +44,7 @@ describe('BoxExitCodeService', () => {
   // The whole point of the field: absence and 0 are different answers, and a
   // truthiness check anywhere on this path erases every clean exit.
   it.each([
-    ['a crashed main command', { exitCode: 137 }, 137],
+    ['a main command ended by a signal', { exitCode: 137 }, 137],
     ['a main command that succeeded', { exitCode: 0 }, 0],
   ])('returns the code for %s', async (_case, payload, expected) => {
     const { service } = serviceThatReads({ state: 'stopped', ...payload })

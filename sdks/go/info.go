@@ -96,10 +96,11 @@ type BoxInfo struct {
 	// measures idleness against. The zero time means no activity was
 	// recorded, which is always the case for local runtimes.
 	LastActivityAt time.Time
-	// ExitCode is the main command's exit code, set when the box stopped
-	// because that command exited, and nil otherwise. It is a pointer, not a
-	// plain int, because 0 is the exit code of every command that succeeded
-	// and so cannot double as "no exit code recorded".
+	// ExitCode is how the box's main command ended, set once the runtime
+	// recorded it and nil otherwise. Stopping a box signals that command, so
+	// this also carries what the stop produced. It is a pointer, not a plain
+	// int, because 0 is the exit code of every command that succeeded and so
+	// cannot double as "no exit code recorded".
 	ExitCode *int
 }
 

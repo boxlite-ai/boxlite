@@ -28,10 +28,10 @@ describe('BoxDto main command exit code', () => {
   }
 
   // The code is read from the runner and handed in, so this conversion's only
-  // job is to keep 0 a value: it is what tells a box that finished its work
-  // from one that crashed.
+  // job is to keep 0 a value: it is what separates a command that succeeded
+  // from one that did not.
   it.each([
-    ['a failing main command', 137, 137],
+    ['a main command ended by a signal', 137, 137],
     ['a main command that succeeded', 0, 0],
   ])('reports the exit code of %s', (_case, read, expected) => {
     expect(BoxDto.fromBox(box(), 'https://proxy.invalid', null, read).exitCode).toBe(expected)

@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// The field exists to tell a box that finished its work from one that crashed,
-// so `0` has to reach the wire as a value while "not recorded" leaves the key
-// out entirely. A plain int with omitempty would drop both.
+// The field exists so a caller can tell a command that succeeded from one that
+// did not, so `0` has to reach the wire as a value while "not recorded" leaves
+// the key out entirely. A plain int with omitempty drops both.
 func TestBoxInfoResponseDistinguishesZeroExitCodeFromNone(t *testing.T) {
 	zero := 0
 	code := 137
@@ -19,7 +19,7 @@ func TestBoxInfoResponseDistinguishesZeroExitCodeFromNone(t *testing.T) {
 		want     string
 	}{
 		{"main command succeeded", &zero, `"exitCode":0`},
-		{"main command crashed", &code, `"exitCode":137`},
+		{"main command ended by a signal", &code, `"exitCode":137`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := json.Marshal(BoxInfoResponse{State: "stopped", ExitCode: tc.exitCode})

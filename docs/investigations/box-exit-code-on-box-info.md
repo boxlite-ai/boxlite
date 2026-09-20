@@ -2,14 +2,14 @@
 
 **Date:** 2026-09-18
 **Status:** Implemented
-**Issue:** POL-603 — cloud box info carries no exit code, so a clean exit and a crash are indistinguishable
+**Issue:** POL-603 — cloud box info carries no exit code, so a command that succeeded and one that did not are indistinguishable
 
 ---
 
 ## Problem
 
 `GET /v1/boxes/{id}` on BoxLite Cloud returns no exit code. A box whose main
-command ran to completion and one whose main command crashed both end up as
+command ran to completion and one whose main command failed both end up as
 `status: stopped`, with nothing in the response telling them apart. For an
 agent runtime this is the whole observability story of a workload: the box
 _is_ the process, and the process's outcome is unreadable.
@@ -74,11 +74,29 @@ Two consequences follow, and both are deliberate:
   `exit_code`, `started_at` and `error_reason` are all lost with it. That is a
   pre-existing gap, tracked in #1551, not something this change introduces.
 
+### A stop records a code too
+
+The code is how the main command ended, not only whether it ended by itself.
+Stopping a box signals that command — `SIGTERM`, then `SIGKILL` after a grace
+period (`src/guest/src/container/lifecycle.rs`) — and the guest records the
+result the same way it records a self-chosen exit, folding a signal into
+`128 + n` through `ExitStatus::shell_code()`.
+
+Both reachable shapes were verified against a local `boxlite serve`: a command
+trapping `SIGTERM` and exiting `7` reads back as `7`, while `sh -c 'sleep 600'`
+reads back as `137`. There is no third — the main command is the container's
+init, and an unhandled `SIGTERM` to PID 1 is dropped by the kernel, so either
+the command handles it and chooses its own code or `SIGKILL` ends it.
+
+So the field is not a "did it fail" flag, and `137` is not a fixed answer for a
+stop. A caller that wants "did my workload fail" reads this together with
+whether it asked for the stop.
+
 ### `0` is a value, not an absence
 
 `CBoxInfo` spells absence as `0` for `pid` and `started_at`. An exit code
 cannot follow that convention: `0` is precisely the answer that distinguishes a
-command that finished its work from one that died. The FFI therefore carries an
+command that succeeded from one that did not. The FFI therefore carries an
 owned pointer, null for absent, released by `free_box_info` — the same shape
 `CBoxInfo` already uses for `network`:
 

@@ -110,13 +110,13 @@ func cBoxInfoExitCodeTestFixtures() [3]*int {
 	defer C.free(unsafe.Pointer(cleanExit))
 	*cleanExit = 0
 
-	crashExit := (*C.int)(C.malloc(C.sizeof_int))
-	defer C.free(unsafe.Pointer(crashExit))
-	*crashExit = 42
+	failedExit := (*C.int)(C.malloc(C.sizeof_int))
+	defer C.free(unsafe.Pointer(failedExit))
+	*failedExit = 42
 
 	return [3]*int{
 		withCode(nil),
 		withCode(cleanExit),
-		withCode(crashExit),
+		withCode(failedExit),
 	}
 }

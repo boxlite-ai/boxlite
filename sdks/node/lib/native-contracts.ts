@@ -270,9 +270,9 @@ export interface JsBoxStateInfo {
   running: boolean;
   pid?: number;
   /**
-   * Exit code of the box's main command, present once the box has stopped
-   * because that command exited. `0` is a real value; check for `undefined`,
-   * not falsiness.
+   * How the box's main command ended, present once the runtime recorded it.
+   * Stopping a box signals that command, so this carries what the stop
+   * produced too. `0` is a real value; check for `undefined`, not falsiness.
    */
   exitCode?: number;
 }

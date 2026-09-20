@@ -138,10 +138,11 @@ describe('BoxLite container process options mapper', () => {
     expect(mapped.cmd).toBeUndefined()
   })
 
-  // Exit code 0 is what tells a clean finish from a crash, so the mapper has
-  // to publish it rather than drop it the way a falsy check would.
+  // Exit code 0 is what separates a command that succeeded from one that did
+  // not, so the mapper has to publish it rather than drop it the way a falsy
+  // check would.
   it.each([
-    ['a failing main command', 137, 137],
+    ['a main command ended by a signal', 137, 137],
     ['a main command that succeeded', 0, 0],
   ])('reports the exit code of %s', (_case, read, expected) => {
     const response = boxToBoxResponse({

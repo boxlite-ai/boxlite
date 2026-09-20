@@ -488,8 +488,11 @@ pub struct BoxInfo {
     /// Health status.
     pub health_status: HealthStatus,
 
-    /// Exit code of the container's init process, when the box stopped
-    /// because its main command exited (docker semantics).
+    /// How the container's init process ended, once the runtime recorded it
+    /// (docker semantics). Stopping a box signals that process, so this
+    /// carries what the stop produced as well as a self-chosen exit: the
+    /// process's own code when it handles `SIGTERM`, and `128 + n` when a
+    /// signal ends it.
     pub exit_code: Option<i32>,
 
     /// When the box most recently entered [`BoxStatus::Running`] (docker's
@@ -602,7 +605,8 @@ pub struct BoxStateInfo {
     /// Process ID of the VMM subprocess (None if not running).
     pub pid: Option<u32>,
 
-    /// Init exit code, when the box stopped because its command exited.
+    /// How init ended, once the runtime recorded it — its own code, or
+    /// `128 + n` when a signal ended it, as stopping a box does.
     pub exit_code: Option<i32>,
 }
 

@@ -388,9 +388,9 @@ typedef struct CBoxInfo {
   // AutoStop measures idleness against; `0` when nothing was recorded, which
   // is always the case for local runtimes.
   int64_t last_activity_at;
-  // Owned exit code of the box's main command; null when the runtime
-  // recorded none — that is, when the box did not stop because that command
-  // exited.
+  // Owned record of how the box's main command ended; null when the runtime
+  // recorded none. Stopping a box signals that command, so this carries what
+  // the stop produced as well as a self-chosen exit.
   //
   // Absence cannot be a sentinel the way it is for [`Self::pid`] and
   // [`Self::started_at`]: `0` is the exit code of every command that

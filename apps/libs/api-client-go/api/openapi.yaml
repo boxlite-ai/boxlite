@@ -5816,11 +5816,13 @@ components:
           example: 2024-10-01T12:00:00Z
           type: string
         exitCode:
-          description: "Exit code of the box's main command, present when the box\
-            \ stopped because that command exited. `0` is a real value, so a client\
-            \ must tell the missing field from a zero one. Only reading a single box\
-            \ carries it: this schema is shared with the box list and with the replies\
-            \ that change a box, which leave it out whether or not one was recorded."
+          description: "How the box's main command ended, present once the box has\
+            \ stopped and the runtime recorded it: its own code when it exited, or\
+            \ `128 + n` when a signal ended it. Stopping a box signals that command,\
+            \ so a stop is recorded here too. `0` is a real value, so a client must\
+            \ tell the missing field from a zero one. Only reading a single box carries\
+            \ it: this schema is shared with the box list and with the replies that\
+            \ change a box, which leave it out whether or not one was recorded."
           example: 137
           type: integer
         class:
