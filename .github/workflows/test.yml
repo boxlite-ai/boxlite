@@ -545,7 +545,32 @@ jobs:
           disable_search: true
           fail_ci_if_error: true
 
-  # End API test job.
+  # A skipped test job cannot publish Codecov's separately required status.
+  # Validate the PR's changed files with Codecov instead of forcing a pass.
+  coverage-empty:
+    name: Codecov (no coverage changes)
+    needs: changes
+    if: >-
+      ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
+          needs.changes.result == 'success' &&
+          needs.changes.outputs.rust == 'false' &&
+          needs.changes.outputs.python == 'false' &&
+          needs.changes.outputs.node == 'false' &&
+          needs.changes.outputs.go == 'false' &&
+          needs.changes.outputs.api == 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Report coverage is unnecessary for this change
+        uses: codecov/codecov-action@v5
+        with:
+          run_command: empty-upload
+          use_oidc: true
+          fail_ci_if_error: true
 
   # Single required status check for branch protection / merge queue.
   # Passes only if every job above succeeded or was skipped (path-filtered).
@@ -554,7 +579,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [changes, rust, python, node, go, setup, api, guest_artifacts]
+    needs: [changes, rust, python, node, go, setup, api, guest_artifacts, coverage-empty]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

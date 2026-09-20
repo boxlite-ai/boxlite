@@ -8,9 +8,79 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { runInNewContext } from 'node:vm'
 import { load as loadYaml } from 'js-yaml'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+
+const coverageWorkflow: any = loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows/test.yml'), 'utf8'))
+const coverageSuites = ['rust', 'python', 'node', 'go', 'api']
+
+function selectsEmptyCoverage(outputs: Record<string, string>, result = 'success', event = 'pull_request') {
+  const job = coverageWorkflow.jobs['coverage-empty']
+  assert.ok(job, 'intentionally skipped coverage must still publish a Codecov result')
+  // This guard uses the common boolean/equality subset of Actions expressions.
+  return runInNewContext(job.if.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), {
+    github: { event_name: event },
+    needs: { changes: { result, outputs } },
+  }, { timeout: 1000 })
+}
+
+test('documentation-only PRs and merge groups request a validated empty upload', () => {
+  const outputs = Object.fromEntries(coverageSuites.map((suite) => [suite, 'false']))
+  for (const event of ['pull_request', 'merge_group']) {
+    assert.equal(selectsEmptyCoverage(outputs, 'success', event), true)
+    assert.ok(Object.hasOwn(coverageWorkflow.on, event))
+    assert.equal(coverageWorkflow.on[event]?.paths, undefined)
+    assert.equal(coverageWorkflow.on[event]?.['paths-ignore'], undefined)
+  }
+  const job = coverageWorkflow.jobs['coverage-empty']
+  assert.equal(job.needs, 'changes')
+  assert.equal(job.permissions['id-token'], 'write')
+  const upload = job.steps.find((step: any) => step.uses?.startsWith('codecov/codecov-action@'))
+  assert.equal(upload?.with?.run_command, 'empty-upload')
+  assert.equal(upload.with.force, undefined, 'Codecov must validate the changed files')
+  assert.equal(upload.with.use_oidc, true)
+  assert.equal(upload.with.fail_ci_if_error, true)
+})
+
+test('empty upload cannot replace a selected suite or failed change detection', () => {
+  const outputs = Object.fromEntries(coverageSuites.map((suite) => [suite, 'false']))
+  for (const suite of coverageSuites) {
+    for (const value of ['true', '', 'unknown']) {
+      assert.equal(selectsEmptyCoverage({ ...outputs, [suite]: value }), false, `${suite}=${value}`)
+    }
+    const missing = { ...outputs }
+    delete missing[suite]
+    assert.equal(selectsEmptyCoverage(missing), false, `missing ${suite}`)
+  }
+  for (const result of ['failure', 'cancelled', 'skipped']) {
+    assert.equal(selectsEmptyCoverage(outputs, result), false, result)
+  }
+  for (const event of ['push', 'schedule', 'workflow_dispatch']) {
+    assert.equal(selectsEmptyCoverage(outputs, 'success', event), false, event)
+  }
+})
+
+test('the required conclusion fails when the empty upload fails', () => {
+  const job = coverageWorkflow.jobs['test-conclusion']
+  assert.ok(job.needs.includes('coverage-empty'), 'the required check must wait for the empty upload')
+  for (const [result, succeeds] of [['success', true], ['skipped', true], ['failure', false], ['cancelled', false]] as const) {
+    const needs = Object.fromEntries(job.needs.map((name: string) => [name, { result: name === 'coverage-empty' ? result : 'success' }]))
+    const script = job.steps[0].run.replaceAll('${{ toJSON(needs) }}', JSON.stringify(needs))
+    const run = spawnSync('bash', ['-eo', 'pipefail', '-c', script], { encoding: 'utf8', timeout: 10_000 })
+    assert.equal(run.error, undefined)
+    assert.equal(run.status === 0, succeeds, `${result}: ${run.stderr}`)
+  }
+})
+
+test('patch coverage requires 90 percent and a report while total stays informational', () => {
+  const config: any = loadYaml(readFileSync(join(REPO_ROOT, 'codecov.yml'), 'utf8'))
+  assert.equal(config.coverage.status.patch.default.target, '90%')
+  assert.equal(config.coverage.status.patch.default.threshold, '0%')
+  assert.equal(config.coverage.status.patch.default.if_not_found, 'failure')
+  assert.equal(config.coverage.status.project.default.informational, true)
+})
 
 function cliUnitTests(runner: 'cargo' | 'nextest', exitCode = 0) {
   const directory = mkdtempSync(join(tmpdir(), 'boxlite-cli-unit-'))

@@ -76,6 +76,18 @@ and bypass change filters. Combined Rust and CLI coverage runs on all three plat
 non-VM integration tests and Linux guest tests. Codecov requires 90% coverage of changed lines
 and reports total coverage.
 
+When none of the coverage suites is selected on a PR or merge group, the
+`Codecov (no coverage changes)` job runs a validated `empty-upload`. Codecov
+checks the changed files before publishing a passing or failing status; the
+workflow never forces a pass. Failed file detection cannot select this path,
+and upload errors fail `Test (conclusion)`. Source changes still need reports
+and 90% patch coverage; missing reports fail the patch status.
+
+After verifying normal uploads and the skipped-coverage path on PRs and merge
+groups, require `codecov/patch` from the Codecov app in the main ruleset alongside
+`Test (conclusion)`. Deploy the workflow before enabling that requirement so
+existing documentation-only PRs do not wait for a status they cannot publish.
+
 Client drift checks watch API code, shared libraries, generators and workspace configuration.
 Guest artifact checks watch guest build inputs instead of the whole make directory. Infrastructure
 tests remain available through `make test:apps:infra` and the local pre-push check;
