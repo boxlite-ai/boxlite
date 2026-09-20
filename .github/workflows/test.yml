@@ -96,7 +96,7 @@ jobs:
         id: config
         with:
           full-matrix: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         id: filter
         if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
         with:

@@ -253,7 +253,11 @@ test\:unit\:rust:
 
 # CLI integration binaries need a VM; CI runs only the inline unit-test modules.
 test\:unit\:cli:
-	@cargo nextest run -p boxlite-cli $(NEXTEST_PROFILE_FLAG) -E 'test(::tests::)'
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite-cli $(NEXTEST_PROFILE_FLAG) -E 'test(::tests::)'; \
+	else \
+		cargo test -p boxlite-cli --bins -- --test-threads=1 '::tests::'; \
+	fi
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
 # excluded from test:unit:rust because the zygote suite forks real processes.

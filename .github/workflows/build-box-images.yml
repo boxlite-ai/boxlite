@@ -42,7 +42,7 @@ jobs:
         with:
           persist-credentials: false # Later steps do not need git credentials.
 
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         id: filter
         if: github.event_name != 'workflow_dispatch'
         with:

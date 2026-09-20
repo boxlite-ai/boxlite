@@ -12,6 +12,57 @@ import { load as loadYaml } from 'js-yaml'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 
+function cliUnitTests(runner: 'cargo' | 'nextest', exitCode = 0) {
+  const directory = mkdtempSync(join(tmpdir(), 'boxlite-cli-unit-'))
+  try {
+    const log = join(directory, 'cargo.log')
+    writeFileSync(join(directory, 'cargo'), `#!/bin/sh
+if [ "$1" = nextest ] && ! command -v cargo-nextest >/dev/null 2>&1; then
+  echo 'error: no such command: nextest' >&2
+  exit 101
+fi
+printf '%s\\n' "$@" > "$CARGO_LOG"
+exit "$CARGO_STATUS"
+`, { mode: 0o755 })
+    if (runner === 'nextest') {
+      writeFileSync(join(directory, 'cargo-nextest'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    }
+    // Isolate tool discovery so an installed nextest cannot hide the fallback.
+    const result = spawnSync('/usr/bin/make', ['-f', join(REPO_ROOT, 'make/test.mk'), 'test:unit:cli', 'NEXTEST_PROFILE=ci'], {
+      cwd: REPO_ROOT,
+      env: { ...process.env, PATH: directory, MAKEFLAGS: '', CARGO_LOG: log, CARGO_STATUS: String(exitCode) },
+      encoding: 'utf8',
+      timeout: 10_000,
+    })
+    assert.equal(result.error, undefined)
+    const args = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []
+    return { result, args }
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+}
+
+test('CLI unit tests fall back to Cargo without running VM integration binaries', () => {
+  const { result, args } = cliUnitTests('cargo')
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(args, ['test', '-p', 'boxlite-cli', '--bins', '--', '--test-threads=1', '::tests::'])
+})
+
+test('CLI unit tests use the requested nextest profile when installed', () => {
+  const { result, args } = cliUnitTests('nextest')
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(args, ['nextest', 'run', '-p', 'boxlite-cli', '--profile', 'ci', '-E', 'test(::tests::)'])
+})
+
+for (const runner of ['cargo', 'nextest'] as const) {
+  test(`CLI unit tests propagate ${runner} failures`, () => {
+    const { result, args } = cliUnitTests(runner, 17)
+    assert.notEqual(result.status, 0)
+    assert.ok(args.length > 0, 'the selected test runner must execute')
+    assert.match(result.stderr, /Error 17/)
+  })
+}
+
 function workflowConfig(fullMatrix: string) {
   const actionPath = join(REPO_ROOT, '.github/actions/ci-config')
   const action: any = loadYaml(readFileSync(join(actionPath, 'action.yml'), 'utf8'))
