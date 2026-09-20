@@ -1,6 +1,44 @@
 # Guest memory (design)
 
-How a guest physical address reaches host memory or a device in the [VMM design](README.md), on arm64; the design also lists the x86_64 layout. Planned: M1 maps guest memory and adds the PL011 and PL031, and M2 adds virtio devices.
+What turns a guest access into host memory or a device access in the [VMM design](README.md), and where each guest physical address goes on arm64; the design also lists the x86_64 layout. Planned: M1 maps guest memory and adds the PL011 and PL031, and M2 adds virtio devices.
+
+## Components
+
+```mermaid
+flowchart TB
+  subgraph guest_side["guest"]
+    guest_code["processes and the kernel<br/>its page tables · stage 1"]
+  end
+  subgraph gpa_space["guest physical addresses"]
+    gpa_ram["RAM · kernel<br/>boot data · virtqueues"]
+    gpa_windows["device windows<br/>virtio-mmio · UART · RTC"]
+    gpa_irq["interrupt controller windows"]
+  end
+  subgraph host_hv["host hypervisor"]
+    stage2["stage-2 translation<br/>EPT or NPT on x86_64"]
+    mmio_exit["MMIO exit"]
+    in_kernel["in-kernel GIC<br/>or local APIC"]
+  end
+  subgraph shim_side["boxlite-shim"]
+    region["MemoryRegion<br/>guest_addr · host_addr · size"]
+    backing["host memory<br/>the RAM backing"]
+    bus["MMIO and port buses"]
+    workers["device workers"]
+  end
+  guest_code m_ram@-->|"guest physical"| gpa_ram
+  guest_code m_window@-->|"guest physical"| gpa_windows
+  guest_code m_irq@-->|"guest physical"| gpa_irq
+  gpa_ram m_mapped@-->|"mapped RAM"| stage2
+  region m_region@-->|"Vm::map_memory"| stage2
+  stage2 m_host@-->|"host memory · no exit"| backing
+  gpa_windows m_exit@-->|"no region covers it"| mmio_exit
+  gpa_irq m_in_kernel@-->|"handled in the host"| in_kernel
+  mmio_exit m_bus@-->|"MmioRead · MmioWrite"| bus
+  bus m_notify@-->|"queue notify"| workers
+  backing m_queues@-->|"virtqueues"| workers
+```
+
+## arm64 address map
 
 ```mermaid
 flowchart TB

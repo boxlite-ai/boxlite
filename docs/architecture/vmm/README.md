@@ -42,6 +42,7 @@ copy at `src/deps/libkrun-sys/vendor/libkrun/` (upstream `e12b9b3`).
 | Minimum macOS | 15, using HVF's in-kernel GICv3 | `hv_gic_create` and `hv_gic_set_spi` exist from macOS 15.0 (`hv_gic.h`), so no HVF or KVM host needs an emulated interrupt controller, and libkrun already prefers the in-kernel GIC wherever the host has it | macOS 12 with a userspace GICv3, which libkrun falls back to below macOS 15 (`libkrun/src/vmm/src/builder.rs:892-894`), at about 3–4 engineer-weeks in M1 |
 | SHARED share | virtio-fs in two stages: a FUSE server core for the SHARED share in M2, full passthrough for user volumes in M3 | Every box mounts the SHARED share, and guest file copy stages through it, so the first box already needs virtio-fs | Moving container layout and file copy off the SHARED share first, which changes the guest agent before the first box boots |
 | Threads | One thread per vCPU, worker threads per device, and a poller on the thread that calls `run()` | HVF binds a vCPU to the thread that created it, and per-device workers keep a slow device, such as a blocking virtio-fs request, from stalling the others | One event loop for all devices (Firecracker), where one slow device stalls the rest; an async runtime inside the jailed shim, which complicates per-thread seccomp |
+| Guest firmware | None: the VMM writes the kernel and its boot data into guest RAM and starts the boot vCPU at the kernel's entry point, as libkrun, Firecracker and crosvm do | The kernel ships with BoxLite as a file, so firmware and a boot loader would only add a step before it and a second guest program to ship, pin and trust | Firmware boot with edk2 UEFI or Rust Hypervisor Firmware, which cloud-hypervisor offers for disk images that carry their own boot loader (`README.md:114-118`, `:134-137`) and which only user-supplied OS images or Secure Boot would need |
 
 macOS 12–14 keep running boxes on libkrun until M5. When M5 removes libkrun,
 the support matrix in the root `README.md:241` changes from "macOS 12+" to macOS 15.
@@ -80,10 +81,14 @@ need no hypervisor.
 
 | Operation | Contract | HVF | KVM | WHP (M10) |
 | --- | --- | --- | --- | --- |
+| Create the VM | the backend's constructor | `hv_vm_create`, one VM per process (`hv_vm.h`) | `KVM_CREATE_VM` on `/dev/kvm`, then the `KVM_SET_TSS_ADDR` the KVM API requires on Intel hosts | `WHvCreatePartition`; `WHvSetPartitionProperty` for the vCPU count; then `WHvSetupPartition` |
+| Create the interrupt controller | the backend's constructor | `hv_gic_create`, after the VM and before any vCPU (`hv_gic.h`) | x86_64: `KVM_CREATE_IRQCHIP` and `KVM_CREATE_PIT2`, before any vCPU; arm64: a `KVM_DEV_TYPE_ARM_VGIC_V3` device with its distributor and redistributor addresses, initialised with `KVM_DEV_ARM_VGIC_CTRL_INIT` once every vCPU exists | local APIC emulation, set with `WHvSetPartitionProperty` before `WHvSetupPartition` |
 | Map guest memory | `Vm::map_memory` (`unsafe`) | `hv_vm_map` | `KVM_SET_USER_MEMORY_REGION`; the backend picks the slot | `WHvMapGpaRange` |
 | Unmap guest memory | `Vm::unmap_memory` | `hv_vm_unmap` | the same slot, set to size 0 | `WHvUnmapGpaRange` |
-| Create a vCPU | `Vm::create_vcpu`, on the thread that will run it | `hv_vcpu_create` | `KVM_CREATE_VCPU` | `WHvCreateVirtualProcessor` |
+| Create a vCPU | `Vm::create_vcpu`, on the thread that will run it | `hv_vcpu_create`, which also returns the `hv_vcpu_exit_t` the vCPU reports its exits in | `KVM_CREATE_VCPU`, then `mmap` of its `kvm_run`; `KVM_ARM_VCPU_INIT` on arm64, with secondaries powered off (`KVM_ARM_VCPU_POWER_OFF`) | `WHvCreateVirtualProcessor` |
+| Set boot registers | M1 adds it | `hv_vcpu_set_reg`, `hv_vcpu_set_sys_reg` | `KVM_SET_ONE_REG` on arm64; on x86_64 `KVM_SET_CPUID2`, then `KVM_SET_MSRS`, `KVM_SET_REGS`, `KVM_SET_FPU`, `KVM_SET_SREGS` and the local APIC's LINT pins, in Firecracker's order (`src/vmm/src/arch/x86_64/vcpu.rs:222-301`) | `WHvSetVirtualProcessorRegisters` |
 | Run to the next exit | `Vcpu::run` → `VcpuExit` | `hv_vcpu_run` | `KVM_RUN` | `WHvRunVirtualProcessor` |
+| Read the exit | the backend decodes it into a `VcpuExit` | `hv_vcpu_exit_t`: the reason and, for an exception, the syndrome and guest address | `kvm_run.exit_reason` and its union | the `WHV_RUN_VP_EXIT_CONTEXT` that `WHvRunVirtualProcessor` fills |
 | Kick from another thread | `VcpuHandle::kick` | `hv_vcpus_exit` | set `immediate_exit`, then signal the vCPU thread | `WHvCancelRunVirtualProcessor` |
 | Set an interrupt line | `Vm::set_irq_line` | `hv_gic_set_spi` | `KVM_IRQ_LINE` | a userspace IOAPIC, in a crate M10 picks, then `WHvRequestInterrupt` |
 
@@ -97,7 +102,8 @@ HVF and KVM keep these rules; [M10](#room-for-later-milestones) covers WHP:
   - HVF needs its GIC before any vCPU exists (`hv_gic.h`), and so does KVM's
     x86 irqchip.
   - KVM on arm64 initialises its GIC only after every vCPU exists, so that
-    backend initialises it on the first `run`.
+    backend initialises it once, in the first `run` on any vCPU, before any
+    vCPU enters the guest.
   - As a result, the VMM creates every vCPU before it runs any.
 - **Thread binding.** HVF accepts vCPU calls only from the thread that created
   the vCPU (`hv_vcpu.h`); KVM only recommends it
@@ -157,29 +163,87 @@ Firecracker, libkrun, hyperlight, alioth, applevisor, kvm-ioctls and QEMU
 
 ### Exit contract
 
+The guest reads and writes RAM mapped with `map_memory` without an exit to the
+VMM. An access to an address no mapping covers, such as a device window, is an
+MMIO exit.
+
+A process in the guest runs on a vCPU at EL0 (ring 3 on x86_64), and the guest
+kernel at EL1 (ring 0). The process's system calls and context switches stay
+inside the guest; only the exits below reach the VMM.
+
 `VcpuExit` (`src/hypervisor/src/exit.rs`) is what `run` returns. MMIO and port
 data borrow a per-vCPU buffer inside the backend, as in libkrun and kvm-ioctls.
 The VMM therefore handles an exit before it runs that vCPU again, and the next
 `run` completes the guest's instruction.
 
-| Exit | Meaning | Source |
-| --- | --- | --- |
-| `MmioRead`, `MmioWrite` | Access to an emulated device | HVF data abort; `KVM_EXIT_MMIO` |
-| `IoIn`, `IoOut` (x86_64 only) | One port access to the 8250 serial, CMOS RTC or i8042; string port I/O is `Error::UnhandledExit` | `KVM_EXIT_IO` |
-| `Interrupted` | A kick | `hv_vcpus_exit`; `KVM_RUN` returning `EINTR` |
-| `Halted` | The vCPU waits for an interrupt | HVF traps `WFI`; KVM with the in-kernel irqchip waits in the kernel, and the backend still maps `KVM_EXIT_HLT`, which only a VM without one returns (as the probe VM in `src/boxlite/src/system_check.rs` does) |
-| `Shutdown` | The guest powered off | PSCI `SYSTEM_OFF`, decoded by the HVF backend; `KVM_EXIT_SYSTEM_EVENT` |
-| `Reset` | The guest reset | PSCI `SYSTEM_RESET`, decoded by the HVF backend and a `KVM_EXIT_SYSTEM_EVENT` reset on KVM arm64; an x86 triple fault (`KVM_EXIT_SHUTDOWN`) |
+| Exit | Meaning | HVF | KVM | WHP (M10) |
+| --- | --- | --- | --- | --- |
+| `MmioRead`, `MmioWrite` | Access to an emulated device | HVF data abort: `HV_EXIT_REASON_EXCEPTION` with a data-abort syndrome | `KVM_EXIT_MMIO` | `WHvRunVpExitReasonMemoryAccess` |
+| `IoIn`, `IoOut` (x86_64 only) | One port access to the 8250 serial, CMOS RTC or i8042; string port I/O is `Error::UnhandledExit` | none | `KVM_EXIT_IO` | `WHvRunVpExitReasonX64IoPortAccess`, which also carries the ports of the userspace PIC and PIT (M10) |
+| `Interrupted` | A kick | `HV_EXIT_REASON_CANCELED`, after `hv_vcpus_exit` | `KVM_RUN` returning `EINTR` | `WHvRunVpExitReasonCanceled` |
+| `Halted` | The vCPU waits for an interrupt | HVF traps `WFI` | KVM with the in-kernel irqchip waits in the kernel, and the backend still maps `KVM_EXIT_HLT`, which only a VM without one returns (as the probe VM in `src/boxlite/src/system_check.rs` does) | with local APIC emulation, `HLT` waits inside `WHvRunVirtualProcessor`; QEMU handles `WHvRunVpExitReasonX64Halt` only without it (`target/i386/whpx/whpx-all.c:2337-2342`) |
+| `Shutdown` | The guest powered off | PSCI `SYSTEM_OFF`, decoded by the HVF backend | `KVM_EXIT_SYSTEM_EVENT` | the i8042 reset below |
+| `Reset` | The guest reset | PSCI `SYSTEM_RESET`, decoded by the HVF backend | a `KVM_EXIT_SYSTEM_EVENT` reset on arm64; an x86 triple fault (`KVM_EXIT_SHUTDOWN`) | the i8042 reset below |
 
 On x86_64 the guest resets through the i8042 port. That reset arrives as an
 `IoOut`, and the VMM's i8042 device turns it into the end of the VM.
 
 KVM handles PSCI `CPU_ON` for secondary vCPUs in the kernel. On HVF the backend
-decodes the call, and M1 adds an exit so the VMM can start the target vCPU.
+decodes the call, and M1 adds an exit so the VMM can start the target vCPU. On
+arm64 only the boot vCPU starts at the kernel's entry point; each secondary
+starts powered off until `CPU_ON` gives it one. An HVF secondary waits parked,
+so the stop path's unpark also wakes one the guest never started.
+
+How each host completes an access on the next `run`:
+
+- **HVF.** The backend decodes a data abort itself: the syndrome gives the
+  access size (SAS), direction (WnR) and register (SRT), and
+  `physical_address` the guest address. On the next `run` it writes the
+  register for a read and advances PC by 4, as libkrun does
+  (`libkrun/src/hvf/src/lib.rs:554-576`, `:615-650`).
+- **KVM.** The kernel completes the access on the next `KVM_RUN`, from the
+  data the VMM leaves in `kvm_run`.
+- **WHP.** A memory-access exit carries the instruction bytes, so
+  `whp::emulator` decodes the access. A port-access exit carries the port,
+  size and `RAX`. On the next `run` the backend writes the destination
+  register for a read and advances RIP.
+
+Hypervisor.framework can also exit with `HV_EXIT_REASON_VTIMER_ACTIVATED`
+(`hv_vcpu_types.h`), but not with the in-kernel GIC, which handles the guest's
+virtual timer itself: QEMU asserts that this exit never arrives with it
+(`target/arm/hvf/hvf.c:2580-2581`) and notes that HVF then handles vtimer
+wake-ups (`:2670-2671`).
+
+Every Linux boot also raises exceptions that the HVF backend resolves itself,
+without a `VcpuExit`, before it enters the guest again:
+
+- **PSCI queries.** Linux first calls `PSCI_VERSION` and `MIGRATE_INFO_TYPE`
+  (`drivers/firmware/psci/psci.c:638`, `:651`). The backend answers both in
+  X0, as libkrun does (`libkrun/src/hvf/src/lib.rs:526-535`), and returns
+  `NOT_SUPPORTED` for any other call it does not act on, as KVM does
+  (`arch/arm64/kvm/psci.c:306-307`).
+- **System registers.** Linux reads ID registers that HVF does not model, such
+  as `ID_AA64PFR2_EL1` (`arch/arm64/kernel/cpuinfo.c:457-472`; QEMU
+  `target/arm/hvf/hvf.c:1145`). A trapped ID register reads as zero, as in QEMU
+  (`hvf.c:1873-1877`) and libkrun
+  (`libkrun/src/devices/src/legacy/vcpu.rs:145-150`). The backend also
+  emulates the OS lock as QEMU does: a write to `OSLAR_EL1` sets the lock that
+  `OSLSR_EL1` reports, and `OSDLR_EL1` is a dummy register
+  (`hvf.c:1746-1750`, `:2044-2046`, `:2056-2058`). libkrun ignores writes to
+  both (`vcpu.rs:258-260`).
+- **WFE.** HVF traps it like `WFI`, but the backend only advances PC, as QEMU
+  does (`hvf.c:2493-2497`).
 
 ## Device model
 
 ### Guest memory layout
+
+Two translations stand between a guest access and host memory. The guest
+kernel's page tables map a guest virtual address to a guest physical one, and
+the host hypervisor's stage-2 translation, EPT or NPT on x86_64, maps that to
+the shim's memory from the regions `map_memory` registers. An address no region
+covers is an MMIO exit, except the windows the host's in-kernel interrupt
+controller claims.
 
 On arm64 the layout follows Firecracker's, with a PL011 in its serial slot, and
 keeps RAM at `0x8000_0000` as libkrun does today.
@@ -202,7 +266,8 @@ On x86_64 the layout uses the values most surveyed VMMs share.
 | --- | --- | --- |
 | `0x7000` | `boot_params` (the zero page) | five of six |
 | `0x2_0000` | kernel command line | five of six |
-| `0x10_0000` | kernel load address | four of six |
+| `0x9_FC00` | MP table, in the last KiB below 640 KiB | Firecracker, libkrun |
+| `0x10_0000` | `bzImage` load address; an ELF `vmlinux` loads where its headers say | four of six |
 | below `0xC000_0000`, and above 4 GiB | RAM, split around the 32-bit MMIO hole | Firecracker, cloud-hypervisor, dragonball |
 | `0xC000_0000`–`0xD000_0000` | 32-bit PCI BAR window, reserved for M9 | Firecracker, cloud-hypervisor and alioth give PCI BARs space in the hole |
 | `0xD000_0000`–`0xE000_0000` | virtio-mmio devices, 4 KiB each, with interrupts from GSI 5 | device window: libkrun, crosvm; GSI 5: Firecracker, libkrun, dragonball |
@@ -262,14 +327,19 @@ today.
 ### Threads
 
 - **vCPU threads.**
-  - Each is named `vcpuN`. It creates its vCPU and waits until every vCPU
-    exists.
+  - `run()` spawns one per vCPU, named `vcpuN`. Each creates its vCPU and waits
+    until every vCPU exists.
   - It then loops: run, dispatch the exit to a bus, run again.
   - On `Halted`, which in practice only HVF returns, it parks until the guest timer's
     deadline, an interrupt, or a stop.
   - The VMM's interrupt path unparks halted vCPUs after it sets a line;
     `Vm::set_irq_line` itself wakes no thread. M1 decides how an IPI from
     another vCPU wakes a parked one.
+  - With the in-kernel GIC, `WFI` still traps (`target/arm/hvf/hvf.c:2493-2497`),
+    but QEMU then arms no timer of its own and leaves vtimer wake-ups to HVF
+    (`:1496-1499`, `:2670-2671`). libkrun instead parks until the deadline in
+    `CNTV_CVAL_EL0` (`libkrun/src/hvf/src/lib.rs:705-721`). M1 confirms which
+    of the two wakes a parked vCPU on time.
 - **Device workers.**
   - Each virtio device owns its worker threads.
   - A vCPU's queue-notify write wakes the worker through an event.
@@ -401,6 +471,64 @@ Leaving libkrunfw drops three kinds of kernel patch:
 - **TSI.** Unused: the network factory always returns gvproxy
   (`src/boxlite/src/net/mod.rs:481-484`).
 
+### Boot path
+
+No firmware or boot loader runs in the guest. As in libkrun, Firecracker and
+crosvm, the VMM is the boot loader: it writes the kernel and its boot data into
+guest RAM and starts the boot vCPU at the kernel's entry point, as Linux's boot
+protocols require (`Documentation/arch/arm64/booting.rst`,
+`Documentation/arch/x86/boot.rst`).
+
+| Step | arm64 (HVF, KVM) | x86_64 (KVM, WHP) |
+| --- | --- | --- |
+| Load the kernel | the `Image` at its text offset from a 2 MiB aligned base (`booting.rst:135-137`) | a `bzImage`'s protected-mode kernel at 1 MiB, or an ELF `vmlinux` at the addresses its program headers name, 16 MiB by default (`arch/x86/Kconfig:2096-2098`) |
+| Describe the machine | a device tree in the last 2 MiB of RAM: memory, each CPU with the `psci` enable method, a `psci` node with the HVC conduit, the GIC, the timer, the `apb_pclk` clock the PL011 and PL031 name, the PL011, the PL031, each device as `virtio,mmio`, and the command line as `bootargs`; Firecracker writes the same nodes, with an `ns16550a` UART in place of the PL011 (`src/vmm/src/arch/aarch64/fdt.rs:351`, `:388`) | `boot_params` at `0x7000`: the setup header, which a `bzImage` carries at offset `0x1f1` and the VMM fills in for a `vmlinux`, the e820 memory map, and `cmd_line_ptr` to the command line at `0x2_0000`, which names each `virtio_mmio.device=` (`boot.rst:1371-1376`); an MP table at `0x9_FC00` that lists each vCPU, the IOAPIC and its interrupt sources |
+| CPU state at entry | MMU off, interrupts masked in `PSTATE.DAIF`, at EL1 (`booting.rst:169-176`) | 64-bit mode with paging on: identity-mapped page tables and a GDT with flat `__BOOT_CS` and `__BOOT_DS`, interrupts off (`boot.rst:1394-1402`) |
+| Boot vCPU registers | PC at the `Image`'s first instruction, X0 at the device tree, X1 to X3 zero (`booting.rst:162-165`, `:423-424`) | RIP at the 64-bit entry, which for a `bzImage` is the load address plus `0x200`; RSI at `boot_params` (`boot.rst:1390-1392`, `:1401-1402`) |
+| Other vCPUs | powered off until the kernel calls PSCI `CPU_ON` (`booting.rst:447-453`) | waiting for the boot vCPU's INIT and SIPI to each one the MP table lists; KVM's in-kernel local APIC holds them in `KVM_MP_STATE_UNINITIALIZED` (`KVM_GET_MP_STATE` in the KVM API) |
+
+Firecracker sets the same state. On arm64 every vCPU gets PSTATE at EL1h with
+DAIF masked, and only vCPU 0 gets PC and X0
+(`src/vmm/src/arch/aarch64/regs.rs:23`, `src/vmm/src/arch/aarch64/vcpu.rs:338-373`).
+On x86_64 the boot vCPU gets RIP, RSI pointing at the zero page, long mode, and
+identity page tables from `0x9000` (`src/vmm/src/arch/x86_64/regs.rs:86-107`,
+`:247-282`).
+
+x86_64 needs the MP table because it boots without ACPI or a device tree:
+without the table or an ACPI MADT, Linux turns off the IOAPIC and SMP
+(`arch/x86/kernel/apic/apic.c:1270-1276`, `arch/x86/kernel/smpboot.c:1088-1090`).
+Linux looks for it in low memory, including the last KiB below 640 KiB
+(`arch/x86/kernel/mpparse.c:612-614`), where Firecracker and libkrun write it
+(`src/vmm/src/arch/x86_64/mod.rs:271-272`,
+`libkrun/src/arch/src/x86_64/mod.rs:266-268`). Firecracker's table lists each
+vCPU, an ISA bus, the IOAPIC and its interrupt sources
+(`src/vmm/src/arch/x86_64/mptable.rs:177-231`).
+
+The kernel then boots itself (Linux v6.12):
+
+1. **Entry.** On arm64 the `Image` header's first two instructions run:
+   `efi_signature_nop`, a NOP that carries the PE/COFF `MZ` magic, then
+   `b primary_entry`. The kernel keeps X0 as its device tree pointer, turns on
+   its MMU and calls `start_kernel` (`arch/arm64/kernel/head.S:60-61`,
+   `:169-170`, `:521-533`, `:243`). On x86_64 a `bzImage` decompresses itself
+   from its entry at `0x200` (`arch/x86/boot/compressed/head_64.S:285-288`,
+   `:477`), and the kernel's `startup_64` calls `x86_64_start_kernel`
+   (`arch/x86/kernel/head_64.S:38`, `:474`).
+2. **Machine.** `start_kernel` reads the device tree or `boot_params` and the
+   command line in `setup_arch` (`init/main.c:903`, `:925`).
+3. **CPUs and devices.** `kernel_init_freeable` starts the other vCPUs in
+   `smp_init`, then probes drivers in `do_basic_setup` (`init/main.c:1572`,
+   `:1580`). The virtio-mmio probe reads each device's magic value and ID
+   (`drivers/virtio/virtio_mmio.c:640`, `:656`), and each read is an MMIO exit
+   to the VMM's device.
+4. **Root and init.** `prepare_namespace` mounts `/dev/vdb` read-only as `/`
+   (`init/main.c:1593`, `init/do_mounts.c:60-69`), and `kernel_init` executes
+   the `init=` program as PID 1 (`init/main.c:594-605`, `:1509`).
+5. **Agent.** `boxlite-guest` applies its sysctl hardening and forks its zygote
+   before any thread (`src/guest/src/main.rs:106-120`). It then serves gRPC on
+   vsock port 2695, connects to port 2696 to report ready, and waits for
+   `Guest.Init` (`src/guest/src/service/server.rs:107-163`).
+
 ## Room for later milestones
 
 - **M6, hot-plug mounts.**
@@ -429,38 +557,47 @@ Leaving libkrunfw drops three kinds of kernel patch:
   - M9 adds an MSI call to `Vm` for those devices.
 - **M10, Windows hosts.** `boxlite-hypervisor` reserves a `whp` module for WHP
   on Windows x86_64, and the [backend table](#hypervisor-backend-interface)
-  lists its calls. It differs from HVF and KVM in two ways:
+  lists its calls. It differs from HVF and KVM in three ways:
   - WHP emulates only local APICs, so the IOAPIC, PIC and PIT run in userspace
     and a raised line ends in `WHvRequestInterrupt`. M10 decides which crate
     owns them. OpenVMM keeps them in its chipset crate, which programs MSI
-    routes into the backend (`vmm_core/virt/src/irqcon.rs:24-29`).
+    routes into the backend (`vmm_core/virt/src/irqcon.rs:24-29`). When the
+    guest ends a level-triggered interrupt, `WHvRunVpExitReasonX64ApicEoi`
+    hands its vector to the userspace IOAPIC, as in QEMU
+    (`target/i386/whpx/whpx-all.c:2332-2335`).
   - A memory-access exit gives the instruction bytes and the guest address,
     not the access width or data. The backend's `emulator` decodes the
     instruction, as OpenVMM does with its `x86emu` crate, so `MmioRead` and
     `MmioWrite` keep their shape.
+  - An unrecoverable guest exception
+    (`WHvRunVpExitReasonUnrecoverableException`) is `Error::UnhandledExit`,
+    and QEMU pauses the VM on it (`target/i386/whpx/whpx-all.c:2684-2694`).
+    KVM instead reports an x86 triple fault as `KVM_EXIT_SHUTDOWN`, which the
+    backend maps to `Reset`. M10 decides whether WHP matches KVM.
 
 ## References
 
-The survey behind the names and the layout, and the M10 notes, used these
-pinned sources:
+The survey behind the names and the layout, the exit contract, the boot path and
+the M10 notes used these pinned sources:
 
 | Project | Pin | Files |
 | --- | --- | --- |
-| [Firecracker](https://github.com/firecracker-microvm/firecracker/tree/68698adfee9b252df130b7a98e3ba04eb81f0f54) | `68698ad` | `src/vmm/src/vstate/`, `src/vmm/src/arch/*/layout.rs` |
+| [Firecracker](https://github.com/firecracker-microvm/firecracker/tree/68698adfee9b252df130b7a98e3ba04eb81f0f54) | `68698ad` | `src/vmm/src/vstate/`, `src/vmm/src/arch/*/layout.rs`, `src/vmm/src/arch/aarch64/regs.rs`, `src/vmm/src/arch/aarch64/vcpu.rs`, `src/vmm/src/arch/aarch64/fdt.rs`, `src/vmm/src/arch/x86_64/regs.rs`, `src/vmm/src/arch/x86_64/vcpu.rs`, `src/vmm/src/arch/x86_64/mod.rs`, `src/vmm/src/arch/x86_64/mptable.rs` |
 | [crosvm](https://github.com/google/crosvm/tree/4c88690f44c382e34bdff7ad18ca10f8f9de6aa2) | `4c88690` | `hypervisor/src/lib.rs`, `devices/src/bus.rs`, `aarch64/src/lib.rs` |
 | [OpenVMM](https://github.com/microsoft/openvmm/tree/998904f2debee98416c5d007a17f05be1b7dad34) | `998904f` | `vmm_core/virt_whp/src/`, `vmm_core/virt/src/irqcon.rs`, `vm/x86/x86emu/` |
-| [cloud-hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor/tree/c24527002473dec810ef98fe3befb558ff2d5ede) | `c245270` | `hypervisor/src/`, `vm-device/src/bus.rs`, `arch/src/*/layout.rs` |
-| [libkrun](https://github.com/libkrun/libkrun/tree/e12b9b3780ffa8df9f3e1797b217d13453479167) | `e12b9b3` | `src/hvf/src/lib.rs`, `src/vmm/src/builder.rs`, `init/init.c` |
+| [cloud-hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor/tree/c24527002473dec810ef98fe3befb558ff2d5ede) | `c245270` | `hypervisor/src/`, `vm-device/src/bus.rs`, `arch/src/*/layout.rs`, `README.md` |
+| [libkrun](https://github.com/libkrun/libkrun/tree/e12b9b3780ffa8df9f3e1797b217d13453479167) | `e12b9b3` | `src/hvf/src/lib.rs`, `src/vmm/src/builder.rs`, `init/init.c`, `src/devices/src/legacy/vcpu.rs`, `src/arch/src/x86_64/mod.rs`, `src/devices/src/fdt/aarch64.rs` |
 | [alioth](https://github.com/google/alioth/tree/9d39a5d288fcd8630a24c5e762e4c31e97f1840f) | `9d39a5d` | `alioth/src/hv/hv.rs`, `alioth/src/arch/*/layout.rs` |
 | [hyperlight](https://github.com/hyperlight-dev/hyperlight/tree/398e7957c194ef6227d79fa729fd8dd43e5dc117) | `398e795` | `src/hyperlight_host/src/hypervisor/virtual_machine/mod.rs` |
 | [kvm-ioctls](https://github.com/rust-vmm/kvm-ioctls/tree/668b30b650c7032efcd1c3c82c065bd44036bea9) | `668b30b` | `kvm-ioctls/src/ioctls/vcpu.rs`, `kvm-ioctls/src/ioctls/vm.rs` |
 | [applevisor](https://github.com/Impalabs/applevisor/tree/e39e718fdc8aef7c65efe091c54d6a50eb33537e) | `e39e718` | `src/vcpu.rs`, `src/gic.rs` |
 | [dragonball (Kata Containers)](https://github.com/kata-containers/kata-containers/tree/68b56713d9fa37d4cf4613c775c78b14465eb7ab) | `68b5671` | `src/dragonball/src/vmm.rs`, `src/dragonball/crates/dbs_boot/` |
-| [QEMU](https://github.com/qemu/qemu/tree/f8aef8a9aed7438083c400da10acabdec485dc9b) | `f8aef8a` | `accel/kvm/kvm-all.c`, `target/arm/hvf/hvf.c` |
+| [Linux](https://github.com/torvalds/linux/tree/v6.12) | `v6.12` | `Documentation/arch/arm64/booting.rst`, `Documentation/arch/x86/boot.rst`, `arch/arm64/kernel/head.S`, `arch/x86/boot/compressed/head_64.S`, `arch/x86/kernel/head_64.S`, `init/main.c`, `init/do_mounts.c`, `drivers/virtio/virtio_mmio.c`, `drivers/firmware/psci/psci.c`, `arch/arm64/kvm/psci.c`, `arch/arm64/kernel/cpuinfo.c`, `arch/x86/kernel/apic/apic.c`, `arch/x86/kernel/smpboot.c`, `arch/x86/kernel/mpparse.c`, `arch/x86/Kconfig` |
+| [QEMU](https://github.com/qemu/qemu/tree/f8aef8a9aed7438083c400da10acabdec485dc9b) | `f8aef8a` | `accel/kvm/kvm-all.c`, `target/arm/hvf/hvf.c`, `target/i386/whpx/whpx-all.c` |
 
 Host APIs:
 
-- **HVF:** the Hypervisor.framework headers `hv_vcpu.h`, `hv_vm.h` and
+- **HVF:** the Hypervisor.framework headers `hv_vcpu.h`, `hv_vcpu_types.h`, `hv_vm.h` and
   `hv_gic.h`, in the macOS SDK.
 - **KVM:** the [KVM API](https://docs.kernel.org/virt/kvm/api.html).
 - **WHP:** the
