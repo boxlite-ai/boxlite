@@ -9,6 +9,11 @@ create or boot a VM yet. The [VMM design](../../docs/architecture/vmm/README.md)
 specifies the lifecycle API, memory layout, buses, interrupts, and threads it
 will implement.
 
+The lifecycle types and `Error` remain crate-visible while those entry points
+are placeholders. M1 will make the implemented `Vm`, `VmExit`, `Error` and
+`Result` public together; M2's engine adapter will then consume that API and
+inspect the error's host cause.
+
 ```text
 boxlite-vmm
 └── boxlite-hypervisor

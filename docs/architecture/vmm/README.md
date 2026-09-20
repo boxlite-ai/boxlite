@@ -88,6 +88,7 @@ need no hypervisor.
 | Create a vCPU | `Vm::create_vcpu`, on the thread that will run it | `hv_vcpu_create`, which also returns the `hv_vcpu_exit_t` the vCPU reports its exits in | `KVM_CREATE_VCPU`, then `mmap` of its `kvm_run`; `KVM_ARM_VCPU_INIT` on arm64, with secondaries powered off (`KVM_ARM_VCPU_POWER_OFF`) | `WHvCreateVirtualProcessor` |
 | Set boot registers | M1 adds it | `hv_vcpu_set_reg`, `hv_vcpu_set_sys_reg` | `KVM_SET_ONE_REG` on arm64; on x86_64 `KVM_SET_CPUID2`, then `KVM_SET_MSRS`, `KVM_SET_REGS`, `KVM_SET_FPU`, `KVM_SET_SREGS` and the local APIC's LINT pins, in Firecracker's order (`src/vmm/src/arch/x86_64/vcpu.rs:222-301`) | `WHvSetVirtualProcessorRegisters` |
 | Run to the next exit | `Vcpu::run` → `VcpuExit` | `hv_vcpu_run` | `KVM_RUN` | `WHvRunVirtualProcessor` |
+| Complete pending I/O before stop or state capture | `Vcpu::complete_pending_io`; no further guest instruction executes | write the read result and advance PC without `hv_vcpu_run` | `KVM_RUN` with `immediate_exit` set; KVM completes the access before checking it | finish emulation and update registers/RIP without `WHvRunVirtualProcessor` |
 | Read the exit | the backend decodes it into a `VcpuExit` | `hv_vcpu_exit_t`: the reason and, for an exception, the syndrome and guest address | `kvm_run.exit_reason` and its union | the `WHV_RUN_VP_EXIT_CONTEXT` that `WHvRunVirtualProcessor` fills |
 | Kick from another thread | `VcpuHandle::kick` | `hv_vcpus_exit` | set `immediate_exit`, then signal the vCPU thread | `WHvCancelRunVirtualProcessor` |
 | Set an interrupt line | `Vm::set_irq_line` | `hv_gic_set_spi` | `KVM_IRQ_LINE` | a userspace IOAPIC, in a crate M10 picks, then `WHvRequestInterrupt` |
@@ -174,7 +175,10 @@ inside the guest; only the exits below reach the VMM.
 `VcpuExit` (`src/hypervisor/src/exit.rs`) is what `run` returns. MMIO and port
 data borrow a per-vCPU buffer inside the backend, as in libkrun and kvm-ioctls.
 The VMM therefore handles an exit before it runs that vCPU again, and the next
-`run` completes the guest's instruction.
+`run` completes the guest's instruction. Before stopping or saving state, the
+VMM releases the borrowed exit and calls `complete_pending_io` instead. That
+operation succeeds without guest execution when nothing is pending, and a
+successfully completed access is not completed again.
 
 | Exit | Meaning | HVF | KVM | WHP (M10) |
 | --- | --- | --- | --- | --- |
@@ -188,9 +192,14 @@ The VMM therefore handles an exit before it runs that vCPU again, and the next
 On x86_64 the guest resets through the i8042 port. That reset arrives as an
 `IoOut`, and the VMM's i8042 device turns it into the end of the VM.
 
-KVM handles PSCI `CPU_ON` for secondary vCPUs in the kernel. On HVF the backend
-decodes the call, and M1 adds an exit so the VMM can start the target vCPU. On
-arm64 only the boot vCPU starts at the kernel's entry point; each secondary
+KVM handles PSCI `CPU_ON` for secondary vCPUs in the kernel. M1 extends the
+current M0 `VcpuExit` enum with an HVF CPU-start request alongside the boot
+register API; neither is implemented by the current HVF stub. That request
+must carry the target MPIDR affinity, entry address and context ID, and let the
+VMM supply the guest-visible PSCI result. The VMM validates the target and its
+startup state, sends the entry/context to the target's owning thread, and
+returns success or the PSCI failure before the caller resumes. On arm64 only
+the boot vCPU starts at the kernel's entry point; each secondary
 starts powered off until `CPU_ON` gives it one. An HVF secondary waits parked,
 so the stop path's unpark also wakes one the guest never started.
 
@@ -369,6 +378,10 @@ let stop = vm.stop_handle();   // Clone + Send; the shim's SIGTERM path calls st
 let exit = vm.run()?;          // VmExit::GuestShutdown, GuestReset or StopRequested
 ```
 
+The current M0 skeleton keeps `Vm`, `VmExit`, `Error` and `Result`
+crate-visible. M1 exposes them together when the lifecycle is implemented;
+the M2 adapter's error mapping below describes that future public API.
+
 - **`run` reports how the VM ended, not the box's exit code.**
   - The guest agent writes the box's exit code to `exit.json` on the SHARED
     share, and it keeps travelling that way (`src/guest/src/service/container.rs:406-488`).
@@ -463,13 +476,26 @@ As PID 1, `boxlite-guest` takes on these duties in M2:
     `CONFIG_INIT_ENV_ARG_LIMIT`.
   - Everything else keeps arriving over gRPC.
 
-Leaving libkrunfw drops three kinds of kernel patch:
+These three boot/runtime integration patch groups come from BoxLite's pinned
+[libkrunfw revision `e0647fa7`][libkrunfw-patches]. They are the patches this
+boot contract replaces, rather than an inventory of every architecture or
+device patch in libkrunfw:
 
-- **Turning init's death into a reboot.** An agent that never exits, plus
-  `panic=-1`, replaces it.
-- **vsock datagrams.** The macOS clock resync uses them.
-- **TSI.** Unused: the network factory always returns gvproxy
-  (`src/boxlite/src/net/mod.rs:481-484`).
+- **Init death and reboot:** [0001, `Don't panic when init dies`][init-death]
+  and [0002, `Ignore run_cmd on orderly reboot`][orderly-reboot]. An agent
+  that never exits, plus `panic=-1`, replaces them.
+- **vsock datagrams:** the [0003–0008 patch series][libkrunfw-patches], ending
+  in `0008-virtio-vsock-support-dgrams.patch`. The macOS clock resync uses
+  datagrams; M2 chooses its replacement.
+- **TSI:** [0009, `Transparent Socket Impersonation implementation`][tsi]
+  and [0010, `allow hijacking sockets`][tsi-hijack]. Unused: the network
+  factory always returns gvproxy (`src/boxlite/src/net/mod.rs:481-484`).
+
+[libkrunfw-patches]: https://github.com/boxlite-ai/libkrunfw/tree/e0647fa7a3932c4570fb2c0fd483b9f7a382ebdd/patches
+[init-death]: https://github.com/boxlite-ai/libkrunfw/blob/e0647fa7a3932c4570fb2c0fd483b9f7a382ebdd/patches/0001-krunfw-Don-t-panic-when-init-dies.patch
+[orderly-reboot]: https://github.com/boxlite-ai/libkrunfw/blob/e0647fa7a3932c4570fb2c0fd483b9f7a382ebdd/patches/0002-krunfw-Ignore-run_cmd-on-orderly-reboot.patch
+[tsi]: https://github.com/boxlite-ai/libkrunfw/blob/e0647fa7a3932c4570fb2c0fd483b9f7a382ebdd/patches/0009-Transparent-Socket-Impersonation-implementation.patch
+[tsi-hijack]: https://github.com/boxlite-ai/libkrunfw/blob/e0647fa7a3932c4570fb2c0fd483b9f7a382ebdd/patches/0010-tsi-allow-hijacking-sockets-tsi_hijack.patch
 
 ### Boot path
 
@@ -563,8 +589,11 @@ The kernel then boots itself (Linux v6.12):
     owns them. OpenVMM keeps them in its chipset crate, which programs MSI
     routes into the backend (`vmm_core/virt/src/irqcon.rs:24-29`). When the
     guest ends a level-triggered interrupt, `WHvRunVpExitReasonX64ApicEoi`
-    hands its vector to the userspace IOAPIC, as in QEMU
-    (`target/i386/whpx/whpx-all.c:2332-2335`).
+    returns its vector to the WHP backend. Inside `Vcpu::run`, that backend
+    forwards EOI to the userspace IOAPIC through a shared controller or
+    callback, then resumes WHP; it does not return EOI as a `VcpuExit` to the
+    VMM loop. M10 wires that controller interaction, as QEMU does inside its
+    WHP exit handling (`target/i386/whpx/whpx-all.c:2332-2335`).
   - A memory-access exit gives the instruction bytes and the guest address,
     not the access width or data. The backend's `emulator` decodes the
     instruction, as OpenVMM does with its `x86emu` crate, so `MmioRead` and

@@ -14,8 +14,9 @@
 ///
 /// Handling an access supplies the device response but does not complete the
 /// guest instruction. The backend must finish pending I/O on re-entry. Before
-/// stopping the vCPU or saving its state, it must finish pending I/O without
-/// executing further instructions.
+/// stopping the vCPU or saving its state, the caller releases the exit borrow
+/// and calls [`Vcpu::complete_pending_io`](crate::Vcpu::complete_pending_io)
+/// to finish the access without executing further instructions.
 #[derive(Debug)]
 pub enum VcpuExit<'a> {
     /// Read from an emulated device; fill the entire buffer before re-entry.

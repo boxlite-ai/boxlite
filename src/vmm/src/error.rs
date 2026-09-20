@@ -48,14 +48,18 @@ mod tests {
 
     #[test]
     fn keeps_the_host_cause_through_the_hypervisor_error() {
-        let host = io::Error::from(io::ErrorKind::Unsupported);
-        let error = Error::from(boxlite_hypervisor::Error::CreateVm(host));
+        for kind in [io::ErrorKind::Unsupported, io::ErrorKind::PermissionDenied] {
+            let host = io::Error::from(kind);
+            let error = Error::from(boxlite_hypervisor::Error::CreateVm(host));
 
-        let hypervisor = error.source().expect("hypervisor error");
-        let cause = hypervisor
-            .source()
-            .and_then(|cause| cause.downcast_ref::<io::Error>())
-            .expect("host cause");
-        assert_eq!(cause.kind(), io::ErrorKind::Unsupported);
+            assert_eq!(error.to_string(), "hypervisor operation failed");
+            let hypervisor = error.source().expect("hypervisor error");
+            assert_eq!(hypervisor.to_string(), "failed to create the VM");
+            let cause = hypervisor
+                .source()
+                .and_then(|cause| cause.downcast_ref::<io::Error>())
+                .expect("host cause");
+            assert_eq!(cause.kind(), kind);
+        }
     }
 }

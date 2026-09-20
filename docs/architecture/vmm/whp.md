@@ -290,21 +290,22 @@ sequenceDiagram
   box Host · Windows API
     participant host_api as WHP
   end
-  box VMM · exit handling and device IRQ routing
-    participant thread0 as Thread T0
+  box VMM · host process, on thread T0
+    participant backend as WHP backend
     participant ioapic as IOAPIC
   end
   Note over kernel,ioapic: This is the level-triggered case, separate from the edge-triggered disk example<br/>EOI means end of interrupt
   %% edge:whp_11_e1
   kernel->>host_api: Acknowledge completion in local APIC
   %% edge:whp_11_e2
-  host_api-->>thread0: X64ApicEoi exit<br/>includes vector
+  host_api-->>backend: X64ApicEoi exit<br/>includes vector
   %% edge:whp_11_e3
-  thread0->>ioapic: Forward EOI vector
+  backend->>ioapic: Forward EOI vector<br/>through controller callback
   %% edge:whp_11_e4
   ioapic->>ioapic: Update in-service state<br/>and reevaluate the line
   %% edge:whp_11_e5
-  thread0->>host_api: Resume virtual processor
+  backend->>host_api: Resume virtual processor
+  Note over backend,ioapic: M10 wires this inside Vcpu::run<br/>EOI does not return to the VMM loop as a VcpuExit
 ```
 
 ### 2.10 Stop the vCPU threads

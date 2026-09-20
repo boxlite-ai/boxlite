@@ -3,9 +3,9 @@
 Host backends for BoxLite's VMM: HVF on macOS arm64 and KVM on Linux x86_64
 and arm64, with WHP on Windows x86_64 reserved for M10. The `Vm`, `Vcpu` and
 `VcpuHandle` traits, with `VcpuExit`, `MemoryRegion` and `Error`, are the
-contract every backend implements; M1 adds the vCPU register access that boot
-needs, and the HVF and KVM backends themselves. The rules each backend keeps
-are in the
+current shared contract; M1 adds the vCPU register access and HVF `CPU_ON`
+exit that boot needs, and the HVF and KVM backends themselves. The rules each
+backend keeps are in the
 [VMM design](../../docs/architecture/vmm/README.md#hypervisor-backend-interface).
 
 This crate owns host VM/vCPU handles, memory registration, interrupt
@@ -15,7 +15,7 @@ machine layout and device emulation belong to `boxlite-vmm`.
 | Module | Responsibility |
 | --- | --- |
 | `vm` | `Vm`: memory mapping, vCPU creation, and interrupt lines |
-| `vcpu` | `Vcpu` and `VcpuHandle`: running a vCPU, and kicking it from another thread |
+| `vcpu` | `Vcpu` and `VcpuHandle`: running a vCPU, completing pending I/O before stop, and kicking it from another thread |
 | `exit` | `VcpuExit`: decoded exits and the I/O completion contract |
 | `memory` | `MemoryRegion`: host memory mapped into the guest |
 | `error` | `Error`: the failed operation, its resource, and the host cause |

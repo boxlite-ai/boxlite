@@ -14,7 +14,7 @@ impl Vcpu {
             let _stop_requested: bool = todo!("check the stop request");
             if _stop_requested {
                 let _completion: boxlite_hypervisor::Result<()> =
-                    todo!("finish pending I/O without executing another guest instruction");
+                    todo!("call backend.complete_pending_io() before stopping");
                 _completion?;
                 return Ok(VmExit::StopRequested);
             }
