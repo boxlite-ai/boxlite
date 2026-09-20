@@ -58,7 +58,7 @@ Key test entry points:
 4. Run quality and tests (`make lint && make fmt:check && make test`)
 5. Commit with clear messages — see [Commit & PR messages](#commit--pr-messages)
 6. Open a Pull Request
-7. Read the current diff, then post the exact `/reviewed <full-head-SHA>` command from the bot comment. Only a new, unedited comment from the PR author counts. `Author reviewed the PR` stays pending until acknowledged; a new commit, or editing/deleting the only acknowledgment, requires a fresh comment. Forks use the same flow. Maintainer approval remains separate
+7. CI converts unacknowledged PRs to draft. Read the current diff, then post the exact `/reviewed <full-head-SHA>` command from the bot comment. Only a new, unedited comment from the PR author counts. Once `Author reviewed the PR` passes, click **Ready for review**. A new commit, or editing/deleting the only acknowledgment, returns the PR to draft and requires a fresh comment. Forks use the same flow. Maintainer approval remains separate
 8. Sign the [BoxLite Contributor License Agreement](./docs/legal/CLA.md) when CLA Assistant asks you to do so
 
 ### Watching CI and PR feedback

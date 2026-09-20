@@ -39,7 +39,7 @@ is *exclusively* callable; the other four can also be dispatched on their own.
 | `test.yml` | push, PR, merge_group | — | Unit tests for every SDK. No VM tests — hosted runners have no nested virtualization |
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
 | `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs |
-| `author-review.yml` | PR (target), issue_comment, merge_group | — | Posts author instructions and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
+| `author-review.yml` | PR (target), issue_comment, merge_group | — | Converts unacknowledged PRs to draft, posts author instructions, and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
 | `warm-caches.yml` | push, weekly, dispatch | — | Populates the sccache the other Rust builds read |
 | `build-runtime.yml` | `workflow_run`, release, dispatch | — | Core runtime and CLI; publishes crates |
 | `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
@@ -79,7 +79,9 @@ upstream revision in `AGENT_TOOLING_REV`; update that pin through a reviewed PR.
 
 Merge queues must require the same PR status before admission. Queue commits carry
 that result forward; authors acknowledge their own PR head, not the temporary merge.
-Existing draft PRs remain draft until a person marks them ready.
+Unacknowledged PRs are converted to draft. After the author acknowledgment passes,
+click **Ready for review** when reviews are wanted; acknowledgment preserves the draft
+state. A new commit or editing/deleting the only acknowledgment returns the PR to draft.
 
 ## Composite actions
 
