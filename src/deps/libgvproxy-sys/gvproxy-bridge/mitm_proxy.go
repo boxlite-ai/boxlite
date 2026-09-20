@@ -49,13 +49,11 @@ func mitmAndForward(guestConn net.Conn, hostname string, dial upstreamDial, ca *
 			req.URL.Scheme = "https"
 			req.URL.Host = hostname
 			req.Host = hostname // HTTP/1.1 Host header must match
-			// Headers substituted here; body substituted in secretTransport.RoundTrip
+			// Secrets are substituted in headers (and URL query) only — never
+			// in the body, which a reflecting host could echo back to the guest.
 			substituteHeaders(req, secrets)
 		},
-		Transport: &secretTransport{
-			inner:   upstreamTransport,
-			secrets: secrets,
-		},
+		Transport:     upstreamTransport,
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			logrus.WithFields(logrus.Fields{
@@ -124,18 +122,3 @@ func (l *singleConnListener) Close() error {
 }
 
 func (l *singleConnListener) Addr() net.Addr { return l.addr }
-
-// secretTransport wraps http.RoundTripper to inject streaming body replacement.
-type secretTransport struct {
-	inner   http.RoundTripper
-	secrets []SecretConfig
-}
-
-func (t *secretTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Body != nil && len(t.secrets) > 0 {
-		req.Body = newStreamingReplacer(req.Body, t.secrets)
-		req.ContentLength = -1
-		req.Header.Del("Content-Length")
-	}
-	return t.inner.RoundTrip(req)
-}
