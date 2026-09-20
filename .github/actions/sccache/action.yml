@@ -23,15 +23,24 @@ inputs:
 runs:
   using: composite
   steps:
+    # Action inputs are evaluated again for post steps, after containers may have
+    # created private lockfiles. Save the checkout hash while it is still readable.
+    - name: Capture lockfile hash before compilation
+      id: lockfiles
+      shell: bash
+      env:
+        LOCKFILES_HASH: ${{ hashFiles('**/Cargo.lock') }}
+      run: printf 'hash=%s\n' "$LOCKFILES_HASH" >> "$GITHUB_OUTPUT"
+
     # Post steps run in reverse: report compiler-cache statistics before archiving.
     # At v0.17.0 cache writes finish before the compiler response returns.
     - uses: actions/cache@v4
       continue-on-error: ${{ inputs.tolerate-failure == 'true' }}
       with:
         path: ${{ runner.temp }}/sccache
-        key: sccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.workflow }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: sccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.workflow }}-${{ github.job }}-${{ steps.lockfiles.outputs.hash }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          sccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.workflow }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}-
+          sccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.workflow }}-${{ github.job }}-${{ steps.lockfiles.outputs.hash }}-
           sccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.workflow }}-${{ github.job }}-
           sccache-v2-${{ runner.os }}-${{ runner.arch }}-
 

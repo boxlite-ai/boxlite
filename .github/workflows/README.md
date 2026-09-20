@@ -158,7 +158,8 @@ Jobs invoking [the sccache action](../actions/sccache/action.yml) use sccache 0.
 replaces per-compilation remote writes, which were failing across native builds. Restore keys
 prefer the same workflow/job and lockfiles, then fall back to the same runner OS/architecture.
 Each successful run saves a new snapshot; compiler content hashes still decide whether entries
-are reusable. A cold cache still requires a full build.
+are reusable. The lockfile hash is captured before compilation, so saving the archive does not
+scan private lockfiles created by root containers. A cold cache still requires a full build.
 
 - The action sets `SCCACHE_GHA_ENABLED=false`, `RUSTC_WRAPPER=sccache` and
   `CARGO_INCREMENTAL=0`. Direct preprocessing mode is disabled when reusing archives.
@@ -181,6 +182,9 @@ are reusable. A cold cache still requires a full build.
   `$RUNNER_TEMP/sccache-error.log`; post steps print statistics before archiving.
 - Rust coverage and guest qualification use the target-directory cache provided by
   `setup-rust-toolchain`, rather than this sccache action.
+- Linux runtime, C, Node and wheel distribution jobs disable that separate Cargo cache:
+  guest staging discards the host toolchain and target directory before container builds.
+  Their shared compiler cache remains enabled. macOS and other jobs retain Cargo caching.
 
 Runtime, C, Node and wheel release builds can reuse compiler snapshots for their platform.
 They still assemble their own SDK artifacts and perform cold builds when no compatible entry
