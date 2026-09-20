@@ -41,7 +41,7 @@ is *exclusively* callable; workflows with `workflow_dispatch` can also run on th
 | `test.yml` | push, PR, merge_group, weekly, dispatch | — | Unit tests for every SDK; compact routine matrices and full weekly/manual matrices |
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
 | `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs |
-| `unreviewed-pr.yml` | PR (target) | — | Commits `UNREVIEWED.md` and drafts a pull request until its author deletes the file and marks it ready. `Author reviewed the PR` is the check |
+| `author-review.yml` | PR (target), issue_comment, merge_group | — | Posts author instructions and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
 | `build-runtime.yml` | push, weekly, release, dispatch | — | Builds runtime/CLI artifacts and populates sccache together; publishes crates on release |
 | `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
 | `build-go.yml` | `workflow_run`, dispatch | — | Tests the released C archive and tags the Go module; automatic builds follow successful C SDK releases |
@@ -79,6 +79,24 @@ Client drift checks watch API code, shared libraries, generators and workspace c
 Guest artifact checks watch guest build inputs instead of the whole make directory. Infrastructure
 tests remain available through `make test:apps:infra` and the local pre-push check;
 `make test:apps:infra-config` explicitly installs and type-checks the SST configuration.
+
+## Author review gate rollout
+
+Require the commit status `Author reviewed the PR` from GitHub Actions on the target
+branch after this workflow is deployed. The handler job `Update author review status`
+only reports whether event processing succeeded; it is not the acknowledgment.
+
+Post `/recheck-author-review` as a PR comment to initialize existing PRs or retry a failed
+handler. Any new non-bot PR comment rechecks live state without acknowledging the diff.
+Comment events run the default-branch workflow; rechecks cannot select a modified branch
+workflow. Bot instruction edits and deletions are reconciled too.
+The bot comment includes the exact command the author must post. No fork branch writes,
+extra GitHub App, or personal token are needed. The workflow runs only the immutable
+upstream revision in `AGENT_TOOLING_REV`; update that pin through a reviewed PR.
+
+Merge queues must require the same PR status before admission. Queue commits carry
+that result forward; authors acknowledge their own PR head, not the temporary merge.
+Existing draft PRs remain draft until a person marks them ready.
 
 ## Composite actions
 

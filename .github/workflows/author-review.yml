@@ -1,0 +1,53 @@
+name: Author review
+
+# Run trusted code only. The same base-repository token can comment on fork PRs and
+# publish their commit statuses; it never needs to write to the contributor's branch.
+# Require the status "Author reviewed the PR" in the target branch rules. The job's
+# own check has a different name: issue_comment jobs run on the default branch.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, closed]
+  issue_comment:
+    types: [created, edited, deleted]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+  statuses: write
+  # This also permits creating and editing PR comments through the issues API.
+  pull-requests: write
+
+concurrency:
+  group: author-review-${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_sha }}
+  cancel-in-progress: false
+
+env:
+  # Reviewed agent-tooling implementation; never float privileged workflow code.
+  AGENT_TOOLING_REV: 17b89c86bd38f74f5100e322580addbfbda0fbc7
+
+jobs:
+  acknowledgment:
+    name: Update author review status
+    if: >-
+      github.event_name != 'issue_comment' ||
+      github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the pinned agent-tooling revision
+        uses: actions/checkout@v4
+        with:
+          repository: boxlite-ai/agent-tooling
+          ref: ${{ env.AGENT_TOOLING_REV }}
+          path: .agent-tooling-src
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Reconcile author acknowledgment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          result=0
+          bash .agent-tooling-src/plugins/boxlite-agent-tooling/scripts/pr-author-review.sh "$GITHUB_EVENT_PATH" || result=$?
+          # Pending is a successfully processed event; API failures must fail the job.
+          if [ "$result" -gt 1 ]; then exit "$result"; fi
