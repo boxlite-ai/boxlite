@@ -21,9 +21,14 @@ pub trait Vm: Send + Sync {
     /// # Safety
     ///
     /// The host range must stay mapped, and back nothing but this guest
-    /// region, until [`unmap_memory`](Self::unmap_memory) for this region
-    /// succeeds, or until the VM and every vCPU created from it are dropped. A
-    /// failed unmap can leave the guest mapping in place, and on KVM a live
+    /// region, until both conditions hold:
+    ///
+    /// - [`unmap_memory`](Self::unmap_memory) for this region succeeds, or the
+    ///   VM and every vCPU created from it are dropped.
+    /// - Every host-side user has stopped accessing the range, including
+    ///   device workers and in-flight host I/O.
+    ///
+    /// A failed unmap can leave the guest mapping in place, and on KVM a live
     /// vCPU keeps the VM's memory mappings alive. The guest reads and writes
     /// the range at any time, so host code may access it only through raw
     /// pointers or volatile accesses, never through Rust references.

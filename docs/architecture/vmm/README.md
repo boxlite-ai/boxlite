@@ -20,8 +20,10 @@ Diagrams of this design:
 - [Windows Hypervisor Platform](./whp.md)
 - [Guest memory](./memory.md)
 
-Repository line references are to commit `42ec1a2a6`. `libkrun/` is the vendored
-copy at `src/deps/libkrun-sys/vendor/libkrun/` (upstream `e12b9b3`).
+BoxLite line references are to commit `42ec1a2a6`. External citations name
+their project; their revisions are pinned under [References](#references).
+`libkrun/` is the vendored copy at `src/deps/libkrun-sys/vendor/libkrun/`
+(upstream `e12b9b3`).
 
 ## Scope
 
@@ -86,7 +88,7 @@ need no hypervisor.
 | Map guest memory | `Vm::map_memory` (`unsafe`) | `hv_vm_map` | `KVM_SET_USER_MEMORY_REGION`; the backend picks the slot | `WHvMapGpaRange` |
 | Unmap guest memory | `Vm::unmap_memory` | `hv_vm_unmap` | the same slot, set to size 0 | `WHvUnmapGpaRange` |
 | Create a vCPU | `Vm::create_vcpu`, on the thread that will run it | `hv_vcpu_create`, which also returns the `hv_vcpu_exit_t` the vCPU reports its exits in | `KVM_CREATE_VCPU`, then `mmap` of its `kvm_run`; `KVM_ARM_VCPU_INIT` on arm64, with secondaries powered off (`KVM_ARM_VCPU_POWER_OFF`) | `WHvCreateVirtualProcessor` |
-| Set boot registers | M1 adds it | `hv_vcpu_set_reg`, `hv_vcpu_set_sys_reg` | `KVM_SET_ONE_REG` on arm64; on x86_64 `KVM_SET_CPUID2`, then `KVM_SET_MSRS`, `KVM_SET_REGS`, `KVM_SET_FPU`, `KVM_SET_SREGS` and the local APIC's LINT pins, in Firecracker's order (`src/vmm/src/arch/x86_64/vcpu.rs:222-301`) | `WHvSetVirtualProcessorRegisters` |
+| Set boot registers | M1 adds it | `hv_vcpu_set_reg`, `hv_vcpu_set_sys_reg` | `KVM_SET_ONE_REG` on arm64; on x86_64 `KVM_SET_CPUID2`, then `KVM_SET_MSRS`, `KVM_SET_REGS`, `KVM_SET_FPU`, `KVM_SET_SREGS` and the local APIC's LINT pins, in Firecracker's order ([Firecracker `src/vmm/src/arch/x86_64/vcpu.rs:222–301`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/x86_64/vcpu.rs#L222-L301)) | `WHvSetVirtualProcessorRegisters` |
 | Run to the next exit | `Vcpu::run` → `VcpuExit` | `hv_vcpu_run` | `KVM_RUN` | `WHvRunVirtualProcessor` |
 | Complete pending I/O before stop or state capture | `Vcpu::complete_pending_io`; no further guest instruction executes | write the read result and advance PC without `hv_vcpu_run` | `KVM_RUN` with `immediate_exit` set; KVM completes the access before checking it | finish emulation and update registers/RIP without `WHvRunVirtualProcessor` |
 | Read the exit | the backend decodes it into a `VcpuExit` | `hv_vcpu_exit_t`: the reason and, for an exception, the syndrome and guest address | `kvm_run.exit_reason` and its union | the `WHV_RUN_VP_EXIT_CONTEXT` that `WHvRunVirtualProcessor` fills |
@@ -120,9 +122,13 @@ HVF and KVM keep these rules; [M10](#room-for-later-milestones) covers WHP:
     tracking which ones already ended.
 - **Memory lifetime.**
   - `map_memory` is `unsafe`. The caller keeps the host range mapped, backing
-    nothing but that guest region, until `unmap_memory` for it succeeds or
-    the VM and all its vCPUs drop. A failed unmap can leave the guest mapping
-    in place, and on KVM a live vCPU keeps the VM's mappings alive.
+    nothing but that guest region, until both the guest mapping is gone
+    (successful `unmap_memory`, or the VM and all its vCPUs dropped) and every
+    host-side user has stopped accessing the range. This includes device
+    workers and in-flight host I/O. A failed unmap can leave the guest mapping
+    in place, and on KVM a live vCPU keeps the VM's mappings alive. Shutdown
+    stops and joins the vCPU and device threads and drains or cancels host
+    I/O before releasing the allocation.
   - The guest changes that memory at any time, so VMM code such as a virtqueue
     touches it only through raw pointers or volatile accesses, never through
     Rust references.
@@ -508,27 +514,28 @@ protocols require (`Documentation/arch/arm64/booting.rst`,
 | Step | arm64 (HVF, KVM) | x86_64 (KVM, WHP) |
 | --- | --- | --- |
 | Load the kernel | the `Image` at its text offset from a 2 MiB aligned base (`booting.rst:135-137`) | a `bzImage`'s protected-mode kernel at 1 MiB, or an ELF `vmlinux` at the addresses its program headers name, 16 MiB by default (`arch/x86/Kconfig:2096-2098`) |
-| Describe the machine | a device tree in the last 2 MiB of RAM: memory, each CPU with the `psci` enable method, a `psci` node with the HVC conduit, the GIC, the timer, the `apb_pclk` clock the PL011 and PL031 name, the PL011, the PL031, each device as `virtio,mmio`, and the command line as `bootargs`; Firecracker writes the same nodes, with an `ns16550a` UART in place of the PL011 (`src/vmm/src/arch/aarch64/fdt.rs:351`, `:388`) | `boot_params` at `0x7000`: the setup header, which a `bzImage` carries at offset `0x1f1` and the VMM fills in for a `vmlinux`, the e820 memory map, and `cmd_line_ptr` to the command line at `0x2_0000`, which names each `virtio_mmio.device=` (`boot.rst:1371-1376`); an MP table at `0x9_FC00` that lists each vCPU, the IOAPIC and its interrupt sources |
+| Describe the machine | a device tree in the last 2 MiB of RAM: memory, each CPU with the `psci` enable method, a `psci` node with the HVC conduit, the GIC, the timer, the `apb_pclk` clock the PL011 and PL031 name, the PL011, the PL031, each device as `virtio,mmio`, and the command line as `bootargs`; Firecracker writes the same nodes, with an `ns16550a` UART in place of the PL011 ([Firecracker `src/vmm/src/arch/aarch64/fdt.rs:351–397`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/aarch64/fdt.rs#L351-L397)) | `boot_params` at `0x7000`: the setup header, which a `bzImage` carries at offset `0x1f1` and the VMM fills in for a `vmlinux`, the e820 memory map, and `cmd_line_ptr` to the command line at `0x2_0000`, which names each `virtio_mmio.device=` (`boot.rst:1371-1376`); an MP table at `0x9_FC00` that lists each vCPU, the IOAPIC and its interrupt sources |
 | CPU state at entry | MMU off, interrupts masked in `PSTATE.DAIF`, at EL1 (`booting.rst:169-176`) | 64-bit mode with paging on: identity-mapped page tables and a GDT with flat `__BOOT_CS` and `__BOOT_DS`, interrupts off (`boot.rst:1394-1402`) |
 | Boot vCPU registers | PC at the `Image`'s first instruction, X0 at the device tree, X1 to X3 zero (`booting.rst:162-165`, `:423-424`) | RIP at the 64-bit entry, which for a `bzImage` is the load address plus `0x200`; RSI at `boot_params` (`boot.rst:1390-1392`, `:1401-1402`) |
 | Other vCPUs | powered off until the kernel calls PSCI `CPU_ON` (`booting.rst:447-453`) | waiting for the boot vCPU's INIT and SIPI to each one the MP table lists; KVM's in-kernel local APIC holds them in `KVM_MP_STATE_UNINITIALIZED` (`KVM_GET_MP_STATE` in the KVM API) |
 
 Firecracker sets the same state. On arm64 every vCPU gets PSTATE at EL1h with
 DAIF masked, and only vCPU 0 gets PC and X0
-(`src/vmm/src/arch/aarch64/regs.rs:23`, `src/vmm/src/arch/aarch64/vcpu.rs:338-373`).
+([Firecracker `src/vmm/src/arch/aarch64/regs.rs:23`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/aarch64/regs.rs#L23),
+[Firecracker `src/vmm/src/arch/aarch64/vcpu.rs:338–373`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/aarch64/vcpu.rs#L338-L373)).
 On x86_64 the boot vCPU gets RIP, RSI pointing at the zero page, long mode, and
-identity page tables from `0x9000` (`src/vmm/src/arch/x86_64/regs.rs:86-107`,
-`:247-282`).
+identity page tables from `0x9000` ([Firecracker `src/vmm/src/arch/x86_64/regs.rs:86–107`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/x86_64/regs.rs#L86-L107),
+[Firecracker `src/vmm/src/arch/x86_64/regs.rs:247–282`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/x86_64/regs.rs#L247-L282)).
 
 x86_64 needs the MP table because it boots without ACPI or a device tree:
 without the table or an ACPI MADT, Linux turns off the IOAPIC and SMP
 (`arch/x86/kernel/apic/apic.c:1270-1276`, `arch/x86/kernel/smpboot.c:1088-1090`).
 Linux looks for it in low memory, including the last KiB below 640 KiB
 (`arch/x86/kernel/mpparse.c:612-614`), where Firecracker and libkrun write it
-(`src/vmm/src/arch/x86_64/mod.rs:271-272`,
+([Firecracker `src/vmm/src/arch/x86_64/mod.rs:271–272`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/x86_64/mod.rs#L271-L272),
 `libkrun/src/arch/src/x86_64/mod.rs:266-268`). Firecracker's table lists each
 vCPU, an ISA bus, the IOAPIC and its interrupt sources
-(`src/vmm/src/arch/x86_64/mptable.rs:177-231`).
+([Firecracker `src/vmm/src/arch/x86_64/mptable.rs:177–231`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/x86_64/mptable.rs#L177-L231)).
 
 The kernel then boots itself (Linux v6.12):
 

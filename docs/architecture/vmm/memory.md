@@ -221,14 +221,14 @@ sequenceDiagram
   %% edge:memory_8_e3
   coordinator->>worker: Stop and join
   %% edge:memory_8_e4
-  worker-->>coordinator: No more accesses to the allocation
+  worker-->>coordinator: No more accesses to the allocation<br/>Host I/O completed or canceled
   %% edge:memory_8_e5
   coordinator->>host_api: Unmap every guest RAM region
   %% edge:memory_8_e6
   host_api-->>coordinator: Successful unmap
   %% edge:memory_8_e7
   coordinator->>backing: Release host allocation
-  Note over coordinator,host_api: A failed unmap may leave the mapping live: retain its backing<br/>Alternatively, destroy the VM and all vCPUs before releasing that memory
+  Note over coordinator,host_api: A failed unmap may leave the mapping live: retain its backing<br/>Alternatively, destroy the VM and all vCPUs<br/>In either case, every host user must finish before releasing memory
 ```
 
 ## 3. The planned arm64 address map
