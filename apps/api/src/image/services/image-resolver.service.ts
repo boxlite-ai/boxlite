@@ -10,10 +10,7 @@ import { assertSupportedImage } from '../../box/constants/curated-images.constan
 import { Organization } from '../../organization/entities/organization.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { ImageVersionState } from '../enums/image-version-state.enum'
-import { isCuratedSelector, isDigestPinned, parseImageRef } from '../utils/image-ref.util'
-
-/** The tag a bare repository means. */
-const IMPLICIT_TAG = 'latest'
+import { IMPLICIT_TAG, isCuratedSelector, isDigestPinned, parseImageRef } from '../utils/image-ref.util'
 
 /** What a box should boot from, and where that answer came from. */
 export type ResolvedImage = {
@@ -87,7 +84,8 @@ export class ImageResolverService {
       .where('image."organizationId" = :organizationId', { organizationId: organization.id })
       .andWhere('image.name = :name', { name })
       // A soft-deleted image must not resolve, or deleting one would stop being
-      // the way to pick up a tag that moved upstream.
+      // the way to pick up a tag that moved upstream — which is what it becomes
+      // once the catalog API exposes a delete.
       .andWhere('image."deletedAt" IS NULL')
       .andWhere('version.digest = :digest', { digest })
       .andWhere('version.state = :state', { state: ImageVersionState.READY })

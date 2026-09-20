@@ -58,6 +58,16 @@ export function isCuratedSelector(image: string | undefined): boolean {
   return supportedImages().some(({ name, ref }) => image === name || image === ref)
 }
 
+/**
+ * The tag a bare repository names.
+ *
+ * Not a convenience: a registry resolves `acme/app` by fetching `acme/app:latest`,
+ * so that is the tag a box booted from whether or not anyone typed it. It lives
+ * here because the catalog has to record it and the resolver has to look it up,
+ * and a rule those two spell differently is a reference that never pins.
+ */
+export const IMPLICIT_TAG = 'latest'
+
 /** Whether a value is a sha256 digest, the only shape this system records. */
 export function isSha256Digest(value: string): boolean {
   return DIGEST_PATTERN.test(value)

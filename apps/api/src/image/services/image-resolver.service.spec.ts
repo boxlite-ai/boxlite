@@ -14,25 +14,34 @@ const DIGEST = `sha256:${'a'.repeat(64)}`
 describe('ImageResolverService', () => {
   const organization = { id: 'org-1' } as Organization
 
-  /** Records the where-clauses so a test can assert what was asked, not just what came back. */
+  /**
+   * Records the where-clauses and the values bound to them, so a test can assert
+   * what was asked, not just what came back. The values matter as much as the
+   * clauses: a lookup by the wrong tag name still searches by tag.
+   */
   function makeRepository(row: Record<string, string> | undefined) {
     const conditions: string[] = []
+    const parameters: Record<string, unknown> = {}
+    const record = (clause: string, bound?: Record<string, unknown>) => {
+      conditions.push(clause)
+      Object.assign(parameters, bound)
+      return builder
+    }
     const builder = {
       innerJoin: jest.fn(() => builder),
-      where: jest.fn((clause: string) => {
-        conditions.push(clause)
-        return builder
-      }),
-      andWhere: jest.fn((clause: string) => {
-        conditions.push(clause)
-        return builder
-      }),
+      where: jest.fn(record),
+      andWhere: jest.fn(record),
       select: jest.fn(() => builder),
       addSelect: jest.fn(() => builder),
       getRawOne: jest.fn(async () => row),
     }
     const createQueryBuilder = jest.fn(() => builder)
-    return { repository: { createQueryBuilder } as unknown as Repository<ImageVersion>, createQueryBuilder, conditions }
+    return {
+      repository: { createQueryBuilder } as unknown as Repository<ImageVersion>,
+      createQueryBuilder,
+      conditions,
+      parameters,
+    }
   }
 
   describe('curated selectors', () => {
@@ -71,12 +80,19 @@ describe('ImageResolverService', () => {
       expect(resolved).toEqual({ ref: `quay.io/acme/app@${DIGEST}`, isOrgOwned: true, imageId: 'img-1' })
     })
 
-    it('treats a bare repository as its latest tag', async () => {
-      const { repository, conditions } = makeRepository({ digest: DIGEST, imageId: 'img-1' })
+    /**
+     * Which tag, not just that a tag was used. `latest` is the name the registry
+     * serves a bare repository under, so it is the name the registrar records —
+     * and a lookup that searched for anything else would miss its own row and
+     * re-resolve the reference forever.
+     */
+    it('looks a bare repository up under the tag the registry serves it as', async () => {
+      const { repository, conditions, parameters } = makeRepository({ digest: DIGEST, imageId: 'img-1' })
 
       const resolved = await new ImageResolverService(repository).resolve(organization, 'quay.io/acme/app')
 
       expect(conditions).toContain('tag.name = :tag')
+      expect(parameters.tag).toBe('latest')
       expect(resolved.ref).toBe(`quay.io/acme/app@${DIGEST}`)
     })
 
@@ -89,8 +105,9 @@ describe('ImageResolverService', () => {
     })
 
     /**
-     * Deleting an image is the only way to pick up a tag that moved upstream,
-     * so a soft-deleted row resolving would close the one escape hatch there is.
+     * Deleting an image is the only thing that will pick up a tag that moved
+     * upstream, once the catalog API exposes it, so a soft-deleted row
+     * resolving would close the one escape hatch there is before it opens.
      */
     it('excludes soft-deleted images from every lookup', async () => {
       const { repository, conditions } = makeRepository(undefined)
