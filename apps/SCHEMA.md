@@ -482,7 +482,9 @@ writes to this table.
 
 One row per upstream repository an organization has pulled, written after a box
 built from it reaches STARTED. Curated images are never rows here: they stay
-env-driven, and the catalog endpoint unions them in at read time.
+env-driven, and the catalog endpoint will union them in at read time when it
+ships. No route serves these tables yet: creating a box reads the catalog,
+nothing returns it.
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
@@ -494,8 +496,9 @@ env-driven, and the catalog endpoint unions them in at read time.
 | `createdAt` / `updatedAt` | `timestamptz` | |
 
 Uniqueness is a partial index rather than a table constraint, so a soft-deleted
-name can be used again; `image_org_lastused_index` serves both the per-org
-listing and the count the admission gate takes before a cold pull.
+name can be used again; `image_org_lastused_index` serves the count the
+admission gate takes before a cold pull, and the per-org listing when the
+catalog API ships.
 
 ### `image_version`
 
@@ -521,8 +524,9 @@ reached through two upstream paths is normal usage.
 ### `image_tag`
 
 The digest a tag resolved to the first time it was pulled. Tags do not move:
-once recorded, a tag keeps pointing at that version, and the escape hatch is
-deleting the image and using it again.
+once recorded, a tag keeps pointing at that version, and the escape hatch will
+be deleting the image and using it again — the delete ships with the catalog
+API, so until then a recorded tag is final.
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |

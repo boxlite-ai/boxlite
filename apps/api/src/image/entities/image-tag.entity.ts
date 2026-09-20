@@ -8,9 +8,11 @@ import { Image } from './image.entity'
 import { ImageVersion } from './image-version.entity'
 
 // The digest a tag resolved to the first time it was pulled. S1 never moves a
-// tag: once `app:latest` is recorded it keeps pointing at that version, and the
-// escape hatch is deleting the image and using it again. Moving a tag becomes a
-// first-class operation later, which is when this table starts changing.
+// tag: once `app:latest` is recorded it keeps pointing at that version. The
+// escape hatch is deleting the image and using it again — which nothing can do
+// yet, because the endpoint that deletes one ships with the catalog API, so
+// until then a recorded tag is final. Moving a tag becomes a first-class
+// operation later, which is when this table starts changing.
 @Entity()
 @Unique('image_tag_image_name_unique', ['imageId', 'name'])
 export class ImageTag {

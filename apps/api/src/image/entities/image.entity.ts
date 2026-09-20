@@ -7,15 +7,16 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, Update
 
 // One row per upstream repository an organization has pulled, created when a
 // box built from it reaches STARTED. Curated images are never rows here: they
-// stay env-driven and the catalog endpoint unions them in, so rotating one
-// does not need a migration.
+// stay env-driven so that rotating one does not need a migration, and the
+// catalog endpoint will union them in at read time when it ships. No route
+// serves this table yet: creating a box reads it, nothing returns it.
 @Entity()
 // A partial unique index rather than @Unique, so a soft-deleted name can be
 // used again. Volume takes the table-level constraint and cannot: its service
 // allows the reuse that the constraint then rejects.
 @Index('image_org_name_active_unique', ['organizationId', 'name'], { unique: true, where: '"deletedAt" IS NULL' })
-// Covers both the per-org listing and the count the admission gate takes
-// before every cold pull.
+// Covers the count the admission gate takes before every cold pull, and the
+// per-org listing when the catalog API ships.
 @Index('image_org_lastused_index', ['organizationId', 'lastUsedAt'])
 export class Image {
   @PrimaryGeneratedColumn('uuid')

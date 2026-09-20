@@ -43,13 +43,14 @@ export const IMAGE_COUNT_LIMIT_CODE = 'image_count_limit_reached'
  * The limit counts *kinds* of image, not bytes: under pull-through every
  * runner ends up caching every image an organization uses, so the number of
  * distinct images is what actually grows the fleet's disk. An image already in
- * the catalog is therefore never refused — booting it again costs nothing new.
+ * the catalog is therefore never refused *by this limit* — it adds no kind.
+ * The cold-pull budget is a separate gate and still applies to it.
  */
 export class ImageCountLimitReachedError extends HttpException {
   constructor(limit: number) {
     super(
       {
-        message: `This organization already holds its limit of ${limit} images. Delete one before using a new image.`,
+        message: `This organization already holds its limit of ${limit} images. This limit does not apply to the images it already holds.`,
         code: IMAGE_COUNT_LIMIT_CODE,
       },
       HttpStatus.BAD_REQUEST,
