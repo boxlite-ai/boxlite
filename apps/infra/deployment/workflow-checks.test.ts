@@ -48,7 +48,7 @@ for (const [path, expected] of [
   ['src/cli/src/main.rs', ['rust']],
   ['make/coverage.mk', ['rust', 'python', 'node', 'go']],
   ['make/quality.mk', ['go']],
-  ['.github/workflows/lint.yml', ['go']],
+  ['.github/workflows/lint.yml', ['go', 'infra']],
 ] as const) {
   test(`source and shared recipes retain their tests: ${path}`, () => {
     assert.deepEqual(testSuites(['docs/README.md', path]), [...expected])

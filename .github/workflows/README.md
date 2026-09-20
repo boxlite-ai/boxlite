@@ -38,7 +38,7 @@ is *exclusively* callable; workflows with `workflow_dispatch` can also run on th
 | --- | --- | --- | --- |
 | `config.yml` | `workflow_call` | call-only | Loads `.github/ci-config.json` before build matrices expand |
 | `lint.yml` | push, PR, merge_group | — | Format and lint per language, plus the installer smoke test. `Lint (conclusion)` is the required check |
-| `test.yml` | push, PR, merge_group, weekly, dispatch | — | SDK tests and combined Rust/CLI coverage; compact routine matrices and full weekly/manual matrices. Codecov requires 90% patch coverage |
+| `test.yml` | push, PR, merge_group, weekly, dispatch | — | Lightweight draft checks; SDK tests and combined Rust/CLI coverage on ready PRs. Compact routine matrices and full weekly/manual matrices. Codecov requires 90% patch coverage |
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
 | `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs |
 | `author-review.yml` | PR (target), issue_comment, merge_group | — | Converts unacknowledged PRs to draft, posts author instructions, and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
@@ -69,6 +69,21 @@ runbook](../../docs/ci/e2e-local.md), [deployment](../../apps/infra/docs/deploym
 commit cancels its superseded lint, test and client-drift runs. Release and deployment jobs keep
 their existing sequencing.
 
+Draft PRs defer the Rust, Python, Node and Go SDK coverage matrices, including Go
+vet and golangci-lint, which reuse the Go job's native build. The Lint and Format
+workflow (including Go formatting), CodeQL, managed Code Quality, API tests and
+setup checks retain their existing selection. Workflow and infrastructure changes
+run `make test:apps:infra` in a separate, path-filtered job whose failures block
+`Test (conclusion)`.
+Marking a PR **Ready for review** triggers the SDK matrix and both Go analyzers
+without requiring another commit. When a user returns it to draft, the new run
+cancels the prior Test run and runs the lightweight selection. The author-review bot uses `GITHUB_TOKEN`;
+[GitHub suppresses that token's draft-conversion event](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow),
+so automatic conversion cannot cancel an already-running matrix. Main pushes,
+merge groups, weekly runs and manual dispatches retain SDK testing.
+Deferred coverage may remain pending on a draft; it is never replaced by
+an empty upload when coverage-bearing files changed.
+
 Python runs all four supported versions on Linux x64 and the latest on macOS and Linux ARM
 (six jobs); Node runs all three versions on Linux x64 and the latest on the other platforms
 (five jobs). Weekly and manually dispatched tests exercise every platform/version combination
@@ -97,7 +112,8 @@ Client drift checks watch API code, shared libraries, generators and workspace c
 Guest artifact qualification runs only weekly or when manually dispatched, retaining all five
 platform/profile combinations. PR, push, and merge-queue runs skip that job; use
 `make test:guest-artifacts` to check guest build changes locally before merging. Infrastructure
-tests remain available through `make test:apps:infra` and the local pre-push check;
+tests run in hosted CI for infrastructure, workflow and relevant Make changes, including drafts,
+and remain available through `make test:apps:infra` and the local pre-push check;
 `make test:apps:infra-config` explicitly installs and type-checks the SST configuration.
 
 ## Author review gate rollout
