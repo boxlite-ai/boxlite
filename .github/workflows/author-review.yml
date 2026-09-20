@@ -13,7 +13,8 @@ on:
     types: [checks_requested]
 
 permissions:
-  contents: read
+  # GitHub requires this for the GraphQL convertPullRequestToDraft mutation.
+  contents: write
   statuses: write
   # This also permits creating and editing PR comments through the issues API.
   pull-requests: write

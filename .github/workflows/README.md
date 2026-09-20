@@ -95,6 +95,10 @@ The bot comment includes the exact command the author must post. No fork branch 
 extra GitHub App, or personal token are needed. The workflow runs only the immutable
 upstream revision in `AGENT_TOOLING_REV`; update that pin through a reviewed PR.
 
+Draft conversion requires `contents: write` as well as `pull-requests: write`;
+`statuses: write` publishes the acknowledgment. The contents permission authorizes
+the GraphQL mutation; the workflow does not push commits or write to fork branches.
+
 Merge queues must require the same PR status before admission. Queue commits carry
 that result forward; authors acknowledge their own PR head, not the temporary merge.
 Unacknowledged PRs are converted to draft. After the author acknowledgment passes,
