@@ -717,3 +717,5 @@ main() {
 }
 
 main "$@"
+
+# Temporary validation: source paths must not pass an empty coverage upload.
