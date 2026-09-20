@@ -38,7 +38,7 @@
 - High-cohesion facade (the shared Design rule's exemplar here): [`ImageManager`](src/boxlite/src/images/manager.rs) exposes `new`/`pull`/`list`/`load_from_local` and hides `Arc<ImageStore>`, blob sources, and manifest handling.
 - Facade exception — stateless utilities: [`jailer/common/`](src/boxlite/src/jailer/common/) async-signal-safe helpers.
 
-<!-- agent-tooling:guidance:begin rev=4d1c272b2fa8 sha256=880fb3083027 -->
+<!-- agent-tooling:guidance:begin rev=7584e7c08bb4 sha256=958e059bf437 -->
 
 > Managed by **boxlite-ai/agent-tooling** — do not edit between the markers. Change `plugins/boxlite-agent-tooling/guidance/workflow.md` there, then rerun `./.agent-tooling/install.sh` here.
 
@@ -68,7 +68,7 @@ Every change goes: understand → research → design → implement → test →
 - DRY when it's the same rule, policy, or transformation. Tolerate small local duplication when an abstraction would hide important local behavior.
 - Validation at the boundary — untrusted inputs get checked where they enter; trust internal code.
 - Composition over inheritance / framework magic.
-- Only what's used — no future-proofing; delete dead code immediately.
+- Only what's used (Occam's razor) — design the simplest API that meets current requirements; no future-proofing. Delete dead code immediately.
 - No premature optimization — measure first.
 
 **Implement**
