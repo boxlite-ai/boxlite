@@ -123,6 +123,19 @@ func TestOverlayBDLocalSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	devices(0)
+	// Stop invalidates the handle; restart through a fresh runtime lookup.
+	a, err = rt.Get(ctx, a.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := a.Stop(cleanup); err != nil {
+			t.Error(err)
+		}
+		a.Close()
+	})
 	if err := a.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
