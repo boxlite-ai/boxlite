@@ -1,0 +1,159 @@
+name: Validate Codecov skipped coverage
+'on':
+  pull_request: null
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      platforms: ${{ steps.config.outputs.platforms }}
+      rust-toolchain: ${{ steps.config.outputs.rust-toolchain }}
+      python-test-matrix: ${{ steps.config.outputs.python-test-matrix }}
+      node-test-matrix: ${{ steps.config.outputs.node-test-matrix }}
+      rust: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.rust == 'true' }}
+      python: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.python == 'true' }}
+      node: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.node == 'true' }}
+      go: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.go == 'true' }}
+      api: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.api == 'true' }}
+      guest_artifacts: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.guest_artifacts == 'true' }}
+      setup: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.setup == 'true' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/ci-config
+        id: config
+        with:
+          full-matrix: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+        id: filter
+        if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+        with:
+          base: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || '' }}
+          ref: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || '' }}
+          filters: |
+            rust:
+              - 'src/boxlite/**'
+              - 'src/cli/**'
+              - 'src/shared/**'
+              - 'src/guest/**'
+              - 'src/hypervisor/**'
+              - 'src/vmm/**'
+              - 'sdks/c/src/**'
+              - 'sdks/c/build.rs'
+              - 'sdks/python/src/**'
+              - 'sdks/node/src/**'
+              - 'sdks/node/build.rs'
+              - 'src/test-utils/**'
+              - 'src/deps/bubblewrap-sys/**'
+              - 'src/deps/e2fsprogs-sys/**'
+              - 'src/deps/libkrun-sys/**'
+              - 'src/**/*.rs'
+              - '.gitmodules'
+              - 'Makefile'
+              - 'make/**'
+              - 'openapi/**'
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
+              - '.config/nextest.toml'
+              - 'codecov.yml'
+              - '.github/actions/setup-rust/**'
+              - '.github/actions/setup-python/**'
+              - '.github/ci-config.json'
+              - '.github/actions/ci-config/**'
+              - '.github/workflows/test.yml'
+            python:
+              - 'sdks/python/**'
+              - 'Makefile'
+              - 'make/**'
+              - 'codecov.yml'
+              - '.github/actions/setup-python/**'
+              - '.github/ci-config.json'
+              - '.github/actions/ci-config/**'
+              - '.github/workflows/test.yml'
+            node:
+              - 'sdks/node/**'
+              - 'Makefile'
+              - 'make/**'
+              - 'codecov.yml'
+              - '.github/ci-config.json'
+              - '.github/actions/ci-config/**'
+              - '.github/workflows/test.yml'
+            go:
+              - 'sdks/go/**'
+              - 'src/deps/libgvproxy-sys/**'
+              - 'Makefile'
+              - 'make/**'
+              - 'codecov.yml'
+              - '.github/actions/setup-go/**'
+              - '.github/actions/setup-rust/**'
+              - '.github/actions/sccache/**'
+              - '.github/ci-config.json'
+              - '.github/actions/ci-config/**'
+              - '.github/workflows/test.yml'
+            api:
+              - 'apps/api/**'
+              - 'apps/package.json'
+              - 'apps/yarn.lock'
+              - 'apps/nx.json'
+              - 'apps/jest.preset.js'
+              - 'codecov.yml'
+              - '.github/workflows/test.yml'
+            guest_artifacts:
+              - '.cargo/**'
+              - '.gitmodules'
+              - 'src/deps/e2fsprogs-sys/**'
+              - 'src/guest/**'
+              - 'src/shared/**'
+              - 'scripts/build/build-guest-deps.sh'
+              - 'scripts/build/build-guest.sh'
+              - 'scripts/build/build-libseccomp.sh'
+              - 'scripts/common.sh'
+              - 'scripts/util.sh'
+              - 'scripts/setup/**'
+              - 'scripts/test/test-guest-artifacts.sh'
+              - 'scripts/test/test-guest-build-contracts.sh'
+              - 'Makefile'
+              - 'make/vars.mk'
+              - 'make/setup.mk'
+              - 'make/build.mk'
+              - 'make/test.mk'
+              - 'rust-toolchain.toml'
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/ci-config.json'
+              - '.github/actions/ci-config/**'
+              - '.github/workflows/test.yml'
+            setup:
+              - '.gitmodules'
+              - 'scripts/setup/setup-submodules.sh'
+              - 'scripts/test/test-setup-submodules.sh'
+              - 'make/setup.mk'
+              - 'make/test.mk'
+              - '.github/workflows/test.yml'
+  coverage-empty:
+    name: Codecov (no coverage changes)
+    needs: changes
+    if: |-
+      ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
+          needs.changes.result == 'success' &&
+          needs.changes.outputs.rust == 'false' &&
+          needs.changes.outputs.python == 'false' &&
+          needs.changes.outputs.node == 'false' &&
+          needs.changes.outputs.go == 'false' &&
+          needs.changes.outputs.api == 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Report coverage is unnecessary for this change
+        uses: codecov/codecov-action@v5
+        with:
+          run_command: empty-upload
+          use_oidc: true
+          fail_ci_if_error: true
