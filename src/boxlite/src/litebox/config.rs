@@ -2,6 +2,7 @@ use crate::BoxID;
 use crate::net::socket_path::BoxSockets;
 use crate::runtime::types::ContainerID;
 use boxlite_shared::BoxTransport;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -14,6 +15,14 @@ use std::path::PathBuf;
 pub struct ContainerRuntimeConfig {
     /// Container ID (64-char hex, generated at box creation).
     pub id: ContainerID,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RootfsBackend {
+    #[default]
+    Legacy,
+    Overlaybd,
 }
 
 /// Static box configuration (set once at creation, never changes).
@@ -40,6 +49,9 @@ pub struct BoxConfig {
     pub options: crate::runtime::options::BoxOptions,
 
     // === Runtime-Generated Configuration ===
+    /// Fixed at creation; records predating this field use the OCI pipeline.
+    #[serde(default)]
+    pub rootfs_backend: RootfsBackend,
     /// VMM engine type.
     pub engine_kind: crate::vmm::VmmKind,
     /// Box home directory.
@@ -47,6 +59,16 @@ pub struct BoxConfig {
 }
 
 impl BoxConfig {
+    pub(crate) fn require_legacy_rootfs(&self, operation: &str) -> BoxliteResult<()> {
+        match self.rootfs_backend {
+            RootfsBackend::Legacy => Ok(()),
+            RootfsBackend::Overlaybd => Err(BoxliteError::Unsupported(format!(
+                "Cannot {operation} box {}: OverlayBD is unavailable in this runtime",
+                self.id
+            ))),
+        }
+    }
+
     /// Socket-path authority for this box, derived from identity
     /// (`box_home` + `id`) — never persisted. Legacy DB rows may still
     /// carry old `transport` / `ready_socket_path` fields; they are

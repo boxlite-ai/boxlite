@@ -481,6 +481,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
+            rootfs_backend: Default::default(),
             box_home: PathBuf::from("/tmp/box"),
         };
         runtime

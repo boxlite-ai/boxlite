@@ -115,6 +115,14 @@ without silently falling back to OCI or modifying existing box data.
 Local SDKs, CLI commands, and `boxlite serve` do not read this setting and retain
 the OCI image pipeline. It is not a per-box API option.
 
+Each box persists its rootfs backend (`legacy` or `overlaybd`) at creation;
+old records without the field mean `legacy`, and unknown values are rejected.
+Recovery and reuse preserve that identity. Until the backend is implemented,
+OverlayBD records remain queryable, reusable, stoppable, and removable, but
+fresh starts, clone/export, and snapshot mutations return an unsupported error.
+Running VM reattachment remains allowed; legacy snapshot repair skips OverlayBD
+records. New local boxes and imported/cloned OCI disks remain `legacy`.
+
 `cmd/runner/main.go` brings up the process in this order:
 
 1. **BoxLite runtime** is initialized via `boxlite.NewClient(...)`. This

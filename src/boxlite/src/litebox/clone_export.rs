@@ -45,6 +45,7 @@ impl BoxImpl {
         if count == 0 {
             return Ok(Vec::new());
         }
+        self.config.require_legacy_rootfs("clone")?;
 
         if !names.is_empty() && names.len() != count {
             return Err(BoxliteError::Config(format!(
@@ -175,6 +176,7 @@ impl BoxImpl {
         _options: crate::runtime::options::ExportOptions,
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
+        self.config.require_legacy_rootfs("export")?;
         let t0 = Instant::now();
         let _lock = self.disk_ops.lock().await;
 

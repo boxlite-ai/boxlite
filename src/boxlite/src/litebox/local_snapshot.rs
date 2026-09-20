@@ -28,6 +28,9 @@ impl LocalSnapshotBackend {
         name: &str,
         _opts: SnapshotOptions,
     ) -> BoxliteResult<SnapshotInfo> {
+        self.inner
+            .config
+            .require_legacy_rootfs("create snapshot for")?;
         validate_snapshot_name(name)?;
         let t0 = Instant::now();
         let _lock = self.inner.disk_ops.lock().await;
@@ -91,6 +94,9 @@ impl LocalSnapshotBackend {
     }
 
     async fn snapshot_remove(&self, name: &str) -> BoxliteResult<()> {
+        self.inner
+            .config
+            .require_legacy_rootfs("remove snapshot for")?;
         validate_snapshot_name(name)?;
         let _lock = self.inner.disk_ops.lock().await;
 
@@ -118,6 +124,9 @@ impl LocalSnapshotBackend {
     }
 
     async fn snapshot_restore(&self, name: &str) -> BoxliteResult<()> {
+        self.inner
+            .config
+            .require_legacy_rootfs("restore snapshot for")?;
         validate_snapshot_name(name)?;
 
         // Refuse restore while the box is active — disk replacement under a running

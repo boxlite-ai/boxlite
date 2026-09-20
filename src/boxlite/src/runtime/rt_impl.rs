@@ -1,7 +1,7 @@
 use crate::db::{BoxStore, Database};
 use crate::experimental::ExperimentalFeatures;
 use crate::images::{ImageDiskManager, ImageManager};
-use crate::litebox::config::BoxConfig;
+use crate::litebox::config::{BoxConfig, RootfsBackend};
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
 use crate::lock::{FileLockManager, LockManager};
 use crate::metrics::{RuntimeMetrics, RuntimeMetricsStorage};
@@ -1203,6 +1203,7 @@ impl RuntimeImpl {
             container,
             options: options.clone(),
             engine_kind: VmmKind::Libkrun,
+            rootfs_backend: RootfsBackend::Legacy,
             box_home,
         };
 
@@ -1252,6 +1253,7 @@ impl RuntimeImpl {
             container: ContainerRuntimeConfig { id: container_id },
             options,
             engine_kind: VmmKind::Libkrun,
+            rootfs_backend: RootfsBackend::Legacy,
             box_home,
         };
 
@@ -1363,17 +1365,10 @@ impl RuntimeImpl {
             );
         }
 
-        // Phase 1.5: Recover any pending snapshots that were interrupted by a crash.
-        {
-            let boxes_dir = self.layout.boxes_dir();
-            if boxes_dir.exists()
-                && let Ok(entries) = std::fs::read_dir(&boxes_dir)
-            {
-                for entry in entries.flatten() {
-                    if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                        crate::litebox::local_snapshot::recover_pending_snapshot(&entry.path());
-                    }
-                }
+        // Phase 1.5: Only legacy disks use qcow2 snapshot crash recovery.
+        for (config, _) in &persisted {
+            if config.rootfs_backend == RootfsBackend::Legacy {
+                crate::litebox::local_snapshot::recover_pending_snapshot(&config.box_home);
             }
         }
 
@@ -2175,6 +2170,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
+            rootfs_backend: RootfsBackend::Legacy,
             box_home: std::path::PathBuf::from("/tmp/test-box"),
         }
     }
@@ -2238,7 +2234,117 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
+            rootfs_backend: RootfsBackend::Legacy,
             box_home,
+        }
+    }
+
+    #[tokio::test]
+    async fn rootfs_backend_creation_stays_legacy() {
+        let (runtime, _dir) = create_test_runtime();
+        let options = test_box_config(true).options;
+        let litebox = runtime.create(options, None).await.unwrap();
+        let (config, _) = runtime
+            .box_manager
+            .box_by_id(litebox.id())
+            .unwrap()
+            .unwrap();
+        assert_eq!(config.rootfs_backend, RootfsBackend::Legacy);
+    }
+
+    #[tokio::test]
+    async fn rootfs_backend_survives_recovery_and_adoption() {
+        for backend in [RootfsBackend::Legacy, RootfsBackend::Overlaybd] {
+            let (runtime, dir) = create_test_runtime();
+            let mut config = test_box_config_in_layout(true, &runtime);
+            config.name = Some("existing".into());
+            config.rootfs_backend = backend;
+            let mut state = BoxState::new();
+            state.set_lock_id(runtime.lock_manager.allocate().unwrap());
+            runtime.box_manager.add_box(&config, &state).unwrap();
+            std::fs::create_dir_all(&config.box_home).unwrap();
+            let marker = config.box_home.join(".snapshot_pending");
+            let data = config.box_home.join("rootfs-data");
+            std::fs::write(&marker, "{}").unwrap();
+            std::fs::write(&data, "keep").unwrap();
+            drop(runtime);
+
+            let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+                home_dir: dir.path().to_path_buf(),
+                image_registries: vec![],
+            })
+            .unwrap();
+            assert_eq!(marker.exists(), backend == RootfsBackend::Overlaybd);
+            assert!(
+                runtime
+                    .get_info(config.id.as_str())
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+            assert_eq!(runtime.list_info().await.unwrap().len(), 1);
+            let (litebox, created) = runtime
+                .get_or_create(config.options.clone(), config.name.clone())
+                .await
+                .unwrap();
+            assert!(!created);
+            assert_eq!(litebox.id(), &config.id);
+            let (loaded, _) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
+            assert_eq!(loaded.rootfs_backend, backend);
+
+            if backend == RootfsBackend::Overlaybd {
+                use crate::litebox::BoxBuilder;
+                for status in [BoxStatus::Configured, BoxStatus::Stopped, BoxStatus::Failed] {
+                    state.status = status;
+                    assert!(matches!(
+                        BoxBuilder::new(runtime.clone(), loaded.clone(), state.clone()),
+                        Err(BoxliteError::Unsupported(_))
+                    ));
+                }
+                state.status = BoxStatus::Running;
+                assert!(BoxBuilder::new(runtime.clone(), loaded, state).is_ok());
+
+                let snapshots = litebox.snapshots();
+                let dest = dir.path().join("export");
+                let results = [
+                    litebox.start().await,
+                    litebox
+                        .clone_box(Default::default(), None)
+                        .await
+                        .map(|_| ()),
+                    litebox.export(Default::default(), &dest).await.map(|_| ()),
+                    snapshots
+                        .create(Default::default(), "snap")
+                        .await
+                        .map(|_| ()),
+                    snapshots.restore("snap").await,
+                    snapshots.remove("snap").await,
+                ];
+                for result in results {
+                    assert!(
+                        matches!(result, Err(BoxliteError::Unsupported(ref message))
+                        if message.contains("OverlayBD")),
+                        "{result:?}"
+                    );
+                }
+                assert!(!dest.exists());
+                assert!(snapshots.list().await.unwrap().is_empty());
+                assert!(snapshots.get("snap").await.unwrap().is_none());
+                assert_eq!(std::fs::read_to_string(&marker).unwrap(), "{}");
+            }
+
+            litebox.stop().await.unwrap();
+            assert_eq!(std::fs::read_to_string(&data).unwrap(), "keep");
+            drop(litebox);
+            runtime.remove(config.id.as_str(), false).unwrap();
+            assert!(
+                runtime
+                    .get_info(config.id.as_str())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(!config.box_home.exists());
         }
     }
 
