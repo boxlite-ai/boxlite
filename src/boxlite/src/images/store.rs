@@ -51,16 +51,29 @@ impl ImageStoreInner {
     }
 }
 
-/// How a pull authenticates.
+/// What one pull may do that the runtime it runs on cannot decide for it.
 ///
-/// Registry credentials are runtime-scoped and matched by host, so they belong
-/// to whoever configured the runtime rather than to whoever asked for the
-/// image. An image ref a tenant chose must not reach them: without this,
+/// Not configuration. The registry list and its credentials are built once,
+/// when the runtime is, and this changes neither: `anonymous` selects among
+/// them and `revalidate` says whether the ref-keyed cache may answer. Both
+/// belong to the box being started rather than to the runtime starting it,
+/// which is why neither can be settled once.
+///
+/// Credentials are matched by host, and that is what forces the first one to
+/// be per pull: a single runtime serves the operator's own images and a ref a
+/// tenant named from the same hosts. Without the split,
 /// `ghcr.io/<someone-else>/<private-image>` is fetched with the operator's
 /// token and handed to the tenant who named it.
 ///
-/// It covers credentials only. Which transport to use and whether to skip
-/// certificate verification stay keyed by host, because reaching a local
+/// Which of the two a ref is cannot be decided here, and cannot be decided by
+/// host either. It is whether the ref is in the operator's curated set —
+/// env-driven, and the control plane's to know — and an operator may point a
+/// curated entry at a private package, so a host rule would either strip the
+/// credential those need or hand it to every tenant ref on the same host. So
+/// the answer arrives with the pull.
+///
+/// `anonymous` covers credentials only. Which transport to use and whether to
+/// skip certificate verification stay keyed by host, because reaching a local
 /// insecure registry is about where the bytes come from, not about whose token
 /// opens the door.
 #[derive(Debug, Clone, Copy, Default)]
