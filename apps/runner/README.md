@@ -106,6 +106,15 @@ the in-process TTL caches under `pkg/cache/`.
 
 ## Process model
 
+`BOXLITE_OVERLAYBD_ENABLED` is a runner-only opt-in, defaulting to `false`.
+Unset or `false` keeps the existing OCI image pipeline and requires no OverlayBD
+installation. Invalid boolean values fail configuration. The backend is not yet
+implemented: setting `true` fails runner startup before runtime initialization,
+without silently falling back to OCI or modifying existing box data.
+
+Local SDKs, CLI commands, and `boxlite serve` do not read this setting and retain
+the OCI image pipeline. It is not a per-box API option.
+
 `cmd/runner/main.go` brings up the process in this order:
 
 1. **BoxLite runtime** is initialized via `boxlite.NewClient(...)`. This
