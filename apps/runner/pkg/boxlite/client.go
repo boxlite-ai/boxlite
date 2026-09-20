@@ -458,12 +458,7 @@ func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
 
 // Destroy removes a box entirely.
 func (c *Client) Destroy(ctx context.Context, boxId string) error {
-	c.mu.Lock()
-	if bx, ok := c.boxes[boxId]; ok {
-		bx.Close()
-		delete(c.boxes, boxId)
-	}
-	c.mu.Unlock()
+	c.forgetBox(boxId)
 
 	if err := c.runtime.ForceRemove(ctx, boxId); err != nil {
 		return err
@@ -681,6 +676,23 @@ func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box,
 	c.mu.Unlock()
 
 	return bx, nil
+}
+
+// forgetBox drops everything this client still holds for a box that is being
+// destroyed: the cached handle, and any image report the box never got to
+// deliver. The report has to go with it — the control plane records an image
+// only on the push that says the box started, so one still owed for a box that
+// no longer exists can never be delivered, and left behind it would accumulate
+// one entry per box this runner ever destroyed.
+func (c *Client) forgetBox(boxId string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if bx, ok := c.boxes[boxId]; ok {
+		bx.Close()
+		delete(c.boxes, boxId)
+	}
+	delete(c.pendingImageReports, boxId)
 }
 
 // evictBox unmaps a handle so the next lookup fetches a fresh one, and only

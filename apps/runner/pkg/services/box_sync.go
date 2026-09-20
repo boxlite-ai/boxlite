@@ -217,7 +217,11 @@ func (s *BoxSyncService) PerformSync(ctx context.Context) error {
 				continue
 			}
 
-			s.log.InfoContext(ctx, "State mismatch for box", "boxId", boxId, "localState", local.state, "remoteState", convertedRemoteState)
+			if local.state != convertedRemoteState {
+				s.log.InfoContext(ctx, "State mismatch for box", "boxId", boxId, "localState", local.state, "remoteState", convertedRemoteState)
+			} else {
+				s.log.InfoContext(ctx, "Pushing an owed image report for box", "boxId", boxId, "state", local.state)
+			}
 
 			err := s.SyncBoxState(ctx, boxId, local.state)
 			if err != nil {
