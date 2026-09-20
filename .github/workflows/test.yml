@@ -387,9 +387,17 @@ jobs:
 
       - uses: ./.github/actions/setup-go
 
+      - name: Check out native dependency workspaces
+        # Cargo's cache action reads the nested workspace metadata during setup.
+        run: make setup:submodules
+
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: ${{ needs.changes.outputs.rust-toolchain }}
+          cache-workspaces: |
+            . -> target
+            src/deps/libkrun-sys/vendor/libkrun -> target
+          cache-workspace-crates: 'true'
 
       - name: Install build dependencies
         run: make setup:build

@@ -11,10 +11,38 @@ inputs:
       pass its output, which keeps the one place a bump has to happen.
     required: false
     default: '1.24'
+  cache:
+    description: >-
+      Cache downloaded Go modules. Formatting-only jobs disable this because
+      gofmt needs no dependencies.
+    required: false
+    default: 'true'
 
 runs:
   using: composite
   steps:
     - uses: actions/setup-go@v5
+      id: go
       with:
         go-version: ${{ inputs.go-version }}
+        # Go's build cache does not detect changes to externally linked C libraries.
+        # Restoring it could hide changes to libboxlite.a from CGO builds and tests.
+        cache: 'false'
+
+    - name: Locate Go module cache
+      id: modules
+      if: ${{ inputs.cache == 'true' }}
+      shell: bash
+      run: |
+        modules_path="$(go env GOMODCACHE)"
+        test -n "$modules_path"
+        printf 'path=%s\n' "$modules_path" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@v4
+      if: ${{ inputs.cache == 'true' }}
+      with:
+        path: ${{ steps.modules.outputs.path }}
+        # There is no root go.sum, and the SDK itself has only go.mod.
+        key: go-modules-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('**/go.mod', '**/go.sum') }}
+        restore-keys: |
+          go-modules-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-

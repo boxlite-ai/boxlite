@@ -28,6 +28,18 @@ inputs:
       the job removes that state before building in a container; sccache is separate.
     required: false
     default: 'true'
+  cache-workspaces:
+    description: >-
+      Cargo workspaces and their target directories, one workspace -> target
+      pair per line. Native Go builds also compile the vendored libkrun workspace.
+    required: false
+    default: '. -> target'
+  cache-workspace-crates:
+    description: >-
+      Retain workspace compilation outputs as well as dependencies. Cargo still
+      checks source freshness and rebuilds commit-dependent code on every invocation.
+    required: false
+    default: 'false'
 
 runs:
   using: composite
@@ -37,3 +49,5 @@ runs:
         toolchain: ${{ inputs.toolchain }}
         components: ${{ inputs.components }}
         cache: ${{ inputs.cache }}
+        cache-workspaces: ${{ inputs.cache-workspaces }}
+        cache-workspace-crates: ${{ inputs.cache-workspace-crates }}

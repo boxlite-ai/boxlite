@@ -89,6 +89,15 @@ groups, require `codecov/patch` from the Codecov app in the main ruleset alongsi
 existing documentation-only PRs do not wait for a status they cannot publish.
 
 Go vet and golangci-lint run after Linux x64 Go coverage, reusing its native SDK build.
+Go module-download caches hash the repository's nested `go.mod` and `go.sum` files;
+there is no root `go.sum`, and the SDK needs its `go.mod` included even without a
+checksum file. The Go build cache is not restored because it cannot detect changes
+to externally linked CGO libraries such as `libboxlite.a`.
+Formatting-only jobs disable module caching. Go test jobs initialize
+submodules before Rust cache setup and retain build state for both the root Cargo
+workspace and vendored libkrun. They retain workspace compilation outputs, while
+still invoking `make coverage:go` to rebuild changed code and current Git metadata.
+Finished native libraries are not reused without Cargo's freshness checks.
 The Go lint job retains formatting checks. SDK and API test filters exclude Markdown and select
 the Make recipes they execute; the changes job still parses every Make include with `make -n help`.
 Client drift and VM E2E triggers also exclude Markdown-only changes.
