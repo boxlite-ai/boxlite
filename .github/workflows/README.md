@@ -170,8 +170,9 @@ are reusable. A cold cache still requires a full build.
 - `SCCACHE_BASEDIRS` normalizes source paths: the workspace on the host, `/work` in
   manylinux, and `/project` in cibuildwheel. Different compilers or build flags still produce
   different cache keys.
-- cibuildwheel installs the same pinned version and accesses the host directory through its
-  `/host` mount. Its absolute wrapper survives Python-specific PATH changes. A local wheel
+- cibuildwheel copies the host action's verified binary and accesses its cache through the
+  `/host` mount. Standalone builds use an existing binary or PyPI's published 0.16.0 package.
+  Its absolute wrapper survives Python-specific PATH changes. A local wheel
   build without a host directory uses a temporary cache inside the container.
 - Host setup exports the wrapper only after the server starts. Ordinary jobs warn and compile
   uncached on setup failure; scheduled runtime builds require successful setup. Containers drop

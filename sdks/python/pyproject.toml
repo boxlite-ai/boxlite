@@ -87,7 +87,12 @@ before-all = ["""
 
     # Linux containers share the host cache through cibuildwheel's /host mount.
     # Use an absolute wrapper: cibuildwheel rebuilds PATH for each Python version.
-    pip install sccache==0.17.0 2>/dev/null || true
+    if [ "$(uname)" = Linux ] && [ -n "${BOXLITE_HOST_SCCACHE_BIN:-}" ]; then
+        # Reuse the host action's checksum-verified release, which PyPI may not publish.
+        install -m 755 "/host$BOXLITE_HOST_SCCACHE_BIN" /usr/local/bin/sccache
+    elif ! command -v sccache &>/dev/null; then
+        pip install sccache==0.16.0 || echo "WARNING: sccache installation failed"
+    fi
     # Create a pass-through shim if installation failed, so compilation can continue.
     # When RUSTC_WRAPPER is set, cargo calls
     # `sccache /path/to/rustc <args>`. The shim just runs `exec "$@"` which
@@ -150,8 +155,8 @@ repair-wheel-command = ""  # Skip auditwheel repair
 # SKIP_GUEST_BUILD=1: Use the restored boxlite-guest from the Ubuntu host
 environment = { SKIP_GUEST_BUILD = "1", PATH = "/usr/local/go/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH", PKG_CONFIG_PATH = "/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig", LD_LIBRARY_PATH = "/usr/local/lib64:/usr/local/lib", RUSTC_WRAPPER = "/usr/local/bin/sccache", SCCACHE_GHA_ENABLED = "false", SCCACHE_DIR = "/tmp/boxlite-sccache", SCCACHE_CACHE_SIZE = "1G", SCCACHE_DIRECT = "false", SCCACHE_BASEDIRS = "/project", CARGO_INCREMENTAL = "0" }
 
-# Only the path crosses into the container; compiler results need no remote credentials.
-environment-pass = ["BOXLITE_HOST_SCCACHE_DIR"]
+# Only file paths cross into the container; compiler results need no remote credentials.
+environment-pass = ["BOXLITE_HOST_SCCACHE_DIR", "BOXLITE_HOST_SCCACHE_BIN"]
 
 # Stop the shared-cache server before wheel tests and container teardown.
 before-test = "/usr/local/bin/sccache --stop-server >/dev/null 2>&1 || true"

@@ -43,6 +43,7 @@ jobs:
         env:
           CIBW_BUILD_VERBOSITY: 0
           BOXLITE_HOST_SCCACHE_DIR: ${{ env.SCCACHE_DIR }}
+          BOXLITE_HOST_SCCACHE_BIN: ${{ env.SCCACHE_PATH }}
         with:
           package-dir: sdks/python
 

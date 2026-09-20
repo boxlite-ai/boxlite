@@ -406,7 +406,7 @@ jobs:
 
       - name: golangci-lint
         if: matrix.platform.target == 'linux-x64-gnu'
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84 # v6
         with:
           working-directory: sdks/go
           args: --timeout=5m --build-tags boxlite_dev

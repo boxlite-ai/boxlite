@@ -75,6 +75,7 @@ test('Go vet and golangci-lint reuse the Linux coverage build', () => {
   const lintAt = steps.findIndex((step: any) => step.uses?.startsWith('golangci/golangci-lint-action'))
   assert.ok(buildAt >= 0 && vetAt > buildAt && lintAt > buildAt, 'Go analysis must reuse the native library produced by coverage')
   for (const index of [vetAt, lintAt]) assert.equal(steps[index].if, "matrix.platform.target == 'linux-x64-gnu'")
+  assert.match(steps[lintAt].uses, /@[0-9a-f]{40}$/, 'Go analysis with OIDC access must use an immutable action revision')
   const formatting = workflow('lint.yml').jobs.go.steps
   assert.ok(formatting.some((step: any) => step.run === 'make fmt:check:go'))
   assert.ok(!formatting.some((step: any) => /dev:go|setup:build/.test(step.run ?? '')), 'formatting must not build the native runtime')
@@ -354,8 +355,9 @@ test('invalid image selections fail before any Docker invocation', () => {
 })
 
 for (const sharedCache of [true, false]) {
-  for (const installSucceeds of [true, false]) {
-    test(`wheel cache setup: shared=${sharedCache}, installation=${installSucceeds}`, () => {
+  for (const source of ['host', 'pip', 'unavailable'] as const) {
+    test(`wheel cache setup: shared=${sharedCache}, source=${source}`, () => {
+      const installSucceeds = source !== 'unavailable'
       const project = parseToml(readFileSync(join(REPO_ROOT, 'sdks/python/pyproject.toml'), 'utf8')) as any
       const config = project.tool.cibuildwheel
       const directory = mkdtempSync(join(tmpdir(), 'boxlite-wheel-cache-'))
@@ -366,13 +368,16 @@ for (const sharedCache of [true, false]) {
         const cache = join(directory, 'container-cache')
         const host = join(directory, 'host')
         const hostCache = join(host, 'runner cache/sccache')
+        const hostBinary = join(host, 'runner tools/sccache')
         const trace = join(directory, 'trace')
-        for (const path of [bin, pythonBin, dirname(wrapper), hostCache, join(directory, 'scripts'), join(directory, 'home')]) {
+        for (const path of [bin, pythonBin, dirname(wrapper), hostCache, dirname(hostBinary), join(directory, 'scripts'), join(directory, 'home')]) {
           mkdirSync(path, { recursive: true })
         }
         writeFileSync(join(bin, 'pip'), `#!/bin/sh
 printf 'pip %s\\n' "$*" >> "$TRACE"
 [ "$INSTALL_SUCCEEDS" = true ] || exit 1
+# PyPI publishes 0.16.0, but does not publish the host action's 0.17.0 release.
+[ "$*" = 'install sccache==0.16.0' ] || exit 1
 cat > "$PYTHON_BIN/sccache" <<'WRAPPER'
 #!/bin/sh
 printf 'installed-wrapper %s\\n' "$*" >> "$TRACE"
@@ -381,6 +386,13 @@ exec "$@"
 WRAPPER
 chmod +x "$PYTHON_BIN/sccache"
 `, { mode: 0o755 })
+        if (source === 'host') {
+          writeFileSync(hostBinary, `#!/bin/sh
+printf 'host-wrapper %s\\n' "$*" >> "$TRACE"
+[ "$1" = --stop-server ] && exit 0
+exec "$@"
+`, { mode: 0o755 })
+        }
         writeFileSync(join(bin, 'uname'), '#!/bin/sh\necho Linux\n', { mode: 0o755 })
         writeFileSync(join(directory, 'scripts/util.sh'), '#!/bin/sh\necho x86_64-unknown-linux-musl\n', { mode: 0o755 })
         writeFileSync(join(bin, 'make'), `#!/bin/sh
@@ -402,8 +414,9 @@ fi
         const env = {
           ...Object.fromEntries(Object.entries<string>(config.linux.environment).map(([name, value]) => [name, relocate(value)])),
           PATH: `${bin}:${pythonBin}:${dirname(wrapper)}:/usr/bin:/bin`, HOME: join(directory, 'home'),
-          TRACE: trace, PYTHON_BIN: pythonBin, INSTALL_SUCCEEDS: String(installSucceeds),
+          TRACE: trace, PYTHON_BIN: pythonBin, INSTALL_SUCCEEDS: String(source === 'pip'),
           BOXLITE_HOST_SCCACHE_DIR: sharedCache ? '/runner cache/sccache' : '',
+          BOXLITE_HOST_SCCACHE_BIN: source === 'host' ? '/runner tools/sccache' : '',
         }
         const result = spawnSync('bash', ['-e', '-c', relocate(config['before-all'].join('\n'))], {
           cwd: directory, env, encoding: 'utf8', timeout: 10_000,
@@ -413,8 +426,15 @@ fi
         assert.ok(calls.includes(`wrapper=${wrapper}\n`), 'runtime must use the stable wrapper from the wheel environment')
         assert.ok(calls.includes(`cache=${cache}\n`), 'runtime must use the configured disk cache')
         assert.match(calls, /compiler-invoked\n/, 'both installed and fallback wrappers must invoke the compiler')
-        assert.equal(calls.includes('installed-wrapper /bin/echo'), installSucceeds)
-        assert.equal(lstatSync(wrapper).isSymbolicLink(), installSucceeds)
+        assert.equal(calls.includes('installed-wrapper /bin/echo'), source === 'pip', 'standalone wheels must install a published package')
+        assert.equal(calls.includes('host-wrapper /bin/echo'), source === 'host', 'CI wheels must execute the verified host binary')
+        assert.equal(lstatSync(wrapper).isSymbolicLink(), source === 'pip')
+        if (source === 'host') {
+          assert.ok(!calls.includes('pip '), 'the verified host binary needs no second installation')
+          const build = workflow('build-wheels.yml').jobs.build_wheels.steps.find((step: any) => step.uses?.startsWith('pypa/cibuildwheel'))
+          assert.equal(build.env.BOXLITE_HOST_SCCACHE_BIN, '${{ env.SCCACHE_PATH }}')
+          assert.ok(config.linux['environment-pass'].includes('BOXLITE_HOST_SCCACHE_BIN'))
+        }
         if (sharedCache) {
           assert.equal(realpathSync(cache), realpathSync(hostCache), 'the container must share the host cache, including paths with spaces')
         } else {
@@ -426,7 +446,7 @@ fi
           cwd: directory, env, encoding: 'utf8', timeout: 10_000,
         })
         assert.equal(stop.status, 0, 'the pass-through fallback must tolerate server shutdown')
-        if (installSucceeds) assert.match(readFileSync(trace, 'utf8'), /installed-wrapper --stop-server\n$/)
+        if (installSucceeds) assert.match(readFileSync(trace, 'utf8'), source === 'host' ? /host-wrapper --stop-server\n$/ : /installed-wrapper --stop-server\n$/)
       } finally {
         rmSync(directory, { recursive: true, force: true })
       }
