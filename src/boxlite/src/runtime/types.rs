@@ -799,6 +799,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: crate::vmm::VmmKind::Libkrun,
+            rootfs_backend: Default::default(),
             box_home: PathBuf::from("/tmp/box"),
         };
 
@@ -837,6 +838,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: crate::vmm::VmmKind::Libkrun,
+            rootfs_backend: Default::default(),
             box_home: PathBuf::from("/tmp/box"),
         };
 
@@ -901,6 +903,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: crate::vmm::VmmKind::Libkrun,
+            rootfs_backend: Default::default(),
             box_home: temp_dir.path().to_path_buf(),
         };
         let mut state = BoxState::new();
