@@ -262,7 +262,11 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
             continue;
         }
         for backing_path in read_backing_chain(&qcow2) {
-            if let Some(parent) = backing_path.parent().filter(|p| p.exists()) {
+            // A device backing grants only that node, never the host's /dev tree.
+            if let Some(parent) = backing_path
+                .parent()
+                .filter(|p| p.exists() && !backing_path.starts_with("/dev"))
+            {
                 paths.push(PathAccess {
                     path: parent.to_path_buf(),
                     writable: false,
@@ -963,6 +967,32 @@ mod tests {
             "bwrap failed:\n{}",
             failures.join("\n")
         );
+    }
+
+    #[test]
+    fn overlaybd_backing_does_not_grant_dev_directory() {
+        use crate::disk::{BackingFormat, Qcow2Helper};
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().join("boxes/test-box"));
+        std::fs::create_dir_all(layout.disk_path().parent().unwrap()).unwrap();
+        let disk = Qcow2Helper::create_cow_child_disk(
+            std::path::Path::new("/dev/null"),
+            BackingFormat::Raw,
+            &layout.disk_path(),
+            65536,
+        )
+        .unwrap();
+        let paths = build_path_access(&layout, &[]);
+        assert!(
+            paths
+                .iter()
+                .any(|p| p.path == std::path::Path::new("/dev/null") && !p.writable)
+        );
+        assert!(
+            !paths.iter().any(|p| p.path == std::path::Path::new("/dev")),
+            "backing must not expose all host devices"
+        );
+        drop(disk);
     }
 
     #[test]

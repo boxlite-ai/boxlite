@@ -120,7 +120,25 @@ impl Sandbox for BwrapSandbox {
             tracing::debug!(path = %pa.path.display(), "bwrap: bind (rw)");
         }
         for pa in ctx.readonly_paths() {
-            bwrap_cmd.ro_bind(&pa.path, &pa.path);
+            use std::os::unix::fs::FileTypeExt;
+            if pa.path.parent() == Some(std::path::Path::new("/dev"))
+                && pa
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| {
+                        n.strip_prefix("ublkb").is_some_and(|id| {
+                            !id.is_empty() && id.bytes().all(|c| c.is_ascii_digit())
+                        })
+                    })
+                && std::fs::metadata(&pa.path).is_ok_and(|m| m.file_type().is_block_device())
+            {
+                // --ro-bind adds MS_NODEV. OverlayBD validates kernel read-only
+                // state before exposing this one node; Landlock also stays read-only.
+                bwrap_cmd.dev_bind(&pa.path, &pa.path);
+            } else {
+                bwrap_cmd.ro_bind(&pa.path, &pa.path);
+            }
             tracing::debug!(path = %pa.path.display(), "bwrap: ro-bind");
         }
 

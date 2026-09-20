@@ -121,6 +121,8 @@ pub type SharedRuntimeImpl = Arc<RuntimeImpl>;
 /// - Immutable fields: No lock needed - never change after creation
 /// - Atomic fields: Lock-free (RuntimeMetricsStorage uses AtomicU64)
 pub struct RuntimeImpl {
+    #[cfg(feature = "cloud-runner")]
+    pub(crate) overlaybd: Option<Arc<crate::images::overlaybd::Overlaybd>>,
     /// Coordination lock for multi-step atomic operations.
     /// Acquire this BEFORE accessing box_manager/image_manager
     /// when you need atomicity across multiple operations.
@@ -231,7 +233,12 @@ impl RuntimeImpl {
         experimental_features: ExperimentalFeatures,
     ) -> BoxliteResult<SharedRuntimeImpl> {
         let _sys = crate::system_check::SystemCheck::run()?;
-        Self::initialize(options, experimental_features)
+        Self::initialize(
+            options,
+            experimental_features,
+            #[cfg(feature = "cloud-runner")]
+            None,
+        )
     }
 
     /// Build a runtime without host validation, so unit tests also run on hosts
@@ -239,12 +246,63 @@ impl RuntimeImpl {
     /// not exercise VM or hypervisor operations.
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn new_for_test(options: BoxliteOptions) -> BoxliteResult<SharedRuntimeImpl> {
-        Self::initialize(options, ExperimentalFeatures::default())
+        Self::initialize(
+            options,
+            ExperimentalFeatures::default(),
+            #[cfg(feature = "cloud-runner")]
+            None,
+        )
+    }
+
+    #[cfg(feature = "cloud-runner")]
+    pub(crate) fn new_cloud_runner(
+        options: BoxliteOptions,
+        image_dir: Option<std::path::PathBuf>,
+    ) -> BoxliteResult<SharedRuntimeImpl> {
+        let manager = crate::images::overlaybd::Overlaybd::new(&options.home_dir, image_dir)?;
+        let _sys = crate::system_check::SystemCheck::run()?;
+        Self::initialize(options, ExperimentalFeatures::default(), Some(manager))
+    }
+
+    pub(crate) fn check_rootfs_start(&self, config: &BoxConfig) -> BoxliteResult<()> {
+        #[cfg(feature = "cloud-runner")]
+        if config.rootfs_backend == RootfsBackend::Overlaybd
+            && self.overlaybd.as_ref().is_some_and(|m| m.enabled())
+        {
+            return Ok(());
+        }
+        config.require_legacy_rootfs("start")
+    }
+
+    #[cfg(feature = "cloud-runner")]
+    pub(crate) fn release_overlaybd(&self, id: &BoxID) -> BoxliteResult<()> {
+        if let Some(manager) = &self.overlaybd {
+            if let Some((config, state)) = self.box_manager.box_by_id(id)? {
+                if config.rootfs_backend != RootfsBackend::Overlaybd {
+                    return Ok(());
+                }
+                let layout = self.layout.box_layout(id.as_str(), false)?;
+                let live_shim = !matches!(
+                    crate::util::PidFileReader::at(layout.pid_file_path()).process_identity(),
+                    crate::util::ProcessIdentity::Absent
+                );
+                if live_shim || state.pid.is_some_and(crate::util::is_process_alive) {
+                    return Err(BoxliteError::InvalidState(format!(
+                        "Cannot release OverlayBD for live box {id}"
+                    )));
+                }
+            }
+            manager.release(id.as_str())?;
+        }
+        Ok(())
     }
 
     fn initialize(
         options: BoxliteOptions,
         experimental_features: ExperimentalFeatures,
+        #[cfg(feature = "cloud-runner")] overlaybd: Option<
+            Arc<crate::images::overlaybd::Overlaybd>,
+        >,
     ) -> BoxliteResult<SharedRuntimeImpl> {
         // Validate Early: Check preconditions before expensive work
         if !options.home_dir.is_absolute() {
@@ -345,6 +403,8 @@ impl RuntimeImpl {
         let guest_rootfs_mgr = GuestRootfsManager::new(base_disk_mgr.clone(), layout.temp_dir());
 
         let inner = Arc::new(Self {
+            #[cfg(feature = "cloud-runner")]
+            overlaybd,
             sync_state: RwLock::new(SynchronizedState {
                 active_boxes_by_id: HashMap::new(),
                 active_boxes_by_name: HashMap::new(),
@@ -369,6 +429,27 @@ impl RuntimeImpl {
 
         // Recover boxes from database
         inner.recover_boxes()?;
+        #[cfg(feature = "cloud-runner")]
+        if let Some(manager) = &inner.overlaybd {
+            let mut active =
+                std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+            for (config, state) in inner.box_manager.all_boxes(true)? {
+                if config.rootfs_backend == RootfsBackend::Overlaybd
+                    && state.pid.is_some()
+                    && let crate::runtime::options::RootfsSpec::Image(reference) =
+                        &config.options.rootfs
+                {
+                    let digest = crate::images::overlaybd::image_digest(reference)?;
+                    active
+                        .entry(digest.into())
+                        .or_default()
+                        .insert(config.id.to_string());
+                }
+            }
+            if let Err(error) = manager.recover(active) {
+                tracing::warn!(%error, "OverlayBD reconciliation deferred; device operations will retry");
+            }
+        }
 
         Ok(inner)
     }
@@ -459,7 +540,22 @@ impl RuntimeImpl {
         }
 
         // Initialize box variables with defaults
-        let (config, mut state) = self.init_box_variables(&options, name.clone());
+        #[allow(unused_mut)] // Mutated only by the runner-only backend.
+        let (mut config, mut state) = self.init_box_variables(&options, name.clone());
+        #[cfg(feature = "cloud-runner")]
+        if let Some(manager) = &self.overlaybd
+            && manager.enabled()
+            && let crate::runtime::options::RootfsSpec::Image(reference) = &options.rootfs
+        {
+            let manager = manager.clone();
+            let reference = reference.clone();
+            tokio::task::spawn_blocking(move || manager.import(&reference))
+                .await
+                .map_err(|e| {
+                    BoxliteError::Internal(format!("OverlayBD image import task failed: {e}"))
+                })??;
+            config.rootfs_backend = RootfsBackend::Overlaybd;
+        }
 
         // Allocate lock for this box
         let lock_id = self.lock_manager.allocate()?;
@@ -939,6 +1035,12 @@ impl RuntimeImpl {
             let _ = self.box_manager.save_box(&config.id, &state);
 
             let _ = std::fs::remove_file(box_layout.pid_file_path());
+            #[cfg(feature = "cloud-runner")]
+            if !crate::util::is_process_alive(pid)
+                && let Err(e) = self.release_overlaybd(&config.id)
+            {
+                tracing::warn!(box_id = %config.id, error = %e, "OverlayBD release deferred to recovery");
+            }
         }
     }
 
@@ -1011,6 +1113,14 @@ impl RuntimeImpl {
                         let mut handler = ShimHandler::from_pid(pid, config.id.clone());
                         let _ = handler.stop();
                     }
+                    #[cfg(feature = "cloud-runner")]
+                    if config.rootfs_backend == RootfsBackend::Overlaybd
+                        && state.pid.is_some_and(crate::util::is_process_alive)
+                    {
+                        return Err(BoxliteError::InvalidState(
+                            "OverlayBD box process survived stop; preserving its device".into(),
+                        ));
+                    }
                     // Update status to stopped and save
                     state.set_status(BoxStatus::Stopped);
                     state.set_pid(None);
@@ -1035,6 +1145,9 @@ impl RuntimeImpl {
                     )));
                 }
             }
+
+            #[cfg(feature = "cloud-runner")]
+            self.release_overlaybd(id)?;
 
             // Remove from BoxManager (database-first)
             self.box_manager.remove_box(id)?;
@@ -2250,6 +2363,70 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(config.rootfs_backend, RootfsBackend::Legacy);
+    }
+
+    #[cfg(feature = "cloud-runner")]
+    #[tokio::test]
+    async fn overlaybd_cloud_selection_and_adoption_preserve_backend() {
+        let (_fixture, manager, reference) = crate::images::overlaybd::tests::fixture();
+        let home = TempDir::new().unwrap();
+        let runtime = RuntimeImpl::initialize(
+            BoxliteOptions {
+                home_dir: home.path().to_path_buf(),
+                image_registries: vec![],
+            },
+            ExperimentalFeatures::default(),
+            Some(manager),
+        )
+        .unwrap();
+        let mut options = test_box_config(true).options;
+        options.rootfs = RootfsSpec::Image(reference);
+        let overlay = runtime
+            .create(options.clone(), Some("overlay".into()))
+            .await
+            .unwrap();
+        let (config, _) = runtime
+            .box_manager
+            .box_by_id(overlay.id())
+            .unwrap()
+            .unwrap();
+        assert_eq!(config.rootfs_backend, RootfsBackend::Overlaybd);
+        assert!(runtime.check_rootfs_start(&config).is_ok());
+        let (local, _dir) = create_test_runtime();
+        assert!(local.check_rootfs_start(&config).is_err());
+        let legacy = local.create(options.clone(), None).await.unwrap();
+        assert_eq!(
+            local
+                .box_manager
+                .box_by_id(legacy.id())
+                .unwrap()
+                .unwrap()
+                .0
+                .rootfs_backend,
+            RootfsBackend::Legacy
+        );
+        options.rootfs = RootfsSpec::Image("example.test/unpinned:tag".into());
+        assert!(runtime.create(options.clone(), None).await.is_err());
+        assert_eq!(runtime.list_info().await.unwrap().len(), 1);
+        // Adoption must use persisted identity, without attempting a new import.
+        let (adopted, created) = runtime
+            .get_or_create(options.clone(), Some("overlay".into()))
+            .await
+            .unwrap();
+        assert!(!created);
+        assert_eq!(adopted.id(), overlay.id());
+        options.rootfs = RootfsSpec::RootfsPath(home.path().display().to_string());
+        let bundle = runtime.create(options, None).await.unwrap();
+        assert_eq!(
+            runtime
+                .box_manager
+                .box_by_id(bundle.id())
+                .unwrap()
+                .unwrap()
+                .0
+                .rootfs_backend,
+            RootfsBackend::Legacy
+        );
     }
 
     #[tokio::test]

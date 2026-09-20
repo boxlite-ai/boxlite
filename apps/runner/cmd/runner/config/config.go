@@ -59,6 +59,7 @@ type Config struct {
 	BuildEngine                        string        `envconfig:"BUILD_ENGINE" default:"buildkit" validate:"oneof=buildkit legacy"`
 	BoxliteHomeDir                     string        `envconfig:"BOXLITE_HOME_DIR"`
 	OverlayBDEnabled                   bool          `envconfig:"BOXLITE_OVERLAYBD_ENABLED" default:"false"`
+	OverlayBDImageDir                  string        `envconfig:"BOXLITE_OVERLAYBD_IMAGE_DIR"`
 	InsecureRegistries                 string        `envconfig:"INSECURE_REGISTRIES"`
 	GhcrUsername                       string        `envconfig:"GHCR_USERNAME"`
 	GhcrToken                          string        `envconfig:"GHCR_TOKEN"`

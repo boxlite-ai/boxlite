@@ -61,6 +61,46 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             )
         };
 
+        #[cfg(feature = "cloud-runner")]
+        {
+            let config = ctx.lock().await.config.clone();
+            if config.rootfs_backend == crate::litebox::config::RootfsBackend::Overlaybd {
+                let RootfsSpec::Image(reference) = rootfs_spec else {
+                    return Err(BoxliteError::Config(
+                        "OverlayBD requires an image reference".into(),
+                    ));
+                };
+                let manager = runtime
+                    .overlaybd
+                    .as_ref()
+                    .ok_or_else(|| {
+                        BoxliteError::Unsupported("OverlayBD requires the cloud runner".into())
+                    })?
+                    .clone();
+                let disk_path = layout.disk_path();
+                let (mut image_config, disk, lease) = tokio::task::spawn_blocking(move || {
+                    manager.prepare(config.id.as_str(), &reference, &disk_path, disk_size_gb)
+                })
+                .await
+                .map_err(|e| {
+                    BoxliteError::Internal(format!("OverlayBD preparation task failed: {e}"))
+                })??;
+                image_config.merge_env(env);
+                apply_user_overrides(
+                    &mut image_config,
+                    entrypoint_override.as_deref(),
+                    cmd_override.as_deref(),
+                    user_override.as_deref(),
+                    working_dir_override.as_deref(),
+                );
+                let mut ctx = ctx.lock().await;
+                ctx.guard.overlaybd_lease = Some(lease);
+                ctx.container_image_config = Some(image_config);
+                ctx.container_disk = Some(disk);
+                return Ok(());
+            }
+        }
+
         let (container_image_config, disk) = run_container_rootfs(
             &rootfs_spec,
             &env,

@@ -1139,6 +1139,16 @@ enum BoxliteErrorCode boxlite_rest_runtime_new_with_options(const CBoxliteRestOp
 
 const char *boxlite_version(void);
 
+// Runner-only constructor. The default native build rejects enabled OverlayBD.
+// Disabled cloud runtimes preserve the ordinary OCI creation path.
+enum BoxliteErrorCode boxlite_cloud_runner_runtime_new(const char *home_dir,
+                                                       const struct BoxliteImageRegistry *image_registries,
+                                                       int image_registries_count,
+                                                       int overlaybd_enabled,
+                                                       const char *image_dir,
+                                                       CBoxliteRuntime **out_runtime,
+                                                       CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,
                                           const struct BoxliteImageRegistry *image_registries,
                                           int image_registries_count,

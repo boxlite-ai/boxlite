@@ -176,6 +176,8 @@ pub struct PreparedBootAssets {
 /// The caller is expected to call `set_last_error()` before the error
 /// propagates so Drop can record what went wrong.
 pub struct CleanupGuard {
+    #[cfg(feature = "cloud-runner")]
+    pub(crate) overlaybd_lease: Option<crate::images::overlaybd::Lease>,
     runtime: SharedRuntimeImpl,
     box_id: BoxID,
     layout: Option<BoxFilesystemLayout>,
@@ -191,6 +193,8 @@ pub struct CleanupGuard {
 impl CleanupGuard {
     pub fn new(runtime: SharedRuntimeImpl, box_id: BoxID) -> Self {
         Self {
+            #[cfg(feature = "cloud-runner")]
+            overlaybd_lease: None,
             runtime,
             box_id,
             layout: None,
@@ -233,6 +237,10 @@ impl CleanupGuard {
     ///
     /// After disarming, Drop will not perform cleanup.
     pub fn disarm(&mut self) {
+        #[cfg(feature = "cloud-runner")]
+        if let Some(lease) = &mut self.overlaybd_lease {
+            lease.disarm();
+        }
         self.armed = false;
     }
 }
@@ -255,6 +263,10 @@ impl Drop for CleanupGuard {
             && let Err(e) = handler.stop()
         {
             tracing::warn!("Failed to stop handler during cleanup: {}", e);
+            #[cfg(feature = "cloud-runner")]
+            if let Some(lease) = &mut self.overlaybd_lease {
+                lease.disarm();
+            }
         }
 
         // DON'T cleanup filesystem - preserve diagnostic files for debugging

@@ -230,6 +230,11 @@ impl BoxWatcher {
             ),
         }
 
+        #[cfg(feature = "cloud-runner")]
+        if let Err(error) = runtime.release_overlaybd(&self.box_id) {
+            tracing::warn!(%error, box_id = %self.box_id, "OverlayBD release deferred to recovery");
+        }
+
         // The same tail `stop()` runs, because this is the box's *other* death.
         // Without it a long-lived runtime keeps handing out the spent handle from
         // its cache, and a remove-on-stop box — the default — that ran to

@@ -44,6 +44,17 @@ type Runtime struct {
 
 // NewRuntime creates a new BoxLite runtime.
 func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
+	return newRuntime(false, false, "", opts...)
+}
+
+// NewCloudRunner is the runner-only entry point for local OverlayBD devices.
+// Enabling it requires Linux and a native library built with cloud-runner.
+// NewRuntime and CLI runtimes always keep the ordinary OCI pipeline.
+func NewCloudRunner(overlayBDEnabled bool, imageDir string, opts ...RuntimeOption) (*Runtime, error) {
+	return newRuntime(true, overlayBDEnabled, imageDir, opts...)
+}
+
+func newRuntime(cloudRunner, overlayBDEnabled bool, imageDir string, opts ...RuntimeOption) (*Runtime, error) {
 	cfg := &runtimeConfig{}
 	for _, o := range opts {
 		o(cfg)
@@ -63,13 +74,18 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 
 	var handle *C.CBoxliteRuntime
 	var cerr C.CBoxliteError
-	code := C.boxlite_runtime_new(
-		homeDir,
-		cImageRegistries,
-		C.int(imageRegistriesCount),
-		&handle,
-		&cerr,
-	)
+	var code uint32
+	if cloudRunner {
+		cImageDir := toCString(imageDir)
+		defer C.free(unsafe.Pointer(cImageDir))
+		var enabled C.int
+		if overlayBDEnabled {
+			enabled = 1
+		}
+		code = C.boxlite_cloud_runner_runtime_new(homeDir, cImageRegistries, C.int(imageRegistriesCount), enabled, cImageDir, &handle, &cerr)
+	} else {
+		code = C.boxlite_runtime_new(homeDir, cImageRegistries, C.int(imageRegistriesCount), &handle, &cerr)
+	}
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}

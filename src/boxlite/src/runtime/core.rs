@@ -91,6 +91,17 @@ impl BoxliteRuntime {
         Ok(Self::from_local(local))
     }
 
+    /// Cloud runner entry point; ordinary SDK/CLI constructors never enable OverlayBD.
+    #[cfg(feature = "cloud-runner")]
+    pub fn new_cloud_runner(
+        options: BoxliteOptions,
+        image_dir: Option<std::path::PathBuf>,
+    ) -> BoxliteResult<Self> {
+        Ok(Self::from_local(LocalRuntime(
+            RuntimeImpl::new_cloud_runner(options, image_dir)?,
+        )))
+    }
+
     pub(crate) fn new_with_experimental_features(
         options: BoxliteOptions,
         features: ExperimentalFeatures,

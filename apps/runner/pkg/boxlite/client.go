@@ -46,6 +46,7 @@ type ClientConfig struct {
 	Logger                       *slog.Logger
 	HomeDir                      string
 	OverlayBDEnabled             bool
+	OverlayBDImageDir            string
 	InsecureRegistries           []string
 	GhcrUsername                 string
 	GhcrToken                    string
@@ -156,9 +157,8 @@ func buildImageRegistries(insecureRegistries []string, ghcrUsername, ghcrToken s
 
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
-	// Keep this opt-in runner-owned; local SDK runtimes retain the OCI path.
-	if config.OverlayBDEnabled {
-		return nil, fmt.Errorf("BOXLITE_OVERLAYBD_ENABLED=true: OverlayBD backend is not implemented; leave it false to use OCI images")
+	if config.OverlayBDEnabled && config.OverlayBDImageDir == "" {
+		return nil, fmt.Errorf("BOXLITE_OVERLAYBD_IMAGE_DIR is required when OverlayBD is enabled")
 	}
 
 	var opts []boxlite.RuntimeOption
@@ -184,7 +184,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		opts = append(opts, boxlite.WithImageRegistries(registries...))
 	}
 
-	rt, err := boxlite.NewRuntime(opts...)
+	rt, err := boxlite.NewCloudRunner(config.OverlayBDEnabled, config.OverlayBDImageDir, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create boxlite runtime: %w", err)
 	}

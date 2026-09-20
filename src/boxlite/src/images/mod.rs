@@ -4,6 +4,8 @@ mod config;
 mod image_disk;
 mod manager;
 mod object;
+#[cfg(feature = "cloud-runner")]
+pub(crate) mod overlaybd;
 mod storage;
 mod store;
 

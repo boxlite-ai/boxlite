@@ -13,6 +13,7 @@ crate-type = ["cdylib", "staticlib"]
 
 [features]
 default = []
+cloud-runner = ["boxlite/cloud-runner"]
 
 [dependencies]
 boxlite = { workspace = true, features = ["rest"] }

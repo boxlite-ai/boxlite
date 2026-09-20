@@ -680,6 +680,8 @@ impl BoxImpl {
         // Note: We check status, not shutdown_token, because the token may be cancelled
         // by runtime.shutdown() before stop() is called on each box.
         if self.state.read().status == BoxStatus::Stopped {
+            #[cfg(feature = "cloud-runner")]
+            self.runtime.release_overlaybd(self.id())?;
             return Ok(());
         }
 
@@ -792,6 +794,9 @@ impl BoxImpl {
                 self.runtime.box_manager.add_box(&self.config, &state)?;
             }
         }
+
+        #[cfg(feature = "cloud-runner")]
+        self.runtime.release_overlaybd(self.id())?;
 
         // Invalidate cache so new handles get fresh BoxImpl
         self.runtime

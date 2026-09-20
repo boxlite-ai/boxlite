@@ -108,18 +108,20 @@ the in-process TTL caches under `pkg/cache/`.
 
 `BOXLITE_OVERLAYBD_ENABLED` is a runner-only opt-in, defaulting to `false`.
 Unset or `false` keeps the existing OCI image pipeline and requires no OverlayBD
-installation. Invalid boolean values fail configuration. The backend is not yet
-implemented: setting `true` fails runner startup before runtime initialization,
-without silently falling back to OCI or modifying existing box data.
+installation. Invalid boolean values fail configuration. Enabling it requires
+a Linux native library built with `cloud-runner`, an absolute local OCI layout
+in `BOXLITE_OVERLAYBD_IMAGE_DIR`, and an operator-managed `overlaybd-ublkd`.
+See [local OverlayBD setup and acceptance](docs/overlaybd.md). No silent OCI
+fallback occurs when OverlayBD preparation fails.
 
 Local SDKs, CLI commands, and `boxlite serve` do not read this setting and retain
 the OCI image pipeline. It is not a per-box API option.
 
 Each box persists its rootfs backend (`legacy` or `overlaybd`) at creation;
 old records without the field mean `legacy`, and unknown values are rejected.
-Recovery and reuse preserve that identity. Until the backend is implemented,
-OverlayBD records remain queryable, reusable, stoppable, and removable, but
-fresh starts, clone/export, and snapshot mutations return an unsupported error.
+Recovery and reuse preserve that identity. OverlayBD fresh starts require the
+enabled cloud runner; clone/export and snapshot mutations remain unsupported.
+OverlayBD records remain queryable, reusable, stoppable, and removable.
 Running VM reattachment remains allowed; legacy snapshot repair skips OverlayBD
 records. New local boxes and imported/cloned OCI disks remain `legacy`.
 

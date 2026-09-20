@@ -190,7 +190,7 @@ impl BoxBuilder {
     ) -> BoxliteResult<Self> {
         // Reattaching a running VM does not rebuild its rootfs.
         if state.status != BoxStatus::Running {
-            config.require_legacy_rootfs("start")?;
+            runtime.check_rootfs_start(&config)?;
         }
         // External source paths were validated at create time. Persisted boxes
         // validate only their stored shape here; the boot-assets task reopens a

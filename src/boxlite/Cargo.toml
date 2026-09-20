@@ -29,6 +29,7 @@ krun = ["krunfw", "libkrun-sys/krun"]                        # Build + staticall
 rest = ["dep:hyper-rustls", "dep:reqwest", "dep:rustls", "dep:urlencoding", "dep:tokio-tungstenite"]  # REST API client backend
 embedded-runtime = []                                        # Embed runtime binaries via include_bytes!
 test-support = []                                            # Expose internal constructors for cross-crate tests
+cloud-runner = []                                            # Runner-only local OverlayBD device backend
 
 [dependencies]
 boxlite-shared.workspace = true

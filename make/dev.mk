@@ -50,7 +50,7 @@ dev\:node: $(if $(SETUP_DONE),,runtime\:debug)
 # Build Go SDK locally (debug mode, static linking)
 dev\:go: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🔨 Building Go SDK (debug)..."
-	@cargo build -p boxlite-c
+	@cargo build -p boxlite-c $(if $(filter 1,$(CLOUD_RUNNER)),--features cloud-runner,)
 	@bash $(SCRIPT_DIR)/build/fix-go-symbols.sh target/debug/libboxlite.a
 	@cd sdks/go && go build -tags boxlite_dev ./...
 	@echo "✅ Go SDK built. You can now run: cd sdks/go && go test -tags boxlite_dev -v ./..."
