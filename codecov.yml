@@ -5,20 +5,36 @@ coverage:
   status:
     project:
       default:
-        target: auto    # Track against historical baseline
-        threshold: 2%   # Allow 2% drop before failing
+        target: auto
+        threshold: 0%
+        informational: true
+        if_ci_failed: error
     patch:
       default:
-        target: 70%     # New code in PRs must be 70% covered
+        target: 90%
+        threshold: 0%
+        if_ci_failed: error
 
 comment:
   layout: "condensed_header, diff, flags, components"
   behavior: default
   require_changes: true   # Only comment if coverage changed
 
+# Path-filtered jobs do not all run on every commit. Preserve unchanged
+# components so a partial upload cannot shrink the project's denominator.
+flags:
+  rust-unit:
+    carryforward: true
+  python:
+    carryforward: true
+  node:
+    carryforward: true
+  go:
+    carryforward: true
+  api:
+    carryforward: true
+
 ignore:
-  - "src/deps/**"         # Vendored dependencies
+  - "src/deps/**/vendor/**" # Third-party sources, not BoxLite's networking bridge
   - "**/tests/**"         # Test files themselves
   - "src/test-utils/**"   # Test scaffolding pulled in by the core crate's tests
-  - "src/guest/**"        # Guest agent (tested separately)
-  - "sdks/**"             # SDKs (have their own test suites)

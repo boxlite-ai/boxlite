@@ -251,7 +251,7 @@ test\:unit\:rust:
 	cargo test $(RUST_UNIT_REST_ARGS) -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	exit $$rc
 
-# CLI integration binaries need a VM; CI runs only the inline unit-test modules.
+# CLI integration binaries need a VM; this target runs only inline unit-test modules.
 test\:unit\:cli:
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite-cli $(NEXTEST_PROFILE_FLAG) -E 'test(::tests::)'; \

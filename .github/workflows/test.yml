@@ -1,13 +1,13 @@
-# Run unit tests across all SDKs.
+# Run hosted-runner tests and collect coverage across the runtime and SDKs.
 #
-# This workflow runs unit tests only (no VM/integration tests).
-# GitHub runners do not support nested virtualization, so we cannot run
-# tests that require actual VMs.
+# Non-VM integration suites use test-only runtime construction because GitHub
+# runners cannot provide the virtualization needed by production startup.
 #
 # Test coverage:
-# - Rust: cargo-nextest (unit tests only, with coverage on Linux x64)
+# - Rust: units and non-VM integration, with llvm-cov coverage
 # - Python: pytest with -m "not integration"
-# - Node.js: vitest (all tests are unit tests)
+# - Node.js: vitest unit project
+# - Go: SDK and networking bridge; API: Jest with Postgres and Redis
 name: Test
 
 on:
@@ -26,6 +26,7 @@ on:
       - 'src/deps/bubblewrap-sys/**'
       - 'src/deps/e2fsprogs-sys/**'
       - 'src/deps/libkrun-sys/**'
+      - 'src/deps/libgvproxy-sys/**'
       - 'src/**/*.rs'
       - '.cargo/**'
       - '.config/nextest.toml'
@@ -83,7 +84,6 @@ jobs:
       python-test-matrix: ${{ steps.config.outputs.python-test-matrix }}
       node-test-matrix: ${{ steps.config.outputs.node-test-matrix }}
       rust: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.rust == 'true' }}
-      cli: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.cli == 'true' }}
       python: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.python == 'true' }}
       node: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.node == 'true' }}
       go: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.go == 'true' }}
@@ -104,7 +104,7 @@ jobs:
           # exists). Empty on pull_request/push, where paths-filter ignores them.
           base: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || '' }}
           ref: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || '' }}
-          # rust and cli list every local package their test builds compile
+          # rust lists every local package its test builds compile
           # (cargo tree -e normal,build,dev --target all), plus everything else
           # the jobs read: manifests, toolchain, cargo, nextest, Codecov and CI
           # config, and the local composite actions they use. rust also matches
@@ -114,8 +114,16 @@ jobs:
           filters: |
             rust:
               - 'src/boxlite/**'
+              - 'src/cli/**'
               - 'src/shared/**'
               - 'src/guest/**'
+              - 'src/hypervisor/**'
+              - 'src/vmm/**'
+              - 'sdks/c/src/**'
+              - 'sdks/c/build.rs'
+              - 'sdks/python/src/**'
+              - 'sdks/node/src/**'
+              - 'sdks/node/build.rs'
               - 'src/test-utils/**'
               - 'src/deps/bubblewrap-sys/**'
               - 'src/deps/e2fsprogs-sys/**'
@@ -132,40 +140,36 @@ jobs:
               - '.config/nextest.toml'
               - 'codecov.yml'
               - '.github/actions/setup-rust/**'
-              - '.github/ci-config.json'
-              - '.github/actions/ci-config/**'
-              - '.github/workflows/test.yml'
-            cli:
-              - 'src/cli/**'
-              - 'src/boxlite/**'
-              - 'src/shared/**'
-              - 'src/test-utils/**'
-              - 'src/deps/bubblewrap-sys/**'
-              - 'src/deps/e2fsprogs-sys/**'
-              - 'src/deps/libkrun-sys/**'
-              - '**/Cargo.toml'
-              - 'Cargo.lock'
-              - 'rust-toolchain.toml'
-              - '.cargo/**'
-              - '.config/nextest.toml'
-              - 'codecov.yml'
-              - '.github/actions/setup-rust/**'
-              - '.github/actions/sccache/**'
+              - '.github/actions/setup-python/**'
               - '.github/ci-config.json'
               - '.github/actions/ci-config/**'
               - '.github/workflows/test.yml'
             python:
               - 'sdks/python/**'
+              - 'Makefile'
+              - 'make/**'
+              - 'codecov.yml'
+              - '.github/actions/setup-python/**'
               - '.github/ci-config.json'
               - '.github/actions/ci-config/**'
               - '.github/workflows/test.yml'
             node:
               - 'sdks/node/**'
+              - 'Makefile'
+              - 'make/**'
+              - 'codecov.yml'
               - '.github/ci-config.json'
               - '.github/actions/ci-config/**'
               - '.github/workflows/test.yml'
             go:
               - 'sdks/go/**'
+              - 'src/deps/libgvproxy-sys/**'
+              - 'Makefile'
+              - 'make/**'
+              - 'codecov.yml'
+              - '.github/actions/setup-go/**'
+              - '.github/actions/setup-rust/**'
+              - '.github/actions/sccache/**'
               - '.github/ci-config.json'
               - '.github/actions/ci-config/**'
               - '.github/workflows/test.yml'
@@ -174,6 +178,9 @@ jobs:
               - 'apps/package.json'
               - 'apps/yarn.lock'
               - 'apps/nx.json'
+              - 'apps/jest.preset.js'
+              - 'codecov.yml'
+              - '.github/workflows/test.yml'
             guest_artifacts:
               - '.cargo/**'
               - '.gitmodules'
@@ -207,7 +214,8 @@ jobs:
               - 'make/test.mk'
               - '.github/workflows/test.yml'
 
-  # Keep platform tests on all runners; collect coverage once on Linux x64.
+  # Merge core, shared, REST, CLI, native VMM and Linux guest coverage.
+  # Codecov gates changed lines at 90% and reports total coverage separately.
   rust:
     name: Rust Tests (${{ matrix.platform.target }})
     needs: changes
@@ -229,6 +237,9 @@ jobs:
         with:
           toolchain: ${{ needs.changes.outputs.rust-toolchain }}
 
+      - uses: ./.github/actions/setup-python
+        # PyO3 unit tests embed an interpreter instead of building a wheel.
+
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y jq libseccomp-dev protobuf-compiler util-linux
@@ -241,7 +252,6 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Install cargo-llvm-cov
-        if: matrix.platform.target == 'linux-x64-gnu'
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Check out vendored libkrun
@@ -250,7 +260,6 @@ jobs:
         run: git submodule update --init --depth 1 -- src/deps/libkrun-sys/vendor/libkrun
 
       - name: Run Rust unit tests with coverage
-        if: matrix.platform.target == 'linux-x64-gnu'
         # The core crate's dev-dependency boxlite-test-utils re-enables its
         # default features, which pull in the -sys crates; those build from
         # vendored submodules this job does not check out.
@@ -258,95 +267,24 @@ jobs:
           BOXLITE_DEPS_STUB: "1"
         run: make coverage:lcov NEXTEST_PROFILE=ci
 
-      - name: Run Rust unit tests
-        if: matrix.platform.target != 'linux-x64-gnu'
-        env:
-          BOXLITE_DEPS_STUB: "1"
-        run: make test:unit:rust NEXTEST_PROFILE=ci
-
       - name: Run OpenAPI reference-server unit tests
         # Keyed on BoxliteError's Display text (src/shared/src/errors.rs, in this
         # filter), so a new variant must add its row there before the reference
         # server can name the class. stdlib only — no extra setup.
         run: make test:unit:openapi
 
-      - name: Run guest unit tests
-        if: runner.os == 'Linux'
-        run: make test:unit:guest
-
       - name: Run guest ownership tests
         if: runner.os == 'Linux'
         run: make test:guest-perms
 
       - name: Upload coverage to Codecov
-        if: matrix.platform.target == 'linux-x64-gnu'
         uses: codecov/codecov-action@v5
         with:
           files: target/coverage/lcov.info
           flags: rust-unit
           use_oidc: true
-          fail_ci_if_error: false
-
-  # cli unit tests (integration tests in tests/ are ignored - require VM)
-  cli:
-    name: CLI Unit Tests (${{ matrix.platform.target }})
-    needs: changes
-    if: ${{ needs.changes.outputs.cli == 'true' }}
-    runs-on: ${{ matrix.platform.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJson(needs.changes.outputs.platforms) }}
-
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - uses: ./.github/actions/setup-rust
-        with:
-          toolchain: ${{ needs.changes.outputs.rust-toolchain }}
-
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install system dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install protobuf
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Install cargo-llvm-cov
-        if: matrix.platform.target == 'linux-x64-gnu'
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - uses: ./.github/actions/sccache
-
-      - name: Run boxlite-cli unit tests with coverage
-        if: matrix.platform.target == 'linux-x64-gnu'
-        # Only run tests in src/ (name contains "::tests::"); skip integration tests in tests/ (require VM)
-        env:
-          BOXLITE_DEPS_STUB: "1"
-        run: make coverage:cli NEXTEST_PROFILE=ci
-
-      - name: Run boxlite-cli unit tests
-        if: matrix.platform.target != 'linux-x64-gnu'
-        env:
-          BOXLITE_DEPS_STUB: "1"
-        run: make test:unit:cli NEXTEST_PROFILE=ci
-
-      - name: Upload coverage to Codecov
-        if: matrix.platform.target == 'linux-x64-gnu'
-        uses: codecov/codecov-action@v5
-        with:
-          files: lcov.info
-          flags: rust-cli
-          use_oidc: true
-          fail_ci_if_error: false
+          disable_search: true
+          fail_ci_if_error: true
 
   # Python SDK unit tests
   python:
@@ -359,6 +297,9 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.changes.outputs.python-test-matrix) }}
 
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -367,14 +308,17 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio
+      - name: Run Python unit tests with coverage
+        run: make coverage:python
 
-      - name: Run Python unit tests
-        working-directory: sdks/python
-        run: python -m pytest tests/ -v -m "not integration"
+      - name: Upload Python coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/python/coverage.xml
+          flags: python
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
 
   # Node.js SDK unit tests
   node:
@@ -387,6 +331,9 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.changes.outputs.node-test-matrix) }}
 
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -413,8 +360,23 @@ jobs:
         run: npm ci
 
       - name: Run Node.js unit tests
+        if: matrix.node-version == '18'
         working-directory: sdks/node
         run: npm run test
+
+      - name: Run Node.js unit tests with coverage
+        if: matrix.node-version != '18'
+        run: make coverage:node
+
+      - name: Upload Node.js coverage to Codecov
+        if: matrix.node-version != '18'
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/node/lcov.info
+          flags: node
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
 
   # Go SDK unit tests
   go:
@@ -427,6 +389,9 @@ jobs:
       matrix:
         platform: ${{ fromJson(needs.changes.outputs.platforms) }}
 
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -442,8 +407,17 @@ jobs:
 
       - uses: ./.github/actions/sccache
 
-      - name: Run Go unit tests
-        run: make test:unit:go
+      - name: Run Go SDK and networking tests with coverage
+        run: make coverage:go
+
+      - name: Upload Go coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/go-sdk.out,target/coverage/gvproxy.out
+          flags: go
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
 
   guest_artifacts:
     name: Guest Artifacts (${{ matrix.os }} / ${{ matrix.target }} / ${{ matrix.profile }})
@@ -510,8 +484,9 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.api == 'true' }}
     runs-on: "ubuntu-latest"
-    permissions: # Repository-controlled tests need no write scopes.
+    permissions: # Read source; OIDC authenticates the coverage upload.
       contents: "read"
+      id-token: write
     services: # Integration dependencies used by API specs.
       redis: # Distributed-lock integration tests.
         image: "redis:7"
@@ -559,7 +534,16 @@ jobs:
       - name: Install app dependencies
         run: "yarn install --immutable"
       - name: Run API unit tests
-        run: "yarn nx run api:test"
+        run: "yarn nx run api:test --coverage --skip-nx-cache"
+
+      - name: Upload API coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/api/lcov.info
+          flags: api
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
 
   # End API test job.
 
@@ -570,7 +554,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [changes, rust, cli, python, node, go, setup, api, guest_artifacts]
+    needs: [changes, rust, python, node, go, setup, api, guest_artifacts]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

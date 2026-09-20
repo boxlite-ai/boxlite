@@ -38,10 +38,10 @@ is *exclusively* callable; workflows with `workflow_dispatch` can also run on th
 | --- | --- | --- | --- |
 | `config.yml` | `workflow_call` | call-only | Loads `.github/ci-config.json` before build matrices expand |
 | `lint.yml` | push, PR, merge_group | — | Format and lint per language, plus the installer smoke test. `Lint (conclusion)` is the required check |
-| `test.yml` | push, PR, merge_group, weekly, dispatch | — | Unit tests for every SDK; compact routine matrices and full weekly/manual matrices |
+| `test.yml` | push, PR, merge_group, weekly, dispatch | — | SDK tests and combined Rust/CLI coverage; compact routine matrices and full weekly/manual matrices. Codecov requires 90% patch coverage |
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
 | `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs |
-| `author-review.yml` | PR (target), issue_comment, merge_group | — | Posts author instructions and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
+| `author-review.yml` | PR (target), issue_comment, merge_group | — | Converts unacknowledged PRs to draft, posts author instructions, and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
 | `build-runtime.yml` | push, weekly, release, dispatch | — | Builds runtime/CLI artifacts and populates sccache together; publishes crates on release |
 | `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
 | `build-go.yml` | `workflow_run`, dispatch | — | Tests the released C archive and tags the Go module; automatic builds follow successful C SDK releases |
@@ -72,8 +72,9 @@ their existing sequencing.
 Python runs all four supported versions on Linux x64 and the latest on macOS and Linux ARM
 (six jobs); Node runs all three versions on Linux x64 and the latest on the other platforms
 (five jobs). Weekly and manually dispatched tests exercise every platform/version combination
-and bypass change filters. Rust and CLI tests still run on all three platforms, with coverage
-collected on Linux x64.
+and bypass change filters. Combined Rust and CLI coverage runs on all three platforms, including
+non-VM integration tests and Linux guest tests. Codecov requires 90% coverage of changed lines
+and reports total coverage.
 
 Client drift checks watch API code, shared libraries, generators and workspace configuration.
 Guest artifact checks watch guest build inputs instead of the whole make directory. Infrastructure
@@ -96,7 +97,9 @@ upstream revision in `AGENT_TOOLING_REV`; update that pin through a reviewed PR.
 
 Merge queues must require the same PR status before admission. Queue commits carry
 that result forward; authors acknowledge their own PR head, not the temporary merge.
-Existing draft PRs remain draft until a person marks them ready.
+Unacknowledged PRs are converted to draft. After the author acknowledgment passes,
+click **Ready for review** when reviews are wanted; acknowledgment preserves the draft
+state. A new commit or editing/deleting the only acknowledgment returns the PR to draft.
 
 ## Composite actions
 
@@ -106,13 +109,13 @@ every consumer.
 | Action | Sites | Used by |
 | --- | --- | --- |
 | `ci-config` | 3 | config, lint, test |
-| `setup-rust` | 12 | build-c, build-node, build-runtime ×2, build-wheels, lint ×3, test ×4 |
-| `sccache` | 8 | build-c, build-node, build-runtime, build-wheels, lint ×2, test ×2 |
+| `setup-rust` | 11 | build-c, build-node, build-runtime ×2, build-wheels, lint ×3, test ×3 |
+| `sccache` | 7 | build-c, build-node, build-runtime, build-wheels, lint ×2, test |
 | `build-guest` | 4 | build-c, build-node, build-runtime, build-wheels |
 | `upload-to-release` | 5 | build-c, build-node, build-runner-binary, build-runtime, build-wheels |
 | `run-in-manylinux` | 3 | build-c, build-node, build-runtime |
 | `setup-go` | 4 | build-go, build-runner-binary, lint, test |
-| `setup-python` | 2 | lint, test |
+| `setup-python` | 3 | lint, test ×2 |
 | `setup-buildx` | 2 | build-box-images, release-box-images |
 
 Two ordering rules, stated in each action's own header: `sccache` runs after `setup-rust`, and

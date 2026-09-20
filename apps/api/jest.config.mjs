@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { fileURLToPath } from 'node:url'
+
 export default {
   displayName: 'boxlite',
   preset: '../jest.preset.js',
@@ -15,5 +17,7 @@ export default {
   // from transformation, so let ts-jest down-level them.
   transformIgnorePatterns: ['/node_modules/(?!(?:uuid|nanoid)/)'],
   moduleFileExtensions: ['ts', 'js', 'html'],
-  coverageDirectory: '../../coverage/apps/boxlite',
+  collectCoverageFrom: ['src/**/*.ts', '!src/**/*.spec.ts', '!src/**/*.d.ts'],
+  coverageReporters: ['text', ['lcov', { projectRoot: fileURLToPath(new URL('../..', import.meta.url)) }]],
+  coverageDirectory: '../../target/coverage/api',
 }

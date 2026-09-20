@@ -38,6 +38,7 @@ Issues = "https://github.com/boxlite-ai/boxlite/issues"
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
+    "pytest-cov>=6.0",
     "ruff>=0.4",
     "tomli>=2.0; python_version < '3.11'",
 ]
@@ -48,6 +49,7 @@ orchestration = ["cloudpickle>=3.0"]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
+    "pytest-cov>=6.0",
     "ruff>=0.4",
     "tomli>=2.0; python_version < '3.11'",
 ]
