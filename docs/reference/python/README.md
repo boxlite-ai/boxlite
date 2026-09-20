@@ -170,9 +170,13 @@ network = NetworkSpec(
 | `mode` | `str` | Required | `"enabled"` or `"disabled"` |
 | `allow_net` | `List[str]` | `[]` | Outbound allowlist used only when `mode="enabled"` |
 
-`mode="disabled"` removes the guest network interface entirely. A host matched
-by a configured `Secret` is additionally reachable on port 443 without a rule of
-its own, so `allow_net` is not the only egress gate.
+A host matched by a configured `Secret` is additionally reachable on port 443
+without a rule of its own, so `allow_net` is not the only egress gate. The
+connection is dialed by name, and under a non-empty `allow_net` an answer in a
+private, loopback or CGNAT range is refused unless an IP or CIDR rule covers it.
+
+`mode="disabled"` removes the guest network interface entirely. No secret makes
+a host reachable in that mode — there is no network to reach it over.
 
 #### Volume Mount Format
 

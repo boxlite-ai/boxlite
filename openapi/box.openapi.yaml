@@ -2116,7 +2116,9 @@ components:
             Supports hostnames, wildcard hostnames, IPs, and CIDRs.
             A host matched by a configured secret is additionally reachable on
             port 443 without a rule of its own, so this is not the only egress
-            gate.
+            gate. That connection is dialed by name, and under a non-empty
+            list an answer in a private, loopback or CGNAT range is refused
+            unless an IP or CIDR rule covers it.
 
     InboundNetworkSpec:
       type: object

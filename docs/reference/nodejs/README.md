@@ -134,7 +134,7 @@ interface NetworkSpec {
 }
 ```
 
-Use `allowNet` only when `mode: "enabled"`. Empty or omitted `allowNet` means full outbound access. A host matched by a configured secret is additionally reachable on port 443 without a rule of its own, so `allowNet` is not the only egress gate. `mode: "disabled"` removes the guest network interface entirely.
+Use `allowNet` only when `mode: "enabled"`. Empty or omitted `allowNet` means full outbound access. A host matched by a configured secret is additionally reachable on port 443 without a rule of its own, so `allowNet` is not the only egress gate. The connection is dialed by name, and under a non-empty allowlist an answer in a private, loopback or CGNAT range is refused unless an IP or CIDR rule covers it. `mode: "disabled"` removes the guest network interface entirely.
 
 #### `JsEnvVar`
 

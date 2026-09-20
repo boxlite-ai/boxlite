@@ -378,7 +378,9 @@ pub struct JsOutboundNetworkSpec {
     /// carries, so a hostname-only list denies all UDP egress — add the IP or
     /// CIDR to keep UDP open. A host matched by a configured secret is
     /// additionally reachable on port 443 without an entry of its own, so this
-    /// list is not the only egress gate.
+    /// list is not the only egress gate. That connection is dialed by name,
+    /// and under a non-empty list an answer in a private, loopback or CGNAT
+    /// range is refused unless an IP or CIDR rule covers it.
     #[napi(js_name = "allowNet")]
     pub allow_net: Option<Vec<String>>,
 }

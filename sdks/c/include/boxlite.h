@@ -988,7 +988,9 @@ void boxlite_options_set_network_disabled(CBoxliteOptions *opts);
 // an allowlist holding only hostnames denies all UDP egress — add the IP or
 // CIDR to keep UDP open. A host matched by a configured secret is
 // additionally reachable on port 443 without an entry of its own, so this
-// allowlist is not the only egress gate.
+// allowlist is not the only egress gate. That connection is dialed by name,
+// and under a non-empty allowlist an answer in a private, loopback or CGNAT
+// range is refused unless an IP or CIDR rule covers it.
 void boxlite_options_add_network_allow(CBoxliteOptions *opts, const char *host);
 
 // Marks services the box exposes as publicly reachable (the default).

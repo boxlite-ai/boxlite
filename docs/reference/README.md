@@ -221,8 +221,12 @@ Structured network configuration for outbound connectivity.
 - A host named by `secrets` below is reachable on port 443 without an
   `allow_net` rule of its own. Substitution runs in front of the allowlist, and
   the connection is dialed by name like any hostname rule, so the guest cannot
-  steer it elsewhere by choosing an address. Only 443 is covered: plain HTTP,
-  any other port, and UDP to that same host still need a rule.
+  steer it elsewhere by choosing an address. Under a non-empty `allow_net` that
+  dial also refuses an answer in a private, loopback or CGNAT range unless an
+  IP or CIDR rule covers it; the link-local and box-subnet refusals above apply
+  either way. Only 443 is covered: plain HTTP, any other port, and UDP to that
+  same host still need a rule. Under `"disabled"` a secret grants nothing,
+  since the guest has no network interface at all.
 - The gateway's DNS resolver and DHCP are internal services and stay reachable
   regardless of `allow_net`.
 - `host.boxlite.internal` is a built-in hostname that resolves to
@@ -262,16 +266,19 @@ Host-side secret substitution rules for outbound HTTPS requests.
 - The guest sees only the placeholder, never the real secret value.
 - The placeholder is also exposed as `BOXLITE_SECRET_<NAME>` inside the guest.
 - **A secret is an egress grant as well as a credential.** Every host this
-  matches becomes reachable on port 443 under a non-empty `allow_net` without a
-  rule of its own — declaring that a credential is used at a host already says
-  the host must be reachable. A wildcard entry grants its subdomains the same
-  way it matches them, one level deep. The grant is still a by-name dial, so a
-  host that answers with a private, loopback or CGNAT address is refused unless
-  an IP or CIDR rule covers that range. Nothing else opens: those hosts on port
+  matches becomes reachable on port 443 without a rule of its own — declaring
+  that a credential is used at a host already says the host must be reachable.
+  A wildcard entry grants its subdomains the same way it matches them, one
+  level deep. The grant is a by-name dial, so under a non-empty `allow_net` a
+  host answering with a private, loopback or CGNAT address is refused unless an
+  IP or CIDR rule covers that range. Nothing else opens: those hosts on port
   80, on any other port, or over UDP are still governed by `allow_net` alone.
 - Substitution is HTTPS-only. A plain-HTTP request would carry the placeholder
   rather than the real value, which is the other reason port 80 is not opened
   here.
+- Under `mode` `"disabled"` a secret does nothing: no network backend is
+  created, so nothing is substituted and no host becomes reachable. The
+  placeholder environment variable is still injected into the guest.
 - C SDK users configure secrets with `boxlite_options_add_secret()`.
 
 #### `advanced.capabilities`

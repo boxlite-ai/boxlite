@@ -956,7 +956,9 @@ impl NetworkConfig {
 ///   CIDR to `allow_net` to keep UDP open.
 /// - A host matched by a configured [`Secret`] is additionally reachable on
 ///   port 443 without a rule of its own, so `allow_net` is not the only
-///   egress gate.
+///   egress gate. That connection is dialed by name, and under a non-empty
+///   `allow_net` an answer in a private, loopback or CGNAT range is refused
+///   unless an IP or CIDR rule covers it.
 ///
 /// The gateway's DNS resolver and DHCP are unaffected: they are internal
 /// services, not egress.
