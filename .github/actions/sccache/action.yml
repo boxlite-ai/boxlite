@@ -3,17 +3,13 @@
 # build dependencies between them. Scheduled runtime builds also require a working cache.
 
 #
-# mozilla-actions/sccache-action installs the binary and exports the cache credentials, but sets
-# neither RUSTC_WRAPPER nor SCCACHE_GHA_ENABLED. Without both, cargo never calls sccache and the
-# job compiles uncached however healthy the setup looked.
-#
-# sccache caches individual compilation units, so it works on the host and inside the Docker and
-# cibuildwheel manylinux containers alike. Runtime builds populate the cache on push to main.
+# The GHA backend writes each compiler result separately; concurrent native builds were losing
+# those writes. Use a bounded disk cache and transfer one archive per job instead. The host and
+# Linux build containers use that same directory, with only one server running at a time.
 
 name: Setup sccache
 description: >-
-  Installs sccache, points it at the GitHub Actions cache, and turns it on for the
-  rest of the job.
+  Installs sccache and persists its local compiler cache between jobs.
 
 inputs:
   tolerate-failure:
@@ -27,6 +23,18 @@ inputs:
 runs:
   using: composite
   steps:
+    # Post steps run in reverse: report compiler-cache statistics before archiving.
+    # At v0.17.0 cache writes finish before the compiler response returns.
+    - uses: actions/cache@v4
+      continue-on-error: ${{ inputs.tolerate-failure == 'true' }}
+      with:
+        path: ${{ runner.temp }}/sccache
+        key: sccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.workflow }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          sccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.workflow }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}-
+          sccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.workflow }}-${{ github.job }}-
+          sccache-v2-${{ runner.os }}-${{ runner.arch }}-
+
     - uses: mozilla-actions/sccache-action@v0.0.9
       continue-on-error: ${{ inputs.tolerate-failure == 'true' }}
       with:
@@ -43,10 +51,7 @@ runs:
         # Exported for this step (so the server restart below picks them up) and
         # appended to GITHUB_ENV (so every later step, and the docker invocation in
         # ./.github/actions/run-in-manylinux, sees them too).
-        # Heredoc form rather than `name=value`: GITHUB_ENV parses a bare line up to the first
-        # newline, so a value that ever contained one would inject the remainder as further
-        # assignments. None of today's values do — a URL, a token and `on` — which is exactly why
-        # the weaker form would survive review until the day it did.
+        # Heredoc form keeps paths containing newlines from injecting extra assignments.
         set_env() {
           export "$1=$2"
           {
@@ -56,13 +61,11 @@ runs:
           } >> "$GITHUB_ENV"
         }
 
-        # Re-exported because sccache-action resolves these in its own process, while
-        # later host steps and the manylinux container read them from the job env.
-        for name in ACTIONS_RESULTS_URL ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_SERVICE_V2; do
-          set_env "$name" "$(printenv "$name" || true)"
-        done
-
-        set_env SCCACHE_GHA_ENABLED true
+        set_env SCCACHE_GHA_ENABLED false
+        set_env SCCACHE_DIR "$RUNNER_TEMP/sccache"
+        set_env SCCACHE_CACHE_SIZE 1G
+        # Avoid preprocessor direct-mode assumptions when restoring caches on another runner.
+        set_env SCCACHE_DIRECT false
 
         # sccache cannot cache incremental compilation, so this is not optional — it is
         # what makes the wrapper below worth setting. Unconditional rather than an input:
@@ -101,6 +104,7 @@ runs:
         }
 
         command -v sccache >/dev/null 2>&1 || unusable 'sccache is not on PATH'
+        mkdir -p "$SCCACHE_DIR" || unusable 'cannot create the compiler cache directory'
 
         # Restarted rather than left as sccache-action started it: the settings above are read at
         # server startup, so a server already running would ignore them.

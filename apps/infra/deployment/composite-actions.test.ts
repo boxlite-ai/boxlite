@@ -247,6 +247,68 @@ test('a caller that supplies no script still gets the prologue and the epilogue'
   )
 })
 
+for (const cached of [true, false]) {
+  test(`manylinux hands the disk cache to the container and returns ownership: cached=${cached}`, () => {
+    // Exercise the real Docker command with a path containing spaces. The stubs record
+    // process boundaries, including cleanup after a failed container build.
+    const dir = mkdtempSync(join(tmpdir(), 'boxlite manylinux '))
+    try {
+      const bin = join(dir, 'bin')
+      mkdirSync(bin)
+      mkdirSync(join(dir, 'sccache'), { recursive: true })
+      for (const [name, body] of Object.entries({
+        docker: 'printf "docker\\n" >> "$TRACE"; printf "%s\\n" "$@" > "$ARGS"; exit 17',
+        sudo: 'printf "ownership\\n" >> "$TRACE"; printf "%s\\n" "$@" > "$OWNER_ARGS"',
+        ...(cached ? { sccache: 'printf "sccache %s\\n" "$*" >> "$TRACE"' } : {}),
+      })) {
+        writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+      }
+      const result = runShell(String(readAction('run-in-manylinux').runs.steps[0].run), {
+        PATH: `${bin}:/usr/bin:/bin`, RUNNER_TEMP: dir, GITHUB_WORKSPACE: dir,
+        BUILD_SCRIPT: '', TARGET: 'linux-arm64-gnu', TRACE: join(dir, 'trace'),
+        SCCACHE_DIR: join(dir, 'sccache'),
+        ARGS: join(dir, 'args'), OWNER_ARGS: join(dir, 'owner-args'),
+        ACTIONS_RUNTIME_TOKEN: 'must-not-be-forwarded',
+      }, dir)
+      assert.equal(result.status, 17, 'cleanup must preserve the container failure')
+      const args = readFileSync(join(dir, 'args'), 'utf8').trim().split('\n')
+      assert.ok(args.includes(`${dir}:/work`), 'workspace mount must remain a single argument')
+      assert.ok(args.includes('quay.io/pypa/manylinux_2_28_aarch64'))
+      assert.equal(args.includes('SCCACHE_DIR=/cache/sccache'), cached)
+      assert.equal(args.includes('SCCACHE_GHA_ENABLED=false'), cached)
+      assert.equal(args.includes('RUSTC_WRAPPER=sccache'), cached)
+      assert.ok(!args.some((argument) => argument.includes('ACTIONS_RUNTIME_TOKEN')))
+      assert.deepEqual(readFileSync(join(dir, 'trace'), 'utf8').trim().split('\n'),
+        [...(cached ? ['sccache --stop-server'] : []), 'docker', 'ownership'])
+      const ownerArgs = readFileSync(join(dir, 'owner-args'), 'utf8').trim().split('\n')
+      assert.equal(ownerArgs[0], 'chown')
+      assert.equal(ownerArgs.at(-1), join(dir, 'sccache'))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+}
+
+for (const status of [0, 17]) {
+  test(`the container flushes its disk cache when the build exits ${status}`, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'boxlite-container-'))
+    try {
+      mkdirSync(join(dir, 'scripts'))
+      writeFileSync(join(dir, 'scripts/util.sh'), '#!/bin/sh\necho x86_64-unknown-linux-musl\n', { mode: 0o755 })
+      for (const name of ['git', 'make', 'sccache']) {
+        writeFileSync(join(dir, name), `#!/bin/sh\nprintf '${name} %s\\n' "$*" >> "$TRACE"\n`, { mode: 0o755 })
+      }
+      const result = runShell(generatedScript(`exit ${status}`), {
+        PATH: `${dir}:/usr/bin:/bin`, CARGO_HOME: dir, TRACE: join(dir, 'trace'),
+      }, dir)
+      assert.equal(result.status, status)
+      assert.match(readFileSync(join(dir, 'trace'), 'utf8'), /sccache --stop-server\n$/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+}
+
 /* ------------------------------------------------------------------------- sccache */
 
 type SccacheRun = {
@@ -327,20 +389,27 @@ const sccacheEnvironment = ({
 }
 
 test('sccache is switched on for the job, not merely installed', () => {
-  // The upstream action installs the binary and exports the cache credentials but sets neither
-  // RUSTC_WRAPPER nor SCCACHE_GHA_ENABLED, so a job that only installed it compiled uncached
-  // while still looking healthy. These two are the difference.
   const { exported, workspace } = sccacheEnvironment()
   assert.equal(exported.get('RUSTC_WRAPPER'), 'sccache')
-  assert.equal(exported.get('SCCACHE_GHA_ENABLED'), 'true')
+  assert.equal(exported.get('SCCACHE_GHA_ENABLED'), 'false')
   // sccache cannot cache incremental compilation, so the wrapper above is worth nothing without it.
   assert.equal(exported.get('CARGO_INCREMENTAL'), '0')
   assert.equal(exported.get('SCCACHE_BASEDIRS'), workspace)
-  // Re-exported for the later host steps and for the docker invocation in run-in-manylinux,
-  // which reads them from the job environment rather than from the installing step's process.
-  assert.equal(exported.get('ACTIONS_RESULTS_URL'), 'https://results.example/')
-  assert.equal(exported.get('ACTIONS_RUNTIME_TOKEN'), 'token-value')
-  assert.equal(exported.get('ACTIONS_CACHE_SERVICE_V2'), 'on')
+  assert.equal(exported.get('SCCACHE_DIR'), join(workspace, 'sccache'))
+  assert.equal(exported.get('SCCACHE_DIRECT'), 'false')
+  assert.equal(exported.get('ACTIONS_RUNTIME_TOKEN'), undefined)
+})
+
+test('compiler results use a bounded disk cache instead of per-object GHA writes', () => {
+  const { exported, workspace } = sccacheEnvironment()
+  assert.equal(exported.get('SCCACHE_GHA_ENABLED'), 'false', 'compiler results must not use the failing remote write path')
+  assert.equal(exported.get('SCCACHE_DIR'), join(workspace, 'sccache'))
+  assert.equal(exported.get('SCCACHE_CACHE_SIZE'), '1G')
+  const steps = readAction('sccache').runs.steps
+  const archive = steps.findIndex((step: any) => step.uses?.startsWith('actions/cache@'))
+  const install = steps.findIndex((step: any) => step.uses?.startsWith('mozilla-actions/sccache-action'))
+  assert.ok(archive >= 0 && archive < install, 'the stats post-step must run before the archive post-step saves its files')
+  assert.equal(steps[archive].with.path, '${{ runner.temp }}/sccache')
 })
 
 test('a missing sccache degrades the build rather than breaking it', () => {
@@ -350,11 +419,7 @@ test('a missing sccache degrades the build rather than breaking it', () => {
   const { exported, stdout } = sccacheEnvironment({ onPath: false })
   assert.equal(exported.get('RUSTC_WRAPPER'), undefined)
   assert.match(stdout, /::warning::/, 'a job compiling uncached says so')
-  // The configuration published before the failure is left alone rather than retracted. That is
-  // all this pins: with no host binary nothing caches anywhere, because run-in-manylinux gates its
-  // entire -e list on host PATH too, and cibuildwheel's container — the only one that installs its
-  // own sccache — wraps cargo through the RUSTC_WRAPPER that is unset here.
-  assert.equal(exported.get('SCCACHE_GHA_ENABLED'), 'true')
+  assert.equal(exported.get('SCCACHE_GHA_ENABLED'), 'false')
 })
 
 test('a caller that refuses to tolerate a cache failure gets one', () => {

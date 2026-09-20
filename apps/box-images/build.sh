@@ -74,6 +74,12 @@ build_image() { # Build or publish one of base, python, or node with the shared 
   local target="$REGISTRY/boxlite-agent-${image}:$tag" # Existing GHCR package name plus version tag.
   local -a build_args=(buildx build --platform "$PLATFORMS" -f "$dockerfile" -t "$target") # Common Buildx arguments.
 
+  # A separate scope preserves all flavors; cache trouble must not prevent validation/publish.
+  if [[ -n "${ACTIONS_RUNTIME_TOKEN:-}" && -n "${ACTIONS_RESULTS_URL:-}" ]]; then
+    build_args+=(--cache-from "type=gha,version=2,scope=box-images-$image"
+      --cache-to "type=gha,version=2,scope=box-images-$image,mode=max,ignore-error=true,timeout=3m")
+  fi
+
   if [[ ! -f "$dockerfile" ]]; then
     echo "Missing Dockerfile: $dockerfile" >&2
     exit 1

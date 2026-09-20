@@ -228,7 +228,7 @@ jobs:
         run: make fmt:check:c
 
   go:
-    name: Go lint and format checks
+    name: Go formatting
     needs: changes
     if: ${{ needs.changes.outputs.go == 'true' || needs.changes.outputs.quality == 'true' }}
     runs-on: ubuntu-latest
@@ -240,27 +240,6 @@ jobs:
 
       - name: Check Go formatting
         run: make fmt:check:go
-
-      - uses: ./.github/actions/setup-rust
-        with:
-          toolchain: ${{ needs.changes.outputs.rust-toolchain }}
-
-      - name: Install build dependencies
-        run: make setup:build
-
-      - uses: ./.github/actions/sccache
-
-      - name: Build Go SDK
-        run: make dev:go
-
-      - name: Run Go vet
-        run: make lint:go
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          working-directory: sdks/go
-          args: --timeout=5m --build-tags boxlite_dev
 
   install_script:
     name: Installer script smoke test

@@ -42,8 +42,16 @@ jobs:
         uses: pypa/cibuildwheel@v3.2.0
         env:
           CIBW_BUILD_VERBOSITY: 0
+          BOXLITE_HOST_SCCACHE_DIR: ${{ env.SCCACHE_DIR }}
         with:
           package-dir: sdks/python
+
+      - name: Return container cache to the runner
+        if: always() && runner.os == 'Linux'
+        run: |
+          if [ -d "$SCCACHE_DIR" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "$SCCACHE_DIR"
+          fi
 
       - name: Upload wheels as artifacts
         uses: actions/upload-artifact@v4

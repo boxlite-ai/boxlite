@@ -31,14 +31,7 @@ on:
       - '.cargo/**'
       - '.config/nextest.toml'
       - '.gitmodules'
-      - 'scripts/common.sh'
-      - 'scripts/build/build-guest-deps.sh'
-      - 'scripts/build/build-guest.sh'
-      - 'scripts/build/build-libseccomp.sh'
-      - 'scripts/util.sh'
       - 'scripts/setup/**'
-      - 'scripts/test/test-guest-artifacts.sh'
-      - 'scripts/test/test-guest-build-contracts.sh'
       - 'Makefile'
       - 'make/**'
       - 'rust-toolchain.toml'
@@ -50,11 +43,14 @@ on:
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/test.yml'
+      - '.github/workflows/lint.yml'
+      - '.pre-commit-config.yaml'
       - '.github/workflows/config.yml'
       - '.github/actions/**'
       - '.github/ci-config.json'
       - 'openapi/**'
       - 'codecov.yml'
+      - '!**/*.md'
   # No path filter on pull_request: the `Test (conclusion)` job is a required
   # status check, so this workflow must run on EVERY PR and report it. A
   # path-skipped workflow leaves the required check stuck "Pending" → PR blocked.
@@ -88,10 +84,11 @@ jobs:
       node: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.node == 'true' }}
       go: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.go == 'true' }}
       api: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.api == 'true' }}
-      guest_artifacts: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.guest_artifacts == 'true' }}
       setup: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.setup == 'true' }}
     steps:
       - uses: actions/checkout@v5
+      - name: Validate Makefile syntax
+        run: make -n help
       - uses: ./.github/actions/ci-config
         id: config
         with:
@@ -108,103 +105,95 @@ jobs:
           # (cargo tree -e normal,build,dev --target all), plus everything else
           # the jobs read: manifests, toolchain, cargo, nextest, Codecov and CI
           # config, and the local composite actions they use. rust also matches
-          # the make tree it runs, the OpenAPI reference server whose tests it
+          # the Make recipes it runs, the OpenAPI reference server whose tests it
           # runs, and src/**/*.rs: a core unit test scans every Rust source
           # under src/ (no_config_json_in_tracing_sigil_workspace_wide).
           filters: |
             rust:
-              - 'src/boxlite/**'
-              - 'src/cli/**'
-              - 'src/shared/**'
-              - 'src/guest/**'
-              - 'src/hypervisor/**'
-              - 'src/vmm/**'
-              - 'sdks/c/src/**'
+              - 'src/boxlite/**/!(*.md)'
+              - 'src/cli/**/!(*.md)'
+              - 'src/shared/**/!(*.md)'
+              - 'src/guest/**/!(*.md)'
+              - 'src/hypervisor/**/!(*.md)'
+              - 'src/vmm/**/!(*.md)'
+              - 'sdks/c/src/**/!(*.md)'
               - 'sdks/c/build.rs'
-              - 'sdks/python/src/**'
-              - 'sdks/node/src/**'
+              - 'sdks/python/src/**/!(*.md)'
+              - 'sdks/node/src/**/!(*.md)'
               - 'sdks/node/build.rs'
-              - 'src/test-utils/**'
-              - 'src/deps/bubblewrap-sys/**'
-              - 'src/deps/e2fsprogs-sys/**'
-              - 'src/deps/libkrun-sys/**'
+              - 'src/test-utils/**/!(*.md)'
+              - 'src/deps/bubblewrap-sys/**/!(*.md)'
+              - 'src/deps/e2fsprogs-sys/**/!(*.md)'
+              - 'src/deps/libkrun-sys/**/!(*.md)'
               - 'src/**/*.rs'
               - '.gitmodules'
               - 'Makefile'
-              - 'make/**'
-              - 'openapi/**'
+              - 'make/vars.mk'
+              - 'make/dev.mk'
+              - 'make/test.mk'
+              - 'make/coverage.mk'
+              - 'openapi/**/!(*.md)'
               - '**/Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
-              - '.cargo/**'
+              - '.cargo/**/!(*.md)'
               - '.config/nextest.toml'
               - 'codecov.yml'
-              - '.github/actions/setup-rust/**'
-              - '.github/actions/setup-python/**'
+              - '.github/actions/setup-rust/**/!(*.md)'
+              - '.github/actions/setup-python/**/!(*.md)'
               - '.github/ci-config.json'
-              - '.github/actions/ci-config/**'
+              - '.github/actions/ci-config/**/!(*.md)'
               - '.github/workflows/test.yml'
             python:
-              - 'sdks/python/**'
+              - 'sdks/python/**/!(*.md)'
               - 'Makefile'
-              - 'make/**'
+              - 'make/vars.mk'
+              - 'make/dev.mk'
+              - 'make/test.mk'
+              - 'make/coverage.mk'
               - 'codecov.yml'
-              - '.github/actions/setup-python/**'
+              - '.github/actions/setup-python/**/!(*.md)'
               - '.github/ci-config.json'
-              - '.github/actions/ci-config/**'
+              - '.github/actions/ci-config/**/!(*.md)'
               - '.github/workflows/test.yml'
             node:
-              - 'sdks/node/**'
+              - 'sdks/node/**/!(*.md)'
               - 'Makefile'
-              - 'make/**'
+              - 'make/vars.mk'
+              - 'make/dev.mk'
+              - 'make/test.mk'
+              - 'make/coverage.mk'
               - 'codecov.yml'
               - '.github/ci-config.json'
-              - '.github/actions/ci-config/**'
+              - '.github/actions/ci-config/**/!(*.md)'
               - '.github/workflows/test.yml'
             go:
-              - 'sdks/go/**'
-              - 'src/deps/libgvproxy-sys/**'
+              - 'sdks/go/**/!(*.md)'
+              - 'src/deps/libgvproxy-sys/**/!(*.md)'
               - 'Makefile'
-              - 'make/**'
+              - 'make/vars.mk'
+              - 'make/build.mk'
+              - 'make/setup.mk'
+              - 'make/dev.mk'
+              - 'make/test.mk'
+              - 'make/coverage.mk'
+              - 'make/quality.mk'
+              - '.pre-commit-config.yaml'
               - 'codecov.yml'
-              - '.github/actions/setup-go/**'
-              - '.github/actions/setup-rust/**'
-              - '.github/actions/sccache/**'
+              - '.github/actions/setup-go/**/!(*.md)'
+              - '.github/actions/setup-rust/**/!(*.md)'
+              - '.github/actions/sccache/**/!(*.md)'
               - '.github/ci-config.json'
-              - '.github/actions/ci-config/**'
+              - '.github/actions/ci-config/**/!(*.md)'
               - '.github/workflows/test.yml'
+              - '.github/workflows/lint.yml'
             api:
-              - 'apps/api/**'
+              - 'apps/api/**/!(*.md)'
               - 'apps/package.json'
               - 'apps/yarn.lock'
               - 'apps/nx.json'
               - 'apps/jest.preset.js'
               - 'codecov.yml'
-              - '.github/workflows/test.yml'
-            guest_artifacts:
-              - '.cargo/**'
-              - '.gitmodules'
-              - 'src/deps/e2fsprogs-sys/**'
-              - 'src/guest/**'
-              - 'src/shared/**'
-              - 'scripts/build/build-guest-deps.sh'
-              - 'scripts/build/build-guest.sh'
-              - 'scripts/build/build-libseccomp.sh'
-              - 'scripts/common.sh'
-              - 'scripts/util.sh'
-              - 'scripts/setup/**'
-              - 'scripts/test/test-guest-artifacts.sh'
-              - 'scripts/test/test-guest-build-contracts.sh'
-              - 'Makefile'
-              - 'make/vars.mk'
-              - 'make/setup.mk'
-              - 'make/build.mk'
-              - 'make/test.mk'
-              - 'rust-toolchain.toml'
-              - '**/Cargo.toml'
-              - 'Cargo.lock'
-              - '.github/ci-config.json'
-              - '.github/actions/ci-config/**'
               - '.github/workflows/test.yml'
             setup:
               - '.gitmodules'
@@ -410,6 +399,18 @@ jobs:
       - name: Run Go SDK and networking tests with coverage
         run: make coverage:go
 
+      # coverage:go has already built the native library needed by both analyzers.
+      - name: Run Go vet
+        if: matrix.platform.target == 'linux-x64-gnu'
+        run: make lint:go
+
+      - name: golangci-lint
+        if: matrix.platform.target == 'linux-x64-gnu'
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: sdks/go
+          args: --timeout=5m --build-tags boxlite_dev
+
       - name: Upload Go coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
@@ -422,7 +423,8 @@ jobs:
   guest_artifacts:
     name: Guest Artifacts (${{ matrix.os }} / ${{ matrix.target }} / ${{ matrix.profile }})
     needs: changes
-    if: ${{ needs.changes.outputs.guest_artifacts == 'true' }}
+    # Qualify all five builds periodically without repeating them on routine CI runs.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -573,7 +575,7 @@ jobs:
           fail_ci_if_error: true
 
   # Single required status check for branch protection / merge queue.
-  # Passes only if every job above succeeded or was skipped (path-filtered).
+  # Passes only if every job above succeeded or was skipped (path- or event-filtered).
   # `if: !cancelled()` is required: without it a failed dependency would skip
   # this job, and GitHub treats a skipped required check as success.
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.

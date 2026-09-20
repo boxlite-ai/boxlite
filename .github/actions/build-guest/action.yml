@@ -1,6 +1,6 @@
 # Requirement: ./.github/actions/setup-rust and ./.github/actions/sccache should both be run before
 # this. They are not nested here on purpose — sccache is job-scoped, not guest-scoped: the manylinux
-# container step later in these same jobs mounts the sccache binary and reads the ACTIONS_* vars
+# container step later in these same jobs mounts the sccache binary and its disk cache
 # this action's siblings exported, so folding the setup in here would hide a job-wide prerequisite
 # inside one of its several consumers.
 #
@@ -49,6 +49,9 @@ runs:
         if [ "$SHOW_SCCACHE_STATS" = 'true' ]; then
           sccache --show-stats
         fi
+
+        # The container takes ownership of the same disk cache next.
+        command -v sccache >/dev/null && sccache --stop-server || true
 
         GUEST_TARGET=$(scripts/util.sh --target)
         rm -rf -- ".cache/$GUEST_TARGET/release"

@@ -45,6 +45,8 @@ runs:
         {
           cat <<'PROLOGUE'
         set -ex
+        # Release the shared cache before the host uses it, even on an early exit.
+        trap 'command -v sccache >/dev/null && sccache --stop-server || true' EXIT
         git config --global --add safe.directory /work
 
         # sccache fallback: if not available, disable wrapper for normal compilation
@@ -86,9 +88,15 @@ runs:
         # source sits at *inside* the container, so stripping it yields the same relative
         # paths ./.github/actions/sccache produces on the host, and one cache entry serves
         # both. SCCACHE_IDLE_TIMEOUT keeps the container's own daemon alive for the build.
-        SCCACHE_DOCKER_ARGS=""
+        SCCACHE_DOCKER_ARGS=()
         if command -v sccache &>/dev/null; then
-          SCCACHE_DOCKER_ARGS="-v $(which sccache):/usr/local/bin/sccache:ro -e SCCACHE_GHA_ENABLED=true -e RUSTC_WRAPPER=sccache -e SCCACHE_BASEDIRS=/work -e SCCACHE_IDLE_TIMEOUT=0 -e CARGO_INCREMENTAL=0 -e ACTIONS_CACHE_SERVICE_V2 -e ACTIONS_RESULTS_URL -e ACTIONS_RUNTIME_TOKEN"
+          # A local sccache directory supports one server at a time.
+          sccache --stop-server || true
+          SCCACHE_DOCKER_ARGS=(-v "$(command -v sccache):/usr/local/bin/sccache:ro"
+            -v "$SCCACHE_DIR:/cache/sccache"
+            -e SCCACHE_GHA_ENABLED=false -e SCCACHE_DIR=/cache/sccache
+            -e SCCACHE_CACHE_SIZE=1G -e SCCACHE_DIRECT=false -e RUSTC_WRAPPER=sccache
+            -e SCCACHE_BASEDIRS=/work -e SCCACHE_IDLE_TIMEOUT=0 -e CARGO_INCREMENTAL=0)
         fi
 
         case "$TARGET" in
@@ -96,10 +104,19 @@ runs:
           *) image_arch=x86_64 ;;
         esac
 
+        # Container cache entries are root-owned private files. Return them to the
+        # runner before actions/cache archives them, including after a failed build.
+        restore_cache_owner() {
+          if [ -d "$SCCACHE_DIR" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "$SCCACHE_DIR"
+          fi
+        }
+        trap restore_cache_owner EXIT
+
         docker run --rm \
           -v "$GITHUB_WORKSPACE":/work \
           -v "$RUNNER_TEMP/build.sh:/tmp/build.sh:ro" \
-          $SCCACHE_DOCKER_ARGS \
+          "${SCCACHE_DOCKER_ARGS[@]}" \
           -w /work \
           -e CARGO_HOME=/work/.cargo-manylinux \
           "quay.io/pypa/manylinux_2_28_$image_arch" \

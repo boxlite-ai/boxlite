@@ -3,15 +3,122 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 import test from 'node:test'
 import { runInNewContext } from 'node:vm'
 import { load as loadYaml } from 'js-yaml'
+import { parse as parseToml } from 'smol-toml'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+// Use the glob engine used by paths-filter, including its extglob behavior.
+const picomatch = createRequire(import.meta.url)('picomatch') as (pattern: string, options: { dot: boolean }) => (path: string) => boolean
+const workflow = (name: string): any => loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows', name), 'utf8'))
+const matches = (pattern: string, path: string) => picomatch(pattern, { dot: true })(path)
+
+function testSuites(paths: string[]) {
+  const filter = workflow('test.yml').jobs.changes.steps.find((step: any) => step.uses?.startsWith('dorny/paths-filter'))
+  const rules = loadYaml(filter.with.filters) as Record<string, string[]>
+  return Object.keys(rules).filter((suite) => paths.some((path) => rules[suite].some((pattern) => matches(pattern, path))))
+}
+
+function acceptsFiles(name: string, event: string, files: string[]) {
+  const trigger = workflow(name).on[event]
+  if (trigger?.['paths-ignore'] && files.every((file) => trigger['paths-ignore'].some((pattern: string) => matches(pattern, file)))) return false
+  if (!trigger?.paths) return true
+  return files.some((file) => trigger.paths.reduce((included: boolean, pattern: string) => {
+    const exclude = pattern.startsWith('!')
+    return matches(exclude ? pattern.slice(1) : pattern, file) ? !exclude : included
+  }, false))
+}
+
+for (const path of ['sdks/go/README.md', 'sdks/python/README.md', 'sdks/node/README.md', 'src/cli/README.md', 'apps/api/README.md', 'make/help.mk', 'make/clean.mk']) {
+  test(`unrelated prose or Make utilities do not rebuild SDKs: ${path}`, () => {
+    assert.deepEqual(testSuites([path]), [])
+  })
+}
+
+for (const [path, expected] of [
+  ['sdks/go/options.go', ['go']],
+  ['sdks/python/boxlite/options.py', ['python']],
+  ['sdks/node/lib/options.ts', ['node']],
+  ['src/cli/src/main.rs', ['rust']],
+  ['make/coverage.mk', ['rust', 'python', 'node', 'go']],
+  ['make/quality.mk', ['go']],
+  ['.github/workflows/lint.yml', ['go']],
+] as const) {
+  test(`source and shared recipes retain their tests: ${path}`, () => {
+    assert.deepEqual(testSuites(['docs/README.md', path]), [...expected])
+  })
+}
+
+for (const [name, events] of [
+  ['codeql.yml', ['pull_request', 'push']],
+  ['e2e-local.yml', ['pull_request_target', 'push']],
+  ['api-client-drift.yml', ['pull_request']],
+] as const) {
+  for (const event of events) {
+    test(`${name} skips documentation-only ${event} changes but keeps code changes`, () => {
+      assert.equal(acceptsFiles(name, event, ['sdks/go/README.md', 'apps/api/README.md']), false)
+      assert.equal(acceptsFiles(name, event, ['docs/README.md', 'apps/api/src/main.ts', 'sdks/go/options.go']), true)
+    })
+  }
+}
+
+test('Go vet and golangci-lint reuse the Linux coverage build', () => {
+  const steps = workflow('test.yml').jobs.go.steps
+  const buildAt = steps.findIndex((step: any) => step.run === 'make coverage:go')
+  const vetAt = steps.findIndex((step: any) => step.run === 'make lint:go')
+  const lintAt = steps.findIndex((step: any) => step.uses?.startsWith('golangci/golangci-lint-action'))
+  assert.ok(buildAt >= 0 && vetAt > buildAt && lintAt > buildAt, 'Go analysis must reuse the native library produced by coverage')
+  for (const index of [vetAt, lintAt]) assert.equal(steps[index].if, "matrix.platform.target == 'linux-x64-gnu'")
+  const formatting = workflow('lint.yml').jobs.go.steps
+  assert.ok(formatting.some((step: any) => step.run === 'make fmt:check:go'))
+  assert.ok(!formatting.some((step: any) => /dev:go|setup:build/.test(step.run ?? '')), 'formatting must not build the native runtime')
+})
+
+test('distribution runtime builds retain release, weekly and manual triggers without push rebuilds', () => {
+  const triggers = workflow('build-runtime.yml').on
+  assert.equal('push' in triggers, false)
+  assert.ok('release' in triggers && 'schedule' in triggers && 'workflow_dispatch' in triggers)
+})
+
+for (const event of ['pull_request', 'push', 'merge_group', 'schedule', 'workflow_dispatch']) {
+  test(`guest artifact qualification is scheduled or manual only: ${event}`, () => {
+    const workflow: any = loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows/test.yml'), 'utf8'))
+    const expression = workflow.jobs.guest_artifacts.if.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+    // This gate uses property access, string equality and boolean operators,
+    // which have the same semantics here in Actions expressions and JavaScript.
+    const shouldRun = runInNewContext(expression, {
+      github: { event_name: event },
+      needs: { changes: { outputs: { guest_artifacts: 'true' } } },
+    }, { timeout: 1000 })
+    assert.equal(shouldRun, event === 'schedule' || event === 'workflow_dispatch',
+      `${event} must not start guest artifact builds unless explicitly scheduled or dispatched`)
+    assert.ok(event in workflow.on, `the workflow must still accept ${event}`)
+  })
+}
+
+for (const result of ['skipped', 'success', 'failure', 'cancelled']) {
+  test(`Test conclusion handles guest artifact result: ${result}`, () => {
+    const workflow: any = loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows/test.yml'), 'utf8'))
+    const conclusion = workflow.jobs['test-conclusion']
+    assert.ok(conclusion.needs.includes('guest_artifacts'))
+    const needs = Object.fromEntries(conclusion.needs.map((name: string) => [name, {
+      result: name === 'guest_artifacts' ? result : 'success',
+    }]))
+    const script = conclusion.steps[0].run.replaceAll('${{ toJSON(needs) }}', JSON.stringify(needs))
+    const execution = spawnSync('bash', ['-eo', 'pipefail', '-c', script], {
+      encoding: 'utf8',
+      timeout: 10_000,
+    })
+    assert.equal(execution.error, undefined)
+    assert.equal(execution.status === 0, result === 'success' || result === 'skipped', execution.stderr)
+  })
+}
 
 const coverageWorkflow: any = loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows/test.yml'), 'utf8'))
 const coverageSuites = ['rust', 'python', 'node', 'go', 'api']
@@ -190,12 +297,13 @@ test('invalid matrix mode fails before exporting configuration', () => {
   assert.match(result.stdout, /full-matrix must be true or false/)
 })
 
-function buildImages(selection?: string) {
+function buildImages(selection?: string, cached = false) {
   const directory = mkdtempSync(join(tmpdir(), 'boxlite-image-selection-'))
   try {
     const log = join(directory, 'docker.log')
     writeFileSync(join(directory, 'docker'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$DOCKER_LOG"\n', { mode: 0o755 })
-    const env = { ...process.env, PATH: `${directory}:${process.env.PATH}`, DOCKER_LOG: log, PUSH: '0', PLATFORMS: 'linux/amd64,linux/arm64', TAG: 'v0.0.0', IMAGES: selection }
+    const env = { ...process.env, PATH: `${directory}:${process.env.PATH}`, DOCKER_LOG: log, PUSH: '0', PLATFORMS: 'linux/amd64,linux/arm64', TAG: 'v0.0.0', IMAGES: selection,
+      ACTIONS_RUNTIME_TOKEN: cached ? 'test-token' : '', ACTIONS_RESULTS_URL: cached ? 'https://cache.example/' : '' }
     const result = spawnSync('bash', [join(REPO_ROOT, 'apps/box-images/build.sh')], { env, encoding: 'utf8', timeout: 10_000 })
     const builds = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []
     return { result, builds }
@@ -221,6 +329,22 @@ test('image builds default to every release flavor', () => {
   }
 })
 
+test('CI image builds persist separate layer caches for each flavor', () => {
+  const { result, builds } = buildImages('base,python,node', true)
+  assert.equal(result.status, 0, result.stderr)
+  for (const [index, flavor] of ['base', 'python', 'node'].entries()) {
+    assert.match(builds[index], new RegExp(`--cache-from type=gha,version=2,scope=box-images-${flavor}`))
+    assert.match(builds[index], new RegExp(`--cache-to type=gha,version=2,scope=box-images-${flavor},mode=max,ignore-error=true,timeout=3m`))
+    assert.ok(!builds[index].includes('test-token'), 'cache credentials must stay out of command arguments')
+  }
+})
+
+test('local image builds do not require GitHub cache credentials', () => {
+  const { result, builds } = buildImages('base')
+  assert.equal(result.status, 0, result.stderr)
+  assert.ok(!builds[0].includes('--cache-'))
+})
+
 test('invalid image selections fail before any Docker invocation', () => {
   for (const selection of ['', 'python,', ',python', 'python,,node', 'python,../../unexpected']) {
     const { result, builds } = buildImages(selection)
@@ -228,6 +352,87 @@ test('invalid image selections fail before any Docker invocation', () => {
     assert.deepEqual(builds, [], selection)
   }
 })
+
+for (const sharedCache of [true, false]) {
+  for (const installSucceeds of [true, false]) {
+    test(`wheel cache setup: shared=${sharedCache}, installation=${installSucceeds}`, () => {
+      const project = parseToml(readFileSync(join(REPO_ROOT, 'sdks/python/pyproject.toml'), 'utf8')) as any
+      const config = project.tool.cibuildwheel
+      const directory = mkdtempSync(join(tmpdir(), 'boxlite-wheel-cache-'))
+      try {
+        const bin = join(directory, 'bin')
+        const pythonBin = join(directory, 'python-bin')
+        const wrapper = join(directory, 'stable-bin/sccache')
+        const cache = join(directory, 'container-cache')
+        const host = join(directory, 'host')
+        const hostCache = join(host, 'runner cache/sccache')
+        const trace = join(directory, 'trace')
+        for (const path of [bin, pythonBin, dirname(wrapper), hostCache, join(directory, 'scripts'), join(directory, 'home')]) {
+          mkdirSync(path, { recursive: true })
+        }
+        writeFileSync(join(bin, 'pip'), `#!/bin/sh
+printf 'pip %s\\n' "$*" >> "$TRACE"
+[ "$INSTALL_SUCCEEDS" = true ] || exit 1
+cat > "$PYTHON_BIN/sccache" <<'WRAPPER'
+#!/bin/sh
+printf 'installed-wrapper %s\\n' "$*" >> "$TRACE"
+[ "$1" = --stop-server ] && exit 0
+exec "$@"
+WRAPPER
+chmod +x "$PYTHON_BIN/sccache"
+`, { mode: 0o755 })
+        writeFileSync(join(bin, 'uname'), '#!/bin/sh\necho Linux\n', { mode: 0o755 })
+        writeFileSync(join(directory, 'scripts/util.sh'), '#!/bin/sh\necho x86_64-unknown-linux-musl\n', { mode: 0o755 })
+        writeFileSync(join(bin, 'make'), `#!/bin/sh
+printf 'make %s\\nwrapper=%s\\ncache=%s\\n' "$*" "\${RUSTC_WRAPPER:-}" "\${SCCACHE_DIR:-}" >> "$TRACE"
+if [ "$1" = runtime ]; then
+  if [ -n "\${RUSTC_WRAPPER:-}" ]; then
+    "$RUSTC_WRAPPER" /bin/echo compiler-invoked >> "$TRACE"
+  else
+    /bin/echo compiler-invoked >> "$TRACE"
+  fi
+fi
+`, { mode: 0o755 })
+        // Relocate fixed container paths only. Branches, commands and assertions use
+        // the production TOML; no fixture may write to the host's /usr/local or /tmp cache.
+        const relocate = (value: string) => value
+          .replaceAll('/usr/local/bin/sccache', wrapper)
+          .replaceAll('/tmp/boxlite-sccache', cache)
+          .replaceAll('/host', host)
+        const env = {
+          ...Object.fromEntries(Object.entries<string>(config.linux.environment).map(([name, value]) => [name, relocate(value)])),
+          PATH: `${bin}:${pythonBin}:${dirname(wrapper)}:/usr/bin:/bin`, HOME: join(directory, 'home'),
+          TRACE: trace, PYTHON_BIN: pythonBin, INSTALL_SUCCEEDS: String(installSucceeds),
+          BOXLITE_HOST_SCCACHE_DIR: sharedCache ? '/runner cache/sccache' : '',
+        }
+        const result = spawnSync('bash', ['-e', '-c', relocate(config['before-all'].join('\n'))], {
+          cwd: directory, env, encoding: 'utf8', timeout: 10_000,
+        })
+        assert.equal(result.status, 0, result.stderr)
+        const calls = readFileSync(trace, 'utf8')
+        assert.ok(calls.includes(`wrapper=${wrapper}\n`), 'runtime must use the stable wrapper from the wheel environment')
+        assert.ok(calls.includes(`cache=${cache}\n`), 'runtime must use the configured disk cache')
+        assert.match(calls, /compiler-invoked\n/, 'both installed and fallback wrappers must invoke the compiler')
+        assert.equal(calls.includes('installed-wrapper /bin/echo'), installSucceeds)
+        assert.equal(lstatSync(wrapper).isSymbolicLink(), installSucceeds)
+        if (sharedCache) {
+          assert.equal(realpathSync(cache), realpathSync(hostCache), 'the container must share the host cache, including paths with spaces')
+        } else {
+          assert.notEqual(lstatSync(cache, { throwIfNoEntry: false })?.isSymbolicLink(), true,
+            'a local build must not create a host link, including a dangling one')
+        }
+        if (!installSucceeds) assert.match(result.stdout, /WARNING: sccache not available/)
+        const stop = spawnSync('bash', ['-e', '-c', relocate(config.linux['before-test'] ?? '')], {
+          cwd: directory, env, encoding: 'utf8', timeout: 10_000,
+        })
+        assert.equal(stop.status, 0, 'the pass-through fallback must tolerate server shutdown')
+        if (installSucceeds) assert.match(readFileSync(trace, 'utf8'), /installed-wrapper --stop-server\n$/)
+      } finally {
+        rmSync(directory, { recursive: true, force: true })
+      }
+    })
+  }
+}
 
 test('the wheel smoke check rejects a package with a missing native extension', () => {
   const project = readFileSync(join(REPO_ROOT, 'sdks/python/pyproject.toml'), 'utf8')

@@ -85,16 +85,26 @@ skip = [
 before-all = ["""
     set -ex  # Exit on error, print commands
 
-    # Install sccache for compilation caching (CI uses GHA cache backend)
-    pip install sccache 2>/dev/null || true
-    # Verify sccache works; create pass-through shim if not to prevent build failures.
-    # When RUSTC_WRAPPER=sccache is set (via environment-pass), cargo calls
+    # Linux containers share the host cache through cibuildwheel's /host mount.
+    # Use an absolute wrapper: cibuildwheel rebuilds PATH for each Python version.
+    pip install sccache==0.17.0 2>/dev/null || true
+    # Create a pass-through shim if installation failed, so compilation can continue.
+    # When RUSTC_WRAPPER is set, cargo calls
     # `sccache /path/to/rustc <args>`. The shim just runs `exec "$@"` which
     # executes `/path/to/rustc <args>` directly — a no-op wrapper.
     if ! command -v sccache &>/dev/null; then
         echo "WARNING: sccache not available, creating pass-through shim"
         printf '#!/bin/sh\nexec "$@"\n' > /usr/local/bin/sccache
         chmod +x /usr/local/bin/sccache
+    fi
+    if [ "$(uname)" = Linux ]; then
+        sccache_binary=$(command -v sccache)
+        if [ "$sccache_binary" != /usr/local/bin/sccache ]; then
+            ln -sf "$sccache_binary" /usr/local/bin/sccache
+        fi
+        if [ -n "${BOXLITE_HOST_SCCACHE_DIR:-}" ]; then
+            ln -s "/host$BOXLITE_HOST_SCCACHE_DIR" /tmp/boxlite-sccache
+        fi
     fi
 
     # cibuildwheel runs from repository root
@@ -138,11 +148,13 @@ repair-wheel-command = ""  # Skip auditwheel repair
 
 # Set Rust and library paths
 # SKIP_GUEST_BUILD=1: Use the restored boxlite-guest from the Ubuntu host
-environment = { SKIP_GUEST_BUILD = "1", PATH = "/usr/local/go/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH", PKG_CONFIG_PATH = "/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig", LD_LIBRARY_PATH = "/usr/local/lib64:/usr/local/lib" }
+environment = { SKIP_GUEST_BUILD = "1", PATH = "/usr/local/go/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH", PKG_CONFIG_PATH = "/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig", LD_LIBRARY_PATH = "/usr/local/lib64:/usr/local/lib", RUSTC_WRAPPER = "/usr/local/bin/sccache", SCCACHE_GHA_ENABLED = "false", SCCACHE_DIR = "/tmp/boxlite-sccache", SCCACHE_CACHE_SIZE = "1G", SCCACHE_DIRECT = "false", SCCACHE_BASEDIRS = "/project", CARGO_INCREMENTAL = "0" }
 
-# Keep the GHA cache credentials available for the planned stable-wrapper fix.
-# Do not pass the host's relative RUSTC_WRAPPER: cibuildwheel rebuilds PATH for each Python.
-environment-pass = ["ACTIONS_RESULTS_URL", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_CACHE_SERVICE_V2", "SCCACHE_GHA_ENABLED"]
+# Only the path crosses into the container; compiler results need no remote credentials.
+environment-pass = ["BOXLITE_HOST_SCCACHE_DIR"]
+
+# Stop the shared-cache server before wheel tests and container teardown.
+before-test = "/usr/local/bin/sccache --stop-server >/dev/null 2>&1 || true"
 
 # Retag wheel for PyPI compliance without bundling libs (we handle runtime deps ourselves)
 # Uses 'wheel tags' to change linux_x86_64 -> manylinux_2_28_x86_64

@@ -24,6 +24,7 @@ on:
       - 'apps/openapitools.json'
       - 'openapi/box.openapi.yaml'
       - '.github/workflows/api-client-drift.yml'
+      - '!**/*.md'
 
 permissions:
   contents: read
