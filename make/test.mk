@@ -376,6 +376,17 @@ test\:perf\:import-export: runtime
 	@cargo test --release -p boxlite --features krun,gvproxy \
 		--test import_export_benchmark -- --ignored --test-threads=1 --nocapture
 
+# Explicit opt-in: prepare the SDK before timing; never warm the image cache here.
+STARTUP_PYTHON ?= $(PROJECT_ROOT)/.venv/bin/python
+export STARTUP_ARGS
+test\:perf\:startup:
+	@$(STARTUP_PYTHON) $(SCRIPT_DIR)/benchmark/startup.py
+
+test\:unit\:startup:
+	@python3 -m unittest discover -s scripts/benchmark -p 'test_*.py' -v
+
+PHONY_TARGETS += test\:perf\:startup test\:unit\:startup
+
 # BoxLite C SDK unit tests.
 test\:unit\:ffi:
 	@echo "🧪 Running BoxLite C SDK unit tests..."
