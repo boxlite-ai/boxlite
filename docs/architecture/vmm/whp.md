@@ -1,272 +1,376 @@
-# Windows Hypervisor Platform (design)
+# Understanding Windows Hypervisor Platform
 
-How the [VMM design](README.md) would run a box on Windows x86_64. Planned for M10: today `boxlite-hypervisor` only reserves the `whp` module.
+A visual introduction to WHP, using BoxLite's [planned native VMM](README.md).
+The example is a Linux x86_64 VM with 2 vCPUs, 512 MiB RAM and a virtual disk
+on a Windows host. This entire backend is planned for M10; the current code
+only reserves its module.
 
-## Components
-
-```mermaid
-flowchart TB
-  subgraph shim["boxlite-shim · one jailed process per box"]
-    run_thread["run() thread · poller"]
-    vcpu_threads["vcpuN threads"]
-    backend["boxlite-hypervisor · whp<br/>Vm · Vcpu · VcpuHandle<br/>WHvMapGpaRange"]
-    devices["MMIO and port buses<br/>8250 · RTC · i8042 · virtio<br/>M10: IOAPIC · PIC · PIT"]
-    workers["device workers"]
-    guest_ram["guest RAM · host memory"]
-    backends["host backends<br/>disks · shares<br/>gvproxy · console.log<br/>box.sock ← runtime"]
-  end
-  subgraph host_hv["Windows · WHP · M10"]
-    hv["vCPUs and guest memory"]
-    irqchip["local APIC emulation<br/>interrupts the guest"]
-  end
-  subgraph guest["guest VM"]
-    kernel["guest kernel<br/>virtio drivers"]
-    agent["boxlite-guest · PID 1<br/>zygote · containers"]
-  end
-  run_thread c_new@-->|"Vm::new · kick"| backend
-  vcpu_threads c_run@-->|"Vcpu::run → VcpuExit"| backend
-  vcpu_threads c_exits@-->|"MMIO and port exits"| devices
-  backend c_hv@-->|"WHvRunVirtualProcessor"| hv
-  hv c_guest@-->|"runs the guest"| kernel
-  devices c_notify@-->|"queue notify"| workers
-  kernel c_ram@-->|"RAM: no exit"| guest_ram
-  kernel c_pid1@-->|"PID 1"| agent
-  workers c_queues@-->|"virtqueues"| guest_ram
-  workers c_backends@-->|"blk · fs · vsock<br/>net · console"| backends
-  workers c_irq@-->|"Vm::set_irq_line · IOAPIC<br/>WHvRequestInterrupt"| irqchip
-```
-
-## Host to guest to host
-
-```mermaid
-sequenceDiagram
-  participant device as device · BusDevice
-  participant vcpu as vcpuN thread · host
-  participant backend as whp backend
-  participant host as WHP
-  participant guest as guest vCPU
-  %% edge:t_run
-  vcpu->>backend: Vcpu::run
-  %% edge:t_host_run
-  backend->>host: WHvRunVirtualProcessor
-  %% edge:t_enter
-  host->>guest: enters the guest
-  Note over host,guest: the guest runs natively · RAM stays in the guest
-  %% edge:t_trap
-  guest->>host: device address · MemoryAccess
-  %% edge:t_exit
-  host-->>backend: exit context<br/>instruction bytes, guest address
-  %% edge:t_decode
-  backend->>backend: whp::emulator decodes the access
-  %% edge:t_vcpu_exit
-  backend-->>vcpu: VcpuExit::MmioRead · guest_addr, bytes
-  %% edge:t_bus
-  vcpu->>device: BusDevice::read(offset, bytes)
-  %% edge:t_filled
-  device-->>vcpu: bytes filled
-  %% edge:t_again
-  vcpu->>backend: Vcpu::run again
-  %% edge:t_complete
-  backend->>host: writes the register, advances RIP<br/>WHvRunVirtualProcessor
-  %% edge:t_resume
-  host->>guest: the guest continues after its load
-```
-
-## Setup order
-
-```mermaid
-sequenceDiagram
-  participant caller as run() thread
-  participant vm as boxlite_vmm::Vm
-  participant backend as whp backend
-  participant whp as WHP
-  participant vcpu as vcpuN thread
-  %% edge:s_new
-  caller->>vm: Vm::new(config)
-  %% edge:s_partition
-  backend->>whp: constructor · WHvCreatePartition<br/>WHvSetPartitionProperty · vCPU count, APIC mode
-  %% edge:s_setup
-  backend->>whp: WHvSetupPartition
-  %% edge:s_map
-  vm->>backend: Vm::map_memory · RAM, split around 0xC000_0000
-  %% edge:s_gpa
-  backend->>whp: WHvMapGpaRange
-  %% edge:s_load
-  vm->>vm: load the kernel and boot_params
-  %% edge:s_run_call
-  caller->>vm: vm.run() · spawns the vCPU threads
-  loop each vCPU
-  %% edge:s_spawn
-  vm->>vcpu: spawn vcpuN
-  %% edge:s_create_vcpu
-  vcpu->>backend: Vm::create_vcpu(N), boot registers (M1)
-  %% edge:s_vp
-  backend->>whp: WHvCreateVirtualProcessor
-  %% edge:s_regs
-  backend->>whp: WHvSetVirtualProcessorRegisters<br/>registers, segments, MSRs
-  end
-  %% edge:s_vcpu_run
-  vcpu->>backend: Vcpu::run, once every vCPU exists
-  %% edge:s_whv_run
-  backend->>whp: WHvRunVirtualProcessor · enters the guest
-```
-
-## Boot: the VMM as boot loader, then the kernel and PID 1
-
-```mermaid
-sequenceDiagram
-  participant vm as boxlite_vmm::Vm · boot loader, no firmware
-  participant vcpu as boot vCPU · WHP
-  participant kernel as guest kernel · ring 0
-  participant init as boxlite-guest · PID 1
-  %% edge:b_load
-  vm->>vm: bzImage at 1 MiB, or vmlinux where its ELF<br/>headers say · boot_params at 0x7000: setup<br/>header, e820 map, cmd_line_ptr → the command<br/>line at 0x2_0000 · MP table at 0x9_FC00
-  %% edge:b_regs
-  vm->>vcpu: WHvSetVirtualProcessorRegisters<br/>RIP = the 64-bit entry, RSI = boot_params<br/>long mode, identity paging, GDT, IRQs off
-  %% edge:b_run
-  vcpu->>kernel: WHvRunVirtualProcessor<br/>the 64-bit entry runs natively
-  %% edge:b_head
-  kernel->>kernel: a bzImage decompresses itself · startup_64<br/>→ start_kernel · setup_arch reads boot_params
-  %% edge:b_smp
-  kernel->>kernel: smp_init: INIT and SIPI to each MP table AP
-  %% edge:b_probe
-  kernel->>vm: do_basic_setup probes each virtio_mmio.device=<br/>magic value, ID reads: MemoryAccess exits
-  %% edge:b_exec
-  kernel->>init: prepare_namespace mounts /dev/vdb read-only<br/>kernel_init execs /boxlite/bin/boxlite-guest
-  %% edge:b_agent
-  init->>init: sysctl hardening · forks the zygote<br/>before any thread
-  %% edge:b_ready
-  init->>vm: gRPC on vsock 2695 · connects to 2696: ready
-```
-
-## A process in the guest
-
-```mermaid
-sequenceDiagram
-  participant host as host · box.sock
-  participant vm as boxlite-vmm
-  participant kernel as guest kernel
-  participant init as boxlite-guest · PID 1
-  participant zygote as zygote
-  participant proc as container process
-  %% edge:p_guest_init
-  host->>init: Guest.Init over vsock 2695 · mounts, network
-  %% edge:p_container_init
-  host->>init: Container.Init · rootfs, OCI bundle
-  %% edge:p_build_init
-  init->>zygote: build_init
-  %% edge:p_clone
-  zygote->>proc: clone3: main →<br/>intermediate → init
-  %% edge:p_start
-  host->>init: Container.Start
-  %% edge:p_entry
-  init->>proc: init execs the entrypoint
-  %% edge:p_exec
-  host->>init: Execution.Exec
-  %% edge:p_build
-  init->>zygote: build · pipes by SCM_RIGHTS
-  %% edge:p_tenant
-  zygote->>proc: a tenant · PID 1 reaps it
-  %% edge:p_syscall
-  proc->>kernel: system calls: ring 3 → ring 0 · no exit
-  %% edge:p_write
-  proc->>init: writes stdout into its pipe
-  %% edge:p_attach
-  init->>kernel: Attach · ExecOutput · 2695
-  %% edge:p_notify
-  kernel->>vm: vsock notify · MemoryAccess
-  %% edge:p_host
-  vm->>host: vsock worker → box.sock
-```
-
-## vCPU lifecycle
+## 1. Architecture
 
 ```mermaid
 flowchart TB
-  created(["spawned by run()<br/>WHvCreateVirtualProcessor"])
-  waiting["waits until<br/>every vCPU exists"]
-  check["stop requested?"]
-  in_guest["in the guest<br/>WHvRunVirtualProcessor<br/>HLT waits here"]
-  dispatching["exit dispatched to a bus<br/>next run: register, RIP<br/>an i8042 write ends the VM"]
-  interrupted["Interrupted"]
-  ended(["thread returns<br/>joined by run()"])
-  created l_regs@-->|"boot registers"| waiting
-  waiting l_start@-->|"all created"| check
-  check l_enter@-->|"no"| in_guest
-  in_guest l_exit@-->|"MMIO · port exit"| dispatching
-  dispatching l_again@-->|"again"| check
-  in_guest l_kick@-->|"Canceled"| interrupted
-  interrupted l_continue@-->|"continue"| check
-  in_guest l_terminal@-->|"error"| ended
-  check l_stop@-->|"yes · pending I/O finished<br/>VmExit::StopRequested"| ended
+  subgraph vmm["VMM · one Windows process"]
+    disk["Virtual disk"]
+    worker["Disk worker"]
+    backing["Host allocation"]
+    ioapic["IOAPIC"]
+    coordinator["Coordinator"]
+    thread0["Thread T0"]
+    thread1["Thread T1"]
+  end
+  subgraph host["Host · WHP and CPU"]
+    lapic["Local APIC"]
+    host_api["WHP API"]
+    physical_cpu["Physical CPU"]
+  end
+  subgraph storage["Host · filesystem"]
+    disk_file[("Backing disk file")]
+  end
+  subgraph guest["VM · Linux, 2 vCPUs and 512 MiB RAM"]
+    guest_ram["Guest RAM"]
+    program["Application"]
+    kernel["Linux kernel"]
+    vcpu0["vCPU 0"]
+    vcpu1["vCPU 1"]
+  end
+  disk whp_2_e1@-->|"queue event"| worker
+  worker whp_2_e2@-->|"read blocks"| disk_file
+  worker whp_2_e3@-->|"queue data"| backing
+  backing whp_2_e4@-->|"same pages"| guest_ram
+  kernel whp_2_e5@-->|"buffers"| guest_ram
+  worker whp_2_e6@-->|"pulse IRQ"| ioapic
+  ioapic whp_2_e7@-->|"inject IRQ"| lapic
+  lapic whp_2_e8@-->|"deliver IRQ"| kernel
+  coordinator whp_1_e1@-->|"configure VM"| host_api
+  thread0 whp_1_e2@-->|"run vCPU 0"| host_api
+  thread1 whp_1_e3@-->|"run vCPU 1"| host_api
+  host_api whp_1_e4@-->|"guest mode"| physical_cpu
+  physical_cpu whp_1_e5@-->|"execute"| kernel
+  program whp_1_e6@-->|"system call"| kernel
+  kernel whp_1_e7@-->|"runs on"| vcpu0
+  kernel whp_1_e8@-->|"runs on"| vcpu1
 ```
 
-## Exits
+## 2. How it works
 
-```mermaid
-flowchart LR
-  subgraph whp_host["Windows Hypervisor Platform"]
-    whv_run["WHvRunVirtualProcessor<br/>fills the exit context"]
-    in_whp["stays inside the call<br/>HLT"]
-  end
-  subgraph whp_backend["boxlite-hypervisor · whp"]
-    r_canceled["Canceled"]
-    r_memory["MemoryAccess<br/>whp::emulator decodes it"]
-    r_io["X64IoPortAccess<br/>port · size · RAX"]
-    r_eoi["X64ApicEoi · vector"]
-  end
-  subgraph vcpu_side["VcpuExit to the vcpuN thread"]
-    x_interrupted["Interrupted"]
-    x_mmio["MmioRead · MmioWrite<br/>MMIO bus → BusDevice"]
-    x_io["IoIn · IoOut<br/>8250 · CMOS RTC · i8042<br/>userspace PIC, PIT (M10)"]
-    x_unhandled["Error::UnhandledExit"]
-  end
-  irqchip["userspace IOAPIC<br/>M10 picks the crate"]
-  whv_run e_canceled@-->|"ExitReason"| r_canceled
-  whv_run e_memory@-->|"ExitReason"| r_memory
-  whv_run e_io@-->|"ExitReason"| r_io
-  whv_run e_eoi@-->|"ExitReason"| r_eoi
-  whv_run e_other@-->|"any other exit"| x_unhandled
-  r_canceled e_interrupted@-->|"kick"| x_interrupted
-  r_memory e_to_mmio@-->|"next run: register, RIP"| x_mmio
-  r_io e_to_io@-->|"next run: RAX, RIP"| x_io
-  r_eoi e_to_irqchip@-->|"level-triggered EOI"| irqchip
-  r_io e_string@-->|"string port I/O"| x_unhandled
-```
-
-## I/O, interrupts and stop
+### 2.1 Create and configure a partition
 
 ```mermaid
 sequenceDiagram
-  participant vcpu as vcpuN thread
-  participant worker as device worker
-  participant irqchip as userspace IOAPIC
-  participant backend as whp backend
-  participant whp as WHP
-  participant runner as run() thread
-  participant shim as SIGTERM path
-  %% edge:i_notify
-  vcpu->>worker: queue notify
-  %% edge:i_set_line
-  worker->>irqchip: Vm::set_irq_line(GSI, high)
-  %% edge:i_request
-  irqchip->>whp: WHvRequestInterrupt
-  %% edge:i_wake
-  whp-->>vcpu: local APIC wakes the vCPU in HLT
-  %% edge:i_stop
-  shim->>runner: stop.stop()
-  %% edge:i_flag
-  runner->>runner: set the stop flag
-  %% edge:i_kick
-  runner->>backend: VcpuHandle::kick and unpark, every vCPU
-  %% edge:i_cancel
-  backend->>whp: cancel · WHvCancelRun<br/>VirtualProcessor
-  %% edge:i_canceled
-  whp-->>vcpu: Canceled → Interrupted
-  %% edge:i_join
-  vcpu-->>runner: thread ends · joined
-  %% edge:i_workers
-  runner->>worker: stop and join
-  %% edge:i_return
-  runner->>runner: returns VmExit::StopRequested
+  box VMM · machine setup
+    participant coordinator as VM coordinator
+  end
+  box Host · Windows API and virtual CPU support
+    participant host_api as WHP
+    participant partition as Partition
+    participant lapic as Local APICs
+  end
+  %% edge:whp_3_e1
+  coordinator->>host_api: WHvGetCapability: check required support
+  %% edge:whp_3_e2
+  coordinator->>host_api: WHvCreatePartition
+  %% edge:whp_3_e3
+  host_api-->>partition: Create empty partition
+  %% edge:whp_3_e4
+  coordinator->>host_api: WHvSetPartitionProperty<br/>2 processors and local-APIC emulation
+  %% edge:whp_3_e5
+  coordinator->>host_api: WHvSetupPartition
+  %% edge:whp_3_e6
+  host_api->>partition: Allocate configured<br/>partition resources
+  %% edge:whp_3_e7
+  host_api->>lapic: Enable local-APIC<br/>emulation
+  Note over coordinator,partition: WHP calls a VM a partition and a vCPU a virtual processor (VP)
 ```
+
+### 2.2 Build the userspace chipset
+
+```mermaid
+sequenceDiagram
+  box VMM · emulated hardware, planned for M10
+    participant coordinator as VM coordinator
+    participant ioapic as IOAPIC
+    participant pic as PIC
+    participant pit as PIT timer
+    participant disk as Virtual disk
+    participant worker as I/O worker
+  end
+  %% edge:whp_4_e1
+  coordinator->>ioapic: Create device IRQ routing
+  %% edge:whp_4_e2
+  coordinator->>pic: Create legacy interrupt controller
+  %% edge:whp_4_e3
+  coordinator->>pit: Create interval timer
+  %% edge:whp_4_e4
+  coordinator->>disk: Configure registers and device interrupt line
+  %% edge:whp_4_e5
+  disk->>worker: Start disk worker
+  Note over coordinator,worker: WHP supplies local APICs, while these chipset devices run in the VMM<br/>M10 chooses the crate that implements IOAPIC, PIC and PIT
+```
+
+### 2.3 Map RAM and load Linux
+
+```mermaid
+sequenceDiagram
+  box VMM · memory and boot loading
+    participant coordinator as VM coordinator
+    participant backing as Host allocation
+  end
+  box Host · Windows API
+    participant host_api as WHP
+  end
+  box VM · guest address space
+    participant guest_ram as Guest RAM
+  end
+  %% edge:whp_5_e1
+  coordinator->>backing: Allocate 512 MiB
+  %% edge:whp_5_e2
+  coordinator->>host_api: WHvMapGpaRange<br/>host address, guest physical address, size, permissions
+  %% edge:whp_5_e3
+  host_api->>guest_ram: Map the same host pages
+  %% edge:whp_5_e4
+  coordinator->>backing: Write x86 Linux kernel and boot data<br/>boot_params, command line, MP table and initial page tables
+  Note over backing,guest_ram: Guest RAM is a view of the host allocation<br/>Larger RAM layouts preserve the x86 device hole beginning at 3 GiB
+```
+
+### 2.4 Create virtual processors and boot Linux
+
+```mermaid
+sequenceDiagram
+  box VMM · one thread per vCPU
+    participant coordinator as VM coordinator
+    participant thread0 as Thread T0
+    participant thread1 as Thread T1
+  end
+  box Host · Windows API
+    participant host_api as WHP
+  end
+  box VM · guest software
+    participant kernel as Linux kernel
+  end
+  %% edge:whp_6_e1
+  coordinator->>thread0: Start T0
+  %% edge:whp_6_e2
+  coordinator->>thread1: Start T1
+  %% edge:whp_6_e3
+  thread0->>host_api: WHvCreateVirtualProcessor: VP 0
+  %% edge:whp_6_e4
+  thread1->>host_api: WHvCreateVirtualProcessor: VP 1
+  Note over thread0,host_api: WHvSetVirtualProcessorRegisters supplies the full x86 startup state<br/>Boot CPU: RIP = 64-bit entry, RSI = boot_params, paging on, interrupts masked
+  %% edge:whp_6_e5
+  thread0->>host_api: Set boot CPU registers
+  %% edge:whp_6_e6
+  thread1->>host_api: Set secondary CPU startup state
+  Note over thread0,host_api: Both VPs exist before guest execution begins
+  %% edge:whp_6_e7
+  thread0->>host_api: WHvRunVirtualProcessor: VP 0
+  %% edge:whp_6_e8
+  thread1->>host_api: WHvRunVirtualProcessor: VP 1
+  %% edge:whp_6_e9
+  host_api->>kernel: Physical CPU<br/>executes Linux
+  Note over host_api,kernel: Linux boots and starts secondary CPUs<br/>using INIT/SIPI, then starts userspace<br/>and the example application
+```
+
+### 2.5 A file read reaches a device register
+
+```mermaid
+sequenceDiagram
+  box VM · guest software and memory
+    participant program as Application
+    participant kernel as Linux kernel<br/>and disk driver
+    participant guest_ram as Guest RAM
+  end
+  box Host · Windows API
+    participant host_api as WHP
+  end
+  box VMM · vCPU 0 thread
+    participant thread0 as Thread T0
+  end
+  Note over program,thread0: Example: Linux has booted, a 4 KiB file read misses the cache and succeeds<br/>Follow its disk request on vCPU 0
+  %% edge:whp_7_e1
+  program->>kernel: read(fd, buf, 4096)
+  %% edge:whp_7_e2
+  kernel->>guest_ram: Write request and<br/>buffer addresses<br/>into the virtqueue
+  Note over program,guest_ram: System calls and mapped RAM accesses stay in the guest<br/>A virtqueue holds requests and completions in guest RAM
+  %% edge:whp_7_e3
+  kernel->>host_api: Write the disk's queue-notify register<br/>MMIO = a device register at a guest memory address
+  %% edge:whp_7_e4
+  host_api-->>thread0: Run call returns<br/>MemoryAccess exit
+  %% edge:whp_7_e5
+  thread0->>thread0: WHP emulator decodes<br/>instruction bytes and<br/>guest address<br/>into MmioWrite
+```
+
+### 2.6 Resume Linux while the worker reads the disk
+
+```mermaid
+sequenceDiagram
+  box VMM · device emulation and host I/O
+    participant thread0 as Thread T0
+    participant disk as Virtual disk
+    participant worker as I/O worker
+  end
+  box Host · Windows API and storage
+    participant host_api as WHP
+    participant disk_file as Backing disk file
+  end
+  box VM · guest memory
+    participant guest_ram as Guest RAM
+  end
+  %% edge:whp_8_e1
+  thread0->>disk: Bus dispatches<br/>MmioWrite
+  %% edge:whp_8_e2
+  disk->>worker: Signal queue event
+  par Guest execution
+  %% edge:whp_8_e3
+    thread0->>thread0: WHP emulator completes<br/>the write and advances RIP
+  %% edge:whp_8_e4
+    thread0->>host_api: WHvRunVirtualProcessor: Linux continues
+  and Device worker
+  %% edge:whp_8_e5
+    worker->>guest_ram: Read request through the host mapping
+  %% edge:whp_8_e6
+    worker->>disk_file: Read requested disk blocks
+  %% edge:whp_8_e7
+    disk_file-->>worker: Return bytes
+  %% edge:whp_8_e8
+    worker->>guest_ram: Write bytes to guest buffers, then publish completion
+  end
+  Note over thread0,guest_ram: Re-entry and host I/O proceed independently<br/>Linux can run other work while this read waits
+```
+
+### 2.7 Route the disk interrupt through the userspace IOAPIC
+
+```mermaid
+sequenceDiagram
+  box VMM · device completion and IRQ routing
+    participant worker as I/O worker
+    participant ioapic as IOAPIC
+  end
+  box Host · Windows API and per-vCPU interrupts
+    participant host_api as WHP
+    participant lapic as Local APIC
+  end
+  box VM · guest interrupt handler
+    participant kernel as Linux kernel
+  end
+  Note over worker,host_api: Continue once the worker publishes completion (2.6)<br/>Guest re-entry may still be pending
+  %% edge:whp_9_e1
+  worker->>ioapic: Pulse the disk's<br/>edge-triggered line
+  %% edge:whp_9_e2
+  ioapic->>host_api: WHvRequestInterrupt<br/>vector and destination
+  %% edge:whp_9_e3
+  host_api->>lapic: Set pending<br/>interrupt
+  %% edge:whp_9_e4
+  lapic->>kernel: Deliver IRQ<br/>when accepted
+  Note over host_api,kernel: With local-APIC emulation enabled, HLT waits inside the run call<br/>An interrupt can wake that waiting virtual processor
+```
+
+### 2.8 Linux completes the file read
+
+```mermaid
+sequenceDiagram
+  box VM · guest execution on vCPU 0
+    participant kernel as Linux kernel<br/>and disk driver
+    participant guest_ram as Guest RAM
+    participant program as Application
+  end
+  Note over kernel,program: The host worker has filled the shared buffers<br/>Linux now completes the read inside the guest
+  %% edge:whp_10_e1
+  kernel->>guest_ram: Read completion<br/>and file bytes
+  %% edge:whp_10_e2
+  kernel-->>program: read() returns 4096 bytes
+```
+
+### 2.9 A level-triggered device also needs EOI feedback
+
+```mermaid
+sequenceDiagram
+  box VM · guest interrupt handler
+    participant kernel as Linux kernel
+  end
+  box Host · Windows API
+    participant host_api as WHP
+  end
+  box VMM · exit handling and device IRQ routing
+    participant thread0 as Thread T0
+    participant ioapic as IOAPIC
+  end
+  Note over kernel,ioapic: This is the level-triggered case, separate from the edge-triggered disk example<br/>EOI means end of interrupt
+  %% edge:whp_11_e1
+  kernel->>host_api: Acknowledge completion in local APIC
+  %% edge:whp_11_e2
+  host_api-->>thread0: X64ApicEoi exit<br/>includes vector
+  %% edge:whp_11_e3
+  thread0->>ioapic: Forward EOI vector
+  %% edge:whp_11_e4
+  ioapic->>ioapic: Update in-service state<br/>and reevaluate the line
+  %% edge:whp_11_e5
+  thread0->>host_api: Resume virtual processor
+```
+
+### 2.10 Stop the vCPU threads
+
+```mermaid
+sequenceDiagram
+  box VMM · lifecycle and vCPU owners
+    participant coordinator as VM coordinator
+    participant thread0 as Thread T0
+    participant thread1 as Thread T1
+  end
+  box Host · Windows API
+    participant host_api as WHP
+  end
+  %% edge:whp_12_e1
+  coordinator->>coordinator: Set shared stop flag
+  %% edge:whp_12_e2
+  coordinator->>host_api: WHvCancelRunVirtualProcessor for each running VP
+  %% edge:whp_12_e3
+  host_api-->>thread0: Run returns Canceled
+  %% edge:whp_12_e4
+  host_api-->>thread1: Run returns Canceled
+  Note over thread0,host_api: Check stop before any re-entry, including when already outside the run call<br/>Complete pending emulation without executing another guest instruction
+  %% edge:whp_12_e5
+  thread0-->>coordinator: Exit loop, join T0
+  %% edge:whp_12_e6
+  thread1-->>coordinator: Exit loop, join T1
+```
+
+### 2.11 Release the remaining resources
+
+```mermaid
+sequenceDiagram
+  box VMM · lifecycle and remaining resources
+    participant coordinator as VM coordinator
+    participant worker as I/O worker
+    participant backing as Host allocation
+  end
+  box Host · Windows API
+    participant host_api as WHP
+  end
+  Note over coordinator,host_api: Both vCPU threads have ended
+  %% edge:whp_13_e1
+  coordinator->>worker: Stop and join
+  %% edge:whp_13_e2
+  worker-->>coordinator: No more guest-memory accesses
+  %% edge:whp_13_e3
+  coordinator->>host_api: WHvDeleteVirtualProcessor for each VP
+  %% edge:whp_13_e4
+  coordinator->>host_api: WHvUnmapGpaRange for each RAM mapping
+  %% edge:whp_13_e5
+  coordinator->>host_api: WHvDeletePartition
+  %% edge:whp_13_e6
+  coordinator->>backing: Free the host allocation after unmapping
+  %% edge:whp_13_e7
+  coordinator->>coordinator: Release userspace chipset<br/>and device resources
+```
+
+## BoxLite implementation reference
+
+[Crate responsibilities](README.md#architecture) ·
+[Backend API contract](README.md#hypervisor-backend-interface) ·
+[Exit decoding](README.md#exit-contract) ·
+[Memory layout](memory.md) ·
+[Boot registers and boot data](README.md#boot-path) ·
+[Threads and lifecycle](README.md#threads) ·
+[Windows M10 scope](README.md#room-for-later-milestones) ·
+[WHP API](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/hypervisor-platform) ·
+[QEMU WHP exit handling](https://github.com/qemu/qemu/blob/f8aef8a9aed7438083c400da10acabdec485dc9b/target/i386/whpx/whpx-all.c#L2332-L2342)
