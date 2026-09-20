@@ -41,6 +41,68 @@ Key test entry points:
 - `make test:all:python` - Python unit + integration suites
 - `make test:all:c` - C SDK suite via CMake/CTest
 
+### Coverage
+
+`make codecov` collects fresh Rust coverage and fails below **90% line
+coverage**. Codecov applies the same minimum to total project coverage and
+changed lines, with no allowed drop. A successful test run alone does not pass
+the coverage gate.
+
+The Rust report combines core, shared, REST, CLI (including authentication
+integration tests), C/Node/Python native bindings, native VMM, and the
+runtime/shutdown/network tests that need no VM. Linux also collects guest unit
+coverage. Vendored dependencies,
+standalone tests, and test scaffolding are excluded; production guest and SDK
+paths are not ignored by Codecov. SDK language wrappers, cloud apps, and shim
+subprocess execution are separate from the Rust unit report.
+
+The Test workflow also uploads Python and Node.js SDK coverage, Go SDK and
+networking bridge coverage, and cloud API coverage. Each reporter includes
+unvisited production files. Codecov carries forward reports for unchanged
+components when their path-filtered jobs are skipped.
+
+| Command | Report under `target/coverage/` | Requirements |
+| --- | --- | --- |
+| `make coverage:python` | `python/coverage.xml` | Python development dependencies |
+| `make coverage:node` | `node/lcov.info` | Node.js 20+ and SDK dependencies |
+| `make coverage:go` | `go-sdk.out`, `gvproxy.out` | Native runtime and Go toolchain |
+| `make coverage:api` | `api/lcov.info` | App dependencies, Postgres, Redis |
+
+On a VM-capable host, `make coverage:python:integration` and
+`make coverage:node:integration` build the native SDKs and run both unit and
+integration tests, replacing their reports with the combined results. Python
+tests marked `e2e` still require separate external services and credentials.
+
+These collectors produce reports; the Codecov project check applies the 90%
+floor to their combined coverage. The local `coverage:check` target checks
+Rust profiles only. A report does not establish coverage for components that
+have not been instrumented: shim subprocesses, the cloud runner/proxy, and
+dashboard still require additional collection.
+
+```bash
+# Unit and non-VM coverage, using the same dependency stubs as CI.
+BOXLITE_DEPS_STUB=1 make codecov
+
+# Generate a report without enforcing the floor while investigating gaps.
+BOXLITE_DEPS_STUB=1 make coverage:lcov
+
+# On a VM-capable host, add runtime and CLI integration coverage to it.
+# Leave BOXLITE_DEPS_STUB unset for the real runtime build and execution.
+make coverage:integration
+make coverage:check
+```
+
+LCOV is written to `target/coverage/lcov.info`; `make coverage` and
+`make coverage:integration` also write `target/coverage/html/index.html`.
+Collection starts clean for unit coverage; integration coverage appends to
+those profiles. Do not run Rust collectors concurrently in one checkout.
+Use `make coverage:report` to inspect partial Rust profiles after a test failure;
+such a report does not make the failed test run successful.
+
+The accumulation uses cargo-llvm-cov's `--no-report` followed by `report`, as
+in its [upstream CI workflow](https://github.com/taiki-e/cargo-llvm-cov/blob/main/.github/workflows/ci.yml#L448-L450).
+Threshold behavior follows [Codecov's status configuration](https://docs.codecov.com/docs/commit-status).
+
 ## How to Contribute
 
 ### Reporting Issues

@@ -36,7 +36,7 @@ is *exclusively* callable; the other four can also be dispatched on their own.
 | --- | --- | --- | --- |
 | `config.yml` | `workflow_call` | call-only | Single source of the platform matrix and language versions |
 | `lint.yml` | push, PR, merge_group | — | Format and lint per language, plus the infra suite. `Lint (conclusion)` is the required check |
-| `test.yml` | push, PR, merge_group | — | Unit tests for every SDK. No VM tests — hosted runners have no nested virtualization |
+| `test.yml` | push, PR, merge_group | — | SDK unit tests and Rust coverage, including guest tests on Linux and non-VM integration tests. Requires 90% Rust line coverage |
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
 | `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs |
 | `unreviewed-pr.yml` | PR (target) | — | Commits `UNREVIEWED.md` and drafts a pull request until its author deletes the file and marks it ready. `Author reviewed the PR` is the check |
@@ -70,13 +70,13 @@ every consumer.
 
 | Action | Sites | Used by |
 | --- | --- | --- |
-| `setup-rust` | 13 | build-c, build-node, build-runtime ×2, build-wheels, lint ×3, test ×4, warm-caches |
-| `sccache` | 9 | build-c, build-node, build-runtime, build-wheels, lint ×2, test ×2, warm-caches |
+| `setup-rust` | 12 | build-c, build-node, build-runtime ×2, build-wheels, lint ×3, test ×3, warm-caches |
+| `sccache` | 8 | build-c, build-node, build-runtime, build-wheels, lint ×2, test, warm-caches |
 | `build-guest` | 5 | build-c, build-node, build-runtime, build-wheels, warm-caches |
 | `upload-to-release` | 5 | build-c, build-node, build-runner-binary, build-runtime, build-wheels |
 | `run-in-manylinux` | 4 | build-c, build-node, build-runtime, warm-caches |
 | `setup-go` | 4 | build-go, build-runner-binary, lint, test |
-| `setup-python` | 3 | build-wheels, lint, test |
+| `setup-python` | 4 | build-wheels, lint, test ×2 |
 | `setup-buildx` | 2 | build-box-images, release-box-images |
 
 Two ordering rules, stated in each action's own header: `sccache` runs after `setup-rust`, and

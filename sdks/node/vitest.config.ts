@@ -5,6 +5,12 @@ export default defineConfig({
     environment: "node",
     globals: true,
     reporters: ["verbose"],
+    coverage: {
+      provider: "v8",
+      include: ["lib/**/*.ts"],
+      reporter: ["text", ["lcov", { projectRoot: "../.." }]],
+      reportsDirectory: "../../target/coverage/node",
+    },
     projects: [
       {
         extends: true,
