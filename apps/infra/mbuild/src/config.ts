@@ -46,7 +46,7 @@ export const STAGE_FILENAME = '.mstage.config.json'
  * resolves the stage's coordinates and sign-in, and mdeploy takes `deploy` —
  * what shape the stage is deployed into, which no build has an opinion about.
  */
-const MSTAGE_STAGE_KEYS = ['home', 'region', 'project', 'zone', 'roleArn', 'protect', 'login']
+const MSTAGE_STAGE_KEYS = ['home', 'region', 'project', 'zone', 'promoteFrom', 'roleArn', 'protect', 'login']
 const MDEPLOY_STAGE_KEYS = ['deploy']
 const BORROWED_STAGE_KEYS = [...MSTAGE_STAGE_KEYS, ...MDEPLOY_STAGE_KEYS]
 

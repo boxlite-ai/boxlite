@@ -1,6 +1,6 @@
 //! Login-style process setup for SSH shell, exec, and SFTP helpers.
 
-use crate::container::user_profile::{root_session_profile, RootSessionProfile};
+use crate::container::user_profile::{session_profile, SessionProfile};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::ffi::OsString;
 use std::os::unix::process::CommandExt as _;
@@ -28,12 +28,8 @@ pub(crate) fn parse_internal_args(args: &[String]) -> BoxliteResult<SessionActio
 /// Run after libcontainer has applied the tenant's namespaces and credentials,
 /// which is what makes the passwd lookup resolve inside the container.
 pub(crate) fn run_internal(action: SessionAction) -> BoxliteResult<()> {
-    let profile = root_session_profile();
-    enter_root_home(&profile)?;
-    // OpenSSH exports the account's shell alongside HOME (session.c, `do_child`).
-    // libcontainer already seeded HOME from the same passwd entry, and
-    // `enter_root_home` narrows it to the directory actually entered.
-    std::env::set_var("SHELL", &profile.login_shell);
+    let profile = prepare_environment()?;
+    enter_home(&profile)?;
 
     match action {
         SessionAction::Shell => exec_login_shell(&profile),
@@ -41,16 +37,20 @@ pub(crate) fn run_internal(action: SessionAction) -> BoxliteResult<()> {
     }
 }
 
-/// Apply root's home before the SFTP protocol loop starts.
-pub(crate) fn prepare_sftp_home() -> BoxliteResult<()> {
-    enter_root_home(&root_session_profile())
+pub(super) fn prepare_environment() -> BoxliteResult<SessionProfile> {
+    let profile = session_profile()?;
+    std::env::set_var("USER", &profile.name);
+    std::env::set_var("LOGNAME", &profile.name);
+    std::env::set_var("HOME", &profile.home_dir);
+    std::env::set_var("SHELL", &profile.login_shell);
+    Ok(profile)
 }
 
-fn enter_root_home(profile: &RootSessionProfile) -> BoxliteResult<()> {
+pub(super) fn enter_home(profile: &SessionProfile) -> BoxliteResult<()> {
     std::env::set_current_dir(&profile.home_dir).or_else(|home_error| {
         std::env::set_current_dir("/").map_err(|fallback_error| {
             BoxliteError::Execution(format!(
-                "failed to enter SSH root home {} ({home_error}) and fallback / ({fallback_error})",
+                "failed to enter SSH user home {} ({home_error}) and fallback / ({fallback_error})",
                 profile.home_dir
             ))
         })
@@ -62,7 +62,7 @@ fn enter_root_home(profile: &RootSessionProfile) -> BoxliteResult<()> {
     Ok(())
 }
 
-fn exec_login_shell(profile: &RootSessionProfile) -> BoxliteResult<()> {
+fn exec_login_shell(profile: &SessionProfile) -> BoxliteResult<()> {
     let shell_name = Path::new(&profile.login_shell)
         .file_name()
         .ok_or_else(|| BoxliteError::Execution("SSH login shell has no basename".into()))?;
@@ -78,7 +78,7 @@ fn exec_login_shell(profile: &RootSessionProfile) -> BoxliteResult<()> {
     )))
 }
 
-fn exec_command(profile: &RootSessionProfile, command: &str) -> BoxliteResult<()> {
+fn exec_command(profile: &SessionProfile, command: &str) -> BoxliteResult<()> {
     // The SSH payload remains one argv value after `-c`; it is never split or
     // interpolated by the guest bridge before the account shell receives it.
     let error = Command::new(&profile.login_shell)
@@ -109,5 +109,28 @@ mod tests {
             parse_internal_args(&["exec".into(), command.into()]).unwrap(),
             SessionAction::Exec(command.into())
         );
+    }
+
+    #[test]
+    fn missing_configured_shell_returns_its_path_in_the_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let shell = directory
+            .path()
+            .join("missing-shell")
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let profile = SessionProfile {
+            name: "app".into(),
+            home_dir: "/".into(),
+            login_shell: shell.clone(),
+        };
+        for error in [
+            exec_command(&profile, "true").unwrap_err(),
+            exec_login_shell(&profile).unwrap_err(),
+        ] {
+            assert!(error.to_string().contains(&shell));
+            assert!(error.to_string().contains("No such file or directory"));
+        }
     }
 }

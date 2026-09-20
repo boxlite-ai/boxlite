@@ -683,12 +683,17 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tokio-vsock",
  "tonic",
  "tracing",
  "tracing-subscriber",
  "uuid",
 ]
+
+[[package]]
+name = "boxlite-hypervisor"
+version = "0.10.2"
 
 [[package]]
 name = "boxlite-node"
@@ -762,6 +767,13 @@ dependencies = [
  "paste",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "boxlite-vmm"
+version = "0.10.2"
+dependencies = [
+ "boxlite-hypervisor",
 ]
 
 [[package]]

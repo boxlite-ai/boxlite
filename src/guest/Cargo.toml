@@ -25,6 +25,7 @@ async-trait = "0.1"
 uuid = { version = "1.10", features = ["v4"] }
 tonic = "0.12"
 tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 futures = "0.3"
 async-stream = "0.3"
 clap = { version = "4.5", features = ["derive"] }

@@ -1,4 +1,7 @@
-PHONY_TARGETS += guest shim runtime cli cli\:release skillbox-image build\:apps
+PHONY_TARGETS += guest shim runtime vmm cli cli\:release skillbox-image build\:apps
+
+vmm:
+	@cargo build -p boxlite-hypervisor -p boxlite-vmm
 
 guest: export _BOXLITE_GUEST_TARGET_ARG := $(value GUEST_TARGET)
 guest: export _BOXLITE_PROFILE_ARG := $(value PROFILE)

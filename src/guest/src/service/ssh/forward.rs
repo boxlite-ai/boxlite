@@ -137,13 +137,17 @@ impl Drop for ReverseListenerRegistration {
 pub(crate) struct ForwardingManager {
     connection_permits: Arc<Semaphore>,
     reverse_listeners: ReverseListenerRegistry,
+    tasks: Arc<super::TaskGroup>,
+    cancel: tokio_util::sync::CancellationToken,
 }
 
 impl ForwardingManager {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(tasks: Arc<super::TaskGroup>) -> Self {
         Self {
             connection_permits: Arc::new(Semaphore::new(MAX_FORWARD_CONNECTIONS)),
             reverse_listeners: ReverseListenerRegistry::default(),
+            tasks,
+            cancel: Default::default(),
         }
     }
 
@@ -185,7 +189,13 @@ impl ForwardingManager {
             };
 
         reply.accept().await;
-        spawn_relay(channel, stream, permit);
+        spawn_relay(
+            channel,
+            stream,
+            permit,
+            self.tasks.clone(),
+            self.cancel.clone(),
+        );
     }
 
     /// Bind a loopback-only reverse forwarding listener.
@@ -228,15 +238,77 @@ impl ForwardingManager {
         };
 
         *requested_port = u32::from(bound_port);
-        spawn_reverse_listener(
-            listener,
-            address,
-            bound_port,
-            session_handle,
-            self.connection_permits.clone(),
-            registration,
-        );
+        self.spawn_reverse_listener(listener, address, bound_port, session_handle, registration);
         true
+    }
+
+    fn spawn_reverse_listener(
+        &self,
+        listener: TcpListener,
+        connected_address: String,
+        connected_port: u16,
+        session_handle: SessionHandle,
+        mut registration: ReverseListenerRegistration,
+    ) {
+        let tasks = self.tasks.clone();
+        let permits = self.connection_permits.clone();
+        let connection_cancel = self.cancel.clone();
+        tasks.clone().spawn_tracked(move |cancel| async move {
+            let mut pending_opens = JoinSet::new();
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = registration.cancelled() => break,
+                    _ = cancel.cancelled() => break,
+                    completed = pending_opens.join_next(), if !pending_opens.is_empty() => {
+                        if let Some(Err(error)) = completed {
+                            warn!(%error, "SSH reverse TCP channel task failed");
+                        }
+                    }
+                    accepted = listener.accept() => {
+                        let (stream, originator) = match accepted {
+                            Ok(accepted) => accepted,
+                            Err(error) => {
+                                warn!(%error, "SSH reverse TCP listener failed");
+                                break;
+                            }
+                        };
+                        let Ok(permit) = permits.clone().try_acquire_owned() else {
+                            debug!(%originator, "SSH forwarding connection limit reached");
+                            continue;
+                        };
+
+                        let handle = session_handle.clone();
+                        let address = connected_address.clone();
+                        let tasks = tasks.clone();
+                        let connection_cancel = connection_cancel.clone();
+                        pending_opens.spawn(async move {
+                            let channel = tokio::time::timeout(
+                                FORWARD_CONNECT_TIMEOUT,
+                                handle.channel_open_forwarded_tcpip(
+                                    address,
+                                    u32::from(connected_port),
+                                    originator.ip().to_string(),
+                                    u32::from(originator.port()),
+                                ),
+                            )
+                            .await;
+                            match channel {
+                                Ok(Ok(channel)) => spawn_relay(channel, stream, permit, tasks, connection_cancel),
+                                Ok(Err(error)) => {
+                                    debug!(%error, "SSH client rejected reverse TCP channel")
+                                }
+                                Err(_) => {
+                                    debug!(%originator, "SSH reverse TCP channel request timed out")
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+
+            finish_reverse_listener(listener, pending_opens, registration).await;
+        });
     }
 
     pub(crate) async fn cancel_tcpip(&mut self, requested_address: &str, port: u32) -> bool {
@@ -253,6 +325,7 @@ impl ForwardingManager {
 
 impl Drop for ForwardingManager {
     fn drop(&mut self) {
+        self.cancel.cancel();
         self.reverse_listeners.cancel_all();
     }
 }
@@ -280,78 +353,22 @@ fn loopback_bind_address(requested: &str) -> Option<String> {
 fn spawn_relay(
     channel: Channel<Msg>,
     mut stream: TcpStream,
-    _permit: tokio::sync::OwnedSemaphorePermit,
+    permit: tokio::sync::OwnedSemaphorePermit,
+    tasks: Arc<super::TaskGroup>,
+    connection_cancel: tokio_util::sync::CancellationToken,
 ) {
-    tokio::spawn(async move {
+    tasks.spawn(async move {
+        let _permit = permit;
         let mut channel = channel.into_stream();
-        if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut stream).await {
+        let result = tokio::select! {
+            _ = connection_cancel.cancelled() => return,
+            result = tokio::io::copy_bidirectional(&mut channel, &mut stream) => result,
+        };
+        if let Err(error) = result {
             debug!(%error, "SSH TCP relay ended with an error");
         }
         let _ = tokio::io::AsyncWriteExt::shutdown(&mut channel).await;
         let _ = tokio::io::AsyncWriteExt::shutdown(&mut stream).await;
-    });
-}
-
-fn spawn_reverse_listener(
-    listener: TcpListener,
-    connected_address: String,
-    connected_port: u16,
-    session_handle: SessionHandle,
-    permits: Arc<Semaphore>,
-    mut registration: ReverseListenerRegistration,
-) {
-    tokio::spawn(async move {
-        let mut pending_opens = JoinSet::new();
-        loop {
-            tokio::select! {
-                biased;
-                _ = registration.cancelled() => break,
-                completed = pending_opens.join_next(), if !pending_opens.is_empty() => {
-                    if let Some(Err(error)) = completed {
-                        warn!(%error, "SSH reverse TCP channel task failed");
-                    }
-                }
-                accepted = listener.accept() => {
-                    let (stream, originator) = match accepted {
-                        Ok(accepted) => accepted,
-                        Err(error) => {
-                            warn!(%error, "SSH reverse TCP listener failed");
-                            break;
-                        }
-                    };
-                    let Ok(permit) = permits.clone().try_acquire_owned() else {
-                        debug!(%originator, "SSH forwarding connection limit reached");
-                        continue;
-                    };
-
-                    let handle = session_handle.clone();
-                    let address = connected_address.clone();
-                    pending_opens.spawn(async move {
-                        let channel = tokio::time::timeout(
-                            FORWARD_CONNECT_TIMEOUT,
-                            handle.channel_open_forwarded_tcpip(
-                                address,
-                                u32::from(connected_port),
-                                originator.ip().to_string(),
-                                u32::from(originator.port()),
-                            ),
-                        )
-                        .await;
-                        match channel {
-                            Ok(Ok(channel)) => spawn_relay(channel, stream, permit),
-                            Ok(Err(error)) => {
-                                debug!(%error, "SSH client rejected reverse TCP channel")
-                            }
-                            Err(_) => {
-                                debug!(%originator, "SSH reverse TCP channel request timed out")
-                            }
-                        }
-                    });
-                }
-            }
-        }
-
-        finish_reverse_listener(listener, pending_opens, registration).await;
     });
 }
 

@@ -10,11 +10,14 @@
  */
 
 import assert from 'node:assert/strict'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { promoteRunner } from '../src/runner-promote.ts'
 import { RunnerBuildError } from '../src/runner-build.ts'
-import { runnerArtifactsBucket } from '../stack/runner-binary.ts'
+import { gcpRunnerArtifactsBucket, runnerArtifactsBucket } from '../stack/runner-binary.ts'
 import type { CommandResult, RunCommand } from '../src/upgrade-runners.ts'
 
 const REF = 'b'.repeat(40)
@@ -23,6 +26,7 @@ const ARCHIVE = `boxlite-runner-v0.10.0-${REF}-linux-amd64.tar.gz`
 const EXAMPLE = fileURLToPath(new URL('../../.mstage.config.example.json', import.meta.url))
 
 const ok = (stdout = ''): CommandResult => ({ ok: true, status: 0, stdout, stderr: '' })
+const failed = (stderr: string): CommandResult => ({ ok: false, status: 1, stdout: '', stderr })
 const bucketFor = (stage: string) => runnerArtifactsBucket({ app: 'boxlite-app', stage, accountId: ACCOUNT })
 
 /** Two stages' buckets, each holding whatever the case says it holds. */
@@ -118,4 +122,96 @@ test('it addresses bytes, and refuses a name that is not one', async () => {
     async () => drive(cloud({}), ['--tag', REF, '--from', 'dev', '--to', 'dev']),
     /promoting "dev" to itself/,
   )
+})
+
+/*
+ * The same move on Google, where two stages are two projects.
+ *
+ * One session does the whole promotion — the destination's, because that is the
+ * one that has to write — so every call against the source bucket is made by an
+ * account from another project. What reaches across is a single grant on that
+ * one bucket, `roles/storage.objectViewer`, and it carries object reads and
+ * nothing else: no object role includes `storage.buckets.get`. So a promotion
+ * that asks the source for its metadata is refused however correct the copy
+ * would have been, and the account the refusal names is the destination's,
+ * which reads as the wrong bucket rather than as the wrong call.
+ */
+const PROJECTS: Record<string, string> = { dev2: 'your-gcp-project-id', prod2: 'another-gcp-project-id' }
+const gcpBucketFor = (stage: string) => gcpRunnerArtifactsBucket({ app: 'boxlite-app', stage, project: PROJECTS[stage]! })
+
+/**
+ * Two GCP stages, because the committed example declares one and a promotion
+ * needs both ends. Cloned from that example rather than written out here, so
+ * the fixture keeps whatever shape `loadConfig` currently accepts.
+ */
+const twoGoogleStages = (): { path: string; remove: () => void } => {
+  const declared = JSON.parse(readFileSync(EXAMPLE, 'utf8'))
+  const second = structuredClone(declared.stages.dev2)
+  second.project = PROJECTS.prod2
+  second.registry.repository = 'boxlite-app-prod2'
+  declared.stages.prod2 = second
+  const directory = mkdtempSync(join(tmpdir(), 'boxlite-promote-stages-'))
+  const path = join(directory, '.mstage.config.json')
+  writeFileSync(path, JSON.stringify(declared))
+  return { path, remove: () => rmSync(directory, { recursive: true, force: true }) }
+}
+
+/** What Cloud Storage answers an account holding `objectViewer` on the source and its own project's admin. */
+const googleCloud = (held: Record<string, string[]>, calls: string[][] = []): RunCommand => {
+  return (file, args) => {
+    calls.push([file, ...args])
+    const asked = args.join(' ')
+    if (asked.startsWith('storage buckets describe')) {
+      if (!asked.includes(gcpBucketFor('dev2'))) return ok('')
+      return failed(
+        `ERROR: (gcloud.storage.buckets.describe) [bl-app-prod2-deploy@${PROJECTS.prod2}.iam.gserviceaccount.com] does ` +
+          `not have permission to access b instance [${gcpBucketFor('dev2')}] (or it may not exist): ` +
+          "Permission 'storage.buckets.get' denied on resource",
+      )
+    }
+    if (asked.startsWith('storage ls')) {
+      const stage = Object.keys(held).find((name) => asked.includes(gcpBucketFor(name)))
+      const names = stage ? held[stage] ?? [] : []
+      if (names.length === 0) return failed('matched no objects')
+      return ok(names.map((name) => `gs://${gcpBucketFor(stage!)}/runner/${REF}/${name}`).join('\n'))
+    }
+    return ok('')
+  }
+}
+
+test('a cross-project source is read at object level, never asked for its metadata', async () => {
+  const stages = twoGoogleStages()
+  const calls: string[][] = []
+  try {
+    const code = await promoteRunner({
+      argv: ['--tag', REF, '--from', 'dev2', '--to', 'prod2'],
+      environment: { MSTAGE_CONFIG: stages.path },
+      cwd: new URL('../..', import.meta.url).pathname,
+      log: () => {},
+      checkLogin: async () => 0,
+      resolveHomeWith: (async () => ({
+        identity: { home: 'gcp', childEnvironment: async () => ({ env: {}, expiresAt: null }) },
+        backend: {},
+      })) as never,
+      run: googleCloud({ dev2: [ARCHIVE, `${ARCHIVE}.sha256`], prod2: [] }, calls),
+    })
+    assert.equal(code, 0)
+  } finally {
+    stages.remove()
+  }
+
+  const described = calls.filter(([file, ...rest]) => file === 'gcloud' && rest.join(' ').startsWith('storage buckets describe'))
+  assert.deepEqual(
+    described.map((call) => call.at(-1)),
+    [`gs://${gcpBucketFor('prod2')}`],
+    'only the bucket this session writes may be asked for its metadata',
+  )
+  const copies = calls.filter(([file, , verb]) => file === 'gcloud' && verb === 'cp').map((call) => call.slice(3, 5))
+  assert.deepEqual(copies, [
+    [`gs://${gcpBucketFor('dev2')}/runner/${REF}/${ARCHIVE}`, `gs://${gcpBucketFor('prod2')}/runner/${REF}/${ARCHIVE}`],
+    [
+      `gs://${gcpBucketFor('dev2')}/runner/${REF}/${ARCHIVE}.sha256`,
+      `gs://${gcpBucketFor('prod2')}/runner/${REF}/${ARCHIVE}.sha256`,
+    ],
+  ])
 })

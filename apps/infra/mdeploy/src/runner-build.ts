@@ -208,7 +208,10 @@ const awsListing = ({
   const listed = must(
     run,
     'aws',
-    // `head-bucket` below already needs s3:ListBucket, so this adds no permission.
+    // s3:ListBucket, which is also all `head-bucket` needs: proving the bucket
+    // and listing it cost one grant here. Cloud Storage prices them apart —
+    // `buckets describe` wants `storage.buckets.get`, which no object role
+    // carries — which is why only the GCP source is read by listing alone.
     ['s3api', 'list-objects-v2', '--region', region, '--bucket', bucket, '--prefix', `${prefix}/`, '--query', 'Contents[].Key', '--output', 'text'],
     `listing what is staged under ${prefix}/`,
   )

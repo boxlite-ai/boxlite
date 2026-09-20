@@ -14,6 +14,8 @@ $(shell \
   echo "$$CHANGED" | grep -q '^src/shared/' && printf 'rust '; \
   echo "$$CHANGED" | grep -q '^src/guest/' && printf 'rust '; \
   echo "$$CHANGED" | grep -q '^src/shim/' && printf 'rust '; \
+  echo "$$CHANGED" | grep -q '^src/hypervisor/' && printf 'rust '; \
+  echo "$$CHANGED" | grep -q '^src/vmm/' && printf 'rust '; \
   echo "$$CHANGED" | grep -q '^src/cli/' && printf 'cli '; \
   echo "$$CHANGED" | grep -q '^sdks/python/' && printf 'python '; \
   echo "$$CHANGED" | grep -q '^sdks/node/' && printf 'node '; \

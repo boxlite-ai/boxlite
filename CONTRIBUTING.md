@@ -52,13 +52,14 @@ Key test entry points:
 
 ### Pull Requests
 
-1. Fork the repository
+1. Fork the repository, unless you can push here: CI cannot mark a pull request opened from a fork, so it refuses one from an owner, member or collaborator and asks for a branch in this repository instead
 2. Create a feature branch (`git checkout -b feature/my-feature`)
 3. Make your changes
 4. Run quality and tests (`make lint && make fmt:check && make test`)
 5. Commit with clear messages — see [Commit & PR messages](#commit--pr-messages)
 6. Open a Pull Request
-7. Sign the [BoxLite Contributor License Agreement](./docs/legal/CLA.md) when CLA Assistant asks you to do so
+7. CI commits `UNREVIEWED.md` and converts the pull request to a draft. Read the diff, delete that file in a commit, and mark the pull request ready; merged with the file still there, it lands on the default branch and says so. From a fork nothing is committed and the check passes, since the workflow cannot write your branch — if it happens to carry `UNREVIEWED.md`, delete it anyway, or merging puts that file on the default branch
+8. Sign the [BoxLite Contributor License Agreement](./docs/legal/CLA.md) when CLA Assistant asks you to do so
 
 ### Watching CI and PR feedback
 

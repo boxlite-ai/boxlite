@@ -414,8 +414,6 @@ fn upgrade_to_attach_session(
 /// Only real input does. An empty frame carries none — a keepalive or a flush
 /// must not hold a box open past its AutoStop window, which is the same reason
 /// `/metrics` and a bare status read are excluded from the request clock.
-/// `docs/architecture/auto-stop-resume-design.md` states the rule as "a
-/// non-empty client data frame".
 fn frame_is_activity(bytes: &[u8]) -> bool {
     !bytes.is_empty()
 }

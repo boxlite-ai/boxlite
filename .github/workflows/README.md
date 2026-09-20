@@ -39,6 +39,7 @@ is *exclusively* callable; the other four can also be dispatched on their own.
 | `test.yml` | push, PR, merge_group | — | Unit tests for every SDK. No VM tests — hosted runners have no nested virtualization |
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
 | `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs |
+| `unreviewed-pr.yml` | PR (target) | — | Commits `UNREVIEWED.md` and drafts a pull request until its author deletes the file and marks it ready. `Author reviewed the PR` is the check |
 | `warm-caches.yml` | push, weekly, dispatch | — | Populates the sccache the other Rust builds read |
 | `build-runtime.yml` | `workflow_run`, release, dispatch | — | Core runtime and CLI; publishes crates |
 | `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |

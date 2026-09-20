@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Network Allowlist Example — DNS Sinkhole Filtering
+Network Allowlist Example — Connect-Time Egress Filtering
 
 Demonstrates NetworkSpec for controlling outbound network access:
   1. Default (Enabled, empty allow_net): full internet access
-  2. Allowlist: only allowed hosts resolve; others sinkholed to 0.0.0.0
+  2. Allowlist: every name resolves; only listed hosts can be connected to
   3. Disabled: no network interface at all
   4. Explicitly enabled: same as default
 
@@ -27,7 +27,6 @@ async def test_default_full_access():
         result = await sandbox.exec("nslookup", "example.com")
         print(f"  nslookup example.com: exit={result.exit_code}")
         assert result.exit_code == 0, f"should resolve, got exit={result.exit_code}"
-        assert "0.0.0.0" not in result.stdout, "should NOT be sinkholed"
         print("  result: resolved to real IP")
 
         result = await sandbox.exec("nslookup", "github.com")
@@ -35,11 +34,21 @@ async def test_default_full_access():
         assert result.exit_code == 0
         print("  result: resolved to real IP")
 
+        # Preflight for Test 2, which reads a failed connection to this host as
+        # the allowlist refusing it. That only follows if the host answers when
+        # nothing is filtering.
+        result = await sandbox.exec(
+            "wget", "-q", "-O-", "--timeout=5", "http://github.com/"
+        )
+        print(f"  wget http://github.com/: exit={result.exit_code}")
+        assert result.exit_code == 0, "github.com must be reachable with full access"
+        print("  result: connected")
+
     print("  PASS")
 
 
 async def test_allowlist_filtering():
-    """Test 2: Allowlist = only listed hosts resolve, others sinkholed."""
+    """Test 2: Allowlist = every name resolves, only listed hosts connect."""
     print("\n--- Test 2: Allowlist (network.allow_net=[example.com]) ---")
 
     async with boxlite.SimpleBox(
@@ -50,16 +59,36 @@ async def test_allowlist_filtering():
         result = await sandbox.exec("nslookup", "example.com")
         print(f"  nslookup example.com: exit={result.exit_code}")
         assert result.exit_code == 0, f"allowed host should resolve, got exit={result.exit_code}"
-        assert "0.0.0.0" not in result.stdout, "allowed host should NOT be sinkholed"
         print("  result: resolved to real IP (allowed)")
 
-        # Non-allowed host should be sinkholed to 0.0.0.0
+        # A non-allowed host still resolves: allow_net does not filter DNS.
+        # It is refused when the sandbox tries to connect.
         result = await sandbox.exec("nslookup", "github.com")
         print(f"  nslookup github.com: exit={result.exit_code}")
-        print(f"  stdout: {result.stdout.strip()[:200]}")
-        # Sinkholed hosts resolve to 0.0.0.0
-        assert "0.0.0.0" in result.stdout, f"non-allowed host should be sinkholed to 0.0.0.0"
-        print("  result: sinkholed to 0.0.0.0 (blocked)")
+        # Both halves: a failed lookup would also contain no "0.0.0.0".
+        assert result.exit_code == 0 and "Address" in result.stdout, (
+            "DNS is not filtered; the name must resolve"
+        )
+        assert "0.0.0.0" not in result.stdout, "the sinkhole answer is gone"
+        print("  result: resolves to a real address (DNS is unrestricted)")
+
+        # Control in the same box: the listed host really is reachable, so the
+        # refusal below is the allowlist and not a broken network.
+        result = await sandbox.exec(
+            "wget", "-q", "-O-", "--timeout=5", "http://example.com/"
+        )
+        print(f"  wget http://example.com/: exit={result.exit_code}")
+        assert result.exit_code == 0, "allowed host should be reachable"
+        print("  result: connected (allowed)")
+
+        # Test 1 already reached this host with full access, so the refusal
+        # below is the allowlist and not a host that happens to be down.
+        result = await sandbox.exec(
+            "wget", "-q", "-O-", "--timeout=3", "http://github.com/"
+        )
+        print(f"  wget http://github.com/: exit={result.exit_code}")
+        assert result.exit_code != 0, "non-allowed host should be refused at connect"
+        print("  result: connection refused (blocked)")
 
     print("  PASS")
 
@@ -111,7 +140,7 @@ async def test_enabled_explicit():
 
 async def main():
     print("=" * 60)
-    print("BoxLite Network Allowlist — DNS Sinkhole Tests")
+    print("BoxLite Network Allowlist — Connect-Time Filtering Tests")
     print("=" * 60)
     print()
     print("NetworkSpec options:")

@@ -854,6 +854,156 @@ const ensureArtifactsBucket = async ({
   log('    created')
 }
 
+/** The stage a promotion into this one reads, and the two things it reads there. */
+export type PromotionSource = {
+  stage: string
+  project: string
+  /** Where `runner:promote` copies the staged binary from. */
+  bucket: string
+}
+
+/**
+ * Which stage's project this one's accounts have to be let into, if any.
+ *
+ * `mstage/config` checks that `promoteFrom` does not name its own stage and,
+ * when the named stage is present, that it lives in the same cloud. What it
+ * cannot check is that the name resolves at all: a CI job restores the
+ * declarations it reaches and not the file, so prod's block routinely arrives
+ * without dev's. A bootstrap reads a whole file, so here an unresolvable name
+ * is a mistake and is refused — left to pass it would be a bootstrap that
+ * silently granted nothing, discovered when prod promotes.
+ *
+ * `undefined` when the source shares this project: the accounts already hold
+ * the project roles there, and a second binding saying so reads as a boundary
+ * that is not one.
+ */
+export const promotionSourceFor = ({
+  config,
+  stage,
+}: {
+  config: {
+    app: string
+    /** The file the refusals name, so an operator knows which one to edit. */
+    path: string
+    stages: Record<string, { project?: string | null; promoteFrom?: string | null }>
+  }
+  stage: string
+}): PromotionSource | undefined => {
+  const from = config.stages[stage]?.promoteFrom
+  if (!from) return undefined
+  const source = config.stages[from]
+  if (!source) {
+    throw new GcpBootstrapError(
+      `Stage "${stage}" promotes from "${from}" in ${config.path}, which declares no such stage. ` +
+        'A promotion needs both ends declared in one file.',
+    )
+  }
+  if (!source.project) throw new GcpBootstrapError(`Stage "${from}" declares no project in ${config.path}`)
+  if (source.project === config.stages[stage]?.project) return undefined
+  return {
+    stage: from,
+    project: source.project,
+    bucket: gcpRunnerArtifactsBucket({ app: config.app, stage: from, project: source.project }),
+  }
+}
+
+/**
+ * What a promotion into this stage reads, granted in the stage it reads from.
+ *
+ * The only work this file does outside its own project, and the reason it has
+ * to: a promotion is one session — the destination's, because that is the one
+ * that writes — so the accounts doing the reading belong to the stage being
+ * bootstrapped while the policies admitting them belong to the source. Neither
+ * end can make this grant alone, and the destination is the end that knows both
+ * account names, because it just created them.
+ *
+ * Two accounts, not one. The legs authenticate differently — `mbuild.yml`
+ * federates `GCP_IMAGE_PUBLISHER` and `mrunner.yml` `GCP_DEPLOYER` — so a grant
+ * to one of them leaves the other half of a promotion failing, which is the
+ * shape this was written for.
+ *
+ * Reported rather than fatal when the source refuses the write. An operator who
+ * administers this stage and not the source is an ordinary situation, and
+ * failing here would throw away a bootstrap that otherwise completed; the two
+ * commands are printed so whoever does hold that project can run them.
+ */
+const grantPromotionReads = async ({
+  run,
+  wait,
+  source,
+  deployerEmail,
+  publisherEmail,
+  log,
+}: {
+  run: Run
+  wait: (milliseconds: number) => Promise<unknown>
+  source: PromotionSource
+  deployerEmail: string
+  publisherEmail: string
+  log: (line: string) => void
+}): Promise<void> => {
+  log(`==> ${source.stage} in ${source.project}, what a promotion reads`)
+  // Its own client: `gcloudFor` puts `--project` on every call, and these are
+  // the only calls this run makes against a project that is not the stage's.
+  const gcloud = gcloudFor({ run, project: source.project, wait })
+  const grants: { what: string; args: string[] }[] = [
+    {
+      /*
+       * Project-wide, which is wider than the bucket grant below and stays that
+       * way deliberately. This is the grant `mbuild promote` is known to work
+       * under — the pull, and the `artifacts docker images list` that decides
+       * whether there is anything to pull — and narrowing it to the one
+       * repository is a change that has to be proved against a real registry
+       * rather than assumed here.
+       */
+      what: `granting ${publisherEmail} read on ${source.project}`,
+      args: [
+        'projects',
+        'add-iam-policy-binding',
+        source.project,
+        `--member=serviceAccount:${publisherEmail}`,
+        '--role=roles/artifactregistry.reader',
+        // Without this gcloud prompts for a condition, which never returns in CI.
+        '--condition=None',
+      ],
+    },
+    {
+      /*
+       * One bucket, not the project: this is the whole of what `runner:promote`
+       * touches at the source. Object reads only — `runner:promote` lists the
+       * prefix and copies what is under it, and asks the bucket itself nothing,
+       * which is what keeps this off `storage.buckets.get` and so off every
+       * role wider than this one.
+       */
+      what: `granting ${deployerEmail} read on gs://${source.bucket}`,
+      args: [
+        'storage',
+        'buckets',
+        'add-iam-policy-binding',
+        `gs://${source.bucket}`,
+        `--member=serviceAccount:${deployerEmail}`,
+        '--role=roles/storage.objectViewer',
+      ],
+    },
+  ]
+
+  const refused: string[] = []
+  for (const grant of grants) {
+    try {
+      await gcloud.applyPolicy(`Could not ${grant.what}`, grant.args)
+    } catch (error) {
+      refused.push(`gcloud ${grant.args.join(' ')} --project ${source.project}`)
+      log(`    ${grant.what}: ${(error as Error).message}`)
+    }
+  }
+  if (refused.length === 0) {
+    log('    both grants applied')
+    return
+  }
+  log(`    ${refused.length} of ${grants.length} refused. Run these where ${source.project} can be administered:`)
+  for (const command of refused) log(`      ${command}`)
+}
+
 /**
  * What turns the OS Config agent on, for every instance in the project.
  *
@@ -907,6 +1057,13 @@ export type GcpBootstrapInput = {
   github: GitHubRepository
   log: (line: string) => void
   /**
+   * The stage a promotion into this one reads from, when it lives in another
+   * project. Absent for a stage nothing is promoted into, and absent when the
+   * source shares this project — there the accounts already hold what they
+   * need, and a second binding would say nothing.
+   */
+  promotionSource?: PromotionSource
+  /**
    * How this waits out a propagation window. Injected for the same reason
    * `run` is: a test proves the retry happens without spending the seconds.
    */
@@ -941,6 +1098,7 @@ export const bootstrapGcp = async ({
   immutableTags,
   github,
   log,
+  promotionSource,
   wait = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 }: GcpBootstrapInput): Promise<GcpBootstrapResult> => {
   const gcloud = gcloudFor({ run, project, wait })
@@ -1018,6 +1176,12 @@ export const bootstrapGcp = async ({
     region,
     log,
   })
+
+  // Last, because it is the only step that reaches outside this project and
+  // both accounts it names have to exist before anything can be granted to them.
+  if (promotionSource) {
+    await grantPromotionReads({ run, wait, source: promotionSource, deployerEmail, publisherEmail, log })
+  }
 
   log('')
   log('The state bucket is deliberately not returned; mstage reads it from')
