@@ -1467,9 +1467,11 @@ mod tests {
     /// the test pins the case where the host does match.
     #[test]
     fn anonymous_pull_sends_no_credential_the_host_would_otherwise_match() {
+        let password = test_registry_password();
+        let token = test_bearer_token();
         let registries = [
-            ImageRegistry::https("ghcr.io").with_basic_auth("operator", "token"),
-            ImageRegistry::https("docker.io").with_bearer_auth("operator-token"),
+            ImageRegistry::https("ghcr.io").with_basic_auth("operator", password.as_str()),
+            ImageRegistry::https("docker.io").with_bearer_auth(token.as_str()),
         ];
 
         for host in ["ghcr.io", "docker.io"] {
@@ -1492,7 +1494,9 @@ mod tests {
     /// pull to work, or the operator's own images stop resolving.
     #[test]
     fn credentialed_pull_still_matches_the_host() {
-        let registries = [ImageRegistry::https("ghcr.io").with_basic_auth("operator", "token")];
+        let password = test_registry_password();
+        let registries =
+            [ImageRegistry::https("ghcr.io").with_basic_auth("operator", password.as_str())];
 
         assert_eq!(
             registry_auth_for(
@@ -1503,7 +1507,7 @@ mod tests {
                     ..Default::default()
                 }
             ),
-            OciRegistryAuth::Basic("operator".to_string(), "token".to_string()),
+            OciRegistryAuth::Basic("operator".to_string(), password),
         );
     }
 
@@ -1514,7 +1518,7 @@ mod tests {
     fn anonymous_pull_leaves_transport_and_tls_alone() {
         let registries = [ImageRegistry::http("registry.local:5000")
             .with_skip_verify(true)
-            .with_basic_auth("operator", "token")];
+            .with_basic_auth("operator", test_registry_password().as_str())];
 
         let config = client_config_for_registry("registry.local:5000", &registries);
 
