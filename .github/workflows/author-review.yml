@@ -11,32 +11,27 @@ on:
     types: [created, edited, deleted]
   merge_group:
     types: [checks_requested]
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: Pull request to recheck (also posts instructions on existing PRs)
-        required: true
-        type: string
 
 permissions:
   contents: read
   statuses: write
+  # This also permits creating and editing PR comments through the issues API.
   pull-requests: write
 
 concurrency:
-  group: author-review-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number || github.event.merge_group.head_sha }}
+  group: author-review-${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_sha }}
   cancel-in-progress: false
 
 env:
   # Reviewed agent-tooling implementation; never float privileged workflow code.
-  AGENT_TOOLING_REV: db53a3fc2a6cdd9c601d873adfdcb9095d087654
+  AGENT_TOOLING_REV: 17b89c86bd38f74f5100e322580addbfbda0fbc7
 
 jobs:
   acknowledgment:
     name: Update author review status
     if: >-
       github.event_name != 'issue_comment' ||
-      (github.event.issue.pull_request && github.event.comment.user.type != 'Bot')
+      github.event.issue.pull_request
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
