@@ -23,7 +23,7 @@ description: >-
   and the tree is removed afterwards to reclaim runner disk. Nothing needs the
   intermediates: every caller restores .cache/<target>; SKIP_GUEST_BUILD=1 keeps
   boxlite-guest from being rebuilt, while the two tools remain available as build
-  outputs without entering the current runtime package. Four callers get that from
+  outputs without entering the current runtime package. Three callers get that from
   ./.github/actions/run-in-manylinux's prologue; build-wheels.yml gets it from
   cibuildwheel instead (sdks/python/pyproject.toml, before-all and environment).
   sccache keeps Rust compilation units separately, so those units remain reusable
@@ -32,8 +32,8 @@ description: >-
 inputs:
   show-sccache-stats:
     description: >-
-      Print sccache statistics after the build. warm-caches.yml sets this because
-      the numbers are its actual output; ordinary builds leave them out of the log.
+      Print sccache statistics after the build. Scheduled runtime builds use this
+      to report their cache refresh; ordinary builds leave them out of the log.
     required: false
     default: 'false'
 

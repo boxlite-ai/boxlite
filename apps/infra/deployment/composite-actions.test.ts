@@ -239,8 +239,7 @@ test('the caller script lands once, however its block scalar was written', () =>
 })
 
 test('a caller that supplies no script still gets the prologue and the epilogue', () => {
-  // warm-caches.yml relies on this: for it the prologue *is* the payload, since running
-  // `make setup:build runtime` under sccache is the whole point of the job.
+  // Empty payloads still need the runtime setup and cache reporting around them.
   const generated = generatedScript('')
   assert.ok(
     generated.includes('make setup:build runtime\n\ncommand -v sccache'),
@@ -359,9 +358,8 @@ test('a missing sccache degrades the build rather than breaking it', () => {
 })
 
 test('a caller that refuses to tolerate a cache failure gets one', () => {
-  // warm-caches.yml passes tolerate-failure: 'false' because populating the cache is the whole
-  // job. A warning it then ignores would let that workflow "succeed" having cached nothing —
-  // and every workflow reading the cache afterwards would silently miss.
+  // Scheduled runtime builds require a working cache. Silently continuing would report a
+  // successful refresh even though subsequent builds could not reuse it.
   const { exported, stdout } = sccacheEnvironment({ onPath: false, tolerateFailure: 'false', expectStatus: 1 })
   assert.match(stdout, /::error::/, 'an intolerant caller is told with an error, not a warning')
   assert.equal(exported.get('RUSTC_WRAPPER'), undefined)
@@ -392,10 +390,10 @@ test('a tolerant job also survives a cache failure after startup', () => {
   )
 })
 
-test('a change under .github reaches this suite locally, not only in CI', () => {
+test('a change under .github reaches this suite locally', () => {
   // Without all three of these a workflow or action edit runs no local check at all: the
   // pre-push hook declines the change, and even if it fired, no component tag would map to a
-  // test. CI catches it via lint.yml's paths filter, but only after a push.
+  // test.
   // Compared as literal text: these files escape for shell and for make, so both carry
   // backslashes that a regex written from the visible characters would silently miss.
   const changes = readFileSync(join(REPO_ROOT, 'make/changes.mk'), 'utf8')

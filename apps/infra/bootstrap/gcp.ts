@@ -47,7 +47,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { gcpRunnerArtifactsBucket } from '../mdeploy/stack/runner-binary.ts'
+import { gcpRunnerArtifactsBucket } from 'mdeploy/runner-binary'
 import { identityFor, poolFor } from 'naming'
 
 export class GcpBootstrapError extends Error {

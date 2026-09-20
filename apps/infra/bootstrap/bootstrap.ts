@@ -105,7 +105,7 @@ import {
 import { validateDotenvSyntax } from '../deployment/key-policy.js'
 import { promptSecret, requireNonEmptySecret } from './secret-prompt.js'
 import { customApiArgs, spaApplicationArgs, tenantSettingsArgs } from './auth0.js'
-import { publicHostsFor } from '../mdeploy/stack/hosts.js'
+import { publicHostsFor } from 'mdeploy/hosts'
 import {
   environmentApiPath,
   githubEnvironmentPayload,

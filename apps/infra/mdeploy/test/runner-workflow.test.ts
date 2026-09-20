@@ -61,7 +61,7 @@ test('staging is not retried, because neither of its failures is transient', () 
 test('an orchestrator can call it and learn which commit it staged', () => {
   // The deploy after it installs a build-mode binary by commit, so the caller
   // needs the resolved SHA rather than the ref it passed in.
-  assert.match(workflow, /^  workflow_call:$/m, 'it must be callable')
+  assert.match(workflow, /^ {2}workflow_call:$/m, 'it must be callable')
   assert.match(workflow, /value: \$\{\{ jobs\.stage-runner\.outputs\.sha \}\}/)
   assert.match(workflow, /sha: \$\{\{ steps\.ref\.outputs\.sha \}\}/)
 })

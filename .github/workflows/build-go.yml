@@ -9,7 +9,7 @@
 #   go build ./...
 #
 # Triggers:
-# - workflow_run: After Build C SDK completes (ensures archives are uploaded)
+# - workflow_run: After a successful release C SDK build (archives are published)
 # - workflow_dispatch: Manual trigger for testing
 name: Build Go SDK
 
@@ -21,6 +21,9 @@ on:
 
 jobs:
   config:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'release')
     uses: ./.github/workflows/config.yml
 
   test:
@@ -28,7 +31,7 @@ jobs:
     needs: config
     if: >-
       github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'success'
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'release')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

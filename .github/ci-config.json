@@ -1,0 +1,13 @@
+{
+  "platforms": [
+    { "os": "macos-15", "target": "darwin-arm64", "rust_target": "aarch64-apple-darwin" },
+    { "os": "ubuntu-latest", "target": "linux-x64-gnu", "rust_target": "x86_64-unknown-linux-gnu" },
+    { "os": "ubuntu-24.04-arm", "target": "linux-arm64-gnu", "rust_target": "aarch64-unknown-linux-gnu" }
+  ],
+  "python-versions": ["3.10", "3.11", "3.12", "3.13"],
+  "node-versions": ["18", "20", "22"],
+  "node-build-version": "20",
+  "go-version": "1.24",
+  "rust-toolchain": "stable",
+  "artifact-retention-days": "7"
+}

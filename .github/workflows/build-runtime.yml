@@ -4,7 +4,7 @@
 # populates the shared sccache cache.
 #
 # Triggers:
-# - push to main (via Warm Caches workflow_run): sccache warm-up only, no publish.
+# - push to main and weekly: builds artifacts and warms sccache in the same pass.
 # - release: published: builds and uploads
 #     - boxlite-runtime-v<version>-<target>.tar.gz   (for `cargo install` consumers)
 #     - boxlite-cli-v<version>-<target>.tar.gz       (self-contained CLI binary;
@@ -30,13 +30,44 @@
 name: Build Runtime
 
 on:
-  workflow_run:
-    workflows: ["Warm Caches"]
-    types: [completed]
+  push:
     branches: [main]
+    paths:
+      - 'src/boxlite/**'
+      - 'src/shared/**'
+      - 'src/guest/**'
+      - 'src/cli/**'
+      - 'src/deps/**'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - '.gitmodules'
+      - 'scripts/build/**'
+      - 'scripts/setup/**'
+      - 'scripts/common.sh'
+      - 'scripts/util.sh'
+      - 'Makefile'
+      - 'make/build.mk'
+      - 'make/setup.mk'
+      - 'make/vars.mk'
+      - '.github/workflows/build-runtime.yml'
+      - '.github/workflows/config.yml'
+      - '.github/ci-config.json'
+      - '.github/actions/ci-config/**'
+      - '.github/actions/setup-rust/**'
+      - '.github/actions/sccache/**'
+      - '.github/actions/build-guest/**'
+      - '.github/actions/run-in-manylinux/**'
+  schedule:
+    - cron: '0 1 * * 1'
   release:
     types: [published]
   workflow_dispatch:
+
+concurrency:
+  group: build-runtime-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -50,9 +81,6 @@ jobs:
   build:
     name: Build Runtime (${{ matrix.target }})
     needs: config
-    if: >-
-      github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'success'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -69,9 +97,13 @@ jobs:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
 
       - uses: ./.github/actions/sccache
+        with:
+          tolerate-failure: ${{ github.event_name != 'schedule' }}
 
       - uses: ./.github/actions/build-guest
         if: runner.os == 'Linux'
+        with:
+          show-sccache-stats: ${{ github.event_name == 'schedule' }}
 
       - name: Build runtime (Linux)
         if: runner.os == 'Linux'

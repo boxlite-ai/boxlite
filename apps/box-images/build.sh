@@ -8,6 +8,7 @@ VERSION_FILE="$IMAGE_DIR/VERSION" # Box image release version source of truth.
 REGISTRY="${REGISTRY:-ghcr.io/boxlite-ai}" # Target registry namespace for the three image packages.
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}" # Default publish target covers Intel and ARM Linux hosts.
 PUSH="${PUSH:-0}" # PUSH=0 validates locally, PUSH=1 publishes to the registry.
+IMAGES="${IMAGES-base,python,node}" # CI selects changed flavors; releases build every flavor.
 
 read_runtime_image_version() { # Read 0.1.0-style version and let normalize_tag add the leading v.
   if [[ ! -f "$VERSION_FILE" ]]; then
@@ -94,6 +95,18 @@ TAG="$(normalize_tag)" # Final Docker tag such as v0.1.0.
 REQUESTED_PLATFORMS=() # Parsed platform list used for validation and local output mode selection.
 parse_platforms "$PLATFORMS"
 
-for image in base python node; do
+# Validate the complete selection before starting any build or publish.
+case "$IMAGES" in
+  ''|,*|*,|*,,*) echo "Invalid IMAGES=$IMAGES; expected comma-separated base, python or node" >&2; exit 1 ;;
+esac
+IFS=',' read -ra REQUESTED_IMAGES <<< "$IMAGES"
+for image in "${REQUESTED_IMAGES[@]}"; do
+  case "$image" in
+    base|python|node) ;;
+    *) echo "Unsupported image '$image'; expected base, python or node" >&2; exit 1 ;;
+  esac
+done
+
+for image in "${REQUESTED_IMAGES[@]}"; do
   build_image "$image" "$TAG" # Publish all three runtime variants with the same version tag.
 done

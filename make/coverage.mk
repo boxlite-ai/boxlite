@@ -1,8 +1,4 @@
-PHONY_TARGETS += coverage
-
-# Optional nextest profile for the unit-coverage passes (CI passes
-# NEXTEST_PROFILE=ci). Empty = nextest's default profile.
-NEXTEST_PROFILE_FLAG = $(if $(NEXTEST_PROFILE),--profile $(NEXTEST_PROFILE),)
+PHONY_TARGETS += coverage coverage\:cli
 
 # Instrument the same crate set test:unit:rust runs. --no-report accumulates
 # the profiles across the passes so one report covers all of them; the clean
@@ -32,6 +28,10 @@ coverage\:lcov:
 	@mkdir -p target/coverage
 	@cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
 	@echo "✅ LCOV output: target/coverage/lcov.info"
+
+# CLI coverage uses the same inline unit-test selection as test:unit:cli.
+coverage\:cli:
+	@cargo llvm-cov nextest -p boxlite-cli $(NEXTEST_PROFILE_FLAG) -E 'test(::tests::)' --lcov --output-path lcov.info
 
 # Generate coverage for Rust integration tests (requires VM environment).
 coverage\:integration: runtime\:debug

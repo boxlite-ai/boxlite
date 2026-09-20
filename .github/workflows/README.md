@@ -1,7 +1,7 @@
 # CI/CD workflows
 
 Every GitHub Actions workflow in the repository: the pull-request checks, the SDK build and
-publish chain, the cloud deploy path, the three end-to-end suites, and the box images.
+publish chain, the cloud deploy path, the local and cloud end-to-end suites, and the box images.
 
 Shared step bundles live one directory over, in [`.github/actions/`](../actions) — GitHub does not
 support subdirectories under `.github/workflows/`, so composite actions are where reuse goes.
@@ -10,10 +10,11 @@ support subdirectories under `.github/workflows/`, so composite actions are wher
 
 ```text
 PULL REQUEST / PUSH                     lint · test · codeql · api-client-drift
-                                        e2e-stack · e2e-local · build-box-images
+                                        e2e-local · build-box-images
 
-BUILD CHAIN (workflow_run)              warm-caches ──▶ build-runtime
-                                        build-c ──▶ build-go
+BUILD + CACHE (push / weekly)           build-runtime
+
+RELEASE CHAIN (workflow_run)            build-c ──▶ build-go
                                                 └──▶ build-runner-binary
 
 RELEASE (release event)                 build-runtime · build-c · build-node · build-wheels
@@ -24,29 +25,29 @@ DEPLOY (manual dispatch)                deploy-infra ─┬─▶ build-apps-api
                                                       └─▶ e2e-cloud
                                         deploy-release   (no builds; consumes published artifacts)
 
-CONFIG                                  config ◀── every build workflow, lint, test, warm-caches
+CONFIG                                  ci-config action ◀── lint, test, config workflow
+                                        config workflow ◀── build workflows
 ```
 
 ## Workflows
 
 **Callable** marks a workflow another one can invoke with `uses:`. `config.yml` is the only one that
-is *exclusively* callable; the other four can also be dispatched on their own.
+is *exclusively* callable; workflows with `workflow_dispatch` can also run on their own.
 
 | Workflow | Triggers | Callable | Purpose |
 | --- | --- | --- | --- |
-| `config.yml` | `workflow_call` | call-only | Single source of the platform matrix and language versions |
-| `lint.yml` | push, PR, merge_group | — | Format and lint per language, plus the infra suite. `Lint (conclusion)` is the required check |
-| `test.yml` | push, PR, merge_group | — | Unit tests for every SDK. No VM tests — hosted runners have no nested virtualization |
+| `config.yml` | `workflow_call` | call-only | Loads `.github/ci-config.json` before build matrices expand |
+| `lint.yml` | push, PR, merge_group | — | Format and lint per language, plus the installer smoke test. `Lint (conclusion)` is the required check |
+| `test.yml` | push, PR, merge_group, weekly, dispatch | — | Unit tests for every SDK; compact routine matrices and full weekly/manual matrices |
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
 | `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs |
 | `unreviewed-pr.yml` | PR (target) | — | Commits `UNREVIEWED.md` and drafts a pull request until its author deletes the file and marks it ready. `Author reviewed the PR` is the check |
-| `warm-caches.yml` | push, weekly, dispatch | — | Populates the sccache the other Rust builds read |
-| `build-runtime.yml` | `workflow_run`, release, dispatch | — | Core runtime and CLI; publishes crates |
+| `build-runtime.yml` | push, weekly, release, dispatch | — | Builds runtime/CLI artifacts and populates sccache together; publishes crates on release |
 | `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
-| `build-go.yml` | `workflow_run`, dispatch | — | Tests the Go SDK and tags its module |
+| `build-go.yml` | `workflow_run`, dispatch | — | Tests the released C archive and tags the Go module; automatic builds follow successful C SDK releases |
 | `build-node.yml` | release, dispatch | — | Node.js SDK, napi-rs addon and platform packages |
-| `build-wheels.yml` | release, dispatch | — | Python wheels via cibuildwheel |
-| `build-runner-binary.yml` | `workflow_run`, dispatch, `workflow_call` | yes | Linux amd64 runner binary |
+| `build-wheels.yml` | release, dispatch | — | Builds Python wheels and verifies their native extension in cibuildwheel before publishing |
+| `build-runner-binary.yml` | `workflow_run`, dispatch, `workflow_call` | yes | Linux amd64 runner binary; automatic builds follow successful C SDK releases |
 | `build-apps-api-image.yml` | dispatch, `workflow_call` | yes | The `apps/api` image: build a commit, build a release, or promote one between stages |
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. The normal deploy path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing |
@@ -56,12 +57,28 @@ is *exclusively* callable; the other four can also be dispatched on their own.
 | `mrunner.yml` | dispatch, `workflow_call` | yes | The runner binary for a commit: build it for a stage, or promote the one another stage serves |
 | `mdeploy.yml` | dispatch, `workflow_call` | yes | Applies the stack for a commit whose artifacts are already in place |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted EC2 runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
-| `e2e-stack.yml` | push, PR, dispatch | — | SDK → API → runner → VM on a nested-KVM runner |
-| `build-box-images.yml` | PR, push, dispatch | — | Builds every box image flavor for both arches without publishing |
+| `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
 | `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | The only workflow that writes to GHCR |
 
 Longer treatments live with their subject rather than here: [E2E local
 runbook](../../docs/ci/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
+
+## Routine checks
+
+`lint` and `test` always report their required conclusion on PRs and merge groups. A newer PR
+commit cancels its superseded lint, test and client-drift runs. Release and deployment jobs keep
+their existing sequencing.
+
+Python runs all four supported versions on Linux x64 and the latest on macOS and Linux ARM
+(six jobs); Node runs all three versions on Linux x64 and the latest on the other platforms
+(five jobs). Weekly and manually dispatched tests exercise every platform/version combination
+and bypass change filters. Rust and CLI tests still run on all three platforms, with coverage
+collected on Linux x64.
+
+Client drift checks watch API code, shared libraries, generators and workspace configuration.
+Guest artifact checks watch guest build inputs instead of the whole make directory. Infrastructure
+tests remain available through `make test:apps:infra` and the local pre-push check;
+`make test:apps:infra-config` explicitly installs and type-checks the SST configuration.
 
 ## Composite actions
 
@@ -70,13 +87,14 @@ every consumer.
 
 | Action | Sites | Used by |
 | --- | --- | --- |
-| `setup-rust` | 13 | build-c, build-node, build-runtime ×2, build-wheels, lint ×3, test ×4, warm-caches |
-| `sccache` | 9 | build-c, build-node, build-runtime, build-wheels, lint ×2, test ×2, warm-caches |
-| `build-guest` | 5 | build-c, build-node, build-runtime, build-wheels, warm-caches |
+| `ci-config` | 3 | config, lint, test |
+| `setup-rust` | 12 | build-c, build-node, build-runtime ×2, build-wheels, lint ×3, test ×4 |
+| `sccache` | 8 | build-c, build-node, build-runtime, build-wheels, lint ×2, test ×2 |
+| `build-guest` | 4 | build-c, build-node, build-runtime, build-wheels |
 | `upload-to-release` | 5 | build-c, build-node, build-runner-binary, build-runtime, build-wheels |
-| `run-in-manylinux` | 4 | build-c, build-node, build-runtime, warm-caches |
+| `run-in-manylinux` | 3 | build-c, build-node, build-runtime |
 | `setup-go` | 4 | build-go, build-runner-binary, lint, test |
-| `setup-python` | 3 | build-wheels, lint, test |
+| `setup-python` | 2 | lint, test |
 | `setup-buildx` | 2 | build-box-images, release-box-images |
 
 Two ordering rules, stated in each action's own header: `sccache` runs after `setup-rust`, and
@@ -98,8 +116,8 @@ so they compile uncached. The action owns the whole configuration; a caller only
 
 - Caches individual compilation units by content hash, so it works on the host and inside the
   Docker and cibuildwheel manylinux containers alike.
-- Pre-warmed by `warm-caches.yml` on push to main; `build-runtime.yml` chains off it via
-  `workflow_run` so the cache is hot.
+- Populated by `build-runtime.yml` on relevant pushes to main and weekly, while producing the
+  runtime and CLI artifacts in the same build.
 - **`RUSTC_WRAPPER=sccache` and `SCCACHE_GHA_ENABLED` are set by the action.** The upstream
   `sccache-action` installs the binary and exports the cache credentials but sets neither, so a job
   that only installed it compiled uncached while still looking healthy. Setting them is what makes
@@ -126,8 +144,8 @@ so they compile uncached. The action owns the whole configuration; a caller only
   not on a failed startup, and `SCCACHE_IGNORE_SERVER_IO_ERROR` is not forwarded. cibuildwheel's
   container is the one that installs its own sccache (`sdks/python/pyproject.toml`), but it wraps
   cargo through the `RUSTC_WRAPPER` its `environment-pass` inherits from the host.
-- `warm-caches.yml` passes `tolerate-failure: 'false'` and is the deliberate exception: populating
-  the cache is its entire purpose, so every one of those paths fails the job rather than warning.
+- Scheduled runtime builds pass `tolerate-failure: 'false'` so a broken weekly cache refresh
+  fails visibly; ordinary builds can continue uncached.
 
 ## CodeQL
 
@@ -142,13 +160,12 @@ observe a real build and therefore uses `autobuild`.
 
 ## Do not rename these
 
-Three workflows chain off another's **display name**, not its filename. Changing a `name:` below
+Two workflows chain off another's **display name**, not its filename. Changing the `name:` below
 silently stops the chain — no error, the downstream workflow simply never fires.
 
 | `name:` | Depended on by |
 | --- | --- |
 | `Build C SDK` | `build-go.yml`, `build-runner-binary.yml` |
-| `Warm Caches` | `build-runtime.yml` |
 
 ## Adding a stage
 

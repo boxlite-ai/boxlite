@@ -119,8 +119,8 @@ before-all = ["""
     make runtime
     """]
 
-# Test the built wheel (optional, add tests later)
-test-command = "python -c 'import boxlite; print(boxlite.__version__)'"
+# Import the compiled extension directly: the package initializer tolerates its absence.
+test-command = "python -c 'from boxlite.boxlite import Boxlite; import boxlite; print(boxlite.__version__)'"
 
 [tool.cibuildwheel.macos]
 # Fix "libkrunfw.4.dylib has a minimum target of 14.0" error

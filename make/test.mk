@@ -1,4 +1,4 @@
-PHONY_TARGETS += test test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
+PHONY_TARGETS += test test\:unit\:cli test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -17,6 +17,8 @@ export FILTER
 # that cannot be expressed as a simple positive FILTER pattern.
 export NEXTEST_FILTER_EXPR
 
+# Shared by unit-test and coverage targets; CI uses nextest's bounded CI profile.
+NEXTEST_PROFILE_FLAG = $(if $(NEXTEST_PROFILE),--profile $(NEXTEST_PROFILE),)
 NEXTEST_FILTER   = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',))
 NEXTEST_CLI_FILTER = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',-E 'not binary(stress_disk)'))
 CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),)
@@ -240,14 +242,18 @@ test\:unit\:rust:
 	@echo "🧪 Running Rust unit tests..."
 	@rc=0; \
 	if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run --no-tests=warn $(RUST_UNIT_CORE_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
-		cargo nextest run --no-tests=warn $(RUST_UNIT_SHARED_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
+		cargo nextest run --no-tests=warn $(NEXTEST_PROFILE_FLAG) $(RUST_UNIT_CORE_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
+		cargo nextest run --no-tests=warn $(NEXTEST_PROFILE_FLAG) $(RUST_UNIT_SHARED_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
 	else \
 		cargo test $(RUST_UNIT_CORE_ARGS) -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 		cargo test $(RUST_UNIT_SHARED_ARGS) -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 	fi; \
 	cargo test $(RUST_UNIT_REST_ARGS) -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	exit $$rc
+
+# CLI integration binaries need a VM; CI runs only the inline unit-test modules.
+test\:unit\:cli:
+	@cargo nextest run -p boxlite-cli $(NEXTEST_PROFILE_FLAG) -E 'test(::tests::)'
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
 # excluded from test:unit:rust because the zygote suite forks real processes.

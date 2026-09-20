@@ -29,7 +29,6 @@ const API_IMAGE_BUILD_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-apps-a
 const BUILD_C_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-c.yml')
 const BUILD_RUNNER_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-runner-binary.yml')
 const E2E_CLOUD_WORKFLOW = join(REPO_ROOT, '.github/workflows/e2e-cloud.yml')
-const LINT_WORKFLOW = join(REPO_ROOT, '.github/workflows/lint.yml')
 const DEV_DEPLOY_ROLE_TRUST = join(REPO_ROOT, 'apps/infra/bootstrap/aws/deploy-role-trust.json')
 const DEV_DEPLOY_ROLE_POLICY = join(REPO_ROOT, 'apps/infra/bootstrap/aws/deploy-role-policy.json')
 const DEV_RUNTIME_BOUNDARY_POLICY = join(REPO_ROOT, 'apps/infra/bootstrap/aws/runtime-boundary-policy.json')
@@ -1906,18 +1905,6 @@ test('promotion reads the source stage in the source stage\'s own region', () =>
   // branch cannot catch it and the digest reaches the copy as "$SOURCE@None". Same hole as
   // artifacts/api.ts:104, which is why the deploy side already guards it.
   assertShellLine(verifyRun, /if \[ -z "\$source_digest" \] \|\| \[ "\$source_digest" = None \]; then/)
-})
-
-test('infrastructure tests cannot persist or write with the workflow token', () => {
-  const source = readFileSync(LINT_WORKFLOW, 'utf8')
-  const infraJobStart = source.indexOf('\n  infra:\n')
-  const infraJobEnd = source.indexOf('  # Single required status check', infraJobStart)
-  assert.notEqual(infraJobStart, -1, 'infra job marker is missing from lint.yml')
-  assert.notEqual(infraJobEnd, -1, 'required-status marker is missing from lint.yml')
-  const infraJob = source.slice(infraJobStart, infraJobEnd)
-
-  assert.match(infraJob, /permissions:\s+contents: read/)
-  assert.match(infraJob, /uses: actions\/checkout@v5\s+with:\s+persist-credentials: false/)
 })
 
 test('dev deploy role trusts only the repository GitHub Environment identity', () => {

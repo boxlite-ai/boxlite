@@ -11,9 +11,6 @@
 #     boxlite-guest from being rebuilt
 #   - Go and cargo go on PATH before `make setup:build runtime`, which every caller needs first
 #
-# warm-caches.yml supplies no script at all: there the prologue *is* the payload, since running
-# `make setup:build runtime` under sccache is the whole point of that job.
-
 name: Run in manylinux
 description: >-
   Runs a build script inside the manylinux_2_28 container every Linux artifact is
@@ -70,7 +67,7 @@ runs:
 
           # Command substitution strips whatever trailing newlines the caller's block
           # scalar left, so `|` and `|-` both land as exactly one. Emitted only when
-          # there is a script, so a caller that supplies none (warm-caches.yml) gets the
+          # there is a script, so an empty payload gets the
           # prologue and epilogue separated by the same single blank line as everyone else.
           script="$(printf '%s' "$BUILD_SCRIPT")"
           if [ -n "$script" ]; then

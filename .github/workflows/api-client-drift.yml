@@ -12,13 +12,25 @@ name: API client drift
 on:
   pull_request:
     paths:
-      - 'apps/**'
-      - '!apps/e2e/**' # Stack e2e suite drives the deployed API; it cannot change a generated client.
+      - 'apps/api/**'
+      - 'apps/libs/**'
+      - 'apps/hack/**'
+      - 'apps/package.json'
+      - 'apps/yarn.lock'
+      - 'apps/.yarn/**'
+      - 'apps/.yarnrc.yml'
+      - 'apps/nx.json'
+      - 'apps/tsconfig.base.json'
+      - 'apps/openapitools.json'
       - 'openapi/box.openapi.yaml'
       - '.github/workflows/api-client-drift.yml'
 
 permissions:
   contents: read
+
+concurrency:
+  group: api-client-drift-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check-generated-clients:

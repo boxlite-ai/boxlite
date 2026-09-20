@@ -27,7 +27,7 @@ import {
   CLICKHOUSE_RETENTION_HOURS,
   encodeClickHouseUserData,
   renderClickHouseSchema,
-} from '../../../../scripts/clickhouse-host.js'
+} from '../../clickhouse-host.ts'
 import type { ClickHouse, ClickHouseProvider, ClickHouseRequest } from '../../clickhouse.ts'
 import type { NetworkBinding } from '../../network.ts'
 import { instanceFor } from 'naming'

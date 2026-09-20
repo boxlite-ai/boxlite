@@ -1,16 +1,14 @@
 # Requirement: ./.github/actions/setup-rust should be run before this in any job that compiles.
 # Kept separate from it because the two are not always adjacent — lint.yml installs musl-cross and
-# build dependencies between them — and because warm-caches.yml wants the toolchain without a
-# tolerated cache failure.
+# build dependencies between them. Scheduled runtime builds also require a working cache.
 
 #
 # mozilla-actions/sccache-action installs the binary and exports the cache credentials, but sets
 # neither RUSTC_WRAPPER nor SCCACHE_GHA_ENABLED. Without both, cargo never calls sccache and the
-# job compiles uncached however healthy the setup looked — which is what every workflow except
-# warm-caches.yml, the only one that declared them at workflow level, used to do.
+# job compiles uncached however healthy the setup looked.
 #
 # sccache caches individual compilation units, so it works on the host and inside the Docker and
-# cibuildwheel manylinux containers alike. The cache is pre-warmed by warm-caches.yml on push to main.
+# cibuildwheel manylinux containers alike. Runtime builds populate the cache on push to main.
 
 name: Setup sccache
 description: >-
@@ -21,9 +19,8 @@ inputs:
   tolerate-failure:
     description: >-
       Whether a failed sccache setup lets the job carry on uncached. This is the
-      graceful fallback every build workflow depends on. warm-caches.yml passes
-      'false' — populating the cache is its entire purpose, so a failed setup
-      there is a failed run rather than a slow one.
+      graceful fallback ordinary builds use. Scheduled runtime builds pass
+      'false' so a failed weekly cache refresh is reported as a failure.
     required: false
     default: 'true'
 
@@ -90,9 +87,8 @@ runs:
         set_env SCCACHE_ERROR_LOG "$RUNNER_TEMP/sccache-error.log"
 
         # Every way the cache can fail to come up routes through here, so `tolerate-failure`
-        # means the same thing for all of them. A caller that passed 'false' — warm-caches.yml,
-        # whose entire purpose is to populate the cache — must not be told about it in a warning
-        # it then ignores.
+        # means the same thing for all of them. A caller that requires a working cache must
+        # receive a failure rather than a warning it then ignores.
         unusable() {
           if [ "$TOLERATE_FAILURE" = 'true' ]; then
             echo "::warning::$1; this job compiles uncached"

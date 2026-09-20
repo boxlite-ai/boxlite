@@ -1,9 +1,5 @@
-# Shared configuration for all workflows.
-#
-# This reusable workflow provides common values to avoid duplication:
-# - Build targets (2-platform matrix: ubuntu-latest, macos-15)
-# - Version configuration (Python, Node.js, Go, Rust)
-# - Artifact retention settings
+# Release workflows need configuration before expanding their build matrix.
+# PR workflows load the same action inside their existing changes job.
 name: Config
 
 on:
@@ -41,19 +37,15 @@ jobs:
     name: Load configuration
     runs-on: ubuntu-latest
     outputs:
-      # === Platform/Matrix Configuration ===
-      # Note: Using macos-15 for libkrun bottle compatibility (arm64_tahoe)
-      platforms: '[{"os":"macos-15","target":"darwin-arm64","rust_target":"aarch64-apple-darwin"},{"os":"ubuntu-latest","target":"linux-x64-gnu","rust_target":"x86_64-unknown-linux-gnu"},{"os":"ubuntu-24.04-arm","target":"linux-arm64-gnu","rust_target":"aarch64-unknown-linux-gnu"}]'
-
-      # === Version Configuration ===
-      python-versions: '["3.10", "3.11", "3.12", "3.13"]'
-      node-versions: '["18", "20", "22"]'
-      node-build-version: '20'
-      go-version: '1.24'
-      rust-toolchain: 'stable'
-
-      # === Artifact Configuration ===
-      artifact-retention-days: '7'
+      platforms: ${{ steps.config.outputs.platforms }}
+      python-versions: ${{ steps.config.outputs.python-versions }}
+      node-versions: ${{ steps.config.outputs.node-versions }}
+      node-build-version: ${{ steps.config.outputs.node-build-version }}
+      go-version: ${{ steps.config.outputs.go-version }}
+      rust-toolchain: ${{ steps.config.outputs.rust-toolchain }}
+      artifact-retention-days: ${{ steps.config.outputs.artifact-retention-days }}
 
     steps:
-      - run: echo "Configuration loaded"
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/ci-config
+        id: config

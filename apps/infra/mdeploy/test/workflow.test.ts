@@ -204,9 +204,9 @@ test('every job that reads a declaration is given one first', () => {
       assert.match(block, /stage-config: /, `${file} sets up without the declaration to restore`)
     }
     // Every job that runs one of the tools has to be one of those call sites.
-    const jobs = source.match(/\n  [a-z-]+:\n/g) ?? []
+    const jobs = source.match(/\n {2}[a-z-]+:\n/g) ?? []
     const runners = jobs.filter((_, index) => {
-      const body = source.split(jobs[index])[1]?.split(/\n  [a-z-]+:\n/)[0] ?? ''
+      const body = source.split(jobs[index])[1]?.split(/\n {2}[a-z-]+:\n/)[0] ?? ''
       return /npm run (--silent )?(mstage|mbuild|mdeploy|runner:)/.test(body)
     })
     assert.equal(runners.length, calls.length, `${file} runs a tool in a job that never set apps/infra up`)
