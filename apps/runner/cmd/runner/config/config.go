@@ -58,6 +58,7 @@ type Config struct {
 	InitializeDaemonTelemetry          bool          `envconfig:"INITIALIZE_DAEMON_TELEMETRY" default:"true"`
 	BuildEngine                        string        `envconfig:"BUILD_ENGINE" default:"buildkit" validate:"oneof=buildkit legacy"`
 	BoxliteHomeDir                     string        `envconfig:"BOXLITE_HOME_DIR"`
+	OverlayBDEnabled                   bool          `envconfig:"BOXLITE_OVERLAYBD_ENABLED" default:"false"`
 	InsecureRegistries                 string        `envconfig:"INSECURE_REGISTRIES"`
 	GhcrUsername                       string        `envconfig:"GHCR_USERNAME"`
 	GhcrToken                          string        `envconfig:"GHCR_TOKEN"`

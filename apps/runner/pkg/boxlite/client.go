@@ -45,6 +45,7 @@ type Client struct {
 type ClientConfig struct {
 	Logger                       *slog.Logger
 	HomeDir                      string
+	OverlayBDEnabled             bool
 	InsecureRegistries           []string
 	GhcrUsername                 string
 	GhcrToken                    string
@@ -155,6 +156,11 @@ func buildImageRegistries(insecureRegistries []string, ghcrUsername, ghcrToken s
 
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
+	// Keep this opt-in runner-owned; local SDK runtimes retain the OCI path.
+	if config.OverlayBDEnabled {
+		return nil, fmt.Errorf("BOXLITE_OVERLAYBD_ENABLED=true: OverlayBD backend is not implemented; leave it false to use OCI images")
+	}
+
 	var opts []boxlite.RuntimeOption
 	if config.HomeDir != "" {
 		opts = append(opts, boxlite.WithHomeDir(config.HomeDir))
