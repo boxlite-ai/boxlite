@@ -135,7 +135,7 @@ sequenceDiagram
   host_pt-->>cpu: Same HPA<br/>0x1234_1000
   %% edge:memory_5_e6
   cpu->>physical_ram: Write the same physical byte
-  Note over worker,physical_ram: The worker uses host translation, not guest stage 1 or stage 2<br/>Guest RAM can change concurrently, so VMM access follows the raw/volatile memory contract
+  Note over worker,physical_ram: The worker uses host translation, not guest stage 1 or stage 2<br/>Host users synchronize conflicting accesses<br/>Guest-shared fields follow protocol atomicity and ordering<br/>Raw pointers and volatile access alone do not synchronize memory
 ```
 
 ### 2.5 A device register takes the MMIO path instead

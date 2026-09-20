@@ -129,9 +129,14 @@ HVF and KVM keep these rules; [M10](#room-for-later-milestones) covers WHP:
     in place, and on KVM a live vCPU keeps the VM's mappings alive. Shutdown
     stops and joins the vCPU and device threads and drains or cancels host
     I/O before releasing the allocation.
-  - The guest changes that memory at any time, so VMM code such as a virtqueue
-    touches it only through raw pointers or volatile accesses, never through
-    Rust references.
+  - The guest can change that memory at any time. VMM code uses guest-memory
+    access primitives that preserve Rust's aliasing rules, not ordinary Rust
+    references into guest-accessible memory. Conflicting host-side accesses
+    require synchronization or atomic operations. Guest-shared protocols,
+    such as virtqueues, require their specified atomicity and memory ordering;
+    a host mutex does not synchronize with the guest. Raw pointers and
+    [volatile accesses](https://doc.rust-lang.org/std/ptr/fn.read_volatile.html)
+    alone do not provide these guarantees.
   - Both ranges align to the host page size, which is 16 KiB on Apple silicon.
 - **Interrupt lines.** A line is a GIC SPI INTID (32 and up) on arm64 and a GSI
   on x86_64. Devices set lines from their own threads. An edge-triggered

@@ -29,9 +29,15 @@ pub trait Vm: Send + Sync {
     ///   device workers and in-flight host I/O.
     ///
     /// A failed unmap can leave the guest mapping in place, and on KVM a live
-    /// vCPU keeps the VM's memory mappings alive. The guest reads and writes
-    /// the range at any time, so host code may access it only through raw
-    /// pointers or volatile accesses, never through Rust references.
+    /// vCPU keeps the VM's memory mappings alive.
+    ///
+    /// The guest can change the range at any time. Use guest-memory access
+    /// primitives that preserve Rust's aliasing rules, not ordinary Rust
+    /// references into guest-accessible memory. Conflicting host-side accesses
+    /// require synchronization or atomic operations. Guest-shared protocols
+    /// such as virtqueues require their specified atomicity and memory
+    /// ordering; a host mutex does not synchronize with the guest. Raw pointers
+    /// and volatile accesses alone do not provide these guarantees.
     unsafe fn map_memory(&self, region: &MemoryRegion) -> Result<()>;
 
     /// Removes a region added with [`map_memory`](Self::map_memory).
