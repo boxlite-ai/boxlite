@@ -47,4 +47,31 @@ describe('RunnerAdapterV2 createBox', () => {
       }),
     )
   })
+
+  it('passes the network rate limit through to the CREATE_BOX job payload', async () => {
+    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    await adapter.init({ id: 'runner-1' } as any)
+
+    await adapter.createBox({
+      id: 'box-1',
+      image: 'base',
+      osUser: 'boxlite',
+      cpu: 1,
+      gpu: 0,
+      mem: 1,
+      disk: 3,
+      networkTxKbps: 10_000,
+      networkRxKbps: 100_000,
+    } as any)
+
+    expect(jobService.createJob).toHaveBeenCalledWith(
+      null,
+      JobType.CREATE_BOX,
+      'runner-1',
+      ResourceType.BOX,
+      'box-1',
+      expect.objectContaining({ networkTxKbps: 10_000, networkRxKbps: 100_000 }),
+    )
+  })
 })

@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::litebox::BoxStatus;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
-use crate::runtime::advanced_options::ContainerCapabilities;
+use crate::runtime::advanced_options::{
+    AdvancedBoxOptions, ContainerCapabilities, NetworkRateLimit,
+};
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 
 // ============================================================================
@@ -90,6 +92,7 @@ pub(crate) struct ServerConfig {
 #[derive(Debug, Deserialize, Clone, Default)]
 pub(crate) struct ServerCapabilities {
     pub linux_capabilities_enabled: Option<bool>,
+    pub network_rate_limit_enabled: Option<bool>,
     pub snapshots_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
@@ -211,21 +214,12 @@ impl CreateBoxRequest {
             volumes,
             detach: Some(options.detach),
             tty: options.tty.then_some(true),
-            // Only the capability policy crosses the wire. Like `security`,
-            // `advanced.network_rate_limit` is deliberately absent: shaping is
-            // done by the local gvproxy bridge and a remote server enforces its
-            // own network policy, so there is no field for a client to set. The
-            // matching refusal lives in BoxOptions::sanitize_remote.
-            //
-            // `Some`, not "non-empty", decides whether this reaches the wire:
-            // an explicitly empty policy is still explicit, and collapsing it
-            // into the same shape as "never touched" would leave the server
-            // unable to tell the two apart.
-            advanced: options.advanced.capabilities().map(|capabilities| {
-                CreateBoxAdvancedOptions {
-                    capabilities: capabilities.clone(),
-                }
-            }),
+            // `security` stays off the wire (above); the capability policy and
+            // the network rate limit ride under `advanced`. A server that cannot
+            // shape advertises no `network_rate_limit_enabled`, and
+            // `RestRuntime::create` refuses before sending rather than letting
+            // the field be dropped.
+            advanced: CreateBoxAdvancedOptions::from_options(&options.advanced),
             // The deprecated remove-on-stop flag was never applied by the cloud
             // control-plane mapper. Keep remote defaults unchanged and only send
             // the modern lifecycle fields when callers explicitly configure them.
@@ -238,7 +232,30 @@ impl CreateBoxRequest {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct CreateBoxAdvancedOptions {
-    pub capabilities: ContainerCapabilities,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<ContainerCapabilities>,
+    #[serde(skip_serializing_if = "NetworkRateLimit::is_unlimited")]
+    pub network_rate_limit: NetworkRateLimit,
+}
+
+impl CreateBoxAdvancedOptions {
+    /// `None` when the caller configured neither knob, so an ordinary create
+    /// keeps `advanced` off the wire entirely — the shape every server already
+    /// handles.
+    ///
+    /// `capabilities` is `Some` whenever a policy was set, even an empty one:
+    /// the server must be able to tell "explicitly empty" from "never touched".
+    /// `network_rate_limit` has no such distinction — `None` and `Some(0)` both
+    /// mean uncapped (`is_unlimited`) — so it is omitted by the same predicate
+    /// the manifest form uses, not by a second rule.
+    fn from_options(advanced: &AdvancedBoxOptions) -> Option<Self> {
+        let capabilities = advanced.capabilities().cloned();
+        let network_rate_limit = advanced.network_rate_limit;
+        (capabilities.is_some() || !network_rate_limit.is_unlimited()).then_some(Self {
+            capabilities,
+            network_rate_limit,
+        })
+    }
 }
 
 /// A mount on the wire. Only managed volumes exist here — a REST server has no
@@ -849,8 +866,9 @@ mod tests {
 
         let req = CreateBoxRequest::from_options(&opts, None);
         let advanced = req.advanced.as_ref().expect("custom policy is serialized");
-        assert_eq!(advanced.capabilities.add, ["SYS_ADMIN"]);
-        assert_eq!(advanced.capabilities.drop, ["CAP_NET_RAW"]);
+        let capabilities = advanced.capabilities.as_ref().expect("policy on the wire");
+        assert_eq!(capabilities.add, ["SYS_ADMIN"]);
+        assert_eq!(capabilities.drop, ["CAP_NET_RAW"]);
 
         let json = serde_json::to_value(&req).expect("serialize create request");
         assert_eq!(
@@ -1021,10 +1039,10 @@ mod tests {
         );
     }
 
-    /// Network shaping is done by the local gvproxy bridge, so the wire form
-    /// has no field for it and a local value must not leak into the request.
+    /// The cap rides under `advanced` with the same field names the manifest
+    /// uses, so a server can deserialize it with the core type.
     #[test]
-    fn test_create_box_request_never_carries_network_rate_limit() {
+    fn test_create_box_request_carries_the_network_rate_limit() {
         use crate::runtime::advanced_options::{AdvancedBoxOptions, NetworkRateLimit};
         use crate::runtime::options::{BoxOptions, RootfsSpec};
 
@@ -1038,11 +1056,86 @@ mod tests {
             advanced,
             ..Default::default()
         };
+
         let req = CreateBoxRequest::from_options(&opts, None);
-        let json = serde_json::to_string(&req).unwrap();
+        assert!(req.advanced.is_some(), "a rate limit must reach the wire");
+
+        let json = serde_json::to_value(&req).expect("serialize create request");
+        assert_eq!(
+            json["advanced"]["network_rate_limit"],
+            serde_json::json!({"tx_kbps": 10_000, "rx_kbps": 20_000})
+        );
         assert!(
-            !json.contains("rate_limit") && !json.contains("kbps"),
-            "wire form must NOT carry a network rate limit; got: {json}"
+            json["advanced"].get("capabilities").is_none(),
+            "an untouched capability policy must not appear next to the cap"
+        );
+    }
+
+    /// Adding the rate limit to the advanced wire type must not change what a
+    /// capability-only caller sends: exact object equality, so a stray
+    /// `"network_rate_limit": {}` fails here.
+    #[test]
+    fn capability_only_requests_keep_their_wire_shape() {
+        let mut advanced = crate::AdvancedBoxOptions::default();
+        advanced
+            .set_capabilities(Some(ContainerCapabilities {
+                add: vec!["SYS_ADMIN".into()],
+                drop: vec![],
+            }))
+            .unwrap();
+        let opts = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(CreateBoxRequest::from_options(&opts, None)).unwrap();
+        assert_eq!(
+            json["advanced"],
+            serde_json::json!({"capabilities": {"add": ["SYS_ADMIN"], "drop": []}})
+        );
+    }
+
+    /// Zero is the documented spelling of "no cap" (the CLI assigns it
+    /// unconditionally), so an all-zero limit is the same wire shape as none.
+    #[test]
+    fn an_all_zero_rate_limit_keeps_advanced_off_the_wire() {
+        use crate::runtime::advanced_options::{AdvancedBoxOptions, NetworkRateLimit};
+
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.network_rate_limit = NetworkRateLimit {
+            tx_kbps: Some(0),
+            rx_kbps: Some(0),
+        };
+        let opts = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(CreateBoxRequest::from_options(&opts, None)).unwrap();
+        assert!(json.get("advanced").is_none(), "got: {json}");
+    }
+
+    /// A one-sided cap sends the explicit zero verbatim rather than rewriting
+    /// it to absent: "0 == uncapped" is the core's one rule
+    /// (`NetworkRateLimit::is_unlimited`), not a second one on the wire.
+    #[test]
+    fn a_one_sided_cap_sends_the_explicit_zero() {
+        use crate::runtime::advanced_options::{AdvancedBoxOptions, NetworkRateLimit};
+
+        let mut advanced = AdvancedBoxOptions::default();
+        advanced.network_rate_limit = NetworkRateLimit {
+            tx_kbps: Some(10_000),
+            rx_kbps: Some(0),
+        };
+        let opts = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(CreateBoxRequest::from_options(&opts, None)).unwrap();
+        assert_eq!(
+            json["advanced"]["network_rate_limit"],
+            serde_json::json!({"tx_kbps": 10_000, "rx_kbps": 0})
         );
     }
 
@@ -1269,6 +1362,7 @@ mod tests {
             "capabilities": {
                 "snapshots_enabled": true,
                 "linux_capabilities_enabled": true,
+                "network_rate_limit_enabled": true,
                 "clone_enabled": false,
                 "export_enabled": true
             }
@@ -1276,6 +1370,7 @@ mod tests {
         let resp: ServerConfig = serde_json::from_str(json).unwrap();
         let caps = resp.capabilities.unwrap();
         assert_eq!(caps.linux_capabilities_enabled, Some(true));
+        assert_eq!(caps.network_rate_limit_enabled, Some(true));
         assert_eq!(caps.snapshots_enabled, Some(true));
         assert_eq!(caps.clone_enabled, Some(false));
         assert_eq!(caps.export_enabled, Some(true));

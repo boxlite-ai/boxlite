@@ -2,6 +2,8 @@
 
 Container security design: [Linux capability API](./container-capabilities.md)
 
+Network shaping design: [Per-box network rate limit](./network-rate-limit.md)
+
 Jailer network permission design:
 [guest networking, host IP grants, and AF_UNIX control plane](./jailer-network-permissions.md)
 

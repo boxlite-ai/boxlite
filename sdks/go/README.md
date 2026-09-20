@@ -139,6 +139,17 @@ for _, image := range cached {
   box, err := runtime.Create(ctx, "alpine:latest", boxlite.WithAdvancedOptions(advanced))
   ```
 
+- A per-direction bandwidth cap lives on the same handle, in kbit/s from the
+  box's point of view (`TxKbps` is what the box sends); `0` leaves a direction
+  uncapped:
+
+  ```go
+  if err := advanced.SetNetworkRateLimit(boxlite.NetworkRateLimit{
+      TxKbps: 10_000,
+      RxKbps: 100_000,
+  }); err != nil { log.Fatal(err) }
+  ```
+
 Port publication is local-only. Remote runtimes reject it with guidance to use
 the existing network tunnel API. Each tunnel handle is one-shot.
 OCI `EXPOSE` metadata does not publish ports.

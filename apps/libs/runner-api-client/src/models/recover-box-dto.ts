@@ -29,6 +29,8 @@ export interface RecoverBoxDTO {
     'memoryQuota'?: number;
     'networkAllowList'?: string;
     'networkBlockAll'?: boolean;
+    'networkRxKbps'?: number;
+    'networkTxKbps'?: number;
     'osUser': string;
     'secrets'?: Array<DtoSecretDTO>;
     'storageQuota'?: number;

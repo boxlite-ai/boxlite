@@ -366,6 +366,7 @@ or `archived`.
 | `public` | `boolean` | default `false` |
 | `networkBlockAll` | `boolean` | default `false` |
 | `networkAllowList` | `character varying` | nullable |
+| `networkTxKbps` / `networkRxKbps` | `integer` | nullable; per-direction bandwidth cap in kbit/s from the box's point of view, `NULL` = uncapped |
 | `authToken` | `character varying` | `nanoid(32)`, lowercased |
 | `daemonVersion` | `character varying` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |

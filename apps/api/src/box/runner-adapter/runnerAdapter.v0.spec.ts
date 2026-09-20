@@ -41,6 +41,53 @@ describe('RunnerAdapterV0 createBox', () => {
     )
   })
 
+  // Both bodies are hand-built object literals; a field missing from either
+  // is a cap the runner never hears about.
+  it('passes the network rate limit through to the runner create body', async () => {
+    const adapter = new RunnerAdapterV0()
+    const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
+    ;(adapter as any).boxApiClient = { create }
+
+    await adapter.createBox({
+      id: 'box-1',
+      image: 'base',
+      osUser: 'boxlite',
+      cpu: 1,
+      gpu: 0,
+      mem: 1,
+      disk: 3,
+      env: {},
+      networkTxKbps: 10_000,
+      networkRxKbps: 100_000,
+    } as any)
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ networkTxKbps: 10_000, networkRxKbps: 100_000 }))
+  })
+
+  it('passes the network rate limit through to the runner recover body', async () => {
+    const adapter = new RunnerAdapterV0()
+    const recover = jest.fn().mockResolvedValue(undefined)
+    ;(adapter as any).boxApiClient = { recover }
+
+    await adapter.recoverBox({
+      id: 'box-1',
+      osUser: 'boxlite',
+      cpu: 1,
+      gpu: 0,
+      mem: 1,
+      disk: 3,
+      env: {},
+      networkTxKbps: 10_000,
+      networkRxKbps: 100_000,
+      errorReason: 'crashed',
+    } as any)
+
+    expect(recover).toHaveBeenCalledWith(
+      'box-1',
+      expect.objectContaining({ networkTxKbps: 10_000, networkRxKbps: 100_000 }),
+    )
+  })
+
   it('passes secrets through to the runner recover body', async () => {
     const adapter = new RunnerAdapterV0()
     const recover = jest.fn().mockResolvedValue(undefined)

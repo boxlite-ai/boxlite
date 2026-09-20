@@ -40,7 +40,7 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
 import hmac
 
@@ -151,10 +151,25 @@ class ContainerCapabilities(BaseModel):
         return capabilities
 
 
+# PyO3 extracts these values as u64 before the core validates the shaper's
+# smaller limit. Reject unrepresentable integers before SDK conversion.
+_NetworkRateKbps = Annotated[int, Field(ge=0, le=(1 << 64) - 1)]
+
+
+class NetworkRateLimit(BaseModel):
+    """Per-direction cap in kbit/s from the box's point of view; None or 0 is uncapped."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tx_kbps: Optional[_NetworkRateKbps] = None
+    rx_kbps: Optional[_NetworkRateKbps] = None
+
+
 class CreateBoxAdvancedOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     capabilities: ContainerCapabilities = Field(default_factory=ContainerCapabilities)
+    network_rate_limit: Optional[NetworkRateLimit] = None
 
 
 class CreateBoxRequest(BaseModel):
@@ -377,15 +392,22 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
         kwargs["cmd"] = req.cmd
     if req.user is not None:
         kwargs["user"] = req.user
-    if req.advanced is not None and (
-        req.advanced.capabilities.add or req.advanced.capabilities.drop
-    ):
-        kwargs["advanced"] = boxlite.AdvancedBoxOptions(
-            capabilities=boxlite.ContainerCapabilities(
+    if req.advanced is not None:
+        advanced_kwargs = {}
+        if req.advanced.capabilities.add or req.advanced.capabilities.drop:
+            advanced_kwargs["capabilities"] = boxlite.ContainerCapabilities(
                 add=req.advanced.capabilities.add,
                 drop=req.advanced.capabilities.drop,
             )
-        )
+        # Forwarded as sent, zeros included: "0 is uncapped" is the core's
+        # rule (NetworkRateLimit::is_unlimited), not one to re-encode here.
+        if req.advanced.network_rate_limit is not None:
+            advanced_kwargs["network_rate_limit"] = boxlite.NetworkRateLimit(
+                tx_kbps=req.advanced.network_rate_limit.tx_kbps,
+                rx_kbps=req.advanced.network_rate_limit.rx_kbps,
+            )
+        if advanced_kwargs:
+            kwargs["advanced"] = boxlite.AdvancedBoxOptions(**advanced_kwargs)
     if req.secrets:
         kwargs["secrets"] = [
             boxlite.Secret(
@@ -564,6 +586,7 @@ async def get_config():
         "overrides": {},
         "capabilities": {
             "linux_capabilities_enabled": True,
+            "network_rate_limit_enabled": True,
             "max_cpus": 32,
             "max_memory_mib": 16384,
             "max_disk_size_gb": 100,

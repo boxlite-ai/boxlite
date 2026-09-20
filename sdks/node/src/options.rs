@@ -2,7 +2,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use boxlite::runtime::advanced_options::{
-    AdvancedBoxOptions, ContainerCapabilities, HealthCheckOptions, SecurityOptions,
+    AdvancedBoxOptions, ContainerCapabilities, HealthCheckOptions, NetworkRateLimit,
+    SecurityOptions,
 };
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
@@ -13,9 +14,9 @@ use boxlite::runtime::options::{
 use napi::bindgen_prelude::Error;
 use napi_derive::napi;
 
-#[cfg(test)]
-use crate::advanced_options::JsContainerCapabilities;
 use crate::advanced_options::{JsAdvancedBoxOptions, JsSecurityOptions};
+#[cfg(test)]
+use crate::advanced_options::{JsContainerCapabilities, JsNetworkRateLimit};
 
 /// Health check options for boxes.
 ///
@@ -532,10 +533,17 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .unwrap_or_default();
 
         let health_check = js_opts.health_check.map(HealthCheckOptions::from);
-        let capabilities: Option<ContainerCapabilities> = js_opts
-            .advanced
-            .and_then(|advanced| advanced.capabilities)
-            .map(Into::into);
+        let (capabilities, network_rate_limit): (Option<ContainerCapabilities>, _) =
+            match js_opts.advanced {
+                Some(advanced) => (
+                    advanced.capabilities.map(Into::into),
+                    advanced
+                        .network_rate_limit
+                        .map(NetworkRateLimit::try_from)
+                        .transpose()?,
+                ),
+                None => (None, None),
+            };
         let secrets = js_opts
             .secrets
             .unwrap_or_default()
@@ -552,6 +560,9 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
 
         let mut advanced = AdvancedBoxOptions::default();
         advanced.set_capabilities(capabilities)?;
+        if let Some(network_rate_limit) = network_rate_limit {
+            advanced.network_rate_limit = network_rate_limit;
+        }
         advanced.security = security;
         advanced.health_check = health_check;
 
@@ -888,6 +899,53 @@ mod tests {
         assert!(unauthenticated.credential.is_none());
     }
 
+    /// A rate limit that cannot be represented as a `u64` is refused. Coercing
+    /// it to "unset" the way the security resource limits are would silently
+    /// hand back an uncapped box — fail-open on the one thing the caller
+    /// asked to constrain.
+    #[test]
+    fn box_options_reject_unrepresentable_network_rate_limit() {
+        for bad in [-1.0, 1.5, f64::NAN, 9_007_199_254_740_993.0] {
+            let js = JsBoxOptions {
+                image: Some("alpine:latest".into()),
+                rootfs_path: None,
+                cpus: None,
+                memory_mib: None,
+                disk_size_gb: None,
+                working_dir: None,
+                env: None,
+                volumes: None,
+                network: None,
+                ports: None,
+                auto_remove: None,
+                auto_stop: None,
+                auto_delete: None,
+                auto_resume: None,
+                detach: None,
+                entrypoint: None,
+                cmd: None,
+                user: None,
+                advanced: Some(JsAdvancedBoxOptions {
+                    capabilities: None,
+                    network_rate_limit: Some(JsNetworkRateLimit {
+                        tx_kbps: Some(bad),
+                        rx_kbps: None,
+                    }),
+                }),
+                security: None,
+                health_check: None,
+                secrets: None,
+            };
+            let error = BoxOptions::try_from(js).err().unwrap_or_else(|| {
+                panic!("txKbps={bad} must be rejected, not treated as uncapped")
+            });
+            assert!(
+                error.to_string().contains("networkRateLimit.txKbps"),
+                "error must name the field, got: {error}"
+            );
+        }
+    }
+
     #[test]
     #[allow(deprecated)]
     fn box_options_from_js_allow_net() {
@@ -940,6 +998,7 @@ mod tests {
                 add: Some(vec!["NET_ADMIN".into(), "SYS_PTRACE".into()]),
                 drop: Some(vec!["MKNOD".into(), "NET_RAW".into()]),
             }),
+            network_rate_limit: None,
         });
         let with_capabilities = BoxOptions::try_from(with_capabilities).unwrap();
         let capabilities = with_capabilities
@@ -949,10 +1008,27 @@ mod tests {
         assert_eq!(capabilities.add, ["NET_ADMIN", "SYS_PTRACE"]);
         assert_eq!(capabilities.drop, ["MKNOD", "NET_RAW"]);
 
+        let mut with_rate_limit = js.clone();
+        with_rate_limit.advanced = Some(JsAdvancedBoxOptions {
+            capabilities: None,
+            network_rate_limit: Some(JsNetworkRateLimit {
+                tx_kbps: Some(10_000.0),
+                rx_kbps: None,
+            }),
+        });
+        let with_rate_limit = BoxOptions::try_from(with_rate_limit).unwrap();
+        assert_eq!(
+            with_rate_limit.advanced.network_rate_limit.tx_kbps,
+            Some(10_000)
+        );
+        assert_eq!(with_rate_limit.advanced.network_rate_limit.rx_kbps, None);
+        assert!(with_rate_limit.advanced.capabilities().is_none());
+
         let opts = BoxOptions::try_from(js).unwrap();
         assert!(!opts.auto_remove);
         assert_eq!(opts.auto_delete, None);
         assert!(opts.advanced.capabilities().is_none());
+        assert!(opts.advanced.network_rate_limit.is_unlimited());
         assert!(matches!(
             opts.inbound_network,
             NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty()

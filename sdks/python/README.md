@@ -250,6 +250,9 @@ Configuration options for creating a box.
 - `advanced: AdvancedBoxOptions | None` - Expert-only container options
   - `capabilities.add: List[str]` - Capabilities added to BoxLite's baseline
   - `capabilities.drop: List[str]` - Capabilities removed from the resulting set
+  - `network_rate_limit: NetworkRateLimit | None` - Per-direction bandwidth cap in
+    kbit/s from the box's point of view (`tx_kbps` guest to internet, `rx_kbps`
+    internet to guest); `None` or `0` leaves a direction uncapped
 - `auto_remove: bool` - Auto cleanup after stop (default: True)
 
 `NetworkSpec` uses:
@@ -299,6 +302,7 @@ options = boxlite.BoxOptions(
             add=["NET_ADMIN"],
             drop=["NET_RAW"],
         ),
+        network_rate_limit=boxlite.NetworkRateLimit(tx_kbps=10_000, rx_kbps=100_000),
     ),
     secrets=[
         boxlite.Secret(

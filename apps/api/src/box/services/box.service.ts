@@ -38,7 +38,7 @@ import { TypedConfigService } from '../../config/typed-config.service'
 import { WarmPool } from '../entities/warm-pool.entity'
 import { BoxDto, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
-import { validateNetworkAllowList } from '../utils/network-validation.util'
+import { validateNetworkAllowList, isNetworkRateLimited } from '../utils/network-validation.util'
 import { VolumeService } from './volume.service'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import {
@@ -292,6 +292,19 @@ export class BoxService {
 
       if (createBoxDto.networkAllowList !== undefined) {
         box.networkAllowList = this.resolveNetworkAllowList(createBoxDto.networkAllowList)
+      }
+
+      box.networkTxKbps = createBoxDto.networkTxKbps
+      box.networkRxKbps = createBoxDto.networkRxKbps
+      // Checked after networkBlockAll resolved: the organization's
+      // limited-egress default blocks a box whose caller never asked for that,
+      // and the runner's core refuses a cap on a box with no interface to
+      // shape. Failing here turns a doomed CREATE_BOX job into a 400.
+      if (box.networkBlockAll && isNetworkRateLimited(box.networkTxKbps, box.networkRxKbps)) {
+        throw new BadRequestError(
+          'A network rate limit needs outbound network access, but this box blocks all network access ' +
+            '(networkBlockAll, or the organization default)',
+        )
       }
 
       const lifecyclePolicy = this.resolveLifecyclePolicy({

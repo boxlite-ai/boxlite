@@ -686,8 +686,10 @@ fn validate_capability_names(
 /// convention Firecracker, Kata and Cloud Hypervisor use. Each direction must
 /// fit within the bridge's token bucket limit; larger values are rejected.
 ///
-/// Local runtime only: a remote server owns its own network policy, so the REST
-/// wire types carry no field for this and `sanitize_remote` rejects it.
+/// Over REST the cap rides under `advanced.network_rate_limit`. A server
+/// advertises support as `capabilities.network_rate_limit_enabled` on
+/// `GET /v1/config`, and `RestRuntime::create` refuses to send a cap to one that
+/// does not, so an older server never silently drops it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NetworkRateLimit {
@@ -793,13 +795,12 @@ pub struct AdvancedBoxOptions {
 
     /// Per-direction rate limit for the box's network interface.
     ///
-    /// Grouped with the other local-only knobs (`security`, `isolate_mounts`,
-    /// `privileged`) rather than placed on `BoxOptions` next to `network`: the
-    /// object-shaped `NetworkConfig` types are the REST wire form and deny
-    /// unknown fields, while this never crosses the wire — `sanitize_remote`
-    /// rejects it and `CreateBoxRequest` has no field for it. It is also
-    /// bidirectional, so it belongs to neither the outbound nor the inbound
-    /// half.
+    /// Grouped under `advanced` with `capabilities` rather than placed on
+    /// `BoxOptions` next to `network`: the object-shaped `NetworkConfig` types
+    /// are the outbound and inbound halves of the REST wire form, and a cap is
+    /// bidirectional, so it belongs to neither. On the wire it travels as
+    /// `advanced.network_rate_limit`, gated on the server advertising
+    /// `network_rate_limit_enabled`.
     ///
     /// Omitted from the serialized form when unlimited, so an ordinary box's
     /// exported manifest keeps the shape older importers already handle (the

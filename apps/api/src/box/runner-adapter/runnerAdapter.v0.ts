@@ -271,6 +271,8 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       })),
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
+      networkTxKbps: box.networkTxKbps,
+      networkRxKbps: box.networkRxKbps,
       metadata,
       authToken: box.authToken,
       organizationId: box.organizationId,
@@ -346,6 +348,8 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       })),
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
+      networkTxKbps: box.networkTxKbps,
+      networkRxKbps: box.networkRxKbps,
       errorReason: box.errorReason,
     }
     await this.boxApiClient.recover(box.id, recoverBoxDTO)
