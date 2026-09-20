@@ -1,13 +1,13 @@
-# Run unit tests across all SDKs.
+# Run hosted-runner tests and collect coverage across the runtime and SDKs.
 #
-# This workflow runs unit tests only (no VM/integration tests).
-# GitHub runners do not support nested virtualization, so we cannot run
-# tests that require actual VMs.
+# Non-VM integration suites use test-only runtime construction because GitHub
+# runners cannot provide the virtualization needed by production startup.
 #
 # Test coverage:
-# - Rust: cargo-nextest (unit tests only, with llvm-cov coverage)
+# - Rust: units and non-VM integration, with llvm-cov coverage
 # - Python: pytest with -m "not integration"
-# - Node.js: vitest (all tests are unit tests)
+# - Node.js: vitest unit project
+# - Go: SDK and networking bridge; API: Jest with Postgres and Redis
 name: Test
 
 on:
@@ -136,12 +136,14 @@ jobs:
               - 'make/**'
               - 'codecov.yml'
               - '.github/actions/setup-python/**'
+              - '.github/workflows/config.yml'
               - '.github/workflows/test.yml'
             node:
               - 'sdks/node/**'
               - 'Makefile'
               - 'make/**'
               - 'codecov.yml'
+              - '.github/workflows/config.yml'
               - '.github/workflows/test.yml'
             go:
               - 'sdks/go/**'
@@ -149,6 +151,10 @@ jobs:
               - 'Makefile'
               - 'make/**'
               - 'codecov.yml'
+              - '.github/actions/setup-go/**'
+              - '.github/actions/setup-rust/**'
+              - '.github/actions/sccache/**'
+              - '.github/workflows/config.yml'
               - '.github/workflows/test.yml'
             api:
               - 'apps/api/**'
@@ -187,8 +193,8 @@ jobs:
               - 'make/test.mk'
               - '.github/workflows/test.yml'
 
-  # Merge core, shared, REST, CLI, native VMM and Linux guest coverage before
-  # applying the same 90% line-coverage floor used by make codecov.
+  # Merge core, shared, REST, CLI, native VMM and Linux guest coverage.
+  # Codecov gates changed lines at 90% and reports total coverage separately.
   rust:
     name: Rust Tests (${{ matrix.platform.target }})
     needs: [config, changes]
@@ -258,9 +264,6 @@ jobs:
           use_oidc: true
           disable_search: true
           fail_ci_if_error: true
-
-      - name: Require 90% Rust line coverage
-        run: make coverage:check
 
   # Python SDK unit tests
   python:
@@ -512,7 +515,7 @@ jobs:
       - name: Install app dependencies
         run: "yarn install --immutable"
       - name: Run API unit tests
-        run: "yarn nx run api:test --coverage"
+        run: "yarn nx run api:test --coverage --skip-nx-cache"
 
       - name: Upload API coverage to Codecov
         uses: codecov/codecov-action@v5

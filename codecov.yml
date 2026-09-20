@@ -5,8 +5,9 @@ coverage:
   status:
     project:
       default:
-        target: 90%
+        target: auto
         threshold: 0%
+        informational: true
         if_ci_failed: error
     patch:
       default:

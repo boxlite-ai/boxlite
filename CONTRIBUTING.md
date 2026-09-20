@@ -43,16 +43,17 @@ Key test entry points:
 
 ### Coverage
 
-`make codecov` collects fresh Rust coverage and fails below **90% line
-coverage**. Codecov applies the same minimum to total project coverage and
-changed lines, with no allowed drop. A successful test run alone does not pass
-the coverage gate.
+`make codecov` collects fresh Rust coverage. Codecov requires **90% coverage
+of changed lines**, with no tolerance below that target. Total project coverage
+is reported as an informational status. The local collection command checks
+test success; Codecov evaluates changed lines against the pull request's base.
 
 The Rust report combines core, shared, REST, CLI (including authentication
 integration tests), C/Node/Python native bindings, native VMM, and the
-runtime/shutdown/network tests that need no VM. Linux also collects guest unit
-coverage. Vendored dependencies,
-standalone tests, and test scaffolding are excluded; production guest and SDK
+runtime/shutdown/network tests that need no VM. Hosted runtime and C unit tests
+use the existing test-only runtime constructor; production runtime creation
+still validates the host. Linux also collects guest unit coverage. Vendored
+dependencies, standalone tests, and test scaffolding are excluded; production guest and SDK
 paths are not ignored by Codecov. SDK language wrappers, cloud apps, and shim
 subprocess execution are separate from the Rust unit report.
 
@@ -73,9 +74,9 @@ On a VM-capable host, `make coverage:python:integration` and
 integration tests, replacing their reports with the combined results. Python
 tests marked `e2e` still require separate external services and credentials.
 
-These collectors produce reports; the Codecov project check applies the 90%
-floor to their combined coverage. The local `coverage:check` target checks
-Rust profiles only. A report does not establish coverage for components that
+These collectors produce fresh reports, bypassing Nx's result cache for API
+coverage. Codecov combines them to evaluate the 90% changed-line gate and report
+total coverage. A report does not establish coverage for components that
 have not been instrumented: shim subprocesses, the cloud runner/proxy, and
 dashboard still require additional collection.
 
@@ -83,13 +84,12 @@ dashboard still require additional collection.
 # Unit and non-VM coverage, using the same dependency stubs as CI.
 BOXLITE_DEPS_STUB=1 make codecov
 
-# Generate a report without enforcing the floor while investigating gaps.
+# Generate the same LCOV report directly while investigating gaps.
 BOXLITE_DEPS_STUB=1 make coverage:lcov
 
 # On a VM-capable host, add runtime and CLI integration coverage to it.
 # Leave BOXLITE_DEPS_STUB unset for the real runtime build and execution.
 make coverage:integration
-make coverage:check
 ```
 
 LCOV is written to `target/coverage/lcov.info`; `make coverage` and

@@ -36,7 +36,7 @@ is *exclusively* callable; the other four can also be dispatched on their own.
 | --- | --- | --- | --- |
 | `config.yml` | `workflow_call` | call-only | Single source of the platform matrix and language versions |
 | `lint.yml` | push, PR, merge_group | — | Format and lint per language, plus the infra suite. `Lint (conclusion)` is the required check |
-| `test.yml` | push, PR, merge_group | — | SDK unit tests and Rust coverage, including guest tests on Linux and non-VM integration tests. Requires 90% Rust line coverage |
+| `test.yml` | push, PR, merge_group | — | SDK unit tests and Rust coverage, including guest tests on Linux and non-VM integration tests. Codecov requires 90% coverage of changed lines and reports total coverage |
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
 | `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs |
 | `unreviewed-pr.yml` | PR (target) | — | Commits `UNREVIEWED.md` and drafts a pull request until its author deletes the file and marks it ready. `Author reviewed the PR` is the check |

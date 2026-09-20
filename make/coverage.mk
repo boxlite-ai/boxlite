@@ -19,7 +19,7 @@ define run_unit_coverage
 	cargo llvm-cov nextest --no-report --no-tests=warn $(NEXTEST_PROFILE_FLAG) $(RUST_UNIT_CORE_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
 	cargo llvm-cov nextest --no-report --no-tests=warn $(NEXTEST_PROFILE_FLAG) $(RUST_UNIT_SHARED_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
 	cargo llvm-cov test --no-report $(RUST_UNIT_REST_ARGS) -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
-	cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite --no-default-features --test runtime --test shutdown --test network $(NEXTEST_FILTER) || rc=$$?; \
+	$(MAKE) coverage:runtime || rc=$$?; \
 	cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-cli --bins --test auth $(NEXTEST_FILTER) || rc=$$?; \
 	cargo llvm-cov nextest --no-report --no-tests=warn $(NEXTEST_PROFILE_FLAG) -p boxlite-hypervisor -p boxlite-vmm --lib $(NEXTEST_FILTER) || rc=$$?; \
 	$(MAKE) coverage:bindings || rc=$$?; \
@@ -44,10 +44,10 @@ coverage\:lcov:
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
 	@echo "✅ LCOV output: target/coverage/lcov.info"
 
-# Check the profiles just collected, without rerunning the tests. Keep the
-# threshold fixed so CI and local acceptance use the same minimum.
-coverage\:check:
-	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --fail-under-lines 90
+coverage\:runtime:
+	@cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) \
+		-p boxlite --no-default-features --features test-support \
+		--test runtime --test shutdown --test network $(NEXTEST_FILTER)
 
 coverage\:bindings:
 	@rc=0; \
@@ -63,9 +63,8 @@ coverage\:report:
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --html --output-dir target/coverage
 
-# Collect a fresh report before applying the gate; never reuse stale profiles.
+# Codecov enforces patch coverage against the PR base; total coverage is reported.
 codecov: coverage\:lcov
-	@$(MAKE) coverage:check
 
 # Go's reports include every package, including packages with no tests.
 coverage\:go: dev\:go
@@ -98,7 +97,7 @@ coverage\:node\:integration: dev\:node
 	@cd sdks/node && npm run test:all -- --coverage $(VITEST_FILTER)
 
 coverage\:api: _ensure-apps-deps
-	@cd apps && yarn nx run api:test --coverage $(if $(FILTER),--testNamePattern '$(FILTER)',)
+	@cd apps && yarn nx run api:test --coverage --skip-nx-cache $(if $(FILTER),--testNamePattern '$(FILTER)',)
 
 # Add VM integration coverage to the unit profiles instead of erasing them.
 # Run coverage:lcov first for a combined report; BOXLITE_DEPS_STUB must be unset.

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export default {
   displayName: 'boxlite',
@@ -18,6 +18,6 @@ export default {
   transformIgnorePatterns: ['/node_modules/(?!(?:uuid|nanoid)/)'],
   moduleFileExtensions: ['ts', 'js', 'html'],
   collectCoverageFrom: ['src/**/*.ts', '!src/**/*.spec.ts', '!src/**/*.d.ts'],
-  coverageReporters: ['text', ['lcov', { projectRoot: resolve(__dirname, '../..') }]],
+  coverageReporters: ['text', ['lcov', { projectRoot: fileURLToPath(new URL('../..', import.meta.url)) }]],
   coverageDirectory: '../../target/coverage/api',
 }
