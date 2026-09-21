@@ -780,7 +780,8 @@ impl RuntimeImpl {
     /// survive parent process exit and runtime shutdown.
     ///
     /// # Arguments
-    /// * `timeout` - Seconds before force-kill. None=10s, Some(-1)=infinite
+    /// * `timeout` - Seconds to wait for stop. None=10s, Some(-1)=infinite.
+    ///   Timed-out stops continue in the background while the executor is alive.
     ///
     /// # Returns
     /// Ok(()) if all boxes stopped successfully, Err if any box failed to stop.
@@ -815,15 +816,26 @@ impl RuntimeImpl {
         // Convert timeout to duration
         let timeout_duration = timeout_to_duration(timeout);
 
-        // Stop all boxes concurrently
-        let stop_futures = active_boxes.iter().map(|box_impl| {
+        // Own each stop independently: a timeout must not abandon a stop waiting
+        // for a capture to release disk_ops after its blocking copy and thaw.
+        let stop_futures = active_boxes.into_iter().map(|box_impl| {
             let box_id = box_impl.id().to_string();
+            let task = tokio::spawn(async move {
+                let result = box_impl.stop().await;
+                if let Err(error) = &result {
+                    tracing::warn!(box_id = %box_impl.id(), %error, "Box stop failed");
+                }
+                result
+            });
             async move {
+                let stop = async {
+                    task.await
+                        .map_err(|e| BoxliteError::Internal(format!("Stop task failed: {e}")))?
+                };
                 let result = if let Some(duration) = timeout_duration {
-                    tokio::time::timeout(duration, box_impl.stop()).await
+                    tokio::time::timeout(duration, stop).await
                 } else {
-                    // Infinite timeout
-                    Ok(box_impl.stop().await)
+                    Ok(stop.await)
                 };
                 (box_id, result)
             }
@@ -1233,10 +1245,13 @@ impl RuntimeImpl {
         let container_id = ContainerID::new();
         let now = Utc::now();
 
+        let lock_id = self.lock_manager.allocate()?;
+
         // Move staging dir to canonical path (cross-fs safe: staging may be on
         // a different filesystem than the boxes dir).
         let box_home = self.layout.boxes_dir().join(box_id.as_str());
         move_dir_cross_fs(&staging_dir, &box_home).map_err(|e| {
+            let _ = self.lock_manager.free(lock_id);
             BoxliteError::Storage(format!(
                 "Failed to move {} to {}: {}",
                 staging_dir.display(),
@@ -1258,7 +1273,6 @@ impl RuntimeImpl {
         let mut state = BoxState::new();
         state.set_status(initial_status);
 
-        let lock_id = self.lock_manager.allocate()?;
         state.set_lock_id(lock_id);
 
         if let Err(e) = self.box_manager.add_box(&config, &state) {
@@ -1268,9 +1282,9 @@ impl RuntimeImpl {
             return Err(e);
         }
 
-        self.get(box_id.as_str()).await?.ok_or_else(|| {
-            BoxliteError::Internal("Provisioned box not found after persist".to_string())
-        })
+        // Persistence succeeded: construct the handle without another fallible lookup.
+        let (box_impl, _) = self.get_or_create_box_impl(config, state);
+        Ok(litebox_from_impl(box_impl))
     }
 
     /// Recover boxes from persistent storage on runtime startup.
@@ -2303,6 +2317,57 @@ mod tests {
     // ====================================================================
     // shutdown() tests
     // ====================================================================
+
+    #[tokio::test]
+    async fn test_capture_cleanup_provision_lock_failure() {
+        let (mut runtime, _dir) = create_test_runtime();
+        Arc::get_mut(&mut runtime).unwrap().lock_manager =
+            Arc::new(crate::lock::InMemoryLockManager::new(1));
+        runtime.lock_manager.allocate().unwrap();
+        let staging = tempfile::tempdir_in(runtime.layout.boxes_dir()).unwrap();
+        let result = runtime
+            .provision_box(
+                staging.path().to_path_buf(),
+                None,
+                test_box_config(true).options,
+                BoxStatus::Stopped,
+            )
+            .await;
+        assert!(result.is_err());
+        drop(staging);
+        assert_eq!(
+            std::fs::read_dir(runtime.layout.boxes_dir())
+                .unwrap()
+                .count(),
+            0,
+            "failed lock allocation leaked the moved clone directory"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_capture_cleanup_shutdown_timeout_keeps_stop_alive() {
+        let (runtime, _dir) = create_test_runtime();
+        let mut config = test_box_config(false);
+        config.box_home = runtime.layout.boxes_dir().join(config.id.as_str());
+        let (box_impl, _) = runtime.get_or_create_box_impl(config, BoxState::new());
+        // A capture owns this lock until its blocking disk copy and thaw finish.
+        let capture = box_impl.disk_ops.lock().await;
+        let error = runtime.shutdown(Some(1)).await.unwrap_err();
+        assert!(error.to_string().contains("timeout"));
+        drop(capture);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while runtime
+                .runtime_metrics
+                .boxes_stopped
+                .load(std::sync::atomic::Ordering::Relaxed)
+                == 0
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("shutdown timeout abandoned the stop waiting for capture");
+    }
 
     #[tokio::test]
     async fn test_shutdown_is_idempotent() {

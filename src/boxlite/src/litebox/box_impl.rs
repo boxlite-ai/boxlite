@@ -1401,7 +1401,7 @@ impl BoxImpl {
 
         let t0 = Instant::now();
 
-        // Phase 1: Freeze guest I/O (best-effort, 5s timeout)
+        // Phase 1: Freeze guest I/O (required, 5s timeout)
         let t_quiesce = Instant::now();
         let frozen = self.guest_quiesce().await;
         if !frozen {
@@ -1502,7 +1502,8 @@ impl BoxImpl {
 
     /// Best-effort guest filesystem thaw (FITHAW) with timeout.
     async fn guest_thaw(&self) {
-        let Ok(live) = self.live_state().await else {
+        // Cleanup must use the existing session even after runtime cancellation.
+        let Some(live) = self.live.get() else {
             tracing::warn!("Cannot thaw: LiveState not available");
             return;
         };
@@ -1982,6 +1983,121 @@ mod tests {
             Arc::new(crate::litebox::LocalSnapshotBackend::new(inner)),
         );
         (fixture, child, handle)
+    }
+
+    #[tokio::test]
+    async fn test_capture_cleanup_thaws_after_runtime_shutdown() {
+        let gate = Arc::new(StartGate::default());
+        let (fixture, _child, handle) = snapshot_fixture(gate.clone()).await;
+        let capture = tokio::spawn(async move {
+            handle
+                .snapshots()
+                .create(crate::SnapshotOptions::default(), "live")
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), gate.entered.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        fixture.box_impl.runtime.shutdown(Some(1)).await.unwrap();
+        gate.release.add_permits(1);
+        capture.await.unwrap().unwrap();
+        assert_eq!(
+            gate.thawed.available_permits(),
+            1,
+            "runtime cancellation must not suppress the cleanup Thaw RPC"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_capture_cleanup_failed_clone_reclaims_base() {
+        let gate = Arc::new(StartGate::default());
+        gate.release.add_permits(2);
+        let (fixture, _child, handle) = snapshot_fixture(gate).await;
+        let existing = handle
+            .clone_box(crate::CloneOptions::default(), Some("taken".into()))
+            .await
+            .unwrap();
+        let runtime = &fixture.box_impl.runtime;
+        let result = handle
+            .clone_boxes(
+                crate::CloneOptions::default(),
+                2,
+                vec!["taken".into(), "unused".into()],
+            )
+            .await;
+        assert!(result.is_err());
+        let bases = runtime
+            .base_disk_mgr
+            .store()
+            .list_by_box(
+                handle.id().as_ref(),
+                Some(crate::disk::BaseDiskKind::CloneBase),
+            )
+            .unwrap();
+        assert_eq!(bases.len(), 1, "failed clone leaked its copied base row");
+        assert_eq!(
+            std::fs::read_dir(runtime.layout.bases_dir())
+                .unwrap()
+                .count(),
+            1,
+            "failed clone leaked its copied base file"
+        );
+        assert_eq!(
+            std::fs::read_dir(runtime.layout.boxes_dir())
+                .unwrap()
+                .count(),
+            2,
+            "failed clone leaked staging directories"
+        );
+        assert!(runtime.get(existing.id().as_ref()).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_capture_cleanup_partial_clone_keeps_completed_boxes() {
+        let gate = Arc::new(StartGate::default());
+        gate.release.add_permits(1);
+        let (fixture, _child, handle) = snapshot_fixture(gate).await;
+        let runtime = &fixture.box_impl.runtime;
+        let result = handle
+            .clone_boxes(
+                crate::CloneOptions::default(),
+                3,
+                vec!["kept".into(), "kept".into(), "unused".into()],
+            )
+            .await;
+        assert!(result.is_err());
+        let kept = runtime
+            .get("kept")
+            .await
+            .unwrap()
+            .expect("completed clone must survive");
+        let bases = runtime
+            .base_disk_mgr
+            .store()
+            .list_by_box(
+                handle.id().as_ref(),
+                Some(crate::disk::BaseDiskKind::CloneBase),
+            )
+            .unwrap();
+        assert_eq!(bases.len(), 1);
+        assert!(bases[0].disk_info().to_path_buf().exists());
+        assert_eq!(
+            runtime
+                .base_disk_mgr
+                .store()
+                .dependent_boxes(bases[0].id())
+                .unwrap(),
+            vec![kept.id().to_string()]
+        );
+        assert_eq!(
+            std::fs::read_dir(runtime.layout.boxes_dir())
+                .unwrap()
+                .count(),
+            2,
+            "partially failed clone leaked unused staging directories"
+        );
     }
 
     #[tokio::test]

@@ -106,75 +106,74 @@ impl BoxImpl {
         // base_path is a flat file (e.g., bases/{nanoid}.qcow2)
         let shared_container = layer.disk_info.to_path_buf();
 
-        // Read virtual size from the shared base for overlay creation.
-        let container_vsize = Qcow2Helper::qcow2_virtual_size(&shared_container)?;
-
-        // Phase B: Create N container overlay headers (VM is resumed, fast).
-        // Guest rootfs is NOT cloned — each clone creates its own on first start.
-        let mut staging_dirs = Vec::with_capacity(count);
-        for _ in 0..count {
-            let temp = tempfile::tempdir_in(rt.layout.boxes_dir()).map_err(|e| {
-                BoxliteError::Storage(format!("Failed to create temp box directory: {}", e))
-            })?;
-            #[allow(deprecated)]
-            let staging = temp.into_path();
-
-            let staging_disks = staging.join("disks");
-            std::fs::create_dir_all(&staging_disks).map_err(|e| {
-                BoxliteError::Storage(format!("Failed to create staging disks dir: {}", e))
-            })?;
-
-            // Container overlay → shared base (qcow2 backing qcow2)
-            // leak() prevents the Disk RAII guard from deleting the file on drop —
-            // the child is the clone's persistent disk and must outlive this function.
-            Qcow2Helper::create_cow_child_disk(
-                &shared_container,
-                BackingFormat::Qcow2,
-                &staging_disks.join(disk_filenames::CONTAINER_DISK),
-                container_vsize,
-            )?
-            .leak();
-
-            staging_dirs.push(staging);
-        }
-
-        // Phase C: Provision each clone and record base disk refs.
         let mut clones = Vec::with_capacity(count);
-        for (i, staging) in staging_dirs.into_iter().enumerate() {
-            let litebox = match rt
-                .provision_box(
-                    staging.clone(),
-                    names.get(i).cloned(),
-                    self.config.options.clone(),
-                    BoxStatus::Stopped,
-                )
-                .await
-            {
-                Ok(lb) => lb,
-                Err(e) => {
-                    // Cleanup remaining staging dirs on failure.
-                    let _ = std::fs::remove_dir_all(&staging);
-                    // Don't clean up already-provisioned clones; they're valid boxes.
-                    return Err(e);
-                }
-            };
+        let result = async {
+            // Read virtual size from the shared base for overlay creation.
+            let container_vsize = Qcow2Helper::qcow2_virtual_size(&shared_container)?;
 
-            // Record that this clone depends on the shared base disk.
-            if let Err(e) = rt
-                .base_disk_mgr
-                .store()
-                .add_ref(&layer.id, litebox.id().as_ref())
-            {
-                tracing::warn!(
-                    clone_id = %litebox.id(),
-                    base_disk_id = %layer.id,
-                    error = %e,
-                    "Failed to record base disk ref for clone"
-                );
+            // Phase B: Create N container overlay headers (VM is resumed, fast).
+            // Guest rootfs is NOT cloned — each clone creates its own on first start.
+            let mut staging_dirs = Vec::with_capacity(count);
+            for _ in 0..count {
+                let temp = tempfile::tempdir_in(rt.layout.boxes_dir()).map_err(|e| {
+                    BoxliteError::Storage(format!("Failed to create temp box directory: {}", e))
+                })?;
+                let staging_disks = temp.path().join("disks");
+                std::fs::create_dir_all(&staging_disks).map_err(|e| {
+                    BoxliteError::Storage(format!("Failed to create staging disks dir: {}", e))
+                })?;
+
+                // Container overlay → shared base (qcow2 backing qcow2)
+                // leak() prevents the Disk RAII guard from deleting the file on drop —
+                // the child is the clone's persistent disk and must outlive this function.
+                Qcow2Helper::create_cow_child_disk(
+                    &shared_container,
+                    BackingFormat::Qcow2,
+                    &staging_disks.join(disk_filenames::CONTAINER_DISK),
+                    container_vsize,
+                )?
+                .leak();
+
+                staging_dirs.push(temp);
             }
 
-            clones.push(litebox);
+            // Phase C: Provision each clone and record base disk refs.
+            for (i, staging) in staging_dirs.into_iter().enumerate() {
+                let litebox = rt
+                    .provision_box(
+                        staging.path().to_path_buf(),
+                        names.get(i).cloned(),
+                        self.config.options.clone(),
+                        BoxStatus::Stopped,
+                    )
+                    .await?;
+
+                // Record that this clone depends on the shared base disk.
+                if let Err(e) = rt
+                    .base_disk_mgr
+                    .store()
+                    .add_ref(&layer.id, litebox.id().as_ref())
+                {
+                    tracing::warn!(
+                        clone_id = %litebox.id(),
+                        base_disk_id = %layer.id,
+                        error = %e,
+                        "Failed to record base disk ref for clone"
+                    );
+                }
+
+                clones.push(litebox);
+            }
+
+            Ok::<_, BoxliteError>(())
         }
+        .await;
+        // Completed clones keep their base, including if recording a ref failed.
+        // For stopped sources, the existing source ref also prevents collection.
+        if result.is_err() && clones.is_empty() {
+            rt.base_disk_mgr.try_gc_base(&layer.id);
+        }
+        result?;
 
         tracing::info!(
             source_id = %self.id(),
