@@ -47,6 +47,10 @@ export enum RoutePath {
   // Webhooks
   WEBHOOKS = '/dashboard/webhooks',
   WEBHOOK_ENDPOINT_DETAILS = '/dashboard/webhooks/:endpointId',
+  // Images
+  /** `:idOrRef` is a catalog id, or a curated image's short name — neither carries a slash. */
+  IMAGE_DETAILS = '/dashboard/images/:idOrRef',
+
   // Boxes
   BOX_DETAILS = '/dashboard/boxes/:boxId',
   BOX_TERMINAL = '/dashboard/boxes/:boxId/terminal',

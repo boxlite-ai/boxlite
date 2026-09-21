@@ -12,6 +12,12 @@ export const CREATE_API_KEY_PERMISSIONS_GROUPS: { name: string; permissions: Cre
     permissions: [CreateApiKeyPermissionsEnum.WRITE_BOXES, CreateApiKeyPermissionsEnum.DELETE_BOXES],
   },
   {
+    // No write, for the same reason as the role groups: nothing writes the
+    // catalog over HTTP.
+    name: 'Images',
+    permissions: [CreateApiKeyPermissionsEnum.READ_IMAGES, CreateApiKeyPermissionsEnum.DELETE_IMAGES],
+  },
+  {
     name: 'Volumes',
     permissions: [
       CreateApiKeyPermissionsEnum.READ_VOLUMES,

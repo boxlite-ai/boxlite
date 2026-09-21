@@ -23,7 +23,7 @@ const RULES = [
   {
     name: 'arbitrary font sizes (use text-label/meta/body/em/section/page)',
     pattern: /\btext-\[\d+(?:\.\d+)?px\]/g,
-    ceiling: 299,
+    ceiling: 290,
   },
   { name: 'rounded corners (the language is square)', pattern: /\brounded-(?:sm|md|lg|xl|2xl|3xl)\b/g, ceiling: 64 },
   {

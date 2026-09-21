@@ -13,6 +13,12 @@ export const ORGANIZATION_ROLE_PERMISSIONS_GROUPS: { name: string; permissions: 
       permissions: [OrganizationRolePermissionsEnum.WRITE_BOXES, OrganizationRolePermissionsEnum.DELETE_BOXES],
     },
     {
+      // No write: an image enters the catalog by being used, so creating a box
+      // is what writes it. There is no route to grant.
+      name: 'Images',
+      permissions: [OrganizationRolePermissionsEnum.READ_IMAGES, OrganizationRolePermissionsEnum.DELETE_IMAGES],
+    },
+    {
       name: 'Registries',
       permissions: [
         OrganizationRolePermissionsEnum.WRITE_REGISTRIES,
