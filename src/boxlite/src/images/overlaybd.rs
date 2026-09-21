@@ -108,10 +108,10 @@ impl Overlaybd {
             ));
         }
         if let Some(path) = &source
-            && (!path.is_absolute() || !path.is_dir())
+            && !path.is_absolute()
         {
             return Err(error(
-                "image directory must be an existing absolute OCI layout directory",
+                "image directory must be an absolute OCI layout directory",
             ));
         }
         Ok(Arc::new(Self {
@@ -227,6 +227,11 @@ impl Overlaybd {
             .source
             .as_ref()
             .ok_or_else(|| error("backend is disabled"))?;
+        if !source.is_dir() {
+            return Err(error(
+                "image directory must exist when importing a new image",
+            ));
+        }
         let digest = format!("sha256:{}", image_digest(reference)?);
         let manifest = Self::manifest(source, reference)?;
         self.copy_blob(source, &manifest.config)?;
@@ -348,32 +353,34 @@ impl Overlaybd {
 
     fn acquire(self: &Arc<Self>, box_id: &str, digest: &str) -> BoxliteResult<(PathBuf, Lease)> {
         let mut users = self.users.lock();
-        let device = match self.matching_device(digest)? {
-            Some(device) => device,
-            None => {
-                if users.get(digest).is_some_and(|ids| !ids.is_empty()) {
-                    return Err(error(
-                        "device disappeared while boxes still hold it; stop those boxes before restarting",
-                    ));
-                }
-                // An ambiguous timeout leaves the config identity discoverable by list/recovery.
-                self.request("add", Some(json!({"config": self.config_path(digest)})))?;
-                self.matching_device(digest)?
-                    .ok_or_else(|| error("created device missing from daemon list"))?
-            }
-        };
+        let device = self.matching_device(digest)?;
+        if device.is_none() && users.get(digest).is_some_and(|ids| !ids.is_empty()) {
+            return Err(error(
+                "device disappeared while boxes still hold it; stop those boxes before restarting",
+            ));
+        }
+        // Register cleanup before add: a lost response can still leave a live device.
         users
             .entry(digest.into())
             .or_default()
             .insert(box_id.into());
-        Ok((
-            device.dev,
-            Lease {
-                owner: self.clone(),
-                box_id: box_id.into(),
-                armed: true,
-            },
-        ))
+        let lease = Lease {
+            owner: self.clone(),
+            box_id: box_id.into(),
+            armed: true,
+        };
+        let device = match device {
+            Some(device) => Ok(device),
+            None => self
+                .request("add", Some(json!({"config": self.config_path(digest)})))
+                .and_then(|_| {
+                    self.matching_device(digest)?
+                        .ok_or_else(|| error("created device missing from daemon list"))
+                }),
+        };
+        // Lease rollback calls release(), which takes this same lock.
+        drop(users);
+        device.map(|device| (device.dev, lease))
     }
 
     pub(crate) fn prepare(
@@ -592,6 +599,9 @@ pub(crate) mod tests {
         let (_dir, manager, reference) = fixture();
         manager.import(&reference).unwrap();
         fs::remove_dir_all(manager.source.as_ref().unwrap()).unwrap();
+        #[cfg(target_os = "linux")]
+        let manager = Overlaybd::new(manager.root.parent().unwrap(), manager.source.clone())
+            .expect("cached boxes must reopen without the import source");
         let manifest = Overlaybd::manifest(&manager.root, &reference).unwrap();
         let config = manager.image_config(&manifest).unwrap();
         assert_eq!(config.cmd, ["sleep", "infinity"]);
@@ -666,22 +676,34 @@ pub(crate) mod tests {
     }
 
     // Exercise the real curl/UDS/JSON boundary; no device or VM is pretended to exist.
-    fn daemon(manager: &Overlaybd, requests: usize) -> std::thread::JoinHandle<Vec<String>> {
+    pub(crate) fn daemon(
+        manager: &Overlaybd,
+        requests: usize,
+    ) -> std::thread::JoinHandle<Vec<String>> {
+        daemon_with_dropped_responses(manager, requests, &[])
+    }
+
+    fn daemon_with_dropped_responses(
+        manager: &Overlaybd,
+        requests: usize,
+        dropped: &[usize],
+    ) -> std::thread::JoinHandle<Vec<String>> {
         let listener = UnixListener::bind(&manager.socket).unwrap();
+        let dropped = dropped.to_vec();
         std::thread::spawn(move || {
             let mut config = None;
             let mut operations = Vec::new();
-            for _ in 0..requests {
+            for index in 0..requests {
                 let mut poll = libc::pollfd {
                     fd: listener.as_raw_fd(),
                     events: libc::POLLIN,
                     revents: 0,
                 };
-                assert_eq!(
-                    unsafe { libc::poll(&mut poll, 1, 5000) },
-                    1,
-                    "daemon request timed out"
-                );
+                let ready = unsafe { libc::poll(&mut poll, 1, 5000) };
+                if ready == 0 && !dropped.is_empty() {
+                    break;
+                }
+                assert_eq!(ready, 1);
                 let (mut stream, _) = listener.accept().unwrap();
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(3)))
@@ -718,6 +740,10 @@ pub(crate) mod tests {
                     },
                     _ => panic!("unexpected operation {path}"),
                 }.to_string();
+                operations.push(path);
+                if dropped.contains(&index) {
+                    continue;
+                }
                 write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -725,10 +751,31 @@ pub(crate) mod tests {
                     response
                 )
                 .unwrap();
-                operations.push(path);
             }
             operations
         })
+    }
+
+    #[test]
+    fn overlaybd_lost_add_response_keeps_device_reclaimable() {
+        for dropped in [&[1][..], &[1, 2][..]] {
+            let (_dir, manager, reference) = fixture();
+            let server = daemon_with_dropped_responses(&manager, dropped.len() + 3, dropped);
+            assert!(
+                manager
+                    .acquire("box-a", image_digest(&reference).unwrap())
+                    .is_err()
+            );
+            // A failed rollback must still be reclaimable when the box is removed.
+            manager.release("box-a").unwrap();
+            let operations = server.join().unwrap();
+            assert_eq!(
+                operations.last().map(String::as_str),
+                Some("/v1/del"),
+                "failed box left its device behind: {operations:?}"
+            );
+            assert!(manager.users.lock().is_empty());
+        }
     }
 
     #[test]

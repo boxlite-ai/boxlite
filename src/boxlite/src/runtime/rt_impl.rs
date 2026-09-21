@@ -447,7 +447,9 @@ impl RuntimeImpl {
                 }
             }
             if let Err(error) = manager.recover(active) {
-                tracing::warn!(%error, "OverlayBD reconciliation deferred; device operations will retry");
+                // Initialization has not taken ownership of the recovered shims.
+                inner.shutdown_token.cancel();
+                return Err(error);
             }
         }
 
@@ -2427,6 +2429,133 @@ mod tests {
                 .rootfs_backend,
             RootfsBackend::Legacy
         );
+    }
+
+    #[cfg(feature = "cloud-runner")]
+    #[test]
+    fn overlaybd_startup_requires_completed_reconciliation() {
+        let (fixture, manager, _) = crate::images::overlaybd::tests::fixture();
+        std::fs::create_dir_all(fixture.path().join("runtime/overlaybd/devices")).unwrap();
+        let home = TempDir::new().unwrap();
+        let options = BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            image_registries: vec![],
+        };
+        let previous = RuntimeImpl::new_for_test(options.clone()).unwrap();
+        let (pid, child) = spawn_dummy_process();
+        let _child = ChildGuard(child);
+        let config = test_box_config_in_layout(false, &previous);
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Running;
+        state.pid = Some(pid);
+        state.set_lock_id(previous.lock_manager.allocate().unwrap());
+        previous.box_manager.add_box(&config, &state).unwrap();
+        std::fs::create_dir_all(&config.box_home).unwrap();
+        let layout = previous
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .unwrap();
+        let started = crate::util::process_start_time(pid).unwrap();
+        std::fs::write(layout.pid_file_path(), format!("{pid}\n{started}\n")).unwrap();
+        previous.shutdown_token.cancel();
+        drop(previous);
+        let result = RuntimeImpl::initialize(
+            options.clone(),
+            ExperimentalFeatures::default(),
+            Some(manager.clone()),
+        );
+        assert!(
+            matches!(result, Err(ref e) if e.to_string().contains("daemon list")),
+            "runtime must report failed reconciliation instead of becoming ready"
+        );
+        assert!(
+            crate::util::is_process_alive(pid),
+            "failed initialization stopped an adopted shim"
+        );
+        let server = crate::images::overlaybd::tests::daemon(&manager, 1);
+        let runtime =
+            RuntimeImpl::initialize(options, ExperimentalFeatures::default(), Some(manager))
+                .unwrap();
+        assert_eq!(server.join().unwrap(), ["/v1/list"]);
+        runtime.shutdown_token.cancel();
+        drop(runtime);
+    }
+
+    #[cfg(feature = "cloud-runner")]
+    async fn overlaybd_stop_retry(auto_remove: bool) {
+        let (_fixture, manager, reference) = crate::images::overlaybd::tests::fixture();
+        let home = TempDir::new().unwrap();
+        let runtime = RuntimeImpl::initialize(
+            BoxliteOptions {
+                home_dir: home.path().to_path_buf(),
+                image_registries: vec![],
+            },
+            ExperimentalFeatures::default(),
+            Some(manager.clone()),
+        )
+        .unwrap();
+        let mut config = test_box_config_in_layout(true, &runtime);
+        config.rootfs_backend = RootfsBackend::Overlaybd;
+        config.options.rootfs = RootfsSpec::Image(reference.clone());
+        config.options.detach = false;
+        config.options.auto_delete = Some(u32::from(auto_remove));
+        let mut state = BoxState::new();
+        state.set_lock_id(runtime.lock_manager.allocate().unwrap());
+        state.mark_failed("startup failed after acquiring device");
+        runtime.box_manager.add_box(&config, &state).unwrap();
+        manager
+            .recover(std::collections::BTreeMap::from([(
+                crate::images::overlaybd::image_digest(&reference)
+                    .unwrap()
+                    .into(),
+                std::collections::BTreeSet::from([config.id.to_string()]),
+            )]))
+            .unwrap();
+        let (box_impl, _) = runtime.get_or_create_box_impl(config.clone(), state);
+        assert!(
+            box_impl
+                .stop()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("daemon list")
+        );
+        let server = crate::images::overlaybd::tests::daemon(&manager, 1);
+        box_impl.stop().await.unwrap();
+        assert_eq!(server.join().unwrap(), ["/v1/list"]);
+        box_impl.stop().await.unwrap();
+        if auto_remove {
+            assert!(
+                runtime.box_manager.box_by_id(&config.id).unwrap().is_none(),
+                "successful Stop retry must complete auto-remove"
+            );
+        } else {
+            let (_, state) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
+            let (fresh, _) = runtime.get_or_create_box_impl(config, state);
+            assert!(
+                !fresh.shutdown_token.is_cancelled(),
+                "successful Stop retry must not return an invalidated cached handle"
+            );
+        }
+        assert_eq!(
+            runtime
+                .runtime_metrics
+                .boxes_stopped
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[cfg(feature = "cloud-runner")]
+    #[tokio::test]
+    async fn overlaybd_stop_failure_invalidates_cached_handle() {
+        overlaybd_stop_retry(false).await;
+    }
+
+    #[cfg(feature = "cloud-runner")]
+    #[tokio::test]
+    async fn overlaybd_stop_failure_retries_auto_remove() {
+        overlaybd_stop_retry(true).await;
     }
 
     #[tokio::test]

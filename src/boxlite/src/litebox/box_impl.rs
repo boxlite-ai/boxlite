@@ -682,6 +682,12 @@ impl BoxImpl {
         if self.state.read().status == BoxStatus::Stopped {
             #[cfg(feature = "cloud-runner")]
             self.runtime.release_overlaybd(self.id())?;
+            if self.config.options.removes_on_stop() {
+                match self.runtime.remove_box(self.id(), false) {
+                    Err(BoxliteError::NotFound(_)) => {}
+                    result => result?,
+                }
+            }
             return Ok(());
         }
 
@@ -795,9 +801,6 @@ impl BoxImpl {
             }
         }
 
-        #[cfg(feature = "cloud-runner")]
-        self.runtime.release_overlaybd(self.id())?;
-
         // Invalidate cache so new handles get fresh BoxImpl
         self.runtime
             .invalidate_box_impl(self.id(), self.config.name.as_deref());
@@ -817,6 +820,10 @@ impl BoxImpl {
             .runtime_metrics
             .boxes_stopped
             .fetch_add(1, Ordering::Relaxed);
+
+        // The box is already stopped even if device cleanup needs a retry.
+        #[cfg(feature = "cloud-runner")]
+        self.runtime.release_overlaybd(self.id())?;
 
         // Apply the configured remove-on-stop policy.
         if self.config.options.removes_on_stop() {

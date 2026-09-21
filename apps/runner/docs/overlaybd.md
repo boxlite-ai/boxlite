@@ -79,11 +79,14 @@ before enabling this in a deployed runner.
 ## Lifetime and limits
 
 Verified blobs are cached under `<home>/overlaybd/blobs`; source layout removal
-does not invalidate an existing box. Each image's device config is local-only,
-with no writable upper layer. The kernel read-only flag and capacity are checked
+does not invalidate an existing box, including after runtime restart. The source
+directory is required only when importing a new image. Each image's device config
+is local-only, with no writable upper layer. The kernel read-only flag and capacity are checked
 before using a node as backing. Box stops release references; the last reference
 deletes the device. Runtime recovery retains devices owned by surviving shims
-and reclaims only its own unused device configs. Keep the daemon alive while
+and reclaims only its own unused device configs. If reconciliation fails,
+runtime initialization fails without stopping recovered shims; restore daemon
+access and retry initialization. Keep the daemon alive while
 boxes run; a vanished device is an error, not a transparent replacement.
 
 Clone, export and snapshot mutations remain rejected for OverlayBD boxes.
