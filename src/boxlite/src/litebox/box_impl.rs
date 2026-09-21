@@ -125,7 +125,7 @@ pub(crate) struct BoxImpl {
     pub(crate) shutdown_token: CancellationToken,
     /// Serializes disk-mutating snapshot/clone/export operations with boot/stop.
     /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
-    pub(crate) disk_ops: tokio::sync::Mutex<()>,
+    pub(crate) disk_ops: Arc<tokio::sync::Mutex<()>>,
 
     /// Event listeners (from runtime options).
     pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
@@ -184,7 +184,7 @@ impl BoxImpl {
             runtime,
             layout,
             shutdown_token,
-            disk_ops: tokio::sync::Mutex::new(()),
+            disk_ops: Arc::new(tokio::sync::Mutex::new(())),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
             watcher: std::sync::OnceLock::new(),
@@ -1201,7 +1201,7 @@ impl BoxImpl {
         let _disk_lock = if attaching {
             None
         } else {
-            Some(self.disk_ops.lock().await)
+            Some(self.lock_disks().await?)
         };
         let state = self.state.read().clone();
         let is_first_start = state.status == BoxStatus::Configured;
@@ -1348,6 +1348,18 @@ impl BoxImpl {
 // ============================================================================
 
 impl BoxImpl {
+    pub(crate) async fn lock_disks(&self) -> BoxliteResult<tokio::sync::MutexGuard<'_, ()>> {
+        let guard = self.disk_ops.lock().await;
+        // Check after locking: stop or the exit watcher may have retired this
+        // handle while we waited, and a fresh handle can now own the same disks.
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated. Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+        Ok(guard)
+    }
+
     /// Called with disk_ops held, before quiesce changes Running to Paused.
     pub(crate) fn disk_snapshot_mode(&self) -> BoxliteResult<crate::disk::DiskSnapshotMode> {
         use crate::disk::DiskSnapshotMode;
@@ -1984,6 +1996,119 @@ mod tests {
             Arc::new(crate::litebox::LocalSnapshotBackend::new(inner)),
         );
         (fixture, child, handle)
+    }
+
+    #[tokio::test]
+    async fn test_capture_fix_start_rechecks_invalidation_after_disk_lock() {
+        let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        Arc::get_mut(&mut fixture.box_impl).unwrap().live.take();
+        {
+            let mut state = fixture.box_impl.state.write();
+            state.force_status(BoxStatus::Configured);
+            // Reaching boot after invalidation must fail before reading this ID.
+            state.lock_id = None;
+        }
+        let disk_lock = fixture.box_impl.disk_ops.lock().await;
+        let mut start = Box::pin(fixture.box_impl.start());
+        assert!(futures::poll!(&mut start).is_pending());
+        fixture.box_impl.shutdown_token.cancel();
+        drop(disk_lock);
+        let result = start.await;
+        assert!(
+            matches!(result, Err(BoxliteError::Stopped(_))),
+            "queued start entered boot after its handle was invalidated: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_capture_fix_stale_handle_cannot_fork_restarted_disk() {
+        use std::os::unix::fs::MetadataExt;
+        let (fixture, child, old_handle) = snapshot_fixture(Arc::new(StartGate::default())).await;
+        old_handle.stop().await.unwrap();
+        assert!(fixture.box_impl.shutdown_token.is_cancelled());
+        let fresh = fixture
+            .box_impl
+            .runtime
+            .get(fixture.box_impl.id().as_str())
+            .await
+            .unwrap()
+            .unwrap();
+        let fresh_inner = fresh
+            .box_backend
+            .clone()
+            .as_any_arc()
+            .downcast::<BoxImpl>()
+            .ok()
+            .unwrap();
+        assert!(!Arc::ptr_eq(&fresh_inner, &fixture.box_impl));
+        // Model the newly started VM retaining an open descriptor to its disk.
+        fresh_inner.state.write().force_status(BoxStatus::Running);
+        fresh_inner.state.write().set_pid(Some(child.0.id()));
+        let path = fresh_inner.config.box_home.join("disks/disk.qcow2");
+        let vm_disk = std::fs::File::open(&path).unwrap();
+        let _active_disk_operation = fresh_inner.disk_ops.lock().await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            old_handle
+                .snapshots()
+                .create(crate::SnapshotOptions::default(), "stale"),
+        )
+        .await
+        .expect("old handle operation unexpectedly blocked");
+        if let Ok(snapshot) = result {
+            assert_ne!(
+                vm_disk.metadata().unwrap().ino(),
+                std::fs::metadata(snapshot.disk_info.as_path())
+                    .unwrap()
+                    .ino(),
+                "stale snapshot handle renamed the restarted VM's open disk into its snapshot"
+            );
+        }
+        let results = [
+            old_handle
+                .clone_box(crate::CloneOptions::default(), None)
+                .await
+                .map(|_| ()),
+            old_handle.snapshots().restore("stale").await,
+            old_handle.snapshots().remove("stale").await,
+            old_handle
+                .export(
+                    crate::ExportOptions::default(),
+                    &fixture._temp_dir.path().join("stale.boxlite"),
+                )
+                .await
+                .map(|_| ()),
+        ];
+        for result in results {
+            assert!(
+                matches!(result, Err(BoxliteError::Stopped(_))),
+                "expired disk operation was not rejected: {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_capture_fix_exit_waits_for_disk_operation() {
+        let (fixture, mut child, _handle) = snapshot_fixture(Arc::new(StartGate::default())).await;
+        let capture = fixture.box_impl.disk_ops.lock().await;
+        let mut watcher =
+            super::super::watcher::BoxWatcher::new(&fixture.box_impl, child.0.id(), None).spawn();
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), &mut watcher)
+                .await
+                .is_err(),
+            "exit watcher retired the handle while a disk operation was active"
+        );
+        assert_eq!(fixture.box_impl.state.read().status, BoxStatus::Running);
+        drop(capture);
+        tokio::time::timeout(Duration::from_secs(5), watcher)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fixture.box_impl.state.read().status, BoxStatus::Stopped);
+        assert!(fixture.box_impl.shutdown_token.is_cancelled());
     }
 
     #[tokio::test]

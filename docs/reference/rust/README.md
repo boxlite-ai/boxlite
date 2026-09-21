@@ -205,7 +205,7 @@ pub struct LiteBox {
 - `start()` initializes VM for `Configured` or `Stopped` boxes
 - Idempotent: calling on `Running` box is a no-op
 - `run()` implicitly calls `start()` if needed
-- `stop()` terminates VM; box can be restarted
+- `stop()` terminates VM and invalidates the handle. Use `runtime.get()` to obtain a fresh handle before further operations, including snapshots, cloning, export, or restart.
 
 #### Example
 

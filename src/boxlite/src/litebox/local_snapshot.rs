@@ -30,7 +30,7 @@ impl LocalSnapshotBackend {
     ) -> BoxliteResult<SnapshotInfo> {
         validate_snapshot_name(name)?;
         let t0 = Instant::now();
-        let _lock = self.inner.disk_ops.lock().await;
+        let _lock = self.inner.lock_disks().await?;
 
         let box_id = self.inner.id().as_str();
         let snap_mgr = self.inner.runtime.snapshot_mgr.clone();
@@ -118,7 +118,7 @@ impl LocalSnapshotBackend {
 
     async fn snapshot_remove(&self, name: &str) -> BoxliteResult<()> {
         validate_snapshot_name(name)?;
-        let _lock = self.inner.disk_ops.lock().await;
+        let _lock = self.inner.lock_disks().await?;
 
         let box_id = self.inner.id().as_str();
         let container_disk = self
@@ -145,7 +145,7 @@ impl LocalSnapshotBackend {
 
     async fn snapshot_restore(&self, name: &str) -> BoxliteResult<()> {
         validate_snapshot_name(name)?;
-        let _lock = self.inner.disk_ops.lock().await;
+        let _lock = self.inner.lock_disks().await?;
 
         // Refuse restore while the box is active — disk replacement under a running
         // VM would corrupt state and potentially lose data.

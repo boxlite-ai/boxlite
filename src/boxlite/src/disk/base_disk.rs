@@ -320,7 +320,18 @@ impl BaseDiskManager {
             disk_info,
             created_at: now,
         };
-        self.store.insert(&disk)?;
+        // Only copies can be ownerless here. A fork's source already depends on
+        // the base even if recording its reference fails.
+        let pending = self.bases_dir.join(format!("{}.copy-pending", disk.id));
+        if mode == super::DiskSnapshotMode::Copy {
+            fs::write(&pending, b"")?;
+        }
+        if let Err(error) = self.store.insert(&disk) {
+            if mode == super::DiskSnapshotMode::Copy {
+                let _ = fs::remove_file(&pending);
+            }
+            return Err(error);
+        }
 
         if mode == super::DiskSnapshotMode::Fork {
             self.store.add_ref(&disk.id, source_box_id)?;
@@ -328,6 +339,43 @@ impl BaseDiskManager {
         captured.leak();
 
         Ok(disk)
+    }
+
+    /// Resolve a live copy after provisioning, or after an interrupted clone.
+    pub(crate) fn finish_pending_copy(&self, id: &BaseDiskID) -> BoxliteResult<()> {
+        let pending = self.bases_dir.join(format!("{id}.copy-pending"));
+        if !pending.try_exists()? {
+            return Ok(());
+        }
+        // Clone config/state and this reference commit in one transaction.
+        if !self.store.has_dependents(id)? {
+            self.store.delete(id)?;
+            match fs::remove_file(self.bases_dir.join(format!("{id}.qcow2"))) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        // Retain the marker on cleanup failure so startup can retry.
+        fs::remove_file(pending)?;
+        // A clone may have dropped its last ref while the marker blocked GC.
+        self.try_gc_base(id);
+        Ok(())
+    }
+
+    pub(crate) fn recover_pending_copies(&self) -> BoxliteResult<()> {
+        for entry in fs::read_dir(&self.bases_dir)? {
+            let path = entry?.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("copy-pending")
+                && let Some(id) = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(BaseDiskID::parse)
+            {
+                self.finish_pending_copy(&id)?;
+            }
+        }
+        Ok(())
     }
 
     /// Attempt to garbage-collect a clone base by ID and cascade to parent.
@@ -342,6 +390,17 @@ impl BaseDiskManager {
 
         // Only auto-cleanup clone bases (snapshots/rootfs require explicit removal)
         if record.kind() != BaseDiskKind::CloneBase {
+            return;
+        }
+
+        // Another task may remove an early clone while its batch is still
+        // provisioning. The pending copy owns the base until that batch ends.
+        if self
+            .bases_dir
+            .join(format!("{base_disk_id}.copy-pending"))
+            .try_exists()
+            .unwrap_or(true)
+        {
             return;
         }
 
@@ -419,6 +478,31 @@ mod tests {
     use crate::db::Database;
     use crate::disk::DiskInfo;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_capture_fix_pending_copy_survives_last_clone_removal() {
+        let (dir, mgr) = setup();
+        let disks = dir.path().join("disks");
+        std::fs::create_dir_all(&disks).unwrap();
+        super::super::Qcow2Helper::create_disk(&disks.join(disk_filenames::CONTAINER_DISK), true)
+            .unwrap();
+        let base = mgr
+            .create_base_disk(
+                &disks,
+                BaseDiskKind::CloneBase,
+                None,
+                "source",
+                super::super::DiskSnapshotMode::Copy,
+            )
+            .unwrap();
+        mgr.store.add_ref(&base.id, "early-clone").unwrap();
+        mgr.store.remove_all_refs_for_box("early-clone").unwrap();
+        mgr.try_gc_base(&base.id);
+        assert!(
+            base.disk_info.as_path().exists(),
+            "removing an early clone deleted the base while provisioning still owned it"
+        );
+    }
 
     fn base_id(id: &str) -> BaseDiskID {
         BaseDiskID::parse(id).expect("test ID must be valid Base62 length-8")

@@ -66,7 +66,7 @@ impl BoxImpl {
         }
 
         let t0 = Instant::now();
-        let _lock = self.disk_ops.lock().await;
+        let _lock = self.lock_disks().await?;
         let mode = self.disk_snapshot_mode()?;
 
         let rt = Arc::clone(&self.runtime);
@@ -159,6 +159,9 @@ impl BoxImpl {
         if result.is_err() {
             rt.base_disk_mgr.try_gc_base(&layer.id);
         }
+        if let Err(error) = rt.base_disk_mgr.finish_pending_copy(&layer.id) {
+            tracing::warn!(%error, "Clone copy cleanup deferred until runtime recovery");
+        }
         result?;
 
         tracing::info!(
@@ -178,7 +181,7 @@ impl BoxImpl {
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         let t0 = Instant::now();
-        let _lock = self.disk_ops.lock().await;
+        let _lock = self.lock_disks().await?;
 
         let box_home = self.config.box_home.clone();
         let runtime_layout = self.runtime.layout.clone();

@@ -29,7 +29,7 @@ async fn create_stopped_box(runtime: &BoxliteRuntime) -> LiteBox {
     litebox.start().await.expect("Failed to start box");
     litebox.stop().await.expect("Failed to stop box");
 
-    litebox
+    runtime.get(litebox.id().as_str()).await.unwrap().unwrap()
 }
 
 /// Create a box from alpine:latest, start it, return it in Running state.
@@ -137,6 +137,7 @@ async fn test_export_import_preserves_box_options() {
 
     source.start().await.expect("start");
     source.stop().await.expect("stop");
+    let source = runtime.get(source.id().as_str()).await.unwrap().unwrap();
 
     let export_dir = TempDir::new_in("/tmp").unwrap();
     let export_path = export_dir.path();

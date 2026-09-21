@@ -1534,6 +1534,8 @@ impl RuntimeImpl {
             tracing::warn!("Guest rootfs GC failed: {}", e);
         }
 
+        self.base_disk_mgr.recover_pending_copies()?;
+
         // Then reclaim base files no DB record and no overlay claims — the
         // per-kind collectors above work from records, so a file whose row is
         // gone is invisible to them.
@@ -1695,7 +1697,13 @@ impl RuntimeImpl {
     /// new handles from runtime.get() will get a fresh BoxImpl.
     pub(crate) fn invalidate_box_impl(&self, box_id: &BoxID, box_name: Option<&str>) {
         let mut sync = self.sync_state.write().unwrap();
-        sync.active_boxes_by_id.remove(box_id);
+        if let Some(old) = sync
+            .active_boxes_by_id
+            .remove(box_id)
+            .and_then(|weak| weak.upgrade())
+        {
+            old.shutdown_token.cancel();
+        }
         if let Some(name) = box_name {
             sync.active_boxes_by_name.remove(name);
         }
@@ -2322,6 +2330,95 @@ mod tests {
     // ====================================================================
     // shutdown() tests
     // ====================================================================
+
+    #[test]
+    fn test_capture_fix_clone_base_crash_recovery() {
+        use crate::disk::{BaseDiskKind, DiskSnapshotMode};
+        for (mode, has_owner) in [
+            (DiskSnapshotMode::Copy, false),
+            (DiskSnapshotMode::Copy, true),
+            (DiskSnapshotMode::Fork, false),
+        ] {
+            let (runtime, dir) = create_test_runtime();
+            let mut config = test_box_config(true);
+            config.box_home = runtime.layout.boxes_dir().join(config.id.as_str());
+            let mut state = BoxState::new();
+            state.status = BoxStatus::Stopped;
+            state.set_lock_id(runtime.lock_manager.allocate().unwrap());
+            runtime.box_manager.add_box(&config, &state).unwrap();
+            let disks = config.box_home.join("disks");
+            std::fs::create_dir_all(&disks).unwrap();
+            crate::disk::Qcow2Helper::create_disk(&disks.join("disk.qcow2"), true).unwrap();
+            // Crash after Phase A, either before or after a durable owner is recorded.
+            let base = runtime
+                .base_disk_mgr
+                .create_base_disk(
+                    &disks,
+                    BaseDiskKind::CloneBase,
+                    None,
+                    config.id.as_str(),
+                    mode,
+                )
+                .unwrap();
+            if has_owner {
+                runtime
+                    .base_disk_mgr
+                    .store()
+                    .add_ref(&base.id, config.id.as_str())
+                    .unwrap();
+            } else {
+                // A legacy fork may lack its ref after a DB failure; its source still owns it.
+                runtime
+                    .base_disk_mgr
+                    .store()
+                    .remove_all_refs_for_box(config.id.as_str())
+                    .unwrap();
+            }
+            let path = base.disk_info.to_path_buf();
+            let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            file.set_times(std::fs::FileTimes::new().set_modified(
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1),
+            ))
+            .unwrap();
+            drop(file);
+            drop(runtime);
+            let reopened = RuntimeImpl::new_for_test(BoxliteOptions {
+                home_dir: dir.path().to_path_buf(),
+                image_registries: vec![],
+            })
+            .unwrap();
+            let keep = has_owner || mode == DiskSnapshotMode::Fork;
+            assert_eq!(
+                path.exists(),
+                keep,
+                "clone base recovery did not respect durable ownership"
+            );
+            assert_eq!(
+                reopened
+                    .base_disk_mgr
+                    .store()
+                    .find_by_id(&base.id)
+                    .unwrap()
+                    .is_some(),
+                keep
+            );
+        }
+    }
+
+    #[test]
+    fn test_capture_fix_invalidation_retires_old_handle() {
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config(true);
+        let (old, _) = runtime.get_or_create_box_impl(config.clone(), BoxState::new());
+        runtime.invalidate_box_impl(&config.id, config.name.as_deref());
+        let (fresh, _) = runtime.get_or_create_box_impl(config, BoxState::new());
+        assert!(!Arc::ptr_eq(&old, &fresh));
+        assert!(!fresh.shutdown_token.is_cancelled());
+        assert!(
+            old.shutdown_token.is_cancelled(),
+            "cache invalidation left the old handle usable"
+        );
+    }
 
     #[test]
     fn test_capture_review_copy_crash_recovery() {

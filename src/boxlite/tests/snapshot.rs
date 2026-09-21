@@ -82,6 +82,53 @@ async fn create_stopped_box(runtime: &BoxliteRuntime) -> LiteBox {
 }
 
 #[tokio::test]
+async fn test_live_disk_isolation_stale_handle() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+    let old = runtime
+        .create(common::alpine_opts(), Some("stale-source".into()))
+        .await
+        .unwrap();
+    old.start().await.unwrap();
+    old.stop().await.unwrap();
+    let current = runtime.get("stale-source").await.unwrap().unwrap();
+    current.start().await.unwrap();
+    exec_stdout(
+        &current,
+        BoxCommand::new("sh").args(["-c", "echo before > /marker; sync"]),
+    )
+    .await;
+    let result = old
+        .snapshots()
+        .create(SnapshotOptions::default(), "stale-probe")
+        .await;
+    let unchanged = if let Ok(snapshot) = result {
+        let before = std::fs::read(snapshot.disk_info.as_path()).unwrap();
+        exec_stdout(
+            &current,
+            BoxCommand::new("sh").args(["-c", "echo after > /marker; sync"]),
+        )
+        .await;
+        before == std::fs::read(snapshot.disk_info.as_path()).unwrap()
+    } else {
+        true // Rejecting an expired handle is also safe.
+    };
+    current.stop().await.unwrap();
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+    assert!(
+        unchanged,
+        "restarted VM writes polluted a snapshot taken through its old handle"
+    );
+}
+
+#[tokio::test]
 async fn test_live_disk_isolation_snapshot() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
