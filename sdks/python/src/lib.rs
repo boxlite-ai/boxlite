@@ -12,6 +12,8 @@ mod options;
 mod runtime;
 mod snapshot_options;
 mod snapshots;
+#[cfg(test)]
+mod test_support;
 mod util;
 mod volumes;
 
@@ -93,4 +95,11 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySecret>()?;
 
     Ok(())
+}
+
+/// The extension module as `import boxlite` sees it, for tests that run
+/// Python code against the binding inside the test binary.
+#[cfg(test)]
+pub(crate) fn test_module(py: Python<'_>) -> Bound<'_, PyModule> {
+    pyo3::wrap_pymodule!(boxlite_python)(py).into_bound(py)
 }

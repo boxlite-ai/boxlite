@@ -33,3 +33,7 @@ serde_json = "1.0"
 # interpreter; auto-initialize does that on first use so the binding's own
 # tests can build Python objects.
 pyo3 = { version = "0.27.1", features = ["auto-initialize"] }
+# The tests' fake REST upstream runs on a runtime of its own: the test thread
+# is busy inside `asyncio.run` and the copies run on pyo3-async-runtimes'
+# runtime. Features only — `boxlite` already builds tokio with them.
+tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "time", "io-util", "net", "sync"] }
