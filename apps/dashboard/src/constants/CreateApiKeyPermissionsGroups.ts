@@ -11,4 +11,12 @@ export const CREATE_API_KEY_PERMISSIONS_GROUPS: { name: string; permissions: Cre
     name: 'Boxes',
     permissions: [CreateApiKeyPermissionsEnum.WRITE_BOXES, CreateApiKeyPermissionsEnum.DELETE_BOXES],
   },
+  {
+    name: 'Volumes',
+    permissions: [
+      CreateApiKeyPermissionsEnum.READ_VOLUMES,
+      CreateApiKeyPermissionsEnum.WRITE_VOLUMES,
+      CreateApiKeyPermissionsEnum.DELETE_VOLUMES,
+    ],
+  },
 ]

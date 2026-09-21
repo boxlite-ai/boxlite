@@ -173,7 +173,7 @@ export class CreateBoxDto {
   disk?: number
 
   @ApiPropertyOptional({
-    description: 'Auto-stop interval in seconds (0 means disabled)',
+    description: 'Auto-stop interval in seconds (0 means disabled, otherwise at least 60)',
     example: 900,
     type: 'integer',
   })

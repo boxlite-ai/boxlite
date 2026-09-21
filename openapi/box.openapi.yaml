@@ -1915,7 +1915,12 @@ components:
           type: integer
           minimum: 0
           default: 900
-          description: Idle time in seconds before AutoStop; 0 disables AutoStop
+          description: |
+            Idle time in seconds before AutoStop; 0 disables AutoStop. A floor
+            on non-zero values is vendor-specific — boxlite cloud rejects
+            anything below 60, because a shorter window is outrun by the
+            interval at which its proxy renews the idle timer; a single-tenant
+            server sweeping on its own timer has no such floor.
         auto_delete:
           type: integer
           minimum: 0
