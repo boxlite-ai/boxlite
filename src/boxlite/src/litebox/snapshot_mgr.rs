@@ -33,7 +33,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::db::snapshot::SnapshotStore;
 use crate::disk::constants::filenames as disk_filenames;
-use crate::disk::{BackingFormat, Qcow2Helper};
+use crate::disk::{BackingFormat, DiskSnapshotMode, Qcow2Helper};
 
 // ============================================================================
 // Domain Type
@@ -136,18 +136,47 @@ impl SnapshotManager {
         self.store.find(box_id, name)
     }
 
+    /// Recover copied snapshots before the legacy fork recovery touches the marker.
+    /// The committed DB row distinguishes a finished capture from an orphaned copy.
+    pub(crate) fn recover_pending_copy(&self, box_home: &Path, box_id: &str) -> BoxliteResult<()> {
+        let marker_path = box_home.join(".snapshot_pending");
+        let content = match std::fs::read_to_string(&marker_path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        let Ok(marker) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return Ok(()); // Legacy recovery handles corrupt markers.
+        };
+        if marker.get("copy").and_then(|v| v.as_bool()) != Some(true) {
+            return Ok(());
+        }
+        let name = marker.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+            BoxliteError::Storage("Pending snapshot copy is missing its name".into())
+        })?;
+        validate_snapshot_name(name)?;
+        if !self.exists(box_id, name)? {
+            match std::fs::remove_dir_all(box_home.join("snapshots").join(name)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        std::fs::remove_file(marker_path)?;
+        Ok(())
+    }
+
     /// Create a snapshot from a box's live container disk.
     ///
     /// 1. Create `box_home/snapshots/{name}/` directory
-    /// 2. Read virtual size from container disk
-    /// 3. Rename container disk → `snapshots/{name}/disk.qcow2`
-    /// 4. Create COW child at original path (box keeps running)
-    /// 5. Insert DB record via `SnapshotStore`
+    /// 2. Copy a live disk, or fork a stopped disk into a COW child
+    /// 3. Insert DB record via `SnapshotStore`
     pub(crate) fn create(
         &self,
         box_home: &Path,
         name: &str,
         box_id: &str,
+        mode: DiskSnapshotMode,
     ) -> BoxliteResult<SnapshotInfo> {
         let disks_dir = box_home.join("disks");
         let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
@@ -169,13 +198,10 @@ impl SnapshotManager {
             ))
         })?;
 
-        // 2-4. Fork: move container → snapshot dir, create COW child at original path
         let snap_disk = snapshot_dir.join(disk_filenames::CONTAINER_DISK);
-        let forked = crate::disk::fork_qcow2(&container_disk, &snap_disk)?;
-        let disk_info = crate::disk::DiskInfo::from(&forked);
-        // forked is persistent (won't be deleted on drop)
+        let captured = mode.capture(&container_disk, &snap_disk)?;
+        let disk_info = crate::disk::DiskInfo::from(&captured);
 
-        // 5. Insert DB record
         let snapshot_id = nanoid::nanoid!(8);
         let now = chrono::Utc::now().timestamp();
         let info = SnapshotInfo {
@@ -186,6 +212,7 @@ impl SnapshotManager {
             disk_info,
         };
         self.store.save(&info)?;
+        captured.leak();
 
         Ok(info)
     }

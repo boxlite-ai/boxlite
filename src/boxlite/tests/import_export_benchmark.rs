@@ -200,7 +200,7 @@ async fn create_benchmark_source(runtime: &BoxliteRuntime) -> LiteBox {
         BoxStatus::Stopped
     );
 
-    source
+    runtime.get(source.id().as_str()).await.unwrap().unwrap()
 }
 
 async fn run_mode(

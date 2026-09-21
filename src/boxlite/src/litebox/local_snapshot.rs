@@ -30,10 +30,11 @@ impl LocalSnapshotBackend {
     ) -> BoxliteResult<SnapshotInfo> {
         validate_snapshot_name(name)?;
         let t0 = Instant::now();
-        let _lock = self.inner.disk_ops.lock().await;
+        let _lock = self.inner.lock_disks().await?;
 
         let box_id = self.inner.id().as_str();
-        let snap_mgr = &self.inner.runtime.snapshot_mgr;
+        let snap_mgr = self.inner.runtime.snapshot_mgr.clone();
+        let mode = self.inner.disk_snapshot_mode()?;
 
         // Check if snapshot name already exists for this box.
         if snap_mgr.exists(box_id, name)? {
@@ -43,27 +44,52 @@ impl LocalSnapshotBackend {
             )));
         }
 
-        // Write crash-recovery marker before moving disks (point of no return).
+        // Track both an interrupted fork and an unpublished copy across process exit.
         let box_home = &self.inner.config.box_home;
         let disks_dir = box_home.join("disks");
         let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
         let pending_marker = box_home.join(".snapshot_pending");
         let snapshot_dir = box_home.join("snapshots").join(name);
+        // disk_ops serializes snapshot writers; never claim an existing directory
+        // as this copy's crash-cleanup target.
+        if mode == crate::disk::DiskSnapshotMode::Copy && snapshot_dir.try_exists()? {
+            return Err(BoxliteError::AlreadyExists(format!(
+                "Snapshot directory already exists: {}",
+                snapshot_dir.display()
+            )));
+        }
         let marker_data = serde_json::json!({
             "snapshot_dir": snapshot_dir.to_string_lossy(),
             "container_disk": container_disk.to_string_lossy(),
+            "copy": mode == crate::disk::DiskSnapshotMode::Copy,
+            "name": name,
         });
         std::fs::write(&pending_marker, marker_data.to_string()).map_err(|e| {
             BoxliteError::Storage(format!("Failed to write snapshot marker: {}", e))
         })?;
 
         // Quiesce VM for point-in-time snapshot consistency.
+        let box_home = box_home.clone();
+        let snapshot_name = name.to_owned();
+        let box_id = box_id.to_owned();
         let result = self
             .inner
-            .with_quiesce_async(async { snap_mgr.create(box_home, name, box_id) })
+            .with_quiesce_async(async move {
+                tokio::task::spawn_blocking(move || {
+                    snap_mgr.create(&box_home, &snapshot_name, &box_id, mode)
+                })
+                .await
+                .map_err(|e| BoxliteError::Internal(format!("Snapshot task failed: {e}")))?
+            })
             .await;
 
-        // Remove marker on success.
+        if result.is_err() && mode == crate::disk::DiskSnapshotMode::Copy {
+            self.inner
+                .runtime
+                .snapshot_mgr
+                .recover_pending_copy(&self.inner.config.box_home, self.inner.id().as_str())?;
+        }
+        // Keep the marker if copy cleanup failed, so startup can retry it.
         let _ = std::fs::remove_file(&pending_marker);
 
         let info = result?;
@@ -92,7 +118,7 @@ impl LocalSnapshotBackend {
 
     async fn snapshot_remove(&self, name: &str) -> BoxliteResult<()> {
         validate_snapshot_name(name)?;
-        let _lock = self.inner.disk_ops.lock().await;
+        let _lock = self.inner.lock_disks().await?;
 
         let box_id = self.inner.id().as_str();
         let container_disk = self
@@ -119,6 +145,7 @@ impl LocalSnapshotBackend {
 
     async fn snapshot_restore(&self, name: &str) -> BoxliteResult<()> {
         validate_snapshot_name(name)?;
+        let _lock = self.inner.lock_disks().await?;
 
         // Refuse restore while the box is active — disk replacement under a running
         // VM would corrupt state and potentially lose data.
@@ -130,8 +157,6 @@ impl LocalSnapshotBackend {
                 ));
             }
         }
-
-        let _lock = self.inner.disk_ops.lock().await;
 
         let box_id = self.inner.id().as_str();
         let disks_dir = self.inner.config.box_home.join("disks");
@@ -154,7 +179,12 @@ impl LocalSnapshotBackend {
 #[async_trait::async_trait]
 impl crate::runtime::backend::SnapshotBackend for LocalSnapshotBackend {
     async fn create(&self, options: SnapshotOptions, name: &str) -> BoxliteResult<SnapshotInfo> {
-        self.snapshot_create(name, options).await
+        let inner = Arc::clone(&self.inner);
+        let name = name.to_owned();
+        // Own the freeze, copy and thaw even if the caller drops its future.
+        tokio::spawn(async move { Self::new(inner).snapshot_create(&name, options).await })
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("Snapshot task failed: {e}")))?
     }
 
     async fn list(&self) -> BoxliteResult<Vec<SnapshotInfo>> {

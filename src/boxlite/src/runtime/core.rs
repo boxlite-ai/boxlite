@@ -376,15 +376,16 @@ impl BoxliteRuntime {
 
     /// Gracefully shutdown all boxes in this runtime.
     ///
-    /// This method stops all running boxes, waiting up to `timeout` seconds
-    /// for each box to stop gracefully before force-killing it.
+    /// This method stops non-detached boxes, waiting up to `timeout` seconds
+    /// for each stop. A timeout returns an error; the stop continues in the
+    /// background while the async executor remains alive.
     ///
     /// After calling this method, the runtime is permanently shut down and
     /// will return errors for any new operations (like `create()`).
     ///
     /// # Arguments
     ///
-    /// * `timeout` - Seconds to wait before force-killing each box:
+    /// * `timeout` - Seconds to wait for each box to stop:
     ///   - `None` - Use default timeout (10 seconds)
     ///   - `Some(n)` where n > 0 - Wait n seconds
     ///   - `Some(-1)` - Wait indefinitely (no timeout)

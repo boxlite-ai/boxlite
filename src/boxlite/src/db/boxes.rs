@@ -10,7 +10,7 @@ use chrono::Utc;
 use rusqlite::{OptionalExtension, params};
 
 use crate::litebox::config::BoxConfig;
-use crate::runtime::id::BoxID;
+use crate::runtime::id::{BaseDiskID, BoxID};
 use crate::runtime::types::BoxState;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -129,11 +129,16 @@ impl BoxStore {
     // Combined operations
     // ========================================================================
 
-    /// Save both config and initial state atomically.
+    /// Save config, initial state, and any backing-disk reference atomically.
     ///
     /// Uses a transaction to ensure both inserts succeed or neither does.
     /// Follows Podman pattern of explicit transactions for multi-statement operations.
-    pub fn save(&self, config: &BoxConfig, state: &BoxState) -> BoxliteResult<()> {
+    pub fn save(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base: Option<&BaseDiskID>,
+    ) -> BoxliteResult<()> {
         let mut conn = self.db.conn();
         let tx = db_err!(conn.transaction())?;
 
@@ -161,6 +166,14 @@ impl BoxStore {
             "INSERT INTO box_state (id, status, pid, json) VALUES (?1, ?2, ?3, ?4)",
             params![config.id, state.status.as_str(), state.pid, state_json],
         ))?;
+
+        // A clone must never become visible without its backing-disk reference.
+        if let Some(base) = base {
+            db_err!(tx.execute(
+                "INSERT INTO base_disk_ref (base_disk_id, box_id) VALUES (?1, ?2)",
+                params![base, config.id],
+            ))?;
+        }
 
         // Commit transaction
         db_err!(tx.commit())?;
@@ -390,7 +403,7 @@ mod tests {
         let config = create_test_config(TEST_ID_1);
         let state = BoxState::new();
 
-        store.save(&config, &state).unwrap();
+        store.save(&config, &state, None).unwrap();
 
         let loaded = store.load_config(config.id.as_str()).unwrap();
         assert!(loaded.is_some());
@@ -429,7 +442,7 @@ mod tests {
         let config = create_test_config(TEST_ID_1);
         let state = BoxState::new();
 
-        store.save(&config, &state).unwrap();
+        store.save(&config, &state, None).unwrap();
 
         let loaded = store.load_state(config.id.as_str()).unwrap();
         assert!(loaded.is_some());
@@ -442,7 +455,7 @@ mod tests {
         let config = create_test_config(TEST_ID_1);
         let state = BoxState::new();
 
-        store.save(&config, &state).unwrap();
+        store.save(&config, &state, None).unwrap();
 
         // Update to running with PID
         let mut new_state = state.clone();
@@ -461,7 +474,7 @@ mod tests {
         let config = create_test_config(TEST_ID_1);
         let state = BoxState::new();
 
-        store.save(&config, &state).unwrap();
+        store.save(&config, &state, None).unwrap();
         assert!(store.load(config.id.as_str()).unwrap().is_some());
 
         store.delete(config.id.as_str()).unwrap();
@@ -477,7 +490,7 @@ mod tests {
         for id in ids {
             let config = create_test_config(id);
             let state = BoxState::new();
-            store.save(&config, &state).unwrap();
+            store.save(&config, &state, None).unwrap();
         }
 
         let all = store.list_all().unwrap();
@@ -497,13 +510,13 @@ mod tests {
         let config1 = create_test_config(TEST_ID_1);
         let mut state1 = BoxState::new();
         state1.set_status(BoxStatus::Running);
-        store.save(&config1, &state1).unwrap();
+        store.save(&config1, &state1, None).unwrap();
 
         // Create stopped box
         let config2 = create_test_config(TEST_ID_2);
         let mut state2 = BoxState::new();
         state2.set_status(BoxStatus::Stopped);
-        store.save(&config2, &state2).unwrap();
+        store.save(&config2, &state2, None).unwrap();
 
         let active = store.list_active().unwrap();
         assert_eq!(active.len(), 1);
@@ -532,7 +545,7 @@ mod tests {
         let mut state = BoxState::new();
         state.set_status(BoxStatus::Running);
         state.set_pid(Some(12345));
-        store.save(&config, &state).unwrap();
+        store.save(&config, &state, None).unwrap();
 
         // Reset active boxes after reboot
         let reset_ids = store.reset_active_boxes_after_reboot().unwrap();

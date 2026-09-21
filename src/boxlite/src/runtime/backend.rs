@@ -134,13 +134,13 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
     ) -> BoxliteResult<()>;
 
     async fn clone_box(
-        &self,
+        self: Arc<Self>,
         options: CloneOptions,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox>;
 
     async fn clone_boxes(
-        &self,
+        self: Arc<Self>,
         options: CloneOptions,
         count: usize,
         names: Vec<String>,

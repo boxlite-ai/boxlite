@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use boxlite::runtime::options::BoxliteOptions;
 use boxlite::{BoxCommand, BoxliteRuntime, LiteBox, SnapshotOptions};
+use boxlite_test_utils::box_test::BoxTestBase;
 use tokio_stream::StreamExt;
 
 // ============================================================================
@@ -79,6 +80,53 @@ async fn create_stopped_box(runtime: &BoxliteRuntime) -> LiteBox {
         .await
         .expect("get failed")
         .expect("box not found")
+}
+
+async fn write_marker(handle: &LiteBox, value: &str) {
+    exec_stdout(
+        handle,
+        BoxCommand::new("sh").args(["-c", "printf '%s\n' \"$1\" > /marker; sync", "sh", value]),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_live_disk_isolation_snapshot_clone_and_stale_handle() {
+    let fixture = BoxTestBase::new().await;
+    let runtime = &fixture.runtime;
+    let source = &fixture.bx;
+    write_marker(source, "before").await;
+    let snapshot = source
+        .snapshots()
+        .create(Default::default(), "live")
+        .await
+        .unwrap();
+    let before = std::fs::read(snapshot.disk_info.as_path()).unwrap();
+    let cloned = source.clone_box(Default::default(), None).await.unwrap();
+    write_marker(source, "source-after").await;
+    let unchanged = before == std::fs::read(snapshot.disk_info.as_path()).unwrap();
+    cloned.start().await.unwrap();
+    let clone_marker = exec_stdout(&cloned, BoxCommand::new("cat").arg("/marker")).await;
+    write_marker(&cloned, "clone-after").await;
+    let source_marker = exec_stdout(source, BoxCommand::new("cat").arg("/marker")).await;
+    cloned.stop().await.unwrap();
+    source.stop().await.unwrap();
+    let restored = runtime.get(source.id().as_str()).await.unwrap().unwrap();
+    restored.snapshots().restore("live").await.unwrap();
+    restored.start().await.unwrap();
+    let restored_marker = exec_stdout(&restored, BoxCommand::new("cat").arg("/marker")).await;
+    let stale = source.snapshots().create(Default::default(), "stale").await;
+    write_marker(&restored, "still-running").await;
+    restored.stop().await.unwrap();
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+    assert!(unchanged, "source modified snapshot bytes");
+    assert_eq!(clone_marker.trim(), "before");
+    assert_eq!(source_marker.trim(), "source-after");
+    assert_eq!(restored_marker.trim(), "before");
+    assert!(matches!(stale, Err(boxlite::BoxliteError::Stopped(_))));
 }
 
 // ============================================================================

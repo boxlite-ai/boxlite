@@ -98,6 +98,7 @@ pub(crate) struct BoxWatcher {
     /// VMs. Both arms upgrade it when they need to persist.
     runtime: Weak<RuntimeImpl>,
     shutdown: CancellationToken,
+    disk_ops: Arc<tokio::sync::Mutex<()>>,
     box_id: BoxID,
     box_name: Option<String>,
     exit_file: std::path::PathBuf,
@@ -114,7 +115,8 @@ impl BoxWatcher {
             shim_pid,
             state: Arc::clone(&bx.state),
             runtime: Arc::downgrade(&bx.runtime),
-            shutdown: bx.shutdown_token.child_token(),
+            shutdown: bx.shutdown_token.clone(),
+            disk_ops: Arc::clone(&bx.disk_ops),
             box_id: bx.config.id.clone(),
             box_name: bx.config.name.clone(),
             exit_file: bx
@@ -147,7 +149,7 @@ impl BoxWatcher {
                 // down rather than race it to the same fields.
                 _ = shutdown.cancelled() => return,
                 _ = shim.wait_for_exit() => {
-                    self.on_shim_exit();
+                    self.on_shim_exit().await;
                     return;
                 }
                 // Disabled (never fires) when there is no probe, degenerating to a
@@ -159,7 +161,7 @@ impl BoxWatcher {
                     tokio::select! {
                         _ = shutdown.cancelled() => return,
                         _ = shim.wait_for_exit() => {
-                            self.on_shim_exit();
+                            self.on_shim_exit().await;
                             return;
                         }
                         flow = self.on_health_tick() => {
@@ -177,7 +179,13 @@ impl BoxWatcher {
     /// The shim exited on its own: record `Stopped` + the exit code, and (for a
     /// health-checked box) flip the last health snapshot to Unhealthy — the whole
     /// job the old exit watcher did, now the single writer of the transition.
-    fn on_shim_exit(&mut self) {
+    async fn on_shim_exit(&mut self) {
+        // A new handle must not boot while this generation still captures disks.
+        let _disk_lock = self.disk_ops.lock().await;
+        if self.shutdown.is_cancelled() {
+            return;
+        }
+        self.shutdown.cancel();
         // The runtime is gone, so it has already torn everything down (its Drop
         // runs shutdown_sync) and there is nobody left to report to.
         let Some(runtime) = self.runtime.upgrade() else {

@@ -194,9 +194,57 @@ impl From<&Disk> for DiskInfo {
     }
 }
 
-/// Fork a qcow2 disk: move original to a new location, create COW child at the original path.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiskSnapshotMode {
+    Fork,
+    Copy,
+}
+
+impl DiskSnapshotMode {
+    pub(crate) fn capture(self, source: &Path, dest: &Path) -> BoxliteResult<Disk> {
+        if self == Self::Fork {
+            return fork_qcow2(source, dest);
+        }
+
+        // A running VM retains the source inode. Flatten also removes backing
+        // dependencies, so deleting the source cannot invalidate this copy.
+        // ponytail: flatten holds the freeze for the full copy; optimize only
+        // when measured pause times justify managing shared backing chains.
+        let virtual_size = Qcow2Helper::qcow2_virtual_size(source)?;
+        let pending = tempfile::NamedTempFile::new_in(dest.parent().ok_or_else(|| {
+            BoxliteError::Storage(format!(
+                "Snapshot destination has no parent: {}",
+                dest.display()
+            ))
+        })?)
+        .map_err(|e| BoxliteError::Storage(format!("Stage snapshot {}: {e}", dest.display())))?;
+        Qcow2Helper::flatten(source, pending.path())?;
+        pending
+            .as_file()
+            .sync_all()
+            .map_err(|e| BoxliteError::Storage(format!("Sync snapshot {}: {e}", dest.display())))?;
+        let size = pending
+            .as_file()
+            .metadata()
+            .map_err(|e| BoxliteError::Storage(format!("Stat snapshot {}: {e}", dest.display())))?
+            .len();
+        pending.persist_noclobber(dest).map_err(|e| {
+            BoxliteError::Storage(format!("Publish snapshot {}: {e}", dest.display()))
+        })?;
+        // The caller keeps the file only after its metadata has been committed.
+        Ok(Disk::with_sizes(
+            dest.to_path_buf(),
+            DiskFormat::Qcow2,
+            false,
+            virtual_size,
+            size,
+        ))
+    }
+}
+
+/// Fork a stopped box's qcow2 disk: move original and create a COW child.
 ///
-/// This is the atomic "make immutable base + keep running" operation:
+/// Requires that no VM has the source disk open for writing:
 /// 1. Read qcow2 virtual size from `source`
 /// 2. Rename `source` → `dest` (makes it immutable)
 /// 3. Create COW child at `source` path (so the original path stays usable)

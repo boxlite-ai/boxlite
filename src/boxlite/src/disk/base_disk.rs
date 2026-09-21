@@ -70,7 +70,7 @@ use crate::disk::constants::filenames as disk_filenames;
 /// Manages the lifecycle of clone base disks.
 ///
 /// All base disks are flat files under `bases_dir/` named by `BaseDiskID`.
-/// Clone operations use `create_base_disk()` for the rename-and-COW operation.
+/// Clone operations use `create_base_disk()` to copy a live disk or fork a stopped disk.
 ///
 /// Cleanup uses DB-based ref tracking: `try_gc_base()` queries the
 /// `base_disk_ref` table to check for dependents before deleting.
@@ -290,9 +290,8 @@ impl BaseDiskManager {
 
     /// Core operation: create a base disk from a box's live container disk.
     ///
-    /// 1. Move container disk → `bases/{base_disk_id}.qcow2` (makes it immutable)
-    /// 2. Create COW child at original path (so the source box keeps running)
-    /// 3. Insert DB record (with JSON blob)
+    /// Copy or fork the container disk into `bases/{base_disk_id}.qcow2`,
+    /// then persist its metadata. Only a fork makes the source depend on it.
     ///
     /// Used by clone operations. Snapshots use `SnapshotManager` instead.
     pub(crate) fn create_base_disk(
@@ -301,16 +300,15 @@ impl BaseDiskManager {
         kind: BaseDiskKind,
         name: Option<&str>,
         source_box_id: &str,
+        mode: super::DiskSnapshotMode,
     ) -> BoxliteResult<BaseDisk> {
         let base_disk_id = BaseDiskIDMint::mint();
 
         let container = source_disks_dir.join(disk_filenames::CONTAINER_DISK);
 
-        // Fork: move container → bases/{id}.qcow2, create COW child at original path
         let base_file = self.bases_dir.join(format!("{}.qcow2", base_disk_id));
-        let forked = super::fork_qcow2(&container, &base_file)?;
-        let disk_info = super::DiskInfo::from(&forked);
-        // forked is persistent (won't be deleted on drop)
+        let captured = mode.capture(&container, &base_file)?;
+        let disk_info = super::DiskInfo::from(&captured);
 
         // Insert DB record
         let now = chrono::Utc::now().timestamp();
@@ -322,12 +320,63 @@ impl BaseDiskManager {
             disk_info,
             created_at: now,
         };
-        self.store.insert(&disk)?;
+        // Only copies can be ownerless here. A fork's source already depends on
+        // the base even if recording its reference fails.
+        let pending = self.bases_dir.join(format!("{}.copy-pending", disk.id));
+        if mode == super::DiskSnapshotMode::Copy {
+            fs::write(&pending, b"")?;
+        }
+        if let Err(error) = self.store.insert(&disk) {
+            if mode == super::DiskSnapshotMode::Copy {
+                let _ = fs::remove_file(&pending);
+            }
+            return Err(error);
+        }
 
-        // Track the source box's dependency on this base disk.
-        self.store.add_ref(&disk.id, source_box_id)?;
+        if mode == super::DiskSnapshotMode::Fork {
+            self.store.add_ref(&disk.id, source_box_id)?;
+        }
+        captured.leak();
 
         Ok(disk)
+    }
+
+    /// Resolve a live copy after provisioning, or after an interrupted clone.
+    pub(crate) fn finish_pending_copy(&self, id: &BaseDiskID) -> BoxliteResult<()> {
+        let pending = self.bases_dir.join(format!("{id}.copy-pending"));
+        if !pending.try_exists()? {
+            return Ok(());
+        }
+        // Clone config/state and this reference commit in one transaction.
+        if !self.store.has_dependents(id)? {
+            self.store.delete(id)?;
+            match fs::remove_file(self.bases_dir.join(format!("{id}.qcow2"))) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        // Retain the marker on cleanup failure so startup can retry.
+        fs::remove_file(pending)?;
+        // A clone may have dropped its last ref while the marker blocked GC.
+        self.try_gc_base(id);
+        Ok(())
+    }
+
+    pub(crate) fn recover_pending_copies(&self) -> BoxliteResult<()> {
+        for entry in fs::read_dir(&self.bases_dir)? {
+            let path = entry?.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("copy-pending")
+                && let Some(id) = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(BaseDiskID::parse)
+                && let Err(error) = self.finish_pending_copy(&id)
+            {
+                tracing::warn!(path = %path.display(), %error, "Pending clone copy recovery failed");
+            }
+        }
+        Ok(())
     }
 
     /// Attempt to garbage-collect a clone base by ID and cascade to parent.
@@ -342,6 +391,17 @@ impl BaseDiskManager {
 
         // Only auto-cleanup clone bases (snapshots/rootfs require explicit removal)
         if record.kind() != BaseDiskKind::CloneBase {
+            return;
+        }
+
+        // Another task may remove an early clone while its batch is still
+        // provisioning. The pending copy owns the base until that batch ends.
+        if self
+            .bases_dir
+            .join(format!("{base_disk_id}.copy-pending"))
+            .try_exists()
+            .unwrap_or(true)
+        {
             return;
         }
 
@@ -417,7 +477,7 @@ impl BaseDiskManager {
 mod tests {
     use super::*;
     use crate::db::Database;
-    use crate::disk::DiskInfo;
+    use crate::disk::{DiskInfo, DiskSnapshotMode::Fork};
     use tempfile::TempDir;
 
     fn base_id(id: &str) -> BaseDiskID {
@@ -469,7 +529,13 @@ mod tests {
         write_qcow2_with_backing(&box_disks.join(disk_filenames::CONTAINER_DISK), None);
 
         let disk = mgr
-            .create_base_disk(&box_disks, BaseDiskKind::Snapshot, Some("snap-1"), "box-1")
+            .create_base_disk(
+                &box_disks,
+                BaseDiskKind::Snapshot,
+                Some("snap-1"),
+                "box-1",
+                Fork,
+            )
             .unwrap();
 
         // Source disk should be replaced with a COW child
@@ -503,7 +569,7 @@ mod tests {
         write_qcow2_with_backing(&box_disks.join(disk_filenames::CONTAINER_DISK), None);
 
         let disk = mgr
-            .create_base_disk(&box_disks, BaseDiskKind::CloneBase, None, "box-1")
+            .create_base_disk(&box_disks, BaseDiskKind::CloneBase, None, "box-1", Fork)
             .unwrap();
 
         // create_base_disk should have added a ref for the source box
@@ -521,7 +587,13 @@ mod tests {
         write_qcow2_with_backing(&box_disks.join(disk_filenames::CONTAINER_DISK), None);
 
         let disk = mgr
-            .create_base_disk(&box_disks, BaseDiskKind::Snapshot, Some("snap-1"), "box-1")
+            .create_base_disk(
+                &box_disks,
+                BaseDiskKind::Snapshot,
+                Some("snap-1"),
+                "box-1",
+                Fork,
+            )
             .unwrap();
 
         // ID should be 8 characters (BaseDiskID length)
@@ -544,11 +616,11 @@ mod tests {
         write_qcow2_with_backing(&box_disks.join(disk_filenames::CONTAINER_DISK), None);
 
         let bd1 = mgr
-            .create_base_disk(&box_disks, BaseDiskKind::CloneBase, None, "box-1")
+            .create_base_disk(&box_disks, BaseDiskKind::CloneBase, None, "box-1", Fork)
             .unwrap();
 
         let bd2 = mgr
-            .create_base_disk(&box_disks, BaseDiskKind::CloneBase, None, "box-1")
+            .create_base_disk(&box_disks, BaseDiskKind::CloneBase, None, "box-1", Fork)
             .unwrap();
 
         // Verify ancestry via filesystem: bd2's backing chain includes bd1

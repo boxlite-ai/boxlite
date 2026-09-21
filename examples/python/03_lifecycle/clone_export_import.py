@@ -171,6 +171,10 @@ async def test_clone_stopped_box():
         await source.stop()
         print(f"  Source stopped: {source.id}")
 
+        # stop() invalidates the handle; obtain a fresh one for disk operations.
+        source = await runtime.get(source.id)
+        assert source is not None
+
         # Clone the stopped box
         print("Cloning stopped box...")
         cloned = await source.clone_box(name="cloned-stopped")

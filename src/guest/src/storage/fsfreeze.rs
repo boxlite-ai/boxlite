@@ -47,6 +47,7 @@ const SKIP_FS_TYPES: &[&str] = &[
     "rpc_pipefs",
     "nfsd",
     "overlay",
+    "virtiofs", // Host-shared files are not part of the qcow2 snapshot.
 ];
 
 /// Freeze all writable filesystems.
@@ -91,15 +92,14 @@ pub fn freeze_filesystems() -> Vec<PathBuf> {
                 frozen.push(PathBuf::from(mount_point));
             }
             Err(e) => {
-                // EOPNOTSUPP means the filesystem doesn't support freeze — skip silently.
                 // EBUSY means already frozen — count as success.
                 if e.raw_os_error() == Some(libc::EBUSY) {
                     debug!(mount_point, "Filesystem already frozen");
                     frozen.push(PathBuf::from(mount_point));
-                } else if e.raw_os_error() == Some(libc::EOPNOTSUPP) {
-                    debug!(mount_point, fs_type, "Filesystem does not support freeze");
                 } else {
                     warn!(mount_point, error = %e, "Failed to freeze filesystem");
+                    thaw_filesystems(&frozen);
+                    return Vec::new();
                 }
             }
         }

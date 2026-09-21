@@ -188,11 +188,12 @@ impl GuestService for GuestServer {
     ) -> Result<Response<QuiesceResponse>, Status> {
         info!("Received quiesce request — freezing filesystems");
 
+        // Serialize with thaw, including a thaw after a host-side RPC timeout.
+        let mut stored = self.frozen_mounts.lock().await;
         let frozen = crate::storage::fsfreeze::freeze_filesystems();
         let frozen_count = frozen.len() as u32;
 
         // Store frozen mount points for the subsequent Thaw call
-        let mut stored = self.frozen_mounts.lock().await;
         *stored = frozen;
 
         Ok(Response::new(QuiesceResponse { frozen_count }))
