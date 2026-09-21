@@ -288,26 +288,14 @@ unsafe fn runtime_new(
 
         // Unit tests exercise FFI validation and lifecycle without a hypervisor.
         // The exported library keeps host validation for C integration tests.
-        let runtime_result = {
+        #[cfg(test)]
+        let new_local = BoxliteRuntime::new_for_test;
+        #[cfg(not(test))]
+        let new_local = BoxliteRuntime::new;
+        let runtime_result = match cloud_image_dir {
             #[cfg(feature = "cloud-runner")]
-            if let Some(image_dir) = cloud_image_dir {
-                BoxliteRuntime::new_cloud_runner(options, image_dir)
-            } else {
-                #[cfg(test)]
-                let result = BoxliteRuntime::new_for_test(options);
-                #[cfg(not(test))]
-                let result = BoxliteRuntime::new(options);
-                result
-            }
-            #[cfg(not(feature = "cloud-runner"))]
-            {
-                let _ = cloud_image_dir;
-                #[cfg(test)]
-                let result = BoxliteRuntime::new_for_test(options);
-                #[cfg(not(test))]
-                let result = BoxliteRuntime::new(options);
-                result
-            }
+            Some(image_dir) => BoxliteRuntime::new_cloud_runner(options, image_dir),
+            _ => new_local(options),
         };
         let runtime = match runtime_result {
             Ok(rt) => rt,
