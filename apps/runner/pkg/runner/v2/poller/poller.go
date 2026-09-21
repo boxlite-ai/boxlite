@@ -97,12 +97,10 @@ func (s *Service) Start(ctx context.Context) {
 				return
 			}
 			s.log.ErrorContext(ctx, "Failed to poll jobs", "error", err)
-			retry := time.NewTimer(5 * time.Second)
 			select {
 			case <-ctx.Done():
-				retry.Stop()
 				return
-			case <-retry.C:
+			case <-time.After(5 * time.Second):
 			}
 			continue
 		}

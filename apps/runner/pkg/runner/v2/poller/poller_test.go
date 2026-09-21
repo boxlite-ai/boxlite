@@ -144,6 +144,7 @@ func (h *pollerHarness) start(t *testing.T, batch, capacity int) context.CancelF
 	}
 	h.service = svc
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); <-h.stopped })
 	go func() {
 		defer close(h.stopped)
 		svc.Start(ctx)
@@ -155,7 +156,6 @@ func TestPollerBoundsJobsAcrossPolls(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h := &pollerHarness{pending: jobsForTest(5)}
 		cancel := h.start(t, 2, 3)
-		defer func() { cancel(); <-h.stopped }()
 		synctest.Wait()
 		if h.peak != 3 || h.started != 3 {
 			t.Fatalf("blocked jobs: peak=%d started=%d, want 3 each", h.peak, h.started)
@@ -182,8 +182,7 @@ func TestPollerRecoverySharesCapacity(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		jobs := jobsForTest(6)
 		h := &pollerHarness{recovered: jobs[:4], pending: jobs[4:]}
-		cancel := h.start(t, 10, 2)
-		defer func() { cancel(); <-h.stopped }()
+		h.start(t, 10, 2)
 		synctest.Wait()
 		if h.peak != 2 || h.started != 2 || len(h.limits) != 0 {
 			t.Fatalf("recovery: peak=%d started=%d polls=%v, want 2, 2, none", h.peak, h.started, h.limits)
@@ -206,8 +205,7 @@ func TestPollerEmptyAndFailedPollsKeepCapacity(t *testing.T) {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				h := &pollerHarness{pending: jobsForTest(3), statuses: []int{status}}
-				cancel := h.start(t, 10, 2)
-				defer func() { cancel(); <-h.stopped }()
+				h.start(t, 10, 2)
 				if status == http.StatusInternalServerError {
 					time.Sleep(5 * time.Second) // Advance the fake clock through retry backoff.
 				}
@@ -224,7 +222,6 @@ func TestPollerCancellationInterruptsBackoff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h := &pollerHarness{statuses: []int{http.StatusInternalServerError}}
 		cancel := h.start(t, 10, 2)
-		defer func() { cancel(); <-h.stopped }()
 		synctest.Wait()
 		cancel()
 		synctest.Wait()
@@ -239,8 +236,7 @@ func TestPollerCancellationInterruptsBackoff(t *testing.T) {
 func TestPollerHoldsCapacityUntilStatusReportReturns(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h := &pollerHarness{pending: jobsForTest(3), reportRelease: make(chan struct{})}
-		cancel := h.start(t, 1, 2)
-		defer func() { cancel(); <-h.stopped }()
+		h.start(t, 1, 2)
 		synctest.Wait()
 		h.release <- struct{}{}
 		synctest.Wait()
@@ -278,8 +274,7 @@ func updateLimitForTest(t *testing.T, s *Service, limit int) {
 func TestPollerIncreasingLimitWakesFullRunner(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h := &pollerHarness{pending: jobsForTest(6)}
-		cancel := h.start(t, 10, 2)
-		defer func() { cancel(); <-h.stopped }()
+		h.start(t, 10, 2)
 		synctest.Wait()
 		updateLimitForTest(t, h.service, 4)
 		synctest.Wait()
@@ -292,8 +287,7 @@ func TestPollerIncreasingLimitWakesFullRunner(t *testing.T) {
 func TestPollerDecreasingLimitDrainsExistingJobs(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h := &pollerHarness{pending: jobsForTest(6)}
-		cancel := h.start(t, 10, 4)
-		defer func() { cancel(); <-h.stopped }()
+		h.start(t, 10, 4)
 		synctest.Wait()
 		updateLimitForTest(t, h.service, 2)
 		for remaining := 3; remaining >= 2; remaining-- {
@@ -314,8 +308,7 @@ func TestPollerDecreasingLimitDrainsExistingJobs(t *testing.T) {
 func TestPollerAppliesNewLimitToInFlightPoll(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h := &pollerHarness{pending: jobsForTest(4), pollRelease: make(chan struct{})}
-		cancel := h.start(t, 10, 4)
-		defer func() { cancel(); <-h.stopped }()
+		h.start(t, 10, 4)
 		synctest.Wait()
 		updateLimitForTest(t, h.service, 2)
 		h.pollRelease <- struct{}{}
