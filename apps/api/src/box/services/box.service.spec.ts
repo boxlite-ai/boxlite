@@ -93,7 +93,7 @@ function makePreviewUrlService() {
     region: 'region-1',
   } as any)
 
-  return { service, redis }
+  return { service, redis, regionService }
 }
 
 describe('BoxService preview URLs', () => {
@@ -113,6 +113,61 @@ describe('BoxService preview URLs', () => {
     const result = await service.getPortPreviewUrl('MixedCaseBox', 'org-1', 22222)
 
     expect(result.url).toBe('https://22222-MixedCaseBox.proxy.example.test')
+  })
+
+  it.each([1, 3000, 8080, 22222, 65535])('signs a preview URL for port %i', async (port) => {
+    const { service, redis } = makePreviewUrlService()
+
+    const result = await service.getSignedPortPreviewUrl('MixedCaseBox', 'org-1', port)
+
+    expect(result).toEqual({
+      boxId: 'MixedCaseBox',
+      port,
+      token: expect.stringMatching(/^[a-z0-9]{16}$/),
+      url: `https://${port}-${result.token}.proxy.example.test`,
+    })
+    expect(service.findOneByIdOrName).toHaveBeenCalledWith('MixedCaseBox', 'org-1')
+    expect(redis.setex).toHaveBeenCalledWith(`box:signed-preview-url-token:${port}:${result.token}`, 60, 'MixedCaseBox')
+  })
+
+  it.each([0, 65536, 3000.5, NaN])('rejects invalid signed preview port %s before storing a token', async (port) => {
+    const { service, redis } = makePreviewUrlService()
+
+    await expect(service.getSignedPortPreviewUrl('MixedCaseBox', 'org-1', port)).rejects.toThrow('Invalid port')
+
+    expect(redis.setex).not.toHaveBeenCalled()
+  })
+
+  it.each([1, 3600, 86400])('stores a service-port token with a lifetime of %i seconds', async (expiresInSeconds) => {
+    const { service, redis } = makePreviewUrlService()
+
+    const result = await service.getSignedPortPreviewUrl('MixedCaseBox', 'org-1', 3000, expiresInSeconds)
+
+    expect(redis.setex).toHaveBeenCalledWith(
+      `box:signed-preview-url-token:3000:${result.token}`,
+      expiresInSeconds,
+      'MixedCaseBox',
+    )
+  })
+
+  it.each([0, 86401])('rejects invalid signed preview lifetime %i before storing a token', async (expiresInSeconds) => {
+    const { service, redis } = makePreviewUrlService()
+
+    await expect(service.getSignedPortPreviewUrl('MixedCaseBox', 'org-1', 22222, expiresInSeconds)).rejects.toThrow(
+      'expiresInSeconds must be between 1 second and 24 hours',
+    )
+
+    expect(redis.setex).not.toHaveBeenCalled()
+  })
+
+  it.each([3000, 22222])('uses the regional proxy domain for signed preview port %i', async (port) => {
+    const { service, regionService } = makePreviewUrlService()
+    regionService.findOne.mockResolvedValue({ proxyUrl: 'https://regional.proxy.example.test' })
+
+    const result = await service.getSignedPortPreviewUrl('MixedCaseBox', 'org-1', port)
+
+    expect(result.url).toBe(`https://${port}-${result.token}.regional.proxy.example.test`)
+    expect(regionService.findOne).toHaveBeenCalledWith('region-1', true)
   })
 })
 
