@@ -20,7 +20,7 @@ machine layout and device emulation belong to `boxlite-vmm`.
 | `memory` | `MemoryRegion`: host memory mapped into the guest |
 | `error` | `Error`: the failed operation, its resource, and the host cause |
 | `hvf` / `hvf::syndrome` | HVF operations and ARM exception decoding (not implemented yet) |
-| `kvm` / `kvm::memory` | KVM operations and private memory-slot allocation (not implemented yet) |
+| `kvm` / `kvm::memory` | x86_64 VM creation, interrupt-controller setup and private memory-slot allocation; vCPU execution and arm64 follow |
 | `whp` / `whp::emulator` | WHP operations and x86 instruction decoding for memory-access exits (reserved for M10) |
 
 Three boundaries decide placement when a case is ambiguous: KVM memory-slot
@@ -31,8 +31,29 @@ instruction bytes.
 
 The backend modules are selected by host OS and architecture, and a host with
 no backend fails the build rather than producing a library that exposes no VM
-operations. The traits are exported from the crate root; each backend's
-concrete type, `HvfVm`, `KvmVm` or `WhpVm`, will get its own export path.
+operations. The traits are exported from the crate root. Linux x86_64 also
+exports `KvmVm`, with construction and memory-registration methods. It does
+not implement the complete `Vm` trait until vCPU execution is added.
+
+`make test:unit:vmm` checks memory-slot validation and rollback without KVM.
+On Linux x86_64, `make test:integration:vmm:kvm` requires read/write access to
+`/dev/kvm`. It checks VM/interrupt-controller creation, executes instructions
+from registered RAM, and replaces an unmapped region. Execution currently uses
+the underlying KVM descriptor inside the test; the public vCPU API is next.
+
+M1 proceeds in boot order: create the VM and map RAM, create/run vCPUs, load
+the kernel and boot metadata, attach legacy devices, then reach a test `/init`
+and return the guest's reset to the caller. The full M1 still includes Linux
+arm64 and macOS arm64 after the initial Linux x86_64 path.
+
+References for this step:
+
+- [kvm-ioctls `src/lib.rs:39–56`](https://github.com/rust-vmm/kvm/blob/b4c9ed8df95a9e10a68f50f5ef5e7d04108759ba/kvm-ioctls/src/lib.rs#L39-L56)
+  demonstrates VM creation, memory registration and a tiny machine-code guest.
+- [Firecracker `arch/x86_64/vm.rs:170–183`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/x86_64/vm.rs#L170-L183)
+  creates the in-kernel irqchip and PIT before any vCPU.
+- [libkrun `linux/vstate.rs:446–476`](https://github.com/libkrun/libkrun/blob/e12b9b3780ffa8df9f3e1797b217d13453479167/src/vmm/src/linux/vstate.rs#L446-L476)
+  checks the KVM API version and capabilities before constructing a VM.
 
 From the repository root, run `make vmm`, `make clippy:vmm` or
 `make test:unit:vmm`. See the [VMM README](../vmm/README.md) for cross-target

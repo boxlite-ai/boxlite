@@ -7,3 +7,8 @@ authors.workspace = true
 license.workspace = true
 publish = false
 description = "Host hypervisor backends for BoxLite's VMM"
+
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+kvm-bindings = "0.14.1"
+kvm-ioctls = "0.25.0"
+libc = "0.2"

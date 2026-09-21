@@ -3,7 +3,9 @@
 A visual introduction to Linux KVM (Kernel-based Virtual Machine), using BoxLite's
 [planned native VMM](README.md). The main example is an x86_64 Linux VM with
 2 vCPUs, 512 MiB RAM and a virtual disk; arm64 differences follow the walkthrough.
-The native KVM backend is still reserved for M1; boxes currently use libkrun.
+M1 currently provides native x86_64 VM creation and RAM registration in
+[`boxlite-hypervisor`](../../../src/hypervisor/README.md); vCPU execution and
+Linux boot follow. Boxes currently use libkrun.
 
 ## 1. Architecture
 
