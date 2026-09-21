@@ -136,6 +136,36 @@ impl SnapshotManager {
         self.store.find(box_id, name)
     }
 
+    /// Recover copied snapshots before the legacy fork recovery touches the marker.
+    /// The committed DB row distinguishes a finished capture from an orphaned copy.
+    pub(crate) fn recover_pending_copy(&self, box_home: &Path, box_id: &str) -> BoxliteResult<()> {
+        let marker_path = box_home.join(".snapshot_pending");
+        let content = match std::fs::read_to_string(&marker_path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        let Ok(marker) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return Ok(()); // Legacy recovery handles corrupt markers.
+        };
+        if marker.get("copy").and_then(|v| v.as_bool()) != Some(true) {
+            return Ok(());
+        }
+        let name = marker.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+            BoxliteError::Storage("Pending snapshot copy is missing its name".into())
+        })?;
+        validate_snapshot_name(name)?;
+        if !self.exists(box_id, name)? {
+            match std::fs::remove_dir_all(box_home.join("snapshots").join(name)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        std::fs::remove_file(marker_path)?;
+        Ok(())
+    }
+
     /// Create a snapshot from a box's live container disk.
     ///
     /// 1. Create `box_home/snapshots/{name}/` directory

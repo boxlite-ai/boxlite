@@ -1195,7 +1195,8 @@ impl BoxImpl {
         use std::sync::Arc;
 
         // Attaching an existing VM does not replace disks and is also needed
-        // by quiesce/stop while they already own disk_ops.
+        // by quiesce/stop while they already own disk_ops. stop() awaits this
+        // same live OnceCell initializer before tearing down the attached VM.
         let attaching = self.state.read().status == BoxStatus::Running;
         let _disk_lock = if attaching {
             None
@@ -1986,6 +1987,189 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_capture_review_stop_waits_for_live_initializer() {
+        let gate = Arc::new(StartGate::default());
+        let mut fixture = running_box_for_start_test(gate).await;
+        let live = Arc::get_mut(&mut fixture.box_impl)
+            .unwrap()
+            .live
+            .take()
+            .unwrap();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let initializing_box = fixture.box_impl.clone();
+        let initializer = tokio::spawn(async move {
+            initializing_box
+                .live
+                .get_or_try_init(|| async {
+                    entered_tx.send(()).unwrap();
+                    release_rx.await.unwrap();
+                    Ok::<_, BoxliteError>(live)
+                })
+                .await
+                .map(|_| ())
+        });
+        entered_rx.await.unwrap();
+        let stopping_box = fixture.box_impl.clone();
+        let stop = tokio::spawn(async move { stopping_box.stop().await });
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            fixture.box_impl.shutdown_token.cancelled(),
+        )
+        .await
+        .unwrap();
+        assert!(!stop.is_finished());
+        assert_eq!(fixture.box_impl.state.read().status, BoxStatus::Running);
+        release_tx.send(()).unwrap();
+        initializer.await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(5), stop)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(fixture.box_impl.state.read().status, BoxStatus::Stopped);
+    }
+
+    #[tokio::test]
+    async fn test_capture_review_invalid_copy_still_thaws() {
+        let gate = Arc::new(StartGate::default());
+        gate.release.add_permits(1);
+        let (fixture, _child, handle) = snapshot_fixture(gate.clone()).await;
+        let source = fixture.box_impl.config.box_home.join("disks/disk.qcow2");
+        let original = std::fs::read(&source).unwrap();
+        std::fs::write(&source, b"invalid qcow2").unwrap();
+        assert!(
+            handle
+                .snapshots()
+                .create(crate::SnapshotOptions::default(), "live")
+                .await
+                .is_err()
+        );
+        assert_eq!(gate.thawed.available_permits(), 1);
+        assert_eq!(fixture.box_impl.state.read().status, BoxStatus::Running);
+        std::fs::write(&source, original).unwrap();
+        gate.release.add_permits(1);
+        handle
+            .snapshots()
+            .create(crate::SnapshotOptions::default(), "live")
+            .await
+            .expect("failed copy must permit retry with the same snapshot name");
+        assert_eq!(gate.thawed.available_permits(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_capture_review_existing_directory_is_not_marked_for_cleanup() {
+        let gate = Arc::new(StartGate::default());
+        let (fixture, _child, handle) = snapshot_fixture(gate.clone()).await;
+        let snapshot_dir = fixture.box_impl.config.box_home.join("snapshots/live");
+        std::fs::create_dir_all(&snapshot_dir).unwrap();
+        let occupied = snapshot_dir.join("disk.qcow2");
+        std::fs::write(&occupied, b"existing snapshot").unwrap();
+        let marker = fixture.box_impl.config.box_home.join(".snapshot_pending");
+        let mut capture = tokio::spawn(async move {
+            handle
+                .snapshots()
+                .create(crate::SnapshotOptions::default(), "live")
+                .await
+        });
+        let marked = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                result = &mut capture => {
+                    assert!(result.unwrap().is_err());
+                    marker.exists()
+                }
+                permit = gate.entered.acquire() => {
+                    permit.unwrap().forget();
+                    // A process exit at this point would leave this marker for recovery.
+                    let marked = marker.exists();
+                    gate.release.add_permits(1);
+                    assert!(capture.await.unwrap().is_err());
+                    marked
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            !marked,
+            "copy marked a pre-existing directory for crash cleanup"
+        );
+        assert_eq!(std::fs::read(occupied).unwrap(), b"existing snapshot");
+    }
+
+    #[tokio::test]
+    async fn test_capture_review_copy_writes_recovery_marker() {
+        let gate = Arc::new(StartGate::default());
+        let (fixture, _child, handle) = snapshot_fixture(gate.clone()).await;
+        let capture = tokio::spawn(async move {
+            handle
+                .snapshots()
+                .create(crate::SnapshotOptions::default(), "live")
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), gate.entered.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        let marker = fixture.box_impl.config.box_home.join(".snapshot_pending");
+        let marked = marker.exists();
+        gate.release.add_permits(1);
+        capture.await.unwrap().unwrap();
+        assert!(
+            marked,
+            "live copy must leave a recovery marker while capture is pending"
+        );
+        assert!(!marker.exists(), "completed capture must remove its marker");
+    }
+
+    #[tokio::test]
+    async fn test_capture_review_clone_ref_failure_is_atomic() {
+        let gate = Arc::new(StartGate::default());
+        gate.release.add_permits(1);
+        let (fixture, _child, handle) = snapshot_fixture(gate).await;
+        let runtime = &fixture.box_impl.runtime;
+        runtime
+            .box_manager
+            .db()
+            .conn()
+            .execute_batch(
+                "CREATE TRIGGER reject_clone_ref BEFORE INSERT ON base_disk_ref
+             BEGIN SELECT RAISE(ABORT, 'injected base reference failure'); END;",
+            )
+            .unwrap();
+        let result = handle
+            .clone_box(crate::CloneOptions::default(), Some("broken".into()))
+            .await;
+        assert!(
+            result.is_err(),
+            "clone succeeded without a durable base reference"
+        );
+        assert!(runtime.get("broken").await.unwrap().is_none());
+        assert_eq!(runtime.lock_manager.allocated_count().unwrap(), 1);
+        assert!(
+            runtime
+                .base_disk_mgr
+                .store()
+                .list_by_box(handle.id().as_ref(), None)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            std::fs::read_dir(runtime.layout.bases_dir())
+                .unwrap()
+                .count(),
+            0
+        );
+        assert_eq!(
+            std::fs::read_dir(runtime.layout.boxes_dir())
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn test_capture_cleanup_thaws_after_runtime_shutdown() {
         let gate = Arc::new(StartGate::default());
         let (fixture, _child, handle) = snapshot_fixture(gate.clone()).await;
@@ -2203,7 +2387,12 @@ mod tests {
             "failed copy leaked staging files"
         );
         assert_eq!(fixture.box_impl.state.read().status, BoxStatus::Running);
-        assert_eq!(gate.thawed.available_permits(), 1);
+        assert_eq!(
+            gate.entered.available_permits(),
+            0,
+            "reject before freezing"
+        );
+        assert_eq!(gate.thawed.available_permits(), 0);
     }
 
     async fn wait_for_background_starts(box_impl: &BoxImpl, expected: usize) {

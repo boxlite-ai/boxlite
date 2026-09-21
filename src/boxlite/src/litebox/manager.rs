@@ -9,7 +9,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::db::BoxStore;
 use crate::litebox::config::BoxConfig;
-use crate::runtime::id::BoxID;
+use crate::runtime::id::{BaseDiskID, BoxID};
 use crate::runtime::types::BoxState;
 
 /// State backend for box persistence.
@@ -47,6 +47,15 @@ impl BoxManager {
 
     /// Add a new box to the database.
     pub fn add_box(&self, config: &BoxConfig, state: &BoxState) -> BoxliteResult<()> {
+        self.add_box_with_base(config, state, None)
+    }
+
+    pub(crate) fn add_box_with_base(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base: Option<&BaseDiskID>,
+    ) -> BoxliteResult<()> {
         // Check name uniqueness if name is set
         if let Some(ref name) = config.name
             && self.lookup_box_id(name)?.is_some()
@@ -65,7 +74,7 @@ impl BoxManager {
             )));
         }
 
-        self.store.save(config, state)?;
+        self.store.save(config, state, base)?;
 
         tracing::debug!(
             box_id = %config.id,

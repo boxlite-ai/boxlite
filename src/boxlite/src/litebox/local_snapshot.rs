@@ -44,21 +44,29 @@ impl LocalSnapshotBackend {
             )));
         }
 
-        // Write crash-recovery marker before moving disks (point of no return).
+        // Track both an interrupted fork and an unpublished copy across process exit.
         let box_home = &self.inner.config.box_home;
         let disks_dir = box_home.join("disks");
         let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
         let pending_marker = box_home.join(".snapshot_pending");
         let snapshot_dir = box_home.join("snapshots").join(name);
+        // disk_ops serializes snapshot writers; never claim an existing directory
+        // as this copy's crash-cleanup target.
+        if mode == crate::disk::DiskSnapshotMode::Copy && snapshot_dir.try_exists()? {
+            return Err(BoxliteError::AlreadyExists(format!(
+                "Snapshot directory already exists: {}",
+                snapshot_dir.display()
+            )));
+        }
         let marker_data = serde_json::json!({
             "snapshot_dir": snapshot_dir.to_string_lossy(),
             "container_disk": container_disk.to_string_lossy(),
+            "copy": mode == crate::disk::DiskSnapshotMode::Copy,
+            "name": name,
         });
-        if mode == crate::disk::DiskSnapshotMode::Fork {
-            std::fs::write(&pending_marker, marker_data.to_string()).map_err(|e| {
-                BoxliteError::Storage(format!("Failed to write snapshot marker: {}", e))
-            })?;
-        }
+        std::fs::write(&pending_marker, marker_data.to_string()).map_err(|e| {
+            BoxliteError::Storage(format!("Failed to write snapshot marker: {}", e))
+        })?;
 
         // Quiesce VM for point-in-time snapshot consistency.
         let box_home = box_home.clone();
@@ -75,7 +83,13 @@ impl LocalSnapshotBackend {
             })
             .await;
 
-        // Remove marker on success.
+        if result.is_err() && mode == crate::disk::DiskSnapshotMode::Copy {
+            self.inner
+                .runtime
+                .snapshot_mgr
+                .recover_pending_copy(&self.inner.config.box_home, self.inner.id().as_str())?;
+        }
+        // Keep the marker if copy cleanup failed, so startup can retry it.
         let _ = std::fs::remove_file(&pending_marker);
 
         let info = result?;

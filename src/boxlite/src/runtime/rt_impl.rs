@@ -1238,6 +1238,7 @@ impl RuntimeImpl {
         name: Option<String>,
         options: BoxOptions,
         initial_status: BoxStatus,
+        base: Option<&crate::runtime::id::BaseDiskID>,
     ) -> BoxliteResult<LiteBox> {
         use crate::litebox::config::ContainerRuntimeConfig;
 
@@ -1275,7 +1276,7 @@ impl RuntimeImpl {
 
         state.set_lock_id(lock_id);
 
-        if let Err(e) = self.box_manager.add_box(&config, &state) {
+        if let Err(e) = self.box_manager.add_box_with_base(&config, &state, base) {
             let _ = self.lock_manager.free(lock_id);
             let _ = std::fs::remove_dir_all(&config.box_home);
             config.sockets().remove();
@@ -1385,6 +1386,10 @@ impl RuntimeImpl {
             {
                 for entry in entries.flatten() {
                     if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                        self.snapshot_mgr.recover_pending_copy(
+                            &entry.path(),
+                            &entry.file_name().to_string_lossy(),
+                        )?;
                         crate::litebox::local_snapshot::recover_pending_snapshot(&entry.path());
                     }
                 }
@@ -2318,6 +2323,88 @@ mod tests {
     // shutdown() tests
     // ====================================================================
 
+    #[test]
+    fn test_capture_review_copy_crash_recovery() {
+        for checkpoint in ["partial", "published", "committed"] {
+            let (runtime, dir) = create_test_runtime();
+            let mut config = test_box_config(true);
+            config.box_home = runtime.layout.boxes_dir().join(config.id.as_str());
+            let mut state = BoxState::new();
+            state.status = BoxStatus::Stopped;
+            state.set_lock_id(runtime.lock_manager.allocate().unwrap());
+            runtime.box_manager.add_box(&config, &state).unwrap();
+            let source = config.box_home.join("disks/disk.qcow2");
+            std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+            crate::disk::Qcow2Helper::create_disk(&source, true).unwrap();
+            let original = std::fs::read(&source).unwrap();
+            let snapshot_dir = config.box_home.join("snapshots/recovery");
+            std::fs::create_dir_all(&snapshot_dir).unwrap();
+            match checkpoint {
+                "partial" => {
+                    std::fs::write(snapshot_dir.join(".partial"), b"partial copy").unwrap()
+                }
+                "published" => {
+                    crate::disk::DiskSnapshotMode::Copy
+                        .capture(&source, &snapshot_dir.join("disk.qcow2"))
+                        .unwrap()
+                        .leak();
+                }
+                _ => {
+                    runtime
+                        .snapshot_mgr
+                        .create(
+                            &config.box_home,
+                            "recovery",
+                            config.id.as_str(),
+                            crate::disk::DiskSnapshotMode::Copy,
+                        )
+                        .unwrap();
+                }
+            }
+            let marker = config.box_home.join(".snapshot_pending");
+            std::fs::write(
+                &marker,
+                serde_json::json!({
+                    "snapshot_dir": snapshot_dir, "container_disk": source,
+                    "copy": true, "name": "recovery"
+                })
+                .to_string(),
+            )
+            .unwrap();
+            drop(runtime);
+            let reopened = RuntimeImpl::new_for_test(BoxliteOptions {
+                home_dir: dir.path().to_path_buf(),
+                image_registries: vec![],
+            })
+            .unwrap();
+            assert_eq!(std::fs::read(&source).unwrap(), original);
+            assert!(!marker.exists());
+            if checkpoint == "committed" {
+                assert!(snapshot_dir.join("disk.qcow2").exists());
+                assert!(
+                    reopened
+                        .snapshot_mgr
+                        .exists(config.id.as_str(), "recovery")
+                        .unwrap()
+                );
+            } else {
+                assert!(
+                    !snapshot_dir.exists(),
+                    "{checkpoint} copy artifacts survived restart"
+                );
+                reopened
+                    .snapshot_mgr
+                    .create(
+                        &config.box_home,
+                        "recovery",
+                        config.id.as_str(),
+                        crate::disk::DiskSnapshotMode::Copy,
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_capture_cleanup_provision_lock_failure() {
         let (mut runtime, _dir) = create_test_runtime();
@@ -2331,6 +2418,7 @@ mod tests {
                 None,
                 test_box_config(true).options,
                 BoxStatus::Stopped,
+                None,
             )
             .await;
         assert!(result.is_err());

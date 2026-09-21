@@ -145,22 +145,9 @@ impl BoxImpl {
                         names.get(i).cloned(),
                         self.config.options.clone(),
                         BoxStatus::Stopped,
+                        Some(&layer.id),
                     )
                     .await?;
-
-                // Record that this clone depends on the shared base disk.
-                if let Err(e) = rt
-                    .base_disk_mgr
-                    .store()
-                    .add_ref(&layer.id, litebox.id().as_ref())
-                {
-                    tracing::warn!(
-                        clone_id = %litebox.id(),
-                        base_disk_id = %layer.id,
-                        error = %e,
-                        "Failed to record base disk ref for clone"
-                    );
-                }
 
                 clones.push(litebox);
             }
@@ -168,9 +155,8 @@ impl BoxImpl {
             Ok::<_, BoxliteError>(())
         }
         .await;
-        // Completed clones keep their base, including if recording a ref failed.
-        // For stopped sources, the existing source ref also prevents collection.
-        if result.is_err() && clones.is_empty() {
+        // Completed clones and stopped sources have durable refs protecting the base.
+        if result.is_err() {
             rt.base_disk_mgr.try_gc_base(&layer.id);
         }
         result?;
