@@ -45,11 +45,9 @@ describe('BoxliteBoxController creation limit', () => {
     const response = await controller.createBox(authContext as never, { image: 'boxlite/base' } as never)
 
     expect(commerceBoxLimitService.resolveMaxCreatedBoxes).toHaveBeenCalledWith(organization.id)
-    expect(boxService.create).toHaveBeenCalledWith(
-      expect.objectContaining({ image: 'boxlite/base' }),
-      organization,
-      { maxCreatedBoxes: 3 },
-    )
+    expect(boxService.create).toHaveBeenCalledWith(expect.objectContaining({ image: 'boxlite/base' }), organization, {
+      maxCreatedBoxes: 3,
+    })
     expect(boxStateWaiter.waitForStarted).not.toHaveBeenCalled()
     expect(response).toEqual(expect.objectContaining({ box_id: 'box-1', status: 'running' }))
 
