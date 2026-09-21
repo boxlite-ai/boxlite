@@ -371,8 +371,9 @@ impl BaseDiskManager {
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .and_then(BaseDiskID::parse)
+                && let Err(error) = self.finish_pending_copy(&id)
             {
-                self.finish_pending_copy(&id)?;
+                tracing::warn!(path = %path.display(), %error, "Pending clone copy recovery failed");
             }
         }
         Ok(())

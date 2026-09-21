@@ -1386,10 +1386,14 @@ impl RuntimeImpl {
             {
                 for entry in entries.flatten() {
                     if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                        self.snapshot_mgr.recover_pending_copy(
+                        if let Err(error) = self.snapshot_mgr.recover_pending_copy(
                             &entry.path(),
                             &entry.file_name().to_string_lossy(),
-                        )?;
+                        ) {
+                            tracing::warn!(path = %entry.path().display(), %error, "Pending snapshot copy recovery failed");
+                            // Legacy recovery would discard the marker needed for retry.
+                            continue;
+                        }
                         crate::litebox::local_snapshot::recover_pending_snapshot(&entry.path());
                     }
                 }
@@ -2381,11 +2385,26 @@ mod tests {
             let path = base.disk_info.to_path_buf();
             let age = std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH);
             std::fs::File::open(&path).unwrap().set_times(age).unwrap();
+            let failed = runtime
+                .layout
+                .bases_dir()
+                .join(crate::runtime::id::BaseDiskIDMint::mint().to_string());
+            let pending = failed.with_extension("copy-pending");
+            let damaged = failed.with_extension("qcow2");
+            std::fs::write(&pending, b"").unwrap();
+            std::fs::create_dir(&damaged).unwrap();
             let reopened = reopen_capture_runtime(runtime, &dir);
+            assert!(
+                pending.exists() && damaged.exists(),
+                "failed copy must remain retryable"
+            );
             let keep = has_owner || mode == Fork;
             assert_eq!(path.exists(), keep, "base recovery ownership");
             let record = reopened.base_disk_mgr.store().find_by_id(&base.id).unwrap();
             assert_eq!(record.is_some(), keep);
+            std::fs::remove_dir(damaged).unwrap();
+            let _reopened = reopen_capture_runtime(reopened, &dir);
+            assert!(!pending.exists(), "retry must finish the repaired copy");
         }
     }
 
@@ -2456,7 +2475,16 @@ mod tests {
                 .to_string(),
             )
             .unwrap();
+            let broken = test_box_config_in_layout(true, &runtime);
+            runtime
+                .box_manager
+                .add_box(&broken, &BoxState::new())
+                .unwrap();
+            std::fs::create_dir_all(&broken.box_home).unwrap();
+            let failed = broken.box_home.join(".snapshot_pending");
+            std::fs::write(&failed, br#"{"copy":true}"#).unwrap();
             let reopened = reopen_capture_runtime(runtime, &dir);
+            assert_eq!(std::fs::read(&failed).unwrap(), br#"{"copy":true}"#);
             assert_eq!(std::fs::read(&source).unwrap(), original);
             assert!(!marker.exists());
             if checkpoint == "committed" {
@@ -2469,6 +2497,9 @@ mod tests {
                     .create(home, "recovery", id, Copy)
                     .unwrap();
             }
+            std::fs::write(&failed, br#"{"copy":true,"name":"retry"}"#).unwrap();
+            let _reopened = reopen_capture_runtime(reopened, &dir);
+            assert!(!failed.exists(), "retry must finish the repaired snapshot");
         }
     }
 
