@@ -117,6 +117,8 @@ sequenceDiagram
 
 ### 2.3 Map RAM and load Linux
 
+See the [side-by-side view of guest ranges, KVM slots and host allocations](memory.md#kvm-example-guest-ranges-and-slots).
+
 ```mermaid
 sequenceDiagram
   box VMM · memory and boot loading
