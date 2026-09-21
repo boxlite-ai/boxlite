@@ -177,6 +177,101 @@ fn map_tonic_err(err: tonic::Status) -> BoxliteError {
     }
 }
 
+/// A `Files` service standing in for the guest's, so the host-side copy paths
+/// can be driven over a real gRPC connection without a VM.
+///
+/// Lives next to the facade it fakes; `box_impl`'s tests reach it as
+/// `crate::portal::interfaces::files::fake`.
+#[cfg(test)]
+pub(crate) mod fake {
+    use std::sync::{Arc, Mutex};
+
+    use boxlite_shared::{DownloadChunk, DownloadRequest, Files, UploadChunk, UploadResponse};
+    use tonic::{Request, Response, Status, Streaming};
+
+    /// One upload as the guest saw it, reassembled from its chunks.
+    #[derive(Debug, Clone)]
+    pub(crate) struct ReceivedUpload {
+        pub dest_path: String,
+        pub container_id: String,
+        pub mkdir_parents: bool,
+        pub overwrite: bool,
+        /// The first chunk's hint; later chunks never carry one.
+        pub source_is_dir: Option<bool>,
+        /// Every chunk's `data`, concatenated.
+        pub archive: Vec<u8>,
+    }
+
+    /// `FilesServer::new` takes the service by value, so the test keeps a
+    /// clone of its own and reads the shared sinks.
+    #[derive(Clone, Default)]
+    pub(crate) struct FakeFiles {
+        /// What `download` serves, split in two chunks with the hint on the first.
+        pub archive: Vec<u8>,
+        /// `None` models a guest built before the shape hint.
+        pub source_is_dir: Option<bool>,
+        pub uploads: Arc<Mutex<Vec<ReceivedUpload>>>,
+        pub downloads: Arc<Mutex<Vec<DownloadRequest>>>,
+    }
+
+    #[tonic::async_trait]
+    impl Files for FakeFiles {
+        type DownloadStream = tokio_stream::wrappers::ReceiverStream<Result<DownloadChunk, Status>>;
+
+        async fn upload(
+            &self,
+            request: Request<Streaming<UploadChunk>>,
+        ) -> Result<Response<UploadResponse>, Status> {
+            let mut chunks = request.into_inner();
+            let first = chunks
+                .message()
+                .await?
+                .ok_or_else(|| Status::invalid_argument("empty upload stream"))?;
+            let mut received = ReceivedUpload {
+                dest_path: first.dest_path,
+                container_id: first.container_id,
+                mkdir_parents: first.mkdir_parents,
+                overwrite: first.overwrite,
+                source_is_dir: first.source_is_dir,
+                archive: first.data,
+            };
+            while let Some(chunk) = chunks.message().await? {
+                received.archive.extend_from_slice(&chunk.data);
+            }
+            self.uploads.lock().expect("uploads sink").push(received);
+            Ok(Response::new(UploadResponse {
+                success: true,
+                error: None,
+            }))
+        }
+
+        async fn download(
+            &self,
+            request: Request<DownloadRequest>,
+        ) -> Result<Response<Self::DownloadStream>, Status> {
+            self.downloads
+                .lock()
+                .expect("downloads sink")
+                .push(request.into_inner());
+            // The hint rides the first chunk only — the second one proves the
+            // reader keeps the first chunk's answer and its bytes.
+            let (head, tail) = self.archive.split_at(self.archive.len() / 2);
+            let (tx, rx) = tokio::sync::mpsc::channel(2);
+            let _ = tx.try_send(Ok(DownloadChunk {
+                data: head.to_vec(),
+                source_is_dir: self.source_is_dir,
+            }));
+            let _ = tx.try_send(Ok(DownloadChunk {
+                data: tail.to_vec(),
+                source_is_dir: None,
+            }));
+            Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+                rx,
+            )))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,52 +349,6 @@ mod tests {
     // single file. These stand a real `Files` service up over a socket so the
     // hint crosses the wire rather than being asserted in place.
 
-    /// A guest whose `download` sends the shape hint, or omits it the way a
-    /// pre-hint peer does.
-    struct StubGuest {
-        source_is_dir: Option<bool>,
-    }
-
-    #[tonic::async_trait]
-    impl boxlite_shared::Files for StubGuest {
-        type DownloadStream =
-            tokio_stream::wrappers::ReceiverStream<Result<boxlite_shared::DownloadChunk, Status>>;
-
-        async fn upload(
-            &self,
-            _request: tonic::Request<tonic::Streaming<UploadChunk>>,
-        ) -> Result<tonic::Response<boxlite_shared::UploadResponse>, Status> {
-            Err(Status::unimplemented("this stub only answers downloads"))
-        }
-
-        async fn download(
-            &self,
-            _request: tonic::Request<DownloadRequest>,
-        ) -> Result<tonic::Response<Self::DownloadStream>, Status> {
-            let (tx, rx) = tokio::sync::mpsc::channel(2);
-            let source_is_dir = self.source_is_dir;
-            tokio::spawn(async move {
-                // The hint rides the first chunk only — the second one proves
-                // the reader keeps the first chunk's answer and its bytes.
-                let _ = tx
-                    .send(Ok(boxlite_shared::DownloadChunk {
-                        data: b"first".to_vec(),
-                        source_is_dir,
-                    }))
-                    .await;
-                let _ = tx
-                    .send(Ok(boxlite_shared::DownloadChunk {
-                        data: b"second".to_vec(),
-                        source_is_dir: None,
-                    }))
-                    .await;
-            });
-            Ok(tonic::Response::new(
-                tokio_stream::wrappers::ReceiverStream::new(rx),
-            ))
-        }
-    }
-
     async fn download_from_stub(source_is_dir: Option<bool>) -> (Vec<u8>, CopySourceKind) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -313,8 +362,10 @@ mod tests {
         };
         tokio::spawn(
             tonic::transport::Server::builder()
-                .add_service(boxlite_shared::FilesServer::new(StubGuest {
+                .add_service(boxlite_shared::FilesServer::new(super::fake::FakeFiles {
+                    archive: b"firstsecond".to_vec(),
                     source_is_dir,
+                    ..Default::default()
                 }))
                 .serve_with_incoming(incoming),
         );
