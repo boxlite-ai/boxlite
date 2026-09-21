@@ -117,10 +117,8 @@ export class ImageRegistrarService {
       // Both branches of the upsert return the row, and a name held only by a
       // soft-deleted image does not conflict at all: the insert succeeds and
       // the organization gets a fresh active row. That is what the partial
-      // index is for — deleting an image is how a tenant will pick up a moved
-      // tag, and using it again brings it back as a new entry. Nothing soft-
-      // deletes a row yet; the index has to be right before something does, or
-      // the first delete is also a migration.
+      // index is for — deleting an image is how a tenant picks up a moved tag,
+      // and using it again brings it back as a new entry.
       const imageId: string | undefined = image.raw?.[0]?.id
       if (!imageId) {
         throw new Error(`Image upsert for '${name}' returned no row`)
@@ -163,8 +161,8 @@ export class ImageRegistrarService {
 
       // `DO NOTHING`, not an update: a tag that already points somewhere stays
       // there. Following a moved tag would change what a box boots from with
-      // nobody asking, and deleting the image is the intended way to pick up a
-      // move, once the catalog API exposes one.
+      // nobody asking, and `DELETE /images/:idOrRef` is the intended way to
+      // pick up a move.
       await manager
         .createQueryBuilder()
         .insert()

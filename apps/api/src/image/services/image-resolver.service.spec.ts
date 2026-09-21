@@ -105,9 +105,9 @@ describe('ImageResolverService', () => {
     })
 
     /**
-     * Deleting an image is the only thing that will pick up a tag that moved
-     * upstream, once the catalog API exposes it, so a soft-deleted row
-     * resolving would close the one escape hatch there is before it opens.
+     * Deleting an image is the only thing that picks up a tag that moved
+     * upstream, so a soft-deleted row resolving would close the one escape
+     * hatch there is.
      */
     it('excludes soft-deleted images from every lookup', async () => {
       const { repository, conditions } = makeRepository(undefined)

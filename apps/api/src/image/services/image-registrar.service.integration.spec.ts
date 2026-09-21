@@ -153,10 +153,9 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
   })
 
   /**
-   * S1 does not move tags. A tag that resolved once keeps naming that build,
-   * and deleting the image is what will pick up a move once the catalog API
-   * exposes a delete — without this, an upstream tag move would silently
-   * change what a box boots from.
+   * Nothing moves tags today. A tag that resolved once keeps naming that
+   * build, and deleting the image is what picks up a move — without this, an
+   * upstream tag move would silently change what a box boots from.
    */
   it('leaves a tag pointing at the build it first resolved to', async () => {
     await report('quay.io/acme/app:v1', DIGEST)
@@ -248,11 +247,9 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
   })
 
   /**
-   * Deleting an image is how a tenant will pick up a tag that moved. Using it
+   * Deleting an image is how a tenant picks up a tag that moved. Using it
    * again has to bring it back — as a new active row beside the soft-deleted
-   * one, which is exactly what the partial unique index exists to allow. The
-   * delete itself ships with the catalog API; the index has to be right before
-   * it does, or the first delete is also a migration.
+   * one, which is exactly what the partial unique index exists to allow.
    */
   it('gives a soft-deleted name a new active row when the image is used again', async () => {
     await report('quay.io/acme/app:v1')

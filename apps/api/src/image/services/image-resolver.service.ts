@@ -83,8 +83,7 @@ export class ImageResolverService {
       .where('image."organizationId" = :organizationId', { organizationId: organization.id })
       .andWhere('image.name = :name', { name })
       // A soft-deleted image must not resolve, or deleting one would stop being
-      // the way to pick up a tag that moved upstream — which is what it becomes
-      // once the catalog API exposes a delete.
+      // the way to pick up a tag that moved upstream.
       .andWhere('image."deletedAt" IS NULL')
       .andWhere('version.digest = :digest', { digest })
       .andWhere('version.state = :state', { state: ImageVersionState.READY })

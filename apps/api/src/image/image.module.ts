@@ -5,23 +5,39 @@
 
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
+import { Box } from '../box/entities/box.entity'
+import { OrganizationModule } from '../organization/organization.module'
+import { ImageController } from './controllers/image.controller'
 import { Image } from './entities/image.entity'
 import { ImageTag } from './entities/image-tag.entity'
 import { ImageVersion } from './entities/image-version.entity'
 import { CuratedImagePinService } from './services/curated-image-pin.service'
 import { ImageAdmissionService } from './services/image-admission.service'
+import { ImageCatalogService } from './services/image-catalog.service'
 import { ImageRegistrarService } from './services/image-registrar.service'
 import { ImageResolverService } from './services/image-resolver.service'
 
 // The catalog's own module: the gate that decides whether an image may be used
-// at all, the resolver that turns it into the ref a runner is given, and the
+// at all, the resolver that turns it into the ref a runner is given, the
 // registrar that records what that ref turned out to be — in the catalog for a
-// tenant's image, as a per-runner pin for a curated one. The entities are
-// registered here because the app uses `autoLoadEntities` — this `forFeature`
-// is what makes the three tables mapped at runtime.
+// tenant's image, as a per-runner pin for a curated one — and the catalog the
+// four HTTP routes read. The entities are registered here because the app uses
+// `autoLoadEntities` — this `forFeature` is what makes the tables mapped at
+// runtime. `Box` is in it because removing an image has to know whether a box
+// could still boot from it; only the entity is borrowed, not the box module.
+// `OrganizationModule` is imported for the permission guard the controller
+// runs, which resolves the caller's role. It does not import this module back,
+// so the edge BoxModule → ImageModule → OrganizationModule stays acyclic.
 @Module({
-  imports: [TypeOrmModule.forFeature([Image, ImageVersion, ImageTag])],
-  providers: [ImageAdmissionService, ImageRegistrarService, ImageResolverService, CuratedImagePinService],
+  imports: [OrganizationModule, TypeOrmModule.forFeature([Image, ImageVersion, ImageTag, Box])],
+  controllers: [ImageController],
+  providers: [
+    ImageAdmissionService,
+    ImageCatalogService,
+    ImageRegistrarService,
+    ImageResolverService,
+    CuratedImagePinService,
+  ],
   exports: [ImageAdmissionService, ImageRegistrarService, ImageResolverService, CuratedImagePinService],
 })
 export class ImageModule {}

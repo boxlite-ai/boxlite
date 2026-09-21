@@ -11,8 +11,8 @@ export class AddImageCatalog1787100000000 implements MigrationInterface {
 
     // One row per upstream repository an organization has pulled. There is no
     // organizationId IS NULL row for curated images: those stay env-driven so
-    // that rotating one does not need a migration, and the catalog endpoint
-    // will union them in at read time when it ships.
+    // that rotating one does not need a migration, and the catalog endpoints
+    // union them in at read time.
     await queryRunner.query(
       `CREATE TABLE "image" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "organizationId" uuid NOT NULL, "name" character varying(255) NOT NULL, "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "lastUsedAt" TIMESTAMP WITH TIME ZONE, "deletedAt" TIMESTAMP WITH TIME ZONE, CONSTRAINT "image_id_pk" PRIMARY KEY ("id"))`,
     )
@@ -23,8 +23,8 @@ export class AddImageCatalog1787100000000 implements MigrationInterface {
       `CREATE UNIQUE INDEX "image_org_name_active_unique" ON "image" ("organizationId", "name") WHERE "deletedAt" IS NULL`,
     )
     // Serves the count the admission gate takes when a create names an image
-    // the organization does not hold yet, and the per-org listing when the
-    // catalog API ships.
+    // the organization does not hold yet, and the per-org listing the catalog
+    // API serves.
     await queryRunner.query(`CREATE INDEX "image_org_lastused_index" ON "image" ("organizationId", "lastUsedAt")`)
 
     // `digest` is the OCI manifest digest the runner reports, not the host's

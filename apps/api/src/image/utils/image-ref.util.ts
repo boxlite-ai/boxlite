@@ -133,6 +133,33 @@ export function parseImageRef(ref: string): ParsedImageRef {
   return { host, repository, tag, digest }
 }
 
+/**
+ * The catalog key a reference normalises to, or undefined when it is not a
+ * reference at all.
+ *
+ * The registrar writes rows under this name, the resolver looks them up by it,
+ * the catalog answers `:idOrRef` with it, and the delete guard compares boxes
+ * against it. Sharing one spelling is the point: a caller can name an image
+ * three ways — `acme/app`, `acme/app:v1`, `acme/app@sha256:…` — and all three
+ * have to reach the one row.
+ *
+ * Unlike {@link parseImageRef} this does not throw. Its callers are readers
+ * asking "is this the same image", and a reference that no longer parses is
+ * simply not the one being asked about. Rejecting malformed input stays with
+ * the boundary.
+ */
+export function catalogNameOf(ref: string | undefined | null): string | undefined {
+  if (!ref) {
+    return undefined
+  }
+  try {
+    const { host, repository } = parseImageRef(ref)
+    return `${host}/${repository}`
+  } catch {
+    return undefined
+  }
+}
+
 /** Addresses that resolve inside the deployment rather than out to a registry. */
 function isInternalAddress(host: string): boolean {
   const hostname = host.replace(/:\d+$/, '').replace(/^\[|\]$/g, '')

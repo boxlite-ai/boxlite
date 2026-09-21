@@ -15,4 +15,5 @@ export enum AuditTarget {
   USER = 'user',
   VOLUME = 'volume',
   REGION = 'region',
+  IMAGE = 'image',
 }

@@ -36,4 +36,11 @@ export enum OrganizationResourcePermission {
 
   // audit
   READ_AUDIT_LOGS = 'read:audit_logs',
+
+  // images — appended rather than grouped with boxes so this order matches the
+  // Postgres enums', which `ALTER TYPE ... ADD VALUE` can only append to.
+  // There is no `write:images`: using an image is what records it, so nothing
+  // writes the catalog over HTTP.
+  READ_IMAGES = 'read:images',
+  DELETE_IMAGES = 'delete:images',
 }
