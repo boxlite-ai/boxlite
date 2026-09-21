@@ -859,21 +859,37 @@ The sync API uses greenlet fiber switching:
 ## Error Types
 
 ```python
-from boxlite import BoxliteError, ExecError, TimeoutError, ParseError
+from boxlite import BoxliteError, NotFoundError, ExecError, TimeoutError, ParseError
 ```
 
 ### Exception Hierarchy
 
 ```
-BoxliteError (base)
-├── ExecError       # Command execution failed
-├── TimeoutError    # Operation timed out
-└── ParseError      # Output parsing failed
+RuntimeError
+└── BoxliteError (base)
+    ├── Raised by the native runtime (one per runtime error kind)
+    │   ├── NotFoundError            # Box or resource does not exist
+    │   ├── AlreadyExistsError       # Box or resource already exists
+    │   ├── InvalidStateError        # Wrong box state for the operation
+    │   ├── InvalidArgumentError     # Invalid argument
+    │   ├── StoppedError             # Box or runtime stopped / shut down
+    │   ├── ResourceExhaustedError   # Disk full, no free VM slots
+    │   ├── SessionReapedError       # Interactive exec session reaped; start a new exec
+    │   ├── ExecutionError           # Command could not be run (e.g. program not found)
+    │   ├── UnsupportedError, UnsupportedEngineError
+    │   ├── ConfigError, StorageError, ImageError, NetworkError
+    │   ├── PortalError, RpcError, RpcTransportError
+    │   └── EngineError, DatabaseError, MetadataError, InternalError
+    └── Raised by the Python convenience wrappers
+        ├── ExecError                # Command ran and exited non-zero
+        ├── TimeoutError             # Operation timed out
+        └── ParseError               # Output parsing failed
 ```
 
 ### `BoxliteError`
 
-Base exception for all BoxLite errors.
+Base exception for all BoxLite errors. It derives from `RuntimeError`, so
+handlers written before typed errors existed (`except RuntimeError`) still match.
 
 ```python
 try:
@@ -881,6 +897,20 @@ try:
         pass
 except BoxliteError as e:
     print(f"BoxLite error: {e}")
+```
+
+### Runtime error types
+
+Errors from the native runtime are raised as the subclass that matches their
+kind, so you can handle a specific failure without matching message text:
+
+```python
+from boxlite import NotFoundError
+
+try:
+    await runtime.remove("my-box")
+except NotFoundError:
+    pass  # already gone
 ```
 
 ### `ExecError`
