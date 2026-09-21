@@ -14,6 +14,30 @@ use crate::BoxliteError;
 /// predates the hint, or a caller streaming bytes it did not pack). The
 /// receiver then peeks the archive to decide the extraction shape, which costs
 /// a staged copy — so pass `File`/`Dir` whenever the shape is known.
+///
+/// # Why the shape travels beside the archive
+///
+/// The receiver has to decide whether the destination becomes the payload
+/// itself or a directory holding it, and only the source's shape answers
+/// that: copying the file `a.txt` onto a `dst` that does not yet exist must
+/// leave `dst` a file, while copying a directory onto that same `dst` must
+/// leave it a directory. Tar cannot tell those apart. Its headers describe
+/// entries, never the source the caller named, and an archive carries no
+/// header of its own — a lone file and a one-file directory packed with
+/// `include_parent = false` are byte-identical archives that have to extract
+/// differently. Counting entries separates the wider cases, at the cost of
+/// buffering the whole archive (what `unpack_stream_spooled` below falls back
+/// to); nothing in the bytes separates that pair.
+///
+/// A tar-based copy either carries this bit out of band or inherits the
+/// ambiguity. Docker carries it: it returns the bit on the download
+/// response (`X-Docker-Container-Path-Stat`) and stats the destination
+/// separately with `HEAD /containers/{id}/archive`; the REST surface here
+/// mirrors it as `X-Boxlite-Source-Is-Dir`. Only the destination half is
+/// free for us, because the guest resolves that locally.
+/// rsync needs no such bit only because it does not use tar: it sends a file
+/// list ahead of the data and reads `S_ISDIR` out of it — an inventory it was
+/// already building to compute deltas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopySourceKind {
     Unknown,

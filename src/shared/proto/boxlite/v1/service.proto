@@ -591,6 +591,8 @@ message UploadChunk {
   // Whether the source is a directory (true) or a single file (false).
   // Set only on the first chunk; unset = unknown (older peer), which makes the
   // receiver fall back to legacy shape detection.
+  // Why the wire carries this at all rather than letting the receiver read it
+  // out of the archive: see CopySourceKind in src/boxlite/src/litebox/copy.rs.
   optional bool source_is_dir = 6;
 }
 
@@ -620,5 +622,7 @@ message DownloadChunk {
   // Whether the source is a directory (true) or a single file (false).
   // Set only on the first chunk; unset = unknown (older peer), which makes the
   // receiver fall back to legacy shape detection.
+  // Why the wire carries this at all rather than letting the receiver read it
+  // out of the archive: see CopySourceKind in src/boxlite/src/litebox/copy.rs.
   optional bool source_is_dir = 2;
 }
