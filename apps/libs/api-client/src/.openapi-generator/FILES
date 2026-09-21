@@ -9,6 +9,7 @@ api/auth-api.ts
 api/box-api.ts
 api/config-api.ts
 api/health-api.ts
+api/images-api.ts
 api/jobs-api.ts
 api/object-storage-api.ts
 api/organizations-api.ts
@@ -60,6 +61,8 @@ docs/BoxApi.md
 docs/BoxClass.md
 docs/BoxDesiredState.md
 docs/BoxLabels.md
+docs/BoxProgress.md
+docs/BoxProgressPhase.md
 docs/BoxState.md
 docs/BoxVolume.md
 docs/BoxliteConfiguration.md
@@ -78,6 +81,11 @@ docs/CreateVolume.md
 docs/HealthApi.md
 docs/HealthControllerCheck200Response.md
 docs/HealthControllerCheck200ResponseInfoValue.md
+docs/Image.md
+docs/ImageDetail.md
+docs/ImageUsage.md
+docs/ImageVersion.md
+docs/ImagesApi.md
 docs/Job.md
 docs/JobStatus.md
 docs/JobType.md
@@ -182,6 +190,8 @@ models/audit-log.ts
 models/box-class.ts
 models/box-desired-state.ts
 models/box-labels.ts
+models/box-progress-phase.ts
+models/box-progress.ts
 models/box-state.ts
 models/box-volume.ts
 models/box.ts
@@ -199,6 +209,10 @@ models/create-user.ts
 models/create-volume.ts
 models/health-controller-check200-response-info-value.ts
 models/health-controller-check200-response.ts
+models/image-detail.ts
+models/image-usage.ts
+models/image-version.ts
+models/image.ts
 models/index.ts
 models/job-status.ts
 models/job-type.ts

@@ -3193,6 +3193,152 @@ paths:
       summary: Update job status
       tags:
       - jobs
+  /images:
+    get:
+      description: "The organization’s images together with the operator’s curated\
+        \ set, which every organization shares and none can delete."
+      operationId: listImages
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Image"
+                type: array
+          description: The images this organization can boot from
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List images
+      tags:
+      - images
+  /images/usage:
+    get:
+      description: "How many images this organization holds against its limit, and\
+        \ the total size its pulled versions declared."
+      operationId: getImageUsage
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageUsage"
+          description: Catalog usage for this organization
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get image usage
+      tags:
+      - images
+  /images/{idOrRef}:
+    delete:
+      description: "Removes the catalog entry, not the bytes: runners keep whatever\
+        \ they cached, and using the same reference again pulls it back as a new entry.\
+        \ That is also how to pick up a tag that has moved upstream, since a recorded\
+        \ tag keeps the digest it first resolved to."
+      operationId: deleteImage
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: "Catalog ID, or any reference that names the image — URL-encode\
+          \ a reference"
+        explode: false
+        in: path
+        name: idOrRef
+        required: true
+        schema:
+          example: quay.io%2Facme%2Fapp
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: The image is no longer in the catalog
+        "400":
+          description: Curated images belong to the operator and cannot be removed
+        "404":
+          description: No such image in this organization
+        "409":
+          description: Boxes that have not been destroyed can still boot from this
+            image
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Remove an image from the catalog
+      tags:
+      - images
+    get:
+      operationId: getImage
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: "Catalog ID, or any reference that names the image — URL-encode\
+          \ a reference, since it contains slashes"
+        explode: false
+        in: path
+        name: idOrRef
+        required: true
+        schema:
+          example: quay.io%2Facme%2Fapp
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageDetail"
+          description: Image details
+        "404":
+          description: No such image in this organization
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get image details
+      tags:
+      - images
   /admin/runners:
     get:
       operationId: adminListRunners
@@ -4583,6 +4729,8 @@ components:
             - write:runners
             - delete:runners
             - read:audit_logs
+            - read:images
+            - delete:images
             type: string
           type: array
         expiresAt:
@@ -4638,6 +4786,8 @@ components:
             - write:runners
             - delete:runners
             - read:audit_logs
+            - read:images
+            - delete:images
             type: string
           type: array
         expiresAt:
@@ -4698,6 +4848,8 @@ components:
             - write:runners
             - delete:runners
             - read:audit_logs
+            - read:images
+            - delete:images
             type: string
           type: array
         lastUsedAt:
@@ -4765,6 +4917,8 @@ components:
             - write:runners
             - delete:runners
             - read:audit_logs
+            - read:images
+            - delete:images
             type: string
           type: array
         isGlobal:
@@ -5167,6 +5321,8 @@ components:
             - write:runners
             - delete:runners
             - read:audit_logs
+            - read:images
+            - delete:images
             type: string
           type: array
       required:
@@ -5209,6 +5365,8 @@ components:
             - write:runners
             - delete:runners
             - read:audit_logs
+            - read:images
+            - delete:images
             type: string
           type: array
       required:
@@ -5703,6 +5861,27 @@ components:
       - mountPath
       - volumeId
       type: object
+    BoxProgressPhase:
+      description: What this box is waiting on while it is being created
+      enum:
+      - preparing_image
+      type: string
+    BoxProgress:
+      properties:
+        phase:
+          allOf:
+          - $ref: "#/components/schemas/BoxProgressPhase"
+          description: What this box is waiting on while it is being created
+          example: preparing_image
+        retryAfterMs:
+          description: "Suggested wait before asking about this box again, in milliseconds.\
+            \ A hint, not a deadline"
+          example: 5000
+          type: number
+      required:
+      - phase
+      - retryAfterMs
+      type: object
     Box:
       example:
         id: aB3cD4eF5gH6
@@ -5744,6 +5923,7 @@ components:
         daemonVersion: 1.0.0
         runnerId: runner123
         toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
+        progress: ""
       properties:
         id:
           description: The public 12-character Box ID
@@ -5891,6 +6071,12 @@ components:
           description: The toolbox proxy URL for the box
           example: https://proxy.app.boxlite.io/toolbox
           type: string
+        progress:
+          allOf:
+          - $ref: "#/components/schemas/BoxProgress"
+          description: "What a box still being created is waiting on. Absent once\
+            \ it has started, and absent while it is being created from an image that\
+            \ has already been pulled"
       required:
       - cpu
       - disk
@@ -5949,6 +6135,7 @@ components:
           daemonVersion: 1.0.0
           runnerId: runner123
           toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
+          progress: ""
         - id: aB3cD4eF5gH6
           organizationId: organization123
           name: MyBox
@@ -5988,6 +6175,7 @@ components:
           daemonVersion: 1.0.0
           runnerId: runner123
           toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
+          progress: ""
         total: 0.8008281904610115
         page: 6.027456183070403
         totalPages: 1.4658129805029452
@@ -6903,6 +7091,251 @@ components:
           type: string
       required:
       - status
+      type: object
+    Image:
+      example:
+        name: quay.io/acme/app
+        id: 123e4567-e89b-12d3-a456-426614174000
+        curated: false
+        curatedRef: curatedRef
+        tags:
+        - v1
+        - latest
+        versionCount: 2
+        sizeBytes: 26214400
+        lastUsedAt: 2026-01-01T00:00:00.000Z
+        createdAt: 2026-01-01T00:00:00.000Z
+      properties:
+        name:
+          description: "What to pass as a box image to boot from this: the curated\
+            \ short name, or the upstream repository path"
+          example: quay.io/acme/app
+          type: string
+        id:
+          description: "Catalog row ID. Null for curated images, which are operator\
+            \ configuration rather than rows"
+          example: 123e4567-e89b-12d3-a456-426614174000
+          nullable: true
+          type: string
+        curated:
+          description: Whether this is one of the operator-provided images every organization
+            shares. Curated images cannot be deleted and do not count against the
+            organization limit
+          example: false
+          type: boolean
+        curatedRef:
+          description: "The exact reference a curated image resolves to. Null for\
+            \ catalog images, which resolve through their versions"
+          nullable: true
+          type: string
+          example: null
+        tags:
+          description: "Tags recorded for this image. Empty for curated images, whose\
+            \ reference the operator pins"
+          example:
+          - v1
+          - latest
+          items:
+            type: string
+          type: array
+        versionCount:
+          description: How many pulled manifest digests this image holds
+          example: 2
+          type: number
+        sizeBytes:
+          description: "Sum of the pulled versions’ declared sizes, in bytes. Layers\
+            \ shared between versions are counted once per version. Null for curated\
+            \ images, whose bytes this system never measured"
+          example: 26214400
+          nullable: true
+          type: number
+        lastUsedAt:
+          description: When a box last booted from this image
+          example: 2026-01-01T00:00:00.000Z
+          nullable: true
+          type: string
+        createdAt:
+          description: When this image first entered the catalog. Null for curated
+            images
+          example: 2026-01-01T00:00:00.000Z
+          nullable: true
+          type: string
+      required:
+      - createdAt
+      - curated
+      - curatedRef
+      - id
+      - lastUsedAt
+      - name
+      - sizeBytes
+      - tags
+      - versionCount
+      type: object
+    ImageUsage:
+      example:
+        count: 3
+        limit: 20
+        knownBytes: 78643200
+      properties:
+        count:
+          description: Images this organization holds. Curated images are the operator’s
+            and are not counted
+          example: 3
+          type: number
+        limit:
+          description: How many images this organization may hold
+          example: 20
+          type: number
+        knownBytes:
+          description: "Sum of the declared sizes of every pulled version, in bytes.\
+            \ A lower bound on what is stored: it counts what the manifests said,\
+            \ and counts a layer once per version that references it"
+          example: 78643200
+          type: number
+      required:
+      - count
+      - knownBytes
+      - limit
+      type: object
+    ImageVersion:
+      example:
+        id: 123e4567-e89b-12d3-a456-426614174000
+        digest: sha256:4a1c2f...
+        sizeBytes: 26214400
+        sourceRef: quay.io/acme/app:v1
+        createdAt: 2026-01-01T00:00:00.000Z
+      properties:
+        id:
+          description: Version ID
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        digest:
+          description: OCI manifest digest this version was pulled at
+          example: sha256:4a1c2f...
+          type: string
+        sizeBytes:
+          description: "Sum of the layer sizes the manifest declared, in bytes"
+          example: 26214400
+          type: number
+        sourceRef:
+          description: "The reference the caller asked for, kept verbatim as provenance"
+          example: quay.io/acme/app:v1
+          type: string
+        createdAt:
+          description: When this version was first recorded
+          example: 2026-01-01T00:00:00.000Z
+          type: string
+      required:
+      - createdAt
+      - digest
+      - id
+      - sizeBytes
+      - sourceRef
+      type: object
+    ImageDetail:
+      example:
+        name: quay.io/acme/app
+        id: 123e4567-e89b-12d3-a456-426614174000
+        curated: false
+        curatedRef: curatedRef
+        tags:
+        - v1
+        - latest
+        versionCount: 2
+        sizeBytes: 26214400
+        lastUsedAt: 2026-01-01T00:00:00.000Z
+        createdAt: 2026-01-01T00:00:00.000Z
+        versions:
+        - id: 123e4567-e89b-12d3-a456-426614174000
+          digest: sha256:4a1c2f...
+          sizeBytes: 26214400
+          sourceRef: quay.io/acme/app:v1
+          createdAt: 2026-01-01T00:00:00.000Z
+        - id: 123e4567-e89b-12d3-a456-426614174000
+          digest: sha256:4a1c2f...
+          sizeBytes: 26214400
+          sourceRef: quay.io/acme/app:v1
+          createdAt: 2026-01-01T00:00:00.000Z
+        history: []
+      properties:
+        name:
+          description: "What to pass as a box image to boot from this: the curated\
+            \ short name, or the upstream repository path"
+          example: quay.io/acme/app
+          type: string
+        id:
+          description: "Catalog row ID. Null for curated images, which are operator\
+            \ configuration rather than rows"
+          example: 123e4567-e89b-12d3-a456-426614174000
+          nullable: true
+          type: string
+        curated:
+          description: Whether this is one of the operator-provided images every organization
+            shares. Curated images cannot be deleted and do not count against the
+            organization limit
+          example: false
+          type: boolean
+        curatedRef:
+          description: "The exact reference a curated image resolves to. Null for\
+            \ catalog images, which resolve through their versions"
+          nullable: true
+          type: string
+          example: null
+        tags:
+          description: "Tags recorded for this image. Empty for curated images, whose\
+            \ reference the operator pins"
+          example:
+          - v1
+          - latest
+          items:
+            type: string
+          type: array
+        versionCount:
+          description: How many pulled manifest digests this image holds
+          example: 2
+          type: number
+        sizeBytes:
+          description: "Sum of the pulled versions’ declared sizes, in bytes. Layers\
+            \ shared between versions are counted once per version. Null for curated\
+            \ images, whose bytes this system never measured"
+          example: 26214400
+          nullable: true
+          type: number
+        lastUsedAt:
+          description: When a box last booted from this image
+          example: 2026-01-01T00:00:00.000Z
+          nullable: true
+          type: string
+        createdAt:
+          description: When this image first entered the catalog. Null for curated
+            images
+          example: 2026-01-01T00:00:00.000Z
+          nullable: true
+          type: string
+        versions:
+          description: "Every pulled version, newest first"
+          items:
+            $ref: "#/components/schemas/ImageVersion"
+          type: array
+        history:
+          description: "Tag movements over time. Always empty today: a tag keeps the\
+            \ digest it first resolved to, so there is nothing to record"
+          example: []
+          items:
+            type: object
+          type: array
+      required:
+      - createdAt
+      - curated
+      - curatedRef
+      - history
+      - id
+      - lastUsedAt
+      - name
+      - sizeBytes
+      - tags
+      - versionCount
+      - versions
       type: object
     AdminCreateRunner:
       example:

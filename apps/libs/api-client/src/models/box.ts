@@ -18,6 +18,9 @@
 import type { BoxDesiredState } from './box-desired-state';
 // May contain unused imports in some cases
 // @ts-ignore
+import type { BoxProgress } from './box-progress';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { BoxState } from './box-state';
 // May contain unused imports in some cases
 // @ts-ignore
@@ -149,6 +152,10 @@ export interface Box {
      * The toolbox proxy URL for the box
      */
     'toolboxProxyUrl': string;
+    /**
+     * What a box still being created is waiting on. Absent once it has started, and absent while it is being created from an image that has already been pulled
+     */
+    'progress'?: BoxProgress;
 }
 
 export const BoxClassEnum = {
