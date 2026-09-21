@@ -681,13 +681,7 @@ mod tests {
     /// so nothing outside these tests needs an archive on disk.
     async fn pack(src: PathBuf, tar_path: PathBuf, opts: PackContext) -> BoxliteResult<()> {
         tokio::task::spawn_blocking(move || {
-            let tar_file = std::fs::File::create(&tar_path).map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "failed to create tar {}: {}",
-                    tar_path.display(),
-                    e
-                ))
-            })?;
+            let tar_file = std::fs::File::create(&tar_path).expect("create the test archive");
             pack_blocking(&src, tar_file, &opts)
         })
         .await
