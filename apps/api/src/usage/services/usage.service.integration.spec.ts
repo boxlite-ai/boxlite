@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { randomUUID } from 'node:crypto'
 import { createServer, Server } from 'node:http'
 import { AddressInfo } from 'node:net'
 import { Redis } from 'ioredis'
@@ -40,6 +41,15 @@ import { UsageConcurrencyGranularity } from '../dto/usage-concurrency.dto'
 // when a Postgres and a Redis are reachable; skipped otherwise.
 const describeIfDatabase = process.env.DB_HOST && process.env.REDIS_HOST ? describe : describe.skip
 
+// Its own database, for the reason box.service.runner-assignment.integration
+// already gives: this suite drops and recreates schema public wholesale, which
+// takes uuid-ossp with it. Every sibling that isolates itself in a schema still
+// defaults its ids to `uuid_generate_v4()`, a function living in that public —
+// so CASCADE reaches out of the dropped schema and strips those defaults, and a
+// suite running concurrently starts inserting NULL ids. A private database
+// removes the coupling instead of ordering around it.
+const databaseName = `usage_ledger_${process.pid}_${randomUUID().replaceAll('-', '')}`
+
 const DAY_MS = 24 * 60 * 60 * 1000
 // Cleared between tests. `box` is here because the reconcile pass reads it; the
 // rest of the schema the initial migration builds is left in place untouched.
@@ -54,9 +64,17 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   let periods: Repository<BoxUsagePeriod>
   let archives: Repository<BoxUsagePeriodArchive>
   let outboxes: Repository<BoxUsageExportOutbox>
-  // Set only once this spec has built the tables itself. Until then the rows in
-  // them belong to somebody else and nothing here may write or clear them.
-  let ownsTables = false
+  let ownsDatabase = false
+
+  // One spelling of the DB_* connection, shared by the admin connections that
+  // create and drop this run's database.
+  const adminConnection = {
+    type: 'postgres' as const,
+    host: process.env.DB_HOST,
+    port: Number(process.env.DB_PORT || 5432),
+    username: process.env.DB_USERNAME,
+    password: process.env.DB_PASSWORD,
+  }
 
   // organizationId is a uuid on the box table, so it has to be a real one here
   // even though the ledger stores it as text.
@@ -204,32 +222,21 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   // CASCADE because box_last_activity references box.
   const truncateTables = () => dataSource.query(`TRUNCATE ${quoted} CASCADE`)
 
-  // This spec rebuilds the entire public schema from the migrations, so it must
-  // never be pointed at a database holding real data. Every table is checked,
-  // not just the ledger's: one populated table anywhere is enough to refuse.
-  const assertDisposableDatabase = async () => {
-    const tables: { table_name: string }[] = await dataSource.query(
-      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`,
-    )
-
-    for (const { table_name } of tables) {
-      const [{ rows }] = await dataSource.query(`SELECT count(*)::int AS rows FROM "${table_name}"`)
-      if (rows > 0) {
-        throw new Error(
-          `refusing to run: "${table_name}" in database "${process.env.DB_DATABASE}" already holds rows — point DB_* at a disposable database`,
-        )
-      }
-    }
-  }
-
   beforeAll(async () => {
+    // Entity-free, so no uuid column makes TypeORM create the extension on this
+    // connection; CREATE DATABASE cannot run inside a transaction, and
+    // dataSource.query is autocommit.
+    const admin = await new DataSource({ ...adminConnection, database: process.env.DB_DATABASE }).initialize()
+    try {
+      await admin.query(`CREATE DATABASE "${databaseName}"`)
+      ownsDatabase = true
+    } finally {
+      await admin.destroy()
+    }
+
     dataSource = await new DataSource({
-      type: 'postgres',
-      host: process.env.DB_HOST,
-      port: Number(process.env.DB_PORT || 5432),
-      username: process.env.DB_USERNAME,
-      password: process.env.DB_PASSWORD,
-      database: process.env.DB_DATABASE,
+      ...adminConnection,
+      database: databaseName,
       entities: [BoxUsagePeriod, BoxUsagePeriodArchive, BoxUsageExportOutbox, Box, BoxLastActivity],
       namingStrategy: new CustomNamingStrategy(),
       synchronize: false,
@@ -239,7 +246,10 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     // the DDL that ships rather than whatever an earlier run happened to leave.
     // The whole schema, not just the ledger: the reconcile pass joins the box
     // table, and box only exists as part of the initial migration.
-    await assertDisposableDatabase()
+    // Safe to drop wholesale only because the database above is this run's
+    // alone: CASCADE takes uuid-ossp with it, and in a shared database it
+    // would reach into every sibling schema and strip the `uuid_generate_v4()`
+    // defaults off their tables.
     await dataSource.query(`DROP SCHEMA public CASCADE`)
     await dataSource.query(`CREATE SCHEMA public`)
     await dataSource.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`)
@@ -258,7 +268,6 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       await new AddBoxSecrets1787000000000().up(queryRunner)
       // Adds `box.imageIsOrgOwned` alongside the catalog tables.
       await new AddImageCatalog1787100000000().up(queryRunner)
-      ownsTables = true
     } finally {
       await queryRunner.release()
     }
@@ -273,20 +282,35 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     outboxes = dataSource.getRepository(BoxUsageExportOutbox)
   })
 
-  // Setup can throw (the disposable-database guard), so nothing here may assume
-  // it ran to completion.
+  // Setup can throw part-way, so nothing here may assume it ran to completion.
+  // The database goes with the run that made it, and nothing sweeps leaked ones
+  // by prefix — so the drop sits in a `finally` and every step before it is one
+  // whose failure must not reach past it.
   afterAll(async () => {
-    if (redis) {
-      await redis.del(...lockKeys)
-      await redis.quit()
-    }
-    if (dataSource?.isInitialized) {
-      if (ownsTables) {
-        // leave the schema in place but carrying nothing, so a later run finds
-        // the database exactly as disposable as it expects
-        await truncateTables().catch(() => undefined)
+    try {
+      try {
+        await redis?.del(...lockKeys)
+      } catch {
+        /* the keys carry their own expiry */
       }
-      await dataSource.destroy()
+      // Severed rather than quit: `quit` waits on a round trip that can reject.
+      redis?.disconnect()
+      if (dataSource?.isInitialized) {
+        await dataSource.destroy()
+      }
+    } finally {
+      if (ownsDatabase) {
+        const admin = await new DataSource({ ...adminConnection, database: process.env.DB_DATABASE }).initialize()
+        try {
+          // A failed test can leave a connection attached, and DROP DATABASE
+          // refuses while any session is — it would report that instead of the
+          // assertion that actually failed.
+          await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1`, [databaseName])
+          await admin.query(`DROP DATABASE IF EXISTS "${databaseName}"`)
+        } finally {
+          await admin.destroy()
+        }
+      }
     }
   })
 
