@@ -130,7 +130,7 @@ describe('BoxService preview URLs', () => {
     expect(redis.setex).toHaveBeenCalledWith(`box:signed-preview-url-token:${port}:${result.token}`, 60, 'MixedCaseBox')
   })
 
-  it.each([0, 65536])('rejects invalid signed preview port %i before storing a token', async (port) => {
+  it.each([0, 65536, 3000.5, NaN])('rejects invalid signed preview port %s before storing a token', async (port) => {
     const { service, redis } = makePreviewUrlService()
 
     await expect(service.getSignedPortPreviewUrl('MixedCaseBox', 'org-1', port)).rejects.toThrow('Invalid port')

@@ -825,13 +825,17 @@ export class BoxService {
     return url
   }
 
+  /**
+   * Sign access to a box's listening port through the shared preview proxy.
+   * The hostname carries the guest port while clients use the proxy's public listener.
+   */
   async getSignedPortPreviewUrl(
     boxIdOrName: string,
     organizationId: string,
     port: number,
     expiresInSeconds = 60,
   ): Promise<SignedPortPreviewUrlDto> {
-    if (port < 1 || port > 65535) {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
     }
     if (expiresInSeconds < 1 || expiresInSeconds > 60 * 60 * 24) {

@@ -134,6 +134,9 @@ export const handlers = [
   }),
   http.get(`${API_URL}/box/:boxIdOrName/ports/:port/signed-preview-url`, ({ params, request }) => {
     const port = Number(params.port)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return HttpResponse.json({ statusCode: 400, message: 'Invalid port' }, { status: 400 })
+    }
     const expiresIn = new URL(request.url).searchParams.get('expiresInSeconds') ?? '60'
     const token = `mock${Math.random().toString(36).slice(2, 14)}`
     return HttpResponse.json({
