@@ -10,6 +10,7 @@ import Redis from 'ioredis'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
 import { BoxDto } from '../dto/box.dto'
+import { BoxPreparingImageTimeoutError } from '../errors/box-preparing-image-timeout.error'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { BoxService } from './box.service'
@@ -124,9 +125,43 @@ export class BoxStateWaiterService implements OnModuleDestroy {
         .catch(fail)
 
       timeout = setTimeout(() => {
-        fail(new RequestTimeoutException(`Timed out waiting for box ${boxId} to reach ${targetState}`))
+        // `.catch` as well as `.then`: this is the last thing that can settle
+        // the wait, so anything that escapes here leaves the caller's request
+        // hanging until it gives up rather than failing it.
+        void this.timedOut(boxId, organizationId, targetState).then(fail).catch(fail)
       }, timeoutSeconds * 1000)
     })
+  }
+
+  /**
+   * The timeout to report, told apart by what the box was waiting on.
+   *
+   * A box whose image is still being pulled is the one case where "timed out"
+   * on its own misleads: the wait is bounded by this service, not by the box,
+   * and the pull carries on after the request is answered. So the failure
+   * carries the same `progress` the box's own representation would, and a
+   * `Retry-After` derived from it.
+   *
+   * Reading the box again costs a query, but only on a path that has already
+   * spent the full wait and is about to fail. Any failure to read it leaves
+   * the plain timeout, which was the whole answer before and is still true.
+   */
+  private async timedOut(
+    boxId: string,
+    organizationId: string,
+    targetState: BoxState,
+  ): Promise<RequestTimeoutException> {
+    const message = `Timed out waiting for box ${boxId} to reach ${targetState}`
+    try {
+      const box = await this.boxService.findOneByIdOrName(boxId, organizationId)
+      const { progress } = await this.boxService.toBoxDto(box)
+      if (progress) {
+        return new BoxPreparingImageTimeoutError(message, progress)
+      }
+    } catch (error) {
+      this.logger.warn(`Failed to read what box ${boxId} was waiting on at timeout: ${error}`)
+    }
+    return new RequestTimeoutException(message)
   }
 
   private assertNotFailed(state: BoxState, errorReason?: string | null) {

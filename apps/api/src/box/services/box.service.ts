@@ -21,6 +21,7 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { ImageAdmissionService } from '../../image/services/image-admission.service'
+import { ImagePreparationService } from '../../image/services/image-preparation.service'
 import { ImageResolverService } from '../../image/services/image-resolver.service'
 import { ImageRegistrarService, ReportedImage } from '../../image/services/image-registrar.service'
 import { BoxWarmPoolService } from './box-warm-pool.service'
@@ -40,7 +41,7 @@ import { OrganizationEvents } from '../../organization/constants/organization-ev
 import { OrganizationSuspendedBoxStoppedEvent } from '../../organization/events/organization-suspended-box-stopped.event'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { WarmPool } from '../entities/warm-pool.entity'
-import { BoxDto, BoxVolume } from '../dto/box.dto'
+import { BoxDto, BoxDtoReads, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
 import { VolumeService } from './volume.service'
@@ -130,6 +131,7 @@ export class BoxService {
     private readonly imageAdmissionService: ImageAdmissionService,
     private readonly imageResolverService: ImageResolverService,
     private readonly imageRegistrarService: ImageRegistrarService,
+    private readonly imagePreparationService: ImagePreparationService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -1139,19 +1141,32 @@ export class BoxService {
    * between "unknown" and "idle" decides whether a box is stopped.
    */
   async toBoxDto(box: Box): Promise<BoxDto> {
-    const [toolboxProxyUrl, lastActivityAt] = await this.resolveDtoMetadata(box)
-    return BoxDto.fromBox(box, toolboxProxyUrl, lastActivityAt)
+    const [toolboxProxyUrl, reads] = await this.resolveDtoMetadata(box)
+    return BoxDto.fromBox(box, toolboxProxyUrl, reads)
   }
 
-  /** The two out-of-entity values every conversion needs, read together. */
-  private async resolveDtoMetadata(box: Box): Promise<[string, Date | null]> {
-    return Promise.all([
+  /**
+   * The out-of-entity values every single-box conversion needs, read together.
+   * The preparation read is here rather than in {@link toBoxDto} alone because
+   * a caller polling a creating box reads it through
+   * {@link toBoxDtoWithExitCode}, and that is the caller progress is for.
+   */
+  private async resolveDtoMetadata(box: Box): Promise<[string, BoxDtoReads]> {
+    const [toolboxProxyUrl, lastActivityAt, preparing] = await Promise.all([
       this.resolveToolboxProxyUrl(box.region),
       this.boxActivityService.getLastActivityAt(box.id).catch((err) => {
         this.logger.warn(`Failed to read last activity for box ${box.id}: ${err}`)
         return null
       }),
+      // Degrades to absent for the same reason as the activity read: what the
+      // box is waiting on is commentary on the box, and losing it must not turn
+      // a successful create into a failed one.
+      this.imagePreparationService.preparingImage([box]).catch((err) => {
+        this.logger.warn(`Failed to read image preparation for box ${box.id}: ${err}`)
+        return new Set<string>()
+      }),
     ])
+    return [toolboxProxyUrl, { lastActivityAt, preparingImage: preparing.has(box.id) }]
   }
 
   /**
@@ -1169,11 +1184,11 @@ export class BoxService {
    * Only the two endpoints that answer a tenant's read use this.
    */
   async toBoxDtoWithExitCode(box: Box): Promise<BoxDto> {
-    const [[toolboxProxyUrl, lastActivityAt], exitCode] = await Promise.all([
+    const [[toolboxProxyUrl, reads], exitCode] = await Promise.all([
       this.resolveDtoMetadata(box),
       this.boxExitCodeService.getExitCode(box),
     ])
-    return BoxDto.fromBox(box, toolboxProxyUrl, lastActivityAt, exitCode)
+    return BoxDto.fromBox(box, toolboxProxyUrl, { ...reads, exitCode })
   }
 
   /**
@@ -1185,11 +1200,15 @@ export class BoxService {
    * client that needs it reads the box itself.
    */
   async toBoxDtos(boxes: Box[]): Promise<BoxDto[]> {
-    const [urlMap, activityMap] = await Promise.all([
+    const [urlMap, activityMap, preparing] = await Promise.all([
       this.resolveToolboxProxyUrls(boxes.map((s) => s.region)),
       this.boxActivityService.getLastActivityAtMany(boxes.map((s) => s.id)).catch((err) => {
         this.logger.warn(`Failed to read last activity for ${boxes.length} boxes: ${err}`)
         return new Map<string, Date>()
+      }),
+      this.imagePreparationService.preparingImage(boxes).catch((err) => {
+        this.logger.warn(`Failed to read image preparation for ${boxes.length} boxes: ${err}`)
+        return new Set<string>()
       }),
     ])
     return boxes.map((s) => {
@@ -1197,7 +1216,7 @@ export class BoxService {
       if (!url) {
         throw new NotFoundException(`Toolbox proxy URL not resolved for region ${s.region}`)
       }
-      return BoxDto.fromBox(s, url, activityMap.get(s.id))
+      return BoxDto.fromBox(s, url, { lastActivityAt: activityMap.get(s.id), preparingImage: preparing.has(s.id) })
     })
   }
 

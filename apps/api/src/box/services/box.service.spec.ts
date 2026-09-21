@@ -58,6 +58,7 @@ function makeService() {
     noop, // imageAdmissionService
     noop, // imageResolverService
     noop, // imageRegistrarService
+    noop, // imagePreparationService
   )
   return { service, boxRepository, eventEmitter, organizationService }
 }
@@ -103,6 +104,7 @@ function makePreviewUrlService() {
     noop, // imageAdmissionService
     noop, // imageResolverService
     noop, // imageRegistrarService
+    noop, // imagePreparationService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -311,6 +313,7 @@ function makeNetworkTunnelService() {
     noop, // imageAdmissionService
     noop, // imageResolverService
     noop, // imageRegistrarService
+    noop, // imagePreparationService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',

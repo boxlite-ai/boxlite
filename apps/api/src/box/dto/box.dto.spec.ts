@@ -34,7 +34,7 @@ describe('BoxDto main command exit code', () => {
     ['a main command ended by a signal', 137, 137],
     ['a main command that succeeded', 0, 0],
   ])('reports the exit code of %s', (_case, read, expected) => {
-    expect(BoxDto.fromBox(box(), 'https://proxy.invalid', null, read).exitCode).toBe(expected)
+    expect(BoxDto.fromBox(box(), 'https://proxy.invalid', { exitCode: read }).exitCode).toBe(expected)
   })
 
   // Absence is the only way to say "not recorded", and it has to survive
@@ -42,7 +42,7 @@ describe('BoxDto main command exit code', () => {
   // against. A runtime that recorded none and a runner that could not be read
   // both arrive here the same way, as nothing.
   it('omits the exit code when there is none', () => {
-    const dto = BoxDto.fromBox(box(), 'https://proxy.invalid', null, undefined)
+    const dto = BoxDto.fromBox(box(), 'https://proxy.invalid', { exitCode: undefined })
 
     expect(dto.exitCode).toBeUndefined()
     expect(JSON.parse(JSON.stringify(dto))).not.toHaveProperty('exitCode')

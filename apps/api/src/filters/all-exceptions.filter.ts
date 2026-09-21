@@ -35,6 +35,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let error: string
     let message: string
     let code: string | undefined
+    // The one structured field a failure may add. Forwarded rather than
+    // flattened because it is the same shape a successful box response
+    // publishes, and a caller that parses one should not need a second parser.
+    let progress: Record<string, unknown> | undefined
 
     // If the exception is a NotFoundException and the request path is not an API request, serve the dashboard index.html file
     if (exception instanceof NotFoundException && !request.path.startsWith('/api/')) {
@@ -69,6 +73,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
           : (responseMessage as string) || exception.message
         const responseCode = (exceptionResponse as Record<string, unknown>).code
         code = typeof responseCode === 'string' ? responseCode : undefined
+        const responseProgress = (exceptionResponse as Record<string, unknown>).progress
+        progress =
+          typeof responseProgress === 'object' && responseProgress !== null && !Array.isArray(responseProgress)
+            ? (responseProgress as Record<string, unknown>)
+            : undefined
       }
 
       const retryAfterSeconds = (exception as { retryAfterSeconds?: unknown }).retryAfterSeconds
@@ -89,6 +98,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       error,
       message,
       ...(code ? { code } : {}),
+      ...(progress ? { progress } : {}),
     })
   }
 }
