@@ -289,6 +289,11 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
         with (
             tempfile.TemporaryDirectory() as directory,
             redirect_stdout(io.StringIO()),
+            patch.object(
+                startup,
+                "subprocess",
+                Mock(run=Mock(return_value=SimpleNamespace(stdout="test-commit\n"))),
+            ),
             patch.object(startup, "run_batch", side_effect=batch),
         ):
             args = arguments(Path(directory) / "result")
@@ -314,6 +319,11 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
         )
         with (
             tempfile.TemporaryDirectory() as directory,
+            patch.object(
+                startup,
+                "subprocess",
+                Mock(run=Mock(return_value=SimpleNamespace(stdout="test-commit\n"))),
+            ),
             patch.object(
                 startup, "run_batch", new=AsyncMock(side_effect=ValueError("failed"))
             ),
