@@ -23,7 +23,13 @@ pub async fn execute(args: RestartArgs, global: &crate::cli::GlobalFlags) -> any
             }
         };
 
-        if let Err(e) = litebox.stop().await {
+        // Wait through any in-flight stop / start before issuing our
+        // own (POL-34). Without this, `restart` issued during a slow
+        // shutdown would surface the transient InvalidState as a
+        // permanent failure.
+        let stop_res =
+            crate::util::retry::retry_on_transient_state(|| async { litebox.stop().await }).await;
+        if let Err(e) = stop_res {
             // If stop fails, we should NOT proceed to start, because resources might still be locked.
             eprintln!("Error restarting box '{}': {}", target, e);
             errors.push(format!("{}: {}", target, e));
@@ -41,7 +47,9 @@ pub async fn execute(args: RestartArgs, global: &crate::cli::GlobalFlags) -> any
             }
         };
 
-        if let Err(e) = litebox.start().await {
+        let start_res =
+            crate::util::retry::retry_on_transient_state(|| async { litebox.start().await }).await;
+        if let Err(e) = start_res {
             eprintln!("Error restarting box '{}': {}", target, e);
             errors.push(format!("{}: {}", target, e));
         } else {

@@ -1,5 +1,7 @@
 //! Utility functions shared across commands
 
+pub mod retry;
+
 /// Convert boxlite exit code to shell exit code.
 ///
 /// Boxlite encodes signal termination as negative values (e.g., -9 for SIGKILL).
