@@ -11,6 +11,9 @@ Two mapped RAM regions provide 12 KiB of guest RAM on a host with 4 KiB pages.
 Program, data and stack labels illustrate how the guest could use that RAM.
 Range endpoints below are inclusive; the host column shows virtual addresses.
 
+<details>
+<summary>Show architecture diagram</summary>
+
 ```text
                   WHOLE EXAMPLE: TWO MAPPED RAM REGIONS
 
@@ -38,6 +41,8 @@ Guest physical addresses          KVM mapping   Host virtual addresses
         | space: unmapped     |
         +---------------------+
 ```
+
+</details>
 
 `<=======>` joins two address views of the **same backing bytes**.
 
@@ -67,6 +72,9 @@ records live in the host process, outside guest RAM. Arrows show relationships,
 not a copy of the bytes.
 
 #### BoxLite PR1: caller-owned RAM and a private slot table
+
+<details>
+<summary>Show BoxLite memory structures</summary>
 
 ```text
 HOST PROCESS: selected structure fields
@@ -101,6 +109,8 @@ GUEST PHYSICAL          SLOT METADATA                 HOST VIRTUAL / RAM
        | 8 KiB        |                              | 8 KiB        |
 0x3FFF +--------------+                              +--------------+ 0x90001FFF
 ```
+
+</details>
 
 The caller retains both allocations. An unused entry is `None`; registration
 records `Some(...)` only after the ioctl succeeds. Neither `MemoryRegion` nor
@@ -552,6 +562,9 @@ macOS Hypervisor.framework; neither adds another KVM memory-manager design here.
 
 ### 2.1 Allocate backing memory in the host process
 
+<details>
+<summary>Show sequence diagram</summary>
+
 ```mermaid
 sequenceDiagram
   box VMM · host process
@@ -570,7 +583,12 @@ sequenceDiagram
   Note over coordinator,os_memory: Host virtual address and guest physical address belong to different address spaces<br/>The guest cannot access the allocation until it is registered with the hypervisor
 ```
 
+</details>
+
 ### 2.2 Register the allocation as guest RAM
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -594,7 +612,12 @@ sequenceDiagram
   Note over region,guest_ram: The mapping covers 512 MiB, with the upper address excluded<br/>It shares the existing pages rather than copying their contents
 ```
 
+</details>
+
 ### 2.3 Translate one guest load into a physical RAM access
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -626,7 +649,12 @@ sequenceDiagram
   Note over program,physical_ram: These are hardware translations while the guest runs<br/>Mapped RAM access needs no device-emulation exit to the VMM
 ```
 
+</details>
+
 ### 2.4 The host worker accesses the same byte through a different pointer
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -654,7 +682,12 @@ sequenceDiagram
   Note over worker,physical_ram: The worker uses host translation, not guest stage 1 or stage 2<br/>Host users synchronize conflicting accesses<br/>Guest-shared fields follow protocol atomicity and ordering<br/>Raw pointers and volatile access alone do not synchronize memory
 ```
 
+</details>
+
 ### 2.5 A device register takes the MMIO path instead
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -687,7 +720,12 @@ sequenceDiagram
   Note over kernel,disk: This is the device path used to notify the disk worker<br/>Request descriptors and file buffers still live in ordinary guest RAM
 ```
 
+</details>
+
 ### 2.6 Interrupt-controller windows depend on who implements them
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -717,7 +755,12 @@ sequenceDiagram
   Note over kernel,ioapic: An unmapped address is not automatically a userspace device<br/>Host-owned controller windows are handled by the host
 ```
 
+</details>
+
 ### 2.7 Keep the backing alive until every user has stopped
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -747,9 +790,14 @@ sequenceDiagram
   Note over coordinator,host_api: A failed unmap may leave the mapping live: retain its backing<br/>Alternatively, destroy the VM and all vCPUs<br/>In either case, every host user must finish before releasing memory
 ```
 
+</details>
+
 ## 3. The planned arm64 address map
 
 ### 3.1 Controller and device windows below RAM
+
+<details>
+<summary>Show address map</summary>
 
 ```mermaid
 flowchart LR
@@ -764,7 +812,12 @@ flowchart LR
   end
 ```
 
+</details>
+
 ### 3.2 RAM and space reserved above it
+
+<details>
+<summary>Show address map</summary>
 
 ```mermaid
 flowchart LR
@@ -775,6 +828,8 @@ flowchart LR
     pci_bars["Above hotplug memory: 64-bit PCI BARs<br/>reserved for M9"]
   end
 ```
+
+</details>
 
 ## BoxLite implementation reference
 

@@ -9,6 +9,9 @@ Linux boot follow. Boxes currently use libkrun.
 
 ## 1. Architecture
 
+<details>
+<summary>Show architecture diagram</summary>
+
 ```mermaid
 flowchart TB
   subgraph vmm["VMM · one Linux process"]
@@ -55,9 +58,14 @@ flowchart TB
   kernel kvm_1_e8@-->|"runs on"| vcpu1
 ```
 
+</details>
+
 ## 2. How it works
 
 ### 2.1 Open KVM and create an empty VM
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -86,7 +94,12 @@ sequenceDiagram
   Note over coordinator,host_api: fd = file descriptor · a handle to a kernel object<br/>The new VM has no vCPUs and no guest RAM
 ```
 
+</details>
+
 ### 2.2 Prepare x86 interrupt controllers
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -115,9 +128,14 @@ sequenceDiagram
   Note over coordinator,pit: Create these before the vCPUs<br/>The arm64 setup is shown separately below
 ```
 
+</details>
+
 ### 2.3 Map RAM and load Linux
 
 See the [side-by-side view of guest ranges, KVM slots and host allocations](memory.md#1-architecture).
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -142,7 +160,12 @@ sequenceDiagram
   Note over backing,guest_ram: Guest RAM and the host allocation name the same pages<br/>A memory slot records a mapping, not another allocation
 ```
 
+</details>
+
 ### 2.4 Create two vCPUs and their run buffers
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -173,7 +196,12 @@ sequenceDiagram
   Note over thread0,host_api: Each kvm_run buffer is shared between the VMM and KVM<br/>It carries exit information and I/O data, not guest RAM
 ```
 
+</details>
+
 ### 2.5 Boot the x86 Linux guest
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -207,7 +235,12 @@ sequenceDiagram
   Note over thread0,kernel: Linux boots, starts its userspace, then the example application runs
 ```
 
+</details>
+
 ### 2.6 A file read reaches a device register
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -236,7 +269,12 @@ sequenceDiagram
   thread0->>thread0: KVM backend reads<br/>kvm_run.mmio fields<br/>into MmioWrite
 ```
 
+</details>
+
 ### 2.7 Resume Linux while the worker reads the disk
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -272,7 +310,12 @@ sequenceDiagram
   Note over thread0,guest_ram: Re-entry and host I/O proceed independently<br/>Linux can run other work while this read waits
 ```
 
+</details>
+
 ### 2.8 KVM delivers the disk interrupt
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -299,7 +342,12 @@ sequenceDiagram
   Note over host_api,kernel: With KVM's in-kernel irqchip, HLT waits inside KVM_RUN<br/>A pending interrupt can wake that kernel wait
 ```
 
+</details>
+
 ### 2.9 Linux completes the file read
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -315,7 +363,12 @@ sequenceDiagram
   kernel-->>program: read() returns 4096 bytes
 ```
 
+</details>
+
 ### 2.10 Stop the vCPU threads
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -344,7 +397,12 @@ sequenceDiagram
   thread1-->>coordinator: Exit loop, join T1
 ```
 
+</details>
+
 ### 2.11 Release the mappings and descriptors
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -372,9 +430,14 @@ sequenceDiagram
   Note over coordinator,host_api: Closing only the VM fd is not enough while other references keep it alive
 ```
 
+</details>
+
 ## 3. What changes on arm64
 
 ### 3.1 Configure the GIC and initialize it after the vCPUs exist
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -403,7 +466,12 @@ sequenceDiagram
   Note over coordinator,gic: The x86 PIC, IOAPIC and PIT setup is replaced by this GIC path
 ```
 
+</details>
+
 ### 3.2 Use the arm64 boot protocol and let KVM start secondaries
+
+<details>
+<summary>Show sequence diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -435,6 +503,8 @@ sequenceDiagram
   kernel->>host_api: PSCI CPU_ON<br/>starts vCPU 1 in-kernel
   Note over host_api,kernel: Device IRQs use GIC SPI numbers with KVM_IRQ_LINE<br/>WFI waits inside KVM, not on a userspace parked-thread path
 ```
+
+</details>
 
 ## BoxLite implementation reference
 
