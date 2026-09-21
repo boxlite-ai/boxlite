@@ -2241,15 +2241,56 @@ mod tests {
 
     #[tokio::test]
     async fn rootfs_backend_creation_stays_legacy() {
+        use crate::litebox::BoxBuilder;
+
         let (runtime, _dir) = create_test_runtime();
         let options = test_box_config(true).options;
         let litebox = runtime.create(options, None).await.unwrap();
-        let (config, _) = runtime
+        let (config, mut state) = runtime
             .box_manager
             .box_by_id(litebox.id())
             .unwrap()
             .unwrap();
         assert_eq!(config.rootfs_backend, RootfsBackend::Legacy);
+        for status in [BoxStatus::Configured, BoxStatus::Stopped, BoxStatus::Failed] {
+            state.status = status;
+            assert!(BoxBuilder::new(runtime.clone(), config.clone(), state.clone()).is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn rootfs_backend_provisioning_stays_legacy_after_reopen() {
+        let (runtime, dir) = create_test_runtime();
+        let staging = runtime.layout.temp_dir().join("staged-box");
+        std::fs::create_dir(&staging).unwrap();
+        std::fs::write(staging.join("rootfs-data"), "preserved").unwrap();
+        let litebox = runtime
+            .provision_box(
+                staging.clone(),
+                Some("provisioned".into()),
+                test_box_config(true).options,
+                BoxStatus::Stopped,
+            )
+            .await
+            .unwrap();
+        let id = litebox.id().clone();
+        assert!(!staging.exists());
+        drop(litebox);
+        drop(runtime);
+
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .unwrap();
+        let (config, state) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
+        assert_eq!(config.rootfs_backend, RootfsBackend::Legacy);
+        assert_eq!(state.status, BoxStatus::Stopped);
+        assert_eq!(config.name.as_deref(), Some("provisioned"));
+        assert_eq!(
+            std::fs::read_to_string(config.box_home.join("rootfs-data")).unwrap(),
+            "preserved"
+        );
     }
 
     #[tokio::test]
