@@ -9,6 +9,7 @@ mod advanced_options;
 mod box_handle;
 mod copy;
 mod exec;
+mod git;
 mod images;
 mod info;
 mod metrics;
@@ -25,6 +26,7 @@ pub use advanced_options::{JsAdvancedBoxOptions, JsContainerCapabilities, JsSecu
 pub use box_handle::JsBox;
 pub use copy::JsCopyOptions;
 pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution};
+pub use git::JsGitHandle;
 pub use images::{JsImageHandle, JsImageInfo, JsImagePullResult};
 pub use info::{
     JsBoxInfo, JsBoxStateInfo, JsHealthState, JsHealthStatus, JsNetworkInfo, JsPublishedPort,

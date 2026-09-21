@@ -10,6 +10,7 @@ Complete API reference for the BoxLite Node.js/TypeScript SDK.
 - [Runtime Management](#runtime-management)
 - [Box Handle](#box-handle)
 - [Network Tunnels](#network-tunnels)
+- [Git config](#git-config)
 - [Command Execution](#command-execution)
 - [Box Types](#box-types)
 - [Error Types](#error-types)
@@ -217,6 +218,7 @@ Handle to a running or stopped box.
 | `id` | `string` | Unique box identifier (ULID) |
 | `name` | `string \| null` | User-defined name |
 | `network` | `JsNetworkHandle` | Box-scoped tunnel operations |
+| `git` | `JsGitHandle` | Box-scoped git config operations |
 
 #### Methods
 
@@ -307,6 +309,34 @@ Each tunnel is one-shot. Choose `connect()` or `forward()`; a forwarder opens
 fresh tunnels for additional clients. This differs from `ports`, which
 creates a persistent, local-only host listener that accepts repeated
 connections from ordinary host applications.
+
+---
+
+## Git config
+
+`JsBox` and `SimpleBox` expose `box.git`. `scope` is `"global"` (default),
+`"local"`, or `"system"`; `"local"` requires `path`.
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Configure user | `await box.git.configureUser(name, email, scope?, path?)` | Set `user.name` and `user.email` |
+| Set config | `await box.git.setConfig(key, value, scope?, path?)` | Write a git config value |
+| Get config | `await box.git.getConfig(key, scope?, path?) => Promise<string>` | Read a git config value |
+
+```typescript
+await box.git.configureUser("BoxLite Bot", "bot@boxlite.ai");
+await box.git.setConfig(
+  "core.autocrlf",
+  "input",
+  "local",
+  "/workspace/repo",
+);
+const email = await box.git.getConfig(
+  "user.email",
+  "local",
+  "/workspace/repo",
+);
+```
 
 ---
 
@@ -437,6 +467,7 @@ interface SimpleBoxOptions {
 |----------|------|-------------|
 | `id` | `string` | Box ID (throws if not started) |
 | `name` | `string \| undefined` | Box name |
+| `git` | `GitHandle` | Box-scoped git config operations |
 
 #### Methods
 

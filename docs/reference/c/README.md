@@ -42,6 +42,7 @@ The SDK provides two API styles:
   - [Runtime Management](#runtime-management)
   - [Box Management](#box-management)
   - [Network Tunnels](#network-tunnels)
+  - [Git config](#git-config)
   - [Command Execution](#command-execution)
   - [Discovery & Introspection](#discovery--introspection)
   - [Metrics](#metrics)
@@ -762,6 +763,125 @@ local-only host listener that accepts repeated connections.
 
 ---
 
+### Git config
+
+```c
+typedef void (*CGitWriteCb)(CBoxliteError* error, void* user_data);
+typedef void (*CGitGetConfigCb)(char* value, CBoxliteError* error, void* user_data);
+
+BoxliteErrorCode boxlite_box_git(
+    CBoxHandle* handle,
+    CBoxGitHandle** out_git,
+    CBoxliteError* out_error
+);
+void boxlite_git_free(CBoxGitHandle* git);
+
+BoxliteErrorCode boxlite_git_configure_user(
+    CBoxGitHandle* git,
+    const char* name,
+    const char* email,
+    const char* scope,
+    const char* path,
+    CGitWriteCb cb,
+    void* user_data,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_git_set_config(
+    CBoxGitHandle* git,
+    const char* key,
+    const char* value,
+    const char* scope,
+    const char* path,
+    CGitWriteCb cb,
+    void* user_data,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_git_get_config(
+    CBoxGitHandle* git,
+    const char* key,
+    const char* scope,
+    const char* path,
+    CGitGetConfigCb cb,
+    void* user_data,
+    CBoxliteError* out_error
+);
+```
+
+`scope` is `"global"` (default), `"local"`, or `"system"`. Pass NULL for
+`scope` or `path` to use the Rust defaults. `"local"` requires `path`; omitting
+it fails with `InvalidArgument` and names the missing argument.
+
+`Ok` means the request was queued. Completions run later on
+`boxlite_runtime_drain()`, with the same borrowed-callback-error contract as
+`boxlite_box_info()`. On a successful `boxlite_git_get_config()`, the callback
+owns the non-NULL string and must free it with `boxlite_free_string()`.
+`boxlite_git_free()` accepts NULL and does not affect the box handle.
+
+```c
+typedef struct {
+    int done;
+    char* email;
+} GitRequest;
+
+static void on_git_write(CBoxliteError* error, void* user_data) {
+    GitRequest* request = user_data;
+    if (error->code != Ok) {
+        fprintf(stderr, "git write failed: %s\n",
+                error->message ? error->message : "unknown error");
+    }
+    request->done = 1;
+}
+
+static void on_git_get(char* value, CBoxliteError* error, void* user_data) {
+    GitRequest* request = user_data;
+    if (error->code != Ok) {
+        fprintf(stderr, "git get failed: %s\n",
+                error->message ? error->message : "unknown error");
+    } else {
+        request->email = value;
+    }
+    request->done = 1;
+}
+
+CBoxGitHandle* git = NULL;
+if (boxlite_box_git(box, &git, &error) != Ok) {
+    fprintf(stderr, "git handle failed: %s\n",
+            error.message ? error.message : "unknown error");
+    boxlite_error_free(&error);
+    return 1;
+}
+
+GitRequest request = {0};
+if (boxlite_git_configure_user(
+        git, "BoxLite Bot", "bot@boxlite.ai", NULL, NULL,
+        on_git_write, &request, &error) == Ok) {
+    while (!request.done) {
+        if (boxlite_runtime_drain(runtime, -1, &error) < 0) {
+            boxlite_error_free(&error);
+            break;
+        }
+    }
+}
+
+request.done = 0;
+if (boxlite_git_get_config(
+        git, "user.email", NULL, NULL, on_git_get, &request, &error) == Ok) {
+    while (!request.done) {
+        if (boxlite_runtime_drain(runtime, -1, &error) < 0) {
+            boxlite_error_free(&error);
+            break;
+        }
+    }
+}
+if (request.email) {
+    printf("user.email=%s\n", request.email);
+    boxlite_free_string(request.email);
+}
+boxlite_git_free(git);
+```
+
+---
+
 ### Command Execution
 
 #### boxlite_execute
@@ -1058,6 +1178,7 @@ BoxliteErrorCode boxlite_box_metrics(
 
 1. **All allocated strings must be freed**
    - `boxlite_box_id()` → `boxlite_free_string()`
+   - successful `boxlite_git_get_config()` callback value → `boxlite_free_string()`
 
 2. **Error structs must be freed**
    - Caller-owned `CBoxliteError` output → `boxlite_error_free()`
@@ -1106,12 +1227,25 @@ Safe to call with NULL.
 
 ---
 
+#### boxlite_git_free
+
+Free a git handle.
+
+```c
+void boxlite_git_free(CBoxGitHandle* git);
+```
+
+Safe to call with NULL. Does not affect the box handle.
+
+---
+
 ## Thread Safety
 
 | Component | Thread Safety |
 |-----------|---------------|
 | `CBoxliteRuntime` | Thread-safe |
 | `CBoxHandle` | **NOT** thread-safe - do not share across threads |
+| `CBoxGitHandle` | **NOT** thread-safe - do not share across threads |
 | `CBoxliteSimple` | **NOT** thread-safe - do not share across threads |
 | Callbacks | Invoked on the thread calling `boxlite_runtime_drain()` |
 
@@ -1239,6 +1373,11 @@ if (code != Ok) {
 | `boxlite_get()` | Reattach to box |
 | `boxlite_box_id()` | Get box ID |
 | `boxlite_box_free()` | Free box handle |
+| `boxlite_box_git()` | Borrow a box-scoped git handle |
+| `boxlite_git_free()` | Free a git handle |
+| `boxlite_git_configure_user()` | Queue `user.name` / `user.email` write |
+| `boxlite_git_set_config()` | Queue a git config write |
+| `boxlite_git_get_config()` | Queue a git config read |
 | `boxlite_box_info()` | Queue box info lookup |
 | `boxlite_box_metrics()` | Get box metrics |
 | `boxlite_execute()` | Execute command |

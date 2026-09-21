@@ -95,6 +95,9 @@ typedef enum BoxliteCopySourceKind {
 // `boxlite_advanced_options_new`, freed via `boxlite_advanced_options_free`.
 typedef struct AdvancedBoxOptionsHandle AdvancedBoxOptionsHandle;
 
+// Opaque handle for git operations on a box.
+typedef struct BoxGitHandle BoxGitHandle;
+
 // Opaque handle to a running box.
 //
 // `handle` is wrapped in `Arc` so it can be cloned into Tokio tasks for
@@ -272,6 +275,15 @@ typedef struct ExecResult {
 } ExecResult;
 
 typedef struct ExecResult CBoxliteExecResult;
+
+typedef struct BoxGitHandle CBoxGitHandle;
+
+// Git write completion (`configure_user` / `set_config`).
+typedef void (*CGitWriteCb)(CBoxliteError*, void*);
+
+// Git get_config completion. On success the callback owns the non-null
+// string and must release it with `boxlite_free_string`.
+typedef void (*CGitGetConfigCb)(char*, CBoxliteError*, void*);
 
 typedef struct ImageHandle CBoxliteImageHandle;
 
@@ -802,6 +814,46 @@ enum BoxliteErrorCode boxlite_simple_run(CBoxliteSimple *box_runner,
 void boxlite_simple_free(CBoxliteSimple *box_runner);
 
 void boxlite_result_free(CBoxliteExecResult *result);
+
+// Borrow the box's git capability into a new owned handle.
+//
+// On success, `*out_git` must be released with `boxlite_git_free`.
+enum BoxliteErrorCode boxlite_box_git(CBoxHandle *handle,
+                                      CBoxGitHandle **out_git,
+                                      CBoxliteError *out_error);
+
+// Release a git handle. Accepts NULL and does not affect the box handle.
+void boxlite_git_free(CBoxGitHandle *git);
+
+// Set `user.name` and `user.email`. Null `scope`/`path` use Rust defaults.
+enum BoxliteErrorCode boxlite_git_configure_user(CBoxGitHandle *git,
+                                                 const char *name,
+                                                 const char *email,
+                                                 const char *scope,
+                                                 const char *path,
+                                                 CGitWriteCb cb,
+                                                 void *user_data,
+                                                 CBoxliteError *out_error);
+
+// Write a git config value. Null `scope`/`path` use Rust defaults.
+enum BoxliteErrorCode boxlite_git_set_config(CBoxGitHandle *git,
+                                             const char *key,
+                                             const char *value,
+                                             const char *scope,
+                                             const char *path,
+                                             CGitWriteCb cb,
+                                             void *user_data,
+                                             CBoxliteError *out_error);
+
+// Read a git config value. On success the callback owns the string and must
+// release it with `boxlite_free_string`.
+enum BoxliteErrorCode boxlite_git_get_config(CBoxGitHandle *git,
+                                             const char *key,
+                                             const char *scope,
+                                             const char *path,
+                                             CGitGetConfigCb cb,
+                                             void *user_data,
+                                             CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_image_pull(CBoxliteImageHandle *handle,
                                          const char *image_ref,
