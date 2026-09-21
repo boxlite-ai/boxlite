@@ -60,7 +60,7 @@ export class ImageController {
   @ApiOperation({
     summary: 'Get image usage',
     description:
-      'How many images this organization holds against its limit, and the total size its recorded versions declared.',
+      'How many images this organization holds against its limit, and the total size its pulled versions declared.',
     operationId: 'getImageUsage',
   })
   @ApiResponse({ status: 200, description: 'Catalog usage for this organization', type: ImageUsageDto })
