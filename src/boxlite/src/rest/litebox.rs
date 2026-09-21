@@ -1469,7 +1469,7 @@ mod tests {
     use futures::{SinkExt, StreamExt};
     use std::sync::Arc;
     use std::time::Duration;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::Mutex;
     use tokio_tungstenite::tungstenite::Message;
@@ -1726,11 +1726,12 @@ mod tests {
         server.abort();
     }
 
-    /// A download whose connection dies mid-body is a transport fault, not a
-    /// client bug — `copy_out` must classify it as such so a caller can retry
-    /// instead of filing one.
-    #[tokio::test]
-    async fn copy_out_reports_a_truncated_download_as_network() {
+    /// A peer that promises 4 KiB of tar, delivers two bytes and hangs up.
+    /// `source_is_dir` rides the headers when the peer is a streaming one;
+    /// `None` is the buffered fallback, which sends no shape at all.
+    async fn serve_severed_archive(
+        source_is_dir: Option<bool>,
+    ) -> (u16, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move {
@@ -1739,17 +1740,28 @@ mod tests {
             while !head.ends_with(b"\r\n\r\n") {
                 head.push(socket.read_u8().await.unwrap());
             }
-            // Promise 4 KiB of tar, deliver two bytes, then hang up.
-            socket
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\n\
-                      Content-Type: application/x-tar\r\n\
-                      Content-Length: 4096\r\n\
-                      Connection: close\r\n\r\nhi",
-                )
-                .await
-                .unwrap();
+            let shape = match source_is_dir {
+                Some(is_dir) => format!("X-Boxlite-Source-Is-Dir: {is_dir}\r\n"),
+                None => String::new(),
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: application/x-tar\r\n\
+                 {shape}\
+                 Content-Length: 4096\r\n\
+                 Connection: close\r\n\r\nhi"
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
         });
+        (port, server)
+    }
+
+    /// A download whose connection dies mid-body is a transport fault, not a
+    /// client bug — `copy_out` must classify it as such so a caller can retry
+    /// instead of filing one.
+    #[tokio::test]
+    async fn copy_out_reports_a_truncated_download_as_network() {
+        let (port, server) = serve_severed_archive(None).await;
 
         let rest_box = rest_box_for(port, "box1");
         let host_dst = std::env::temp_dir().join("boxlite-copy-out-truncated");
@@ -1771,26 +1783,7 @@ mod tests {
     /// shared fault slot, not just `read_capped`.
     #[tokio::test]
     async fn copy_out_streaming_truncation_classifies_as_network() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut head = Vec::new();
-            while !head.ends_with(b"\r\n\r\n") {
-                head.push(socket.read_u8().await.unwrap());
-            }
-            // Streaming peer: carries the shape hint, promises 4 KiB, hangs up.
-            socket
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\n\
-                      Content-Type: application/x-tar\r\n\
-                      X-Boxlite-Source-Is-Dir: false\r\n\
-                      Content-Length: 4096\r\n\
-                      Connection: close\r\n\r\nhi",
-                )
-                .await
-                .unwrap();
-        });
+        let (port, server) = serve_severed_archive(Some(false)).await;
 
         let rest_box = rest_box_for(port, "box1");
         let host_dst = std::env::temp_dir().join("boxlite-copy-out-stream-truncated");
@@ -2768,34 +2761,171 @@ mod tests {
     /// would clobber what the caller asked us to preserve.
     #[tokio::test]
     async fn copy_in_stream_refuses_no_overwrite_without_sending_anything() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let served = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let saw_request = Arc::clone(&served);
-        let server = tokio::spawn(async move {
-            if listener.accept().await.is_ok() {
-                saw_request.store(true, std::sync::atomic::Ordering::SeqCst);
-            }
-        });
-
-        let rest_box = Arc::new(rest_box_for(port, "box1"));
-        let archive: BoxByteStream = Box::pin(futures::stream::empty());
-        let error = rest_box
-            .copy_in_stream(
-                archive,
-                "/tmp/dst".to_string(),
-                CopySourceKind::File,
-                CopyOptions::default().no_overwrite(),
-            )
-            .await
-            .expect_err("overwrite=false must be refused");
+        let (error, reached) = refusal_without_a_request(|rest_box| async move {
+            let archive: BoxByteStream = Box::pin(futures::stream::empty());
+            rest_box
+                .copy_in_stream(
+                    archive,
+                    "/tmp/dst".to_string(),
+                    CopySourceKind::File,
+                    CopyOptions::default().no_overwrite(),
+                )
+                .await
+                .expect_err("overwrite=false must be refused")
+        })
+        .await;
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
         assert!(
-            !served.load(std::sync::atomic::Ordering::SeqCst),
+            !reached,
             "the refusal must happen before any request is sent"
         );
-        server.abort();
+    }
+
+    // ── The streamed pair through the public facade ───────────────
+    //
+    // `LiteBox` is what every caller holds; over REST it forwards to the
+    // `RestBox` methods above. These complete an upload — nothing else here
+    // does — and sever a download, so the success arm and the stream's error
+    // arm both run against a real socket.
+
+    /// A `LiteBox` over `rest_box_for`, wired the way `RestRuntime` wires one:
+    /// the same `RestBox` behind all three backends.
+    fn litebox_for(port: u16, box_id: &str) -> crate::LiteBox {
+        let rest_box = Arc::new(rest_box_for(port, box_id));
+        let box_backend: Arc<dyn BoxBackend> = rest_box.clone();
+        let network_backend: Arc<dyn BoxNetworkBackend> = rest_box.clone();
+        let snapshot_backend: Arc<dyn SnapshotBackend> = rest_box;
+        crate::LiteBox::new(box_backend, network_backend, snapshot_backend)
+    }
+
+    fn stream_of(chunks: Vec<Vec<u8>>) -> BoxByteStream {
+        Box::pin(futures::stream::iter(chunks.into_iter().map(Ok)))
+    }
+
+    /// Accept `requests` uploads, decoding each chunked body and answering
+    /// 204; hands back `(request line, body)` per upload.
+    ///
+    /// `reqwest::Body::wrap_stream` carries no length, so hyper frames the
+    /// body chunked — `serve_refusal_envelope`'s `Content-Length` drain would
+    /// read nothing here.
+    async fn serve_upload_sink(
+        requests: usize,
+    ) -> (u16, tokio::task::JoinHandle<Vec<(String, Vec<u8>)>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            for _ in 0..requests {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(socket);
+                let mut request_line = String::new();
+                reader.read_line(&mut request_line).await.unwrap();
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).await.unwrap();
+                    if header == "\r\n" {
+                        break;
+                    }
+                }
+                let body = read_chunked_body(&mut reader).await;
+                let mut socket = reader.into_inner();
+                socket
+                    .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+                let _ = socket.shutdown().await;
+                seen.push((request_line.trim_end().to_owned(), body));
+            }
+            seen
+        });
+        (port, server)
+    }
+
+    /// Hex size, CRLF, data, CRLF — until the zero-size chunk and its
+    /// terminating CRLF.
+    async fn read_chunked_body(reader: &mut BufReader<TcpStream>) -> Vec<u8> {
+        let mut body = Vec::new();
+        loop {
+            let mut size_line = String::new();
+            reader.read_line(&mut size_line).await.unwrap();
+            let size = usize::from_str_radix(size_line.trim(), 16).unwrap();
+            if size == 0 {
+                let mut terminator = String::new();
+                reader.read_line(&mut terminator).await.unwrap();
+                return body;
+            }
+            let mut chunk = vec![0u8; size + 2];
+            reader.read_exact(&mut chunk).await.unwrap();
+            body.extend_from_slice(&chunk[..size]);
+        }
+    }
+
+    /// The archive must arrive whole; the shape hint rides the query when the
+    /// caller knows it and stays off it when they do not — the server then
+    /// peeks, rather than being told a shape nobody vouched for.
+    #[tokio::test]
+    async fn copy_in_stream_puts_the_archive_upstream_with_the_shape_hint_and_reports_success() {
+        let (port, server) = serve_upload_sink(2).await;
+        let litebox = litebox_for(port, "box1");
+
+        litebox
+            .copy_in_stream(
+                stream_of(vec![b"head".to_vec(), b"tail".to_vec()]),
+                "/app",
+                CopySourceKind::Dir,
+                CopyOptions::default(),
+            )
+            .await
+            .expect("a hinted upload");
+        litebox
+            .copy_in_stream(
+                stream_of(vec![b"blob".to_vec()]),
+                "/app",
+                CopySourceKind::Unknown,
+                CopyOptions::default(),
+            )
+            .await
+            .expect("an upload without a hint");
+
+        let seen = server.await.unwrap();
+        assert_eq!(
+            seen[0].0,
+            "PUT /v1/boxes/box1/files?path=%2Fapp&source_is_dir=true HTTP/1.1"
+        );
+        assert_eq!(seen[0].1, b"headtail");
+        assert_eq!(
+            seen[1].0, "PUT /v1/boxes/box1/files?path=%2Fapp HTTP/1.1",
+            "an unknown shape is omitted, not guessed"
+        );
+        assert_eq!(seen[1].1, b"blob");
+    }
+
+    /// A server that promises more than it sends must reach the caller as the
+    /// transport fault, through the stream — a clean end would hand them a
+    /// truncated archive that extracts without complaint.
+    #[tokio::test]
+    async fn copy_out_stream_severs_with_the_transport_fault_when_the_server_hangs_up() {
+        let (port, server) = serve_severed_archive(Some(false)).await;
+
+        let (mut stream, kind) = litebox_for(port, "box1")
+            .copy_out_stream("/tmp/archive", CopyOptions::default())
+            .await
+            .expect("the headers arrived");
+
+        assert_eq!(kind, CopySourceKind::File);
+        let mut last = None;
+        while let Some(item) = stream.next().await {
+            last = Some(item);
+        }
+        server.await.unwrap();
+        let error = last
+            .expect("the stream yielded something")
+            .expect_err("a severed body must end in an error, not an EOF");
+        assert!(
+            error.to_string().contains("response decode failed"),
+            "the transport classification must survive into the stream: {error}"
+        );
     }
 
     // ── Options this backend cannot deliver ───────────────────────
@@ -2872,12 +3002,13 @@ mod tests {
             CopyOptions::default().follow_symlinks(true),
         )] {
             let (error, reached) = refusal_without_a_request(|rest_box| async move {
-                // Not `expect_err`: the Ok half carries a `BoxByteStream`,
-                // which has no `Debug`.
-                match rest_box.copy_out_stream("/src".to_string(), opts).await {
-                    Ok(_) => panic!("{label} must be refused"),
-                    Err(e) => e,
-                }
+                // `map(|_| ())` because the Ok half carries a `BoxByteStream`,
+                // which has no `Debug` for `expect_err` to print.
+                rest_box
+                    .copy_out_stream("/src".to_string(), opts)
+                    .await
+                    .map(|_| ())
+                    .expect_err(&format!("{label} must be refused"))
             })
             .await;
 
@@ -2926,13 +3057,11 @@ mod tests {
         assert!(reached, "copy_out must not refuse include_parent=false");
 
         let (error, reached) = refusal_without_a_request(|rest_box| async move {
-            match rest_box
+            rest_box
                 .copy_out_stream("/src".to_string(), flattened)
                 .await
-            {
-                Ok(_) => panic!("the stub server answers nothing"),
-                Err(e) => e,
-            }
+                .map(|_| ())
+                .expect_err("the stub server answers nothing")
         })
         .await;
         assert!(!matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
