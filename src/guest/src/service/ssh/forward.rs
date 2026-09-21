@@ -9,8 +9,9 @@ use russh::{Channel, ChannelOpenFailure};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{oneshot, Semaphore};
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::{debug, warn};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -20,16 +21,14 @@ struct ForwardKey {
 }
 
 struct ReverseListenerEntry {
-    identity: Arc<()>,
-    cancel: oneshot::Sender<()>,
-    stopped: oneshot::Receiver<()>,
+    tasks: Arc<super::TaskGroup>,
 }
 
 /// Shared registration state lets a listener remove itself after an accept
 /// failure without awaiting or dropping its own task handle.
 #[derive(Clone, Default)]
 struct ReverseListenerRegistry {
-    entries: Arc<Mutex<HashMap<ForwardKey, ReverseListenerEntry>>>,
+    entries: Arc<Mutex<HashMap<ForwardKey, Arc<ReverseListenerEntry>>>>,
 }
 
 impl ReverseListenerRegistry {
@@ -37,29 +36,24 @@ impl ReverseListenerRegistry {
         &self,
         key: ForwardKey,
         max_listeners: usize,
+        tasks: &super::TaskGroup,
     ) -> Option<ReverseListenerRegistration> {
         let mut entries = self.lock();
         if entries.len() >= max_listeners || entries.contains_key(&key) {
             return None;
         }
 
-        let identity = Arc::new(());
-        let (cancel_tx, cancel_rx) = oneshot::channel();
-        let (stopped_tx, stopped_rx) = oneshot::channel();
-        entries.insert(
-            key.clone(),
-            ReverseListenerEntry {
-                identity: identity.clone(),
-                cancel: cancel_tx,
-                stopped: stopped_rx,
-            },
-        );
+        let entry = Arc::new(ReverseListenerEntry {
+            tasks: tasks.child(),
+        });
+        // Count the listener before publishing it, even before its task starts.
+        let lifetime = entry.tasks.token();
+        entries.insert(key.clone(), entry.clone());
         Some(ReverseListenerRegistration {
             registry: self.clone(),
             key,
-            identity,
-            cancel: cancel_rx,
-            stopped: Some(stopped_tx),
+            entry,
+            _lifetime: lifetime,
         })
     }
 
@@ -69,10 +63,8 @@ impl ReverseListenerRegistry {
             return false;
         };
 
-        let _ = entry.cancel.send(());
-        // Closing this receiver also counts as completion: it means the
-        // registration guard was dropped while its listener task unwound.
-        let _ = entry.stopped.await;
+        entry.tasks.cancel();
+        entry.tasks.wait().await;
         true
     }
 
@@ -83,7 +75,7 @@ impl ReverseListenerRegistry {
             .map(|(_, entry)| entry)
             .collect::<Vec<_>>();
         for entry in entries {
-            let _ = entry.cancel.send(());
+            entry.tasks.cancel();
         }
     }
 
@@ -91,7 +83,7 @@ impl ReverseListenerRegistry {
         self.lock().len()
     }
 
-    fn lock(&self) -> MutexGuard<'_, HashMap<ForwardKey, ReverseListenerEntry>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<ForwardKey, Arc<ReverseListenerEntry>>> {
         self.entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -101,14 +93,13 @@ impl ReverseListenerRegistry {
 struct ReverseListenerRegistration {
     registry: ReverseListenerRegistry,
     key: ForwardKey,
-    identity: Arc<()>,
-    cancel: oneshot::Receiver<()>,
-    stopped: Option<oneshot::Sender<()>>,
+    entry: Arc<ReverseListenerEntry>,
+    _lifetime: TaskTrackerToken,
 }
 
 impl ReverseListenerRegistration {
-    async fn cancelled(&mut self) {
-        let _ = (&mut self.cancel).await;
+    async fn cancelled(&self) {
+        self.entry.tasks.cancelled().await;
     }
 }
 
@@ -117,14 +108,9 @@ impl Drop for ReverseListenerRegistration {
         let mut entries = self.registry.lock();
         let owns_entry = entries
             .get(&self.key)
-            .is_some_and(|entry| Arc::ptr_eq(&entry.identity, &self.identity));
+            .is_some_and(|entry| Arc::ptr_eq(entry, &self.entry));
         if owns_entry {
             entries.remove(&self.key);
-        }
-        drop(entries);
-
-        if let Some(stopped) = self.stopped.take() {
-            let _ = stopped.send(());
         }
     }
 }
@@ -230,9 +216,9 @@ impl ForwardingManager {
             address: address.clone(),
             port: bound_port,
         };
-        let Some(registration) = self
-            .reverse_listeners
-            .register(key, MAX_REMOTE_FORWARD_LISTENERS)
+        let Some(registration) =
+            self.reverse_listeners
+                .register(key, MAX_REMOTE_FORWARD_LISTENERS, &self.tasks)
         else {
             return false;
         };
@@ -248,7 +234,7 @@ impl ForwardingManager {
         connected_address: String,
         connected_port: u16,
         session_handle: SessionHandle,
-        mut registration: ReverseListenerRegistration,
+        registration: ReverseListenerRegistration,
     ) {
         let tasks = self.tasks.clone();
         let permits = self.connection_permits.clone();
@@ -392,6 +378,138 @@ async fn finish_reverse_listener(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn listener_cancellation_is_isolated_until_connection_cancel() {
+        let tasks = super::super::TaskGroup::default();
+        let registry = ReverseListenerRegistry::default();
+        let key = ForwardKey {
+            address: "127.0.0.1".into(),
+            port: 32001,
+        };
+        let first = registry.register(key.clone(), 2, &tasks).unwrap();
+        let sibling = registry
+            .register(
+                ForwardKey {
+                    address: "127.0.0.1".into(),
+                    port: 32002,
+                },
+                2,
+                &tasks,
+            )
+            .unwrap();
+        let (finish_tx, finish_rx) = oneshot::channel();
+        let relay = tasks.spawn_tracked(|cancel| async move {
+            finish_rx.await.unwrap();
+            assert!(!cancel.is_cancelled());
+        });
+        let cancel = registry.cancel(&key);
+        tokio::pin!(cancel);
+        assert!(futures::poll!(&mut cancel).is_pending());
+        first.cancelled().await;
+        assert!(futures::poll!(std::pin::pin!(sibling.cancelled())).is_pending());
+        drop(first);
+        assert!(cancel.await);
+        finish_tx.send(()).unwrap();
+        relay.await.unwrap();
+        tasks.cancel();
+        sibling.cancelled().await;
+        drop(sibling);
+        tokio::time::timeout(std::time::Duration::from_secs(1), tasks.wait())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn abandoned_cancel_waiter_cannot_remove_replacement_or_leak_child() {
+        let tasks = super::super::TaskGroup::default();
+        let registry = ReverseListenerRegistry::default();
+        let key = ForwardKey {
+            address: "127.0.0.1".into(),
+            port: 32001,
+        };
+        let old = registry.register(key.clone(), 1, &tasks).unwrap();
+        {
+            let cancel = registry.cancel(&key);
+            tokio::pin!(cancel);
+            assert!(futures::poll!(&mut cancel).is_pending());
+            old.cancelled().await;
+        }
+        let replacement = registry.register(key.clone(), 1, &tasks).unwrap();
+        drop(old);
+        assert_eq!(registry.len(), 1);
+        assert!(futures::poll!(std::pin::pin!(replacement.cancelled())).is_pending());
+        registry.cancel_all();
+        replacement.cancelled().await;
+        let wait = tasks.wait();
+        tokio::pin!(wait);
+        assert!(futures::poll!(&mut wait).is_pending());
+        drop(replacement);
+        tokio::time::timeout(std::time::Duration::from_secs(1), wait)
+            .await
+            .unwrap();
+        assert_eq!(registry.len(), 0);
+        assert!(!registry.cancel(&key).await);
+    }
+
+    #[tokio::test]
+    async fn registration_release_after_abort_or_panic_completes_cancellation() {
+        for abort_before_start in [true, false] {
+            let tasks = super::super::TaskGroup::default();
+            let registry = ReverseListenerRegistry::default();
+            let key = ForwardKey {
+                address: "127.0.0.1".into(),
+                port: 32001,
+            };
+            let registration = registry.register(key.clone(), 1, &tasks).unwrap();
+            let cancel = registry.cancel(&key);
+            tokio::pin!(cancel);
+            assert!(futures::poll!(&mut cancel).is_pending());
+            let listener = tasks.spawn_tracked(|_| async move {
+                let _registration = registration;
+                panic!("listener failed");
+            });
+            if abort_before_start {
+                listener.abort();
+            }
+            let error = listener.await.unwrap_err();
+            assert_eq!(error.is_cancelled(), abort_before_start);
+            assert_eq!(error.is_panic(), !abort_before_start);
+            assert!(cancel.await);
+            assert_eq!(registry.len(), 0);
+            tokio::time::timeout(std::time::Duration::from_secs(1), tasks.wait())
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn rejected_registrations_and_natural_exit_leave_no_child_waiters() {
+        let tasks = super::super::TaskGroup::default();
+        let registry = ReverseListenerRegistry::default();
+        let key = ForwardKey {
+            address: "127.0.0.1".into(),
+            port: 32001,
+        };
+        let registration = registry.register(key.clone(), 2, &tasks).unwrap();
+        assert!(registry.register(key.clone(), 2, &tasks).is_none());
+        assert!(registry
+            .register(
+                ForwardKey {
+                    address: "127.0.0.1".into(),
+                    port: 32002
+                },
+                1,
+                &tasks
+            )
+            .is_none());
+        drop(registration);
+        assert_eq!(registry.len(), 0);
+        tokio::time::timeout(std::time::Duration::from_secs(1), tasks.wait())
+            .await
+            .unwrap();
+    }
 
     #[test]
     fn direct_targets_are_bounded_and_require_a_real_port() {
@@ -417,6 +535,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_waits_for_the_listener_socket_and_pending_opens() {
+        let tasks = super::super::TaskGroup::default();
         let registry = ReverseListenerRegistry::default();
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let bound_address = listener.local_addr().unwrap();
@@ -424,7 +543,7 @@ mod tests {
             address: "127.0.0.1".into(),
             port: bound_address.port(),
         };
-        let registration = registry.register(key.clone(), 1).unwrap();
+        let registration = registry.register(key.clone(), 1, &tasks).unwrap();
         let (finish_tx, finish_rx) = oneshot::channel::<()>();
         let mut pending_opens = JoinSet::new();
         pending_opens.spawn(async move {
@@ -473,12 +592,13 @@ mod tests {
 
     #[tokio::test]
     async fn spontaneous_listener_exit_removes_only_its_registration() {
+        let tasks = super::super::TaskGroup::default();
         let registry = ReverseListenerRegistry::default();
         let key = ForwardKey {
             address: "127.0.0.1".into(),
             port: 32_002,
         };
-        let registration = registry.register(key.clone(), 1).unwrap();
+        let registration = registry.register(key.clone(), 1, &tasks).unwrap();
         assert_eq!(registry.len(), 1);
 
         drop(registration);
@@ -487,16 +607,17 @@ mod tests {
         assert!(!registry.cancel(&key).await);
     }
 
-    #[test]
-    fn an_old_listener_exit_cannot_remove_a_replacement_registration() {
+    #[tokio::test]
+    async fn an_old_listener_exit_cannot_remove_a_replacement_registration() {
+        let tasks = super::super::TaskGroup::default();
         let registry = ReverseListenerRegistry::default();
         let key = ForwardKey {
             address: "127.0.0.1".into(),
             port: 32_003,
         };
-        let old_registration = registry.register(key.clone(), 1).unwrap();
+        let old_registration = registry.register(key.clone(), 1, &tasks).unwrap();
         registry.cancel_all();
-        let replacement = registry.register(key, 1).unwrap();
+        let replacement = registry.register(key, 1, &tasks).unwrap();
 
         drop(old_registration);
         assert_eq!(registry.len(), 1);

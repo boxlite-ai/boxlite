@@ -22,13 +22,15 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UnixListener, UnixStream};
-use tokio::sync::{mpsc, oneshot, Semaphore};
+use tokio::sync::{mpsc, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::{debug, warn};
 
 pub(crate) const INTERNAL_REVERSE_STREAMLOCAL_ARG: &str = "--boxlite-internal-reverse-streamlocal";
@@ -317,40 +319,38 @@ impl Drop for BoundSocket {
 
 #[derive(Clone, Default)]
 struct ListenerRegistry {
-    entries: Arc<Mutex<HashMap<String, ListenerEntry>>>,
+    entries: Arc<Mutex<HashMap<String, Arc<ListenerEntry>>>>,
 }
 
 struct ListenerEntry {
-    identity: Arc<()>,
-    cancel: oneshot::Sender<()>,
-    stopped: oneshot::Receiver<bool>,
+    tasks: Arc<super::TaskGroup>,
+    stopped_cleanly: AtomicBool,
 }
 
 impl ListenerRegistry {
-    fn register(&self, socket_path: String, limit: usize) -> Option<ListenerRegistration> {
+    fn register(
+        &self,
+        socket_path: String,
+        limit: usize,
+        tasks: &super::TaskGroup,
+    ) -> Option<ListenerRegistration> {
         let mut entries = self.lock();
         if entries.len() >= limit || entries.contains_key(&socket_path) {
             return None;
         }
 
-        let identity = Arc::new(());
-        let (cancel_tx, cancel_rx) = oneshot::channel();
-        let (stopped_tx, stopped_rx) = oneshot::channel();
-        entries.insert(
-            socket_path.clone(),
-            ListenerEntry {
-                identity: identity.clone(),
-                cancel: cancel_tx,
-                stopped: stopped_rx,
-            },
-        );
+        let entry = Arc::new(ListenerEntry {
+            tasks: tasks.child(),
+            stopped_cleanly: AtomicBool::new(false),
+        });
+        // Count the listener before publishing it, even before its task starts.
+        let lifetime = entry.tasks.token();
+        entries.insert(socket_path.clone(), entry.clone());
         Some(ListenerRegistration {
             registry: self.clone(),
             socket_path,
-            identity,
-            cancel: cancel_rx,
-            stopped: Some(stopped_tx),
-            stopped_cleanly: false,
+            entry,
+            _lifetime: lifetime,
         })
     }
 
@@ -359,8 +359,9 @@ impl ListenerRegistry {
         let Some(entry) = entry else {
             return false;
         };
-        let _ = entry.cancel.send(());
-        entry.stopped.await.unwrap_or(false)
+        entry.tasks.cancel();
+        entry.tasks.wait().await;
+        entry.stopped_cleanly.load(Ordering::Acquire)
     }
 
     fn cancel_all(&self) {
@@ -370,7 +371,7 @@ impl ListenerRegistry {
             .map(|(_, entry)| entry)
             .collect::<Vec<_>>();
         for entry in entries {
-            let _ = entry.cancel.send(());
+            entry.tasks.cancel();
         }
     }
 
@@ -378,7 +379,7 @@ impl ListenerRegistry {
         self.lock().len()
     }
 
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, ListenerEntry>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Arc<ListenerEntry>>> {
         self.entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -388,19 +389,17 @@ impl ListenerRegistry {
 struct ListenerRegistration {
     registry: ListenerRegistry,
     socket_path: String,
-    identity: Arc<()>,
-    cancel: oneshot::Receiver<()>,
-    stopped: Option<oneshot::Sender<bool>>,
-    stopped_cleanly: bool,
+    entry: Arc<ListenerEntry>,
+    _lifetime: TaskTrackerToken,
 }
 
 impl ListenerRegistration {
-    async fn cancelled(&mut self) {
-        let _ = (&mut self.cancel).await;
+    async fn cancelled(&self) {
+        self.entry.tasks.cancelled().await;
     }
 
     fn finish_cleanly(&mut self) {
-        self.stopped_cleanly = true;
+        self.entry.stopped_cleanly.store(true, Ordering::Release);
     }
 }
 
@@ -409,14 +408,9 @@ impl Drop for ListenerRegistration {
         let mut entries = self.registry.lock();
         let owns_entry = entries
             .get(&self.socket_path)
-            .is_some_and(|entry| Arc::ptr_eq(&entry.identity, &self.identity));
+            .is_some_and(|entry| Arc::ptr_eq(entry, &self.entry));
         if owns_entry {
             entries.remove(&self.socket_path);
-        }
-        drop(entries);
-
-        if let Some(stopped) = self.stopped.take() {
-            let _ = stopped.send(self.stopped_cleanly);
         }
     }
 }
@@ -450,10 +444,11 @@ impl ReverseStreamlocalManager {
         {
             return false;
         }
-        let Some(registration) = self
-            .listeners
-            .register(socket_path.to_string(), MAX_REMOTE_FORWARD_LISTENERS)
-        else {
+        let Some(registration) = self.listeners.register(
+            socket_path.to_string(),
+            MAX_REMOTE_FORWARD_LISTENERS,
+            &self.tasks,
+        ) else {
             return false;
         };
 
@@ -696,14 +691,19 @@ impl RunningHelper {
     }
 
     async fn request_stop(&mut self) -> bool {
-        self.stdin
+        let result = self
+            .stdin
             .send(ExecStdin {
                 execution_id: self.execution_id.clone(),
                 data: Vec::new(),
                 close: true,
             })
-            .await
-            .is_ok()
+            .await;
+        if let Err(error) = &result {
+            warn!(execution_id = %self.execution_id, %error,
+                "reverse streamlocal stop request failed; socket pathname may remain");
+        }
+        result.is_ok()
     }
 
     async fn wait_stopped(&mut self) -> bool {
@@ -718,13 +718,45 @@ impl RunningHelper {
         {
             Ok(_) => true,
             Err(error) => {
-                debug!(%error, "reverse streamlocal helper stop acknowledgement failed");
+                warn!(execution_id = %self.execution_id, %error,
+                    "reverse streamlocal stop acknowledgement failed; socket pathname may remain");
                 false
             }
         }
     }
 
-    fn spawn_cleanup(self, force_termination: bool) {
+    async fn stop_listener(&mut self) -> bool {
+        let tasks = self.tasks.clone();
+        let execution_id = self.execution_id.clone();
+        // Keep the same future alive when cancellation shortens the deadline:
+        // read_marker may already have consumed part of STOPPED.
+        let stop = async {
+            if !self.request_stop().await {
+                return false;
+            }
+            self.wait_stopped().await
+        };
+        tokio::pin!(stop);
+        let deadline = tokio::time::Instant::now() + CONTROL_CALL_TIMEOUT;
+        let result = tokio::select! {
+            biased;
+            _ = tasks.cancelled() => {
+                let deadline = deadline.min(tokio::time::Instant::now() + PROCESS_TERMINATION_GRACE);
+                tokio::time::timeout_at(deadline, &mut stop).await
+            }
+            result = tokio::time::timeout_at(deadline, &mut stop) => result,
+        };
+        match result {
+            Ok(acknowledged) => acknowledged,
+            Err(error) => {
+                warn!(%execution_id, %error,
+                    "reverse streamlocal stop confirmation timed out; socket pathname may remain");
+                false
+            }
+        }
+    }
+
+    fn spawn_cleanup(self, mode: HelperCleanup) {
         spawn_execution_cleanup(
             self.tasks,
             self.server,
@@ -732,7 +764,7 @@ impl RunningHelper {
             self.execution_id,
             Some(self.output),
             Some(self.stdin_task),
-            force_termination,
+            mode,
         );
     }
 }
@@ -875,22 +907,31 @@ fn spawn_listener(
         // streams independently and may continue draining.
         drop(ingress);
         let was_cancelled = matches!(end, End::Cancelled);
-        let stop_acknowledged = if matches!(end, End::HelperEnded) {
-            false
-        } else {
-            let requested = helper.request_stop().await;
-            requested
-                && tokio::time::timeout(CONTROL_CALL_TIMEOUT, helper.wait_stopped())
-                    .await
-                    .unwrap_or(false)
+        let stop = async move {
+            let stop_acknowledged = if matches!(end, End::HelperEnded) {
+                false
+            } else {
+                helper.stop_listener().await
+            };
+            if !stop_acknowledged {
+                warn!(execution_id = %helper.execution_id, %socket_path,
+                    "reverse streamlocal stop unconfirmed; socket pathname may remain");
+            }
+            helper.spawn_cleanup(if stop_acknowledged {
+                HelperCleanup::Drain
+            } else {
+                HelperCleanup::Kill
+            });
+            stop_acknowledged
         };
-
-        finish_pending_opens(&mut pending_opens).await;
+        let (stop_acknowledged, ()) = tokio::join!(
+            stop,
+            finish_or_cancel_pending_opens(&mut pending_opens, &cancel),
+        );
         if was_cancelled && stop_acknowledged {
             registration.finish_cleanly();
         }
         drop(registration);
-        helper.spawn_cleanup(!stop_acknowledged && !matches!(end, End::HelperEnded));
     });
 }
 
@@ -928,6 +969,20 @@ async fn relay(
     }
     let _ = channel.shutdown().await;
     let _ = stream.shutdown().await;
+}
+
+async fn finish_or_cancel_pending_opens(
+    pending_opens: &mut JoinSet<()>,
+    cancel: &tokio_util::sync::CancellationToken,
+) {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            pending_opens.abort_all();
+            finish_pending_opens(pending_opens).await;
+        }
+        _ = finish_pending_opens(pending_opens) => {}
+    }
 }
 
 async fn finish_pending_opens(pending_opens: &mut JoinSet<()>) {
@@ -1035,8 +1090,14 @@ fn spawn_failed_helper_cleanup(
         execution_id,
         output,
         stdin_task,
-        true,
+        HelperCleanup::FailedStart,
     );
+}
+
+enum HelperCleanup {
+    Drain,
+    Kill,
+    FailedStart,
 }
 
 fn spawn_execution_cleanup(
@@ -1046,9 +1107,9 @@ fn spawn_execution_cleanup(
     execution_id: String,
     output: Option<mpsc::Receiver<Result<ExecOutput, tonic::Status>>>,
     stdin_task: Option<JoinHandle<()>>,
-    force_termination: bool,
+    mode: HelperCleanup,
 ) {
-    tasks.clone().spawn_tracked(move |_| async move {
+    tasks.clone().spawn_tracked(move |cancel| async move {
         let output_task = output.map(|mut output| {
             tasks.spawn_tracked(move |_| async move {
                 while let Some(message) = output.recv().await {
@@ -1066,52 +1127,40 @@ fn spawn_execution_cleanup(
         });
 
         let state = registry.get(&execution_id).await;
-        if force_termination {
-            // A failed start may still have a working stdin control stream.
-            // Give that graceful stop a chance to unlink the socket before
-            // escalating to signals that cannot run the helper's destructor.
-            let exited_gracefully = if let Some(state) = &state {
-                tokio::time::timeout(PROCESS_TERMINATION_GRACE, state.wait_process())
-                    .await
-                    .is_ok()
-            } else {
-                true
-            };
-            if !exited_gracefully {
-                let _ = tokio::time::timeout(
-                    CONTROL_CALL_TIMEOUT,
-                    server.kill_execution(
-                        &execution_id,
-                        15,
-                        super::bridge::SIGNAL_TARGETS_PROCESS_GROUP,
-                    ),
-                )
-                .await;
-                if let Some(state) = &state {
-                    if tokio::time::timeout(PROCESS_TERMINATION_GRACE, state.wait_process())
-                        .await
-                        .is_err()
-                    {
+        if let Some(state) = &state {
+            let exited = match mode {
+                HelperCleanup::Drain => tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => false,
+                    _ = state.wait_process() => true,
+                },
+                HelperCleanup::Kill => false,
+                // Startup failures may still unlink through stdin EOF. Service
+                // cancellation must not add another grace after confirmation.
+                HelperCleanup::FailedStart => tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => false,
+                    exited = async {
+                        if tokio::time::timeout(PROCESS_TERMINATION_GRACE, state.wait_process()).await.is_ok() {
+                            return true;
+                        }
                         let _ = tokio::time::timeout(
                             CONTROL_CALL_TIMEOUT,
-                            server.kill_execution(
-                                &execution_id,
-                                9,
-                                super::bridge::SIGNAL_TARGETS_PROCESS_GROUP,
-                            ),
-                        )
-                        .await;
-                    }
-                } else {
-                    let _ = tokio::time::timeout(
-                        CONTROL_CALL_TIMEOUT,
-                        server.kill_execution(
-                            &execution_id,
-                            9,
-                            super::bridge::SIGNAL_TARGETS_PROCESS_GROUP,
-                        ),
-                    )
-                    .await;
+                            server.kill_execution(&execution_id, 15, super::bridge::SIGNAL_TARGETS_PROCESS_GROUP),
+                        ).await;
+                        tokio::time::timeout(PROCESS_TERMINATION_GRACE, state.wait_process()).await.is_ok()
+                    } => exited,
+                },
+            };
+            if !exited {
+                match tokio::time::timeout(
+                    CONTROL_CALL_TIMEOUT,
+                    server.kill_execution(&execution_id, 9, super::bridge::SIGNAL_TARGETS_PROCESS_GROUP),
+                ).await {
+                    Ok(Ok(true)) => {},
+                    Ok(Ok(false)) => debug!(%execution_id, "reverse streamlocal helper KILL rejected or process already exited"),
+                    Ok(Err(error)) => warn!(%execution_id, %error, "reverse streamlocal helper KILL failed"),
+                    Err(error) => warn!(%execution_id, %error, "reverse streamlocal helper KILL timed out"),
                 }
             }
         }
@@ -1133,6 +1182,7 @@ fn spawn_execution_cleanup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::oneshot;
 
     const TOKEN: &str = "9e3d4f4f-e9e5-4896-a42c-9fe5f53244af";
 
@@ -1225,6 +1275,111 @@ mod tests {
 
         let mode = std::fs::metadata(&socket_path).expect("stat").mode();
         assert_eq!(mode & 0o777, 0o600, "actual mode {:o}", mode & 0o777);
+    }
+
+    #[tokio::test]
+    async fn listener_cancellation_is_isolated_until_connection_cancel() {
+        let tasks = super::super::TaskGroup::default();
+        let registry = ListenerRegistry::default();
+        let key = "/run/one.sock".to_string();
+        let first = registry.register(key.clone(), 2, &tasks).unwrap();
+        let sibling = registry
+            .register("/run/two.sock".to_string(), 2, &tasks)
+            .unwrap();
+        let (finish_tx, finish_rx) = oneshot::channel();
+        let relay = tasks.spawn_tracked(|cancel| async move {
+            finish_rx.await.unwrap();
+            assert!(!cancel.is_cancelled());
+        });
+        let cancel = registry.cancel(&key);
+        tokio::pin!(cancel);
+        assert!(futures::poll!(&mut cancel).is_pending());
+        first.cancelled().await;
+        assert!(futures::poll!(std::pin::pin!(sibling.cancelled())).is_pending());
+        drop(first);
+        assert!(!cancel.await);
+        finish_tx.send(()).unwrap();
+        relay.await.unwrap();
+        tasks.cancel();
+        sibling.cancelled().await;
+        drop(sibling);
+        tokio::time::timeout(std::time::Duration::from_secs(1), tasks.wait())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn abandoned_cancel_waiter_cannot_remove_replacement_or_leak_child() {
+        let tasks = super::super::TaskGroup::default();
+        let registry = ListenerRegistry::default();
+        let key = "/run/one.sock".to_string();
+        let old = registry.register(key.clone(), 1, &tasks).unwrap();
+        {
+            let cancel = registry.cancel(&key);
+            tokio::pin!(cancel);
+            assert!(futures::poll!(&mut cancel).is_pending());
+            old.cancelled().await;
+        }
+        let replacement = registry.register(key.clone(), 1, &tasks).unwrap();
+        drop(old);
+        assert_eq!(registry.len(), 1);
+        assert!(futures::poll!(std::pin::pin!(replacement.cancelled())).is_pending());
+        registry.cancel_all();
+        replacement.cancelled().await;
+        let wait = tasks.wait();
+        tokio::pin!(wait);
+        assert!(futures::poll!(&mut wait).is_pending());
+        drop(replacement);
+        tokio::time::timeout(std::time::Duration::from_secs(1), wait)
+            .await
+            .unwrap();
+        assert_eq!(registry.len(), 0);
+        assert!(!registry.cancel(&key).await);
+    }
+
+    #[tokio::test]
+    async fn registration_release_after_abort_or_panic_completes_cancellation() {
+        for abort_before_start in [true, false] {
+            let tasks = super::super::TaskGroup::default();
+            let registry = ListenerRegistry::default();
+            let key = "/run/one.sock".to_string();
+            let registration = registry.register(key.clone(), 1, &tasks).unwrap();
+            let cancel = registry.cancel(&key);
+            tokio::pin!(cancel);
+            assert!(futures::poll!(&mut cancel).is_pending());
+            let listener = tasks.spawn_tracked(|_| async move {
+                let _registration = registration;
+                panic!("listener failed");
+            });
+            if abort_before_start {
+                listener.abort();
+            }
+            let error = listener.await.unwrap_err();
+            assert_eq!(error.is_cancelled(), abort_before_start);
+            assert_eq!(error.is_panic(), !abort_before_start);
+            assert!(!cancel.await);
+            assert_eq!(registry.len(), 0);
+            tokio::time::timeout(std::time::Duration::from_secs(1), tasks.wait())
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn rejected_registrations_and_natural_exit_leave_no_child_waiters() {
+        let tasks = super::super::TaskGroup::default();
+        let registry = ListenerRegistry::default();
+        let key = "/run/one.sock".to_string();
+        let registration = registry.register(key.clone(), 2, &tasks).unwrap();
+        assert!(registry.register(key.clone(), 2, &tasks).is_none());
+        assert!(registry
+            .register("/run/two.sock".to_string(), 1, &tasks)
+            .is_none());
+        drop(registration);
+        assert_eq!(registry.len(), 0);
+        tokio::time::timeout(std::time::Duration::from_secs(1), tasks.wait())
+            .await
+            .unwrap();
     }
 
     #[test]
@@ -1338,22 +1493,36 @@ mod tests {
             .is_err());
     }
 
-    #[test]
-    fn duplicate_and_listener_limit_registrations_are_rejected() {
+    #[tokio::test]
+    async fn duplicate_and_listener_limit_registrations_are_rejected() {
+        let tasks = super::super::TaskGroup::default();
         let registry = ListenerRegistry::default();
-        let first = registry.register("/run/one.sock".into(), 2).unwrap();
-        assert!(registry.register("/run/one.sock".into(), 2).is_none());
-        let second = registry.register("/run/two.sock".into(), 2).unwrap();
-        assert!(registry.register("/run/three.sock".into(), 2).is_none());
+        let first = registry
+            .register("/run/one.sock".into(), 2, &tasks)
+            .unwrap();
+        assert!(registry
+            .register("/run/one.sock".into(), 2, &tasks)
+            .is_none());
+        let second = registry
+            .register("/run/two.sock".into(), 2, &tasks)
+            .unwrap();
+        assert!(registry
+            .register("/run/three.sock".into(), 2, &tasks)
+            .is_none());
         drop(first);
-        assert!(registry.register("/run/three.sock".into(), 2).is_some());
+        assert!(registry
+            .register("/run/three.sock".into(), 2, &tasks)
+            .is_some());
         drop(second);
     }
 
     #[tokio::test]
     async fn cancel_waits_for_pending_channel_opens() {
+        let tasks = super::super::TaskGroup::default();
         let registry = ListenerRegistry::default();
-        let mut registration = registry.register("/run/one.sock".into(), 1).unwrap();
+        let mut registration = registry
+            .register("/run/one.sock".into(), 1, &tasks)
+            .unwrap();
         let (finish_tx, finish_rx) = oneshot::channel::<()>();
         let mut pending = JoinSet::new();
         pending.spawn(async move {
@@ -1468,3 +1637,6 @@ mod tests {
         drop(connect);
     }
 }
+
+#[cfg(test)]
+mod shutdown_tests;

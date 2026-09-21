@@ -85,6 +85,18 @@ tracked and a later Configure must finish draining it before starting another
 listener. A bind failure returns `Unavailable` and leaves SSH disabled, without
 restoring the old configuration. Disable performs the same drain and is idempotent.
 
+Reverse Unix-socket listener cancellation preserves established connections and
+allows the helper to drain them for up to 30 seconds. Disconnect, Disable, and
+Configure restart instead terminate the helper: sending the stop request and
+receiving `STOPPED` share a one-second deadline. Acknowledgement triggers immediate
+SIGKILL; failure or timeout also triggers SIGKILL, without an additional TERM
+grace period. Cancellation during acknowledgement shortens its remaining deadline
+to at most one second, and cancellation during draining escalates immediately.
+Pending channel opens are cancelled and joined. Process reaping, stream cleanup,
+and execution registry release still complete before SSH stop succeeds. If the
+helper cannot confirm pathname removal, a warning records the execution ID and
+failure; the socket pathname may remain in the container.
+
 Status contains only `enabled`, the actual bound `listen_address`, `generation`,
 a comment-free `host_public_key`, and its SHA-256 `host_key_fingerprint`. Generation
 increments on each successful listener start. Disabled status has empty address
