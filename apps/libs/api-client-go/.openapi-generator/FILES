@@ -81,6 +81,7 @@ model_oidc_config.go
 model_organization.go
 model_organization_box_default_limited_network_egress.go
 model_organization_invitation.go
+model_organization_referral_code.go
 model_organization_role.go
 model_organization_suspension.go
 model_organization_unsuspension.go

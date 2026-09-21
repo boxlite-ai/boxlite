@@ -425,6 +425,39 @@ paths:
       summary: Set default region for organization
       tags:
       - organizations
+  /organizations/{organizationId}/referral-code:
+    get:
+      operationId: getOrganizationReferralCode
+      parameters:
+      - description: Organization ID
+        explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationReferralCode"
+          description: ""
+        "403":
+          description: Organization access denied or invitation unavailable
+        "503":
+          description: Invitation code generation unavailable
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get or initialize an organization invitation code
+      tags:
+      - organizations
   /organizations/{organizationId}:
     delete:
       operationId: deleteOrganization
@@ -5026,6 +5059,24 @@ components:
           type: string
       required:
       - defaultRegionId
+      type: object
+    OrganizationReferralCode:
+      example:
+        organizationId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        referralCode: 7KMNP4XZQ2
+      properties:
+        organizationId:
+          format: uuid
+          type: string
+        referralCode:
+          example: 7KMNP4XZQ2
+          maxLength: 10
+          minLength: 10
+          pattern: "^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$"
+          type: string
+      required:
+      - organizationId
+      - referralCode
       type: object
     OrganizationSuspension:
       example:
