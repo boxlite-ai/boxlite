@@ -1,38 +1,58 @@
 # Understanding guest memory
 
-A visual introduction to memory in the [planned native VMM](README.md), using
-an arm64 VM with 512 MiB RAM. The walkthrough follows one byte through guest
-and host addresses. Pointer values and physical addresses are illustrative;
-the final address-map diagrams show BoxLite's planned guest layout. A separate
-[KVM slot example](#kvm-example-guest-ranges-and-slots) uses smaller allocations
-to show guest ranges and host allocations side by side.
+A visual introduction to memory in the [planned native VMM](README.md).
+The architecture view starts with a small x86_64 KVM example; the walkthrough
+then follows one byte through an arm64 VM with 512 MiB RAM. Example addresses
+are illustrative; the final address-map diagrams show BoxLite's planned layout.
 
 ## 1. Architecture
 
-```mermaid
-flowchart TB
-  subgraph guest["VM · guest address space"]
-    program["Guest application"]
-    guest_pt["Guest page tables"]
-    guest_address["Guest physical address<br/>GPA 0x8000_1000"]
-  end
-  subgraph vmm["VMM · host process address space"]
-    worker["Device worker"]
-    host_address["Host virtual address<br/>HVA 0x1_0000_1000"]
-  end
-  subgraph host["Host · CPU translation and physical RAM"]
-    stage2["Stage-2 tables<br/>EPT or NPT on x86"]
-    host_pt["Host page tables"]
-    physical_ram["Same RAM byte<br/>HPA 0x1234_1000"]
-  end
-  program memory_1_e1@-->|"GVA 0x0040_1000"| guest_pt
-  guest_pt memory_1_e2@-->|"stage 1"| guest_address
-  guest_address memory_1_e3@-->|"guest access"| stage2
-  stage2 memory_1_e4@-->|"stage 2"| physical_ram
-  worker memory_1_e5@-->|"host pointer"| host_address
-  host_address memory_1_e6@-->|"host access"| host_pt
-  host_pt memory_1_e7@-->|"host translation"| physical_ram
+Two mapped RAM regions provide 12 KiB of guest RAM on a host with 4 KiB pages.
+Program, data and stack labels illustrate how the guest could use that RAM.
+Range endpoints below are inclusive; the host column shows virtual addresses.
+
+```text
+                  WHOLE EXAMPLE: TWO MAPPED RAM REGIONS
+
+Guest physical addresses          KVM mapping   Host virtual addresses
+                                                BoxLite-owned allocations
+
+0x0000  +---------------------+
+        | Unmapped            |
+0x0FFF  +---------------------+
+
+0x1000  +---------------------+                 +---------------------+ 0x70000000
+        | Program             |     slot 0      | Program bytes       |
+        | 4 KiB               |    <=======>    | 4 KiB allocation    |
+0x1FFF  +---------------------+                 +---------------------+ 0x70000FFF
+
+0x2000  +---------------------+                 +---------------------+ 0x90000000
+        | Data                |     slot 1      | 8 KiB allocation    |
+0x2010  | One byte: 00        |    <=======>    | Same byte: 00       | 0x90000010
+        | ...                 |                 | ...                 |
+        | Stack space         |                 |                     |
+0x3FFF  +---------------------+                 +---------------------+ 0x90001FFF
+
+0x4000  +---------------------+
+        | Remaining address   |
+        | space: unmapped     |
+        +---------------------+
 ```
+
+`<=======>` joins two address views of the **same backing bytes**.
+
+- **Slot 0** maps the 4 KiB program region. **Slot 1** maps the entire 8 KiB
+  data/stack region; a slot can cover several pages.
+- Guest byte `0x2010` is `0x10` bytes into slot 1, so its host address is
+  `0x90000000 + 0x10 = 0x90000010`. Both labels identify the same byte.
+- The guest regions are adjacent even though the host allocations are far
+  apart. Their host physical pages may also be scattered.
+
+[`MemorySlots`](../../../src/hypervisor/src/kvm/memory.rs) keeps the slot
+records outside guest RAM. Its vector index is the slot ID; `None` marks an
+unused slot. Records change only after the KVM ioctl succeeds. BoxLite keeps
+the backing allocations alive under the
+[memory lifetime contract](../../../src/hypervisor/src/vm.rs).
 
 ## 2. How it works
 
@@ -79,52 +99,6 @@ sequenceDiagram
   host_api->>guest_ram: Register GPA range [0x8000_0000, 0xA000_0000)<br/>backed by the existing host allocation
   Note over region,guest_ram: The mapping covers 512 MiB, with the upper address excluded<br/>It shares the existing pages rather than copying their contents
 ```
-
-#### KVM example: guest ranges and slots
-
-The native x86_64 KVM backend can assemble guest RAM from several host
-allocations. This illustrative example uses 4 KiB host pages and three slots
-covering 16 KiB of RAM. Range endpoints below are inclusive. The host
-addresses are illustrative virtual addresses; both columns refer to the same
-backing bytes.
-
-```text
-GUEST ADDRESS SPACE          KVM SLOT          HOST RAM ALLOCATIONS
-
-0x0000 ┌──────────────┐
-       │   Unmapped   │
-0x0FFF └──────────────┘
-
-0x1000 ┌──────────────┐                      ┌──────────────┐ 0x70000000
-       │    4 KiB     │ ◄──── slot 0 ──────► │    4 KiB     │
-0x1FFF └──────────────┘                      └──────────────┘ 0x70000FFF
-
-0x2000 ┌──────────────┐                      ┌──────────────┐ 0x80000000
-       │              │                      │              │
-       │    8 KiB     │ ◄──── slot 1 ──────► │    8 KiB     │
-       │              │                      │              │
-0x3FFF └──────────────┘                      └──────────────┘ 0x80001FFF
-
-0x4000 ┌──────────────┐
-       │   Unmapped   │
-0xFFFF └──────────────┘
-
-0x10000┌──────────────┐                      ┌──────────────┐ 0x90000000
-       │    4 KiB     │ ◄──── slot 2 ──────► │    4 KiB     │
-0x10FFF└──────────────┘                      └──────────────┘ 0x90000FFF
-
-                             slot 3
-                             unused
-```
-
-- Guest ranges can be adjacent while their host allocations are far apart.
-  Each slot describes one contiguous mapping, which may cover several pages.
-- The holes have no RAM mapping. Host physical pages backing each allocation
-  may be scattered even though its host virtual addresses are contiguous.
-- [`MemorySlots`](../../../src/hypervisor/src/kvm/memory.rs) records mappings
-  by slot ID; `None` marks an unused slot. It updates a record only after the
-  KVM ioctl succeeds. The caller retains ownership of the RAM under the
-  [memory lifetime contract](../../../src/hypervisor/src/vm.rs).
 
 ### 2.3 Translate one guest load into a physical RAM access
 
