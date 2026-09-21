@@ -9,6 +9,7 @@
 //! - [`box_test`] — Per-test fixture with helpers (`BoxTestBase`)
 //! - [`sync_point`] — Async sync points for concurrency testing
 //! - [`fault_injection`] — Fault injection framework
+//! - [`tracing_capture`] — Capture `tracing` output to assert on log-only behavior
 //!
 //! # Quick Start
 //!
@@ -23,6 +24,7 @@ pub mod config_matrix;
 pub mod fault_injection;
 pub mod home;
 pub mod sync_point;
+pub mod tracing_capture;
 
 /// Shutdown timeout for test runtimes (seconds).
 pub const TEST_SHUTDOWN_TIMEOUT: i32 = 10;

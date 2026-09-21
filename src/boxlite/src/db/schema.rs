@@ -7,7 +7,7 @@
 //! Each table has queryable columns for efficient filtering + JSON blob for full data.
 
 /// Current schema version.
-pub const SCHEMA_VERSION: i32 = 10;
+pub const SCHEMA_VERSION: i32 = 11;
 
 /// Schema version tracking table.
 pub const SCHEMA_VERSION_TABLE: &str = r#"
@@ -67,6 +67,12 @@ CREATE TABLE IF NOT EXISTS alive (
 ///
 /// Stores cached image metadata. Maps image references to their cached metadata.
 /// Queryable columns for efficient lookup + layers stored as JSON array.
+///
+/// `last_used_at` (unix seconds, added in v11) is the eviction signal for the
+/// image disk cache. It cannot be replaced by the disk file's mtime: those
+/// files are read-only backing files, so reading one never updates its mtime
+/// and an mtime-ordered eviction degrades into "oldest created first" — which
+/// evicts the widely shared base images first, exactly backwards.
 pub const IMAGE_INDEX_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS image_index (
     reference TEXT PRIMARY KEY NOT NULL,
@@ -74,7 +80,8 @@ CREATE TABLE IF NOT EXISTS image_index (
     config_digest TEXT NOT NULL,
     layers TEXT NOT NULL,
     cached_at TEXT NOT NULL,
-    complete INTEGER NOT NULL DEFAULT 0
+    complete INTEGER NOT NULL DEFAULT 0,
+    last_used_at INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_image_index_manifest_digest ON image_index(manifest_digest);

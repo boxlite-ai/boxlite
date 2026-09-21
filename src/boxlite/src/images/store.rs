@@ -15,7 +15,8 @@
 
 use crate::db::{CachedImage, Database, ImageIndexStore};
 use crate::images::manager::{ImageManifest, LayerInfo};
-use crate::images::storage::ImageStorage;
+use crate::images::storage::{ImageStorage, UnsizedBlobBudget};
+use crate::images::{index_key, parse_override};
 use crate::runtime::options::{ImageRegistry, ImageRegistryAuth, RegistryTransport};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use oci_client::Reference;
@@ -26,8 +27,64 @@ use oci_client::manifest::{
 use oci_client::secrets::RegistryAuth as OciRegistryAuth;
 use oci_spec::image::MediaType;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
+
+/// Default ceiling on the total size an image's layers may declare, checked
+/// before a single layer is fetched.
+///
+/// This is the bound that protects the volume. The per-blob check can only
+/// catch a registry that exceeds *its own* declaration; a manifest is free to
+/// declare, perfectly honestly, more than the host can hold. A runner's root
+/// volume is 100 GB with roughly 70 GB usable for the image cache, so one
+/// image is deliberately allowed only a fraction of it.
+/// Override via `BOXLITE_MAX_IMAGE_DOWNLOAD_SIZE`.
+const DEFAULT_MAX_IMAGE_DOWNLOAD_SIZE: u64 = 20 * 1024 * 1024 * 1024; // 20 GiB
+
+fn max_image_download_size() -> u64 {
+    static MAX: OnceLock<u64> = OnceLock::new();
+    *MAX.get_or_init(|| {
+        parse_override(
+            std::env::var("BOXLITE_MAX_IMAGE_DOWNLOAD_SIZE").ok(),
+            DEFAULT_MAX_IMAGE_DOWNLOAD_SIZE,
+        )
+    })
+}
+
+/// Refuse a pull whose declared layers do not fit, before fetching any of them.
+///
+/// Layers that declare no size contribute nothing to the sum — they are
+/// bounded while streaming instead, by the pull's shared
+/// [`UnsizedBlobBudget`]. So the two bounds cover the two different lies a
+/// registry can tell: describing a blob and then exceeding it, and not
+/// describing it at all.
+fn assert_declared_size_fits(layers: &[LayerInfo], image_ref: &str) -> BoxliteResult<()> {
+    let declared = layers
+        .iter()
+        .filter_map(|layer| u64::try_from(layer.size).ok())
+        .fold(0u64, u64::saturating_add);
+    let limit = max_image_download_size();
+
+    if declared > limit {
+        return Err(BoxliteError::ResourceExhausted(format!(
+            "Image {image_ref} declares {declared} bytes of layers, past the \
+             BOXLITE_MAX_IMAGE_DOWNLOAD_SIZE limit of {limit}; refusing before any layer \
+             is fetched. If this image is legitimate, raise BOXLITE_MAX_IMAGE_DOWNLOAD_SIZE."
+        )));
+    }
+    Ok(())
+}
+
+/// Whether this store holds every blob of the image being indexed.
+///
+/// Pulled images land in `images/layers/`; a local OCI bundle's blobs stay in
+/// the bundle directory and are read from there, so its index row must not
+/// claim otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlobsInStore {
+    Yes,
+    No,
+}
 
 // ============================================================================
 // INNER STATE (no locking awareness)
@@ -267,7 +324,11 @@ impl ImageStore {
     /// - If `path/index.json` or `path/oci-layout` doesn't exist
     /// - If any referenced blob is missing
     /// - If hard linking fails
-    pub async fn load_from_local(&self, path: std::path::PathBuf) -> BoxliteResult<ImageManifest> {
+    pub async fn load_from_local(
+        &self,
+        path: std::path::PathBuf,
+        reference: &str,
+    ) -> BoxliteResult<ImageManifest> {
         tracing::info!("Loading OCI image from local path: {}", path.display());
 
         // 1. Validate OCI layout
@@ -314,12 +375,21 @@ impl ImageStore {
             manifest_digest
         );
 
-        Ok(ImageManifest {
+        let manifest = ImageManifest {
             manifest_digest: manifest_digest.to_string(),
             layers,
             config_digest: config_digest_str,
             diff_ids: Vec::new(), // Populated later if config is available
-        })
+        };
+
+        // Record the bundle so the image-disk reclaim pass can see that the
+        // disk built from these layers is still reachable. Without a row the
+        // sweep reads that disk as unreachable and deletes it out from under
+        // the next box built from the same bundle.
+        self.upsert_index_row(&index_key(reference), &manifest, BlobsInStore::No)
+            .await?;
+
+        Ok(manifest)
     }
 
     /// Get an ImageManifest digest from the descriptor.
@@ -593,13 +663,25 @@ impl ImageStore {
             .extract_image_manifest(&client, reference, &manifest, manifest_digest_str)
             .await?;
 
+        // Step 3b: refuse an image that does not fit before fetching any of it.
+        assert_declared_size_fits(&image_manifest.layers, &reference.whole())?;
+
+        // One allowance for this pull, shared by every blob that declares no
+        // size, so a manifest full of `size: 0` layers cannot multiply it.
+        let unsized_budget = UnsizedBlobBudget::new();
+
         // Step 4: Download layers (no lock during download, atomic file writes)
-        self.download_layers(&client, reference, &image_manifest.layers)
+        self.download_layers(&client, reference, &image_manifest.layers, &unsized_budget)
             .await?;
 
         // Step 5: Download config (no lock during download)
-        self.download_config(&client, reference, &image_manifest.config_digest)
-            .await?;
+        self.download_config(
+            &client,
+            reference,
+            &image_manifest.config_digest,
+            &unsized_budget,
+        )
+        .await?;
 
         // Step 5b: Parse diff_ids from config for DiffID verification.
         // load_diff_ids_from_config re-verifies the config digest, so a
@@ -611,7 +693,7 @@ impl ImageStore {
         }
 
         // Step 6: Update index using reference.whole() as the cache key
-        self.update_index(&reference.whole(), &image_manifest)
+        self.update_index(&index_key(&reference.whole()), &image_manifest)
             .await?;
 
         Ok(image_manifest)
@@ -619,6 +701,24 @@ impl ImageStore {
 
     /// Update index with newly pulled image.
     async fn update_index(&self, image_ref: &str, manifest: &ImageManifest) -> BoxliteResult<()> {
+        self.upsert_index_row(image_ref, manifest, BlobsInStore::Yes)
+            .await
+    }
+
+    /// Write this reference's row in the index.
+    ///
+    /// `blobs` records whether *this store* holds every blob: a local bundle's
+    /// blobs stay in the bundle directory, so its row must not claim a store
+    /// cache hit (`try_load_cached` re-verifies anyway, but the column is read
+    /// as a claim). The reclaim pass counts the row either way — a row means
+    /// "some reference on this host names these layers", which is exactly the
+    /// reachability question it asks.
+    async fn upsert_index_row(
+        &self,
+        image_ref: &str,
+        manifest: &ImageManifest,
+        blobs: BlobsInStore,
+    ) -> BoxliteResult<()> {
         let inner = self.inner.read().await;
 
         let cached_image = CachedImage {
@@ -626,7 +726,10 @@ impl ImageStore {
             config_digest: manifest.config_digest.clone(),
             layers: manifest.layers.iter().map(|l| l.digest.clone()).collect(),
             cached_at: chrono::Utc::now().to_rfc3339(),
-            complete: true,
+            complete: matches!(blobs, BlobsInStore::Yes),
+            // Writing the row *is* a use: the caller pulled or loaded this
+            // image to build a box out of it.
+            last_used_at: chrono::Utc::now().timestamp(),
         };
 
         inner.index.upsert(image_ref, &cached_image)?;
@@ -809,6 +912,7 @@ impl ImageStore {
         client: &oci_client::Client,
         reference: &Reference,
         layers: &[LayerInfo],
+        unsized_budget: &UnsizedBlobBudget,
     ) -> BoxliteResult<()> {
         use futures::future::join_all;
 
@@ -853,7 +957,7 @@ impl ImageStore {
         // Download in parallel (no lock held)
         let download_futures = layers_to_download
             .iter()
-            .map(|layer| self.download_layer(client, reference, layer));
+            .map(|layer| self.download_layer(client, reference, layer, unsized_budget));
 
         let results = join_all(download_futures).await;
 
@@ -869,6 +973,7 @@ impl ImageStore {
         client: &oci_client::Client,
         reference: &Reference,
         layer: &LayerInfo,
+        unsized_budget: &UnsizedBlobBudget,
     ) -> BoxliteResult<()> {
         const MAX_RETRIES: u32 = 3;
 
@@ -891,7 +996,7 @@ impl ImageStore {
                 let inner = self.inner.read().await;
                 match inner
                     .storage
-                    .stage_layer_download(&layer.digest, layer.size)
+                    .stage_layer_download(&layer.digest, layer.size, unsized_budget.clone())
                     .await
                 {
                     Ok(result) => result,
@@ -940,6 +1045,13 @@ impl ImageStore {
                     }
                 },
                 Err(e) => {
+                    // A blob that outgrew its budget is the cap doing its job,
+                    // not a flaky transfer — retrying just re-downloads the
+                    // same bomb, so this leaves the loop instead of looping.
+                    if let Some(breach) = staged.budget_error() {
+                        staged.abort().await;
+                        return Err(breach);
+                    }
                     tracing::warn!("Layer download failed (attempt {}): {}", attempt, e);
                     last_error = Some(format!("failed to pull layer {}: {e}", layer.digest));
                     staged.abort().await;
@@ -957,6 +1069,7 @@ impl ImageStore {
         client: &oci_client::Client,
         reference: &Reference,
         config_digest: &str,
+        unsized_budget: &UnsizedBlobBudget,
     ) -> BoxliteResult<()> {
         // Check if already cached (quick read lock)
         {
@@ -972,7 +1085,10 @@ impl ImageStore {
         // Start staged download (quick read lock)
         let mut staged = {
             let inner = self.inner.read().await;
-            inner.storage.stage_config_download(config_digest).await?
+            inner
+                .storage
+                .stage_config_download(config_digest, unsized_budget.clone())
+                .await?
         };
 
         // Download to temp file (no lock)
@@ -990,8 +1106,12 @@ impl ImageStore {
             )
             .await
         {
+            // Same budget check as the layer path: a config blob descriptor is
+            // always built with `size: 0`, so only the global cap bounds it.
+            let breach = staged.budget_error();
             staged.abort().await;
-            return Err(BoxliteError::Storage(format!("failed to pull config: {e}")));
+            return Err(breach
+                .unwrap_or_else(|| BoxliteError::Storage(format!("failed to pull config: {e}"))));
         }
 
         // Verify and commit (atomic move to final location)
@@ -1407,13 +1527,121 @@ mod tests {
         let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
 
         // Load from local
-        let manifest = store.load_from_local(bundle_dir.clone()).await.unwrap();
+        let manifest = store
+            .load_from_local(bundle_dir.clone(), "local/test:latest")
+            .await
+            .unwrap();
 
         // Verify manifest
         assert_eq!(manifest.layers.len(), 1);
         assert_eq!(manifest.layers[0].digest, layer_digest);
         assert!(!manifest.config_digest.is_empty());
         assert!(!manifest.manifest_digest.is_empty());
+    }
+
+    /// The bound that protects the volume: a manifest is free to declare,
+    /// perfectly honestly, more than the host can hold — and the per-blob
+    /// check cannot catch that, because no blob exceeds its own declaration.
+    #[test]
+    fn a_manifest_declaring_more_than_the_limit_is_refused_before_any_fetch() {
+        let layers = vec![
+            LayerInfo {
+                digest: "sha256:a".into(),
+                media_type: "application/vnd.oci.image.layer.v1.tar+gzip".into(),
+                size: (max_image_download_size() / 2) as i64,
+            },
+            LayerInfo {
+                digest: "sha256:b".into(),
+                media_type: "application/vnd.oci.image.layer.v1.tar+gzip".into(),
+                size: (max_image_download_size() / 2 + 1) as i64,
+            },
+        ];
+
+        let err = assert_declared_size_fits(&layers, "registry/huge:1")
+            .expect_err("a manifest over the limit must be refused");
+        assert!(
+            matches!(err, BoxliteError::ResourceExhausted(_)),
+            "a deliberate limit, not a storage fault: {err:?}"
+        );
+        assert!(
+            err.to_string().contains("BOXLITE_MAX_IMAGE_DOWNLOAD_SIZE"),
+            "the error must name the override: {err}"
+        );
+        assert!(
+            err.to_string().contains("before any layer"),
+            "the error must say nothing was fetched: {err}"
+        );
+    }
+
+    /// Layers that declare no size contribute nothing to the manifest sum —
+    /// they are bounded while streaming, by the pull's shared allowance. A
+    /// manifest of `size: 0` layers must not be refused here, or the two
+    /// bounds would be doing each other's job.
+    #[test]
+    fn unsized_layers_do_not_count_toward_the_manifest_limit() {
+        let layers: Vec<LayerInfo> = (0..64)
+            .map(|i| LayerInfo {
+                digest: format!("sha256:{i}"),
+                media_type: "application/vnd.oci.image.layer.v1.tar+gzip".into(),
+                size: 0,
+            })
+            .collect();
+
+        assert!(assert_declared_size_fits(&layers, "registry/unsized:1").is_ok());
+    }
+
+    /// Exactly at the limit is allowed; the refusal is for going past it.
+    #[test]
+    fn a_manifest_exactly_at_the_limit_is_allowed() {
+        let layers = vec![LayerInfo {
+            digest: "sha256:a".into(),
+            media_type: "application/vnd.oci.image.layer.v1.tar+gzip".into(),
+            size: max_image_download_size() as i64,
+        }];
+
+        assert!(assert_declared_size_fits(&layers, "registry/exact:1").is_ok());
+    }
+
+    /// A local bundle must leave an index row naming its layers: the image
+    /// disk built from that bundle is named by those same layers, and the
+    /// reclaim sweep reads "no row names it" as "nothing can reach it".
+    /// Without this row the first sweep after the box goes away deletes a
+    /// perfectly good disk that the next box from the same bundle then has to
+    /// rebuild from scratch.
+    #[tokio::test]
+    async fn load_from_local_records_an_index_row_for_the_bundle() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bundle_dir = temp_dir.path().join("bundle");
+        let images_dir = temp_dir.path().join("images");
+        let db_path = temp_dir.path().join("test.db");
+
+        let layer_digest = create_test_oci_bundle(&bundle_dir);
+
+        let db = Database::open(&db_path).unwrap();
+        let store = ImageStore::new(images_dir, db, vec![]).unwrap();
+        store
+            .load_from_local(bundle_dir, "local/test:latest")
+            .await
+            .unwrap();
+
+        let rows = store.list().await.unwrap();
+        assert_eq!(rows.len(), 1, "the bundle must be recorded exactly once");
+        let (reference, cached) = &rows[0];
+        assert_eq!(
+            reference,
+            &index_key("local/test:latest"),
+            "the row is keyed the way every other index row is — by the \
+             normalized reference, so the cache-hit path can find it again"
+        );
+        assert_eq!(
+            cached.layers,
+            vec![layer_digest],
+            "the row must carry the bundle's layers, in order — that list is what names the disk"
+        );
+        assert!(
+            !cached.complete,
+            "a bundle's blobs live in the bundle, not in this store"
+        );
     }
 
     #[tokio::test]
@@ -1431,7 +1659,10 @@ mod tests {
         let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
 
         // Load from local
-        let _manifest = store.load_from_local(bundle_dir.clone()).await.unwrap();
+        let _manifest = store
+            .load_from_local(bundle_dir.clone(), "local/test:latest")
+            .await
+            .unwrap();
 
         // Verify blobs were NOT imported to storage
         // (This is the key behavior change - LocalBundleBlobSource reads from bundle)
@@ -1466,7 +1697,7 @@ mod tests {
         let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
 
         // Load should fail
-        let result = store.load_from_local(bundle_dir).await;
+        let result = store.load_from_local(bundle_dir, "local/test:latest").await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("oci-layout"));
@@ -1492,7 +1723,7 @@ mod tests {
         let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
 
         // Load should fail
-        let result = store.load_from_local(bundle_dir).await;
+        let result = store.load_from_local(bundle_dir, "local/test:latest").await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("index.json"));

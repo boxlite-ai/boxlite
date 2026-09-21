@@ -80,6 +80,83 @@ pub(crate) struct BaseDiskManager {
     store: BaseDiskStore,
 }
 
+/// The set of paths something still backs onto, and whether the scan that
+/// produced it saw everything.
+///
+/// An incomplete set is not a smaller set — it is an unknown one. The two read
+/// very differently to a caller about to delete what is not in it.
+pub(crate) struct ReferencedPaths {
+    pub(crate) paths: HashSet<PathBuf>,
+    /// False when any directory could not be listed or any backing chain was
+    /// cut short.
+    pub(crate) complete: bool,
+}
+
+/// Whether a filesystem error hides something rather than proving it absent.
+///
+/// Only `NotFound` proves absence. `Path::exists` cannot make that call — it
+/// answers `false` for a permission or I/O error exactly as it does for a
+/// missing path — so probing with it reports a *complete* answer for a
+/// directory that merely could not be opened, or for a live box's overlay
+/// that merely could not be stat'd. The eviction pass has no second guard, so
+/// it would then delete the backing file under every running box: the exact
+/// conflation [`ReferencedPaths::complete`] exists to prevent. The same
+/// hazard is spelled out for the chain walk in `qcow2::read_backing_chain`.
+pub(crate) fn failure_means_unknown(kind: std::io::ErrorKind) -> bool {
+    !proves_absence(kind)
+}
+
+/// The other side of [`failure_means_unknown`], so a caller acting on the
+/// ordinary case says so plainly instead of negating the unknown one.
+pub(crate) fn proves_absence(kind: std::io::ErrorKind) -> bool {
+    kind == std::io::ErrorKind::NotFound
+}
+
+/// Paths in one directory listing, with an entry that could not be read
+/// recorded as a hole in the answer rather than dropped.
+///
+/// `read_dir` yields a `Result` per entry, and a dropped `Err` is
+/// indistinguishable from a directory that simply holds fewer boxes — the
+/// exact conflation [`ReferencedPaths::complete`] exists to prevent one level
+/// up, where the whole directory is unlistable.
+fn listed_paths<I>(entries: I, referenced: &mut ReferencedPaths) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = std::io::Result<fs::DirEntry>>,
+{
+    let mut paths = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(entry) => paths.push(entry.path()),
+            Err(e) => {
+                tracing::warn!("GC: failed to read a directory entry: {}", e);
+                referenced.complete = false;
+            }
+        }
+    }
+    paths
+}
+
+impl ReferencedPaths {
+    fn new() -> Self {
+        Self {
+            paths: HashSet::new(),
+            complete: true,
+        }
+    }
+
+    /// Fold one chain in.
+    ///
+    /// No normalization here: qcow2 headers already record a canonical path
+    /// (`write_cow_child_header`) and the cache and base directories
+    /// canonicalize at construction, so both sides of the membership test are
+    /// in the same shape. That invariant is pinned where it is produced, by
+    /// `a_backing_path_is_recorded_canonical_even_when_given_through_a_symlink`.
+    fn absorb(&mut self, chain: super::BackingChain) {
+        self.complete &= chain.complete;
+        self.paths.extend(chain.paths);
+    }
+}
+
 impl BaseDiskManager {
     /// How long a base file must sit untouched before the orphan sweep may
     /// consider it. Covers the window between `install`'s rename and its insert.
@@ -122,34 +199,87 @@ impl BaseDiskManager {
     /// leaf is collected on this pass and its parent on the next, so the sweep
     /// still converges.
     ///
-    /// `read_backing_chain` returns partial results on a read error and caps at
-    /// `MAX_BACKING_CHAIN_DEPTH`, so this can under-report. It is one of two
-    /// independent guards in [`Self::gc_orphans`], never the sole authority.
+    /// This can under-report — see [`ReferencedPaths::complete`] and use
+    /// [`Self::referenced_backing_paths_checked`] when the answer decides a
+    /// deletion. Here it is one of two independent guards in
+    /// [`Self::gc_orphans`], never the sole authority.
     pub(crate) fn referenced_backing_paths(&self, boxes_dir: &Path) -> HashSet<PathBuf> {
-        let mut referenced = HashSet::new();
+        self.referenced_backing_paths_checked(boxes_dir).paths
+    }
+
+    /// [`Self::referenced_backing_paths`] with the flag a deleting caller needs.
+    ///
+    /// A caller that has no second guard — image-disk eviction targets entries
+    /// that *do* have index rows, so the "no row names it" guard cannot help —
+    /// must treat an incomplete answer as "unknown", not as "unreferenced".
+    /// Silently deleting on a partial scan removes the backing file out from
+    /// under a running box.
+    pub(crate) fn referenced_backing_paths_checked(&self, boxes_dir: &Path) -> ReferencedPaths {
+        let mut referenced = ReferencedPaths::new();
 
         match fs::read_dir(boxes_dir) {
             Ok(entries) => {
-                for entry in entries.flatten() {
-                    let disks_dir = entry.path().join("disks");
+                for box_dir in listed_paths(entries, &mut referenced) {
+                    // Only a directory can be a box. A stray file here — an
+                    // editor swap file, a `.DS_Store` — would otherwise make
+                    // every overlay path under it stat as `ENOTDIR`, which the
+                    // predicate below correctly calls "unknown", and one such
+                    // entry would then hold the whole answer incomplete for
+                    // good. `is_dir()` cannot make this call either: it says
+                    // false for a real box the scan could not stat, and that
+                    // must stay unknown rather than become "not a box".
+                    match fs::metadata(&box_dir) {
+                        Ok(md) if md.is_dir() => {}
+                        Ok(_) => continue,
+                        // Raced away between listing and stat: it holds nothing.
+                        Err(e) if proves_absence(e.kind()) => continue,
+                        Err(e) => {
+                            tracing::warn!(
+                                "GC: failed to stat box dir {}: {}",
+                                box_dir.display(),
+                                e
+                            );
+                            referenced.complete = false;
+                            continue;
+                        }
+                    }
+
+                    let disks_dir = box_dir.join("disks");
                     for overlay in [
                         disk_filenames::CONTAINER_DISK,
                         disk_filenames::GUEST_ROOTFS_DISK,
                     ] {
                         let overlay_path = disks_dir.join(overlay);
-                        if overlay_path.exists() {
-                            referenced.extend(super::read_backing_chain(&overlay_path));
+                        match fs::metadata(&overlay_path) {
+                            Ok(_) => {
+                                referenced.absorb(super::read_backing_chain_checked(&overlay_path))
+                            }
+                            // A box owns at most these two overlays and often
+                            // only one, so a missing file is ordinary.
+                            Err(e) if proves_absence(e.kind()) => {}
+                            Err(e) => {
+                                tracing::warn!(
+                                    "GC: failed to stat overlay {}: {}",
+                                    overlay_path.display(),
+                                    e
+                                );
+                                referenced.complete = false;
+                            }
                         }
                     }
                 }
             }
             Err(e) => {
-                if boxes_dir.exists() {
+                // A boxes directory that cannot be listed is the worst case:
+                // every overlay under it is invisible, so the set looks empty
+                // rather than partial.
+                if failure_means_unknown(e.kind()) {
                     tracing::warn!(
                         "GC: failed to read boxes dir {}: {}",
                         boxes_dir.display(),
                         e
                     );
+                    referenced.complete = false;
                 }
             }
         }
@@ -157,17 +287,35 @@ impl BaseDiskManager {
         // Ancestry between bases themselves.
         match fs::read_dir(&self.bases_dir) {
             Ok(entries) => {
-                for entry in entries.flatten() {
-                    referenced.extend(super::read_backing_chain(&entry.path()));
+                for base in listed_paths(entries, &mut referenced) {
+                    // The mirror of the box dir check above, and the same
+                    // reason. Only a file can be a base. A stray directory
+                    // would reach `has_qcow2_magic`, where `File::open`
+                    // succeeds and `read_exact` fails with `EISDIR` — not the
+                    // `UnexpectedEof` that ends a chain, so the walk reports a
+                    // truncated one and holds the answer incomplete for good.
+                    match fs::metadata(&base) {
+                        Ok(md) if md.is_file() => {}
+                        Ok(_) => continue,
+                        // Swept away between listing and stat: it backs nothing.
+                        Err(e) if proves_absence(e.kind()) => continue,
+                        Err(e) => {
+                            tracing::warn!("GC: failed to stat base {}: {}", base.display(), e);
+                            referenced.complete = false;
+                            continue;
+                        }
+                    }
+                    referenced.absorb(super::read_backing_chain_checked(&base));
                 }
             }
             Err(e) => {
-                if self.bases_dir.exists() {
+                if failure_means_unknown(e.kind()) {
                     tracing::warn!(
                         "GC: failed to read bases dir {}: {}",
                         self.bases_dir.display(),
                         e
                     );
+                    referenced.complete = false;
                 }
             }
         }
@@ -200,7 +348,12 @@ impl BaseDiskManager {
         let entries = match fs::read_dir(&self.bases_dir) {
             Ok(entries) => entries,
             Err(e) => {
-                if self.bases_dir.exists() {
+                // Only a missing directory is ordinary — the first GC runs
+                // before anything is installed. Anything else hid the listing,
+                // and the pass then reclaims nothing; the one signal that says
+                // so must not be gated on a probe that reads an unopenable
+                // directory as an absent one.
+                if failure_means_unknown(e.kind()) {
                     tracing::warn!(
                         "GC: failed to read bases dir {}: {}",
                         self.bases_dir.display(),
@@ -821,6 +974,210 @@ mod tests {
                 created_at: 0,
             })
             .unwrap();
+    }
+
+    /// A directory that is merely unopenable must not be reported as an empty
+    /// one. `Path::exists` cannot tell the two apart — it answers `false` for
+    /// a permission or `ENOTDIR` error just as it does for a missing path —
+    /// and the eviction pass, which has no second guard, deletes what is
+    /// absent from the set.
+    #[test]
+    fn only_a_missing_directory_is_a_complete_answer() {
+        assert!(
+            proves_absence(std::io::ErrorKind::NotFound),
+            "a directory that is genuinely absent holds no boxes"
+        );
+        assert!(
+            !failure_means_unknown(std::io::ErrorKind::NotFound),
+            "and is therefore not an unknown one"
+        );
+        for kind in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::NotADirectory,
+            std::io::ErrorKind::Other,
+        ] {
+            assert!(
+                failure_means_unknown(kind),
+                "{kind:?} hides the contents rather than proving them empty"
+            );
+            assert!(
+                !proves_absence(kind),
+                "{kind:?} is not a proof of absence either"
+            );
+        }
+    }
+
+    /// The same thing end to end, through a failure a test can actually
+    /// provoke: a `boxes_dir` whose parent is a regular file. `read_dir`
+    /// fails with `ENOTDIR` and `exists()` answers `false`, so the old probe
+    /// called that a complete, empty scan.
+    #[test]
+    fn an_unopenable_boxes_dir_is_not_a_complete_answer() {
+        let (_dir, mgr) = setup();
+        let tmp = TempDir::new().unwrap();
+        let not_a_dir = tmp.path().join("regular-file");
+        std::fs::write(&not_a_dir, b"x").unwrap();
+        let boxes_dir = not_a_dir.join("boxes");
+        assert!(!boxes_dir.exists(), "exists() cannot see the ENOTDIR");
+
+        let referenced = mgr.referenced_backing_paths_checked(&boxes_dir);
+
+        assert!(
+            !referenced.complete,
+            "a boxes dir that could not be opened leaves the answer unknown"
+        );
+    }
+
+    /// `gc_orphans` returns `Ok(0)` whether its bases dir is absent or merely
+    /// unopenable, so the warning is the only thing that tells a sweep with
+    /// nothing to do from a sweep that could not look. Provoked as above, with
+    /// a bases dir whose parent is a regular file.
+    #[test]
+    fn a_sweep_that_could_not_read_its_bases_dir_says_so() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(&dir.path().join("db").join("test.db")).unwrap();
+        let not_a_dir = dir.path().join("regular-file");
+        std::fs::write(&not_a_dir, b"x").unwrap();
+        let bases_dir = not_a_dir.join("bases");
+        assert!(!bases_dir.exists(), "exists() cannot see the ENOTDIR");
+        let mgr = BaseDiskManager::new(bases_dir, BaseDiskStore::new(db));
+
+        let (removed, logged) = boxlite_test_utils::tracing_capture::capture(|| {
+            mgr.gc_orphans(&dir.path().join("boxes")).unwrap()
+        });
+
+        assert_eq!(removed, 0, "a dir that could not be read reclaims nothing");
+        assert!(
+            logged.contains("failed to read bases dir"),
+            "an unopenable bases dir must not sweep silently: {logged}"
+        );
+    }
+
+    /// The other half of that gate: a bases dir that was never created is the
+    /// ordinary case — the first sweep can precede the first install — and
+    /// must stay quiet, or the warning means nothing.
+    #[test]
+    fn a_sweep_is_quiet_when_its_bases_dir_is_merely_absent() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(&dir.path().join("db").join("test.db")).unwrap();
+        let mgr = BaseDiskManager::new(dir.path().join("never-created"), BaseDiskStore::new(db));
+
+        let (removed, logged) = boxlite_test_utils::tracing_capture::capture(|| {
+            mgr.gc_orphans(&dir.path().join("boxes")).unwrap()
+        });
+
+        assert_eq!(removed, 0);
+        assert!(
+            logged.is_empty(),
+            "a bases dir that never existed is not a failure to report: {logged}"
+        );
+    }
+
+    /// The same conflation one level down: a live box whose overlay cannot be
+    /// stat'd must not read as a box that owns no overlay. Provoked without
+    /// privileges by making the box's `disks` a regular file, so the overlay
+    /// path stats as `ENOTDIR` while `exists()` answers `false`.
+    #[test]
+    fn an_unstattable_overlay_is_not_a_complete_answer() {
+        let (_dir, mgr) = setup();
+        let tmp = TempDir::new().unwrap();
+        let boxes_dir = tmp.path().join("boxes");
+        std::fs::create_dir_all(boxes_dir.join("live-box")).unwrap();
+        // Not a directory, so every overlay path under it stats as ENOTDIR.
+        std::fs::write(boxes_dir.join("live-box").join("disks"), b"x").unwrap();
+        assert!(
+            !boxes_dir
+                .join("live-box")
+                .join("disks")
+                .join(disk_filenames::CONTAINER_DISK)
+                .exists(),
+            "exists() cannot see the ENOTDIR"
+        );
+
+        let referenced = mgr.referenced_backing_paths_checked(&boxes_dir);
+
+        assert!(
+            !referenced.complete,
+            "an overlay that could not be stat'd leaves the answer unknown"
+        );
+    }
+
+    /// The flip side of stat'ing instead of probing: a stray file under
+    /// `boxes_dir` is not a box, and must not be read as one the scan could
+    /// not see. Every overlay path under it stats as `ENOTDIR`, which is
+    /// genuinely "unknown" for a directory — so without the kind check one
+    /// `.DS_Store` would hold `complete` false for good, and both image-disk
+    /// passes skip on an incomplete answer. The old `exists()` probe skipped
+    /// such an entry harmlessly, so this is the regression the switch invites.
+    #[test]
+    fn a_stray_file_among_the_boxes_is_not_an_unreadable_box() {
+        let (_dir, mgr) = setup();
+        let tmp = TempDir::new().unwrap();
+        let boxes_dir = tmp.path().join("boxes");
+
+        // One real box with a real overlay, so the scan has something to find.
+        let live_disks = boxes_dir.join("live-box").join("disks");
+        std::fs::create_dir_all(&live_disks).unwrap();
+        std::fs::write(live_disks.join(disk_filenames::CONTAINER_DISK), b"x").unwrap();
+
+        // And the entry Finder leaves behind.
+        std::fs::write(boxes_dir.join(".DS_Store"), b"x").unwrap();
+
+        let referenced = mgr.referenced_backing_paths_checked(&boxes_dir);
+
+        assert!(
+            referenced.complete,
+            "a file that cannot be a box says nothing about what the scan saw"
+        );
+    }
+
+    /// The mirror, one directory over: a stray *directory* under `bases_dir`
+    /// is not a base. `has_qcow2_magic` opens a directory successfully and
+    /// then fails `read_exact` with `EISDIR`, which is not the
+    /// `UnexpectedEof` that ends a chain — so the walk would report a
+    /// truncated one and pin `complete` false for good, and both image-disk
+    /// passes skip on an incomplete answer.
+    #[test]
+    fn a_stray_directory_among_the_bases_is_not_a_truncated_chain() {
+        let (dir, mgr) = setup();
+        let boxes_dir = dir.path().join("boxes");
+        std::fs::create_dir_all(&boxes_dir).unwrap();
+
+        // A real base, so the scan has something to walk.
+        std::fs::write(mgr.bases_dir().join("aaa11111.qcow2"), b"not-qcow2").unwrap();
+        // And a directory that is not one.
+        std::fs::create_dir_all(mgr.bases_dir().join("stray-dir")).unwrap();
+
+        let referenced = mgr.referenced_backing_paths_checked(&boxes_dir);
+
+        assert!(
+            referenced.complete,
+            "a directory that cannot be a base says nothing about what the scan saw"
+        );
+    }
+
+    /// `read_dir` hands back a `Result` per entry, and dropping the `Err`
+    /// makes a partially listed directory look like a smaller one. Eviction
+    /// has no second guard, so that reads as "no box backs onto this" and
+    /// takes the backing file out from under a running box.
+    #[test]
+    fn an_unreadable_directory_entry_reports_incomplete() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("box-a"), b"x").unwrap();
+        let mut referenced = ReferencedPaths::new();
+
+        let entries = std::fs::read_dir(dir.path())
+            .unwrap()
+            .chain(std::iter::once(Err(std::io::Error::other(
+                "readdir failed",
+            ))));
+        let paths = listed_paths(entries, &mut referenced);
+
+        assert_eq!(paths.len(), 1, "the readable entry still comes back");
+        assert!(
+            !referenced.complete,
+            "an entry that could not be read leaves the answer unknown, not smaller"
+        );
     }
 
     /// Only a file that *nothing* claims may be deleted.

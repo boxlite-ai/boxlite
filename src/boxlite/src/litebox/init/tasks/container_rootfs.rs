@@ -221,6 +221,9 @@ fn create_cow_disk(
         ContainerRootfsPrepResult::DiskImage {
             base_disk_path,
             disk_size: base_disk_size,
+            // Held by the caller's binding for the whole of this match, which
+            // is what keeps the base disk alive while its COW child is made.
+            _image_disk_lease: _,
         } => {
             // Calculate target disk size: use max of user-specified size and base disk size
             let target_disk_size = if let Some(size_gb) = disk_size_gb {
@@ -339,7 +342,7 @@ async fn prepare_disk_rootfs(
     image_disk_mgr: &ImageDiskManager,
     image: &crate::images::ImageObject,
 ) -> BoxliteResult<ContainerRootfsPrepResult> {
-    let disk = image_disk_mgr.get_or_create(image).await?;
+    let (disk, image_disk_lease) = image_disk_mgr.get_or_create(image).await?;
 
     let disk_path = disk.path().to_path_buf();
     let disk_size = std::fs::metadata(&disk_path)
@@ -352,5 +355,8 @@ async fn prepare_disk_rootfs(
     Ok(ContainerRootfsPrepResult::DiskImage {
         base_disk_path: disk_path,
         disk_size,
+        // The COW child that makes this disk referenced is created from the
+        // value we are returning, so the lease has to travel with it.
+        _image_disk_lease: image_disk_lease,
     })
 }

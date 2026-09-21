@@ -14,18 +14,25 @@ pub(crate) struct PyRuntimeMetrics {
     pub(crate) total_commands_executed: u64,
     #[pyo3(get)]
     pub(crate) total_exec_errors: u64,
+    #[pyo3(get)]
+    pub(crate) image_disks_evicted_total: u64,
+    #[pyo3(get)]
+    pub(crate) image_disk_bytes_reclaimed_total: u64,
 }
 
 #[pymethods]
 impl PyRuntimeMetrics {
     fn __repr__(&self) -> String {
         format!(
-            "RuntimeMetrics(boxes_created={}, boxes_failed={}, running={}, commands={}, errors={})",
+            "RuntimeMetrics(boxes_created={}, boxes_failed={}, running={}, commands={}, errors={}, \
+             image_disks_evicted={}, image_disk_bytes_reclaimed={})",
             self.boxes_created_total,
             self.boxes_failed_total,
             self.num_running_boxes,
             self.total_commands_executed,
-            self.total_exec_errors
+            self.total_exec_errors,
+            self.image_disks_evicted_total,
+            self.image_disk_bytes_reclaimed_total
         )
     }
 }
@@ -38,6 +45,8 @@ impl From<RuntimeMetrics> for PyRuntimeMetrics {
             num_running_boxes: metrics.num_running_boxes(),
             total_commands_executed: metrics.total_commands_executed(),
             total_exec_errors: metrics.total_exec_errors(),
+            image_disks_evicted_total: metrics.image_disks_evicted_total(),
+            image_disk_bytes_reclaimed_total: metrics.image_disk_bytes_reclaimed_total(),
         }
     }
 }

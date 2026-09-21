@@ -1,6 +1,6 @@
 use crate::db::{BoxStore, Database};
 use crate::experimental::ExperimentalFeatures;
-use crate::images::{ImageDiskManager, ImageManager};
+use crate::images::{DiskCacheReclaim, ImageDiskManager, ImageManager};
 use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
 use crate::lock::{FileLockManager, LockManager};
@@ -18,6 +18,7 @@ use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, Weak};
+use std::time::{Duration, Instant};
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
@@ -139,8 +140,13 @@ pub struct RuntimeImpl {
     // ========================================================================
     /// Filesystem layout (immutable after init)
     pub(crate) layout: FilesystemLayout,
-    /// Pure image disk cache manager (image layers → ext4, no guest binary)
-    pub(crate) image_disk_mgr: ImageDiskManager,
+    /// Pure image disk cache manager (image layers → ext4, no guest binary).
+    ///
+    /// `Arc` so the periodic reclaim thread can hold a `Weak` to *it* rather
+    /// than to the whole runtime: a weak reference to the runtime would make
+    /// `Arc::get_mut(&mut runtime)` fail for every caller that legitimately
+    /// mutates a freshly built one.
+    pub(crate) image_disk_mgr: Arc<ImageDiskManager>,
     /// Versioned guest rootfs manager (image disk + guest binary → ext4)
     pub(crate) guest_rootfs_mgr: GuestRootfsManager,
     /// Guest rootfs lazy initialization (Arc<OnceCell>)
@@ -214,6 +220,12 @@ pub struct SynchronizedState {
 /// cached image disk.
 const IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES: u64 = 512 * 1024 * 1024;
 
+/// How often the background image-disk sweep runs. Long on purpose: it only
+/// has something to collect after a headroom-constant change or a curated tag
+/// rotation, and the build-path trigger already covers the case that matters
+/// for space (about to add a disk).
+const IMAGE_DISK_GC_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+
 impl RuntimeImpl {
     // ========================================================================
     // CONSTRUCTION
@@ -245,6 +257,21 @@ impl RuntimeImpl {
     fn initialize(
         options: BoxliteOptions,
         experimental_features: ExperimentalFeatures,
+    ) -> BoxliteResult<SharedRuntimeImpl> {
+        Self::initialize_with_gc_interval(options, experimental_features, IMAGE_DISK_GC_INTERVAL)
+    }
+
+    /// [`Self::initialize`] with the periodic reclaim's interval supplied.
+    ///
+    /// The interval is six hours in production, which is longer than a test
+    /// can wait, and it is the constructor's own wiring of that thread that
+    /// wants covering — the tests beside the thread drive it directly and so
+    /// cover only what it does once started. This passes the interval and
+    /// changes nothing else, in the manner of [`Self::new_for_test`].
+    fn initialize_with_gc_interval(
+        options: BoxliteOptions,
+        experimental_features: ExperimentalFeatures,
+        gc_interval: Duration,
     ) -> BoxliteResult<SharedRuntimeImpl> {
         // Validate Early: Check preconditions before expensive work
         if !options.home_dir.is_absolute() {
@@ -313,6 +340,7 @@ impl RuntimeImpl {
                 },
             )?;
 
+        let image_index_store = crate::db::ImageIndexStore::new(db.clone());
         let base_disk_store = crate::db::BaseDiskStore::new(db.clone());
         let base_disk_mgr =
             crate::disk::BaseDiskManager::new(layout.bases_dir(), base_disk_store.clone());
@@ -335,13 +363,23 @@ impl RuntimeImpl {
             "Initialized lock manager"
         );
 
+        // Built before the image disk cache, which reports what it reclaims
+        // into it.
+        let runtime_metrics = RuntimeMetricsStorage::new();
+
         // See IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES for why this is a fixed
         // budget rather than derived from the guest binary actually on disk.
-        let image_disk_mgr = ImageDiskManager::new(
+        let image_disk_mgr = Arc::new(ImageDiskManager::new(
             layout.image_layout().disk_images_dir(),
             layout.temp_dir(),
             IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES,
-        );
+            DiskCacheReclaim::new(
+                image_index_store,
+                base_disk_mgr.clone(),
+                layout.boxes_dir(),
+                runtime_metrics.clone(),
+            ),
+        ));
         let guest_rootfs_mgr = GuestRootfsManager::new(base_disk_mgr.clone(), layout.temp_dir());
 
         let inner = Arc::new(Self {
@@ -355,7 +393,7 @@ impl RuntimeImpl {
             image_disk_mgr,
             guest_rootfs_mgr,
             guest_rootfs: Arc::new(OnceCell::new()),
-            runtime_metrics: RuntimeMetricsStorage::new(),
+            runtime_metrics,
             experimental_features,
             base_disk_mgr,
             snapshot_mgr,
@@ -370,7 +408,144 @@ impl RuntimeImpl {
         // Recover boxes from database
         inner.recover_boxes()?;
 
+        Self::spawn_periodic_image_disk_gc(
+            &inner.image_disk_mgr,
+            inner.shutdown_token.clone(),
+            gc_interval,
+        );
+
         Ok(inner)
+    }
+
+    /// Start the periodic image-disk reclaim.
+    ///
+    /// The other two triggers only fire on events that may never come: a
+    /// long-lived runner can go weeks without restarting (startup trigger)
+    /// and days without a cold image build (build-path trigger), while boxes
+    /// come and go the whole time. Worse for the eviction pass specifically,
+    /// the control plane scores a runner down as its disk fills and stops
+    /// placing boxes on it altogether once the score drops far enough — so
+    /// the hosts that most need to evict are the ones that stop getting
+    /// builds. This pass is what lets them recover unattended.
+    ///
+    /// Its first act is an eviction, before any wait. `initialize` calls
+    /// `recover_boxes` on the line above, and that runs the collector — but
+    /// nothing evicts there, deliberately, because eviction deletes under
+    /// disk pressure and that is not work to hand a caller of
+    /// `BoxliteRuntime::new`. The collector waits for the first interval
+    /// instead: repeating it at t=0 would duplicate the sweep just done, and
+    /// while the repeat was in flight no test of startup recovery could tell
+    /// which of the two had done the work.
+    ///
+    /// Runs on a thread of its own rather than a tokio task, because
+    /// `BoxliteRuntime::new` is synchronous and every binding calls it outside
+    /// any tokio context — so a task would never be scheduled on exactly the
+    /// hosts this pass exists for.
+    ///
+    /// Takes the manager rather than the runtime so the thread's `Weak` lands on
+    /// the manager's allocation: a weak reference to the runtime itself would
+    /// break `Arc::get_mut` for every caller that mutates a freshly built one.
+    pub(crate) fn spawn_periodic_image_disk_gc(
+        image_disk_mgr: &Arc<ImageDiskManager>,
+        shutdown: CancellationToken,
+        interval: Duration,
+    ) {
+        // Weak: the sweep must not be the reason a cache manager stays alive.
+        let image_disk_mgr = Arc::downgrade(image_disk_mgr);
+
+        // A plain thread, not a tokio task. Every binding constructs the
+        // runtime outside a tokio context — the C ABI builds one and never
+        // enters it before calling through, and the napi and pyo3
+        // constructors are synchronous and have none at all — so a task would
+        // never be scheduled there. Those are the hosts this trigger exists
+        // for: once a runner fills its disk the control plane stops giving it
+        // work, so trigger 2 never fires again and trigger 1 waits for a
+        // restart.
+        let spawned = std::thread::Builder::new()
+            .name("boxlite-image-disk-gc".into())
+            .spawn(move || {
+                // Eviction first, before any wait. `recover_boxes` has just
+                // run the collector on the way up and there is no startup
+                // eviction anywhere, so a host that came back above the high
+                // watermark would otherwise sit full until this interval
+                // elapsed — and a host scored down for a full disk is one the
+                // control plane stops sending builds to, so trigger 2 will not
+                // arrive either. Doing only this half here keeps it off the
+                // caller's thread without repeating what startup just did.
+                if !shutdown.is_cancelled()
+                    && let Some(mgr) = image_disk_mgr.upgrade()
+                {
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        mgr.evict_cold_if_low_on_space()
+                    })) {
+                        Err(_) => tracing::warn!("Startup image disk eviction panicked"),
+                        Ok(Err(e)) => tracing::warn!("Startup image disk eviction failed: {}", e),
+                        Ok(Ok(evicted)) => {
+                            tracing::info!(evicted, "Startup image disk eviction complete")
+                        }
+                    }
+                }
+
+                loop {
+                    // The wait comes first. The collector runs in
+                    // `recover_boxes` one line before this thread is spawned,
+                    // so a full pass at t=0 would repeat it — and the repeat is
+                    // not free: while it is in flight a test of startup
+                    // recovery cannot tell the sweep it means to check from
+                    // this one, and goes green either way.
+                    //
+                    // Woken in slices, so a shutdown is noticed in about a
+                    // second rather than after an interval measured in hours.
+                    let deadline = Instant::now() + interval;
+                    loop {
+                        let now = Instant::now();
+                        if now >= deadline {
+                            break;
+                        }
+                        if shutdown.is_cancelled() {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_secs(1).min(deadline - now));
+                    }
+                    if shutdown.is_cancelled() {
+                        return;
+                    }
+                    let Some(mgr) = image_disk_mgr.upgrade() else {
+                        return;
+                    };
+                    // Caught, because an uncaught one unwinds this thread
+                    // and ends the pass for the life of the process —
+                    // silently, and on the hosts least able to afford it. The
+                    // tokio task this replaced got the same containment from
+                    // `spawn_blocking`'s `JoinError`.
+                    let swept = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        mgr.reclaim_now()
+                    }));
+                    match swept {
+                        Err(_) => {
+                            tracing::warn!("Periodic image disk reclaim panicked; continuing")
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!("Periodic image disk reclaim failed: {}", e)
+                        }
+                        // A heartbeat, not just a result: "the timer is alive
+                        // and found nothing" has to be distinguishable from
+                        // "the timer is dead".
+                        Ok(Ok(reclaimed)) => tracing::info!(
+                            collected = reclaimed.collected,
+                            evicted = reclaimed.evicted,
+                            "Periodic image disk reclaim complete"
+                        ),
+                    }
+                    // Dropped before looping back to the wait: holding it
+                    // would keep the manager alive across an interval that is
+                    // hours long.
+                    drop(mgr);
+                }
+            });
+        if let Err(e) = spawned {
+            tracing::warn!("Could not start the periodic image disk GC thread: {}", e);
+        }
     }
 
     // ========================================================================
@@ -1522,6 +1697,27 @@ impl RuntimeImpl {
             tracing::warn!("Orphaned base disk GC failed: {}", e);
         }
 
+        // And the image disk cache. It has no per-record collector at all —
+        // entries are named by content, so an entry no `image_index` row can
+        // name any more is the only kind of dead one there is.
+        //
+        // The collector only, not the eviction pass beside it in
+        // `reclaim_now`. Eviction deletes under disk pressure, which is
+        // exactly when it has the most to delete, and this runs on the thread
+        // that `BoxliteRuntime::new` returns on. The periodic thread performs
+        // it instead, immediately rather than an interval later. The two
+        // cannot collide: a file is a candidate for the collector only while
+        // no index row names it, and for eviction only while one does.
+        //
+        // Reported either way, as the periodic pass reports: "ran and found
+        // nothing" has to read differently from "did not run".
+        match self.image_disk_mgr.gc_unreachable() {
+            Ok(collected) => {
+                tracing::info!(collected, "Startup image disk collection complete")
+            }
+            Err(e) => tracing::warn!("Startup image disk collection failed: {}", e),
+        }
+
         tracing::info!("Box recovery complete");
         Ok(())
     }
@@ -2146,6 +2342,111 @@ mod tests {
         sanitize_local_options(&ExperimentalFeatures::default(), options)
             .await
             .expect("privileged mode should be available without an experimental opt-in");
+    }
+
+    /// Write a settled, unreachable entry into a runtime's image disk cache.
+    fn plant_unreachable_image_disk(home_dir: &std::path::Path) -> std::path::PathBuf {
+        let cache_dir = home_dir.join("images").join("disk-images");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let orphan = cache_dir.join(format!(
+            "sha256-forgotten-r{IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES}.ext4"
+        ));
+        std::fs::write(&orphan, vec![0u8; 4096]).unwrap();
+        // Past the sweep's grace window, which exists for freshly installed files.
+        let settled = std::time::SystemTime::now() - Duration::from_secs(3600);
+        filetime::set_file_mtime(&orphan, filetime::FileTime::from_system_time(settled)).unwrap();
+        orphan
+    }
+
+    /// The constructor has to arm trigger 3, and nothing covered that: the
+    /// `spawn_periodic_image_disk_gc` call could be deleted from
+    /// `initialize` without failing a test. The three tests beside the thread
+    /// build a manager directly, so they cover what it does once started and
+    /// never that anything starts it.
+    ///
+    /// This one goes through the constructor, and plants the orphan *after*
+    /// it returns — which is what leaves the periodic thread as the only
+    /// thing able to reclaim it. `initialize` reclaims once on the way up
+    /// and finishes before returning, so anything planted earlier would be
+    /// trigger 1's work. The signal is the file, not a log line: the
+    /// thread's own heartbeat is written on the thread, and
+    /// `tracing_capture` scopes a subscriber to the calling one.
+    #[test]
+    fn initialize_arms_the_periodic_image_disk_reclaim() {
+        let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
+        let options = BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        };
+
+        let runtime = RuntimeImpl::initialize_with_gc_interval(
+            options,
+            ExperimentalFeatures::default(),
+            Duration::from_millis(20),
+        )
+        .expect("Failed to create test runtime");
+
+        let orphan = plant_unreachable_image_disk(temp_dir.path());
+        for _ in 0..100 {
+            if !orphan.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(
+            !orphan.exists(),
+            "the constructor must arm the periodic reclaim"
+        );
+
+        runtime.shutdown_token.cancel();
+    }
+
+    /// And startup collects without evicting. Eviction deletes under disk
+    /// pressure, which is when it has the most to delete, and
+    /// `BoxliteRuntime::new` returns on this thread — so it belongs to the
+    /// periodic one. Read off the heartbeat, which reports what the pass did:
+    /// a collected count, and no eviction count because no eviction ran. The
+    /// periodic thread's own t=0 eviction is on the thread, and
+    /// `tracing_capture` scopes its subscriber to the calling one, so it
+    /// cannot be mistaken for this.
+    #[test]
+    fn recover_boxes_collects_without_evicting() {
+        let (runtime, _temp_dir) = create_test_runtime();
+
+        let (_, logged) = boxlite_test_utils::tracing_capture::capture(|| {
+            runtime.recover_boxes().expect("Failed to recover boxes")
+        });
+
+        assert!(
+            logged.contains("collected="),
+            "startup must still run the collector: {logged}"
+        );
+        assert!(
+            !logged.contains("evicted="),
+            "eviction is the periodic thread's, not the caller's: {logged}"
+        );
+    }
+
+    /// Trigger 1 of 3: startup. The image disk cache has no per-record
+    /// collector, so this sweep is the only thing that ever removes an entry
+    /// left behind by a headroom-constant change or a retired image.
+    #[test]
+    fn recover_boxes_sweeps_unreachable_image_disks() {
+        let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
+        let orphan = plant_unreachable_image_disk(temp_dir.path());
+
+        let options = BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        };
+        let _runtime = RuntimeImpl::initialize(options, ExperimentalFeatures::default())
+            .expect("Failed to create test runtime");
+
+        assert!(
+            !orphan.exists(),
+            "startup recovery must sweep the image disk cache"
+        );
     }
 
     /// Create a RuntimeImpl with isolated temp directory.
