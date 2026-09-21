@@ -476,33 +476,8 @@ impl BaseDiskManager {
 mod tests {
     use super::*;
     use crate::db::Database;
-    use crate::disk::DiskInfo;
+    use crate::disk::{DiskInfo, DiskSnapshotMode::Fork};
     use tempfile::TempDir;
-
-    #[test]
-    fn test_capture_fix_pending_copy_survives_last_clone_removal() {
-        let (dir, mgr) = setup();
-        let disks = dir.path().join("disks");
-        std::fs::create_dir_all(&disks).unwrap();
-        super::super::Qcow2Helper::create_disk(&disks.join(disk_filenames::CONTAINER_DISK), true)
-            .unwrap();
-        let base = mgr
-            .create_base_disk(
-                &disks,
-                BaseDiskKind::CloneBase,
-                None,
-                "source",
-                super::super::DiskSnapshotMode::Copy,
-            )
-            .unwrap();
-        mgr.store.add_ref(&base.id, "early-clone").unwrap();
-        mgr.store.remove_all_refs_for_box("early-clone").unwrap();
-        mgr.try_gc_base(&base.id);
-        assert!(
-            base.disk_info.as_path().exists(),
-            "removing an early clone deleted the base while provisioning still owned it"
-        );
-    }
 
     fn base_id(id: &str) -> BaseDiskID {
         BaseDiskID::parse(id).expect("test ID must be valid Base62 length-8")
@@ -558,7 +533,7 @@ mod tests {
                 BaseDiskKind::Snapshot,
                 Some("snap-1"),
                 "box-1",
-                super::super::DiskSnapshotMode::Fork,
+                Fork,
             )
             .unwrap();
 
@@ -593,13 +568,7 @@ mod tests {
         write_qcow2_with_backing(&box_disks.join(disk_filenames::CONTAINER_DISK), None);
 
         let disk = mgr
-            .create_base_disk(
-                &box_disks,
-                BaseDiskKind::CloneBase,
-                None,
-                "box-1",
-                super::super::DiskSnapshotMode::Fork,
-            )
+            .create_base_disk(&box_disks, BaseDiskKind::CloneBase, None, "box-1", Fork)
             .unwrap();
 
         // create_base_disk should have added a ref for the source box
@@ -622,7 +591,7 @@ mod tests {
                 BaseDiskKind::Snapshot,
                 Some("snap-1"),
                 "box-1",
-                super::super::DiskSnapshotMode::Fork,
+                Fork,
             )
             .unwrap();
 
@@ -646,23 +615,11 @@ mod tests {
         write_qcow2_with_backing(&box_disks.join(disk_filenames::CONTAINER_DISK), None);
 
         let bd1 = mgr
-            .create_base_disk(
-                &box_disks,
-                BaseDiskKind::CloneBase,
-                None,
-                "box-1",
-                super::super::DiskSnapshotMode::Fork,
-            )
+            .create_base_disk(&box_disks, BaseDiskKind::CloneBase, None, "box-1", Fork)
             .unwrap();
 
         let bd2 = mgr
-            .create_base_disk(
-                &box_disks,
-                BaseDiskKind::CloneBase,
-                None,
-                "box-1",
-                super::super::DiskSnapshotMode::Fork,
-            )
+            .create_base_disk(&box_disks, BaseDiskKind::CloneBase, None, "box-1", Fork)
             .unwrap();
 
         // Verify ancestry via filesystem: bd2's backing chain includes bd1

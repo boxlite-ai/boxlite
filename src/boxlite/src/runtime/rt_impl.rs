@@ -2331,134 +2331,122 @@ mod tests {
     // shutdown() tests
     // ====================================================================
 
-    #[test]
-    fn test_capture_fix_clone_base_crash_recovery() {
-        use crate::disk::{BaseDiskKind, DiskSnapshotMode};
-        for (mode, has_owner) in [
-            (DiskSnapshotMode::Copy, false),
-            (DiskSnapshotMode::Copy, true),
-            (DiskSnapshotMode::Fork, false),
-        ] {
-            let (runtime, dir) = create_test_runtime();
-            let mut config = test_box_config(true);
-            config.box_home = runtime.layout.boxes_dir().join(config.id.as_str());
-            let mut state = BoxState::new();
-            state.status = BoxStatus::Stopped;
-            state.set_lock_id(runtime.lock_manager.allocate().unwrap());
-            runtime.box_manager.add_box(&config, &state).unwrap();
-            let disks = config.box_home.join("disks");
-            std::fs::create_dir_all(&disks).unwrap();
-            crate::disk::Qcow2Helper::create_disk(&disks.join("disk.qcow2"), true).unwrap();
-            // Crash after Phase A, either before or after a durable owner is recorded.
-            let base = runtime
-                .base_disk_mgr
-                .create_base_disk(
-                    &disks,
-                    BaseDiskKind::CloneBase,
-                    None,
-                    config.id.as_str(),
-                    mode,
-                )
-                .unwrap();
-            if has_owner {
-                runtime
-                    .base_disk_mgr
-                    .store()
-                    .add_ref(&base.id, config.id.as_str())
-                    .unwrap();
-            } else {
-                // A legacy fork may lack its ref after a DB failure; its source still owns it.
-                runtime
-                    .base_disk_mgr
-                    .store()
-                    .remove_all_refs_for_box(config.id.as_str())
-                    .unwrap();
-            }
-            let path = base.disk_info.to_path_buf();
-            let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-            file.set_times(std::fs::FileTimes::new().set_modified(
-                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1),
-            ))
-            .unwrap();
-            drop(file);
-            drop(runtime);
-            let reopened = RuntimeImpl::new_for_test(BoxliteOptions {
-                home_dir: dir.path().to_path_buf(),
-                image_registries: vec![],
-            })
-            .unwrap();
-            let keep = has_owner || mode == DiskSnapshotMode::Fork;
-            assert_eq!(
-                path.exists(),
-                keep,
-                "clone base recovery did not respect durable ownership"
-            );
-            assert_eq!(
-                reopened
-                    .base_disk_mgr
-                    .store()
-                    .find_by_id(&base.id)
-                    .unwrap()
-                    .is_some(),
-                keep
-            );
-        }
+    fn capture_source() -> (SharedRuntimeImpl, TempDir, BoxConfig) {
+        let (runtime, dir) = create_test_runtime();
+        let config = test_box_config_in_layout(true, &runtime);
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Stopped;
+        state.set_lock_id(runtime.lock_manager.allocate().unwrap());
+        runtime.box_manager.add_box(&config, &state).unwrap();
+        let disk = config.box_home.join("disks/disk.qcow2");
+        std::fs::create_dir_all(disk.parent().unwrap()).unwrap();
+        crate::disk::Qcow2Helper::create_disk(&disk, true).unwrap();
+        (runtime, dir, config)
+    }
+
+    fn reopen_capture_runtime(runtime: SharedRuntimeImpl, dir: &TempDir) -> SharedRuntimeImpl {
+        drop(runtime);
+        RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .unwrap()
     }
 
     #[test]
-    fn test_capture_fix_invalidation_retires_old_handle() {
-        let (runtime, _dir) = create_test_runtime();
+    fn test_capture_fix_clone_base_crash_recovery() {
+        use crate::disk::{
+            BaseDiskKind::CloneBase,
+            DiskSnapshotMode::{Copy, Fork},
+        };
+        for (mode, has_owner) in [(Copy, false), (Copy, true), (Fork, false)] {
+            let (runtime, dir, config) = capture_source();
+            let id = config.id.as_str();
+            let disks = config.box_home.join("disks");
+            // Crash after Phase A, either before or after a durable owner is recorded.
+            let base = runtime
+                .base_disk_mgr
+                .create_base_disk(&disks, CloneBase, None, id, mode)
+                .unwrap();
+            let store = runtime.base_disk_mgr.store();
+            store.add_ref(&base.id, id).unwrap();
+            if !has_owner {
+                store.remove_all_refs_for_box(id).unwrap();
+                if mode == Copy {
+                    runtime.base_disk_mgr.try_gc_base(&base.id);
+                    assert!(base.disk_info.as_path().exists(), "pending copy GC");
+                }
+                // An old Fork can lack a DB ref while its source still uses it.
+            }
+            let path = base.disk_info.to_path_buf();
+            let age = std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH);
+            std::fs::File::open(&path).unwrap().set_times(age).unwrap();
+            let reopened = reopen_capture_runtime(runtime, &dir);
+            let keep = has_owner || mode == Fork;
+            assert_eq!(path.exists(), keep, "base recovery ownership");
+            let record = reopened.base_disk_mgr.store().find_by_id(&base.id).unwrap();
+            assert_eq!(record.is_some(), keep);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_capture_fix_invalidation_rejects_old_disk_operations() {
+        let (runtime, dir) = create_test_runtime();
         let config = test_box_config(true);
         let (old, _) = runtime.get_or_create_box_impl(config.clone(), BoxState::new());
         runtime.invalidate_box_impl(&config.id, config.name.as_deref());
         let (fresh, _) = runtime.get_or_create_box_impl(config, BoxState::new());
         assert!(!Arc::ptr_eq(&old, &fresh));
         assert!(!fresh.shutdown_token.is_cancelled());
-        assert!(
-            old.shutdown_token.is_cancelled(),
-            "cache invalidation left the old handle usable"
-        );
+        assert!(old.shutdown_token.is_cancelled());
+        let old = litebox_from_impl(old);
+        let snapshots = old.snapshots();
+        let archive = dir.path().join("stale.boxlite");
+        for result in [
+            snapshots
+                .create(Default::default(), "stale")
+                .await
+                .map(|_| ()),
+            old.clone_box(Default::default(), None).await.map(|_| ()),
+            snapshots.restore("stale").await,
+            snapshots.remove("stale").await,
+            old.export(Default::default(), &archive).await.map(|_| ()),
+        ] {
+            assert!(
+                matches!(result, Err(BoxliteError::Stopped(_))),
+                "{result:?}"
+            );
+        }
     }
 
     #[test]
     fn test_capture_review_copy_crash_recovery() {
+        use crate::disk::DiskSnapshotMode::Copy;
         for checkpoint in ["partial", "published", "committed"] {
-            let (runtime, dir) = create_test_runtime();
-            let mut config = test_box_config(true);
-            config.box_home = runtime.layout.boxes_dir().join(config.id.as_str());
-            let mut state = BoxState::new();
-            state.status = BoxStatus::Stopped;
-            state.set_lock_id(runtime.lock_manager.allocate().unwrap());
-            runtime.box_manager.add_box(&config, &state).unwrap();
-            let source = config.box_home.join("disks/disk.qcow2");
-            std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-            crate::disk::Qcow2Helper::create_disk(&source, true).unwrap();
+            let (runtime, dir, config) = capture_source();
+            let id = config.id.as_str();
+            let home = &config.box_home;
+            let source = home.join("disks/disk.qcow2");
             let original = std::fs::read(&source).unwrap();
-            let snapshot_dir = config.box_home.join("snapshots/recovery");
+            let snapshot_dir = home.join("snapshots/recovery");
             std::fs::create_dir_all(&snapshot_dir).unwrap();
             match checkpoint {
                 "partial" => {
                     std::fs::write(snapshot_dir.join(".partial"), b"partial copy").unwrap()
                 }
                 "published" => {
-                    crate::disk::DiskSnapshotMode::Copy
-                        .capture(&source, &snapshot_dir.join("disk.qcow2"))
+                    Copy.capture(&source, &snapshot_dir.join("disk.qcow2"))
                         .unwrap()
                         .leak();
                 }
                 _ => {
                     runtime
                         .snapshot_mgr
-                        .create(
-                            &config.box_home,
-                            "recovery",
-                            config.id.as_str(),
-                            crate::disk::DiskSnapshotMode::Copy,
-                        )
+                        .create(home, "recovery", id, Copy)
                         .unwrap();
                 }
             }
-            let marker = config.box_home.join(".snapshot_pending");
+            let marker = home.join(".snapshot_pending");
             std::fs::write(
                 &marker,
                 serde_json::json!({
@@ -2468,35 +2456,17 @@ mod tests {
                 .to_string(),
             )
             .unwrap();
-            drop(runtime);
-            let reopened = RuntimeImpl::new_for_test(BoxliteOptions {
-                home_dir: dir.path().to_path_buf(),
-                image_registries: vec![],
-            })
-            .unwrap();
+            let reopened = reopen_capture_runtime(runtime, &dir);
             assert_eq!(std::fs::read(&source).unwrap(), original);
             assert!(!marker.exists());
             if checkpoint == "committed" {
                 assert!(snapshot_dir.join("disk.qcow2").exists());
-                assert!(
-                    reopened
-                        .snapshot_mgr
-                        .exists(config.id.as_str(), "recovery")
-                        .unwrap()
-                );
+                assert!(reopened.snapshot_mgr.exists(id, "recovery").unwrap());
             } else {
-                assert!(
-                    !snapshot_dir.exists(),
-                    "{checkpoint} copy artifacts survived restart"
-                );
+                assert!(!snapshot_dir.exists(), "{checkpoint} copy survived restart");
                 reopened
                     .snapshot_mgr
-                    .create(
-                        &config.box_home,
-                        "recovery",
-                        config.id.as_str(),
-                        crate::disk::DiskSnapshotMode::Copy,
-                    )
+                    .create(home, "recovery", id, Copy)
                     .unwrap();
             }
         }
@@ -2508,7 +2478,8 @@ mod tests {
         Arc::get_mut(&mut runtime).unwrap().lock_manager =
             Arc::new(crate::lock::InMemoryLockManager::new(1));
         runtime.lock_manager.allocate().unwrap();
-        let staging = tempfile::tempdir_in(runtime.layout.boxes_dir()).unwrap();
+        let boxes = runtime.layout.boxes_dir();
+        let staging = tempfile::tempdir_in(&boxes).unwrap();
         let result = runtime
             .provision_box(
                 staging.path().to_path_buf(),
@@ -2520,33 +2491,23 @@ mod tests {
             .await;
         assert!(result.is_err());
         drop(staging);
-        assert_eq!(
-            std::fs::read_dir(runtime.layout.boxes_dir())
-                .unwrap()
-                .count(),
-            0,
-            "failed lock allocation leaked the moved clone directory"
-        );
+        let remaining = std::fs::read_dir(boxes).unwrap().count();
+        assert_eq!(remaining, 0, "failed provisioning leaked a box directory");
     }
 
     #[tokio::test]
     async fn test_capture_cleanup_shutdown_timeout_keeps_stop_alive() {
         let (runtime, _dir) = create_test_runtime();
-        let mut config = test_box_config(false);
-        config.box_home = runtime.layout.boxes_dir().join(config.id.as_str());
+        let config = test_box_config_in_layout(false, &runtime);
         let (box_impl, _) = runtime.get_or_create_box_impl(config, BoxState::new());
         // A capture owns this lock until its blocking disk copy and thaw finish.
         let capture = box_impl.disk_ops.lock().await;
         let error = runtime.shutdown(Some(1)).await.unwrap_err();
         assert!(error.to_string().contains("timeout"));
         drop(capture);
+        let stopped = &runtime.runtime_metrics.boxes_stopped;
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while runtime
-                .runtime_metrics
-                .boxes_stopped
-                .load(std::sync::atomic::Ordering::Relaxed)
-                == 0
-            {
+            while stopped.load(std::sync::atomic::Ordering::Relaxed) == 0 {
                 tokio::task::yield_now().await;
             }
         })
