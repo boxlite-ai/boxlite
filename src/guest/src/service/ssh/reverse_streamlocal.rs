@@ -323,7 +323,7 @@ struct ListenerRegistry {
 }
 
 struct ListenerEntry {
-    tasks: Arc<super::TaskGroup>,
+    listener_tasks: Arc<super::TaskGroup>,
     stopped_cleanly: AtomicBool,
 }
 
@@ -332,7 +332,7 @@ impl ListenerRegistry {
         &self,
         socket_path: String,
         limit: usize,
-        tasks: &super::TaskGroup,
+        connection_tasks: &super::TaskGroup,
     ) -> Option<ListenerRegistration> {
         let mut entries = self.lock();
         if entries.len() >= limit || entries.contains_key(&socket_path) {
@@ -340,11 +340,11 @@ impl ListenerRegistry {
         }
 
         let entry = Arc::new(ListenerEntry {
-            tasks: tasks.child(),
+            listener_tasks: connection_tasks.child(),
             stopped_cleanly: AtomicBool::new(false),
         });
         // Count the listener before publishing it, even before its task starts.
-        let lifetime = entry.tasks.token();
+        let lifetime = entry.listener_tasks.token();
         entries.insert(socket_path.clone(), entry.clone());
         Some(ListenerRegistration {
             registry: self.clone(),
@@ -359,8 +359,8 @@ impl ListenerRegistry {
         let Some(entry) = entry else {
             return false;
         };
-        entry.tasks.cancel();
-        entry.tasks.wait().await;
+        entry.listener_tasks.cancel();
+        entry.listener_tasks.wait().await;
         entry.stopped_cleanly.load(Ordering::Acquire)
     }
 
@@ -371,7 +371,7 @@ impl ListenerRegistry {
             .map(|(_, entry)| entry)
             .collect::<Vec<_>>();
         for entry in entries {
-            entry.tasks.cancel();
+            entry.listener_tasks.cancel();
         }
     }
 
@@ -395,7 +395,7 @@ struct ListenerRegistration {
 
 impl ListenerRegistration {
     async fn cancelled(&self) {
-        self.entry.tasks.cancelled().await;
+        self.entry.listener_tasks.cancelled().await;
     }
 
     fn finish_cleanly(&mut self) {
@@ -417,16 +417,16 @@ impl Drop for ListenerRegistration {
 
 /// Owns reverse streamlocal listeners created by one authenticated connection.
 pub(crate) struct ReverseStreamlocalManager {
-    tasks: Arc<super::TaskGroup>,
+    connection_tasks: Arc<super::TaskGroup>,
     listeners: ListenerRegistry,
     cancel: tokio_util::sync::CancellationToken,
     connection_permits: Arc<Semaphore>,
 }
 
 impl ReverseStreamlocalManager {
-    pub(crate) fn new(tasks: Arc<super::TaskGroup>) -> Self {
+    pub(crate) fn new(connection_tasks: Arc<super::TaskGroup>) -> Self {
         Self {
-            tasks,
+            connection_tasks,
             listeners: ListenerRegistry::default(),
             cancel: Default::default(),
             connection_permits: Arc::new(Semaphore::new(MAX_FORWARD_CONNECTIONS)),
@@ -447,7 +447,7 @@ impl ReverseStreamlocalManager {
         let Some(registration) = self.listeners.register(
             socket_path.to_string(),
             MAX_REMOTE_FORWARD_LISTENERS,
-            &self.tasks,
+            &self.connection_tasks,
         ) else {
             return false;
         };
@@ -472,7 +472,7 @@ impl ReverseStreamlocalManager {
 
         let token = uuid::Uuid::new_v4().to_string();
         let helper = match RunningHelper::start(
-            self.tasks.clone(),
+            self.connection_tasks.clone(),
             server,
             socket_path,
             ingress_address,
@@ -516,7 +516,7 @@ impl Drop for ReverseStreamlocalManager {
 }
 
 struct RunningHelper {
-    tasks: Arc<super::TaskGroup>,
+    connection_tasks: Arc<super::TaskGroup>,
     cancel: tokio_util::sync::CancellationToken,
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
@@ -529,7 +529,7 @@ struct RunningHelper {
 
 impl RunningHelper {
     async fn start(
-        tasks: Arc<super::TaskGroup>,
+        connection_tasks: Arc<super::TaskGroup>,
         server: Arc<GuestServer>,
         socket_path: &str,
         ingress: SocketAddrV4,
@@ -567,7 +567,7 @@ impl RunningHelper {
             // and running, so it must be torn down rather than leaked.
             Err(error) => {
                 spawn_failed_helper_cleanup(
-                    tasks.clone(),
+                    connection_tasks.clone(),
                     server.clone(),
                     registry,
                     execution_id,
@@ -577,7 +577,7 @@ impl RunningHelper {
                 return Err(format!("reverse streamlocal stdin setup failed: {error}"));
             }
         };
-        let stdin_task = tasks.spawn_tracked(move |_| async move {
+        let stdin_task = connection_tasks.spawn_tracked(move |_| async move {
             if let Ok(Err(error)) = input.await {
                 debug!(%error, "reverse streamlocal helper stdin ended");
             }
@@ -592,7 +592,7 @@ impl RunningHelper {
             .is_err()
         {
             spawn_failed_helper_cleanup(
-                tasks.clone(),
+                connection_tasks.clone(),
                 server.clone(),
                 registry,
                 execution_id,
@@ -617,7 +617,7 @@ impl RunningHelper {
                     .await;
                 drop(stdin_tx);
                 spawn_failed_helper_cleanup(
-                    tasks.clone(),
+                    connection_tasks.clone(),
                     server.clone(),
                     registry,
                     execution_id,
@@ -636,7 +636,7 @@ impl RunningHelper {
                     .await;
                 drop(stdin_tx);
                 spawn_failed_helper_cleanup(
-                    tasks.clone(),
+                    connection_tasks.clone(),
                     server.clone(),
                     registry,
                     execution_id,
@@ -666,7 +666,7 @@ impl RunningHelper {
                     .await;
                 drop(stdin_tx);
                 spawn_failed_helper_cleanup(
-                    tasks.clone(),
+                    connection_tasks.clone(),
                     server.clone(),
                     registry,
                     execution_id,
@@ -678,7 +678,7 @@ impl RunningHelper {
         };
 
         Ok(Self {
-            tasks,
+            connection_tasks,
             cancel,
             server,
             registry,
@@ -726,10 +726,10 @@ impl RunningHelper {
     }
 
     async fn stop_listener(&mut self) -> bool {
-        let tasks = self.tasks.clone();
+        let connection_tasks = self.connection_tasks.clone();
         let execution_id = self.execution_id.clone();
-        // Keep the same future alive when cancellation shortens the deadline:
-        // read_marker may already have consumed part of STOPPED.
+        // Keep the same future alive when connection cancellation shortens the
+        // deadline: read_marker may already have consumed part of STOPPED.
         let stop = async {
             if !self.request_stop().await {
                 return false;
@@ -740,7 +740,7 @@ impl RunningHelper {
         let deadline = tokio::time::Instant::now() + CONTROL_CALL_TIMEOUT;
         let result = tokio::select! {
             biased;
-            _ = tasks.cancelled() => {
+            _ = connection_tasks.cancelled() => {
                 let deadline = deadline.min(tokio::time::Instant::now() + PROCESS_TERMINATION_GRACE);
                 tokio::time::timeout_at(deadline, &mut stop).await
             }
@@ -758,7 +758,7 @@ impl RunningHelper {
 
     fn spawn_cleanup(self, mode: HelperCleanup) {
         spawn_execution_cleanup(
-            self.tasks,
+            self.connection_tasks,
             self.server,
             self.registry,
             self.execution_id,
@@ -809,8 +809,8 @@ fn spawn_listener(
     mut helper: RunningHelper,
     mut registration: ListenerRegistration,
 ) {
-    let tasks = helper.tasks.clone();
-    tasks.clone().spawn_tracked(move |cancel| async move {
+    let connection_tasks = helper.connection_tasks.clone();
+    connection_tasks.clone().spawn_tracked(move |cancel| async move {
         enum End {
             Cancelled,
             HelperEnded,
@@ -868,7 +868,7 @@ fn spawn_listener(
                     let handle = session_handle.clone();
                     let path = socket_path.clone();
                     let expected_token = token.clone();
-                    let tasks = tasks.clone();
+                    let connection_tasks = connection_tasks.clone();
                     let cancel = helper.cancel.clone();
                     pending_opens.spawn(async move {
                         let stream = match authenticate_ingress(stream, expected_token.as_bytes()).await {
@@ -885,7 +885,7 @@ fn spawn_listener(
                         .await;
                         match channel {
                             Ok(Ok(channel)) => {
-                                tasks.spawn(async move {
+                                connection_tasks.spawn(async move {
                                     tokio::select! {
                                         _ = cancel.cancelled() => {},
                                         _ = relay(channel, stream, permit) => {},
@@ -1076,7 +1076,7 @@ fn append_stopped_marker_prefix(buffer: &mut Vec<u8>, chunk: &[u8]) -> bool {
 }
 
 fn spawn_failed_helper_cleanup(
-    tasks: Arc<super::TaskGroup>,
+    connection_tasks: Arc<super::TaskGroup>,
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
     execution_id: String,
@@ -1084,7 +1084,7 @@ fn spawn_failed_helper_cleanup(
     stdin_task: Option<JoinHandle<()>>,
 ) {
     spawn_execution_cleanup(
-        tasks,
+        connection_tasks,
         server,
         registry,
         execution_id,
@@ -1101,7 +1101,7 @@ enum HelperCleanup {
 }
 
 fn spawn_execution_cleanup(
-    tasks: Arc<super::TaskGroup>,
+    connection_tasks: Arc<super::TaskGroup>,
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
     execution_id: String,
@@ -1109,9 +1109,9 @@ fn spawn_execution_cleanup(
     stdin_task: Option<JoinHandle<()>>,
     mode: HelperCleanup,
 ) {
-    tasks.clone().spawn_tracked(move |cancel| async move {
+    connection_tasks.clone().spawn_tracked(move |cancel| async move {
         let output_task = output.map(|mut output| {
-            tasks.spawn_tracked(move |_| async move {
+            connection_tasks.spawn_tracked(move |_| async move {
                 while let Some(message) = output.recv().await {
                     let Ok(message) = message else {
                         break;
@@ -1279,15 +1279,17 @@ mod tests {
 
     #[tokio::test]
     async fn listener_cancellation_is_isolated_until_connection_cancel() {
-        let tasks = super::super::TaskGroup::default();
+        let connection_tasks = super::super::TaskGroup::default();
         let registry = ListenerRegistry::default();
         let key = "/run/one.sock".to_string();
-        let first = registry.register(key.clone(), 2, &tasks).unwrap();
+        let first = registry
+            .register(key.clone(), 2, &connection_tasks)
+            .unwrap();
         let sibling = registry
-            .register("/run/two.sock".to_string(), 2, &tasks)
+            .register("/run/two.sock".to_string(), 2, &connection_tasks)
             .unwrap();
         let (finish_tx, finish_rx) = oneshot::channel();
-        let relay = tasks.spawn_tracked(|cancel| async move {
+        let relay = connection_tasks.spawn_tracked(|cancel| async move {
             finish_rx.await.unwrap();
             assert!(!cancel.is_cancelled());
         });
@@ -1300,33 +1302,37 @@ mod tests {
         assert!(!cancel.await);
         finish_tx.send(()).unwrap();
         relay.await.unwrap();
-        tasks.cancel();
+        connection_tasks.cancel();
         sibling.cancelled().await;
         drop(sibling);
-        tokio::time::timeout(std::time::Duration::from_secs(1), tasks.wait())
+        tokio::time::timeout(std::time::Duration::from_secs(1), connection_tasks.wait())
             .await
             .unwrap();
     }
 
     #[tokio::test]
     async fn abandoned_cancel_waiter_cannot_remove_replacement_or_leak_child() {
-        let tasks = super::super::TaskGroup::default();
+        let connection_tasks = super::super::TaskGroup::default();
         let registry = ListenerRegistry::default();
         let key = "/run/one.sock".to_string();
-        let old = registry.register(key.clone(), 1, &tasks).unwrap();
+        let old = registry
+            .register(key.clone(), 1, &connection_tasks)
+            .unwrap();
         {
             let cancel = registry.cancel(&key);
             tokio::pin!(cancel);
             assert!(futures::poll!(&mut cancel).is_pending());
             old.cancelled().await;
         }
-        let replacement = registry.register(key.clone(), 1, &tasks).unwrap();
+        let replacement = registry
+            .register(key.clone(), 1, &connection_tasks)
+            .unwrap();
         drop(old);
         assert_eq!(registry.len(), 1);
         assert!(futures::poll!(std::pin::pin!(replacement.cancelled())).is_pending());
         registry.cancel_all();
         replacement.cancelled().await;
-        let wait = tasks.wait();
+        let wait = connection_tasks.wait();
         tokio::pin!(wait);
         assert!(futures::poll!(&mut wait).is_pending());
         drop(replacement);
@@ -1340,14 +1346,16 @@ mod tests {
     #[tokio::test]
     async fn registration_release_after_abort_or_panic_completes_cancellation() {
         for abort_before_start in [true, false] {
-            let tasks = super::super::TaskGroup::default();
+            let connection_tasks = super::super::TaskGroup::default();
             let registry = ListenerRegistry::default();
             let key = "/run/one.sock".to_string();
-            let registration = registry.register(key.clone(), 1, &tasks).unwrap();
+            let registration = registry
+                .register(key.clone(), 1, &connection_tasks)
+                .unwrap();
             let cancel = registry.cancel(&key);
             tokio::pin!(cancel);
             assert!(futures::poll!(&mut cancel).is_pending());
-            let listener = tasks.spawn_tracked(|_| async move {
+            let listener = connection_tasks.spawn_tracked(|_| async move {
                 let _registration = registration;
                 panic!("listener failed");
             });
@@ -1359,7 +1367,7 @@ mod tests {
             assert_eq!(error.is_panic(), !abort_before_start);
             assert!(!cancel.await);
             assert_eq!(registry.len(), 0);
-            tokio::time::timeout(std::time::Duration::from_secs(1), tasks.wait())
+            tokio::time::timeout(std::time::Duration::from_secs(1), connection_tasks.wait())
                 .await
                 .unwrap();
         }
@@ -1367,17 +1375,21 @@ mod tests {
 
     #[tokio::test]
     async fn rejected_registrations_and_natural_exit_leave_no_child_waiters() {
-        let tasks = super::super::TaskGroup::default();
+        let connection_tasks = super::super::TaskGroup::default();
         let registry = ListenerRegistry::default();
         let key = "/run/one.sock".to_string();
-        let registration = registry.register(key.clone(), 2, &tasks).unwrap();
-        assert!(registry.register(key.clone(), 2, &tasks).is_none());
+        let registration = registry
+            .register(key.clone(), 2, &connection_tasks)
+            .unwrap();
         assert!(registry
-            .register("/run/two.sock".to_string(), 1, &tasks)
+            .register(key.clone(), 2, &connection_tasks)
+            .is_none());
+        assert!(registry
+            .register("/run/two.sock".to_string(), 1, &connection_tasks)
             .is_none());
         drop(registration);
         assert_eq!(registry.len(), 0);
-        tokio::time::timeout(std::time::Duration::from_secs(1), tasks.wait())
+        tokio::time::timeout(std::time::Duration::from_secs(1), connection_tasks.wait())
             .await
             .unwrap();
     }
@@ -1495,33 +1507,33 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_and_listener_limit_registrations_are_rejected() {
-        let tasks = super::super::TaskGroup::default();
+        let connection_tasks = super::super::TaskGroup::default();
         let registry = ListenerRegistry::default();
         let first = registry
-            .register("/run/one.sock".into(), 2, &tasks)
+            .register("/run/one.sock".into(), 2, &connection_tasks)
             .unwrap();
         assert!(registry
-            .register("/run/one.sock".into(), 2, &tasks)
+            .register("/run/one.sock".into(), 2, &connection_tasks)
             .is_none());
         let second = registry
-            .register("/run/two.sock".into(), 2, &tasks)
+            .register("/run/two.sock".into(), 2, &connection_tasks)
             .unwrap();
         assert!(registry
-            .register("/run/three.sock".into(), 2, &tasks)
+            .register("/run/three.sock".into(), 2, &connection_tasks)
             .is_none());
         drop(first);
         assert!(registry
-            .register("/run/three.sock".into(), 2, &tasks)
+            .register("/run/three.sock".into(), 2, &connection_tasks)
             .is_some());
         drop(second);
     }
 
     #[tokio::test]
     async fn cancel_waits_for_pending_channel_opens() {
-        let tasks = super::super::TaskGroup::default();
+        let connection_tasks = super::super::TaskGroup::default();
         let registry = ListenerRegistry::default();
         let mut registration = registry
-            .register("/run/one.sock".into(), 1, &tasks)
+            .register("/run/one.sock".into(), 1, &connection_tasks)
             .unwrap();
         let (finish_tx, finish_rx) = oneshot::channel::<()>();
         let mut pending = JoinSet::new();

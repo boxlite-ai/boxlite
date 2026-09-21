@@ -53,7 +53,7 @@ impl Drop for ChildGuard {
 
 async fn fixture(
     server: Arc<GuestServer>,
-    tasks: Arc<super::super::TaskGroup>,
+    connection_tasks: Arc<super::super::TaskGroup>,
     path: &Path,
     ingress: SocketAddrV4,
 ) -> (RunningHelper, ChildGuard) {
@@ -101,7 +101,7 @@ async fn fixture(
         .send_execution_input(opening, Box::pin(ReceiverStream::new(input).map(Ok)))
         .await
         .unwrap();
-    let stdin_task = tasks.spawn_tracked(|_| async move {
+    let stdin_task = connection_tasks.spawn_tracked(|_| async move {
         input_task.await.unwrap().unwrap();
     });
     let mut output = server.attach_execution(&execution_id).await.unwrap();
@@ -123,7 +123,7 @@ async fn fixture(
     .unwrap();
     (
         RunningHelper {
-            tasks,
+            connection_tasks,
             cancel: Default::default(),
             server,
             registry,
@@ -176,27 +176,27 @@ async fn shutdown_silent_helper(cancel_after_stop: bool, shutdown: Shutdown) {
             .await
             .unwrap();
     }
-    let tasks = server
+    let service_tasks = server
         .ssh_manager
         .state
         .lock()
         .await
-        .tasks
+        .service_tasks
         .clone()
         .unwrap_or_default();
-    server.ssh_manager.state.lock().await.tasks = Some(tasks.clone());
+    server.ssh_manager.state.lock().await.service_tasks = Some(service_tasks.clone());
     let path = root.path().join("helper.sock");
     let ingress = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let SocketAddr::V4(address) = ingress.local_addr().unwrap() else {
         unreachable!()
     };
-    let (mut helper, guard) = fixture(server.clone(), tasks.clone(), &path, address).await;
+    let (mut helper, guard) = fixture(server.clone(), service_tasks.clone(), &path, address).await;
     let mut unix = UnixStream::connect(&path).await.unwrap();
     let (mut tcp, _) = ingress.accept().await.unwrap();
     let mut token = [0; INGRESS_TOKEN_BYTES];
     tcp.read_exact(&mut token).await.unwrap();
     if !cancel_after_stop {
-        tasks.cancel();
+        service_tasks.cancel();
     }
     assert!(helper.stop_listener().await);
     assert!(!path.exists());
@@ -233,10 +233,10 @@ async fn shutdown_silent_helper(cancel_after_stop: bool, shutdown: Shutdown) {
                         .unwrap()
                         .authorizer,
                     authenticated,
-                    tasks.clone(),
+                    service_tasks.clone(),
                 );
                 drop(connection);
-                tasks.wait().await;
+                service_tasks.wait().await;
                 Ok(())
             }
         }
@@ -247,7 +247,7 @@ async fn shutdown_silent_helper(cancel_after_stop: bool, shutdown: Shutdown) {
     // Cleanup precedes every defect assertion, including the old-code timeout.
     drop((unix, tcp, ingress));
     let _ = server.kill_execution("reverse-helper-test", 9, true).await;
-    tokio::time::timeout(Duration::from_secs(5), tasks.wait())
+    tokio::time::timeout(Duration::from_secs(5), service_tasks.wait())
         .await
         .unwrap();
     let exit = state.wait_process().await;
@@ -299,13 +299,14 @@ async fn confirmation_during_shutdown(scenario: Confirmation) {
     let server = Arc::new(GuestServer::new(crate::layout::GuestLayout::with_base(
         root.path(),
     )));
-    let tasks = Arc::new(super::super::TaskGroup::default());
+    let connection_tasks = Arc::new(super::super::TaskGroup::default());
     let path = root.path().join("confirm.sock");
     let ingress = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let SocketAddr::V4(address) = ingress.local_addr().unwrap() else {
         unreachable!()
     };
-    let (mut helper, guard) = fixture(server.clone(), tasks.clone(), &path, address).await;
+    let (mut helper, guard) =
+        fixture(server.clone(), connection_tasks.clone(), &path, address).await;
     let state = server.registry.get(&helper.execution_id).await.unwrap();
     if matches!(scenario, Confirmation::AlreadyExited) {
         assert!(helper.request_stop().await);
@@ -314,7 +315,8 @@ async fn confirmation_during_shutdown(scenario: Confirmation) {
     }
     let (status, output) = mpsc::channel(2);
     let mut original_output = std::mem::replace(&mut helper.output, output);
-    tasks.spawn_tracked(|_| async move { while original_output.recv().await.is_some() {} });
+    connection_tasks
+        .spawn_tracked(|_| async move { while original_output.recv().await.is_some() {} });
     let (blocked_input, blocked_receiver) = mpsc::channel(1);
     if matches!(scenario, Confirmation::FullInputQueue) {
         blocked_input
@@ -347,13 +349,13 @@ async fn confirmation_during_shutdown(scenario: Confirmation) {
             // Poll through production parsing before cancellation. Restarting
             // read_marker here would reject the remaining suffix.
             assert!(futures::poll!(&mut stop).is_pending());
-            tasks.cancel();
+            connection_tasks.cancel();
             status
                 .send(Ok(stdout(&REVERSE_STREAMLOCAL_STOPPED_MAGIC[split..])))
                 .await
                 .unwrap();
         } else {
-            tasks.cancel();
+            connection_tasks.cancel();
             if matches!(scenario, Confirmation::Invalid) {
                 status.send(Ok(stdout(b"invalid"))).await.unwrap();
             }
@@ -367,7 +369,7 @@ async fn confirmation_during_shutdown(scenario: Confirmation) {
     helper.spawn_cleanup(HelperCleanup::Kill);
     drop(blocked_receiver);
     drop(blocked_input);
-    tokio::time::timeout(Duration::from_secs(5), tasks.wait())
+    tokio::time::timeout(Duration::from_secs(5), connection_tasks.wait())
         .await
         .unwrap();
     let released = server.registry.get("reverse-helper-test").await.is_none();

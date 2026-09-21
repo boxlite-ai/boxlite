@@ -80,7 +80,7 @@ impl ChannelCompletion {
 
 #[derive(Clone)]
 struct StdinForwarder {
-    tasks: Arc<super::TaskGroup>,
+    channel_tasks: Arc<super::TaskGroup>,
     execution_id: String,
     sender: mpsc::Sender<ExecStdin>,
 }
@@ -102,14 +102,14 @@ impl StdinForwarder {
         };
         tokio::select! {
             biased;
-            _ = self.tasks.cancelled() => Err(BridgeError::StdinClosed),
+            _ = self.channel_tasks.cancelled() => Err(BridgeError::StdinClosed),
             result = self.sender.send(message) => result.map_err(|_| BridgeError::StdinClosed),
         }
     }
 }
 
 pub(crate) struct ChannelBridge {
-    tasks: Arc<super::TaskGroup>,
+    channel_tasks: Arc<super::TaskGroup>,
     server: Arc<GuestServer>,
     execution_id: String,
     stdin: StdinForwarder,
@@ -118,7 +118,7 @@ pub(crate) struct ChannelBridge {
 
 impl ChannelBridge {
     pub(crate) async fn start(
-        tasks: Arc<super::TaskGroup>,
+        connection_tasks: Arc<super::TaskGroup>,
         server: Arc<GuestServer>,
         command: Command,
         tty: Option<TtyConfig>,
@@ -126,7 +126,7 @@ impl ChannelBridge {
         channel_id: ChannelId,
         session_handle: SessionHandle,
     ) -> Result<Self, BridgeError> {
-        let tasks = tasks.child();
+        let channel_tasks = connection_tasks.child();
         let container_id = resolve_single_container(&server).await?;
         let launch = execution_launch(command, tty, env, &container_id);
         let completion = launch.completion;
@@ -178,13 +178,13 @@ impl ChannelBridge {
             // The execution is already registered and running, so this failure
             // path owes the same teardown every sibling below performs.
             Err(error) => {
-                cleanup_failed_execution_start(tasks.clone(), server.clone(), execution_id);
+                cleanup_failed_execution_start(channel_tasks.clone(), server.clone(), execution_id);
                 return Err(error.into());
             }
         };
         // Dropping this waiter would detach the core writer. Resource release
         // aborts that writer; keep tracking its JoinHandle through completion.
-        tasks.spawn_tracked(move |_| async move {
+        channel_tasks.spawn_tracked(move |_| async move {
             if let Ok(Err(error)) = input_task.await {
                 warn!(%error, "SSH stdin forwarding ended with an error");
             }
@@ -194,7 +194,11 @@ impl ChannelBridge {
             let ready = match await_streamlocal_ready(&server, &execution_id).await {
                 Ok(ready) => ready,
                 Err(error) => {
-                    cleanup_failed_execution_start(tasks.clone(), server.clone(), execution_id);
+                    cleanup_failed_execution_start(
+                        channel_tasks.clone(),
+                        server.clone(),
+                        execution_id,
+                    );
                     return Err(error);
                 }
             };
@@ -220,20 +224,20 @@ impl ChannelBridge {
             completion,
             output_start,
         );
-        let output_task = tasks.spawn(output);
+        let output_task = channel_tasks.spawn(output);
         spawn_execution_cleanup(
-            tasks.clone(),
+            channel_tasks.clone(),
             server.clone(),
             execution_id.clone(),
             output_task,
         );
 
         Ok(Self {
-            tasks: tasks.clone(),
+            channel_tasks: channel_tasks.clone(),
             server,
             execution_id: execution_id.clone(),
             stdin: StdinForwarder {
-                tasks,
+                channel_tasks,
                 execution_id,
                 sender: stdin_tx,
             },
@@ -282,7 +286,7 @@ impl ChannelBridge {
     }
 
     pub(crate) fn terminate_running(&mut self) {
-        self.tasks.cancel();
+        self.channel_tasks.cancel();
     }
 }
 
@@ -328,7 +332,7 @@ async fn terminate_process_group(server: Arc<GuestServer>, execution_id: String)
 
 impl Drop for ChannelBridge {
     fn drop(&mut self) {
-        self.tasks.cancel();
+        self.channel_tasks.cancel();
     }
 }
 
@@ -823,12 +827,12 @@ fn output_gap_message(source: &str, lost_bytes: u64) -> Vec<u8> {
 /// release waits for both before closing descriptors and removing the registry
 /// entry.
 fn spawn_execution_cleanup(
-    tasks: Arc<super::TaskGroup>,
+    channel_tasks: Arc<super::TaskGroup>,
     server: Arc<GuestServer>,
     execution_id: String,
     output_task: JoinHandle<()>,
 ) -> JoinHandle<()> {
-    tasks.spawn_tracked(move |cancel| async move {
+    channel_tasks.spawn_tracked(move |cancel| async move {
         let registry = &server.registry;
         let Some(state) = registry.get(&execution_id).await else {
             return;
@@ -853,13 +857,13 @@ fn spawn_execution_cleanup(
 }
 
 fn cleanup_failed_execution_start(
-    tasks: Arc<super::TaskGroup>,
+    channel_tasks: Arc<super::TaskGroup>,
     server: Arc<GuestServer>,
     execution_id: String,
 ) {
-    let output_task = tasks.spawn(async {});
-    spawn_execution_cleanup(tasks.clone(), server, execution_id, output_task);
-    tasks.cancel();
+    let output_task = channel_tasks.spawn(async {});
+    spawn_execution_cleanup(channel_tasks.clone(), server, execution_id, output_task);
+    channel_tasks.cancel();
 }
 
 fn exit_notification(exit_code: i32, signal: i32, error_message: String) -> ExitNotification {
@@ -1283,12 +1287,12 @@ mod tests {
 
     // Construct a channel without requiring a container or SSH transport.
     fn test_stdin_forwarder(
-        tasks: Arc<super::super::TaskGroup>,
+        channel_tasks: Arc<super::super::TaskGroup>,
     ) -> (StdinForwarder, mpsc::Receiver<ExecStdin>) {
         let (sender, receiver) = mpsc::channel(STDIN_QUEUE_DEPTH);
         (
             StdinForwarder {
-                tasks,
+                channel_tasks,
                 execution_id: "exec-1".into(),
                 sender,
             },
@@ -1297,10 +1301,10 @@ mod tests {
     }
 
     async fn cancelled_full_stdin_queue(close: bool) {
-        let generation = Arc::new(super::super::TaskGroup::default());
-        let connection = generation.child();
-        let channel = connection.child();
-        let (forwarder, mut receiver) = test_stdin_forwarder(channel.clone());
+        let service_tasks = Arc::new(super::super::TaskGroup::default());
+        let connection_tasks = service_tasks.child();
+        let channel_tasks = connection_tasks.child();
+        let (forwarder, mut receiver) = test_stdin_forwarder(channel_tasks.clone());
         for _ in 0..STDIN_QUEUE_DEPTH {
             forwarder.data(vec![1]).await.unwrap();
         }
@@ -1316,7 +1320,7 @@ mod tests {
             assert!(futures::poll!(&mut blocked).is_pending());
             tokio::task::yield_now().await;
             assert!(futures::poll!(&mut blocked).is_pending());
-            generation.cancel();
+            service_tasks.cancel();
             let result = tokio::time::timeout(std::time::Duration::from_secs(1), blocked)
                 .await
                 .expect("cancelled stdin enqueue must stop waiting on the full queue");
@@ -1328,9 +1332,9 @@ mod tests {
         }
         assert!(receiver.try_recv().is_err());
         drop(forwarder);
-        drop(channel);
-        drop(connection);
-        generation.wait().await;
+        drop(channel_tasks);
+        drop(connection_tasks);
+        service_tasks.wait().await;
     }
 
     #[tokio::test]
@@ -1345,10 +1349,10 @@ mod tests {
 
     #[tokio::test]
     async fn stdin_cancel_rejects_data_and_eof_with_queue_space() {
-        let tasks = Arc::new(super::super::TaskGroup::default());
-        let (forwarder, mut receiver) = test_stdin_forwarder(tasks.clone());
+        let channel_tasks = Arc::new(super::super::TaskGroup::default());
+        let (forwarder, mut receiver) = test_stdin_forwarder(channel_tasks.clone());
         forwarder.data(vec![1]).await.unwrap();
-        tasks.cancel();
+        channel_tasks.cancel();
         assert!(matches!(
             forwarder.data(vec![2]).await,
             Err(BridgeError::StdinClosed)
@@ -1359,28 +1363,28 @@ mod tests {
         ));
         assert_eq!(receiver.recv().await.unwrap().data, vec![1]);
         assert!(receiver.try_recv().is_err());
-        tasks.wait().await;
+        channel_tasks.wait().await;
     }
 
     #[tokio::test]
     async fn stdin_cancel_before_first_enqueue_rejects_data() {
-        let tasks = Arc::new(super::super::TaskGroup::default());
-        let (forwarder, mut receiver) = test_stdin_forwarder(tasks.clone());
+        let channel_tasks = Arc::new(super::super::TaskGroup::default());
+        let (forwarder, mut receiver) = test_stdin_forwarder(channel_tasks.clone());
         let send = forwarder.data(vec![1]);
-        tasks.cancel();
+        channel_tasks.cancel();
         assert!(matches!(send.await, Err(BridgeError::StdinClosed)));
         assert!(receiver.try_recv().is_err());
-        tasks.wait().await;
+        channel_tasks.wait().await;
     }
 
     #[tokio::test]
     async fn stdin_cancel_channel_preserves_sibling() {
-        let connection = Arc::new(super::super::TaskGroup::default());
-        let channel = connection.child();
-        let sibling = connection.child();
-        let (forwarder, _receiver) = test_stdin_forwarder(channel.clone());
-        let (other, mut receiver) = test_stdin_forwarder(sibling.clone());
-        channel.cancel();
+        let connection_tasks = Arc::new(super::super::TaskGroup::default());
+        let channel_tasks = connection_tasks.child();
+        let sibling_channel_tasks = connection_tasks.child();
+        let (forwarder, _receiver) = test_stdin_forwarder(channel_tasks.clone());
+        let (other, mut receiver) = test_stdin_forwarder(sibling_channel_tasks.clone());
+        channel_tasks.cancel();
         assert!(matches!(
             forwarder.eof().await,
             Err(BridgeError::StdinClosed)
@@ -1391,17 +1395,17 @@ mod tests {
         assert_eq!(message.data, vec![3]);
         assert!(!message.close);
         assert!(receiver.recv().await.unwrap().close);
-        assert!(!connection.is_cancelled());
-        assert!(!sibling.is_cancelled());
-        drop((forwarder, other, channel, sibling));
-        connection.wait().await;
+        assert!(!connection_tasks.is_cancelled());
+        assert!(!sibling_channel_tasks.is_cancelled());
+        drop((forwarder, other, channel_tasks, sibling_channel_tasks));
+        connection_tasks.wait().await;
     }
 
     #[tokio::test]
     async fn stdin_backpressure_preserves_more_than_one_queue_of_frames() {
         let (sender, mut receiver) = mpsc::channel(STDIN_QUEUE_DEPTH);
         let forwarder = StdinForwarder {
-            tasks: Default::default(),
+            channel_tasks: Default::default(),
             execution_id: "exec-1".into(),
             sender,
         };
