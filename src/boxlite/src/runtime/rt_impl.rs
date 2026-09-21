@@ -2252,6 +2252,13 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(config.rootfs_backend, RootfsBackend::Legacy);
+        assert!(
+            litebox
+                .clone_boxes(Default::default(), 0, Vec::new())
+                .await
+                .unwrap()
+                .is_empty()
+        );
         for status in [BoxStatus::Configured, BoxStatus::Stopped, BoxStatus::Failed] {
             state.status = status;
             assert!(BoxBuilder::new(runtime.clone(), config.clone(), state.clone()).is_ok());
@@ -2351,6 +2358,10 @@ mod tests {
                     litebox.start().await,
                     litebox
                         .clone_box(Default::default(), None)
+                        .await
+                        .map(|_| ()),
+                    litebox
+                        .clone_boxes(Default::default(), 0, Vec::new())
                         .await
                         .map(|_| ()),
                     litebox.export(Default::default(), &dest).await.map(|_| ()),

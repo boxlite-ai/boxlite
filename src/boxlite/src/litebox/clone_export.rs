@@ -42,10 +42,10 @@ impl BoxImpl {
         count: usize,
         names: Vec<String>,
     ) -> BoxliteResult<Vec<crate::LiteBox>> {
+        self.config.require_legacy_rootfs("clone")?;
         if count == 0 {
             return Ok(Vec::new());
         }
-        self.config.require_legacy_rootfs("clone")?;
 
         if !names.is_empty() && names.len() != count {
             return Err(BoxliteError::Config(format!(
