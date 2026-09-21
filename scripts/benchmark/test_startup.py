@@ -166,6 +166,83 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(cancelled), 2)
         runtime.remove.assert_awaited_once_with("box", force=True)
 
+    async def test_timeout_removes_boxes_before_waiting_for_stalled_cancellation(self):
+        for stage, shutdown_fails in (
+            ("create", False),
+            ("wait", False),
+            ("stdout", False),
+            ("stderr", False),
+            ("create", True),
+        ):
+            with self.subTest(stage=stage, shutdown_fails=shutdown_fails):
+                released = asyncio.Event()
+                entered = asyncio.Event()
+
+                async def blocked(*_, entered=entered, released=released):
+                    entered.set()
+                    while not released.is_set():
+                        try:
+                            await released.wait()
+                        except asyncio.CancelledError:
+                            pass
+                    raise asyncio.CancelledError
+
+                async def stream(name, stage=stage, blocked=blocked):
+                    if stage == name:
+                        await blocked()
+                    yield "discard"
+
+                execution = SimpleNamespace(
+                    stdin=lambda: SimpleNamespace(close=AsyncMock()),
+                    stdout=lambda: stream("stdout"),
+                    stderr=lambda: stream("stderr"),
+                    wait=blocked
+                    if stage == "wait"
+                    else AsyncMock(
+                        return_value=SimpleNamespace(exit_code=0, error_message=None)
+                    ),
+                )
+                box = SimpleNamespace(id="box", exec=AsyncMock(return_value=execution))
+                runtime = self.runtime()
+                runtime.create = (
+                    blocked if stage == "create" else AsyncMock(return_value=box)
+                )
+                runtime.remove.side_effect = (
+                    lambda *_args, released=released, **_kwargs: released.set()
+                )
+                if shutdown_fails:
+                    runtime.shutdown.side_effect = RuntimeError("shutdown failed")
+                args = arguments(Path("unused"))
+                args.timeout = 0.01
+                with (
+                    patch.object(startup, "allocated_bytes", return_value=0),
+                    patch.object(startup, "CLEANUP_TIMEOUT", 0.01),
+                ):
+                    tasks_before = asyncio.all_tasks()
+                    batch = asyncio.create_task(
+                        startup.run_batch(
+                            runtime,
+                            SimpleNamespace(BoxOptions=Mock()),
+                            args,
+                            args.output,
+                            1,
+                        )
+                    )
+                    try:
+                        await asyncio.wait_for(entered.wait(), 1)
+                        done, _ = await asyncio.wait([batch], timeout=0.5)
+                        self.assertTrue(done, "timeout must reach forced box cleanup")
+                        with self.assertRaises(
+                            RuntimeError if shutdown_fails else asyncio.TimeoutError
+                        ):
+                            batch.result()
+                        runtime.remove.assert_awaited_once_with("box", force=True)
+                        runtime.shutdown.assert_awaited_once_with(timeout=20)
+                        self.assertFalse(asyncio.all_tasks() - tasks_before)
+                    finally:
+                        released.set()
+                        await asyncio.gather(batch, return_exceptions=True)
+
     async def test_counter_reset_fails_and_still_cleans(self):
         runtime = self.runtime()
         with (

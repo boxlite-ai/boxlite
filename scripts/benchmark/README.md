@@ -25,6 +25,10 @@ Use a new output directory for each run; an existing directory is rejected.
 `--batch` is the number of concurrently started boxes (default 4, range 2–64).
 `--cpus` and `--memory-mib` set resources **per box** (defaults 1 and 512).
 `--timeout` bounds each batch, including image preparation and startup.
+Cancellation and cleanup have separate 30-second waits. If cancellation stalls,
+the harness shuts down the runtime and force-removes its boxes before waiting
+again for task and output-stream cleanup. Shutdown failure still attempts forced
+removal; unfinished cleanup fails the run and retains the runtime home.
 `--network-label` records the network conditions; it does not configure them.
 
 Compare the same image digest, command, architecture, SDK build, resources, and

@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+CLEANUP_TIMEOUT = 30
+
 
 def allocated_bytes(root):
     """Count allocated blocks once per inode, without following symlinks."""
@@ -108,8 +110,16 @@ async def run_batch(runtime, sdk, args, home, count):
     tasks = [
         asyncio.create_task(run_box(runtime, sdk, args, started)) for _ in range(count)
     ]
+    batch = asyncio.gather(*tasks)
+    # A timed-out batch may finish later; never log arbitrary SDK exception text.
+    batch.add_done_callback(
+        lambda future: None if future.cancelled() else future.exception()
+    )
     try:
-        rows = await asyncio.wait_for(asyncio.gather(*tasks), args.timeout)
+        done, _ = await asyncio.wait([batch], timeout=args.timeout)
+        if not done:
+            raise asyncio.TimeoutError("batch deadline exceeded")
+        rows = batch.result()
         elapsed = (time.perf_counter() - started) * 1000
         rx_after = received_bytes(args.interface)
         if rx_before is not None and rx_after < rx_before:
@@ -124,14 +134,26 @@ async def run_batch(runtime, sdk, args, home, count):
     finally:
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        # wait_for would wait for cancellation, blocking the forced cleanup below.
+        _, pending = await asyncio.wait(tasks, timeout=CLEANUP_TIMEOUT)
 
         # An interrupted create can leave a DB row without returning a handle.
         async def remove_boxes():
             for box in await runtime.list_info():
                 await runtime.remove(box.id, force=True)
 
-        await asyncio.wait_for(remove_boxes(), 30)
+        try:
+            if pending:
+                # Reject new operations and stop active boxes before forced removal.
+                await asyncio.wait_for(runtime.shutdown(timeout=20), CLEANUP_TIMEOUT)
+        finally:
+            try:
+                await asyncio.wait_for(remove_boxes(), CLEANUP_TIMEOUT)
+            finally:
+                # run_box owns its stream tasks until its finally block finishes.
+                _, pending = await asyncio.wait(tasks, timeout=CLEANUP_TIMEOUT)
+                if pending:
+                    raise asyncio.TimeoutError("box tasks did not stop after cleanup")
 
 
 def summarize(batches):
