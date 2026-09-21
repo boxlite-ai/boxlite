@@ -419,7 +419,6 @@ impl Drop for ListenerRegistration {
 pub(crate) struct ReverseStreamlocalManager {
     connection_tasks: Arc<super::TaskGroup>,
     listeners: ListenerRegistry,
-    cancel: tokio_util::sync::CancellationToken,
     connection_permits: Arc<Semaphore>,
 }
 
@@ -428,7 +427,6 @@ impl ReverseStreamlocalManager {
         Self {
             connection_tasks,
             listeners: ListenerRegistry::default(),
-            cancel: Default::default(),
             connection_permits: Arc::new(Semaphore::new(MAX_FORWARD_CONNECTIONS)),
         }
     }
@@ -477,7 +475,6 @@ impl ReverseStreamlocalManager {
             socket_path,
             ingress_address,
             token.clone(),
-            self.cancel.clone(),
         )
         .await
         {
@@ -510,14 +507,12 @@ impl ReverseStreamlocalManager {
 
 impl Drop for ReverseStreamlocalManager {
     fn drop(&mut self) {
-        self.cancel.cancel();
         self.listeners.cancel_all();
     }
 }
 
 struct RunningHelper {
     connection_tasks: Arc<super::TaskGroup>,
-    cancel: tokio_util::sync::CancellationToken,
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
     execution_id: String,
@@ -534,7 +529,6 @@ impl RunningHelper {
         socket_path: &str,
         ingress: SocketAddrV4,
         token: String,
-        cancel: tokio_util::sync::CancellationToken,
     ) -> Result<Self, String> {
         let container_id = super::bridge::resolve_single_container(&server)
             .await
@@ -679,7 +673,6 @@ impl RunningHelper {
 
         Ok(Self {
             connection_tasks,
-            cancel,
             server,
             registry,
             execution_id,
@@ -869,7 +862,6 @@ fn spawn_listener(
                     let path = socket_path.clone();
                     let expected_token = token.clone();
                     let connection_tasks = connection_tasks.clone();
-                    let cancel = helper.cancel.clone();
                     pending_opens.spawn(async move {
                         let stream = match authenticate_ingress(stream, expected_token.as_bytes()).await {
                             Ok(stream) => stream,
@@ -885,12 +877,7 @@ fn spawn_listener(
                         .await;
                         match channel {
                             Ok(Ok(channel)) => {
-                                connection_tasks.spawn(async move {
-                                    tokio::select! {
-                                        _ = cancel.cancelled() => {},
-                                        _ = relay(channel, stream, permit) => {},
-                                    }
-                                });
+                                connection_tasks.spawn(relay(channel, stream, permit));
                             }
                             Ok(Err(error)) => {
                                 debug!(%error, "SSH client rejected reverse streamlocal channel")

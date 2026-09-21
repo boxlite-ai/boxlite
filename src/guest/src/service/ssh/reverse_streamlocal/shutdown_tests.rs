@@ -124,7 +124,6 @@ async fn fixture(
     (
         RunningHelper {
             connection_tasks,
-            cancel: Default::default(),
             server,
             registry,
             execution_id,
