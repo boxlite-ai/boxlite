@@ -11,7 +11,7 @@ import (
 )
 
 type JobConcurrency struct {
-	MaxConcurrentJobs int `json:"maxConcurrentJobs"`
+	MaxConcurrentJobs int `json:"maxConcurrentJobs" validate:"required" minimum:"1"`
 }
 
 func (a *ApiServer) registerJobConcurrencyRoutes() {

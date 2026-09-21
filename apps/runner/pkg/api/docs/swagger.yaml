@@ -234,7 +234,10 @@ definitions:
   api.JobConcurrency:
     properties:
       maxConcurrentJobs:
+        minimum: 1
         type: integer
+    required:
+      - maxConcurrentJobs
     type: object
   dto.VolumeDTO:
     properties:

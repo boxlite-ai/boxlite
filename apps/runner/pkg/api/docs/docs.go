@@ -1031,9 +1031,13 @@ const docTemplate = `{
         },
         "api.JobConcurrency": {
             "type": "object",
+            "required": [
+                "maxConcurrentJobs"
+            ],
             "properties": {
                 "maxConcurrentJobs": {
-                    "type": "integer"
+                    "type": "integer",
+                    "minimum": 1
                 }
             }
         },
