@@ -94,6 +94,31 @@ describe('OrganizationResourceActionGuard', () => {
     expect(organizationUserService.findOne).not.toHaveBeenCalled()
   })
 
+  // The exemption is keyed on the role first, the guard second. A human context
+  // on a BoxAccessGuard route — the one the runner case above is waved through —
+  // must not inherit that pass, or declaring BoxAccessGuard would open every box
+  // route to any authenticated user. The organization lookup is the proof: the
+  // bypass returns before it, so reaching it means the request fell through to
+  // the normal organization check.
+  it('does not let a non-machine user inherit a machine role exemption', async () => {
+    const { guard, organizationService } = createGuard()
+    const handler = function boxHandler() {}
+    Reflect.defineMetadata(GUARDS_METADATA, [BoxAccessGuard], handler)
+
+    const request = {
+      params: { boxId: 'box-1' },
+      user: {
+        role: 'user',
+        userId: 'user-1',
+        organizationId: 'org-1',
+      },
+    }
+
+    await expect(guard.canActivate(httpContext(request, handler))).resolves.toBe(false)
+
+    expect(organizationService.findOne).toHaveBeenCalledWith('org-1')
+  })
+
   it('unwraps OrGuard metadata so runner activity updates reach BoxAccessGuard', async () => {
     const { guard, organizationService, organizationUserService } = createGuard()
     const handler = function runnerActivityHandler() {}

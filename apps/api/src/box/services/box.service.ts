@@ -81,6 +81,7 @@ import {
   AUTO_STOP_DISABLED,
   DEFAULT_AUTO_STOP_SECONDS,
   DEFAULT_AUTO_RESUME,
+  MIN_AUTO_STOP_SECONDS,
 } from '../constants/box-lifecycle.constants'
 
 // TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
@@ -1479,6 +1480,11 @@ export class BoxService {
 
     if (!Number.isInteger(autoStop) || autoStop < AUTO_STOP_DISABLED) {
       throw new BadRequestError('Auto-stop interval must be a non-negative integer number of seconds')
+    }
+    if (autoStop !== AUTO_STOP_DISABLED && autoStop < MIN_AUTO_STOP_SECONDS) {
+      throw new BadRequestError(
+        `Auto-stop interval must be 0 (disabled) or at least ${MIN_AUTO_STOP_SECONDS} seconds; shorter windows cannot be kept alive by proxy traffic`,
+      )
     }
     if (!Number.isInteger(autoDelete) || autoDelete < AUTO_DELETE_DISABLED) {
       throw new BadRequestError('Auto-delete interval must be a non-negative integer number of seconds')
