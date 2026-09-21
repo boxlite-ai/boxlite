@@ -1144,6 +1144,11 @@ fn sign_shim_with_entitlements(binary: &Path) {
         }
     }
 }
+
+#[path = "src/default_runtime_dir.rs"]
+mod default_runtime_dir;
+use default_runtime_dir::default_runtime_dir;
+
 /// Whether to `include_bytes!` shim/guest into the crate.
 ///
 /// Release always embeds (self-contained dist). Debug does not, unless
@@ -1164,6 +1169,7 @@ fn embed_runtime_binaries() -> bool {
 /// bundle all required libraries and binaries together.
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src/default_runtime_dir.rs");
     println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
     println!("cargo:rerun-if-env-changed=BOXLITE_EMBED_RUNTIME");
     println!("cargo:rerun-if-env-changed=CARGO_TARGET_DIR");
@@ -1262,20 +1268,21 @@ fn main() {
     // Generate embedded runtime manifest (include_bytes! for self-contained SDKs)
     EmbeddedManifest::new(&runtime_dir).generate(&mode, &cargo);
 
-    // Debug non-embed: bake the stable symlink dir so `./target/debug/boxlite`
-    // finds shim/guest without the caller exporting BOXLITE_RUNTIME_DIR.
-    // Process env still wins at runtime. The path string is stable, so guest
-    // rebuilds do not force a host crate rebuild.
+    // Debug non-embed: bake a directory so the binary finds shim/guest without
+    // BOXLITE_RUNTIME_DIR. In-tree uses the stable symlink dir (guest rebuilds
+    // do not force a host crate rebuild). Dependency / crates.io builds use
+    // OUT_DIR/runtime, where Prebuilt actually extracts. Process env still wins.
     if !embed_runtime_binaries() {
-        if let Some(target_dir) =
-            CargoBuildContext::target_dir_for_workspace(cargo.workspace_root())
-        {
-            let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-            let stable = target_dir.join(profile).join("runtime");
-            println!(
-                "cargo:rustc-env=BOXLITE_DEFAULT_RUNTIME_DIR={}",
-                stable.display()
-            );
-        }
+        let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+        let default_dir = default_runtime_dir(
+            cargo.is_dependency_build(),
+            CargoBuildContext::target_dir_for_workspace(cargo.workspace_root()).as_deref(),
+            &runtime_dir,
+            &profile,
+        );
+        println!(
+            "cargo:rustc-env=BOXLITE_DEFAULT_RUNTIME_DIR={}",
+            default_dir.display()
+        );
     }
 }

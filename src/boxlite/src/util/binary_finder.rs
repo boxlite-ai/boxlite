@@ -4,7 +4,8 @@
 //! bundled with BoxLite. The search follows a priority order:
 //!
 //! 1. `BOXLITE_RUNTIME_DIR` - Explicit override (highest priority)
-//! 2. Compile-time `BOXLITE_DEFAULT_RUNTIME_DIR` (`target/<profile>/runtime` in debug)
+//! 2. Compile-time `BOXLITE_DEFAULT_RUNTIME_DIR` (in-tree: `target/<profile>/runtime`;
+//!    crates.io / dependency debug: `OUT_DIR/runtime`)
 //! 3. Embedded runtime cache (e.g., `~/.local/share/boxlite/runtimes/v{VERSION}-{COMMIT}-{HASH}/`) - Self-contained SDKs
 //! 4. `DYLD_LIBRARY_PATH` (macOS) / `LD_LIBRARY_PATH` (Linux) - User-specified runtime location
 //! 5. dladdr-based detection - For packaged/installed scenarios
@@ -71,7 +72,8 @@ impl RuntimeBinaryFinder {
     ///
     /// Search priority:
     /// 1. `BOXLITE_RUNTIME_DIR` (explicit override)
-    /// 2. Compile-time default (`target/<profile>/runtime` when debug does not embed)
+    /// 2. Compile-time default (`target/<profile>/runtime` in-tree, `OUT_DIR/runtime`
+    ///    for crates.io / dependency debug builds that do not embed)
     /// 3. Embedded runtime cache
     /// 4. `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH` (user-specified runtime location)
     /// 5. dladdr-based detection (for packaged scenarios)
