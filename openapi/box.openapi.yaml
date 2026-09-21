@@ -1594,12 +1594,33 @@ components:
           type: array
           items:
             type: string
-            example: "boxes:read"
+            example: "volume:read"
           description: |
-            Granted scope strings (`boxes:read`, `boxes:write`, etc.).
-            Clients typically check these at credential-validation time
-            so under-scoped credentials surface immediately rather than
-            at first use.
+            What this credential can reach on this server, as
+            `<resource>:<action>` strings.
+
+            The vocabulary spans every operation this specification
+            defines — `box:read`, `box:write`, `box:exec`, `box:delete`,
+            `volume:read`, `volume:write`, `volume:delete`, `image:read`,
+            `image:write`, `snapshot:read`, `snapshot:write`,
+            `snapshot:delete`, `me:read`. A deployment reports only the
+            subset whose operations it actually serves: a server with no
+            managed volumes never reports `volume:*`, one that serves no
+            images never reports `image:*`, the same way `GET /v1/config`
+            reports the capabilities it lacks.
+
+            Within that subset the list is complete in one direction:
+            every operation the credential may invoke has its scope
+            listed, so a client can check it at validation time and
+            surface an under-scoped credential immediately rather than at
+            first use. It is an upper bound in the other — a listed scope
+            may still be refused by an access rule the list cannot
+            express, so its presence is not a guarantee.
+
+            How a scope is earned is deployment defined: BoxLite cloud
+            derives it from the permissions on the key, while a
+            single-tenant server with no permission model reports
+            everything it serves.
         expires_at:
           type: string
           format: date-time
