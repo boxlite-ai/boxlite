@@ -97,6 +97,41 @@ describe('BoxLite lifecycle policy mapper', () => {
 
     expect(response.auto_resume).toBe(true)
   })
+
+  // POL-311: `GET /v1/boxes/{id}` (and the list endpoint, both served by
+  // boxToBoxResponse) previously had no way to tell an anonymous caller
+  // whether a box is publicly reachable — `box.public` existed on the
+  // control-plane model but never reached the wire response.
+  it.each([
+    [true, 'enabled'],
+    [false, 'disabled'],
+  ])('carries box.public=%s as network.inbound.mode=%s', (isPublic, expectedMode) => {
+    const response = boxToBoxResponse({
+      id: 'box-1',
+      name: 'demo',
+      state: BoxState.STARTED,
+      labels: {},
+      public: isPublic,
+      networkBlockAll: false,
+    } as any)
+
+    expect(response.network.inbound.mode).toBe(expectedMode)
+  })
+
+  it('carries outbound network policy alongside inbound', () => {
+    const response = boxToBoxResponse({
+      id: 'box-1',
+      name: 'demo',
+      state: BoxState.STARTED,
+      labels: {},
+      public: true,
+      networkBlockAll: true,
+      networkAllowList: 'pypi.org,*.openai.com',
+    } as any)
+
+    expect(response.network.outbound.mode).toBe('disabled')
+    expect(response.network.outbound.allow_net).toEqual(['pypi.org', '*.openai.com'])
+  })
 })
 
 // These four validated, were audit-logged, and were then dropped on the floor

@@ -168,6 +168,9 @@ pub(super) struct BoxResponse {
     /// "not finished" apart from "finished with 0".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    /// Network configuration and visibility (`inbound.mode`). Always
+    /// populated by this server — see [`boxlite::BoxInfo::network`].
+    pub network: Option<boxlite::runtime::types::NetworkInfo>,
 }
 
 #[derive(Serialize)]

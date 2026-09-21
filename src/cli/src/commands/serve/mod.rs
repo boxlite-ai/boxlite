@@ -1116,6 +1116,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         auto_delete: info.auto_delete,
         auto_resume: info.auto_resume,
         exit_code: info.exit_code,
+        network: info.network.clone(),
     }
 }
 
