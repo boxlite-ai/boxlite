@@ -34,7 +34,9 @@ func TestIntegrationCreateBoxIdempotentOnReplay(t *testing.T) {
 
 	client, err := NewClient(ctx, ClientConfig{HomeDir: t.TempDir()})
 	if err != nil {
-		t.Fatalf("NewClient: %v", err)
+		// The Create below skips on a prerequisite too, but on any error; this
+		// one classifies first. See skipOrFailRuntimeStart.
+		skipOrFailRuntimeStart(t, err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
 

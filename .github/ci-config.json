@@ -7,7 +7,7 @@
   "python-versions": ["3.10", "3.11", "3.12", "3.13"],
   "node-versions": ["18", "20", "22"],
   "node-build-version": "20",
-  "go-version": "1.24",
+  "go-version": "1.25.4",
   "rust-toolchain": "stable",
   "artifact-retention-days": "7"
 }

@@ -57,16 +57,16 @@ dependencies, standalone tests, and test scaffolding are excluded; production gu
 paths are not ignored by Codecov. SDK language wrappers, cloud apps, and shim
 subprocess execution are separate from the Rust unit report.
 
-The Test workflow also uploads Python and Node.js SDK coverage, Go SDK and
-networking bridge coverage, and cloud API coverage. Each reporter includes
-unvisited production files. Codecov carries forward reports for unchanged
+The Test workflow also uploads Python and Node.js SDK coverage; Go SDK,
+networking bridge, and cloud runner coverage; and cloud API coverage. Each
+reporter includes unvisited production files. Codecov carries forward reports for unchanged
 components when their path-filtered jobs are skipped.
 
 | Command | Report under `target/coverage/` | Requirements |
 | --- | --- | --- |
 | `make coverage:python` | `python/coverage.xml` | Python development dependencies |
 | `make coverage:node` | `node/lcov.info` | Node.js 20+ and SDK dependencies |
-| `make coverage:go` | `go-sdk.out`, `gvproxy.out` | Native runtime and Go toolchain |
+| `make coverage:go` | `go-sdk.out`, `gvproxy.out`, `runner.out` | Native runtime and Go toolchain |
 | `make coverage:api` | `api/lcov.info` | App dependencies, Postgres, Redis |
 
 On a VM-capable host, `make coverage:python:integration` and
@@ -77,7 +77,7 @@ tests marked `e2e` still require separate external services and credentials.
 These collectors produce fresh reports, bypassing Nx's result cache for API
 coverage. Codecov combines them to evaluate the 90% changed-line gate and report
 total coverage. A report does not establish coverage for components that
-have not been instrumented: shim subprocesses, the cloud runner/proxy, and
+have not been instrumented: shim subprocesses, the cloud proxy, and
 dashboard still require additional collection.
 
 ```bash

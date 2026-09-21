@@ -43,6 +43,7 @@ for (const path of ['sdks/go/README.md', 'sdks/python/README.md', 'sdks/node/REA
 
 for (const [path, expected] of [
   ['sdks/go/options.go', ['go']],
+  ['apps/runner/cmd/runner/main.go', ['go']],
   ['sdks/python/boxlite/options.py', ['python']],
   ['sdks/node/lib/options.ts', ['node']],
   ['src/cli/src/main.rs', ['rust']],
@@ -52,6 +53,14 @@ for (const [path, expected] of [
 ] as const) {
   test(`source and shared recipes retain their tests: ${path}`, () => {
     assert.deepEqual(testSuites(['docs/README.md', path]), [...expected])
+  })
+}
+
+// Anything the `go` filter selects on must also reach the workflow that runs
+// the filter, or a push to main changes the suite's inputs and tests nothing.
+for (const path of ['apps/runner/cmd/runner/main.go', 'apps/go.work', 'apps/go.work.sum']) {
+  test(`a push that selects the go suite reaches the Test workflow: ${path}`, () => {
+    assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
   })
 }
 

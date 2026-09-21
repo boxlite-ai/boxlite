@@ -111,3 +111,36 @@ test('libkrun is checked out before Rust caching reads its workspace metadata', 
     'cache metadata needs the pinned libkrun checkout before setup-rust')
   assert.ok(steps.some((step: any) => step.run === 'make coverage:go'), 'every run must still rebuild as needed and execute coverage')
 })
+
+// A module whose `go` directive exceeds the installed toolchain makes GOTOOLCHAIN
+// fetch another one mid-job, and the fetched toolchain cannot run `go tool covdata`
+// — so coverage collapses to `no such tool "covdata"` on every package without
+// tests, while a plain `go build` keeps working and hides it.
+test('the CI Go toolchain satisfies every module in the repository', () => {
+  const configured = JSON.parse(readFileSync(join(root, '.github/ci-config.json'), 'utf8'))['go-version']
+  assert.equal(String(action('setup-go').inputs['go-version'].default), String(configured),
+    'setup-go\'s default is what jobs with no config dependency install; it must name the same version')
+
+  // A missing component counts as 0, so "1.25" does NOT satisfy "1.25.4". That is
+  // deliberate: setup-go would resolve "1.25" to some newest patch, but nothing
+  // here can prove which, and an unprovable match is what let the gap open. Pin
+  // the patch in ci-config.json rather than loosening this.
+  const parts = (version: string) => version.split('.').map(Number)
+  const atLeast = (have: number[], want: number[]) => {
+    for (let index = 0; index < want.length; index += 1) {
+      const mine = have[index] ?? 0
+      if (mine !== want[index]) return mine > want[index]
+    }
+    return true
+  }
+
+  const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0')
+  const manifests = tracked.filter((file) => /(^|\/)go\.(mod|work)$/.test(file))
+  assert.ok(manifests.length > 0, 'the repository has Go modules to check')
+  for (const path of manifests) {
+    const required = readFileSync(join(root, path), 'utf8').match(/^go\s+(\d+\.\d+(?:\.\d+)?)/m)?.[1]
+    if (!required) continue
+    assert.ok(atLeast(parts(String(configured)), parts(required)),
+      `${path} requires go ${required}, but CI installs ${configured}`)
+  }
+})

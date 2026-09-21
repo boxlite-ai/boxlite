@@ -80,7 +80,7 @@ help:
 	@echo "    make coverage              - Generate HTML coverage report (unit tests)"
 	@echo "    make coverage:lcov         - Generate LCOV output for CI upload"
 	@echo "    make coverage:report       - Render collected Rust profiles as LCOV and HTML"
-	@echo "    make coverage:go           - Collect Go SDK and networking bridge coverage"
+	@echo "    make coverage:go           - Collect Go SDK, networking bridge, and runner coverage"
 	@echo "    make coverage:python       - Collect Python SDK coverage"
 	@echo "    make coverage:node         - Collect Node.js SDK coverage"
 	@echo "    make coverage:python:integration - Collect Python unit and VM integration coverage"

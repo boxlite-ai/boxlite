@@ -70,6 +70,8 @@ coverage\:go: dev\:go
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/go-sdk.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	(cd src/deps/libgvproxy-sys/gvproxy-bridge && go test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/gvproxy.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
+	(cd apps/runner && GOFLAGS=-tags=boxlite_dev go test -covermode=atomic -coverpkg=./... \
+		-coverprofile="$(PROJECT_ROOT)/target/coverage/runner.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	exit $$rc
 
 coverage\:python: _ensure-python-deps
