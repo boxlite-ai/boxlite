@@ -899,14 +899,35 @@ mod tests {
         );
     }
 
-    /// A `CopyTarget` for `in_container`, with no rootfs behind it — enough to
-    /// exercise the reachability checks, which read only the path and the mounts.
+    /// A `CopyTarget` for `in_container`, with a placeholder rootfs path —
+    /// enough for the reachability checks, which read the path and the
+    /// mounts, and for the extraction-target check, which names `on_rootfs`
+    /// without resolving it.
     fn target(in_container: &str, mounts: &[&str]) -> CopyTarget {
         CopyTarget {
             in_container: PathBuf::from(in_container),
             on_rootfs: PathBuf::from("/unused"),
             mounts: mounts.iter().map(PathBuf::from).collect(),
         }
+    }
+
+    /// The unpacker hands back destination paths under `on_rootfs`; anything
+    /// else means the two disagree about where the copy lands, which is a fault
+    /// of ours and not a refusal the caller can act on.
+    #[test]
+    fn an_extraction_target_outside_the_destination_is_a_storage_fault() {
+        let etc = target("/etc", &[]);
+
+        let err = etc
+            .validate_extraction_target(Path::new("/elsewhere/hosts"))
+            .expect_err("a target outside the destination must not validate");
+
+        assert!(matches!(err, BoxliteError::Storage(_)), "{err:?}");
+        let message = err.to_string();
+        assert!(
+            message.contains("/elsewhere/hosts") && message.contains("/unused"),
+            "the fault must name both paths: {message}"
+        );
     }
 
     /// A reachable destination does not make its payload reachable:
@@ -1250,7 +1271,15 @@ mod upload_tests {
             &mut self,
             entries: &[(&str, &[u8])],
         ) -> Result<Response<UploadResponse>, Status> {
-            let bytes = archive(entries);
+            self.upload_bytes(archive(entries)).await
+        }
+
+        /// One hinted directory upload of `bytes`, whatever they are.
+        #[allow(clippy::result_large_err)]
+        async fn upload_bytes(
+            &mut self,
+            bytes: Vec<u8>,
+        ) -> Result<Response<UploadResponse>, Status> {
             self.client
                 .upload(tokio_stream::iter([UploadChunk {
                     dest_path: "/".into(),
@@ -1280,6 +1309,22 @@ mod upload_tests {
             builder.append_data(&mut header, path, *content).unwrap();
         }
         builder.into_inner().unwrap()
+    }
+
+    /// Only a mount refusal is the caller's to act on. Anything else the
+    /// unpacker fails on — here an archive that is not a tar at all — is the
+    /// guest's own fault and must be reported as such.
+    #[tokio::test]
+    async fn a_corrupt_archive_with_a_hint_is_an_internal_fault_not_a_refusal() {
+        let mut fixture = UploadFixture::new().await;
+
+        let err = fixture
+            .upload_bytes(vec![b'x'; 1024])
+            .await
+            .expect_err("garbage is not a tar");
+
+        assert_eq!(err.code(), tonic::Code::Internal);
+        assert!(err.message().contains("tar"), "{}", err.message());
     }
 
     #[tokio::test]
