@@ -255,6 +255,20 @@ func TestBoxliteExecAttach_StdinAndExit(t *testing.T) {
 		t.Fatalf("write stdin: %v", err)
 	}
 
+	// Confirm the forward here, while the session is still live. Past the exit
+	// the server has sent its Close and the reader only drains, so whether a
+	// frame still reaches stdin then depends on which goroutine the scheduler
+	// runs first — and on a finished exec the production stdin writer refuses
+	// the write anyway (ManagedExec.AttachWriteStdin).
+	select {
+	case got := <-stdinDone:
+		if string(got) != "ls\n" {
+			t.Fatalf("expected stdin %q, got %q", "ls\n", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stdin pump did not deliver bytes")
+	}
+
 	// Push some stdout, expect to read back a binary frame with 0x01 prefix.
 	go func() {
 		_, _ = stub.stdoutW.Write([]byte("hello"))
@@ -311,16 +325,6 @@ func TestBoxliteExecAttach_StdinAndExit(t *testing.T) {
 	}
 	if !gotExit {
 		t.Fatal("did not receive exit text frame within deadline")
-	}
-
-	// Confirm stdin was forwarded.
-	select {
-	case got := <-stdinDone:
-		if string(got) != "ls\n" {
-			t.Fatalf("expected stdin %q, got %q", "ls\n", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("stdin pump did not deliver bytes")
 	}
 
 	// Confirm disconnect was marked. The handler runs MarkDisconnected

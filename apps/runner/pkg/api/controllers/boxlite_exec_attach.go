@@ -430,8 +430,16 @@ func readClientFrames(ctx context.Context, conn *websocket.Conn, exec attachExec
 		// both branches below write, which §5.5.1 forbids after the Close the
 		// caller has already sent — but the reader has to stay on the socket so
 		// the peer's own Close can still arrive and end the handshake. Ending
-		// the loop on the first frame instead would hand a client with stdin
-		// still in flight exactly the teardown this avoids.
+		// the loop on the first frame instead would hand a client still sending
+		// stdin exactly the teardown this avoids.
+		//
+		// Those frames are dropped, not queued, and the two cancellation causes
+		// lose nothing by it. After a clean exit the exec is finished and
+		// ManagedExec.AttachWriteStdin refuses the write on its own, so
+		// forwarding would produce only the error reply this guard suppresses.
+		// After a failure the exec may still be live, but the session is going
+		// down either way, and releasing its attach slot is what lets the
+		// client come back and resend.
 		//
 		// The deadline is deliberately NOT extended here. A live session pushes
 		// it out by pongWait on every frame, which is how an idle client is
