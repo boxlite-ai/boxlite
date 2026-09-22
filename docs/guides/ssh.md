@@ -85,6 +85,12 @@ tracked and a later Configure must finish draining it before starting another
 listener. A bind failure returns `Unavailable` and leaves SSH disabled, without
 restoring the old configuration. Disable performs the same drain and is idempotent.
 
+Reverse TCP listener cancellation closes the listening socket and cancels pending
+SSH channel opens, waiting for their sockets and connection permits to be released
+before reporting success. It does not wait for the normal channel-open timeout.
+Established TCP relays continue transferring until they finish or SSH disconnects;
+other reverse listeners remain active.
+
 Reverse Unix-socket listener cancellation preserves established connections and
 allows the helper to drain them for up to 30 seconds. Disconnect, Disable, and
 Configure restart instead terminate the helper: sending the stop request and

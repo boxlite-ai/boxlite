@@ -4,13 +4,14 @@ use crate::service::ssh::limits::{
     FORWARD_CONNECT_TIMEOUT, MAX_FORWARD_CONNECTIONS, MAX_FORWARD_HOST_BYTES,
     MAX_REMOTE_FORWARD_LISTENERS,
 };
+use futures::FutureExt;
 use russh::server::{ChannelOpenHandle, Handle as SessionHandle, Msg};
 use russh::{Channel, ChannelOpenFailure};
 use std::collections::HashMap;
+use std::panic::{resume_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
-use tokio::task::JoinSet;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::{debug, warn};
 
@@ -97,6 +98,7 @@ struct ReverseListenerRegistration {
     _lifetime: TaskTrackerToken,
 }
 
+#[cfg(test)]
 impl ReverseListenerRegistration {
     async fn cancelled(&self) {
         self.entry.listener_tasks.cancelled().await;
@@ -105,6 +107,7 @@ impl ReverseListenerRegistration {
 
 impl Drop for ReverseListenerRegistration {
     fn drop(&mut self) {
+        self.entry.listener_tasks.cancel();
         let mut entries = self.registry.lock();
         let owns_entry = entries
             .get(&self.key)
@@ -231,60 +234,56 @@ impl ForwardingManager {
     ) {
         let connection_tasks = self.connection_tasks.clone();
         let permits = self.connection_permits.clone();
-        connection_tasks.clone().spawn_tracked(move |cancel| async move {
-            let mut pending_opens = JoinSet::new();
+        let listener_tasks = registration.entry.listener_tasks.clone();
+        listener_tasks.clone().spawn(async move {
+            // Capture the guard before the first poll, so abort also cancels opens.
+            let _registration = registration;
             loop {
-                tokio::select! {
-                    biased;
-                    _ = registration.cancelled() => break,
-                    _ = cancel.cancelled() => break,
-                    completed = pending_opens.join_next(), if !pending_opens.is_empty() => {
-                        if let Some(Err(error)) = completed {
-                            warn!(%error, "SSH reverse TCP channel task failed");
+                let (stream, originator) = match listener.accept().await {
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        warn!(%error, "SSH reverse TCP listener failed");
+                        break;
+                    }
+                };
+                let Ok(permit) = permits.clone().try_acquire_owned() else {
+                    debug!(%originator, "SSH forwarding connection limit reached");
+                    continue;
+                };
+
+                let handle = session_handle.clone();
+                let address = connected_address.clone();
+                let connection_tasks = connection_tasks.clone();
+                listener_tasks.spawn(async move {
+                    let open = async move {
+                        let channel = tokio::time::timeout(
+                            FORWARD_CONNECT_TIMEOUT,
+                            handle.channel_open_forwarded_tcpip(
+                                address,
+                                u32::from(connected_port),
+                                originator.ip().to_string(),
+                                u32::from(originator.port()),
+                            ),
+                        )
+                        .await;
+                        match channel {
+                            Ok(Ok(channel)) => {
+                                spawn_relay(channel, stream, permit, connection_tasks)
+                            }
+                            Ok(Err(error)) => {
+                                debug!(%error, "SSH client rejected reverse TCP channel")
+                            }
+                            Err(_) => {
+                                debug!(%originator, "SSH reverse TCP channel request timed out")
+                            }
                         }
+                    };
+                    if let Err(panic) = AssertUnwindSafe(open).catch_unwind().await {
+                        warn!(%originator, "SSH reverse TCP channel task failed: panic");
+                        resume_unwind(panic);
                     }
-                    accepted = listener.accept() => {
-                        let (stream, originator) = match accepted {
-                            Ok(accepted) => accepted,
-                            Err(error) => {
-                                warn!(%error, "SSH reverse TCP listener failed");
-                                break;
-                            }
-                        };
-                        let Ok(permit) = permits.clone().try_acquire_owned() else {
-                            debug!(%originator, "SSH forwarding connection limit reached");
-                            continue;
-                        };
-
-                        let handle = session_handle.clone();
-                        let address = connected_address.clone();
-                        let connection_tasks = connection_tasks.clone();
-                        pending_opens.spawn(async move {
-                            let channel = tokio::time::timeout(
-                                FORWARD_CONNECT_TIMEOUT,
-                                handle.channel_open_forwarded_tcpip(
-                                    address,
-                                    u32::from(connected_port),
-                                    originator.ip().to_string(),
-                                    u32::from(originator.port()),
-                                ),
-                            )
-                            .await;
-                            match channel {
-                                Ok(Ok(channel)) => spawn_relay(channel, stream, permit, connection_tasks),
-                                Ok(Err(error)) => {
-                                    debug!(%error, "SSH client rejected reverse TCP channel")
-                                }
-                                Err(_) => {
-                                    debug!(%originator, "SSH reverse TCP channel request timed out")
-                                }
-                            }
-                        });
-                    }
-                }
+                });
             }
-
-            finish_reverse_listener(listener, pending_opens, registration).await;
         });
     }
 
@@ -342,23 +341,6 @@ fn spawn_relay(
         let _ = tokio::io::AsyncWriteExt::shutdown(&mut channel).await;
         let _ = tokio::io::AsyncWriteExt::shutdown(&mut stream).await;
     });
-}
-
-async fn finish_reverse_listener(
-    listener: TcpListener,
-    mut pending_opens: JoinSet<()>,
-    registration: ReverseListenerRegistration,
-) {
-    // Stop accepting first, then wait for every already-accepted channel open
-    // to resolve. Cancellation cannot report success while one of those tasks
-    // could still open a forwarded channel afterward.
-    drop(listener);
-    while let Some(completed) = pending_opens.join_next().await {
-        if let Err(error) = completed {
-            warn!(%error, "SSH reverse TCP channel task failed");
-        }
-    }
-    drop(registration);
 }
 
 #[cfg(test)]
@@ -446,35 +428,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn registration_release_after_abort_or_panic_completes_cancellation() {
-        for abort_before_start in [true, false] {
+    async fn registration_release_cancels_pending_tasks_on_return_abort_and_panic() {
+        for exit in ["return", "abort", "panic"] {
             let connection_tasks = super::super::TaskGroup::default();
             let registry = ReverseListenerRegistry::default();
             let key = ForwardKey {
                 address: "127.0.0.1".into(),
                 port: 32001,
             };
-            let registration = registry
-                .register(key.clone(), 1, &connection_tasks)
-                .unwrap();
-            let cancel = registry.cancel(&key);
-            tokio::pin!(cancel);
-            assert!(futures::poll!(&mut cancel).is_pending());
-            let listener = connection_tasks.spawn_tracked(|_| async move {
-                let _registration = registration;
-                panic!("listener failed");
+            let registration = registry.register(key, 1, &connection_tasks).unwrap();
+            let listener_tasks = registration.entry.listener_tasks.clone();
+            let (started_tx, started_rx) = oneshot::channel();
+            let (held_tx, held_rx) = oneshot::channel::<()>();
+            listener_tasks.spawn(async move {
+                let _held = held_tx;
+                started_tx.send(()).unwrap();
+                std::future::pending::<()>().await;
             });
-            if abort_before_start {
+            started_rx.await.unwrap();
+            let listener = listener_tasks.spawn(async move {
+                let _registration = registration;
+                if exit == "panic" {
+                    panic!("listener failed");
+                }
+            });
+            // The current-thread runtime cannot poll the listener before abort.
+            if exit == "abort" {
                 listener.abort();
             }
-            let error = listener.await.unwrap_err();
-            assert_eq!(error.is_cancelled(), abort_before_start);
-            assert_eq!(error.is_panic(), !abort_before_start);
-            assert!(cancel.await);
-            assert_eq!(registry.len(), 0);
+            let result = listener.await;
+            match exit {
+                "abort" => assert!(result.unwrap_err().is_cancelled()),
+                "panic" => assert!(result.unwrap_err().is_panic()),
+                _ => result.unwrap(),
+            }
+            assert!(listener_tasks.is_cancelled());
+            drop(listener_tasks);
             tokio::time::timeout(std::time::Duration::from_secs(1), connection_tasks.wait())
                 .await
                 .unwrap();
+            assert!(held_rx.await.is_err());
+            assert_eq!(registry.len(), 0);
         }
     }
 
@@ -529,65 +523,6 @@ mod tests {
         assert_eq!(loopback_bind_address("::1"), Some("::1".into()));
         assert_eq!(loopback_bind_address("0.0.0.0"), None);
         assert_eq!(loopback_bind_address("192.0.2.10"), None);
-    }
-
-    #[tokio::test]
-    async fn cancel_waits_for_the_listener_socket_and_pending_opens() {
-        let connection_tasks = super::super::TaskGroup::default();
-        let registry = ReverseListenerRegistry::default();
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let bound_address = listener.local_addr().unwrap();
-        let key = ForwardKey {
-            address: "127.0.0.1".into(),
-            port: bound_address.port(),
-        };
-        let registration = registry
-            .register(key.clone(), 1, &connection_tasks)
-            .unwrap();
-        let (finish_tx, finish_rx) = oneshot::channel::<()>();
-        let mut pending_opens = JoinSet::new();
-        pending_opens.spawn(async move {
-            let _ = finish_rx.await;
-        });
-
-        let registry_for_cancel = registry.clone();
-        let cancel_task = tokio::spawn(async move { registry_for_cancel.cancel(&key).await });
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while registry.len() != 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("cancel must claim the registration");
-
-        let listener_task = tokio::spawn(finish_reverse_listener(
-            listener,
-            pending_opens,
-            registration,
-        ));
-        let replacement_listener = tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if let Ok(listener) = TcpListener::bind(bound_address).await {
-                    break listener;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("cancel must close the listening socket");
-        assert!(!cancel_task.is_finished());
-
-        finish_tx.send(()).unwrap();
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_secs(1), cancel_task)
-                .await
-                .expect("cancel must finish at the listener boundary")
-                .unwrap()
-        );
-        listener_task.await.unwrap();
-        assert_eq!(registry.len(), 0);
-        drop(replacement_listener);
-        assert!(TcpStream::connect(bound_address).await.is_err());
     }
 
     #[tokio::test]
