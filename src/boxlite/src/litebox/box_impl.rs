@@ -1073,6 +1073,11 @@ impl BoxImpl {
     // LIVE STATE INITIALIZATION (internal)
     // ========================================================================
 
+    /// Ensure the VM and container main process are running and share their session.
+    pub(crate) async fn guest_session(&self) -> BoxliteResult<GuestSession> {
+        Ok(self.live_state().await?.guest_session.clone())
+    }
+
     /// The implicit-boot funnel: boot the box and make sure its container's init
     /// is running. `exec`, `metrics`, `copy_into` and `copy_out` pass through
     /// here and, as before, get a box whose container is *running* — booting and
@@ -2429,3 +2434,7 @@ mod tests {
         drop((litebox, child));
     }
 }
+
+#[cfg(test)]
+#[path = "ssh_tests.rs"]
+mod ssh_tests;

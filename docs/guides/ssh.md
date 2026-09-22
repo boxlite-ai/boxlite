@@ -1,48 +1,45 @@
 # Guest SSH control
 
-SSH starts disabled. Control it through the existing host-only guest gRPC connection
-at the box's `sockets/box.sock`, after `Guest.Init` succeeds. There is no LiteBox,
-CLI, or language SDK SSH control API. SSH does not publish a host port; configure
-network forwarding separately when needed.
-
-`boxlite.v1.Ssh` exposes `Configure`, `Status`, and `Disable`. The complete schema
-is in `src/shared/proto/boxlite/v1/service.proto`.
-
-Callers must regenerate their protocol bindings and send `SshConfigureRequest.config`
-using field number 4. The legacy string fields `listen_address`, `ca_public_key`,
-and `principal` (field numbers 1–3) are reserved and ignored when decoding. After
-Guest.Init succeeds, a legacy-only request returns `InvalidArgument` because
-`config` is missing, without changing the current SSH service. There is no legacy
-request conversion or protocol version negotiation.
+SSH starts disabled. The local Rust runtime exposes `LiteBox::ssh()` to configure,
+query, or disable it. Each operation ensures the VM and container main process
+are running, starting them implicitly when needed. Querying status and disabling
+SSH can therefore also start the box. Creating the handle alone does not start
+anything. The REST backend returns `Unsupported`; CLI and other language SDKs
+have no SSH control API.
+SSH does not publish a host port; configure network forwarding separately when needed.
 
 ```rust,ignore
-use boxlite_shared::{SshAccount, SshClient, SshConfig, SshConfigureRequest, SshStatusRequest,
-    SshDisableRequest};
+use boxlite::{SshAccount, SshConfig};
 
-// channel is a tonic Channel connected to the running box's box.sock.
-let mut ssh = SshClient::new(channel);
-let status = ssh.configure(SshConfigureRequest {
-    config: Some(SshConfig {
-        listen_address: "0.0.0.0:2222".into(),
-        host_private_key: std::fs::read_to_string("host_key")?,
-        accounts: vec![
-            SshAccount {
-                login: "alice".into(),
-                authorized_keys: vec![std::fs::read_to_string("alice.pub")?],
-                ca: None,
-            },
-            SshAccount {
-                login: "bob".into(),
-                authorized_keys: vec![std::fs::read_to_string("bob.pub")?],
-                ca: None,
-            },
-        ],
-    }),
-}).await?.into_inner().status.unwrap();
+let ssh = sandbox.ssh();
+let status = ssh.configure(SshConfig {
+    listen_address: "0.0.0.0:2222".into(),
+    host_private_key: std::fs::read_to_string("host_key")?,
+    accounts: vec![SshAccount {
+        login: "alice".into(),
+        authorized_keys: vec![std::fs::read_to_string("alice.pub")?],
+        ca: None,
+    }],
+}).await?;
 println!("{} {}", status.host_public_key, status.host_key_fingerprint);
-let current = ssh.status(SshStatusRequest {}).await?.into_inner().status;
-ssh.disable(SshDisableRequest {}).await?;
+let current = ssh.status().await?;
+ssh.disable().await?;
 ```
+
+`SshHandle` owns its backend reference and can outlive the `LiteBox` borrow.
+A fresh handle to a running VM can query SSH without calling `start()` again.
+After startup, obtaining the SSH interface and making the RPC share a 5-second
+deadline; VM and container startup time is excluded. Runtime shutdown cancels the
+whole operation, including startup. Operations are not automatically retried.
+Timeout or cancellation does not undo changes the guest may already have applied.
+Invalidated handles return `Stopped`; drop all references to the old box and
+obtain a fresh handle with `runtime.get()` to restart it.
+
+The internal host-only `boxlite.v1.Ssh` gRPC service remains available on
+`sockets/box.sock`; its schema is in `src/shared/proto/boxlite/v1/service.proto`.
+Raw protocol callers must send `SshConfigureRequest.config` using field 4.
+Legacy string fields 1–3 are reserved and ignored. A legacy-only request returns
+`InvalidArgument` after Guest.Init without changing the current service.
 
 Configure accepts an unencrypted OpenSSH host private key and a non-empty
 `accounts` list. Each account has a unique `login` and at least one public key or

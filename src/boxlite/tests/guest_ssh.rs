@@ -788,3 +788,91 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn runtime_ssh_control_and_recovered_handle() {
+    let home = common::home::PerTestBoxHome::new();
+    let keys = tempfile::TempDir::new_in("/tmp").unwrap();
+    let host_key = keys.path().join("host");
+    let user_key = keys.path().join("user");
+    generate_key(&host_key, "host").await;
+    generate_key(&user_key, "user").await;
+    let options = BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    };
+    let mut runtime = BoxliteRuntime::new(options.clone()).unwrap();
+    let mut box_options = common::alpine_opts();
+    box_options.detach = true;
+    box_options.ports = vec![PortSpec {
+        host_port: None,
+        guest_port: 2222,
+        protocol: PortProtocol::Tcp,
+        host_ip: Some("127.0.0.1".into()),
+    }];
+    let mut sandbox = runtime
+        .create(box_options, Some("runtime-ssh".into()))
+        .await
+        .unwrap();
+    let handle = sandbox.ssh();
+    assert_eq!(
+        sandbox.info().await.unwrap().status,
+        boxlite::BoxStatus::Configured
+    );
+    drop(handle);
+    let config = boxlite::SshConfig {
+        listen_address: "0.0.0.0:2222".into(),
+        host_private_key: std::fs::read_to_string(&host_key).unwrap(),
+        accounts: vec![boxlite::SshAccount {
+            login: "alice".into(),
+            authorized_keys: vec![std::fs::read_to_string(user_key.with_extension("pub")).unwrap()],
+            ca: None,
+        }],
+    };
+    for _ in 0..2 {
+        let initial = sandbox.ssh().status().await.unwrap();
+        assert!(!initial.enabled);
+        assert_eq!(initial.generation, 0);
+        let status = sandbox.ssh().configure(config.clone()).await.unwrap();
+        let info = sandbox.info().await.unwrap();
+        let port = info.network.unwrap().published_ports.unwrap()[0].host_port;
+        drop(sandbox);
+        drop(runtime);
+        runtime = BoxliteRuntime::new(options.clone()).unwrap();
+        sandbox = runtime.get("runtime-ssh").await.unwrap().unwrap();
+        let ssh = sandbox.ssh();
+        assert_eq!(ssh.status().await.unwrap(), status);
+        assert_eq!(sandbox.info().await.unwrap().pid, info.pid);
+        let mut invalid = config.clone();
+        invalid.accounts.clear();
+        assert!(matches!(
+            ssh.configure(invalid).await,
+            Err(boxlite::BoxliteError::InvalidArgument(_))
+        ));
+        assert_eq!(ssh.status().await.unwrap(), status);
+        let known_hosts = keys.path().join("known_hosts");
+        std::fs::write(
+            &known_hosts,
+            format!("[127.0.0.1]:{port} {}\n", status.host_public_key),
+        )
+        .unwrap();
+        let mut exec = client_command("ssh", &user_key, &known_hosts, port);
+        exec.args(["alice@127.0.0.1", "printf runtime-ssh-ok"]);
+        assert_eq!(checked_output(exec).await, b"runtime-ssh-ok");
+        let disabled = ssh.disable().await.unwrap();
+        assert!(!disabled.enabled);
+        assert_eq!(ssh.disable().await.unwrap(), disabled);
+        sandbox.stop().await.unwrap();
+        assert!(matches!(
+            ssh.status().await,
+            Err(boxlite::BoxliteError::Stopped(_))
+        ));
+        drop(ssh);
+        drop(sandbox);
+        sandbox = runtime.get("runtime-ssh").await.unwrap().unwrap();
+    }
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}

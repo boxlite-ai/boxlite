@@ -17,6 +17,7 @@ mod network;
 pub(crate) mod ports;
 mod snapshot;
 pub(crate) mod snapshot_mgr;
+mod ssh;
 mod state;
 mod watcher;
 
@@ -29,6 +30,7 @@ pub use network::{
     BoxConnection, BoxReader, BoxTunnel, BoxWriter, NetworkHandle, SocketAddress, TunnelForwarder,
 };
 pub use snapshot::SnapshotHandle;
+pub use ssh::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
 pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
 
 pub(crate) use box_impl::SharedBoxImpl;
@@ -225,6 +227,12 @@ impl LiteBox {
     /// Get a network handle for raw tunnel operations.
     pub fn network(&self) -> NetworkHandle {
         NetworkHandle::new(Arc::clone(&self.network_backend))
+    }
+
+    /// Create an SSH control handle without starting the box.
+    /// Its operations start the VM and container main process as needed.
+    pub fn ssh(&self) -> SshHandle {
+        SshHandle::new(Arc::clone(&self.box_backend))
     }
 
     /// Get a snapshot handle for snapshot operations.

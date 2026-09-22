@@ -187,6 +187,43 @@ pub struct LiteBox {
 }
 ```
 
+#### SSH control
+
+`LiteBox::ssh()` returns an owned, cloneable `SshHandle` without starting the box.
+All three operations ensure the VM and container main process are running,
+starting them implicitly when needed. This includes status queries and disabling
+SSH. A fresh handle reuses a running VM; the REST backend returns `Unsupported`.
+
+| Method | Signature |
+|--------|-----------|
+| Configure | `async fn configure(&self, config: SshConfig) -> BoxliteResult<SshStatus>` |
+| Query | `async fn status(&self) -> BoxliteResult<SshStatus>` |
+| Disable | `async fn disable(&self) -> BoxliteResult<SshStatus>` |
+
+These types are exported directly from `boxlite`, independently of protobuf:
+
+| Type | Public fields |
+|------|---------------|
+| `SshConfig` | `listen_address: String`, `host_private_key: String`, `accounts: Vec<SshAccount>` |
+| `SshAccount` | `login: String`, `authorized_keys: Vec<String>`, `ca: Option<SshCaConfig>` |
+| `SshCaConfig` | `public_key: String`, `principal: String` |
+| `SshStatus` | `enabled: bool`, `generation: u64`, `listen_address: String`, `host_public_key: String`, `host_key_fingerprint: String` |
+
+Configuration fields are explicit; the runtime neither generates keys nor stores
+configuration nor publishes ports. All types are `Clone + Debug + Send + Sync`;
+configuration Debug output redacts credentials, and status supports `PartialEq + Eq`.
+
+After VM and container startup, obtaining the SSH interface and making the RPC
+share a 5-second deadline. Runtime shutdown cancels the whole operation, including
+startup; operations are not retried. Cancellation/timeout cannot guarantee
+rollback. Invalidated handles return `Stopped`; drop all references to the old box
+and use `runtime.get()` to obtain a fresh handle for restart. Guest
+`InvalidArgument`, `FailedPrecondition`, and `Unimplemented` map to `InvalidArgument`, `InvalidState`, and `Unsupported`; other RPC failures
+retain operation and gRPC status context. Missing response status is `Internal`.
+
+See the [SSH guide](../../guides/ssh.md) for an implicit-start example,
+validation, reconfiguration, disable, and generation semantics.
+
 #### Methods
 
 | Method | Signature | Description |
@@ -194,6 +231,7 @@ pub struct LiteBox {
 | `id` | `fn id(&self) -> &BoxID` | Get box ID |
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
+| `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH, implicitly starting the local box as needed |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
