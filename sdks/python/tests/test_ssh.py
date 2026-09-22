@@ -11,6 +11,7 @@ from boxlite.simplebox import SimpleBox
 from boxlite.sync_api._ssh import SyncSshHandle
 
 
+@pytest.mark.integration
 def test_ssh_native_credentials_are_redacted():
     ca = boxlite.SshCaConfig("sentinel-ca", "principal")
     account = boxlite.SshAccount("alice", ["sentinel-public"], ca)
@@ -55,6 +56,7 @@ def test_ssh_sync_wrapper_forwards():
     native.configure.assert_awaited_once_with("config")
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_ssh_native_rest_roundtrip():
     import json
