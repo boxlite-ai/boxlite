@@ -130,3 +130,11 @@ export {
   type InteractiveBoxOptions,
 } from "./interactivebox.js";
 export { SkillBox, type SkillBoxOptions } from "./skillbox.js";
+
+export type {
+  SshCaConfig,
+  SshAccount,
+  SshConfig,
+  SshStatus,
+  JsSshHandle,
+} from "./native-contracts.js";

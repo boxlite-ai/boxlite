@@ -72,6 +72,59 @@ export class BoxliteProxyController {
     private readonly autoResume: BoxAutoResumeService,
   ) {}
 
+  @Get(':boxId/ssh')
+  async proxySshStatus(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(authContext, boxId, (id) => `/v1/boxes/${id}/ssh`, req, res, next, USER_OPERATION, {
+      requireStarted: true,
+    })
+  }
+
+  @Post(':boxId/ssh/configure')
+  async proxySshConfigure(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      (id) => `/v1/boxes/${id}/ssh/configure`,
+      req,
+      res,
+      next,
+      USER_OPERATION,
+      { requireStarted: true },
+    )
+  }
+
+  @Post(':boxId/ssh/disable')
+  async proxySshDisable(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      (id) => `/v1/boxes/${id}/ssh/disable`,
+      req,
+      res,
+      next,
+      USER_OPERATION,
+      { requireStarted: true },
+    )
+  }
+
   @All(':boxId/exec')
   async proxyExec(
     @AuthContext() authContext: OrganizationAuthContext,
@@ -292,7 +345,7 @@ export class BoxliteProxyController {
     res: Response,
     next: NextFunction,
     policy: ProxyActivityPolicy,
-    opts?: { ws?: boolean; proxyTimeoutMs?: number },
+    opts?: { ws?: boolean; proxyTimeoutMs?: number; requireStarted?: boolean },
   ) {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     if (!box) {
@@ -323,6 +376,10 @@ export class BoxliteProxyController {
       res.once('close', stop)
       res.once('finish', stop)
       res.once('error', stop)
+    }
+
+    if (opts?.requireStarted && !box.autoResume && box.state !== BoxState.STARTED) {
+      throw new ConflictException('Box has AutoResume disabled; start it explicitly first')
     }
 
     if (policy.autoResume && box.autoResume) {

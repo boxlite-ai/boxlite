@@ -208,6 +208,38 @@ const NETWORK_SCOPES: &[CommandScope] = &[CommandScope {
     globals: BOX_GLOBALS,
     children: &[],
 }];
+const SSH_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "configure",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "status",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "disable",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "setup",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "forward",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "connect",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+];
 const VOLUME_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "create",
@@ -231,6 +263,11 @@ const VOLUME_SCOPES: &[CommandScope] = &[
     },
 ];
 const COMMAND_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "ssh",
+        globals: BOX_GLOBALS,
+        children: SSH_SCOPES,
+    },
     CommandScope {
         name: "run",
         globals: ALL_GLOBALS,
@@ -611,6 +648,9 @@ pub enum Commands {
 
     /// Manage box networking
     Network(crate::commands::network::NetworkArgs),
+
+    /// Configure guest SSH, prepare keys, forward a port, or connect.
+    Ssh(crate::commands::ssh::SshArgs),
 
     /// Start a long-running REST API server
     Serve(crate::commands::serve::ServeArgs),

@@ -49,6 +49,11 @@ try:
         SnapshotInfo,
         SnapshotOptions,
         SocketAddress,
+        SshAccount,
+        SshCaConfig,
+        SshConfig,
+        SshHandle,
+        SshStatus,
         TunnelForwarder,
         VolumeHandle,
         VolumeInfo,
@@ -92,6 +97,11 @@ try:
         "HealthCheckOptions",
         "SecurityOptions",
         "Secret",
+        "SshAccount",
+        "SshCaConfig",
+        "SshConfig",
+        "SshHandle",
+        "SshStatus",
         "SnapshotHandle",
         "SnapshotInfo",
         "SnapshotOptions",
@@ -182,6 +192,7 @@ try:
         SyncNetworkHandle,
         SyncSimpleBox,
         SyncSkillBox,
+        SyncSshHandle,
         SyncTunnelForwarder,
     )
 
@@ -197,6 +208,7 @@ try:
             "SyncNetworkHandle",
             "SyncSimpleBox",
             "SyncSkillBox",
+            "SyncSshHandle",
             "SyncTunnelForwarder",
         ]
     )

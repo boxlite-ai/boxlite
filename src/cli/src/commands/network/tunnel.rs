@@ -1,4 +1,4 @@
-//! Print a remote URL or run a local tunnel listener.
+//! Print a remote URL, run a local listener, or relay a tunnel over stdio.
 
 use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -21,8 +21,12 @@ pub struct TunnelArgs {
     pub port: u16,
 
     /// Bind a local TCP port/address or unix:/absolute/path socket
-    #[arg(long, value_name = "ADDRESS", value_parser = parse_socket_address)]
+    #[arg(long, value_name = "ADDRESS", value_parser = parse_socket_address, conflicts_with = "stdio")]
     pub listen: Option<SocketAddress>,
+
+    /// Relay raw bytes over stdin/stdout (for SSH ProxyCommand)
+    #[arg(long)]
+    pub stdio: bool,
 }
 
 fn parse_socket_address(value: &str) -> std::result::Result<SocketAddress, String> {
@@ -63,6 +67,15 @@ pub async fn execute(args: TunnelArgs, global: &GlobalFlags) -> Result<()> {
     let network = box_handle.network();
     let target = SocketAddr::new(guest_ip, args.port);
     let tunnel = network.tunnel(target).await?;
+    if args.stdio {
+        let connection = tunnel.connect()?;
+        // The stream owns its transport. Keeping runtime handles here would
+        // lock BOXLITE_HOME for the entire SSH session and prevent controls.
+        drop(network);
+        drop(box_handle);
+        drop(runtime);
+        return super::stdio::run(connection).await;
+    }
     let Some(listen) = args.listen else {
         let url = tunnel.uri().ok_or_else(|| {
             anyhow!("local boxes have no public URL; point boxlite at a remote service with --url or --profile")

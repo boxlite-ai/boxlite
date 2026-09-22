@@ -260,6 +260,12 @@ class SyncSimpleBox:
         return self.network.tunnel(port)
 
     @property
+    def ssh(self):
+        if self._box is None:
+            raise RuntimeError("Box not started. Call start() first.")
+        return self._box.ssh
+
+    @property
     def network(self):
         """Get the box-scoped network handle."""
         if self._box is None:

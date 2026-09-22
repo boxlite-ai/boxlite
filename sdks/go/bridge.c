@@ -86,3 +86,6 @@ CExecutionSignalCb cbExecutionSignal(void) { return (CExecutionSignalCb)goBoxlit
 CExecutionResizeCb cbExecutionResize(void) { return (CExecutionResizeCb)goBoxliteOnExecutionResize; }
 CTunnelForwarderWaitCb cbTunnelForwarderWait(void) { return (CTunnelForwarderWaitCb)goBoxliteOnTunnelForwarderWait; }
 CTunnelForwarderCloseCb cbTunnelForwarderClose(void) { return (CTunnelForwarderCloseCb)goBoxliteOnTunnelForwarderClose; }
+
+extern void goBoxliteOnSsh(CSshStatus *status, CBoxliteError *err, void *ud);
+CSshCb cbSsh(void) { return goBoxliteOnSsh; }

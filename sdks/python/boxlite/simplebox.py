@@ -60,6 +60,27 @@ class NetworkHandle:
         return BoxTunnel(await self._owner._create_tunnel(port))
 
 
+class SshHandle:
+    """SSH control for an initialized SimpleBox; acquiring it does not start a box."""
+
+    def __init__(self, box):
+        self._owner = box
+
+    def _handle(self):
+        if not self._owner._started:
+            raise RuntimeError("Box not started. Call 'await box.start()' first.")
+        return self._owner._box.ssh
+
+    async def configure(self, config):
+        return await self._handle().configure(config)
+
+    async def status(self):
+        return await self._handle().status()
+
+    async def disable(self):
+        return await self._handle().disable()
+
+
 class SimpleBox:
     """
     Base class for specialized container types.
@@ -214,6 +235,10 @@ class SimpleBox:
         Returns None if the box hasn't been started yet.
         """
         return self._created
+
+    @property
+    def ssh(self) -> SshHandle:
+        return SshHandle(self)
 
     @property
     def network(self) -> NetworkHandle:

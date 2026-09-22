@@ -1,12 +1,79 @@
 # Guest SSH control
 
-SSH starts disabled. The local Rust runtime exposes `LiteBox::ssh()` to configure,
-query, or disable it. Each operation ensures the VM and container main process
+SSH starts disabled. Rust, Python, Node.js, Go, C, and the REST API expose
+configure, status, and disable operations. Each operation ensures the VM and container main process
 are running, starting them implicitly when needed. Querying status and disabling
 SSH can therefore also start the box. Creating the handle alone does not start
-anything. The REST backend returns `Unsupported`; CLI and other language SDKs
-have no SSH control API.
+anything. REST operations follow the server’s autoResume policy; a stopped box
+with autoResume disabled must be started explicitly. CLI commands use the same
+SDK startup and autoResume behavior.
 SSH does not publish a host port; configure network forwarding separately when needed.
+
+## CLI quick start
+
+The CLI uses the system OpenSSH tools (`ssh-keygen` and, for login, `ssh`):
+
+```bash
+# Prepare keys and print a ready-to-run SSH command without connecting.
+boxlite ssh setup mybox
+
+# Keep localhost:2222 forwarding in the foreground; use the printed command
+# from another terminal. Ctrl-C closes forwarding and leaves SSH configured.
+boxlite ssh forward mybox
+
+# Open an interactive session, or run a command and return its exit code.
+boxlite ssh connect mybox
+boxlite ssh connect mybox -- sh -c 'echo hello; exit 7'
+```
+
+These commands create separate Ed25519 host and user keys, configure login
+`boxlite` on guest address `0.0.0.0:22`, and pin the host key in a dedicated
+`known_hosts` file with strict verification. `forward --listen 127.0.0.1:2022`
+selects another local TCP address; an occupied port fails without fallback.
+`connect` uses `network tunnel --stdio` as the system SSH ProxyCommand, so no
+local listening port is needed. Login information goes to stderr during connect;
+stdout and the terminal belong to SSH.
+
+Keys and the configuration record live on the client machine under
+`<credential-home>/ssh/<target-digest>/<box-id>/` (default `~/.boxlite/ssh/`).
+`--home` / `BOXLITE_HOME` select the credential home; `--config` can independently
+select the local runtime directory. Local runtime paths and remote URL, routing
+prefix, and profile combinations get separate records. Box names resolve to IDs.
+Directories use mode `0700`; private keys and records use `0600`. User private
+keys never leave the client. Host private keys are submitted only by configure,
+and are not added to BoxOptions, the runtime database, snapshots, or archives.
+
+Repeated setup, forward, and connect reuse owned keys and leave existing
+sessions intact when host identity, listener, and generation match the record.
+After disable or a VM restart, they configure the saved keys again. An enabled
+configuration that does not match is refused; `--replace` explicitly generates
+new keys and replaces it, disconnecting sessions. A local preparation lock
+prevents concurrent updates. Keys are saved before configure; an ambiguous
+failure retains them so the next invocation can query state before deciding
+whether configuration is needed. Configure is never automatically retried.
+
+For complete configuration control:
+
+```bash
+boxlite ssh configure mybox --file ssh.json
+cat ssh.json | boxlite ssh configure mybox --file -
+boxlite ssh status mybox
+boxlite ssh disable mybox
+```
+
+The JSON file follows the Rust `SshConfig` fields shown below, including the
+host private key and the full accounts list. Configure fully replaces SSH.
+Control commands default to JSON; setup and forward default to YAML. All accept
+`--format json|yaml`. Outputs include public status or login information, never
+private key contents. All six commands support the usual `--home`, `--config`,
+`--url`, `--profile`, and `--path-prefix` rules.
+
+Local and REST SSH controls are supported. Remote forwarding and login also
+require the server's tunnel API: `boxlite serve` currently has no tunnel route,
+and the cloud tunnel requires a public box. These commands do not change public
+visibility or add a server tunnel route.
+
+## SDK configuration
 
 ```rust,ignore
 use boxlite::{SshAccount, SshConfig};
@@ -28,7 +95,7 @@ ssh.disable().await?;
 
 `SshHandle` owns its backend reference and can outlive the `LiteBox` borrow.
 A fresh handle to a running VM can query SSH without calling `start()` again.
-After startup, obtaining the SSH interface and making the RPC share a 5-second
+For local backends, after startup, obtaining the SSH interface and making the RPC share a 5-second
 deadline; VM and container startup time is excluded. Runtime shutdown cancels the
 whole operation, including startup. Operations are not automatically retried.
 Timeout or cancellation does not undo changes the guest may already have applied.
@@ -98,3 +165,46 @@ executions continue. Guest shutdown calls Disable before cleaning up executions
 and containers, and continues cleanup even if Disable fails. SSH does not track
 guest shutdown: concurrent Configure may briefly restart it, with VM shutdown
 reclaiming any remaining resources.
+
+## SDK and REST entry points
+
+| Client | Entry point |
+| --- | --- |
+| Python | `await box.ssh.configure(config)`, `.status()`, `.disable()` |
+| Python sync | `box.ssh.configure(config)`, `.status()`, `.disable()` |
+| Node.js | `await box.ssh.configure(config)`, `.status()`, `.disable()` |
+| Go | `ssh, err := box.SSH()`; `ssh.Configure(ctx, config)`, `Status(ctx)`, `Disable(ctx)`; `defer ssh.Close()` |
+| C Native API | `boxlite_box_ssh`; `boxlite_ssh_configure/status/disable`; `boxlite_ssh_free` |
+
+Python `SimpleBox.ssh` requires the box to have been initialized with `start()` or
+its context manager. Node.js SimpleBox initializes lazily on the first operation.
+Acquiring either handle does not initialize the box.
+
+Python configuration uses `SshConfig`, `SshAccount`, and `SshCaConfig`, with the
+same snake_case fields as Rust. Node.js uses objects with `listenAddress`,
+`hostPrivateKey`, `accounts`, `authorizedKeys`, and `ca: { publicKey, principal }`.
+Go uses `SSHConfig`, `SSHAccount`, and `SSHCAConfig`.
+
+```python
+config = boxlite.SshConfig("0.0.0.0:2222", host_private_key, [
+    boxlite.SshAccount("alice", [alice_public_key])
+])
+status = await box.ssh.configure(config)
+await box.ssh.disable()
+```
+
+C configure accepts a UTF-8 JSON `SshConfig` string, parsed and copied before the
+function returns. Callbacks run through `boxlite_runtime_drain`. Each successful
+callback transfers a `CSshStatus*` to the caller, who must release it using
+`boxlite_ssh_status_free`; its strings are read-only. Releasing an SSH handle does
+not disable the listener or invalidate already submitted operations.
+
+REST uses `GET /ssh`, `POST /ssh/configure` (the configuration object as the body),
+and `POST /ssh/disable`, relative to `/v1[/{prefix}]/boxes/{box_id}`. Each returns
+HTTP 200 and the five status fields described above. REST uses its existing HTTP
+request timeout. Older servers report unknown routes through the usual HTTP error
+handling; clients do not fall back or retry. See the [OpenAPI contract](../../openapi/box.openapi.yaml).
+
+Generation is unsigned 64-bit: Python exposes `int`, Node.js exposes `bigint`, and
+Go/C expose `uint64`/`uint64_t`. JavaScript callers reading raw REST JSON must use
+a parser that preserves integers beyond `Number.MAX_SAFE_INTEGER`.

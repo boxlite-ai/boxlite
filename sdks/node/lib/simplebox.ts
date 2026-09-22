@@ -1,3 +1,4 @@
+import type { JsSshHandle, SshConfig } from "./native-contracts.js";
 /**
  * SimpleBox - Foundation for specialized container types.
  *
@@ -465,6 +466,7 @@ export class SimpleBox {
   protected _reuseExisting: boolean;
   protected _created: boolean | null = null;
   readonly network: NetworkHandle;
+  readonly ssh: JsSshHandle;
 
   /**
    * Create a new SimpleBox.
@@ -542,6 +544,12 @@ export class SimpleBox {
     this._name = options.name;
     this._reuseExisting = options.reuseExisting ?? false;
     this.network = new NetworkHandle(() => this._ensureBox());
+    this.ssh = {
+      configure: async (config: SshConfig) =>
+        (await this._ensureBox()).ssh.configure(config),
+      status: async () => (await this._ensureBox()).ssh.status(),
+      disable: async () => (await this._ensureBox()).ssh.disable(),
+    };
   }
 
   /**

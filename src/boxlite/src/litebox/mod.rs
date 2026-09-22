@@ -41,7 +41,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::metrics::BoxMetrics;
-use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
+use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend, SshBackend};
 use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
 use crate::{BoxID, BoxInfo};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -64,6 +64,7 @@ pub struct LiteBox {
     network_backend: Arc<dyn BoxNetworkBackend>,
     /// Backend for snapshot lifecycle operations.
     snapshot_backend: Arc<dyn SnapshotBackend>,
+    ssh_backend: Arc<dyn SshBackend>,
 }
 
 impl LiteBox {
@@ -72,6 +73,7 @@ impl LiteBox {
         box_backend: Arc<dyn BoxBackend>,
         network_backend: Arc<dyn BoxNetworkBackend>,
         snapshot_backend: Arc<dyn SnapshotBackend>,
+        ssh_backend: Arc<dyn SshBackend>,
     ) -> Self {
         let id = box_backend.id().clone();
         let name = box_backend.name().map(|s| s.to_string());
@@ -81,6 +83,7 @@ impl LiteBox {
             box_backend,
             network_backend,
             snapshot_backend,
+            ssh_backend,
         }
     }
 
@@ -232,7 +235,7 @@ impl LiteBox {
     /// Create an SSH control handle without starting the box.
     /// Its operations start the VM and container main process as needed.
     pub fn ssh(&self) -> SshHandle {
-        SshHandle::new(Arc::clone(&self.box_backend))
+        SshHandle::new(Arc::clone(&self.ssh_backend))
     }
 
     /// Get a snapshot handle for snapshot operations.

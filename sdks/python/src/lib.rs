@@ -11,6 +11,7 @@ mod options;
 mod runtime;
 mod snapshot_options;
 mod snapshots;
+mod ssh;
 mod util;
 mod volumes;
 
@@ -41,6 +42,11 @@ use pyo3::prelude::*;
 
 #[pymodule(name = "boxlite")]
 fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<ssh::PySshCaConfig>()?;
+    m.add_class::<ssh::PySshAccount>()?;
+    m.add_class::<ssh::PySshConfig>()?;
+    m.add_class::<ssh::PySshStatus>()?;
+    m.add_class::<ssh::PySshHandle>()?;
     m.add_class::<PyOptions>()?;
     m.add_class::<PyImageRegistry>()?;
     m.add_class::<PyBoxOptions>()?;

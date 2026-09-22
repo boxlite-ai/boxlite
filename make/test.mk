@@ -1,3 +1,4 @@
+PHONY_TARGETS += test\:unit\:openapi-routes test\:unit\:api test\:unit\:runner
 PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
@@ -216,7 +217,7 @@ test\:stress:
 # Core unit suites: Rust unit + FFI unit + gvproxy bridge unit.
 test\:unit\:core:
 	@echo "── Core unit suites (rust, openapi, ffi, gvproxy) ──"
-	$(call run_suites,test:unit:rust test:unit:openapi test:unit:ffi test:unit:gvproxy)
+	$(call run_suites,test:unit:rust test:unit:openapi test:unit:openapi-routes test:unit:ffi test:unit:gvproxy)
 
 # Core integration suites: Rust integration + CLI integration.
 test\:integration\:core:
@@ -399,12 +400,22 @@ test\:unit\:gvproxy:
 #
 # Discovery is restricted to the modules that import only the stdlib
 # (openapi/reference-server/errors.py, like config.py). The rest of that
-# directory needs python-dotenv, fastapi and pydantic, which no setup target
-# here installs — discovering the whole directory would fail this suite on
-# every checkout that does not intend to run the server.
+# directory needs the dependencies installed by test:unit:openapi-routes;
+# keep this fast stdlib-only entry point available separately.
 test\:unit\:openapi:
 	@echo "🧪 Running OpenAPI reference-server unit tests..."
 	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
+
+test\:unit\:openapi-routes: _ensure-python-deps
+	@. .venv/bin/activate && uv pip install fastapi uvicorn sse-starlette PyJWT python-multipart python-dotenv httpx
+	@. .venv/bin/activate && python -m unittest discover -s openapi/reference-server/tests -p 'test_*.py' -v
+
+# Focused service suites avoid unrelated infrastructure prerequisites.
+test\:unit\:api: _ensure-apps-deps
+	@cd apps && yarn nx test api --runInBand $(if $(FILTER),--testNamePattern='$(FILTER)',)
+
+test\:unit\:runner: dev\:go
+	@cd apps/runner && go test -tags boxlite_dev $(GOTEST_FILTER) ./pkg/api/controllers ./pkg/boxlite
 
 # CLI integration tests.
 test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)

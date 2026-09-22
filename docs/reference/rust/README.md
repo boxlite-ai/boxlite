@@ -192,7 +192,8 @@ pub struct LiteBox {
 `LiteBox::ssh()` returns an owned, cloneable `SshHandle` without starting the box.
 All three operations ensure the VM and container main process are running,
 starting them implicitly when needed. This includes status queries and disabling
-SSH. A fresh handle reuses a running VM; the REST backend returns `Unsupported`.
+SSH. A fresh handle reuses a running VM. REST delegates to the server and respects
+its autoResume policy and the HTTP client timeout.
 
 | Method | Signature |
 |--------|-----------|

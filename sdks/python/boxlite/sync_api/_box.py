@@ -128,6 +128,12 @@ class SyncBox:
         return self._sync(self._box.metrics())
 
     @property
+    def ssh(self):
+        from ._ssh import SyncSshHandle
+
+        return SyncSshHandle(self, self._box.ssh)
+
+    @property
     def network(self) -> "SyncNetworkHandle":
         """Get the box-scoped network handle."""
         if self._network is None:

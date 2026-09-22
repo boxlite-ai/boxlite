@@ -206,3 +206,11 @@ pub(crate) trait ExecBackend: Send + Sync {
         y_pixels: u32,
     ) -> BoxliteResult<()>;
 }
+
+/// Independent SSH control capability for local and remote boxes.
+#[async_trait]
+pub(crate) trait SshBackend: Send + Sync {
+    async fn configure(&self, config: crate::SshConfig) -> BoxliteResult<crate::SshStatus>;
+    async fn status(&self) -> BoxliteResult<crate::SshStatus>;
+    async fn disable(&self) -> BoxliteResult<crate::SshStatus>;
+}

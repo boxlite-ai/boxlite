@@ -693,6 +693,88 @@ async def stop_box(
     return box_info_to_dict(info)
 
 
+class SshCaConfig(BaseModel):
+    public_key: str = Field(repr=False)
+    principal: str = Field(repr=False)
+
+
+class SshAccount(BaseModel):
+    login: str
+    authorized_keys: list[str] = Field(repr=False)
+    ca: Optional[SshCaConfig] = Field(default=None, repr=False)
+
+
+class SshConfig(BaseModel):
+    listen_address: str
+    host_private_key: str = Field(repr=False)
+    accounts: list[SshAccount] = Field(repr=False)
+
+
+async def ssh_handle(box_id):
+    box = await get_box_or_404(box_id)
+    info = await box.info()
+    if info.state.status.lower() == "stopped" and not info.auto_resume:
+        raise HTTPException(
+            409,
+            detail=error_envelope(
+                "box has AutoResume disabled; start it first",
+                "InvalidStateError",
+                "invalid_state",
+            ),
+        )
+    return box.ssh
+
+
+def ssh_status_dict(status):
+    return {
+        key: getattr(status, key)
+        for key in (
+            "enabled",
+            "generation",
+            "listen_address",
+            "host_public_key",
+            "host_key_fingerprint",
+        )
+    }
+
+
+@app.get("/v1/{prefix}/boxes/{box_id}/ssh")
+async def ssh_status(prefix: str, box_id: str, _auth: dict = Depends(require_auth)):
+    return ssh_status_dict(await (await ssh_handle(box_id)).status())
+
+
+@app.post("/v1/{prefix}/boxes/{box_id}/ssh/disable")
+async def ssh_disable(prefix: str, box_id: str, _auth: dict = Depends(require_auth)):
+    return ssh_status_dict(await (await ssh_handle(box_id)).disable())
+
+
+@app.post("/v1/{prefix}/boxes/{box_id}/ssh/configure")
+async def ssh_configure(
+    prefix: str, box_id: str, request: Request, _auth: dict = Depends(require_auth)
+):
+    try:
+        config = SshConfig.model_validate(await request.json())
+    except (ValueError, TypeError):
+        raise HTTPException(
+            400,
+            detail=error_envelope(
+                "invalid SSH configuration JSON",
+                "InvalidArgumentError",
+                "invalid_argument",
+            ),
+        ) from None
+    accounts = [
+        boxlite.SshAccount(
+            a.login,
+            a.authorized_keys,
+            boxlite.SshCaConfig(a.ca.public_key, a.ca.principal) if a.ca else None,
+        )
+        for a in config.accounts
+    ]
+    native = boxlite.SshConfig(config.listen_address, config.host_private_key, accounts)
+    return ssh_status_dict(await (await ssh_handle(box_id)).configure(native))
+
+
 @app.post("/v1/{prefix}/boxes/{box_id}/snapshots", status_code=201)
 async def create_snapshot(
     prefix: str,

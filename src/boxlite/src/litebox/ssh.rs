@@ -1,17 +1,19 @@
-//! SSH control with implicit startup for local boxes.
+//! SSH control over local and REST backends.
 
 use std::{fmt, sync::Arc, time::Duration};
 
 use boxlite_shared::{BoxliteError, BoxliteResult};
 
 use super::box_impl::BoxImpl;
-use crate::runtime::backend::BoxBackend;
+use crate::runtime::backend::SshBackend;
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 // Deadline for SSH interface acquisition and RPC, after VM/container startup.
 const SSH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Complete guest SSH configuration. Keys are never persisted by the runtime.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SshConfig {
     pub listen_address: String,
     pub host_private_key: String,
@@ -19,7 +21,7 @@ pub struct SshConfig {
 }
 
 /// Credentials accepted for one SSH login (not a container OS identity).
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SshAccount {
     pub login: String,
     pub authorized_keys: Vec<String>,
@@ -27,7 +29,7 @@ pub struct SshAccount {
 }
 
 /// Certificate authority and required certificate principal.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SshCaConfig {
     pub public_key: String,
     pub principal: String,
@@ -63,7 +65,7 @@ impl fmt::Debug for SshCaConfig {
 }
 
 /// Guest listener state and public host identity; contains no credentials.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SshStatus {
     pub enabled: bool,
     pub generation: u64,
@@ -74,39 +76,47 @@ pub struct SshStatus {
 
 /// Owned SSH control handle. Operations start the VM and container as needed.
 ///
-/// After startup, SSH interface acquisition and the RPC share a 5-second deadline.
+/// Locally, after startup, interface acquisition and the RPC share a 5-second deadline.
+/// REST operations use the HTTP client timeout and the server startup policy.
 /// Runtime shutdown cancels the whole operation, including startup. Operations
 /// are not retried. Timeout or cancellation
 /// does not undo a configuration already applied by the guest.
 #[derive(Clone)]
 pub struct SshHandle {
-    backend: Arc<dyn BoxBackend>,
+    backend: Arc<dyn SshBackend>,
 }
 
 impl fmt::Debug for SshHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SshHandle")
-            .field("box_id", self.backend.id())
-            .finish_non_exhaustive()
+        f.debug_struct("SshHandle").finish_non_exhaustive()
     }
 }
 
 impl SshHandle {
-    pub(super) fn new(backend: Arc<dyn BoxBackend>) -> Self {
+    pub(super) fn new(backend: Arc<dyn SshBackend>) -> Self {
         Self { backend }
     }
 
+    /// Replace all credentials and restart SSH, disconnecting existing sessions.
+    pub async fn configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
+        self.backend.configure(config).await
+    }
+    /// Query listener state; may start the box.
+    pub async fn status(&self) -> BoxliteResult<SshStatus> {
+        self.backend.status().await
+    }
+    /// Disable the listener and disconnect sessions; may start the box.
+    pub async fn disable(&self) -> BoxliteResult<SshStatus> {
+        self.backend.disable().await
+    }
+}
+
+#[async_trait]
+impl SshBackend for BoxImpl {
     /// Validate and replace SSH configuration, disconnecting existing clients.
     /// Starts the VM and container main process as needed.
-    pub async fn configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
-        let backend = self
-            .backend
-            .clone()
-            .as_any_arc()
-            .downcast::<BoxImpl>()
-            .map_err(|_| {
-                BoxliteError::Unsupported("SSH control requires the local backend".into())
-            })?;
+    async fn configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
+        let backend = self;
         tokio::select! {
             biased;
             _ = backend.shutdown_token.cancelled() => Err(BoxliteError::Stopped(format!(
@@ -126,15 +136,8 @@ impl SshHandle {
     }
 
     /// Query SSH state, starting the VM and container as needed.
-    pub async fn status(&self) -> BoxliteResult<SshStatus> {
-        let backend = self
-            .backend
-            .clone()
-            .as_any_arc()
-            .downcast::<BoxImpl>()
-            .map_err(|_| {
-                BoxliteError::Unsupported("SSH control requires the local backend".into())
-            })?;
+    async fn status(&self) -> BoxliteResult<SshStatus> {
+        let backend = self;
         tokio::select! {
             biased;
             _ = backend.shutdown_token.cancelled() => Err(BoxliteError::Stopped(format!(
@@ -155,15 +158,8 @@ impl SshHandle {
 
     /// Stop SSH and disconnect clients. Repeated calls are supported.
     /// Starts the VM and container main process as needed, even if SSH is disabled.
-    pub async fn disable(&self) -> BoxliteResult<SshStatus> {
-        let backend = self
-            .backend
-            .clone()
-            .as_any_arc()
-            .downcast::<BoxImpl>()
-            .map_err(|_| {
-                BoxliteError::Unsupported("SSH control requires the local backend".into())
-            })?;
+    async fn disable(&self) -> BoxliteResult<SshStatus> {
+        let backend = self;
         tokio::select! {
             biased;
             _ = backend.shutdown_token.cancelled() => Err(BoxliteError::Stopped(format!(

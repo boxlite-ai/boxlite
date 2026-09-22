@@ -649,3 +649,7 @@ scripts/build/fix-go-symbols.sh target/debug/libboxlite.a
 
 - **Spec**:
   - [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) — formal API schema
+
+Guest SSH control is available under `/v1/boxes/:boxId/ssh` (GET status),
+`/ssh/configure` (POST configuration), and `/ssh/disable` (POST). The API proxy
+authorizes the tenant and applies autoResume before forwarding these operations.

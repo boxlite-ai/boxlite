@@ -641,3 +641,27 @@ type executionWaitResult struct {
 	exitCode int
 	err      error
 }
+
+//export goBoxliteOnSsh
+func goBoxliteOnSsh(status *C.CSshStatus, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	defer C.boxlite_ssh_status_free(status)
+	if h == 0 || !claimHandleForDispatch(h) {
+		return
+	}
+	defer h.Delete()
+	ch := h.Value().(chan sshResult)
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- sshResult{err: err}
+		return
+	}
+	if status == nil {
+		ch <- sshResult{err: &Error{Code: ErrInternal, Message: "missing SSH status"}}
+		return
+	}
+	ch <- sshResult{value: &SSHStatus{
+		Enabled: bool(status.enabled), Generation: uint64(status.generation),
+		ListenAddress: C.GoString(status.listen_address), HostPublicKey: C.GoString(status.host_public_key),
+		HostKeyFingerprint: C.GoString(status.host_key_fingerprint),
+	}}
+}

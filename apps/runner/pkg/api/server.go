@@ -157,6 +157,9 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		boxliteApi.PUT("/:boxId/files", controllers.BoxliteFileUpload)
 		boxliteApi.GET("/:boxId/files", controllers.BoxliteFileDownload)
 		boxliteApi.GET("/:boxId/metrics", controllers.BoxliteMetrics)
+		boxliteApi.GET("/:boxId/ssh", controllers.BoxliteSshStatus)
+		boxliteApi.POST("/:boxId/ssh/configure", controllers.BoxliteSshConfigure)
+		boxliteApi.POST("/:boxId/ssh/disable", controllers.BoxliteSshDisable)
 		boxliteApi.Handle(http.MethodConnect, "/:boxId/network/tunnel", controllers.BoxliteNetworkTunnel(boxControllerLogger))
 	}
 

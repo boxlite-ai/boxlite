@@ -1393,3 +1393,8 @@ export LD_LIBRARY_PATH=/path/to/boxlite/target/release:$LD_LIBRARY_PATH
 - **[C Quick Start](../../getting-started/quickstart-c.md)** - 5-minute guide
 - **[C Examples](../../../examples/c/)** - Working examples
 - **[Concepts](../../concepts/README.md)** - How BoxLite works
+
+## SSH control
+
+SSH configure, status, and disable are available through the [SSH control guide](../../guides/ssh.md),
+including types, handle ownership, startup behavior, and REST semantics.

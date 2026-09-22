@@ -1,0 +1,557 @@
+use assert_cmd::Command;
+use predicates::str::contains;
+
+#[test]
+fn ssh_commands_expose_help_and_target_flags() {
+    for command in [
+        "configure",
+        "status",
+        "disable",
+        "setup",
+        "forward",
+        "connect",
+    ] {
+        Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+            .args(["ssh", command, "--help"])
+            .assert()
+            .success()
+            .stdout(contains("--home"))
+            .stdout(contains("--config"))
+            .stdout(contains("--url"))
+            .stdout(contains("--profile"))
+            .stdout(contains("--path-prefix"));
+    }
+}
+
+#[test]
+fn ssh_configure_invalid_input_is_redacted() {
+    let home = tempfile::tempdir().unwrap();
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+        .arg("--home").arg(home.path())
+        .args(["ssh", "configure", "test", "--file", "-"])
+        .write_stdin(r#"{"listen_address":"0.0.0.0:22","host_private_key":"sentinel-private","accounts":"sentinel-account"}"#)
+        .assert().failure();
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    assert!(stderr.contains("Invalid SSH configuration"), "{stderr}");
+    assert!(!stderr.contains("sentinel"), "{stderr}");
+}
+
+#[test]
+fn ssh_completion_includes_all_commands() {
+    Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+        .args(["completion", "bash"])
+        .assert()
+        .success()
+        .stdout(contains("configure"))
+        .stdout(contains("setup"))
+        .stdout(contains("connect"));
+}
+
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
+
+struct SshServer {
+    url: String,
+    state: Arc<Mutex<ServerState>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+struct ServerState {
+    status: Value,
+    configurations: usize,
+    fail_after_apply: bool,
+    paths: Vec<String>,
+    tunnel_uri: Option<String>,
+    authorizations: Vec<String>,
+}
+
+impl SshServer {
+    async fn start() -> Self {
+        let state = Arc::new(Mutex::new(ServerState {
+            status: json!({"enabled":false,"generation":0,"listen_address":"","host_public_key":"","host_key_fingerprint":""}),
+            configurations: 0,
+            fail_after_apply: false,
+            paths: vec![],
+            tunnel_uri: None,
+            authorizations: vec![],
+        }));
+        let app = axum::Router::new()
+            .fallback(server_request)
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        Self { url, state, task }
+    }
+
+    fn cli(&self, home: &std::path::Path) -> Command {
+        let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("boxlite"));
+        cmd.timeout(std::time::Duration::from_secs(20));
+        cmd.env_remove("BOXLITE_API_KEY")
+            .env_remove("BOXLITE_PROFILE");
+        cmd.arg("--home")
+            .arg(home)
+            .args(["--url", &self.url, "--path-prefix", "team"]);
+        cmd
+    }
+
+    fn setup(&self, home: &std::path::Path, extra: &[&str]) -> Value {
+        let result = self
+            .cli(home)
+            .args(["ssh", "setup", "alias", "--format", "json"])
+            .args(extra)
+            .assert()
+            .success();
+        serde_json::from_slice(&result.get_output().stdout).unwrap()
+    }
+}
+impl Drop for SshServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn server_request(
+    State(state): State<Arc<Mutex<ServerState>>>,
+    req: axum::extract::Request,
+) -> axum::response::Response {
+    let path = req.uri().path().to_string();
+    let method = req.method().to_string();
+    let authorization = req
+        .headers()
+        .get("authorization")
+        .map(|value| value.to_str().unwrap().to_owned())
+        .unwrap_or_default();
+    let body = axum::body::to_bytes(req.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let mut state = state.lock().unwrap();
+    state.paths.push(format!("{method} {path}"));
+    state.authorizations.push(authorization);
+    if path == "/v1/team/boxes/real-id/network/tunnel" && method == "POST" {
+        return match &state.tunnel_uri {
+            Some(uri) => Json(json!({"uri":uri})).into_response(),
+            None => StatusCode::NOT_FOUND.into_response(),
+        };
+    }
+    if path == "/v1/team/boxes/alias" || path == "/v1/team/boxes/real-id" {
+        return Json(json!({"box_id":"real-id","name":"alias","status":"running","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","image":"alpine:latest","cpus":1,"memory_mib":256})).into_response();
+    }
+    if path == "/v1/team/boxes/real-id/ssh/configure" && method == "POST" {
+        let config: Value = serde_json::from_slice(&body).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("host");
+        std::fs::write(&key, config["host_private_key"].as_str().unwrap()).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let public = std::process::Command::new("ssh-keygen")
+            .args(["-y", "-f"])
+            .arg(key)
+            .output()
+            .unwrap();
+        assert!(public.status.success());
+        state.configurations += 1;
+        state.status = json!({"enabled":true,"generation":state.status["generation"].as_u64().unwrap()+1,"listen_address":config["listen_address"],"host_public_key":String::from_utf8(public.stdout).unwrap().trim(),"host_key_fingerprint":"SHA256:test"});
+        if state.fail_after_apply {
+            state.fail_after_apply = false;
+            return (StatusCode::GATEWAY_TIMEOUT, "sentinel server secret").into_response();
+        }
+    } else if path == "/v1/team/boxes/real-id/ssh/disable" && method == "POST" {
+        state.status["enabled"] = json!(false);
+    } else if path != "/v1/team/boxes/real-id/ssh" {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    Json(state.status.clone()).into_response()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_setup_reuses_conflicts_replaces_and_recovers_pending_keys() {
+    use std::os::unix::fs::PermissionsExt;
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let first = server.setup(home.path(), &[]);
+    let key = std::path::Path::new(first["identity_file"].as_str().unwrap());
+    assert_eq!(
+        std::fs::metadata(key).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        std::fs::metadata(key.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert!(key.to_string_lossy().contains("real-id"));
+    let second = server.setup(home.path(), &[]);
+    assert_eq!(first["identity_file"], second["identity_file"]);
+    assert_eq!(server.state.lock().unwrap().configurations, 1);
+    server.state.lock().unwrap().status["generation"] = json!(9);
+    server
+        .cli(home.path())
+        .args(["ssh", "setup", "alias"])
+        .assert()
+        .failure()
+        .stderr(contains("--replace"));
+    let replaced = server.setup(home.path(), &["--replace"]);
+    assert_ne!(first["identity_file"], replaced["identity_file"]);
+    server
+        .cli(home.path())
+        .args(["ssh", "disable", "alias"])
+        .assert()
+        .success();
+    let restored = server.setup(home.path(), &[]);
+    assert_eq!(restored["identity_file"], replaced["identity_file"]);
+    server.state.lock().unwrap().fail_after_apply = true;
+    server
+        .cli(home.path())
+        .args(["ssh", "setup", "alias", "--replace"])
+        .assert()
+        .failure();
+    let count = server.state.lock().unwrap().configurations;
+    let recovered = server.setup(home.path(), &[]);
+    assert_ne!(recovered["identity_file"], restored["identity_file"]);
+    assert_eq!(server.state.lock().unwrap().configurations, count);
+    let other = SshServer::start().await;
+    let isolated = other.setup(home.path(), &[]);
+    assert_ne!(isolated["identity_file"], recovered["identity_file"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_status_preserves_maximum_generation_and_full_mapping() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let expected = json!({"enabled":true,"generation":u64::MAX,"listen_address":"0.0.0.0:22","host_public_key":"public","host_key_fingerprint":"SHA256:test"});
+    server.state.lock().unwrap().status = expected.clone();
+    let output = server
+        .cli(home.path())
+        .args(["ssh", "status", "alias"])
+        .assert()
+        .success();
+    let actual: Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(actual, expected);
+    assert!(
+        server
+            .state
+            .lock()
+            .unwrap()
+            .paths
+            .contains(&"GET /v1/team/boxes/real-id/ssh".to_string())
+    );
+}
+
+async fn connect_peer(
+    server: &SshServer,
+    response: &'static [u8],
+    read_request: bool,
+) -> tokio::task::JoinHandle<Vec<u8>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    server.state.lock().unwrap().tunnel_uri =
+        Some(format!("http://{}", listener.local_addr().unwrap()));
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut header = Vec::new();
+        while !header.ends_with(b"\r\n\r\n") {
+            header.push(stream.read_u8().await.unwrap());
+            assert!(header.len() < 8192);
+        }
+        assert!(header.starts_with(b"CONNECT "));
+        stream
+            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .await
+            .unwrap();
+        let mut request = Vec::new();
+        if read_request {
+            stream.read_to_end(&mut request).await.unwrap();
+        }
+        stream.write_all(response).await.unwrap();
+        stream.shutdown().await.unwrap();
+        request
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_stdio_cli_rest_connect_raw_bytes_and_half_close() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let peer = connect_peer(&server, b"\0\xffreply\r\n", true).await;
+    let result = server
+        .cli(home.path())
+        .args(["network", "tunnel", "alias", "22", "--stdio"])
+        .write_stdin(b"\xff\0input\r\n".as_slice())
+        .assert()
+        .success();
+    assert_eq!(result.get_output().stdout, b"\0\xffreply\r\n");
+    assert_eq!(peer.await.unwrap(), b"\xff\0input\r\n");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_stdio_cli_exits_while_stdin_writer_remains_open() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let peer = connect_peer(&server, b"bye", false).await;
+    let mut child = tokio::process::Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+        .arg("--home")
+        .arg(home.path())
+        .args([
+            "--url",
+            &server.url,
+            "--path-prefix",
+            "team",
+            "network",
+            "tunnel",
+            "alias",
+            "22",
+            "--stdio",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let _open_stdin = child.stdin.take().unwrap();
+    let output = tokio::time::timeout(std::time::Duration::from_secs(10), child.wait_with_output())
+        .await
+        .expect("remote EOF must cancel stdin")
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"bye");
+    peer.await.unwrap();
+}
+
+#[test]
+fn ssh_stdio_conflicts_with_listener() {
+    Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+        .args([
+            "network", "tunnel", "alias", "22", "--stdio", "--listen", "2222",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("cannot be used with"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_connect_delegates_io_arguments_and_exit_code() {
+    use std::os::unix::fs::PermissionsExt;
+    let server = SshServer::start().await;
+    let home = tempfile::Builder::new()
+        .prefix("ssh spaces ' \" %h ")
+        .tempdir()
+        .unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let ssh = tools.path().join("ssh");
+    std::fs::write(
+        &ssh,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SSH_TEST_ARGS\"\nprintf 'remote-output'\nexit 17\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let captured = tools.path().join("args");
+    let path = format!(
+        "{}:{}",
+        tools.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    server
+        .cli(home.path())
+        .env("PATH", path)
+        .env("SSH_TEST_ARGS", &captured)
+        .args(["ssh", "connect", "alias", "--", "sh", "-c", "exit 17"])
+        .assert()
+        .code(17)
+        .stdout("remote-output");
+    let args = std::fs::read_to_string(captured).unwrap();
+    assert!(args.contains("StrictHostKeyChecking=yes"));
+    assert!(args.contains("IdentitiesOnly=yes"));
+    assert!(args.contains("'network' 'tunnel' 'real-id' '22' '--stdio'"));
+    assert!(args.contains("'--path-prefix' 'team'"));
+    assert!(args.contains("'sh' '-c' 'exit 17'"));
+    assert!(args.contains("%%h"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_configure_file_and_stdin_reach_rest() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let login = server.setup(home.path(), &[]);
+    let key_dir = std::path::Path::new(login["identity_file"].as_str().unwrap())
+        .parent()
+        .unwrap();
+    let config = json!({"listen_address":"0.0.0.0:22","host_private_key":std::fs::read_to_string(key_dir.join("host")).unwrap(),"accounts":[{"login":"boxlite","authorized_keys":[std::fs::read_to_string(key_dir.join("identity.pub")).unwrap()],"ca":null}]}).to_string();
+    let file = home.path().join("config.json");
+    std::fs::write(&file, &config).unwrap();
+    server
+        .cli(home.path())
+        .args(["ssh", "configure", "alias", "--file"])
+        .arg(file)
+        .assert()
+        .success();
+    server
+        .cli(home.path())
+        .args([
+            "ssh",
+            "configure",
+            "alias",
+            "--file",
+            "-",
+            "--format",
+            "yaml",
+        ])
+        .write_stdin(config)
+        .assert()
+        .success();
+    assert_eq!(server.state.lock().unwrap().configurations, 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_real_openssh_parses_quoted_paths_and_proxy_percent_tokens() {
+    let server = SshServer::start().await;
+    let home = tempfile::Builder::new()
+        .prefix("ssh ' \" %h ")
+        .tempdir()
+        .unwrap();
+    let login = server.setup(home.path(), &[]);
+    let peer = connect_peer(&server, b"SSH-2.0-test\r\n", false).await;
+    let command = login["command"]
+        .as_str()
+        .unwrap()
+        .replacen("'ssh'", "'ssh' '-vv'", 1);
+    let result = Command::new("/bin/sh")
+        .args(["-c", &command])
+        .timeout(std::time::Duration::from_secs(10))
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&result.get_output().stderr);
+    assert!(!stderr.contains("not accessible"), "{stderr}");
+    assert!(!stderr.contains("invalid quotes"), "{stderr}");
+    assert!(stderr.contains("Remote protocol version 2.0"), "{stderr}");
+    peer.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_prepare_lock_rejects_concurrent_writer() {
+    use nix::fcntl::{Flock, FlockArg};
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let login = server.setup(home.path(), &[]);
+    let root = std::path::Path::new(login["identity_file"].as_str().unwrap())
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let _lock = Flock::lock(
+        std::fs::File::open(root.join("lock")).unwrap(),
+        FlockArg::LockExclusiveNonblock,
+    )
+    .unwrap();
+    server
+        .cli(home.path())
+        .args(["ssh", "setup", "alias"])
+        .assert()
+        .failure()
+        .stderr(contains("already in progress"));
+    assert_eq!(server.state.lock().unwrap().configurations, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_keygen_missing_and_timeout_are_explicit_and_reaped() {
+    use std::os::unix::fs::PermissionsExt;
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    server
+        .cli(home.path())
+        .env("PATH", tools.path())
+        .args(["ssh", "setup", "alias"])
+        .assert()
+        .failure()
+        .stderr(contains("install OpenSSH"));
+    let script = tools.path().join("ssh-keygen");
+    let pidfile = tools.path().join("pid");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nprintf '%s' \"$$\" > \"$KEYGEN_PID\"\nexec /bin/sleep 60\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    server
+        .cli(home.path())
+        .timeout(std::time::Duration::from_secs(30))
+        .env("PATH", tools.path())
+        .env("KEYGEN_PID", &pidfile)
+        .args(["ssh", "setup", "alias"])
+        .assert()
+        .failure()
+        .stderr(contains("ssh-keygen timed out"));
+    let pid: i32 = std::fs::read_to_string(pidfile).unwrap().parse().unwrap();
+    assert_eq!(
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
+        Err(nix::errno::Errno::ESRCH)
+    );
+    assert_eq!(server.state.lock().unwrap().configurations, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_profile_and_auth_environment_survive_proxy_command() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("credentials.toml"),
+        format!(
+            "[profiles.saved]\nurl = {:?}\napi_key = 'stored-test-key'\npath_prefix = 'team'\n",
+            server.url
+        ),
+    )
+    .unwrap();
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+        .arg("--home")
+        .arg(home.path())
+        .env_remove("BOXLITE_REST_URL")
+        .env_remove("BOXLITE_REST_PATH_PREFIX")
+        .env("BOXLITE_API_KEY", "env-test-key")
+        .args([
+            "--profile",
+            "saved",
+            "ssh",
+            "setup",
+            "alias",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    let login: Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    let command = login["command"].as_str().unwrap();
+    assert!(!command.contains("test-key"));
+    let peer = connect_peer(&server, b"SSH-2.0-test\r\n", false).await;
+    Command::new("/bin/sh")
+        .args(["-c", command])
+        .env("BOXLITE_API_KEY", "env-test-key")
+        .timeout(std::time::Duration::from_secs(10))
+        .assert()
+        .failure();
+    peer.await.unwrap();
+    let state = server.state.lock().unwrap();
+    assert!(state.authorizations.len() >= 5);
+    assert!(
+        state
+            .authorizations
+            .iter()
+            .all(|authorization| authorization == "Bearer env-test-key")
+    );
+    assert!(
+        state
+            .paths
+            .contains(&"POST /v1/team/boxes/real-id/network/tunnel".to_owned())
+    );
+}

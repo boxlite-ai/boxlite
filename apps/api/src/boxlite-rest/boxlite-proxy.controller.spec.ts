@@ -450,3 +450,47 @@ describe('BoxliteProxyController', () => {
     expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('SSH proxy', () => {
+  beforeEach(() => jest.clearAllMocks())
+  it.each(['proxySshStatus', 'proxySshConfigure', 'proxySshDisable'] as const)(
+    '%s respects tenant, alias, and activity policy',
+    async (method) => {
+      jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+      const { controller, boxService, autoResume } = makeHarness()
+      await controller[method](activeAuth as never, 'alias', {} as never, {} as never, jest.fn())
+      expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('alias', 'org-1')
+      expect(boxService.updateLastActivityAt).toHaveBeenCalledWith('box-uuid', expect.any(Date))
+      expect(autoResume.ensureReady).toHaveBeenCalledWith('box-uuid', activeAuth.organization)
+      const rewrite = jest.mocked(createProxyMiddleware).mock.calls[0][0].pathRewrite as (path: string) => string
+      expect(rewrite('')).toMatch(/^\/v1\/boxes\/box-uuid\/ssh/)
+    },
+  )
+  it.each(['proxySshStatus', 'proxySshConfigure', 'proxySshDisable'] as const)(
+    '%s rejects stopped boxes with autoResume disabled',
+    async (method) => {
+      const { controller, boxService, autoResume } = makeHarness()
+      boxService.findOneByIdOrName.mockResolvedValue({
+        id: 'box-uuid',
+        runnerId: 'runner-1',
+        autoResume: false,
+        state: 'stopped',
+        public: false,
+      })
+      await expect(
+        controller[method](activeAuth as never, 'alias', {} as never, {} as never, jest.fn()),
+      ).rejects.toMatchObject({ status: 409 })
+      expect(autoResume.ensureReady).not.toHaveBeenCalled()
+      expect(createProxyMiddleware).not.toHaveBeenCalled()
+    },
+  )
+  it('does not proxy a box outside the tenant', async () => {
+    const { controller, boxService } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue(null as never)
+    await expect(
+      controller.proxySshStatus(activeAuth as never, 'foreign', {} as never, {} as never, jest.fn()),
+    ).rejects.toMatchObject({ status: 404 })
+    expect(createProxyMiddleware).not.toHaveBeenCalled()
+    expect(boxService.updateLastActivityAt).not.toHaveBeenCalled()
+  })
+})

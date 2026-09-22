@@ -151,6 +151,8 @@ typedef struct RestOptionsHandle RestOptionsHandle;
 // per-runtime event queue used by the post-and-drain callback API.
 typedef struct RuntimeHandle RuntimeHandle;
 
+typedef struct SshControl SshControl;
+
 // Opaque long-lived listener handle.
 typedef struct TunnelForwarderHandle TunnelForwarderHandle;
 
@@ -472,6 +474,20 @@ typedef struct VolumeHandle CBoxliteVolumeHandle;
 
 // Runtime shutdown completion.
 typedef void (*CRuntimeShutdownCb)(CBoxliteError*, void*);
+
+typedef struct SshControl CSshHandle;
+
+// Owned result. Release with boxlite_ssh_status_free; strings are read-only.
+typedef struct CSshStatus {
+  bool enabled;
+  uint64_t generation;
+  char *listen_address;
+  char *host_public_key;
+  char *host_key_fingerprint;
+} CSshStatus;
+
+// Completion transfers status ownership to the caller; error is borrowed.
+typedef void (*CSshCb)(struct CSshStatus*, CBoxliteError*, void*);
 
 // C ABI representation of volume metadata.
 //
@@ -1187,6 +1203,36 @@ void boxlite_runtime_free(CBoxliteRuntime *runtime);
 //
 // Returns the number of dispatched events, or `-1` on error.
 int boxlite_runtime_drain(CBoxliteRuntime *runtime, int timeout_ms, CBoxliteError *out_error);
+
+// Acquire an owned handle without starting the box. Free with boxlite_ssh_free.
+enum BoxliteErrorCode boxlite_box_ssh(CBoxHandle *handle,
+                                      CSshHandle **out_ssh,
+                                      CBoxliteError *out_error);
+
+// Parse and copy a snake_case SshConfig JSON string before returning.
+// The caller may release config_json immediately. Invalid JSON never echoes input.
+enum BoxliteErrorCode boxlite_ssh_configure(CSshHandle *handle,
+                                            const char *config_json,
+                                            CSshCb cb,
+                                            void *user_data,
+                                            CBoxliteError *out_error);
+
+// Query status asynchronously; may start the box.
+enum BoxliteErrorCode boxlite_ssh_status(CSshHandle *handle,
+                                         CSshCb cb,
+                                         void *user_data,
+                                         CBoxliteError *out_error);
+
+// Disable SSH asynchronously and disconnect sessions; may start the box.
+enum BoxliteErrorCode boxlite_ssh_disable(CSshHandle *handle,
+                                          CSshCb cb,
+                                          void *user_data,
+                                          CBoxliteError *out_error);
+
+// Free the handle; submitted operations retain their own references.
+void boxlite_ssh_free(CSshHandle *handle);
+
+void boxlite_ssh_status_free(struct CSshStatus *status);
 
 void boxlite_free_string(char *s);
 

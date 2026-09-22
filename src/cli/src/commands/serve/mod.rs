@@ -1751,9 +1751,14 @@ async fn get_or_attach_main_session(
 // ============================================================================
 
 fn build_router(state: Arc<AppState>) -> Router {
-    use handlers::{advanced, boxes, config, executions, files, me, metrics, snapshots, volumes};
+    use handlers::{
+        advanced, boxes, config, executions, files, me, metrics, snapshots, ssh, volumes,
+    };
 
     Router::new()
+        .route("/v1/boxes/{box_id}/ssh", get(ssh::status))
+        .route("/v1/boxes/{box_id}/ssh/configure", post(ssh::configure))
+        .route("/v1/boxes/{box_id}/ssh/disable", post(ssh::disable))
         // Identity (no tenant prefix)
         .route("/v1/me", get(me::get_me))
         .route("/v1/config", get(config::get_config))
@@ -3587,6 +3592,28 @@ mod tests {
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
         let client = reqwest::Client::new();
+
+        for (method, suffix) in [
+            (reqwest::Method::GET, ""),
+            (reqwest::Method::POST, "/configure"),
+            (reqwest::Method::POST, "/disable"),
+        ] {
+            let response = client.request(method, format!("{base}/v1/boxes/{STUB_BOX_ID}/ssh{suffix}"))
+                .json(&serde_json::json!({"listen_address":"addr", "host_private_key":"private", "accounts":[]}))
+                .send().await.unwrap();
+            assert_eq!(
+                response.status().as_u16(),
+                409,
+                "SSH must respect AutoResume: {suffix}"
+            );
+        }
+
+        let invalid_ssh = client.post(format!("{base}/v1/boxes/{STUB_BOX_ID}/ssh/configure"))
+            .json(&serde_json::json!({"host_private_key": "sentinel-private", "accounts": "sentinel-secret"}))
+            .send().await.unwrap();
+        assert_eq!(invalid_ssh.status().as_u16(), 400);
+        assert!(!invalid_ssh.text().await.unwrap().contains("sentinel"));
+        assert!(state.last_activity.read().await.contains_key(STUB_BOX_ID));
 
         let exec = client
             .post(format!("{base}/v1/boxes/{STUB_BOX_ID}/exec"))
