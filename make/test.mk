@@ -1,4 +1,13 @@
-PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
+PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:vmm\:boot test\:vmm\:boot-artifacts test\:vmm\:boot-reproducible test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
+
+test\:vmm\:boot:
+	@python3 "$(SCRIPT_DIR)/test/test-vmm-boot.py"
+
+test\:vmm\:boot-artifacts:
+	@python3 "$(SCRIPT_DIR)/test/test-vmm-boot.py" --artifacts
+
+test\:vmm\:boot-reproducible:
+	@python3 "$(SCRIPT_DIR)/test/test-vmm-boot.py" --reproducible
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
