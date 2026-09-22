@@ -61,7 +61,7 @@ is *exclusively* callable; workflows with `workflow_dispatch` can also run on th
 | `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | The only workflow that writes to GHCR |
 
 Longer treatments live with their subject rather than here: [E2E local
-runbook](../../docs/ci/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
+runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
 
 ## Routine checks
 

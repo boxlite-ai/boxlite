@@ -8,7 +8,7 @@
 //! API as before, but the build now routes through the zygote's single-threaded
 //! fork server instead of calling ContainerBuilder inline.
 //!
-//! See `docs/investigations/concurrent-exec-deadlock.md` for background.
+//! See `docs/contributing/investigations/concurrent-exec-deadlock.md` for background.
 
 mod common;
 

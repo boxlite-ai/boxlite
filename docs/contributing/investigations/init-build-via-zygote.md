@@ -1,4 +1,4 @@
-# Container Init Creation via the Zygote
+# Container init creation via the zygote
 
 **Date:** 2026-07-14
 **Status:** Implemented 2026-07-21 (`ZygoteRequest::BuildInit`; deltas from the

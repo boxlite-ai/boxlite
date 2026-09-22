@@ -1,4 +1,4 @@
-# BoxLite CLI Reference
+# BoxLite CLI reference
 
 Exhaustive reference for the `boxlite` command-line interface — every subcommand, every flag, every exit code.
 
@@ -6,7 +6,7 @@ Exhaustive reference for the `boxlite` command-line interface — every subcomma
 
 For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
 
-## Table of Contents
+## Table of contents
 
 - [Synopsis](#synopsis)
 - [Installation & Verification](#installation--verification)
@@ -57,7 +57,7 @@ boxlite [GLOBAL OPTIONS] <COMMAND> [ARGS...]
 
 ---
 
-## Installation & Verification
+## Installation & verification
 
 The `boxlite` CLI can be installed three ways:
 
@@ -117,7 +117,7 @@ sh ./install.sh
 
 ---
 
-## Global Options
+## Global options
 
 Place these options before the top-level command or after the complete command
 path. A parent command accepts only options shared by all children; for example,
@@ -145,7 +145,7 @@ and `--version` display actions remain terminal.
 
 ---
 
-## Environment Variables
+## Environment variables
 
 | Variable | Read by | Description |
 |----------|---------|-------------|
@@ -743,7 +743,7 @@ boxlite completion fish > ~/.config/fish/completions/boxlite.fish
 
 ---
 
-## Shared Flag Groups
+## Shared flag groups
 
 Several commands flatten shared `clap` `Args` structs. Each is documented here once.
 
@@ -853,7 +853,7 @@ does not expose remove-on-stop.
 
 ---
 
-## Volume Mount Syntax
+## Volume mount syntax
 
 `-v`/`--volume` accepts the grammar implemented in `src/cli/src/volumespec.rs`:
 
@@ -905,7 +905,7 @@ The anonymous-volume base directory is resolved as: `--home`, else `$BOXLITE_HOM
 
 ---
 
-## Port Publish Syntax
+## Port publish syntax
 
 `-p`/`--publish` accepts the grammar implemented at
 `src/cli/src/cli.rs`:
@@ -929,7 +929,7 @@ Image `EXPOSE` declarations remain metadata and do not open host listeners.
 
 ---
 
-## Output Formats
+## Output formats
 
 The `--format` flag is shared across `list`, `images`, `inspect`, `stats`,
 `info`, `volume ls`, and `volume get`. Valid values come from
@@ -950,7 +950,7 @@ Defaults:
 
 ---
 
-## Configuration File
+## Configuration file
 
 `--config PATH` accepts a JSON file deserialized into `BoxliteOptions`. The primary field is `image_registries`; CLI flags like `--home` and `--registry` are layered on top after loading.
 
@@ -978,7 +978,7 @@ For a richer treatment of the registry config (auth flows, fallbacks, mirrors), 
 
 ---
 
-## Exit Codes
+## Exit codes
 
 `boxlite` follows POSIX shell exit-code conventions. The mapping lives at `src/cli/src/util/mod.rs:11-15`.
 
@@ -994,7 +994,7 @@ For a richer treatment of the registry config (auth flows, fallbacks, mirrors), 
 
 ---
 
-## See Also
+## See also
 
 - [`src/cli/README.md`](../../../src/cli/README.md) — quick start, install alternatives, common workflows
 - [`docs/reference/README.md`](../README.md) — reference index (SDKs + CLI)

@@ -471,7 +471,8 @@ environment variable, required)
 The proxy is host-routed: a host whose first label parses as `<port>-<box>`
 selects the preview forwarding paths, and any other host serves the base-host
 utility routes. The preview-warning acceptance route is handled before host
-routing, so it works on every host.
+routing, so it works on every host. How the proxy authenticates these requests
+and tunnels them to guest ports is in [`proxy/README.md`](./proxy/README.md).
 
 <details>
 <summary><b>Proxy routes</b> · 5 routes</summary>

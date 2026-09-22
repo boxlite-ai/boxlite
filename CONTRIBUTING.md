@@ -25,7 +25,7 @@ make setup
 make dev:python
 ```
 
-For detailed build instructions, see [docs/guides](./docs/guides/README.md#building-from-source).
+For detailed build instructions, see [Building from source](./docs/contributing/development/building.md).
 
 ### Running Tests
 
@@ -193,7 +193,7 @@ Verification: workflow checks passed. Hosted CI timing has not been measured.
 
 ### Code Style
 
-Follow the [Rust Style Guide](./docs/development/rust-style.md) which includes:
+Follow the [Rust style guide](./docs/contributing/development/rust-style.md), which includes:
 
 - [Microsoft Rust Guidelines](https://microsoft.github.io/rust-guidelines)
 - BoxLite-specific patterns (async-first, centralized errors, thread-safe types)
@@ -204,26 +204,93 @@ Follow the [Rust Style Guide](./docs/development/rust-style.md) which includes:
 - `make lint` / `make lint:fix` for lint checks and safe autofix
 - Keep functions focused (single responsibility)
 - Add tests for new functionality
-- Update documentation as needed
+- Update documentation in the same pull request, in the place [Documentation](#documentation) assigns
 
 ## Project Structure
 
 ```
 src/
   boxlite/        # Core runtime (Rust)
-  cli/            # CLI
-  server/         # Distributed server
-  shared/         # Shared types and protocol
-  ffi/            # FFI layer for SDKs
-  guest/          # Guest agent (runs inside VM)
+  cli/            # boxlite CLI
+  shim/           # Per-box shim process
+  guest/          # Guest agent (runs inside the VM)
+  vmm/            # BoxLite's own VMM
+  hypervisor/     # Hypervisor backends for the VMM
+  shared/         # Types and protocol shared by host, shim, and guest
   test-utils/     # Test utilities
   deps/           # Vendored C sys crates
 sdks/
   python/         # Python SDK
-  c/              # C SDK
   node/           # Node.js SDK
+  go/             # Go SDK
+  c/              # C SDK
+openapi/          # REST API contract
 examples/         # Example code
+docs/             # Documentation (see Documentation below)
+apps/             # Hosted platform: API, runner, preview proxy, dashboard, infrastructure
+scripts/          # Build, release, and test scripts
 ```
+
+## Documentation
+
+Every doc has one home, and other docs link to it instead of repeating it. Place a doc by the
+first rule that matches:
+
+1. **A dated record** — a root-cause analysis, investigation, or design study — goes in
+   [`docs/contributing/investigations/`](./docs/contributing/investigations/), whichever code it
+   covers.
+2. **One directory's code** — what it is, how to build and test it, how it works inside — goes in
+   that directory's `README.md`: `src/<crate>/`, `sdks/<lang>/`, `apps/<app>/`,
+   `examples/<name>/`. A topic too long for the README gets its own file beside it, linked from
+   the README. A README that a package registry publishes (`src/cli/`, `sdks/<lang>/`) is
+   written for that package's users first; a contributor guide too long for it goes in
+   `docs/contributing/development/`.
+3. **Several hosted-platform services** go in the [`apps/`](./apps/README.md) hub:
+   `apps/README.md` for architecture, `apps/API.md` for interfaces, `apps/SCHEMA.md` for the data
+   model, and `apps/infra/docs/` for deployment and operations.
+4. **Using BoxLite** — the runtime, CLI, and SDKs — goes in [`docs/`](./docs/README.md), by what
+   the reader needs:
+
+   | The reader needs                                    | Directory               |
+   | --------------------------------------------------- | ----------------------- |
+   | A first working box                                 | `docs/getting-started/` |
+   | Steps toward one goal                               | `docs/guides/`          |
+   | How and why BoxLite works                           | `docs/concepts/`        |
+   | Exact facts: APIs, CLI flags, configuration, errors | `docs/reference/`       |
+   | A quick answer to a common question                 | `docs/faq.md`           |
+
+5. **Working on BoxLite** across components goes in
+   [`docs/contributing/`](./docs/contributing/README.md):
+
+   | The reader needs                     | Directory                         |
+   | ------------------------------------ | --------------------------------- |
+   | How the code fits together           | `docs/contributing/architecture/` |
+   | How to build, test, and ship changes | `docs/contributing/development/`  |
+
+6. **The repository itself**: this file for the contribution process,
+   [`AGENTS.md`](./AGENTS.md) for agent rules,
+   [`.github/workflows/README.md`](./.github/workflows/README.md) for CI workflows,
+   [`SECURITY.md`](./SECURITY.md) for vulnerability reports, and
+   [`docs/legal/CLA.md`](./docs/legal/CLA.md) for the CLA, whose URL is published.
+
+Apart from dated records (rule 1), `docs/` never explains how an `apps/` service works: those
+services are deployment internals, not the portable contract
+([reference](./docs/reference/README.md#http-api-reference)).
+
+The four user-facing sections follow [uv's documentation](https://github.com/astral-sh/uv/tree/main/docs),
+and the top-level contributor section follows [Deno's](https://github.com/denoland/docs).
+
+When you add or change a doc:
+
+- Link every page from its section's `README.md`, a landing page that introduces each page in a
+  sentence.
+- Create a directory only when its second doc arrives; until then, use the closest existing one.
+- Name files in lowercase kebab-case, such as `guest-networking.md`.
+- Write headings under `docs/` in sentence case: capitalize the first word and proper nouns only.
+- Keep an experimental feature's page in the section its content belongs to, and state its
+  status, such as release candidate, in the title or the first paragraph.
+- Change a doc in the same pull request as the behavior it describes, and delete docs for behavior
+  that no longer exists.
 
 ## License
 

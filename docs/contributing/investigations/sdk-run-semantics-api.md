@@ -1,4 +1,4 @@
-# SDK API for Run-Command Semantics
+# SDK API for run-command semantics
 
 **Date:** 2026-07-14
 **Status:** Design — pending review

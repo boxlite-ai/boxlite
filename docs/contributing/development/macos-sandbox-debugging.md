@@ -1,4 +1,4 @@
-# Debugging macOS Sandbox (Seatbelt) Denials
+# Debugging macOS sandbox (Seatbelt) denials
 
 This guide explains how to debug sandbox policy issues when developing or troubleshooting BoxLite's macOS sandbox isolation.
 
@@ -8,7 +8,7 @@ BoxLite uses macOS's built-in sandbox system (Seatbelt) to isolate the `boxlite-
 
 The shipped profile is **deny-by-default** (`(deny default)`) with explicit allowlists for required process/sysctl/mach/file/network operations.
 
-## Quick Reference
+## Quick reference
 
 ```bash
 # Real-time monitoring (recommended during development)
@@ -18,9 +18,9 @@ log stream --predicate 'eventMessage CONTAINS "Sandbox:" AND eventMessage CONTAI
 log show --last 5m --predicate 'eventMessage CONTAINS "Sandbox:" AND eventMessage CONTAINS "deny"'
 ```
 
-## Debugging Workflow
+## Debugging workflow
 
-### Step 1: Enable Real-time Log Monitoring
+### Step 1: Enable real-time log monitoring
 
 Open a separate terminal and start monitoring sandbox messages:
 
@@ -32,7 +32,7 @@ log stream --predicate 'subsystem == "com.apple.sandbox"' --level error
 log stream --predicate 'eventMessage CONTAINS "boxlite-shim" AND eventMessage CONTAINS "deny"'
 ```
 
-### Step 2: Run Your Test
+### Step 2: Run your test
 
 In another terminal, run the operation that's failing:
 
@@ -51,7 +51,7 @@ asyncio.run(test())
 "
 ```
 
-### Step 3: Analyze Denials
+### Step 3: Analyze denials
 
 Sandbox denials appear in the format:
 
@@ -72,7 +72,7 @@ Common denial types:
 | `network-outbound` | `*:443` | Process tried to make network connection |
 | `iokit-open` | `IOHIDFamily` | Process tried to access IOKit device |
 
-### Step 4: Update the Policy
+### Step 4: Update the policy
 
 Based on the denial, add the appropriate rule to the SBPL policy:
 
@@ -87,7 +87,7 @@ Based on the denial, add the appropriate rule to the SBPL policy:
 (allow mach-lookup (global-name "com.apple.service"))
 ```
 
-### Step 5: Rebuild and Test
+### Step 5: Rebuild and test
 
 After updating `.sbpl` files, rebuild to pick up changes:
 
@@ -100,9 +100,9 @@ make dev:python
 cargo clean -p boxlite && cargo build -p boxlite
 ```
 
-## Log Commands Reference
+## Log commands reference
 
-### Real-time Streaming
+### Real-time streaming
 
 ```bash
 # All sandbox messages
@@ -118,7 +118,7 @@ log stream --predicate 'eventMessage CONTAINS "boxlite-shim"'
 log stream --predicate 'eventMessage CONTAINS "Sandbox:" AND eventMessage CONTAINS "boxlite" AND eventMessage CONTAINS "deny"'
 ```
 
-### Historical Queries
+### Historical queries
 
 ```bash
 # Last N minutes
@@ -131,7 +131,7 @@ log show --start "2024-01-06 10:00:00" --end "2024-01-06 10:05:00" --predicate '
 log show --last 10m --predicate 'eventMessage CONTAINS "Sandbox:" AND eventMessage CONTAINS "deny"' | grep -oE 'deny\(1\) [^ ]+' | sort | uniq -c | sort -rn
 ```
 
-### Filtering Tips
+### Filtering tips
 
 ```bash
 # Exclude noisy system processes
@@ -141,9 +141,9 @@ log show --last 5m --predicate 'eventMessage CONTAINS "Sandbox:" AND eventMessag
 log show --last 5m --predicate 'senderImagePath == "/kernel" AND eventMessage CONTAINS "Sandbox:"'
 ```
 
-## SBPL Policy Syntax
+## SBPL policy syntax
 
-### Basic Structure
+### Basic structure
 
 ```scheme
 (version 1)
@@ -157,7 +157,7 @@ log show --last 5m --predicate 'senderImagePath == "/kernel" AND eventMessage CO
 (allow sysctl-read (sysctl-name "hw.ncpu"))
 ```
 
-### Common Patterns
+### Common patterns
 
 ```scheme
 ; Allow reading entire directory tree
@@ -181,7 +181,7 @@ log show --last 5m --predicate 'senderImagePath == "/kernel" AND eventMessage CO
     (global-name "com.apple.system.logger"))
 ```
 
-### Testing Syntax
+### Testing syntax
 
 ```bash
 # Test if policy syntax is valid
@@ -191,7 +191,7 @@ sandbox-exec -p '(version 1)(deny default)(allow process-exec)' /bin/echo "Polic
 sandbox-exec -f /path/to/policy.sbpl /bin/echo "Policy OK"
 ```
 
-## BoxLite Policy Files
+## BoxLite policy files
 
 BoxLite's sandbox policy is split into multiple files:
 
@@ -203,7 +203,7 @@ BoxLite's sandbox policy is split into multiple files:
 | `seatbelt_network_policy.sbpl` | Network access (optional) |
 | `seatbelt.rs` | Dynamic policy assembly (binary, volumes, box_dir) |
 
-### Viewing Generated Policy
+### Viewing generated policy
 
 The full runtime policy is assembled in `boxlite/src/jailer/sandbox/seatbelt.rs` by `build_sandbox_policy()` and passed directly via `sandbox-exec -p`.
 
@@ -212,9 +212,9 @@ When debugging, inspect:
 - Dynamic path grants from `build_dynamic_read_paths()` and `build_dynamic_write_paths()`
 - Sandbox denials from `log show`/`log stream` to identify missing allowlist clauses
 
-## Common Issues
+## Common issues
 
-### 1. Changes Not Taking Effect
+### 1. Changes not taking effect
 
 The `.sbpl` files are embedded at compile time via `include_str!`. After modifying them:
 
@@ -227,7 +227,7 @@ cargo build -p boxlite
 make dev:python
 ```
 
-### 2. Path Canonicalization
+### 2. Path canonicalization
 
 macOS uses symlinks (`/var` -> `/private/var`, `/tmp` -> `/private/tmp`). Use canonical paths:
 
@@ -239,11 +239,11 @@ macOS uses symlinks (`/var` -> `/private/var`, `/tmp` -> `/private/tmp`). Use ca
 (allow file-write* (subpath "/private/tmp"))
 ```
 
-### 3. Duplicate Denials
+### 3. Duplicate denials
 
 The log may show "X duplicate reports for...". This means the same denial happened multiple times. Fix the root cause, not each duplicate.
 
-### 4. Silent Failures
+### 4. Silent failures
 
 Some denials don't appear in logs immediately. If the process hangs or crashes without logged denials:
 
@@ -251,14 +251,14 @@ Some denials don't appear in logs immediately. If the process hangs or crashes w
 2. Ensure process actually started: check host logs
 3. Try running without sandbox to isolate the issue
 
-### 5. Permissions vs Sandbox
+### 5. Permissions vs sandbox
 
 Not all failures are sandbox-related. Check:
 - File permissions (`ls -la`)
 - Directory existence
 - Hypervisor.framework entitlements
 
-## Debugging Checklist
+## Debugging checklist
 
 - [ ] Start log streaming before running test
 - [ ] Filter logs for your process name
@@ -269,7 +269,7 @@ Not all failures are sandbox-related. Check:
 - [ ] Rebuild and retest
 - [ ] Verify no new denials appear
 
-## Further Reading
+## Further reading
 
 - [Apple Sandbox Guide](https://developer.apple.com/library/archive/documentation/Security/Conceptual/AppSandboxDesignGuide/)
 - [SBPL Reference (reverse-engineered)](https://reverse.put.as/wp-content/uploads/2011/09/Apple-Sandbox-Guide-v1.0.pdf)

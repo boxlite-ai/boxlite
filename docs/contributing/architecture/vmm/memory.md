@@ -262,10 +262,10 @@ flowchart LR
 
 ## BoxLite implementation reference
 
-[MemoryRegion fields](../../../src/hypervisor/src/memory.rs) ·
+[MemoryRegion fields](../../../../src/hypervisor/src/memory.rs) ·
 [Memory lifetime contract](README.md#hypervisor-backend-interface) ·
 [Guest address layout](README.md#guest-memory-layout) ·
-[Pending I/O contract](../../../src/hypervisor/src/exit.rs) ·
+[Pending I/O contract](../../../../src/hypervisor/src/exit.rs) ·
 [HVF walkthrough](hvf.md) · [KVM walkthrough](kvm.md) · [WHP walkthrough](whp.md) ·
 [WHP host-to-guest mapping API](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/funcs/whvmapgparange) ·
 [KVM memory registration](https://docs.kernel.org/virt/kvm/api.html#kvm-set-user-memory-region)

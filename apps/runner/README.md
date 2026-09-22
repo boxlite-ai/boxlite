@@ -11,7 +11,7 @@ Production deployment runs on bare EC2 (see
 behind the NestJS API service.
 
 For the system-wide context (CDN, load balancers, where the runner fits in
-the request path), see [`docs/architecture/README.md`](../../docs/architecture/README.md).
+the request path), see [`apps/README.md`](../README.md).
 
 ---
 

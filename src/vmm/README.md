@@ -5,7 +5,7 @@ entry points sketch event dispatch, guest exits, and worker cleanup with inline
 `todo!()` operations that panic if called. VM event labels stay local to
 `Vm::run`; vCPU exits use `boxlite_hypervisor::VcpuExit`, and `Error` wraps
 `boxlite_hypervisor::Error` with its cause chain intact. This crate cannot
-create or boot a VM yet. The [VMM design](../../docs/architecture/vmm/README.md)
+create or boot a VM yet. The [VMM design](../../docs/contributing/architecture/vmm/README.md)
 specifies the lifecycle API, memory layout, buses, interrupts, and threads it
 will implement.
 

@@ -265,7 +265,7 @@ to the `options` of whichever Environment-selecting inputs should reach it —
 both `stage` and `source_stage` in `build-apps-api-image.yml` (a stage absent from
 `source_stage` can never be promoted *from*). Those lists are allowlists, so a
 typo cannot target a protected Environment, and they are deliberately
-independent: see [.github/workflows/README.md](../../.github/workflows/README.md)
+independent: see [.github/workflows/README.md](../../../.github/workflows/README.md)
 for which path currently reaches which stage.
 
 ## Outbound mail
@@ -543,7 +543,7 @@ host at a time and stops on the first failure.
 Both runner commands carry `:legacy` because the unsuffixed names now belong to
 mdeploy — `npm run runner:update` and `npm run runner:build` act on the stages
 that path deploys, and reach a host over SSM or an IAP tunnel depending on the
-cloud. See `DEPLOY.md`. The two pairs exist only while both deploy paths do:
+cloud. See [`mdeploy.md`](mdeploy.md). The two pairs exist only while both deploy paths do:
 each path's launcher is recorded in its own state, so neither can be repointed
 at the other's.
 

@@ -231,7 +231,7 @@ fn kvm_smoke_failed(exit_reason: i32, expected: i32, kernel: &str) -> HostDiagno
              - Ensure nested virtualization is enabled (cloud instances need this explicitly)\n\
              - Load the KVM module: sudo modprobe kvm_intel  # or kvm_amd\n\
              - Check: lsmod | grep kvm\n\
-             - See https://github.com/boxlite-ai/boxlite/blob/main/docs/faq.md"
+             - See https://github.com/boxlite-ai/boxlite/blob/main/docs/guides/troubleshooting.md"
         ),
     )
 }

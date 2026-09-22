@@ -1,13 +1,13 @@
-# Rust Style Guide
+# Rust style guide
 
 This guide extends the [Microsoft Rust Guidelines](https://microsoft.github.io/rust-guidelines) with BoxLite-specific patterns.
 
-## External References
+## External references
 
 - **Microsoft Rust Guidelines**: https://microsoft.github.io/rust-guidelines
 - **Rust API Guidelines**: https://rust-lang.github.io/api-guidelines/
 
-## Universal Guidelines (Must Follow)
+## Universal guidelines (must follow)
 
 These guidelines from the Microsoft Rust Guidelines are particularly important for BoxLite:
 
@@ -24,7 +24,7 @@ These guidelines from the Microsoft Rust Guidelines are particularly important f
 | **M-REGULAR-FN** | Prefer regular functions over methods when `self` isn't needed |
 | **M-SMALLER-CRATES** | Keep crates focused on a single responsibility |
 
-## Safety Guidelines
+## Safety guidelines
 
 | Guideline | Summary |
 |-----------|---------|
@@ -32,9 +32,9 @@ These guidelines from the Microsoft Rust Guidelines are particularly important f
 | **M-UNSAFE-IMPLIES-UB** | Document all undefined behavior conditions in unsafe code |
 | **M-UNSOUND** | Never expose unsound APIs; soundness must be guaranteed |
 
-## BoxLite-Specific Patterns
+## BoxLite-specific patterns
 
-### Async-First Architecture
+### Async-first architecture
 
 All I/O operations use async/await with Tokio runtime:
 
@@ -52,7 +52,7 @@ async fn read_config(path: &Path) -> Result<Config> {
 }
 ```
 
-### Centralized Error Handling
+### Centralized error handling
 
 Use the `BoxliteError` enum for all errors (see `boxlite-shared/src/errors.rs`):
 
@@ -68,7 +68,7 @@ std::fs::create_dir_all(&socket_dir).map_err(|e| {
 std::fs::create_dir_all(&dir)?;
 ```
 
-### Public Types Must Be `Send + Sync`
+### Public types must be `Send + Sync`
 
 All public types exposed through the API must be thread-safe:
 
@@ -84,7 +84,7 @@ pub struct LiteBox {
 }
 ```
 
-## Formatting and Linting
+## Formatting and linting
 
 - **Formatting**: `cargo fmt` (enforced in CI)
 - **Linting**: `cargo clippy` (warnings are errors in CI)
@@ -96,7 +96,7 @@ cargo fmt
 cargo clippy --all-targets --all-features
 ```
 
-## Quick Reference
+## Quick reference
 
 When writing Rust code for BoxLite, ask yourself:
 

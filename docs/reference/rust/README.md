@@ -1,4 +1,4 @@
-# Rust API Reference
+# Rust API reference
 
 Complete API reference for the BoxLite Rust SDK.
 
@@ -11,7 +11,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
 
 ---
 
-## Table of Contents
+## Table of contents
 
 - [Runtime Management](#runtime-management)
   - [BoxliteRuntime](#boxliteruntime)
@@ -30,7 +30,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [ExecResult](#execresult)
 - [Box Configuration](#box-configuration)
   - [BoxOptions](#boxoptions)
-  - [AdvancedBoxOptions](#advancedoptions)
+  - [AdvancedBoxOptions](#advancedboxoptions)
   - [RootfsSpec](#rootfsspec)
   - [VolumeSpec](#volumespec)
   - [NetworkSpec](#networkspec)
@@ -54,7 +54,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
 
 ---
 
-## Runtime Management
+## Runtime management
 
 ### BoxliteRuntime
 
@@ -175,7 +175,7 @@ let options = BoxliteOptions {
 
 ---
 
-## Box Handle
+## Box handle
 
 ### LiteBox
 
@@ -337,7 +337,7 @@ pub enum BoxStatus {
 | `can_remove` | `fn can_remove(&self) -> bool` | True if Configured, Stopped, or Unknown |
 | `can_run` | `fn can_run(&self) -> bool` | True if Configured, Running, or Stopped |
 
-#### State Machine
+#### State machine
 
 ```
 create() → Configured (persisted to DB, no VM)
@@ -370,7 +370,7 @@ pub struct BoxState {
 
 ---
 
-## Network Tunnels
+## Network tunnels
 
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
@@ -395,7 +395,7 @@ Dropping the final handle requests cancellation.
 
 ---
 
-## Command Execution
+## Command execution
 
 ### BoxCommand
 
@@ -414,7 +414,7 @@ let cmd = BoxCommand::new("python3")
     .tty(true);
 ```
 
-#### Builder Methods
+#### Builder methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
@@ -519,7 +519,7 @@ while let Some(line) = stderr.next().await {
 }
 ```
 
-#### Concurrent Reading
+#### Concurrent reading
 
 ```rust
 use futures::StreamExt;
@@ -559,7 +559,7 @@ impl ExecResult {
 
 ---
 
-## Box Configuration
+## Box configuration
 
 ### BoxOptions
 
@@ -955,7 +955,7 @@ let security = SecurityOptions::builder()
     .build();
 ```
 
-#### Builder Methods
+#### Builder methods
 
 | Method | Description |
 |--------|-------------|
@@ -1060,7 +1060,7 @@ println!("Memory: {:?} bytes", metrics.memory_bytes());
 | `network_tcp_connections` | `Option<u64>` | Active TCP connections |
 | `network_tcp_errors` | `Option<u64>` | TCP connection errors |
 
-#### Stage Timing
+#### Stage timing
 
 | Field | Description |
 |-------|-------------|
@@ -1073,7 +1073,7 @@ println!("Memory: {:?} bytes", metrics.memory_bytes());
 
 ---
 
-## Type Utilities
+## Type utilities
 
 ### Bytes
 
@@ -1150,7 +1150,7 @@ let valid = ContainerID::is_valid("a".repeat(64).as_str());  // true
 
 ---
 
-## Error Types
+## Error types
 
 ### BoxliteError
 
@@ -1222,7 +1222,7 @@ Result type alias for BoxLite operations.
 pub type BoxliteResult<T> = Result<T, BoxliteError>;
 ```
 
-#### Error Handling Example
+#### Error handling example
 
 ```rust
 use boxlite::BoxliteError;
@@ -1237,7 +1237,7 @@ match runtime.create(options, None).await {
 
 ---
 
-## Complete Example
+## Complete example
 
 ```rust
 use boxlite::runtime::{BoxliteRuntime, BoxOptions};
@@ -1309,7 +1309,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ---
 
-## Thread Safety
+## Thread safety
 
 All public types are `Send + Sync`:
 
@@ -1341,10 +1341,10 @@ for handle in handles {
 
 ---
 
-## See Also
+## See also
 
 - [Getting Started Guide](../../getting-started/README.md)
-- [Architecture Overview](../../architecture/README.md)
+- [Concepts](../../concepts/README.md)
 - [Configuration Reference](../README.md)
 - [Python SDK Reference](../python/README.md)
 - [Node.js SDK Reference](../nodejs/README.md)

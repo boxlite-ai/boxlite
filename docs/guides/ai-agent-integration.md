@@ -1,9 +1,10 @@
-# AI Agent Integration Guide
+# AI agent integration guide
 
-This guide covers best practices for integrating BoxLite as a sandboxed execution environment for AI agents. It builds on the quick-start patterns in the [How-to Guides](README.md#using-with-ai-agents) with deeper coverage of configuration, concurrency, timeouts, security, and file transfer.
+This guide covers best practices for integrating BoxLite as a sandboxed execution environment for AI agents. It starts with quick patterns, then covers configuration, concurrency, timeouts, security, and file transfer in depth.
 
-## Table of Contents
+## Table of contents
 
+- [Quick Patterns](#quick-patterns)
 - [Recommended Configuration](#recommended-configuration)
 - [Concurrency Model](#concurrency-model)
 - [Timeout Handling and Zombie Prevention](#timeout-handling-and-zombie-prevention)
@@ -14,9 +15,135 @@ This guide covers best practices for integrating BoxLite as a sandboxed executio
 
 ---
 
-## Recommended Configuration
+## Quick patterns
 
-### Workload-Type Reference
+### CodeBox for AI code execution
+
+**Use Case:** AI generates Python code that needs execution.
+
+**Example:**
+
+```python
+import asyncio
+import boxlite
+
+async def execute_ai_code(code: str):
+    """Execute untrusted AI-generated code safely."""
+    async with boxlite.CodeBox() as codebox:
+        try:
+            result = await codebox.run(code)
+            return {"success": True, "output": result}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+# AI-generated code
+ai_code = """
+import requests
+response = requests.get('https://api.github.com/repos/python/cpython')
+data = response.json()
+print(f"Stars: {data['stargazers_count']}")
+"""
+
+result = asyncio.run(execute_ai_code(ai_code))
+print(result)
+```
+
+### Multiple tools in one box
+
+AI agents often need multiple tools. BoxLite provides a full Linux environment.
+
+**Example:**
+
+```python
+async with boxlite.SimpleBox(image="python:slim") as box:
+    # File system access
+    await box.exec("mkdir", "-p", "/workspace")
+
+    # Python code execution
+    await box.exec("python", "-c", "print('Hello')")
+
+    # Package installation
+    await box.exec("pip", "install", "requests")
+
+    # Network requests
+    await box.exec("curl", "https://api.github.com/zen")
+
+    # File manipulation
+    await box.exec("echo", "data", ">", "/workspace/file.txt")
+```
+
+### Capturing output
+
+**Streaming Output:**
+
+```python
+execution = await box.exec("python", "long_running_script.py")
+
+# Stream stdout in real-time
+stdout = execution.stdout()
+async for line in stdout:
+    print(f"AI Output: {line}")
+
+    # Parse and react to output
+    if "ERROR" in line:
+        await execution.kill()  # Stop on error
+        break
+```
+
+**Exit Codes:**
+
+```python
+result = await box.exec("command")
+
+if result.exit_code == 0:
+    print("Success!")
+else:
+    print(f"Failed with code {result.exit_code}")
+    print(f"Error: {result.stderr}")
+```
+
+### Performance tips
+
+**Reuse Boxes:**
+
+```python
+# Create once, use many times
+box = runtime.create(boxlite.BoxOptions(image="python:slim"))
+
+for code in ai_generated_codes:
+    result = await box.exec("python", "-c", code)
+    # Process result
+
+# Cleanup when done
+await box.remove()
+```
+
+**Batch Operations:**
+
+```python
+# Execute multiple commands in one box (faster than creating new boxes)
+async with boxlite.SimpleBox(image="python:slim") as box:
+    await box.exec("pip", "install", "requests")
+    result1 = await box.exec("python", "script1.py")
+    result2 = await box.exec("python", "script2.py")
+    result3 = await box.exec("python", "script3.py")
+```
+
+**Monitor Resources:**
+
+```python
+metrics = await box.metrics()
+if metrics.memory_usage_bytes > 0.8 * (1024**3):  # 80% of 1GB
+    print("Warning: High memory usage")
+    # Consider recreating box or increasing limit
+```
+
+
+---
+
+## Recommended configuration
+
+### Workload-type reference
 
 | Workload | Image | CPUs | Memory | Disk | Notes |
 |----------|-------|------|--------|------|-------|
@@ -26,7 +153,7 @@ This guide covers best practices for integrating BoxLite as a sandboxed executio
 | Multi-tool agent | `python:slim` | 2 | 1024 MiB | None | Balance cost vs. capability |
 | Persistent env | `python:slim` | 1 | 512 MiB | 10 GB | State survives restarts |
 
-### Starter Configuration
+### Starter configuration
 
 ```python
 import boxlite
@@ -40,7 +167,7 @@ options = boxlite.BoxOptions(
 )
 ```
 
-### Security Presets
+### Security presets
 
 `SecurityOptions` has three presets:
 
@@ -62,9 +189,9 @@ security.network_enabled = False  # Disable network for strict isolation
 
 ---
 
-## Concurrency Model
+## Concurrency model
 
-### One Box, Multiple Executions (Recommended)
+### One box, multiple executions (recommended)
 
 A single box can run many `exec()` calls. Each call spawns a new process inside the same VM. This avoids repeated VM boot overhead and is safe because the VM provides hardware isolation from the host.
 
@@ -99,7 +226,7 @@ async def main():
 
 **When to use:** Most AI agent scenarios. Keeps VM boot cost to one-time.
 
-### One Box Per Agent
+### One box per agent
 
 Use separate boxes when you need strict isolation between agents, different images, or independent resource limits.
 
@@ -123,9 +250,9 @@ async def main():
 
 ---
 
-## Timeout Handling and Zombie Prevention
+## Timeout handling and zombie prevention
 
-### The Problem
+### The problem
 
 `asyncio.wait_for()` cancels the Python coroutine but does **not** kill the guest process. Without explicit cleanup, the process continues running inside the VM indefinitely.
 
@@ -138,7 +265,7 @@ except asyncio.TimeoutError:
     print("Timed out")  # Process is still running in the VM!
 ```
 
-### Correct Pattern
+### Correct pattern
 
 Always kill the execution in the timeout handler:
 
@@ -154,7 +281,7 @@ async def exec_with_timeout(box, cmd, args=None, timeout=30):
         raise
 ```
 
-### Defensive Helper
+### Defensive helper
 
 For maximum safety, combine timeout handling with a try/finally block:
 
@@ -181,9 +308,9 @@ async def safe_exec(box, cmd, args=None, timeout=30):
 
 ---
 
-## Security Boundaries
+## Security boundaries
 
-### Read-Only Volume Mounts
+### Read-only volume mounts
 
 Use read-only volumes to provide data to the sandbox without risk of modification:
 
@@ -197,7 +324,7 @@ options = boxlite.BoxOptions(
 )
 ```
 
-### SecurityOptions Fields
+### SecurityOptions fields
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -211,7 +338,7 @@ options = boxlite.BoxOptions(
 | `network_enabled` | `bool` | Allow network access from sandbox (macOS only) |
 | `close_fds` | `bool` | Close inherited file descriptors |
 
-### Network Isolation
+### Network isolation
 
 To prevent an agent from accessing the network:
 
@@ -228,7 +355,7 @@ options = boxlite.BoxOptions(
 
 > **OS support note:** In the Python bindings, `network_enabled` is currently a macOS-only control. On Linux and other platforms, network isolation is typically enforced by the container/runtime networking configuration (for example, running in an isolated network namespace and not publishing ports), and `network_enabled` may not itself hard-disable all outbound connectivity.
 
-### Resource Limits as Security Boundaries
+### Resource limits as security boundaries
 
 Resource limits prevent a rogue agent from consuming all host resources:
 
@@ -243,7 +370,7 @@ options = boxlite.BoxOptions(
 
 ---
 
-## File Transfer Patterns
+## File transfer patterns
 
 ### Comparison
 
@@ -303,7 +430,7 @@ await stdin.close()
 await execution.wait()
 ```
 
-### Inline Data via exec
+### Inline data via exec
 
 For small payloads, write data through a command:
 
@@ -321,7 +448,7 @@ execution = await box.exec("sh", [
 result = await execution.wait()
 ```
 
-### Volume Mounts
+### Volume mounts
 
 For datasets or configuration that should be available immediately:
 
@@ -339,7 +466,7 @@ options = boxlite.BoxOptions(
 
 ---
 
-## Terminal Resizing
+## Terminal resizing
 
 When running interactive TTY sessions (e.g., an AI agent controlling a shell), use `resize_tty()` to set the terminal dimensions. This ensures proper line wrapping and avoids garbled output from programs that query terminal size.
 
@@ -367,7 +494,7 @@ async for line in stdout:
 
 ---
 
-## Complete Example
+## Complete example
 
 Putting it all together: proper configuration, security, concurrent execution with timeouts, TTY resizing, and cleanup.
 
@@ -453,9 +580,8 @@ asyncio.run(main())
 
 ---
 
-## See Also
+## See also
 
-- [How-to Guides: Using with AI Agents](README.md#using-with-ai-agents) - Quick-start patterns
 - [Python SDK README](../../sdks/python/README.md) - API reference
-- [Architecture Documentation](../architecture/README.md) - How BoxLite isolation works
-- [Configuration Reference](../reference/README.md) - Full BoxOptions details
+- [Security](../concepts/security.md) - How BoxLite isolation works
+- [Configuration Reference](../reference/configuration.md) - Full BoxOptions details

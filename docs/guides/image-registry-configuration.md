@@ -1,8 +1,8 @@
-# Guide: Image Registry Configuration
+# Guide: Image registry configuration
 
 This guide explains how to configure BoxLite to pull OCI container images from custom registries, such as a private enterprise registry, a third-party registry like `ghcr.io` or `quay.io`, or a local caching proxy.
 
-## How it Works
+## How it works
 
 When you ask BoxLite to create a box from an image (e.g., `image="alpine"`), it needs to resolve this "unqualified" reference into a full image reference (e.g., `docker.io/library/alpine:latest`).
 
@@ -12,7 +12,7 @@ You can provide a list of custom registries. BoxLite will try to pull the image 
 
 **Fully qualified image references (e.g., `quay.io/prometheus/prometheus:v2.40.1`) always bypass this search mechanism and are pulled directly.**
 
-## CLI Configuration
+## CLI configuration
 
 The CLI layers configuration sources with the following priority (from lowest to highest):
 
@@ -20,7 +20,7 @@ The CLI layers configuration sources with the following priority (from lowest to
 2.  **Configuration File (`--config`)**: Loads configuration from the specified path
 3.  **CLI Flags (`--registry`)**: Prepended to registries from config file (highest priority)
 
-### 1. Configuration File
+### 1. Configuration file
 
 Create a JSON configuration file with your registry preferences:
 
@@ -63,7 +63,7 @@ Create a JSON configuration file with your registry preferences:
 - `skip_verify: true` disables TLS certificate and hostname verification for HTTPS registries.
 - `auth` can be `{ "type": "basic", "username": "...", "password": "..." }` or `{ "type": "bearer", "token": "..." }`.
 
-### 2. Using the Configuration File
+### 2. Using the configuration file
 
 Use the `--config` flag to specify your configuration file:
 
@@ -74,7 +74,7 @@ boxlite --config ./project-config.json run alpine
 
 **Important**: If you specify a config file with `--config` and the file does not exist or is invalid, the command will fail with an error.
 
-### 3. Command Line Flags
+### 3. Command line flags
 
 You can use the global `--registry` flag with `boxlite run` or `boxlite create`. You can specify it multiple times.
 
@@ -92,7 +92,7 @@ boxlite --config ./config.json \
   my-internal-app:latest
 ```
 
-## SDK Configuration
+## SDK configuration
 
 The SDKs are "pure" by design. They **do not** automatically load any configuration file. This ensures that your code's behavior is deterministic and doesn't silently depend on the user's local environment.
 
@@ -165,7 +165,7 @@ const box = new SimpleBox({
 await box.exec('echo', 'Hello!');
 ```
 
-### Advanced: Loading Config in SDKs
+### Advanced: Loading config in SDKs
 
 If you want your SDK application to respect a configuration file, you can manually load it. This puts the control in your hands.
 

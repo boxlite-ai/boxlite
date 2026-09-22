@@ -1,11 +1,11 @@
-# Node.js SDK API Reference
+# Node.js SDK API reference
 
 Complete API reference for the BoxLite Node.js/TypeScript SDK.
 
 **Node.js:** 18+
 **Platforms:** macOS (Apple Silicon), Linux (x86_64, ARM64)
 
-## Table of Contents
+## Table of contents
 
 - [Runtime Management](#runtime-management)
 - [Box Handle](#box-handle)
@@ -19,7 +19,7 @@ Complete API reference for the BoxLite Node.js/TypeScript SDK.
 
 ---
 
-## Runtime Management
+## Runtime management
 
 ### `JsBoxlite` / `Boxlite`
 
@@ -37,14 +37,14 @@ import { SimpleBox } from 'boxlite';
 new JsBoxlite(options: JsOptions)
 ```
 
-#### Static Methods
+#### Static methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `withDefaultConfig()` | `() => JsBoxlite` | Get runtime with default config (`~/.boxlite`) |
 | `initDefault()` | `(options: JsOptions) => void` | Initialize default runtime with custom options |
 
-#### Instance Methods
+#### Instance methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
@@ -204,7 +204,7 @@ interface Secret {
 
 ---
 
-## Box Handle
+## Box handle
 
 ### `JsBox`
 
@@ -286,7 +286,7 @@ live binding data yet, so box, get, or list info may report
 
 ---
 
-## Network Tunnels
+## Network tunnels
 
 `JsBox` and `SimpleBox` expose the same `box.network` workflow.
 
@@ -310,7 +310,7 @@ connections from ordinary host applications.
 
 ---
 
-## Command Execution
+## Command execution
 
 ### `JsExecution`
 
@@ -395,7 +395,7 @@ Result of a completed execution.
 
 ---
 
-## Box Types
+## Box types
 
 ### `SimpleBox`
 
@@ -405,7 +405,7 @@ Context manager for basic command execution with automatic cleanup.
 import { SimpleBox } from 'boxlite';
 ```
 
-#### Constructor Options
+#### Constructor options
 
 ```typescript
 interface SimpleBoxOptions {
@@ -484,7 +484,7 @@ Python code execution sandbox.
 import { CodeBox } from 'boxlite';
 ```
 
-#### Constructor Options
+#### Constructor options
 
 ```typescript
 interface CodeBoxOptions extends SimpleBoxOptions {
@@ -527,7 +527,7 @@ Browser automation with Chrome DevTools Protocol.
 import { BrowserBox, BrowserType } from 'boxlite';
 ```
 
-#### Constructor Options
+#### Constructor options
 
 ```typescript
 interface BrowserBoxOptions {
@@ -537,7 +537,7 @@ interface BrowserBoxOptions {
 }
 ```
 
-#### Browser CDP Ports
+#### Browser CDP ports
 
 | Browser | Port | Image |
 |---------|------|-------|
@@ -581,7 +581,7 @@ Desktop automation with full GUI environment.
 import { ComputerBox } from 'boxlite';
 ```
 
-#### Constructor Options
+#### Constructor options
 
 ```typescript
 interface ComputerBoxOptions {
@@ -592,7 +592,7 @@ interface ComputerBoxOptions {
 }
 ```
 
-#### Mouse Methods
+#### Mouse methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
@@ -605,14 +605,14 @@ interface ComputerBoxOptions {
 | `leftClickDrag()` | `(startX, startY, endX, endY) => Promise<void>` | Drag |
 | `cursorPosition()` | `() => Promise<[number, number]>` | Get cursor pos |
 
-#### Keyboard Methods
+#### Keyboard methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `type()` | `(text: string) => Promise<void>` | Type text |
 | `key()` | `(keySequence: string) => Promise<void>` | Press key(s) |
 
-##### Key Syntax Reference (xdotool format)
+##### Key syntax reference (xdotool format)
 
 | Key | Syntax |
 |-----|--------|
@@ -637,7 +637,7 @@ await desktop.key('alt+Tab');       // Switch window
 await desktop.key('ctrl+a Delete'); // Select all and delete
 ```
 
-#### Display Methods
+#### Display methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
@@ -646,7 +646,7 @@ await desktop.key('ctrl+a Delete'); // Select all and delete
 | `scroll()` | `(x, y, direction, amount?) => Promise<void>` | Scroll |
 | `getScreenSize()` | `() => Promise<[number, number]>` | Get dimensions |
 
-##### Screenshot Return Type
+##### Screenshot return type
 
 ```typescript
 interface Screenshot {
@@ -657,7 +657,7 @@ interface Screenshot {
 }
 ```
 
-##### Scroll Directions
+##### Scroll directions
 
 | Direction | Description |
 |-----------|-------------|
@@ -699,7 +699,7 @@ Interactive terminal sessions with PTY support.
 import { InteractiveBox } from 'boxlite';
 ```
 
-#### Constructor Options
+#### Constructor options
 
 ```typescript
 interface InteractiveBoxOptions extends SimpleBoxOptions {
@@ -708,7 +708,7 @@ interface InteractiveBoxOptions extends SimpleBoxOptions {
 }
 ```
 
-##### TTY Mode
+##### TTY mode
 
 | Value | Behavior |
 |-------|----------|
@@ -741,13 +741,13 @@ try {
 
 ---
 
-## Error Types
+## Error types
 
 ```typescript
 import { BoxliteError, ExecError, TimeoutError, ParseError } from 'boxlite';
 ```
 
-### Exception Hierarchy
+### Exception hierarchy
 
 ```
 BoxliteError (base)
@@ -848,7 +848,7 @@ console.log(`Running: ${metrics.numRunningBoxes}`);
 
 Per-box resource metrics.
 
-#### Counter Fields
+#### Counter fields
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -857,7 +857,7 @@ Per-box resource metrics.
 | `bytesSentTotal` | `number` | Bytes sent via stdin |
 | `bytesReceivedTotal` | `number` | Bytes received via stdout/stderr |
 
-#### Resource Fields
+#### Resource fields
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -868,7 +868,7 @@ Per-box resource metrics.
 | `networkTcpConnections` | `number \| undefined` | Current TCP connections |
 | `networkTcpErrors` | `number \| undefined` | Total TCP errors |
 
-#### Timing Fields (milliseconds)
+#### Timing fields (milliseconds)
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -890,7 +890,7 @@ console.log(`Boot time: ${metrics.guestBootDurationMs}ms`);
 
 ---
 
-## Type Definitions
+## Type definitions
 
 ### `ExecResult` (wrapper)
 
@@ -931,14 +931,14 @@ type BrowserType = 'chromium' | 'firefox' | 'webkit';
 
 Default values used by BoxLite.
 
-### Resource Defaults
+### Resource defaults
 
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `DEFAULT_CPUS` | `1` | Default CPU cores |
 | `DEFAULT_MEMORY_MIB` | `512` | Default memory in MiB |
 
-### ComputerBox Defaults
+### ComputerBox defaults
 
 | Constant | Value | Description |
 |----------|-------|-------------|
@@ -950,7 +950,7 @@ Default values used by BoxLite.
 | `COMPUTERBOX_GUI_HTTPS_PORT` | `3001` | HTTPS GUI port |
 | `DESKTOP_READY_TIMEOUT` | `60` | Ready timeout (seconds) |
 
-### BrowserBox Ports
+### BrowserBox ports
 
 | Constant | Value | Description |
 |----------|-------|-------------|
@@ -960,9 +960,9 @@ Default values used by BoxLite.
 
 ---
 
-## See Also
+## See also
 
 - [Node.js SDK README](../../../sdks/node/README.md) - Quick start and examples
 - [Getting Started Guide](../../getting-started/quickstart-nodejs.md) - Installation
-- [Configuration Reference](../README.md#configuration-reference) - BoxOptions details
-- [Error Codes](../README.md#error-codes--handling) - Error handling
+- [Configuration Reference](../configuration.md) - BoxOptions details
+- [Error Codes](../errors.md) - Error handling

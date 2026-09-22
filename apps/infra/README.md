@@ -15,7 +15,7 @@ npm command -> domain CLI -> deployment facade -> SST -> stack/deployStack()
 - [Deployment](docs/deployment.md) — prerequisites, bootstrap, preview, deploy, artifact modes, routine commands, and troubleshooting
 - [Security](docs/security.md) — credentials, policy enforcement, and protected resources
 - [Networking](docs/networking.md) — VPC layout and traffic flows
-- [ClickHouse](CLICKHOUSE.md) — backend selection and private UI access
+- [ClickHouse](docs/clickhouse.md) — backend selection and private UI access
 
 Use the repository make targets for validation:
 

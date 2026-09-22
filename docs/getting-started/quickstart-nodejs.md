@@ -1,4 +1,4 @@
-# Node.js Quick Start
+# Node.js quick start
 
 Get up and running with BoxLite Node.js SDK in 5 minutes.
 
@@ -18,7 +18,7 @@ import { SimpleBox } from '@boxlite-ai/boxlite';
 console.log('BoxLite loaded successfully');
 ```
 
-## Basic Execution
+## Basic execution
 
 Create a file `hello.js`:
 
@@ -50,7 +50,7 @@ node hello.js
 4. Streams output back to your application
 5. Cleans up when `stop()` is called
 
-## TypeScript 5.2+ (Async Disposal)
+## TypeScript 5.2+ (async disposal)
 
 ```typescript
 import { SimpleBox } from '@boxlite-ai/boxlite';
@@ -65,7 +65,7 @@ async function main() {
 main();
 ```
 
-## Running Examples
+## Running examples
 
 BoxLite includes 5 Node.js examples:
 
@@ -97,7 +97,7 @@ node interactivebox.js
 4. **computerbox.js** - Desktop automation (mouse, keyboard, screenshots)
 5. **interactivebox.js** - Interactive terminal sessions
 
-## Next Steps
+## Next steps
 
 - **[Node.js SDK README](../../sdks/node/README.md)** - Complete API reference
   - Core API (SimpleBox, CodeBox, BrowserBox, ComputerBox, InteractiveBox)

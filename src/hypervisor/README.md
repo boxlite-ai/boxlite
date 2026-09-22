@@ -6,7 +6,7 @@ and arm64, with WHP on Windows x86_64 reserved for M10. The `Vm`, `Vcpu` and
 current shared contract; M1 adds the vCPU register access and HVF `CPU_ON`
 exit that boot needs, and the HVF and KVM backends themselves. The rules each
 backend keeps are in the
-[VMM design](../../docs/architecture/vmm/README.md#hypervisor-backend-interface).
+[VMM design](../../docs/contributing/architecture/vmm/README.md#hypervisor-backend-interface).
 
 This crate owns host VM/vCPU handles, memory registration, interrupt
 injection, and decoding host exits. It is a leaf among the BoxLite crates;

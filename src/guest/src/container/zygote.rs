@@ -9,7 +9,7 @@
 //! safe. This is the same pattern as runwasi's Zygote (PR #775) and
 //! runc's nsexec.
 //!
-//! See `docs/investigations/concurrent-exec-deadlock.md` for full analysis.
+//! See `docs/contributing/investigations/concurrent-exec-deadlock.md` for full analysis.
 
 use super::capabilities::CapabilitySet;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};

@@ -1,4 +1,4 @@
-# E2E Local CI Runbook
+# E2E local CI runbook
 
 `e2e-local.yml` runs BoxLite's VM-based integration tests on a self-hosted AWS EC2
 runner. This is the operational reference for that workflow: how it runs, how it is
@@ -120,7 +120,7 @@ tmate SSH session and leaves the instance running (it auto-stops after 30 minute
 
 ## References
 
-- Workflow: [`.github/workflows/e2e-local.yml`](../../.github/workflows/e2e-local.yml)
-- Provisioning script: [`scripts/ci/setup-ci-runner.sh`](../../scripts/ci/setup-ci-runner.sh)
-- Build-dependency setup: [`scripts/setup/setup-ubuntu.sh`](../../scripts/setup/setup-ubuntu.sh)
-- CI overview: [`.github/workflows/README.md`](../../.github/workflows/README.md)
+- Workflow: [`.github/workflows/e2e-local.yml`](../../../.github/workflows/e2e-local.yml)
+- Provisioning script: [`scripts/ci/setup-ci-runner.sh`](../../../scripts/ci/setup-ci-runner.sh)
+- Build-dependency setup: [`scripts/setup/setup-ubuntu.sh`](../../../scripts/setup/setup-ubuntu.sh)
+- CI overview: [`.github/workflows/README.md`](../../../.github/workflows/README.md)

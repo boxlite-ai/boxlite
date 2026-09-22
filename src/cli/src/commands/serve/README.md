@@ -439,6 +439,6 @@ shape:
 
 ## See Also
 
-- [CLI Development Guide](../../../../../docs/development/cli.md) — building and testing the CLI
-- [Architecture](../../../../../docs/architecture/README.md) — core runtime architecture
-- [Rust Style Guide](../../../../../docs/development/rust-style.md) — coding standards
+- [CLI Development Guide](../../../../../docs/contributing/development/cli.md) — building and testing the CLI
+- [Architecture](../../../../../docs/contributing/architecture/README.md) — core runtime architecture
+- [Rust Style Guide](../../../../../docs/contributing/development/rust-style.md) — coding standards

@@ -1,10 +1,10 @@
-# REST API E2E Test Report and Runbook
+# REST API E2E test report and runbook
 
 This document defines the reusable BoxLite REST API test flow. It covers the
 public REST contract, the existing SDK -> API -> Runner -> VM E2E suite, the
 CLI command matrix, and both API-key and OIDC authentication modes.
 
-## Test Stack
+## Test stack
 
 ```mermaid
 flowchart LR
@@ -20,7 +20,7 @@ flowchart LR
   Runner --> VM["libkrun VM"]
 ```
 
-## Existing Base
+## Existing base
 
 The suite under `apps/e2e` is already REST-backed. It builds a Python
 SDK REST client and verifies that requests reach the API and Runner. It is not
@@ -34,7 +34,7 @@ This PR fills the following gaps:
 - explicit skips for commands or SDK entry points that are not REST-backed yet;
 - shared output artifacts under `target/rest-test-report`.
 
-## Where To Run
+## Where to run
 
 Run heavy verification on the dev machine or in CI. Do not run full REST E2E,
 CLI integration, or `make test:apps` on the local Mac unless local rebuilds are
@@ -55,9 +55,9 @@ make test:rest:cli AUTH=api-key SCOPE=smoke
 make test:rest:cli AUTH=oidc SCOPE=full
 ```
 
-## Authentication Inputs
+## Authentication inputs
 
-### API Key
+### API key
 
 REST E2E:
 
@@ -104,7 +104,7 @@ BOXLITE_PROFILE=dev-oidc make test:rest:cli AUTH=oidc SCOPE=full
 Both REST E2E auth modes discover `path_prefix` through `/v1/me` by default.
 Only set `BOXLITE_E2E_PREFIX` when intentionally overriding server discovery.
 
-## Request Flow
+## Request flow
 
 ```mermaid
 sequenceDiagram
@@ -170,7 +170,7 @@ sequenceDiagram
    make test:rest:report
    ```
 
-## Skip Rules
+## Skip rules
 
 Skips must be explicit in artifacts. Current intentional skips:
 
@@ -199,7 +199,7 @@ Key files:
 - `cli-matrix-<auth>-<scope>.md`;
 - `rest-report.md`.
 
-## Operating Principles
+## Operating principles
 
 - Run smoke first, then the full matrix.
 - Keep authentication modes isolated; do not set `BOXLITE_API_KEY` for OIDC CLI

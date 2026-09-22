@@ -30,7 +30,7 @@
 # the runner itself (see scripts/ci/setup-ci-runner.sh).
 #
 # Setup:   ./scripts/ci/setup-ci-runner.sh
-# Runbook: docs/ci/e2e-local.md
+# Runbook: docs/contributing/development/e2e-local.md
 name: E2E local
 
 on:

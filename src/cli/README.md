@@ -3,7 +3,7 @@
 Command-line interface for BoxLite — use BoxLite without writing code, with a familiar Docker/Podman-like experience.
 
 
-For CLI development (build, test, adding commands), see [CLI Development Guide](../docs/development/cli.md).
+For CLI development (build, test, adding commands), see [CLI Development Guide](../../docs/contributing/development/cli.md).
 
 
 **Platforms:** macOS (Apple Silicon), Linux (x86_64, ARM64)
@@ -654,4 +654,4 @@ Use `--config PATH` to load a JSON config file. Useful for default registries an
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for details.
+Licensed under the Apache License, Version 2.0. See [LICENSE](../../LICENSE) for details.

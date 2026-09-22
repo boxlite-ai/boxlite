@@ -955,9 +955,9 @@ make dist:python
 ## Further Documentation
 
 - [BoxLite Main README](../../README.md) - Project overview
-- [Architecture Documentation](../../docs/architecture/README.md) - How BoxLite works
+- [Concepts](../../docs/concepts/README.md) - How BoxLite works
 - [Getting Started Guide](../../docs/getting-started/README.md) - Installation and setup
-- [How-to Guides](../../docs/guides/README.md) - Practical guides
+- [Guides](../../docs/guides/README.md) - Practical guides
 - [API Reference](../../docs/reference/README.md) - Complete API documentation
 
 ## License

@@ -1,4 +1,4 @@
-# BoxLite VMM Design
+# BoxLite VMM design
 
 BoxLite is replacing libkrun and libkrunfw with a virtualization stack it owns:
 

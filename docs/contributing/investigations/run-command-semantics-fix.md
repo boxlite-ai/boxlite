@@ -1,4 +1,4 @@
-# `boxlite run` COMMAND: Docker Semantics Fix
+# `boxlite run` COMMAND: Docker semantics fix
 
 **Date:** 2026-07-14
 **Status:** Implemented — CLI integration suite 317/321 (the 4 failures

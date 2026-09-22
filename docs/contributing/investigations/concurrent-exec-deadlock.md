@@ -1,4 +1,4 @@
-# Concurrent Exec Deadlock: Root Cause Analysis
+# Concurrent exec deadlock: Root cause analysis
 
 **Date:** 2026-03-10
 **Branch:** `test/concurrent-exec-deadlock-coverage`
@@ -9,7 +9,7 @@
 
 ## Conclusion
 
-### Root Cause: musl `__malloc_lock` deadlock after `clone3()` in multi-threaded process
+### Root cause: musl `__malloc_lock` deadlock after `clone3()` in multi-threaded process
 
 The guest binary (`boxlite-guest`) is statically linked against **musl libc**
 (`aarch64-unknown-linux-musl`) and runs a multi-threaded **tokio runtime**. When
@@ -21,7 +21,7 @@ to reset `__malloc_lock` in the child, the intermediate process deadlocks on its
 very first memory allocation — before it can send any channel messages or close
 inherited file descriptors. The parent then blocks forever on `recvmsg()`.
 
-### Deadlock Call Graph
+### Deadlock call graph
 
 ```
 TOKIO RUNTIME (multi-threaded, PID 1 inside guest VM)
@@ -102,7 +102,7 @@ INTERMEDIATE PROCESS (PID 248, single-threaded child)
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### Why Intermittent (~30-50%)
+### Why intermittent (~30-50%)
 
 The deadlock only occurs when `__malloc_lock` is held by another thread at the
 exact moment of `clone3()`. With multiple tokio workers doing frequent allocations,
@@ -118,7 +118,7 @@ clone3():    ─────────┼────────────�
                    DEADLOCK          SAFE             DEADLOCK
 ```
 
-### Why musl-Specific
+### Why musl-specific
 
 | Behavior                  | glibc                           | musl                           |
 |---------------------------|----------------------------------|---------------------------------|
@@ -126,7 +126,7 @@ clone3():    ─────────┼────────────�
 | `__malloc_lock` in child  | Reset to unlocked state          | **Copied as-is (locked)**       |
 | fork() safety             | Mostly safe for malloc           | **Unsafe if other threads malloc** |
 
-### Fix Options
+### Fix options
 
 | Option | Approach | Pros | Cons |
 |--------|----------|------|------|
@@ -138,7 +138,7 @@ clone3():    ─────────┼────────────�
 
 Recommended: **A (short-term) + B (long-term)**
 
-### Upstream Status (youki)
+### Upstream status (youki)
 
 This is a **known issue** in the youki project, tracked as
 [containers/youki#2144](https://github.com/containers/youki/issues/2144)
@@ -174,9 +174,9 @@ fix must come from BoxLite's side.
 
 ---
 
-## Debug Process
+## Debug process
 
-### Step 1: Reproduce the Stall
+### Step 1: Reproduce the stall
 
 **Tool:** `cargo test` with `--nocapture`, loop runner
 
@@ -200,7 +200,7 @@ only one build() runs at a time, yet it still stalls intermittently.
 
 ---
 
-### Step 2: Identify Where build() Hangs
+### Step 2: Identify where build() hangs
 
 **Tool:** Source code reading of libcontainer (youki v0.5.7)
 
@@ -236,7 +236,7 @@ waiting for the intermediate process to send `intermediate_ready`.
 
 ---
 
-### Step 3: Add Watchdog Diagnostic Thread
+### Step 3: Add watchdog diagnostic thread
 
 **Tool:** Custom diagnostic code in `guest/src/container/command.rs`
 
@@ -265,7 +265,7 @@ obviously-named child processes are alive.
 
 ---
 
-### Step 4: Read Parent Thread Syscall Info
+### Step 4: Read parent thread syscall info
 
 **Tool:** `/proc/self/task/<tid>/wchan` and `/proc/self/task/<tid>/syscall`
 
@@ -291,7 +291,7 @@ channel socket.
 
 ---
 
-### Step 5: Dump All Open File Descriptors
+### Step 5: Dump all open file descriptors
 
 **Tool:** `/proc/self/fd/` readlink scan
 
@@ -319,7 +319,7 @@ This matches the expected state after parent closes `main_sender` and `inter_sen
 
 ---
 
-### Step 6: Inspect Socket State via /proc/net/unix
+### Step 6: Inspect socket state via /proc/net/unix
 
 **Tool:** `/proc/net/unix` filtered by socket inodes
 
@@ -360,7 +360,7 @@ its copies. Something else holds copies of `main_sender` and `inter_sender`.
 
 ---
 
-### Step 7: Check Peer Liveness via poll() and FIONREAD
+### Step 7: Check peer liveness via poll() and FIONREAD
 
 **Tool:** `poll()` syscall and `ioctl(FIONREAD)` on the blocked fd
 
@@ -387,7 +387,7 @@ would be set.
 
 ---
 
-### Step 8: Expand /proc/net/unix to ALL SEQPACKET Entries
+### Step 8: Expand /proc/net/unix to ALL SEQPACKET entries
 
 **Tool:** Broadened `/proc/net/unix` filter to include all Type `0005` entries
 
@@ -415,7 +415,7 @@ not in our process's fd table. Some other process holds them open.
 
 ---
 
-### Step 9: Scan ALL Processes' fd Tables for Socket Holders
+### Step 9: Scan ALL processes' fd tables for socket holders
 
 **Tool:** `/proc/<pid>/fd/` readlink scan across all PIDs
 
@@ -461,7 +461,7 @@ progressed past its initial setup.
 
 ---
 
-### Step 10: Identify the Stuck Child Process
+### Step 10: Identify the stuck child process
 
 **Tool:** `/proc/<pid>/comm`, `/proc/<pid>/stat`, `/proc/<pid>/wchan`,
 `/proc/<pid>/syscall`, `/proc/<pid>/stack`
@@ -505,7 +505,7 @@ thread that held the lock does not exist in the child. Classic fork-in-multithre
 
 ---
 
-### Step 11: Resolve the Futex Address to a Symbol
+### Step 11: Resolve the futex address to a symbol
 
 **Tool:** `llvm-nm` on the statically linked guest binary
 
@@ -532,7 +532,7 @@ time, and musl has no `pthread_atfork` handler to reset it in the child.
 
 ---
 
-### Step 12: Confirm the Mechanism
+### Step 12: Confirm the mechanism
 
 **Understanding:** The mutex is NOT shared across processes. `clone3()` **copies**
 the entire address space into the child. The child gets a snapshot of the mutex in
@@ -565,7 +565,7 @@ without allocating memory. Even `Vec::new()`, `String::from()`, `format!()`, or
 
 ---
 
-## Environment Details
+## Environment details
 
 | Component       | Detail                                           |
 |-----------------|--------------------------------------------------|
@@ -577,7 +577,7 @@ without allocating memory. Even `Vec::new()`, `String::from()`, `format!()`, or
 | libcontainer    | youki v0.5.7 (vendored)                          |
 | Channel type    | `AF_UNIX SOCK_SEQPACKET` with `SOCK_CLOEXEC`    |
 
-## libcontainer Channel Architecture
+## libcontainer channel architecture
 
 ```
 container_main_process() creates 3 channel pairs (6 SEQPACKET sockets):
@@ -602,7 +602,7 @@ When intermediate deadlocks at step 5:
   - Parent blocks forever
 ```
 
-## Test Results Summary
+## Test results summary
 
 | Batch   | Runs | Stalls | Stall Rate |
 |---------|------|--------|------------|
@@ -612,7 +612,7 @@ When intermediate deadlocks at step 5:
 | Batch 4 | 12   | 1      | 8.3%       |
 | **Total** | **38** | **11** | **28.9%** |
 
-## Diagnostic Techniques Reference
+## Diagnostic techniques reference
 
 | Technique | Source | What it reveals |
 |-----------|--------|-----------------|
@@ -627,7 +627,7 @@ When intermediate deadlocks at step 5:
 | `ioctl(fd, FIONREAD)` | syscall | Bytes pending in socket recv buffer |
 | `llvm-nm --numeric-sort` | toolchain | Resolve address to symbol in static binary |
 
-## Files Read During Investigation
+## Files read during investigation
 
 ```
 guest/src/container/command.rs                                    (MODIFIED — watchdog)

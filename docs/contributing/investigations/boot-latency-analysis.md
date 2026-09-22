@@ -1,10 +1,10 @@
-# BoxLite Boot Latency Analysis
+# BoxLite boot latency analysis
 
-**Date:** 2025-02-22
+**Date:** 2026-02-22
 **Scope:** `handle.start()` latency on macOS ARM64 (Apple Silicon)
 **Test:** `boxlite/tests/timing_profile.rs` with `alpine:latest` image
 
-## Executive Summary
+## Executive summary
 
 `handle.start()` takes **~2.1s with jailer** vs **~0.7s without jailer**. The
 1.4s difference is **not caused by sandbox-exec** (which adds only ~5ms). The
@@ -12,7 +12,7 @@ root cause is **macOS kernel per-page code signing validation** for freshly
 copied dylibs — an unavoidable kernel-level cost when executing binaries from
 new inodes.
 
-## Full Boot Timeline (Jailer ON)
+## Full boot timeline (jailer ON)
 
 ```
 Time (wall)         Event                               Delta
@@ -43,7 +43,7 @@ Time (wall)         Event                               Delta
 02:37:21.143        handle.start() returns               total: 2067ms
 ```
 
-## Latency Breakdown
+## Latency breakdown
 
 | Phase | Duration | % of Total | Root Cause |
 |-------|----------|------------|------------|
@@ -55,7 +55,7 @@ Time (wall)         Event                               Delta
 
 **Code signing validation accounts for ~1450ms (70%) of boot time.**
 
-## Root Cause: macOS Kernel Code Signing Page Validation
+## Root cause: macOS kernel code signing page validation
 
 ### Mechanism
 
@@ -88,7 +88,7 @@ libgvproxy 10.9MB = 20.7MB total), varying only copy freshness and sandbox:
 | Cold copy, `codesign --verify` | 850 | Userspace != kernel cache |
 | Cold copy, first exec warmup | **34** | dyld mmap warms kernel cache |
 
-### Key Findings
+### Key findings
 
 1. **sandbox-exec is NOT the bottleneck** — policy compilation takes ~10ms
    regardless of complexity (tested with 5 to 200 rules: identical latency)
@@ -117,7 +117,7 @@ libgvproxy 10.9MB = 20.7MB total), varying only copy freshness and sandbox:
 The ~1417ms difference is almost entirely code signing validation (990 + 427).
 The sandbox policy overhead is negligible.
 
-## Pipeline Stage Metrics (from handle.metrics())
+## Pipeline stage metrics (from handle.metrics())
 
 | Stage | Jailer ON | Jailer OFF |
 |-------|-----------|------------|
@@ -129,9 +129,9 @@ The sandbox policy overhead is negligible.
 | stage_container_init | 86ms | 63ms |
 | guest_connect (computed) | ~1697ms | ~621ms |
 
-## Potential Mitigations
+## Potential mitigations
 
-### High Impact
+### High impact
 
 1. **Shared bin/ directory** — Copy dylibs once to a shared location
    (`~/.boxlite/bin/`) instead of per-box. Code signing cache is per-inode, so
@@ -151,7 +151,7 @@ The sandbox policy overhead is negligible.
    - **Estimated savings: ~990ms on subsequent start**
    - Trade-off: Adds ~850ms to `create()` time instead of `start()` time
 
-### Medium Impact
+### Medium impact
 
 4. **Skip copy for ephemeral boxes** — If `auto_remove=true`, use the original
    binary directly (no copy needed since box won't persist).
@@ -163,14 +163,14 @@ The sandbox policy overhead is negligible.
    4.4MB, shim 5.4MB.
    - **Estimated savings: proportional to size reduction**
 
-### Low Impact (Confirmed NOT Effective)
+### Low impact (confirmed NOT effective)
 
 - ~~Simplify seatbelt policy~~ — Policy complexity has zero impact on startup
 - ~~Pre-warm with `cat`~~ — Wrong cache path, doesn't help
 - ~~Pre-warm with `codesign --verify`~~ — Userspace validation, doesn't help
 - ~~Reduce FD cleanup range~~ — Only 0.9ms for 4092 close() calls
 
-## Instrumentation Added
+## Instrumentation added
 
 The following `eprintln!` instrumentation was added during this investigation:
 

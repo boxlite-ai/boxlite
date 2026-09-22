@@ -3,7 +3,7 @@
 ## Project Overview
 
 - [README.md](./README.md) — features, quick start, supported platforms
-- [docs/architecture/README.md](./docs/architecture/README.md) — components, use cases
+- [docs/concepts/README.md](./docs/concepts/README.md) — how BoxLite works: boxes, images, storage, networking, security
 - [sdks/python/README.md](./sdks/python/README.md) — Python SDK (3.10+, PyO3 bindings, async API)
 - [sdks/node/README.md](./sdks/node/README.md) — Node.js/TypeScript SDK (18+, napi-rs bindings)
 - [sdks/go/README.md](./sdks/go/README.md) — Go SDK (1.24+, CGO + prebuilt native library)
@@ -13,12 +13,16 @@
 
 ## Tech Stack
 
-- [docs/architecture/README.md#tech-stack](./docs/architecture/README.md#tech-stack)
+- [docs/contributing/architecture/README.md](./docs/contributing/architecture/README.md) — runtime components, SDK bindings, and the source map
 
 ## Project Structure
 
 - [CONTRIBUTING.md](./CONTRIBUTING.md#project-structure) — directory layout
-- [docs/architecture/README.md](./docs/architecture/README.md) — component architecture
+- [docs/contributing/architecture/README.md](./docs/contributing/architecture/README.md) — component architecture
+
+## Documentation
+
+- [CONTRIBUTING.md](./CONTRIBUTING.md#documentation) — where each doc goes; place every new or moved doc by its rules.
 
 ## Common Commands
 
@@ -27,7 +31,7 @@
 
 ## Code Style
 
-- [docs/development/rust-style.md](./docs/development/rust-style.md)
+- [docs/contributing/development/rust-style.md](./docs/contributing/development/rust-style.md)
 
 ## Commit & PR Messages
 

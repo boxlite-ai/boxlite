@@ -1,4 +1,4 @@
-# CLI Development Guide
+# CLI development guide
 
 This guide covers building, testing, and contributing to the BoxLite CLI (`boxlite`). The CLI is implemented in the `boxlite-cli` crate and follows the same [Rust Style Guide](./rust-style.md) as the rest of the project.
 
@@ -93,5 +93,5 @@ fn test_run_exit_code_success() {
 ## See also
 
 - [Rust Style Guide](./rust-style.md) — coding standards for BoxLite.
-- [CONTRIBUTING.md](../../CONTRIBUTING.md) — general contribution workflow.
-- [boxlite-cli/README.md](../../boxlite-cli/README.md) — user-facing CLI documentation.
+- [CONTRIBUTING.md](../../../CONTRIBUTING.md) — general contribution workflow.
+- [boxlite-cli/README.md](../../../src/cli/README.md) — user-facing CLI documentation.
