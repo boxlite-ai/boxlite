@@ -19,6 +19,7 @@ define run_unit_coverage
 	$(MAKE) coverage:runtime || rc=$$?; \
 	cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-cli --bins --test auth $(NEXTEST_FILTER) || rc=$$?; \
 	$(MAKE) coverage:bindings || rc=$$?; \
+	$(MAKE) coverage:cloud-runner || rc=$$?; \
 	if [ "$$(uname)" = Linux ]; then \
 		cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-guest $(NEXTEST_FILTER) || rc=$$?; \
 	fi; \
@@ -52,6 +53,13 @@ coverage\:bindings:
 	cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) \
 		-p boxlite-python --no-default-features --lib $(NEXTEST_FILTER) || rc=$$?; \
 	exit $$rc
+
+# Keep the default-feature pass above: it proves the SDK rejects the opt-in.
+# Enable both crates here so neither the core backend nor the C ABI is omitted.
+coverage\:cloud-runner:
+	@cargo llvm-cov test --no-report -p boxlite -p boxlite-c \
+		--features boxlite/cloud-runner,boxlite-c/cloud-runner --lib --no-fail-fast \
+		-- --test-threads=1 $(CARGOTEST_FILTER)
 
 # Render collected profiles, including partial results from a failed test run.
 coverage\:report:

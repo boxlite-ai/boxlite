@@ -275,6 +275,15 @@ impl RuntimeImpl {
     }
 
     #[cfg(feature = "cloud-runner")]
+    pub(crate) async fn release_overlaybd_async(self: &Arc<Self>, id: &BoxID) -> BoxliteResult<()> {
+        let runtime = self.clone();
+        let id = id.clone();
+        tokio::task::spawn_blocking(move || runtime.release_overlaybd(&id))
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("OverlayBD release task failed: {e}")))?
+    }
+
+    #[cfg(feature = "cloud-runner")]
     pub(crate) fn release_overlaybd(&self, id: &BoxID) -> BoxliteResult<()> {
         if let Some(manager) = &self.overlaybd {
             if let Some((config, state)) = self.box_manager.box_by_id(id)? {
@@ -2556,6 +2565,80 @@ mod tests {
     #[tokio::test]
     async fn overlaybd_stop_failure_retries_auto_remove() {
         overlaybd_stop_retry(true).await;
+    }
+
+    #[cfg(feature = "cloud-runner")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn overlaybd_stop_keeps_executor_responsive() {
+        for mode in ["watcher", "failed", "stopped"] {
+            let (_fixture, manager, reference) = crate::images::overlaybd::tests::fixture();
+            let home = TempDir::new().unwrap();
+            let runtime = RuntimeImpl::initialize(
+                BoxliteOptions {
+                    home_dir: home.path().into(),
+                    image_registries: vec![],
+                },
+                ExperimentalFeatures::default(),
+                Some(manager.clone()),
+            )
+            .unwrap();
+            let mut config = test_box_config_in_layout(true, &runtime);
+            config.rootfs_backend = RootfsBackend::Overlaybd;
+            let mut state = BoxState::new();
+            state.set_lock_id(runtime.lock_manager.allocate().unwrap());
+            state.mark_failed("device cleanup pending");
+            if mode == "stopped" {
+                state.mark_stop();
+            }
+            if mode == "watcher" {
+                let mut child = std::process::Command::new("true").spawn().unwrap();
+                let pid = child.id();
+                child.wait().unwrap();
+                state.status = BoxStatus::Running;
+                state.pid = Some(pid);
+            }
+            runtime.box_manager.add_box(&config, &state).unwrap();
+            manager
+                .recover(std::collections::BTreeMap::from([(
+                    crate::images::overlaybd::image_digest(&reference)
+                        .unwrap()
+                        .into(),
+                    std::collections::BTreeSet::from([config.id.to_string()]),
+                )]))
+                .unwrap();
+            let (started, request_started) = tokio::sync::oneshot::channel();
+            let (respond, may_respond) = std::sync::mpsc::channel();
+            let progressed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let observed = progressed.clone();
+            let server =
+                crate::images::overlaybd::tests::daemon_with_gate(&manager, 1, &[], move || {
+                    started.send(()).unwrap();
+                    observed.store(
+                        may_respond
+                            .recv_timeout(std::time::Duration::from_secs(3))
+                            .is_ok(),
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
+                });
+            let heartbeat = tokio::spawn(async move {
+                request_started.await.unwrap();
+                let _ = respond.send(());
+            });
+            let (box_impl, _) = runtime.get_or_create_box_impl(config, state);
+            let result = if mode == "watcher" {
+                box_impl.arm_watcher(None);
+                Ok(())
+            } else {
+                box_impl.stop().await
+            };
+            heartbeat.await.unwrap();
+            assert_eq!(server.join().unwrap(), ["/v1/list"]);
+            assert!(
+                progressed.load(std::sync::atomic::Ordering::SeqCst),
+                "OverlayBD stop blocked the Tokio executor (mode={mode})"
+            );
+            result.unwrap();
+        }
     }
 
     #[tokio::test]

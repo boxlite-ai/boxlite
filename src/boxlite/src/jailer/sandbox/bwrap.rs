@@ -197,6 +197,39 @@ mod tests {
     use super::*;
     use crate::runtime::advanced_options::ResourceLimits;
 
+    #[test]
+    fn apply_keeps_non_ublk_paths_nodev() {
+        let limits = ResourceLimits::default();
+        for path in [
+            "/tmp/image",
+            "/dev/null",
+            "/dev/ublkb",
+            "/dev/ublkb-invalid",
+            "/dev/ublkb4294967295",
+        ] {
+            let ctx = SandboxContext {
+                id: "test-box",
+                paths: vec![super::super::PathAccess {
+                    path: path.into(),
+                    writable: false,
+                }],
+                unix_sockets: Default::default(),
+                resource_limits: &limits,
+                network_enabled: false,
+                sandbox_profile: None,
+                detached: false,
+            };
+            let mut cmd = Command::new("/box/bin/boxlite-shim");
+            BwrapSandbox::new().apply(&ctx, &mut cmd);
+            let args: Vec<_> = cmd.get_args().collect();
+            assert!(
+                args.windows(3).any(|a| a == ["--ro-bind", path, path]),
+                "{path}: {args:?}"
+            );
+            assert!(!args.windows(3).any(|a| a == ["--dev-bind", path, path]));
+        }
+    }
+
     /// The shim is statically linked, so libkrun's `dlopen` of `libkrunfw.so.5`
     /// can only be satisfied via `LD_LIBRARY_PATH` inside the `--clearenv`
     /// sandbox — the shim's `$ORIGIN` rpath is absent and the inherited

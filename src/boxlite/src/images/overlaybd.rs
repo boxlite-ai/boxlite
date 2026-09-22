@@ -575,9 +575,11 @@ pub(crate) mod tests {
         } else {
             "amd64"
         };
-        let config = write(json!({"architecture": arch, "os": "linux", "rootfs": {"type": "layers", "diff_ids": []}, "config": {"Cmd": ["sleep", "infinity"], "Env": ["MESSAGE=hello"]}}).to_string().as_bytes());
+        let mut config = write(json!({"architecture": arch, "os": "linux", "rootfs": {"type": "layers", "diff_ids": []}, "config": {"Cmd": ["sleep", "infinity"], "Env": ["MESSAGE=hello"]}}).to_string().as_bytes());
+        config["mediaType"] = json!("application/vnd.oci.image.config.v1+json");
         let mut layer =
             write(b"fixture layer; real device format is covered by the Linux smoke test");
+        layer["mediaType"] = json!("application/vnd.oci.image.layer.v1.tar");
         layer["annotations"] = json!({"containerd.io/snapshot/overlaybd/version": "0.1.0", "containerd.io/snapshot/overlaybd/blob-digest": layer["digest"]});
         let manifest = write(
             json!({"schemaVersion": 2, "config": config, "layers": [layer]})
@@ -673,6 +675,111 @@ pub(crate) mod tests {
         );
         assert_eq!(Qcow2Helper::qcow2_virtual_size(&cow).unwrap(), 65536);
         assert!(prepare_cow(&cow, &second, 131072, None).is_err());
+        prepare_cow(&cow, &second, 65536, None).unwrap();
+        assert_eq!(fs::read(&cow).unwrap(), after);
+        assert!(
+            matches!(prepare_cow(&dir.path().join("overflow.qcow2"), &first, 65536, Some(u64::MAX)), Err(e) if e.to_string().contains("overflow"))
+        );
+    }
+
+    #[test]
+    fn overlaybd_validates_manifest_and_import_boundaries() {
+        let (_dir, manager, reference) = fixture();
+        let source = manager.source.as_ref().unwrap();
+        let manifest_path = Overlaybd::blob_path(
+            source,
+            &format!("sha256:{}", image_digest(&reference).unwrap()),
+        )
+        .unwrap();
+        let original: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        for (field, value, message) in [
+            ("/schemaVersion", json!(1), "single-platform"),
+            ("/layers", json!([]), "single-platform"),
+            (
+                "/layers/0/annotations/containerd.io~1snapshot~1overlaybd~1blob-digest",
+                json!("sha256:wrong"),
+                "annotation",
+            ),
+            ("/layers/0/size", json!(0), "size/type"),
+        ] {
+            let mut manifest = original.clone();
+            *manifest.pointer_mut(field).unwrap() = value;
+            let bytes = manifest.to_string();
+            let digest = hex::encode(Sha256::digest(bytes.as_bytes()));
+            fs::write(source.join("blobs/sha256").join(&digest), bytes).unwrap();
+            let error = manager
+                .import(&format!("example.test/test@sha256:{digest}"))
+                .unwrap_err();
+            assert!(error.to_string().contains(message), "{field}: {error}");
+        }
+        fs::write(&manifest_path, b"corrupt").unwrap();
+        assert!(
+            manager
+                .import(&reference)
+                .unwrap_err()
+                .to_string()
+                .contains("digest mismatch")
+        );
+        fs::write(&manifest_path, vec![0; MAX_JSON as usize + 1]).unwrap();
+        assert!(
+            manager
+                .import(&reference)
+                .unwrap_err()
+                .to_string()
+                .contains("4 MiB")
+        );
+        fs::remove_dir_all(source).unwrap();
+        assert!(
+            manager
+                .import(&reference)
+                .unwrap_err()
+                .to_string()
+                .contains("must exist")
+        );
+        let disabled = Overlaybd::new(manager.root.parent().unwrap(), None).unwrap();
+        assert!(!disabled.enabled());
+        assert!(
+            disabled
+                .import(&reference)
+                .unwrap_err()
+                .to_string()
+                .contains("disabled")
+        );
+        assert!(matches!(
+            disabled.prepare("box", &reference, &manager.root.join("disk"), None),
+            Err(BoxliteError::Unsupported(_))
+        ));
+        assert!(digest_hex("sha512:abcd").is_err());
+    }
+
+    #[test]
+    fn overlaybd_prepare_rejects_stale_config_and_rolls_back_device_errors() {
+        let (dir, manager, reference) = fixture();
+        manager.import(&reference).unwrap();
+        let path = manager.config_path(image_digest(&reference).unwrap());
+        let disk = dir.path().join("disk.qcow2");
+        let server = daemon(&manager, 10);
+        for _ in 0..2 {
+            assert!(manager.prepare("box", &reference, &disk, None).is_err());
+            assert!(manager.users.lock().is_empty());
+            assert!(!disk.exists());
+        }
+        assert_eq!(
+            server
+                .join()
+                .unwrap()
+                .iter()
+                .filter(|op| *op == "/v1/del")
+                .count(),
+            2
+        );
+        fs::write(path, b"{}").unwrap();
+        assert!(
+            matches!(manager.prepare("box", &reference, &disk, None), Err(e) if e.to_string().contains("persisted device config differs"))
+        );
+        let file = dir.path().join("ordinary-file");
+        fs::write(&file, b"not a block device").unwrap();
+        assert!(device_capacity(&file).is_err());
     }
 
     // Exercise the real curl/UDS/JSON boundary; no device or VM is pretended to exist.
@@ -688,11 +795,21 @@ pub(crate) mod tests {
         requests: usize,
         dropped: &[usize],
     ) -> std::thread::JoinHandle<Vec<String>> {
+        daemon_with_gate(manager, requests, dropped, || {})
+    }
+
+    pub(crate) fn daemon_with_gate(
+        manager: &Overlaybd,
+        requests: usize,
+        dropped: &[usize],
+        before_first_response: impl FnOnce() + Send + 'static,
+    ) -> std::thread::JoinHandle<Vec<String>> {
         let listener = UnixListener::bind(&manager.socket).unwrap();
         let dropped = dropped.to_vec();
         std::thread::spawn(move || {
             let mut config = None;
             let mut operations = Vec::new();
+            let mut gate = Some(before_first_response);
             for index in 0..requests {
                 let mut poll = libc::pollfd {
                     fd: listener.as_raw_fd(),
@@ -726,21 +843,24 @@ pub(crate) mod tests {
                 reader.read_exact(&mut body).unwrap();
                 let path = first.split_whitespace().nth(1).unwrap().to_owned();
                 let response = match path.as_str() {
-                    "/v1/list" => json!({"ok": true, "devices": config.as_ref().map(|c| vec![json!({"dev_id": 7, "dev": "/dev/ublkb7", "config": c, "writable": false, "state": "running"})]).unwrap_or_default()}),
+                    "/v1/list" => json!({"ok": true, "devices": config.as_ref().map(|c| vec![json!({"dev_id": u32::MAX, "dev": "/dev/ublkb4294967295", "config": c, "writable": false, "state": "running"})]).unwrap_or_default()}),
                     "/v1/add" => {
                         let body: Value = serde_json::from_slice(&body).unwrap();
                         assert!(config.is_none());
                         config = Some(body["config"].as_str().unwrap().to_owned());
-                        json!({"ok": true, "dev_id": 7, "dev": "/dev/ublkb7"})
+                        json!({"ok": true, "dev_id": u32::MAX, "dev": "/dev/ublkb4294967295"})
                     },
                     "/v1/del" => {
-                        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["dev_id"], 7);
+                        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["dev_id"], u32::MAX);
                         config = None;
                         json!({"ok": true})
                     },
                     _ => panic!("unexpected operation {path}"),
                 }.to_string();
                 operations.push(path);
+                if let Some(gate) = gate.take() {
+                    gate();
+                }
                 if dropped.contains(&index) {
                     continue;
                 }

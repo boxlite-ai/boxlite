@@ -476,6 +476,10 @@ impl BwrapCommand {
     /// Panics if called when `is_available()` returns false. Always check
     /// availability before calling this method.
     pub fn build(&self, executable: impl AsRef<Path>, args: &[String]) -> Command {
+        // Argument-only unit tests never launch bwrap or require user namespaces.
+        #[cfg(test)]
+        let bwrap_path = get_bwrap_path().cloned().unwrap_or_else(|| "bwrap".into());
+        #[cfg(not(test))]
         let bwrap_path = get_bwrap_path().expect(
             "BwrapCommand::build() called but bwrap is not available. Check is_available() first.",
         );

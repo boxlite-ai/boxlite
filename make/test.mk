@@ -18,6 +18,7 @@ PHONY_TARGETS += test\:integration\:overlaybd
 test\:integration\:overlaybd:
 	@test "$$(uname -s)" = Linux || { echo "OverlayBD acceptance requires Linux"; exit 1; }
 	@test -n "$$OVERLAYBD_TEST_IMAGE" -a -n "$$BOXLITE_OVERLAYBD_IMAGE_DIR" || { echo "Set OVERLAYBD_TEST_IMAGE and BOXLITE_OVERLAYBD_IMAGE_DIR"; exit 1; }
+	@$(MAKE) dev:go CLOUD_RUNNER=1
 	@cd sdks/go && go test -tags boxlite_dev -count=1 -timeout 5m -run '^TestOverlayBDLocalSmoke$$' .
 
 # Advanced nextest-only filter expression. Use this for CI-specific exclusions

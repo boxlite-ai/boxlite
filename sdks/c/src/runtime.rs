@@ -114,7 +114,7 @@ pub unsafe extern "C" fn boxlite_cloud_runner_runtime_new(
             _ => {
                 write_error(
                     out_error,
-                    BoxliteError::Config("OverlayBD requires an image directory".into()),
+                    BoxliteError::InvalidArgument("OverlayBD requires an image directory".into()),
                 );
                 return BoxliteErrorCode::InvalidArgument;
             }
@@ -122,7 +122,7 @@ pub unsafe extern "C" fn boxlite_cloud_runner_runtime_new(
         _ => {
             write_error(
                 out_error,
-                BoxliteError::Config("overlaybd_enabled must be 0 or 1".into()),
+                BoxliteError::InvalidArgument("overlaybd_enabled must be 0 or 1".into()),
             );
             return BoxliteErrorCode::InvalidArgument;
         }

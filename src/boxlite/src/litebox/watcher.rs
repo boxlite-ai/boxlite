@@ -147,7 +147,7 @@ impl BoxWatcher {
                 // down rather than race it to the same fields.
                 _ = shutdown.cancelled() => return,
                 _ = shim.wait_for_exit() => {
-                    self.on_shim_exit();
+                    self.on_shim_exit().await;
                     return;
                 }
                 // Disabled (never fires) when there is no probe, degenerating to a
@@ -159,7 +159,7 @@ impl BoxWatcher {
                     tokio::select! {
                         _ = shutdown.cancelled() => return,
                         _ = shim.wait_for_exit() => {
-                            self.on_shim_exit();
+                            self.on_shim_exit().await;
                             return;
                         }
                         flow = self.on_health_tick() => {
@@ -177,7 +177,15 @@ impl BoxWatcher {
     /// The shim exited on its own: record `Stopped` + the exit code, and (for a
     /// health-checked box) flip the last health snapshot to Unhealthy — the whole
     /// job the old exit watcher did, now the single writer of the transition.
-    fn on_shim_exit(&mut self) {
+    async fn on_shim_exit(mut self) {
+        let box_id = self.box_id.clone();
+        // Exit bookkeeping can release a device, including during auto-remove.
+        if let Err(error) = tokio::task::spawn_blocking(move || self.record_shim_exit()).await {
+            tracing::warn!(%error, %box_id, "Box exit cleanup task failed");
+        }
+    }
+
+    fn record_shim_exit(&mut self) {
         // The runtime is gone, so it has already torn everything down (its Drop
         // runs shutdown_sync) and there is nobody left to report to.
         let Some(runtime) = self.runtime.upgrade() else {

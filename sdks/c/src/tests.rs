@@ -10,6 +10,100 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 extern "C" fn noop_shutdown_cb(_err: *mut FFIError, _ud: *mut c_void) {}
+
+#[test]
+fn cloud_runner_rejects_invalid_inputs_consistently() {
+    let invalid_utf8 = [0xffu8, 0];
+    for (enabled, directory, message) in [
+        (-1, ptr::null(), "must be 0 or 1"),
+        (2, ptr::null(), "must be 0 or 1"),
+        (1, ptr::null(), "image directory"),
+        (1, c"".as_ptr(), "image directory"),
+        (1, invalid_utf8.as_ptr().cast(), "image directory"),
+    ] {
+        let home = unique_test_home("cloud-invalid");
+        let home_c = CString::new(home.to_str().unwrap()).unwrap();
+        let mut runtime = ptr::null_mut();
+        let mut error = FFIError::default();
+        let code = unsafe {
+            boxlite_cloud_runner_runtime_new(
+                home_c.as_ptr(),
+                ptr::null(),
+                0,
+                enabled,
+                directory,
+                &mut runtime,
+                &mut error,
+            )
+        };
+        let detail = unsafe { CStr::from_ptr(error.message) }
+            .to_string_lossy()
+            .into_owned();
+        let error_code = error.code;
+        unsafe { boxlite_error_free(&mut error) };
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert_eq!(error_code, code, "return code and error payload must agree");
+        assert!(detail.contains(message), "{detail}");
+        assert!(runtime.is_null());
+        assert!(!home.exists());
+    }
+}
+
+#[test]
+fn cloud_runner_enforces_native_feature_and_platform() {
+    let home = unique_test_home("cloud-gate");
+    let home_c = CString::new(home.to_str().unwrap()).unwrap();
+    let mut runtime = ptr::null_mut();
+    let mut error = FFIError::default();
+    let code = unsafe {
+        boxlite_cloud_runner_runtime_new(
+            home_c.as_ptr(),
+            ptr::null(),
+            0,
+            1,
+            c"relative-layout".as_ptr(),
+            &mut runtime,
+            &mut error,
+        )
+    };
+    let expected = if cfg!(all(feature = "cloud-runner", target_os = "linux")) {
+        BoxliteErrorCode::Storage
+    } else {
+        BoxliteErrorCode::Unsupported
+    };
+    assert_eq!(code, expected);
+    assert_eq!(error.code, code);
+    assert!(runtime.is_null());
+    unsafe { boxlite_error_free(&mut error) };
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[cfg(not(feature = "cloud-runner"))]
+#[test]
+fn cloud_runner_disabled_uses_local_runtime() {
+    let home = unique_test_home("cloud-disabled");
+    let home_c = CString::new(home.to_str().unwrap()).unwrap();
+    let mut runtime = ptr::null_mut();
+    let mut error = FFIError::default();
+    let code = unsafe {
+        boxlite_cloud_runner_runtime_new(
+            home_c.as_ptr(),
+            ptr::null(),
+            0,
+            0,
+            ptr::null(),
+            &mut runtime,
+            &mut error,
+        )
+    };
+    assert_eq!(code, BoxliteErrorCode::Ok);
+    assert!(!runtime.is_null());
+    unsafe {
+        boxlite_runtime_free(runtime);
+        boxlite_error_free(&mut error);
+    }
+    std::fs::remove_dir_all(home).unwrap();
+}
 extern "C" fn noop_image_pull_cb(
     _r: *mut crate::images::CImagePullResult,
     _err: *mut FFIError,
