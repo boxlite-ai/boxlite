@@ -59,25 +59,21 @@ print(f"Memory: {memory_mb:.2f} MB")
 
 ## Disk configuration
 
-**Ephemeral (Default):**
+Every box has a container disk, a copy-on-write QCOW2 image that is never smaller than the image.
+`disk_size_gb` sets a larger size:
 
 ```python
 boxlite.BoxOptions(
-    disk_size_gb=None  # No persistent disk
+    disk_size_gb=None  # Image size (default)
 )
-```
 
-**Persistent:**
-
-```python
 boxlite.BoxOptions(
-    disk_size_gb=20  # 20 GB persistent disk
+    disk_size_gb=20  # At least 20 GB
 )
 ```
 
-**Performance:**
-- Ephemeral: Fastest (in-memory/tmpfs)
-- QCOW2: Moderate (copy-on-write overhead)
+The disk lives as long as the box. By default the box is removed when it stops; set
+`auto_delete=0` to keep the box, and its disk, after stop.
 
 **I/O Monitoring:**
 - Currently not exposed in metrics

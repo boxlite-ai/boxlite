@@ -13,14 +13,14 @@ can be embedded directly into applications without requiring a daemon or externa
 ## Pages
 
 - [Images](images.md): how BoxLite pulls, caches, and shares OCI images.
-- [Storage](storage.md): a box's root filesystem, volumes, and the `~/.boxlite` home directory.
+- [Storage](storage.md): a box's root filesystem and volumes.
 - [Networking](networking.md): network backends, service access, and addressing.
 - [Security](security.md): the isolation layers around every box.
 - [Metrics](metrics.md): runtime-wide and per-box counters.
 
 ## How the parts fit
 
-```
+```text
 ┌────────────────────────────────────────────────────────────────────┐
 │                        Host Application                            │
 │  ┌──────────────────────────────────────────────────────────────┐  │

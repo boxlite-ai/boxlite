@@ -10,7 +10,7 @@ How the code fits together.
 
 - [Architecture](architecture/README.md): components, the VMM abstraction, host-guest RPC,
   concurrency, and error handling.
-- [VMM design](architecture/vmm/README.md): BoxLite's own VMM, which replaces libkrun, with
+- [VMM design](architecture/vmm/README.md): BoxLite's own VMM, which is replacing libkrun, with
   background on [Hypervisor.framework](architecture/vmm/hvf.md), [KVM](architecture/vmm/kvm.md),
   the [Windows Hypervisor Platform](architecture/vmm/whp.md), and
   [guest memory](architecture/vmm/memory.md).

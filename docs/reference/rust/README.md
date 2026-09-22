@@ -205,7 +205,8 @@ pub struct LiteBox {
 - `start()` initializes VM for `Configured` or `Stopped` boxes
 - Idempotent: calling on `Running` box is a no-op
 - `run()` implicitly calls `start()` if needed
-- `stop()` terminates VM; box can be restarted
+- `stop()` terminates the VM. With default options a local runtime then removes the box;
+  `auto_delete: Some(0)` keeps it
 
 #### Example
 
@@ -339,10 +340,10 @@ pub enum BoxStatus {
 
 #### State machine
 
-```
+```text
 create() → Configured (persisted to DB, no VM)
 start()  → Running (VM initialized)
-stop()   → Stopped (VM terminated, can restart)
+stop()   → Stopped (VM terminated); a local runtime removes it unless auto_delete is Some(0)
 ```
 
 ### BoxState
@@ -600,7 +601,12 @@ pub struct BoxOptions {
     /// Port mappings
     pub ports: Vec<PortSpec>,
 
-    /// Auto-remove box when stopped (default: true)
+    /// Seconds after stop before the box is deleted: `Some(0)` keeps it, and a
+    /// local runtime deletes at stop for any other value. `None` (default) falls
+    /// back to `auto_remove` locally and to the server's policy on REST.
+    pub auto_delete: Option<u32>,
+
+    /// Deprecated: use `auto_delete`. Remove the box when it stops (default: true)
     pub auto_remove: bool,
 
     /// Run independently of parent process (default: false)
@@ -641,8 +647,8 @@ let options = BoxOptions {
         },
         ..Default::default()
     },
-    auto_remove: false,  // Keep box after stop
-    detach: true,        // Run independently
+    auto_delete: Some(0),  // Keep box after stop
+    detach: true,          // Run independently
     ..Default::default()
 };
 ```
@@ -912,7 +918,8 @@ pub struct SecurityOptions {
     /// Custom sandbox profile (macOS only)
     pub sandbox_profile: Option<PathBuf>,
 
-    /// Enable network in sandbox (macOS only)
+    /// Network grants of the host-side sandbox (seatbelt on macOS, Landlock on Linux);
+    /// does not disable guest networking
     pub network_enabled: bool,
 }
 ```
@@ -982,7 +989,7 @@ let security = SecurityOptions::builder()
 | `max_memory_bytes(n)` | RLIMIT_AS |
 | `max_cpu_time_seconds(n)` | RLIMIT_CPU |
 | `sandbox_profile(path)` | macOS sandbox profile |
-| `network_enabled(bool)` | macOS network access |
+| `network_enabled(bool)` | Host sandbox network grants, not guest networking |
 | `build()` | Build SecurityOptions |
 
 ### ResourceLimits
@@ -1345,6 +1352,6 @@ for handle in handles {
 
 - [Getting Started Guide](../../getting-started/README.md)
 - [Concepts](../../concepts/README.md)
-- [Configuration Reference](../README.md)
+- [Configuration Reference](../configuration.md)
 - [Python SDK Reference](../python/README.md)
 - [Node.js SDK Reference](../nodejs/README.md)

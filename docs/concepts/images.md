@@ -4,7 +4,7 @@ BoxLite uses OCI-compatible container images with intelligent caching.
 
 ## Image pull flow
 
-```
+```text
 Registry (Docker Hub, GHCR, ECR, etc.)
            │
            ▼
@@ -14,7 +14,7 @@ Registry (Docker Hub, GHCR, ECR, etc.)
            │
            ▼
 ┌─────────────────────┐
-│   ImageStore        │  Store blobs in ~/.boxlite/images/blobs/
+│   ImageStore        │  Store layers in ~/.boxlite/images/layers/
 └─────────────────────┘
            │
            ▼

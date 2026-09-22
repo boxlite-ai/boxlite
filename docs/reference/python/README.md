@@ -127,7 +127,7 @@ Configuration options for creating a box.
 | `image` | `str` | Required | OCI image URI (e.g., `"python:slim"`, `"alpine:latest"`) |
 | `cpus` | `int` | `1` | Number of CPU cores (1 to host CPU count) |
 | `memory_mib` | `int` | `512` | Memory limit in MiB (128-65536) |
-| `disk_size_gb` | `int \| None` | `None` | Persistent disk size in GB (None = ephemeral) |
+| `disk_size_gb` | `int \| None` | `None` | Container disk size in GB, never smaller than the image (None = image size) |
 | `working_dir` | `str` | `"/root"` | Working directory inside container |
 | `env` | `List[Tuple[str, str]]` | `[]` | Environment variables as (key, value) pairs |
 | `volumes` | `List[Tuple \| Dict]` | `[]` | Volume mounts; tuple = host bind, dict = `managed_volume` or `host_path` |
@@ -135,7 +135,8 @@ Configuration options for creating a box.
 | `ports` | `List[Tuple \| Dict]` | `[]` | Local TCP forwarding; omit `host_port` in a dict for automatic allocation |
 | `secrets` | `List[Secret]` | `[]` | Outbound HTTPS secret substitution rules |
 | `advanced` | `AdvancedBoxOptions \| None` | `None` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
-| `auto_remove` | `bool` | `True` | Auto cleanup when stopped |
+| `auto_delete` | `int \| None` | `None` | `0` keeps the box after stop; above `0`, a REST runtime deletes it that many seconds after stop and a local runtime at stop. `None` keeps the runtime's default (`auto_remove` locally) |
+| `auto_remove` | `bool` | `True` | Deprecated: use `auto_delete`. Auto cleanup when stopped |
 | `detach` | `bool` | `False` | Survive parent process exit |
 
 Capability policy is intentionally nested with the other expert-only options:
@@ -260,7 +261,6 @@ Handle to a running or stopped box.
 | `exec()` | `(cmd, args, env, tty) -> Execution` | Execute command (async) |
 | `attach()` | `(execution_id=None, stdin=True) -> Execution` | Follow a running session (async) |
 | `stop()` | `() -> None` | Stop the box gracefully (async) |
-| `remove()` | `() -> None` | Delete box and its data (async) |
 | `info()` | `async () -> BoxInfo` | Get box metadata |
 | `metrics()` | `() -> BoxMetrics` | Get resource usage metrics (async) |
 
@@ -864,7 +864,7 @@ from boxlite import BoxliteError, ExecError, TimeoutError, ParseError
 
 ### Exception hierarchy
 
-```
+```text
 BoxliteError (base)
 ├── ExecError       # Command execution failed
 ├── TimeoutError    # Operation timed out

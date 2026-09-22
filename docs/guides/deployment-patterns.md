@@ -6,7 +6,7 @@ Before deploying BoxLite to production:
 
 - [ ] **Resource Limits Configured**
   - Set appropriate `cpus` and `memory_mib`
-  - Configure `disk_size_gb` if persistence needed
+  - Set `auto_delete=0` on boxes that must survive stop
   - Test resource consumption under load
 
 - [ ] **Error Handling Robust**
@@ -108,10 +108,9 @@ spec:
 
 ```python
 # Create pool of boxes
-boxes = [
-    runtime.create(boxlite.BoxOptions(image="python:slim"))
-    for _ in range(10)
-]
+boxes = [boxlite.SimpleBox(image="python:slim") for _ in range(10)]
+for box in boxes:
+    await box.start()
 
 # Reuse boxes for multiple tasks
 for i, task in enumerate(tasks):
@@ -125,7 +124,7 @@ for i, task in enumerate(tasks):
 # Pre-pull images before high traffic
 images = ["python:slim", "node:alpine", "alpine:latest"]
 for image in images:
-    runtime.create(boxlite.BoxOptions(image=image))
+    await runtime.images.pull(image)
 # Images are now cached in ~/.boxlite/images/
 ```
 

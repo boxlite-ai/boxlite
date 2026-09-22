@@ -8,7 +8,7 @@ BoxLite supports pluggable network backends for Box connectivity.
 
 User-mode networking based on gVisor's network stack.
 
-```
+```text
 Box                    gvproxy                  Internet
 ┌──────┐              ┌───────┐              ┌──────────┐
 │ eth0 │◄────vsock───▶│       │◄────TCP/UDP─▶│          │

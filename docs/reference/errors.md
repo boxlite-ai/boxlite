@@ -15,7 +15,7 @@ Platform or hypervisor not supported.
 - Hypervisor.framework not available on macOS
 
 **Example:**
-```
+```text
 Error: unsupported engine kind
 ```
 
@@ -36,7 +36,7 @@ Hypervisor or VM engine error.
 - VM creation failed
 
 **Example:**
-```
+```text
 Error: engine reported an error: KVM is not available
 ```
 
@@ -47,7 +47,6 @@ sudo modprobe kvm kvm_intel  # or kvm_amd
 
 # Linux: Check /dev/kvm permissions
 ls -l /dev/kvm
-sudo chmod 666 /dev/kvm
 
 # Linux: Add user to kvm group
 sudo usermod -aG kvm $USER
@@ -65,7 +64,7 @@ Invalid box configuration.
 - Invalid port numbers
 
 **Example:**
-```
+```text
 Error: configuration error: CPU count must be between 1 and 8
 ```
 
@@ -85,7 +84,7 @@ Filesystem or disk operation error.
 - QCOW2 operation failed
 
 **Example:**
-```
+```text
 Error: storage error: No space left on device
 ```
 
@@ -99,7 +98,7 @@ ls -ld ~/.boxlite
 chmod 755 ~/.boxlite
 
 # Clean up old boxes
-# (manually remove ~/.boxlite/boxes/*)
+boxlite rm <box>
 ```
 
 ### `Image(String)`
@@ -114,7 +113,7 @@ OCI image pull or extraction error.
 - Corrupted image layers
 
 **Example:**
-```
+```text
 Error: images error: failed to pull image: 404 Not Found
 ```
 
@@ -129,7 +128,8 @@ ping registry-1.docker.io
 # Authenticate for private images
 docker login
 
-# Clear image cache if corrupted
+# Clear the image cache if corrupted. Box disks are backed by files
+# in it, so remove existing boxes first (boxlite rm).
 rm -rf ~/.boxlite/images/*
 ```
 
@@ -144,7 +144,7 @@ Host-guest communication error (gRPC over vsock).
 - Guest initialization failed
 
 **Example:**
-```
+```text
 Error: portal error: connection timeout
 ```
 
@@ -164,7 +164,7 @@ Network configuration or connectivity error.
 - Network backend initialization failed
 
 **Example:**
-```
+```text
 Error: network error: bind: address already in use
 ```
 
@@ -176,8 +176,8 @@ lsof -i :8080
 # Stop conflicting process or use different port
 ports=[(8081, 80, "tcp")]
 
-# Verify gvproxy binary exists
-ls ~/.boxlite/gvproxy/
+# gvproxy runs inside each box's shim process; verify the shim is running
+ps aux | grep boxlite-shim
 ```
 
 ### `Execution(String)`
@@ -191,7 +191,7 @@ Command execution error.
 - Streaming I/O error
 
 **Example:**
-```
+```text
 Error: Execution error: command not found: python3
 ```
 
@@ -218,7 +218,7 @@ Internal BoxLite error.
 - Unhandled edge case
 
 **Example:**
-```
+```text
 Error: internal error: unexpected state transition
 ```
 
@@ -237,7 +237,7 @@ Box or resource not found.
 - Image not in cache
 
 **Example:**
-```
+```text
 Error: box not found: 01JJNH8...
 ```
 
@@ -255,13 +255,13 @@ Box or resource already exists.
 - Port already forwarded
 
 **Example:**
-```
+```text
 Error: already exists: box with this ID exists
 ```
 
 **Solution:**
-- Use existing box: `runtime.get(box_id)`
-- Remove existing box: `box.remove()`
+- Use existing box: `await runtime.get(box_id)`
+- Remove existing box: `await runtime.remove(box_id)`
 - Use different configuration (e.g., different port)
 
 ### `InvalidState(String)`
@@ -274,7 +274,7 @@ Box is in wrong state for requested operation.
 - Restarting box that never started
 
 **Example:**
-```
+```text
 Error: invalid state: cannot execute on stopped box
 ```
 
@@ -311,13 +311,18 @@ async def safe_execution():
 ### Rust
 
 ```rust
-use boxlite::{BoxliteRuntime, BoxliteError, BoxliteResult};
+use boxlite::{BoxOptions, BoxliteError, BoxliteResult, BoxliteRuntime, RootfsSpec};
 
-fn main() -> BoxliteResult<()> {
+#[tokio::main]
+async fn main() -> BoxliteResult<()> {
     let runtime = BoxliteRuntime::default_runtime();
+    let options = BoxOptions {
+        rootfs: RootfsSpec::Image("alpine:latest".into()),
+        ..Default::default()
+    };
 
-    match runtime.create(options) {
-        Ok((box_id, litebox)) => {
+    match runtime.create(options, None).await {
+        Ok(_litebox) => {
             // Success
         }
         Err(BoxliteError::UnsupportedEngine) => {

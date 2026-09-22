@@ -128,7 +128,7 @@ sudo modprobe kvm kvm_intel  # or kvm_amd
 
 # Check /dev/kvm permissions
 ls -l /dev/kvm
-sudo chmod 666 /dev/kvm  # or add user to kvm group
+sudo usermod -aG kvm $USER  # then log out and back in
 ```
 
 **Problem:** Box fails to start

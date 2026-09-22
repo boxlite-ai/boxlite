@@ -4,7 +4,7 @@ BoxLite provides comprehensive metrics at runtime and per-Box levels.
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────┐
 │            RuntimeMetrics               │
 │  ┌─────────────────────────────────┐   │

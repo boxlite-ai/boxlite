@@ -9,9 +9,9 @@ Mount host directories into boxes for data input/output.
 - Low overhead
 - Real-time host-guest synchronization
 
-**QCOW2 (Persistent Disk):**
+**QCOW2 (container disk):**
 - Block device
-- Survives box restarts
+- Survives stop only when the box is kept (`auto_delete=0`)
 - Copy-on-write
 
 ## Read-only vs read-write
@@ -85,17 +85,18 @@ async with boxlite.SimpleBox(
 ### 4. Persistent storage with QCOW2
 
 ```python
-# Create box with persistent disk
-box = runtime.create(boxlite.BoxOptions(
+# Create a box that keeps its disk after stop
+box = await runtime.create(boxlite.BoxOptions(
     image="postgres:latest",
-    disk_size_gb=20,  # 20 GB persistent disk
+    disk_size_gb=20,  # 20 GB disk
     env=[("POSTGRES_PASSWORD", "secret")],
+    auto_delete=0,  # keep the box after stop
 ))
 
 # Data survives stop/restart
 await box.stop()
 # ... later ...
-box = runtime.get(box.id)  # Disk still intact
+box = await runtime.get(box.id)  # Disk still intact
 ```
 
 ## Performance considerations

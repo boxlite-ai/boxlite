@@ -77,7 +77,9 @@ async with boxlite.SimpleBox(image="python:slim") as box:
 **Streaming Output:**
 
 ```python
-execution = await box.exec("python", "long_running_script.py")
+runtime = boxlite.Boxlite.default()
+low_level_box = await runtime.create(boxlite.BoxOptions(image="python:slim"))
+execution = await low_level_box.exec("python", ["long_running_script.py"])
 
 # Stream stdout in real-time
 stdout = execution.stdout()
@@ -88,6 +90,8 @@ async for line in stdout:
     if "ERROR" in line:
         await execution.kill()  # Stop on error
         break
+
+await low_level_box.stop()
 ```
 
 **Exit Codes:**
@@ -108,14 +112,11 @@ else:
 
 ```python
 # Create once, use many times
-box = runtime.create(boxlite.BoxOptions(image="python:slim"))
-
-for code in ai_generated_codes:
-    result = await box.exec("python", "-c", code)
-    # Process result
-
-# Cleanup when done
-await box.remove()
+async with boxlite.SimpleBox(image="python:slim") as box:
+    for code in ai_generated_codes:
+        result = await box.exec("python", "-c", code)
+        # Process result
+# The box stops when the block exits
 ```
 
 **Batch Operations:**
@@ -147,11 +148,11 @@ if metrics.memory_usage_bytes > 0.8 * (1024**3):  # 80% of 1GB
 
 | Workload | Image | CPUs | Memory | Disk | Notes |
 |----------|-------|------|--------|------|-------|
-| Code execution | `python:slim` | 1 | 512 MiB | None | Ephemeral, fast startup |
+| Code execution | `python:slim` | 1 | 512 MiB | None | Removed on stop, fast startup |
 | Data analysis | `python:slim` | 2 | 2048 MiB | None | More memory for pandas/numpy |
 | Web browsing | Use `BrowserBox` | 2 | 2048 MiB | None | Chromium needs resources |
 | Multi-tool agent | `python:slim` | 2 | 1024 MiB | None | Balance cost vs. capability |
-| Persistent env | `python:slim` | 1 | 512 MiB | 10 GB | State survives restarts |
+| Persistent env | `python:slim` | 1 | 512 MiB | 10 GB | `auto_delete=0` keeps state across stop |
 
 ### Starter configuration
 
@@ -163,7 +164,7 @@ options = boxlite.BoxOptions(
     cpus=2,
     memory_mib=1024,
     working_dir="/workspace",
-    security=boxlite.SecurityOptions.maximum(),
+    advanced=boxlite.AdvancedBoxOptions(security=boxlite.SecurityOptions.maximum()),
 )
 ```
 
@@ -184,7 +185,6 @@ security = boxlite.SecurityOptions.maximum()
 
 # Customize if needed
 security.max_open_files = 2048
-security.network_enabled = False  # Disable network for strict isolation
 ```
 
 ---
@@ -205,7 +205,7 @@ async def main():
         image="python:slim",
         cpus=2,
         memory_mib=1024,
-        security=boxlite.SecurityOptions.maximum(),
+        advanced=boxlite.AdvancedBoxOptions(security=boxlite.SecurityOptions.maximum()),
     ))
 
     try:
@@ -220,8 +220,7 @@ async def main():
             result = await execution.wait()
             print(f"Exit code: {result.exit_code}")
     finally:
-        await box.stop()
-        await runtime.remove(box.id)
+        await box.stop()  # also removes the box by default
 ```
 
 **When to use:** Most AI agent scenarios. Keeps VM boot cost to one-time.
@@ -335,7 +334,7 @@ options = boxlite.BoxOptions(
 | `max_processes` | `int \| None` | Maximum number of processes |
 | `max_memory` | `int \| None` | Maximum virtual memory in bytes |
 | `max_cpu_time` | `int \| None` | Maximum CPU time in seconds |
-| `network_enabled` | `bool` | Allow network access from sandbox (macOS only) |
+| `network_enabled` | `bool` | Network grants of the host-side sandbox (seatbelt on macOS, Landlock on Linux); does not disable guest networking |
 | `close_fds` | `bool` | Close inherited file descriptors |
 
 ### Network isolation
@@ -343,17 +342,16 @@ options = boxlite.BoxOptions(
 To prevent an agent from accessing the network:
 
 ```python
-security = boxlite.SecurityOptions.maximum()
-security.network_enabled = False
-
 options = boxlite.BoxOptions(
     image="python:slim",
-    security=security,
+    # No network interface in the box
+    network=boxlite.NetworkSpec(outbound=boxlite.OutboundNetworkSpec(mode="disabled")),
     # No ports= means no incoming connections either
 )
 ```
 
-> **OS support note:** In the Python bindings, `network_enabled` is currently a macOS-only control. On Linux and other platforms, network isolation is typically enforced by the container/runtime networking configuration (for example, running in an isolated network namespace and not publishing ports), and `network_enabled` may not itself hard-disable all outbound connectivity.
+`SecurityOptions.network_enabled` does not take the guest offline: it only drops the host sandbox's
+own network grants, and BoxLite rejects `network_enabled=False` while the box's network is enabled.
 
 ### Resource limits as security boundaries
 
@@ -364,7 +362,7 @@ options = boxlite.BoxOptions(
     image="python:slim",
     cpus=1,             # Cap CPU usage
     memory_mib=512,     # Hard memory limit (OOM kills the box)
-    security=boxlite.SecurityOptions.maximum(),
+    advanced=boxlite.AdvancedBoxOptions(security=boxlite.SecurityOptions.maximum()),
 )
 ```
 
@@ -397,8 +395,7 @@ result = await execution.wait()
 # Copy results out
 await box.copy_out("/workspace/output.json", "/host/output.json")
 
-await box.stop()
-await runtime.remove(box.id)
+await box.stop()  # also removes the box by default
 ```
 
 **Ownership (`copy_in` only):** files arriving in the box are owned by its exec user (the
@@ -529,7 +526,7 @@ async def main():
         volumes=[
             ("/host/datasets", "/mnt/data", True),
         ],
-        security=boxlite.SecurityOptions.maximum(),
+        advanced=boxlite.AdvancedBoxOptions(security=boxlite.SecurityOptions.maximum()),
     ))
 
     try:
@@ -571,8 +568,7 @@ async def main():
         await execution.wait()
 
     finally:
-        await box.stop()
-        await runtime.remove(box.id)
+        await box.stop()  # also removes the box by default
 
 
 asyncio.run(main())

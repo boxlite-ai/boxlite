@@ -155,16 +155,15 @@ for info in boxes:
 
 **Guest Logs:**
 - Inside box: `/var/log/`
-- Requires persistent disk to access after box stops
+- Requires keeping the box after stop (`auto_delete=0`)
 
 **Database:**
-- `~/.boxlite/db/boxes.db`
-- `~/.boxlite/db/images.db`
+- `~/.boxlite/db/boxlite.db`
 
 **Inspect Database:**
 
 ```bash
-sqlite3 ~/.boxlite/db/boxes.db
+sqlite3 ~/.boxlite/db/boxlite.db
 .tables
-SELECT * FROM boxes;
+SELECT * FROM box_state;
 ```

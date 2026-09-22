@@ -29,7 +29,7 @@ options = boxlite.BoxOptions(
 )
 
 runtime = boxlite.Boxlite.default()
-box = runtime.create(options)
+box = await runtime.create(options)
 ```
 
 **Multiple Ports:**
@@ -73,16 +73,23 @@ import boxlite
 import requests
 
 async def test_connectivity():
-    async with boxlite.SimpleBox(
+    runtime = boxlite.Boxlite.default()
+    box = await runtime.create(boxlite.BoxOptions(
         image="python:slim",
-        ports=[(8080, 8000, "tcp")]
-    ) as box:
-        # Start web server in box
-        await box.exec("python", "-m", "http.server", "8000", background=True)
+        ports=[(8080, 8000, "tcp")],
+    ))
+    # Box.exec returns while the server keeps running
+    server = await box.exec("python", ["-u", "-m", "http.server", "8000"])
+    async for line in server.stdout():  # wait until it is listening
+        if "Serving HTTP" in line:
+            break
 
-        # Test from host
-        response = requests.get("http://localhost:8080")
-        print(f"Status: {response.status_code}")
+    # Test from host
+    response = requests.get("http://localhost:8080")
+    print(f"Status: {response.status_code}")
+
+    await server.kill()
+    await box.stop()
 
 asyncio.run(test_connectivity())
 ```
@@ -151,8 +158,8 @@ lsof -i :8080
 
 **Solutions:**
 ```bash
-# Verify gvproxy is running
-ps aux | grep gvproxy
+# gvproxy runs inside each box's shim process; verify the shim is running
+ps aux | grep boxlite-shim
 
 # Check DNS resolution
 # (run inside box)

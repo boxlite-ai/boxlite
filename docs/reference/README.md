@@ -7,7 +7,7 @@ step-by-step tasks, see [Guides](../guides/README.md).
 
 - [Configuration](configuration.md): `BoxOptions` parameters, runtime options, and environment variables.
 - [Error codes and handling](errors.md): error types and patterns for handling them.
-- [File formats](file-formats.md): QCOW2 disk images, the OCI image cache, box configuration, and SQLite databases.
+- [File formats](file-formats.md): the `~/.boxlite` home directory, QCOW2 and ext4 disk images, the OCI image cache, and the SQLite database.
 
 ## SDK API references
 

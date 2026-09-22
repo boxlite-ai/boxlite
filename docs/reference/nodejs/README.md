@@ -100,7 +100,7 @@ Configuration options for creating a box.
 | `rootfsPath` | `string` | - | Pre-prepared rootfs directory (alternative to image) |
 | `cpus` | `number` | `1` | Number of CPU cores |
 | `memoryMib` | `number` | `512` | Memory limit in MiB |
-| `diskSizeGb` | `number` | - | Persistent disk size in GB |
+| `diskSizeGb` | `number` | - | Container disk size in GB, never smaller than the image |
 | `workingDir` | `string` | `"/root"` | Working directory inside container |
 | `env` | `JsEnvVar[]` | `[]` | Environment variables |
 | `volumes` | `JsVolumeSpec[]` | `[]` | Volume mounts |
@@ -108,7 +108,8 @@ Configuration options for creating a box.
 | `ports` | `JsPortSpec[]` | `[]` | Local TCP port mappings; omit `hostPort` for automatic allocation |
 | `secrets` | `Secret[]` | `[]` | Outbound HTTPS secret substitution rules |
 | `advanced` | `AdvancedBoxOptions` | `{}` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
-| `autoRemove` | `boolean` | `false` | Auto cleanup when stopped |
+| `autoDelete` | `number` | - | `0` keeps the box after stop; above `0`, a remote runtime deletes it that many seconds after stop and a local runtime at stop. Unset keeps the runtime's default: `autoRemove` locally, the server's policy on a remote runtime |
+| `autoRemove` | `boolean` | `false` | Deprecated: use `autoDelete`. Auto cleanup when stopped |
 | `detach` | `boolean` | `false` | Survive parent process exit |
 
 Capability policy is intentionally nested with the other expert-only options:
@@ -749,7 +750,7 @@ import { BoxliteError, ExecError, TimeoutError, ParseError } from 'boxlite';
 
 ### Exception hierarchy
 
-```
+```text
 BoxliteError (base)
 ├── ExecError       # Command failed
 ├── TimeoutError    # Operation timeout

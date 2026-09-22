@@ -205,22 +205,23 @@ memory_mib=4096   # 4 GB
 
 ### `disk_size_gb: int | None`
 
-Create a persistent QCOW2 disk image.
+Size of the box's container disk, a copy-on-write QCOW2 image. The disk is never smaller than the
+image.
 
-**Default:** `None` (ephemeral storage only)
+**Default:** `None` (the image's size)
 
 **Range:** 1 to 1024 (1 TB)
 
 **Example:**
 ```python
-disk_size_gb=None   # Ephemeral (default)
-disk_size_gb=10     # 10 GB persistent disk
-disk_size_gb=100    # 100 GB persistent disk
+disk_size_gb=None   # Image size (default)
+disk_size_gb=10     # At least 10 GB
+disk_size_gb=100    # At least 100 GB
 ```
 
 **Notes:**
-- Disk persists across stop/restart
-- Stored at `~/.boxlite/boxes/{box-id}/disk.qcow2`
+- Disk persists across stop/restart only when the box is kept after stop (`auto_delete=0`)
+- Stored at `~/.boxlite/boxes/{box-id}/disks/disk.qcow2`
 - Copy-on-write (thin provisioned)
 - Deleted when box is removed
 
@@ -322,22 +323,28 @@ ports=[
 - Port mappings are only for host → box traffic. Use
   `host.boxlite.internal:<port>` for box → host loopback traffic.
 
-### `auto_remove: bool`
+### `auto_delete: int | None`
 
-Automatically remove box when stopped.
+Seconds after a successful stop before the box is deleted.
 
-**Default:** `True`
+**Default:** `None`, which keeps the runtime's default: `auto_remove` on a local runtime, the
+server's policy on a REST runtime.
 
 **Example:**
 ```python
-auto_remove=True   # Auto cleanup (default)
-auto_remove=False  # Manual cleanup required
+auto_delete=0     # Keep the box after stop
+auto_delete=3600  # REST runtime: delete an hour after stop
 ```
 
 **Notes:**
-- `True`: Box is removed when context exits or `stop()` is called
-- `False`: Box persists after stop, can be restarted with `runtime.get(box_id)`
-- Manual cleanup: `await box.remove()`
+- `0`: the box persists after stop, and `runtime.get(box_id)` returns it
+- Above `0`: a local runtime has no sweeper, so it deletes the box at stop
+- Manual cleanup: `await runtime.remove(box_id)`
+
+### `auto_remove: bool`
+
+Deprecated: use `auto_delete`, which takes precedence when set. `True`, the default, removes the box
+when it stops on a local runtime; REST runtimes do not send it and keep the server's policy.
 
 ## Runtime options
 
@@ -349,17 +356,7 @@ Base directory for BoxLite runtime data.
 
 **Override:** Set `BOXLITE_HOME` environment variable
 
-**Structure:**
-```
-~/.boxlite/
-├── images/       # OCI image cache (blobs, index.json)
-├── boxes/        # Per-box data (config.json, disk.qcow2)
-├── init/         # Shared guest rootfs
-├── logs/         # Runtime logs
-├── gvproxy/      # Network backend binaries
-├── lock          # Filesystem lock file
-└── db/           # SQLite databases (boxes.db, images.db)
-```
+**Structure:** see [File formats](file-formats.md#home-directory).
 
 **Example:**
 ```python

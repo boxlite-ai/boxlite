@@ -5,7 +5,7 @@ How the BoxLite runtime's code fits together, for contributors. The user-level p
 
 ## Design documents
 
-- [VMM](vmm/README.md): BoxLite's own VMM, which replaces libkrun.
+- [VMM](vmm/README.md): BoxLite's own VMM, which is replacing libkrun.
 - [Jailer network permissions](jailer-network-permissions.md): guest networking, host IP grants,
   and the AF_UNIX control plane.
 - [Container capabilities](container-capabilities.md): the Linux capability API.
@@ -43,7 +43,7 @@ The main entry point for creating and managing Boxes. Holds all runtime state pr
 
 **State architecture:**
 
-```
+```text
 RuntimeInnerImpl
 ├── sync_state (RwLock)
 │   ├── BoxManager      # Tracks all Boxes and their states (Source: src/boxlite/src/litebox/manager.rs)
@@ -139,7 +139,7 @@ Runs inside the Box, receives commands from host via gRPC.
 
 ## Image store
 
-```
+```text
 ImageManager
 ├── ImageStore         # OCI blob storage and retrieval
 ├── ImageStorage       # Layer extraction and caching
@@ -223,10 +223,10 @@ Communication uses gRPC over transport channels, bridged via libkrun's vsock sup
 
 ### Transport flow
 
-```
+```text
 Host Application
       │
-      │ Unix Socket (/tmp/boxlite-{id}.sock)
+      │ Unix Socket (boxes/{id}/sockets/box.sock)
       ▼
 ┌─────────────────┐
 │  libkrun vsock  │  (Unix socket ↔ vsock bridge)
@@ -265,7 +265,7 @@ service Execution {
 
 ### Initialization sequence
 
-```
+```text
 Host                              Guest (Box)
   │                                 │
   │──── spawn Box subprocess ──────▶│
@@ -287,7 +287,7 @@ Host                              Guest (Box)
 
 BoxLite provides language-specific SDKs built on the core Rust library.
 
-```
+```text
 ┌─────────────────────────────────────────┐
 │           Host Application              │
 └─────────────────────────────────────────┘

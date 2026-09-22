@@ -171,29 +171,30 @@ boxlite.BoxOptions(memory_mib=2048)  # For complex workloads
 **Subsequent runs:** 1-2 seconds (image cached)
 
 **Optimization:**
-- Pre-pull images: `runtime.create(boxlite.BoxOptions(image="..."))`
+- Pre-pull images: `await runtime.images.pull("...")`
 - Reuse boxes instead of creating new ones
 - Use smaller base images (`alpine:latest` vs `ubuntu:latest`)
 
 ### Can I persist data between boxes?
 
-**Yes**, using persistent disks.
+**Yes.** Keep a box after stop to keep its disk, or mount a volume to share data between boxes.
 
-**Ephemeral (default):**
+**Default:**
 ```python
-boxlite.BoxOptions()  # Data lost when box is removed
+boxlite.BoxOptions()  # The box and its disk are removed when it stops
 ```
 
-**Persistent:**
+**Kept after stop:**
 ```python
 boxlite.BoxOptions(
-    disk_size_gb=10  # 10 GB persistent QCOW2 disk
+    disk_size_gb=10,  # 10 GB QCOW2 disk
+    auto_delete=0,    # keep the box after stop
 )
 
 # Data survives stop/restart
 await box.stop()
 # ... later ...
-box = runtime.get(box_id)  # Disk intact
+box = await runtime.get(box_id)  # Disk intact
 ```
 
 **Also:**
@@ -327,7 +328,6 @@ See [Configuring Networking](./guides/networking.md) for details.
    ```
 
 2. **Disk I/O:**
-   - Use ephemeral storage (faster than QCOW2)
    - Check host disk speed: `dd if=/dev/zero of=test bs=1M count=1024`
 
 3. **Too many boxes:**
@@ -346,7 +346,7 @@ See [Configuring Networking](./guides/networking.md) for details.
 **It depends on host resources.**
 
 **Resource calculation:**
-```
+```text
 Total Memory = (boxes * memory_mib) + overhead
 Total CPUs = boxes * cpus (can oversubscribe)
 

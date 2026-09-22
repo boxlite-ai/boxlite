@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust 1.75+ (stable)
+- Rust 1.88+ (stable)
 - macOS (Apple Silicon) or Linux (x86_64/ARM64) with KVM
 - Python 3.10+ (for Python SDK development)
 
@@ -45,7 +45,7 @@ make dev:python
 
 Build scripts are located in `scripts/`:
 
-```
+```text
 scripts/
 ├── setup/              # Platform-specific setup
 │   ├── macos.sh

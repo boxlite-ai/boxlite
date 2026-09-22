@@ -24,7 +24,8 @@ docker login
 # Correct: "python:3.11-slim"
 # Wrong: "python/3.11-slim"
 
-# Clear cache if corrupted
+# Clear the image cache if corrupted. Box disks are backed by files
+# in it, so remove existing boxes first (boxlite rm).
 rm -rf ~/.boxlite/images/*
 ```
 
@@ -232,21 +233,21 @@ await stdin.close()
 
 3. **Test from inside box:**
    ```python
-   # Start server in box
-   await box.exec("python", "-m", "http.server", "80", background=True)
+   # Start server in a Box from runtime.create; exec returns while it runs
+   server = await box.exec("python", ["-u", "-m", "http.server", "80"])
+   async for line in server.stdout():  # wait until it is listening
+       if "Serving HTTP" in line:
+           break
 
    # Test from host
    import requests
    response = requests.get("http://localhost:8080")
    ```
 
-4. **Check gvproxy:**
+4. **Check the shim:** gvproxy runs inside each box's `boxlite-shim` process.
    ```bash
-   ps aux | grep gvproxy
-   # Should show gvproxy process
-
-   ls ~/.boxlite/gvproxy/
-   # Should contain gvproxy binary
+   ps aux | grep boxlite-shim
+   # Should show one process per running box
    ```
 
 ## "Permission denied" errors
@@ -268,9 +269,6 @@ ls -l /dev/kvm
 # Add user to kvm group
 sudo usermod -aG kvm $USER
 # Logout and login required
-
-# Or temporarily (not recommended)
-sudo chmod 666 /dev/kvm
 ```
 
 **3. Volume mounts:**
