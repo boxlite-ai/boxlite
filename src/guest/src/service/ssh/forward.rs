@@ -630,3 +630,6 @@ mod tests {
         assert_eq!(registry.len(), 0);
     }
 }
+
+#[cfg(test)]
+mod shutdown_tests;

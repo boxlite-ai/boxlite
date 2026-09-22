@@ -3,6 +3,7 @@ use crate::reaper::Reaper;
 use crate::service::exec::{
     exec_handle::ExecHandle, process_instance::ProcessInstance, state::ExecutionState,
 };
+use crate::service::ssh::forwarding_fixture::{completes, ForwardingSession};
 use nix::unistd::Pid;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
@@ -11,6 +12,16 @@ use tokio::sync::oneshot;
 #[test]
 #[ignore = "invoked as an isolated helper subprocess"]
 fn helper_subprocess() {
+    if std::env::var_os("BOXLITE_TEST_IGNORE_TERM").is_some() {
+        // Only this isolated child changes its signal disposition.
+        unsafe {
+            nix::sys::signal::signal(
+                nix::sys::signal::Signal::SIGTERM,
+                nix::sys::signal::SigHandler::SigIgn,
+            )
+            .unwrap();
+        }
+    }
     let socket_path = std::env::var("BOXLITE_TEST_HELPER_SOCKET").unwrap();
     let ingress = std::env::var("BOXLITE_TEST_HELPER_INGRESS")
         .unwrap()
@@ -57,9 +68,23 @@ async fn fixture(
     path: &Path,
     ingress: SocketAddrV4,
 ) -> (RunningHelper, ChildGuard) {
+    fixture_with_signals(server, connection_tasks, path, ingress, false).await
+}
+
+async fn fixture_with_signals(
+    server: Arc<GuestServer>,
+    connection_tasks: Arc<super::super::TaskGroup>,
+    path: &Path,
+    ingress: SocketAddrV4,
+    ignore_term: bool,
+) -> (RunningHelper, ChildGuard) {
     let reaper = Reaper::install();
     let spawned = std::time::Instant::now();
-    let child = Command::new(std::env::current_exe().unwrap())
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    if ignore_term {
+        command.env("BOXLITE_TEST_IGNORE_TERM", "1");
+    }
+    let child = command
         .args([
             "--exact",
             "service::ssh::reverse_streamlocal::shutdown_tests::helper_subprocess",
@@ -446,4 +471,397 @@ async fn shutdown_configure_terminates_revoked_helper() {
 #[tokio::test]
 async fn shutdown_connection_drop_terminates_revoked_helper() {
     shutdown_silent_helper(true, Shutdown::Connection).await;
+}
+
+struct ListenerFixture {
+    root: tempfile::TempDir,
+    server: Arc<GuestServer>,
+    tasks: Arc<super::super::TaskGroup>,
+    listeners: ListenerRegistry,
+    permits: Arc<Semaphore>,
+    ingress: SocketAddrV4,
+    guard: ChildGuard,
+    state: ExecutionState,
+    ssh: ForwardingSession,
+}
+
+impl ListenerFixture {
+    async fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let server = Arc::new(GuestServer::new(crate::layout::GuestLayout::with_base(
+            root.path(),
+        )));
+        let tasks = Arc::new(super::super::TaskGroup::default());
+        let ssh = ForwardingSession::new(server.clone(), tasks.clone()).await;
+        let ingress = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let SocketAddr::V4(address) = ingress.local_addr().unwrap() else {
+            unreachable!()
+        };
+        let path = root.path().join("listener.sock");
+        let (helper, guard) =
+            completes(fixture(server.clone(), tasks.clone(), &path, address)).await;
+        let state = server.registry.get(&helper.execution_id).await.unwrap();
+        let listeners = ListenerRegistry::default();
+        let registration = listeners
+            .register(path.to_str().unwrap().into(), 1, &tasks)
+            .unwrap();
+        let permits = Arc::new(Semaphore::new(1));
+        spawn_listener(
+            ingress,
+            path.to_str().unwrap().into(),
+            "9e3d4f4f-e9e5-4896-a42c-9fe5f53244af".into(),
+            ssh.handle.clone(),
+            permits.clone(),
+            helper,
+            registration,
+        );
+        Self {
+            root,
+            server,
+            tasks,
+            listeners,
+            permits,
+            ingress: address,
+            guard,
+            state,
+            ssh,
+        }
+    }
+
+    fn path(&self) -> std::path::PathBuf {
+        self.root.path().join("listener.sock")
+    }
+
+    async fn finish(self) {
+        completes(self.ssh.close()).await;
+        completes(self.tasks.wait()).await;
+        assert!(self.tasks.is_cancelled());
+        assert!(self
+            .server
+            .registry
+            .get("reverse-helper-test")
+            .await
+            .is_none());
+        assert_eq!(self.listeners.len(), 0);
+        assert_eq!(self.permits.available_permits(), 1);
+        completes(self.state.wait_process()).await;
+        assert_eq!(
+            nix::sys::wait::waitpid(self.guard.pid(), Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
+            Err(nix::errno::Errno::ECHILD)
+        );
+        assert!(TcpStream::connect(self.ingress).await.is_err());
+    }
+}
+
+#[tokio::test]
+async fn listener_revocation_preserves_forwarded_channel_and_response_after_eof() {
+    let _serial = crate::reaper::reap_test_guard().await;
+    completes(async {
+        let mut fixture = ListenerFixture::new().await;
+        let mut unix = UnixStream::connect(fixture.path()).await.unwrap();
+        let opened = fixture.ssh.channels.recv().await.unwrap();
+        assert_eq!(opened.address, fixture.path().to_str().unwrap());
+        opened.reply.accept().await;
+        let mut channel = opened.channel.into_stream();
+        unix.write_all(b"before").await.unwrap();
+        let mut before = [0; 6];
+        channel.read_exact(&mut before).await.unwrap();
+        assert_eq!(&before, b"before");
+        assert!(
+            fixture
+                .listeners
+                .cancel(fixture.path().to_str().unwrap())
+                .await
+        );
+        assert!(!fixture.path().exists());
+        unix.write_all(b"after").await.unwrap();
+        unix.shutdown().await.unwrap();
+        let mut request = Vec::new();
+        channel.read_to_end(&mut request).await.unwrap();
+        assert_eq!(request, b"after");
+        channel.write_all(b"response").await.unwrap();
+        let mut response = [0; 8];
+        unix.read_exact(&mut response).await.unwrap();
+        assert_eq!(&response, b"response");
+        assert!(futures::poll!(std::pin::pin!(fixture.state.wait_process())).is_pending());
+        // The response direction stays open: disconnect must cancel this drain.
+        fixture.finish().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn disconnect_cancels_unconfirmed_channel_and_reaps_listener_helper() {
+    let _serial = crate::reaper::reap_test_guard().await;
+    completes(async {
+        let mut fixture = ListenerFixture::new().await;
+        let _unix = UnixStream::connect(fixture.path()).await.unwrap();
+        let pending = fixture.ssh.channels.recv().await.unwrap();
+        assert_eq!(fixture.permits.available_permits(), 0);
+        // Keep the reply alive without accepting or rejecting it until after
+        // production SshConnection::drop has cancelled and drained its tasks.
+        fixture.finish().await;
+        drop(pending);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn rejected_channel_releases_capacity_for_a_completed_relay() {
+    let _serial = crate::reaper::reap_test_guard().await;
+    completes(async {
+        let mut fixture = ListenerFixture::new().await;
+        let mut rejected = UnixStream::connect(fixture.path()).await.unwrap();
+        let opened = fixture.ssh.channels.recv().await.unwrap();
+        opened
+            .reply
+            .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+            .await;
+        let mut bytes = Vec::new();
+        rejected.read_to_end(&mut bytes).await.unwrap();
+        assert!(bytes.is_empty());
+        drop(rejected);
+        let mut unix = UnixStream::connect(fixture.path()).await.unwrap();
+        let opened = fixture.ssh.channels.recv().await.unwrap();
+        opened.reply.accept().await;
+        let mut channel = opened.channel.into_stream();
+        unix.shutdown().await.unwrap();
+        channel.read_to_end(&mut bytes).await.unwrap();
+        channel.shutdown().await.unwrap();
+        unix.read_to_end(&mut bytes).await.unwrap();
+        assert!(
+            fixture
+                .listeners
+                .cancel(fixture.path().to_str().unwrap())
+                .await
+        );
+        completes(fixture.state.wait_process()).await;
+        fixture.finish().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn invalid_ingress_and_connection_limit_do_not_open_channels() {
+    let _serial = crate::reaper::reap_test_guard().await;
+    completes(async {
+        let fixture = ListenerFixture::new().await;
+        let mut invalid = TcpStream::connect(fixture.ingress).await.unwrap();
+        invalid
+            .write_all(&[b'x'; INGRESS_TOKEN_BYTES])
+            .await
+            .unwrap();
+        let mut bytes = Vec::new();
+        invalid.read_to_end(&mut bytes).await.unwrap();
+        assert!(bytes.is_empty());
+        let permit = fixture.permits.clone().acquire_owned().await.unwrap();
+        let mut limited = TcpStream::connect(fixture.ingress).await.unwrap();
+        limited.read_to_end(&mut bytes).await.unwrap();
+        assert!(bytes.is_empty());
+        drop(permit);
+        fixture.finish().await;
+    })
+    .await;
+}
+
+async fn helper_output_failure(output: Option<Result<ExecOutput, tonic::Status>>) {
+    let _serial = crate::reaper::reap_test_guard().await;
+    completes(async {
+        let root = tempfile::tempdir().unwrap();
+        let server = Arc::new(GuestServer::new(crate::layout::GuestLayout::with_base(
+            root.path(),
+        )));
+        let tasks = Arc::new(super::super::TaskGroup::default());
+        let ssh = ForwardingSession::new(server.clone(), tasks.clone()).await;
+        let ingress = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let SocketAddr::V4(address) = ingress.local_addr().unwrap() else {
+            unreachable!()
+        };
+        let path = root.path().join("output.sock");
+        let (mut helper, guard) = fixture(server.clone(), tasks.clone(), &path, address).await;
+        let state = server.registry.get(&helper.execution_id).await.unwrap();
+        let (sender, receiver) = mpsc::channel(4);
+        let mut original = std::mem::replace(&mut helper.output, receiver);
+        tasks.spawn_tracked(|_| async move { while original.recv().await.is_some() {} });
+        sender.send(Ok(ExecOutput { event: None })).await.unwrap();
+        sender
+            .send(Ok(ExecOutput {
+                event: Some(exec_output::Event::Stderr(boxlite_shared::Stderr {
+                    data: b"diagnostic".to_vec(),
+                    ..Default::default()
+                })),
+            }))
+            .await
+            .unwrap();
+        if let Some(output) = output {
+            sender.send(output).await.unwrap();
+        }
+        drop(sender);
+        let listeners = ListenerRegistry::default();
+        let registration = listeners
+            .register(path.to_str().unwrap().into(), 1, &tasks)
+            .unwrap();
+        spawn_listener(
+            ingress,
+            path.to_str().unwrap().into(),
+            "9e3d4f4f-e9e5-4896-a42c-9fe5f53244af".into(),
+            ssh.handle.clone(),
+            Arc::new(Semaphore::new(1)),
+            helper,
+            registration,
+        );
+        state.wait_process().await;
+        ssh.close().await;
+        tasks.wait().await;
+        assert_eq!(listeners.len(), 0);
+        assert!(server.registry.get("reverse-helper-test").await.is_none());
+        assert_eq!(
+            nix::sys::wait::waitpid(guard.pid(), Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
+            Err(nix::errno::Errno::ECHILD)
+        );
+    })
+    .await;
+}
+
+#[derive(Clone, Copy)]
+enum FailedStartExit {
+    Natural,
+    Term,
+    Kill,
+}
+
+async fn failed_helper_start(expected: FailedStartExit) {
+    let _serial = crate::reaper::reap_test_guard().await;
+
+    completes(async {
+        let root = tempfile::tempdir().unwrap();
+        let server = Arc::new(GuestServer::new(crate::layout::GuestLayout::with_base(
+            root.path(),
+        )));
+        let tasks = Arc::new(super::super::TaskGroup::default());
+        let ingress = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let SocketAddr::V4(address) = ingress.local_addr().unwrap() else {
+            unreachable!()
+        };
+        let (helper, guard) = fixture_with_signals(
+            server.clone(),
+            tasks.clone(),
+            &root.path().join("failed.sock"),
+            address,
+            matches!(expected, FailedStartExit::Kill),
+        )
+        .await;
+        let state = server.registry.get(&helper.execution_id).await.unwrap();
+        let _relay = if matches!(expected, FailedStartExit::Natural) {
+            None
+        } else {
+            let unix = UnixStream::connect(root.path().join("failed.sock"))
+                .await
+                .unwrap();
+            let (mut tcp, _) = ingress.accept().await.unwrap();
+            let mut token = [0; INGRESS_TOKEN_BYTES];
+            tcp.read_exact(&mut token).await.unwrap();
+            Some((unix, tcp))
+        };
+        let RunningHelper {
+            stdin,
+            stdin_task,
+            output,
+            execution_id,
+            registry,
+            ..
+        } = helper;
+        if matches!(expected, FailedStartExit::Natural) {
+            stdin
+                .send(ExecStdin {
+                    execution_id: execution_id.clone(),
+                    data: vec![],
+                    close: true,
+                })
+                .await
+                .unwrap();
+        }
+        drop(stdin);
+        spawn_failed_helper_cleanup(
+            tasks.clone(),
+            server.clone(),
+            registry,
+            execution_id,
+            Some(output),
+            Some(stdin_task),
+        );
+        tasks.wait().await;
+        let exit = state.wait_process().await;
+        use crate::service::exec::exec_handle::ExitStatus;
+        use nix::sys::signal::Signal;
+        match expected {
+            FailedStartExit::Natural => assert!(matches!(exit, ExitStatus::Code(0))),
+            FailedStartExit::Term => assert!(matches!(exit, ExitStatus::Signal(Signal::SIGTERM))),
+            FailedStartExit::Kill => assert!(matches!(exit, ExitStatus::Signal(Signal::SIGKILL))),
+        }
+        assert!(server.registry.get("reverse-helper-test").await.is_none());
+        assert_eq!(
+            nix::sys::wait::waitpid(guard.pid(), Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
+            Err(nix::errno::Errno::ECHILD)
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn invalid_helper_output_removes_listener() {
+    helper_output_failure(Some(Ok(ExecOutput {
+        event: Some(exec_output::Event::Stdout(boxlite_shared::Stdout {
+            data: b"invalid".to_vec(),
+            ..Default::default()
+        })),
+    })))
+    .await;
+}
+
+#[tokio::test]
+async fn helper_output_error_removes_listener() {
+    helper_output_failure(Some(Err(tonic::Status::internal("test output failure")))).await;
+}
+
+#[tokio::test]
+async fn helper_output_eof_removes_listener() {
+    helper_output_failure(None).await;
+}
+
+#[tokio::test]
+async fn failed_helper_start_allows_natural_exit() {
+    failed_helper_start(FailedStartExit::Natural).await;
+}
+
+#[tokio::test]
+async fn failed_helper_start_escalates_to_term() {
+    failed_helper_start(FailedStartExit::Term).await;
+}
+
+#[tokio::test]
+async fn failed_helper_start_escalates_to_kill() {
+    failed_helper_start(FailedStartExit::Kill).await;
+}
+
+#[tokio::test]
+async fn premature_helper_exit_removes_listener_and_releases_execution() {
+    let _serial = crate::reaper::reap_test_guard().await;
+    completes(async {
+        let fixture = ListenerFixture::new().await;
+        assert!(fixture
+            .server
+            .kill_execution("reverse-helper-test", 9, true)
+            .await
+            .unwrap());
+        fixture.state.wait_process().await;
+        // Await the production registry release while SSH is still connected.
+        while fixture.server.registry.exists("reverse-helper-test").await {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(fixture.listeners.len(), 0);
+        assert!(TcpStream::connect(fixture.ingress).await.is_err());
+        fixture.finish().await;
+    })
+    .await;
 }

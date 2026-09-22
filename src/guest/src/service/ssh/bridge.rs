@@ -1517,3 +1517,6 @@ mod tests {
         assert!(!registry.exists("draining").await);
     }
 }
+
+#[cfg(test)]
+mod shutdown_tests;
