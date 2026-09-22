@@ -6,15 +6,18 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/boxlite-ai/common-go/pkg/telemetry"
 	"github.com/boxlite-ai/image-service/cmd/registry-proxy/config"
 	"github.com/boxlite-ai/image-service/internal"
 	"github.com/boxlite-ai/image-service/internal/proxy"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 func main() {
@@ -56,7 +59,7 @@ func run() int {
 	defer signal.Stop(signals)
 
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- proxy.Start(ctx, cfg) }()
+	go func() { serveErr <- proxy.Start(ctx, cfg, controlPlane(cfg)) }()
 
 	return await(logger, signals, serveErr, cancel)
 }
@@ -111,6 +114,19 @@ func initLogger(ctx context.Context, logger *slog.Logger, cfg *config.Config) (*
 		return logger, func() {}, err
 	}
 	return otelLogger, func() { telemetry.ShutdownLogger(otelLogger, provider) }, nil
+}
+
+// controlPlane is the client this proxy asks about callers. Each request
+// carries the caller's own key rather than one of ours, so nothing is
+// authenticated here.
+func controlPlane(cfg *config.Config) *apiclient.APIClient {
+	clientConfig := apiclient.NewConfiguration()
+	clientConfig.Servers = apiclient.ServerConfigurations{{URL: cfg.BoxliteApiUrl}}
+	clientConfig.HTTPClient = &http.Client{
+		Timeout:   cfg.UpstreamTimeout,
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
+	}
+	return apiclient.NewAPIClient(clientConfig)
 }
 
 func telemetryConfig(cfg *config.Config) telemetry.Config {

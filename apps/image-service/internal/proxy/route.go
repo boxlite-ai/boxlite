@@ -19,9 +19,14 @@ type Route struct {
 	// says which runner is calling, never which org: runners are shared and
 	// belong to none, so a runner credential cannot answer "whose image is
 	// this?" and must not be read as if it could.
-	Org      string
-	Upstream oci.Upstream
-	Request  oci.Request
+	Org string
+	// PublishedHost is the registry name the caller wrote. It is kept beside
+	// the resolved endpoint because they differ for Docker Hub, and an operator
+	// allows — and an error message names — the name they know, never
+	// registry-1.docker.io.
+	PublishedHost string
+	Upstream      oci.Upstream
+	Request       oci.Request
 }
 
 // The name the registry proxy publishes is <org>/<upstream host>/<repository…>,
@@ -52,5 +57,10 @@ func ParseRoute(urlPath string) (Route, error) {
 	if err != nil {
 		return Route{}, err
 	}
-	return Route{Org: segments[0], Upstream: upstream, Request: request}, nil
+	return Route{
+		Org:           segments[0],
+		PublishedHost: segments[1],
+		Upstream:      upstream,
+		Request:       request,
+	}, nil
 }

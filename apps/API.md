@@ -45,6 +45,7 @@ import, images, and runtime-wide metrics. They are intentionally absent below;
 | [Hosted BoxLite-compatible API](#hosted-boxlite-compatible-api)           | `apps/api`                   | `/api/v1`                                                                            | `3000`                   |
 | [Runner API](#runner-api)                                                 | `apps/runner`                | `/`                                                                                  | `3003`                   |
 | [Preview proxy API](#preview-proxy-api)                                   | `apps/proxy`                 | `proxy.<domain>`, `<port>-<box>.proxy.<domain>`                                      | `4000`                   |
+| [Registry proxy API](#registry-proxy-api)                                 | `apps/image-service`         | `/v2`                                                                                | `4100`                   |
 | [Telemetry collector API](#telemetry-collector-api)                       | `apps/otel-collector`        | OTLP/HTTP and health listeners                                                       | `4318`, `13133`, `13132` |
 | [Local development stack](#local-development-stack)                       | `apps/infra-local`           | `http://localhost:28080`                                                             | local host ports only    |
 | [Container-based local environment](#container-based-local-environment)   | `apps/scripts`               | containers on `5556`, `5432`, `6379`, `5001`; apps on `3000`, `3001`, `4000`, `8080` | local host ports only    |
@@ -485,6 +486,33 @@ and tunnels them to guest ports is in [`proxy/README.md`](./proxy/README.md).
 | `POST`    | `<any host>/accept-boxlite-preview-warning?redirect={url}` | Records preview-warning acceptance and redirects the browser.                                    |
 | `ANY`     | `<port>-<box>.proxy.<domain>/{path...}`                    | Reverse-proxies HTTP and WebSocket traffic to the selected box port after preview access checks. |
 | `CONNECT` | `<port>-<box>.proxy.<domain>`                              | Opens a bidirectional TCP tunnel through the runner; allowed for public boxes only.              |
+
+</details>
+
+## Registry proxy API
+
+**Service:** `apps/image-service` (binary `cmd/registry-proxy`) · **Base path:**
+`/v2` · **Port:** `4100` in deployments (`REGISTRY_PROXY_PORT` environment
+variable)
+
+The pull half of the OCI distribution protocol, served so a runner can fetch an
+image whose registry credentials only the platform holds. The organization and
+the upstream registry ride in the repository name — `<org>/<host>/<repo…>` —
+because one proxy serves every registry and the path is what says which. A
+manifest is relayed byte for byte and a blob is streamed, so the digest a client
+verifies still covers what the upstream served. How callers are authenticated,
+which upstreams are reachable, and how redirects are judged is in
+[`image-service/README.md`](./image-service/README.md).
+
+<details>
+<summary><b>Registry proxy routes</b> · 4 routes</summary>
+
+| Method       | Path                                                  | What it does                                                                             |
+| ------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `GET`        | `/health`                                             | Reports registry proxy health and version.                                               |
+| `GET` `HEAD` | `/v2/`                                                | The distribution version check; answers an unauthenticated caller with a Basic challenge. |
+| `GET` `HEAD` | `/v2/{org}/{host}/{repository...}/manifests/{ref}`    | Relays the upstream manifest unmodified, with its digest and media type.                 |
+| `GET` `HEAD` | `/v2/{org}/{host}/{repository...}/blobs/{digest}`     | Streams the upstream blob, following a registry's redirect to a permitted address.        |
 
 </details>
 

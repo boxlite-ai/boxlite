@@ -26,4 +26,8 @@ var (
 	ErrInvalidHost = errors.New("invalid registry host")
 	// ErrUnsupportedMethod means the HTTP method is not one a pull may use.
 	ErrUnsupportedMethod = errors.New("unsupported method")
+	// ErrInvalidChallenge means a WWW-Authenticate header cannot be acted on.
+	ErrInvalidChallenge = errors.New("invalid authentication challenge")
+	// ErrTokenRefused means a token endpoint would not issue one.
+	ErrTokenRefused = errors.New("token refused")
 )

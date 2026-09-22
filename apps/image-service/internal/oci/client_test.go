@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 // recordingUpstream answers every request with body and records what it was
@@ -195,6 +197,112 @@ func TestClientRefusesEndpointsThatAreNotHosts(t *testing.T) {
 			Upstream{Endpoint: endpoint, Repository: "acme/app"}, request, nil)
 		if !errors.Is(err, ErrInvalidHost) {
 			t.Errorf("Pull to a host carrying %s failed with %v, want %v", carrying, err, ErrInvalidHost)
+		}
+	}
+}
+
+// A token endpoint is a second host with its own certificate, so the exchange
+// is asserted against a stub that records what it was asked for.
+func newTokenEndpoint(t *testing.T, status int, body string) *recordingUpstream {
+	t.Helper()
+	endpoint := &recordingUpstream{}
+	endpoint.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		endpoint.method = r.Method
+		endpoint.rawPath = r.URL.String()
+		endpoint.header = r.Header.Clone()
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(endpoint.server.Close)
+	return endpoint
+}
+
+func TestExchangeReturnsTheIssuedToken(t *testing.T) {
+	endpoint := newTokenEndpoint(t, http.StatusOK, `{"token":"issued-for-the-pull","expires_in":300}`)
+	challenge := Challenge{Scheme: SchemeBearer, Parameters: map[string]string{
+		"realm":   "https://" + endpoint.endpoint() + "/token",
+		"service": "ghcr.io",
+	}}
+
+	token, err := endpoint.client().Exchange(context.Background(), challenge, PullScope("acme/app"), nil)
+	if err != nil {
+		t.Fatalf("Exchange failed: %v", err)
+	}
+	if token.Value != "issued-for-the-pull" {
+		t.Errorf("token = %q, want the issued one", token.Value)
+	}
+	if token.Lifetime() != 300*time.Second {
+		t.Errorf("lifetime = %v, want 300s", token.Lifetime())
+	}
+	if !strings.Contains(endpoint.rawPath, "scope=repository%3Aacme%2Fapp%3Apull") {
+		t.Errorf("token endpoint saw %q, want the pull scope", endpoint.rawPath)
+	}
+}
+
+// Docker Hub fills access_token rather than the specified token field, so a
+// client that reads only one of them works against ghcr and fails against
+// Docker Hub — the exact shape of failure the endpoint mapping exists to avoid.
+func TestExchangeAcceptsEitherTokenField(t *testing.T) {
+	endpoint := newTokenEndpoint(t, http.StatusOK, `{"access_token":"docker-hub-token"}`)
+	challenge := Challenge{Scheme: SchemeBearer, Parameters: map[string]string{
+		"realm": "https://" + endpoint.endpoint() + "/token",
+	}}
+
+	token, err := endpoint.client().Exchange(context.Background(), challenge, PullScope("library/alpine"), nil)
+	if err != nil {
+		t.Fatalf("Exchange failed: %v", err)
+	}
+	if token.Value != "docker-hub-token" {
+		t.Errorf("token = %q, want the access_token value", token.Value)
+	}
+	// A token endpoint that states no lifetime is read as the specification's
+	// minimum rather than as "forever".
+	if token.Lifetime() != 60*time.Second {
+		t.Errorf("lifetime = %v, want the 60s default", token.Lifetime())
+	}
+}
+
+func TestExchangeForwardsTheCredentialItIsGiven(t *testing.T) {
+	endpoint := newTokenEndpoint(t, http.StatusOK, `{"token":"t"}`)
+	challenge := Challenge{Scheme: SchemeBearer, Parameters: map[string]string{
+		"realm": "https://" + endpoint.endpoint() + "/token",
+	}}
+
+	header := http.Header{"Authorization": {"Basic dXNlcjpwYXNz"}}
+	if _, err := endpoint.client().Exchange(context.Background(), challenge, PullScope("acme/app"), header); err != nil {
+		t.Fatalf("Exchange failed: %v", err)
+	}
+	if got := endpoint.header.Get("Authorization"); got != "Basic dXNlcjpwYXNz" {
+		t.Errorf("token endpoint saw Authorization %q, want the supplied credential", got)
+	}
+}
+
+// A refusal must not carry the rejected credential onward: the body a token
+// endpoint answers with can repeat what it was sent.
+func TestExchangeReportsARefusalWithoutItsBody(t *testing.T) {
+	endpoint := newTokenEndpoint(t, http.StatusUnauthorized, `{"details":"bad password hunter2"}`)
+	challenge := Challenge{Scheme: SchemeBearer, Parameters: map[string]string{
+		"realm": "https://" + endpoint.endpoint() + "/token",
+	}}
+
+	_, err := endpoint.client().Exchange(context.Background(), challenge, PullScope("acme/app"), nil)
+	if !errors.Is(err, ErrTokenRefused) {
+		t.Fatalf("Exchange failed with %v, want %v", err, ErrTokenRefused)
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("the refusal carried the endpoint's body onward: %v", err)
+	}
+}
+
+func TestExchangeRejectsABodyThatIsNotAToken(t *testing.T) {
+	for _, body := range []string{`{"expires_in":300}`, `not json`} {
+		endpoint := newTokenEndpoint(t, http.StatusOK, body)
+		challenge := Challenge{Scheme: SchemeBearer, Parameters: map[string]string{
+			"realm": "https://" + endpoint.endpoint() + "/token",
+		}}
+
+		if _, err := endpoint.client().Exchange(context.Background(), challenge, PullScope("acme/app"), nil); !errors.Is(err, ErrTokenRefused) {
+			t.Errorf("Exchange of %q failed with %v, want %v", body, err, ErrTokenRefused)
 		}
 	}
 }

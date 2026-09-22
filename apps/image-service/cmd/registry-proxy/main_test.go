@@ -218,6 +218,7 @@ func TestRunServesThenDrainsOnSIGTERM(t *testing.T) {
 	previous := slog.Default()
 	t.Cleanup(func() { slog.SetDefault(previous) })
 
+	t.Setenv("BOXLITE_API_URL", "https://api.invalid")
 	t.Setenv("REGISTRY_PROXY_PORT", strconv.Itoa(freePort(t)))
 	t.Setenv("SHUTDOWN_TIMEOUT_SEC", "10")
 	t.Setenv("OTEL_LOGGING_ENABLED", "false")

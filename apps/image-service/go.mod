@@ -3,11 +3,14 @@ module github.com/boxlite-ai/image-service
 go 1.25.4
 
 require (
+	github.com/boxlite-ai/boxlite/libs/api-client-go v0.152.1
 	github.com/boxlite-ai/common-go v0.0.0
 	github.com/gin-gonic/gin v1.10.1
 	github.com/go-playground/validator/v10 v10.27.0
 	github.com/kelseyhightower/envconfig v1.4.0
 	go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin v0.63.0
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0
+	golang.org/x/time v0.14.0
 )
 
 require (
@@ -16,6 +19,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
+	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.10 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -58,7 +62,9 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// common-go is a sibling module in this workspace and is not published, so the
-// version above is a placeholder the replacement satisfies. Stated here rather
-// than left to apps/go.work so this module also builds on its own.
+// Sibling modules in this workspace. common-go is unpublished, so its version
+// above is a placeholder the replacement satisfies. Stated here rather than
+// left to apps/go.work so this module also builds on its own.
 replace github.com/boxlite-ai/common-go => ../libs/common-go
+
+replace github.com/boxlite-ai/boxlite/libs/api-client-go => ../libs/api-client-go

@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"time"
 
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/boxlite-ai/image-service/cmd/registry-proxy/config"
 	"github.com/boxlite-ai/image-service/internal"
+	"github.com/boxlite-ai/image-service/internal/oci"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
@@ -33,7 +35,7 @@ const readHeaderTimeout = 10 * time.Second
 
 // Start runs the registry proxy until ctx is cancelled, then drains in-flight
 // pulls within the configured shutdown timeout.
-func Start(ctx context.Context, cfg *config.Config) error {
+func Start(ctx context.Context, cfg *config.Config, api *apiclient.APIClient) error {
 	address := fmt.Sprintf(":%d", cfg.Port)
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
@@ -41,7 +43,7 @@ func Start(ctx context.Context, cfg *config.Config) error {
 	}
 	slog.Info("Registry proxy is running", "port", cfg.Port, "version", internal.Version)
 
-	return serve(ctx, listener, NewRouter(cfg), time.Duration(cfg.ShutdownTimeoutSec)*time.Second)
+	return serve(ctx, listener, NewRouter(cfg, api), time.Duration(cfg.ShutdownTimeoutSec)*time.Second)
 }
 
 // serve answers on listener until ctx is cancelled, then stops accepting and
@@ -69,7 +71,7 @@ func serve(ctx context.Context, listener net.Listener, handler http.Handler, dra
 
 // NewRouter builds the registry proxy's HTTP surface. It is separate from Start
 // so the surface can be exercised without binding a port.
-func NewRouter(cfg *config.Config) *gin.Engine {
+func NewRouter(cfg *config.Config, api *apiclient.APIClient) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 
 	router := gin.New()
@@ -81,5 +83,21 @@ func NewRouter(cfg *config.Config) *gin.Engine {
 	router.GET(HealthPath, func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "version": internal.Version})
 	})
+
+	// One client for pulls, redirects and token exchanges alike: they share the
+	// address rule and the connection pool, and a token endpoint is as much an
+	// upstream as the registry that named it.
+	upstream := oci.NewClient(newUpstreamClient(routable, cfg.UpstreamTimeout))
+	proxy := &registryProxy{
+		upstream:  upstream,
+		runners:   newRunnerAuthenticator(api, cfg.CredentialTTL, cfg.RejectionTTL),
+		allowlist: newUpstreamAllowlist(cfg.UpstreamHosts),
+		limits:    newPullLimiter(cfg.PullsPerSecond, cfg.PullBurst, cfg.TrackedMeters),
+		tokens:    newTokenBroker(upstream),
+	}
+	// GET and HEAD share one handler: the distribution protocol answers both on
+	// the manifest endpoint, and a HEAD is a GET whose body nobody reads.
+	router.GET(oci.PathPrefix+"*path", proxy.handle)
+	router.HEAD(oci.PathPrefix+"*path", proxy.handle)
 	return router
 }

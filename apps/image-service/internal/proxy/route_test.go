@@ -20,9 +20,10 @@ func TestParseRouteSplitsTheOrgAndUpstreamOutOfTheName(t *testing.T) {
 			name: "ghcr",
 			path: "/v2/acme/ghcr.io/acme/app/manifests/1.2",
 			want: Route{
-				Org:      "acme",
-				Upstream: oci.Upstream{Endpoint: "ghcr.io", Repository: "acme/app"},
-				Request:  oci.Request{Name: "acme/ghcr.io/acme/app", Kind: oci.KindManifest, Reference: "1.2"},
+				Org:           "acme",
+				PublishedHost: "ghcr.io",
+				Upstream:      oci.Upstream{Endpoint: "ghcr.io", Repository: "acme/app"},
+				Request:       oci.Request{Name: "acme/ghcr.io/acme/app", Kind: oci.KindManifest, Reference: "1.2"},
 			},
 		},
 		{
@@ -30,9 +31,10 @@ func TestParseRouteSplitsTheOrgAndUpstreamOutOfTheName(t *testing.T) {
 			name: "a repository nested several levels down",
 			path: "/v2/acme/ghcr.io/acme/team/app/blobs/sha256:ab12cd34",
 			want: Route{
-				Org:      "acme",
-				Upstream: oci.Upstream{Endpoint: "ghcr.io", Repository: "acme/team/app"},
-				Request:  oci.Request{Name: "acme/ghcr.io/acme/team/app", Kind: oci.KindBlob, Reference: "sha256:ab12cd34"},
+				Org:           "acme",
+				PublishedHost: "ghcr.io",
+				Upstream:      oci.Upstream{Endpoint: "ghcr.io", Repository: "acme/team/app"},
+				Request:       oci.Request{Name: "acme/ghcr.io/acme/team/app", Kind: oci.KindBlob, Reference: "sha256:ab12cd34"},
 			},
 		},
 		{
@@ -41,8 +43,9 @@ func TestParseRouteSplitsTheOrgAndUpstreamOutOfTheName(t *testing.T) {
 			name: "an org id that is a uuid",
 			path: "/v2/3f2b7a10-5c9e-4e21-9a44-8b1d6e0f7c35/ghcr.io/acme/app/manifests/1.2",
 			want: Route{
-				Org:      "3f2b7a10-5c9e-4e21-9a44-8b1d6e0f7c35",
-				Upstream: oci.Upstream{Endpoint: "ghcr.io", Repository: "acme/app"},
+				Org:           "3f2b7a10-5c9e-4e21-9a44-8b1d6e0f7c35",
+				PublishedHost: "ghcr.io",
+				Upstream:      oci.Upstream{Endpoint: "ghcr.io", Repository: "acme/app"},
 				Request: oci.Request{
 					Name:      "3f2b7a10-5c9e-4e21-9a44-8b1d6e0f7c35/ghcr.io/acme/app",
 					Kind:      oci.KindManifest,

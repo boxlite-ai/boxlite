@@ -23,7 +23,7 @@ import (
 // non-200 stops every deployment from ever reporting ready.
 func TestRouterServesHealthWithTheRunningVersion(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	NewRouter(&config.Config{}).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, HealthPath, nil))
+	NewRouter(&config.Config{}, nil).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, HealthPath, nil))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("GET %s = %d, want 200", HealthPath, recorder.Code)
@@ -44,14 +44,36 @@ func TestRouterServesHealthWithTheRunningVersion(t *testing.T) {
 	}
 }
 
-// /v2/ belongs to the distribution protocol and no handler claims it yet, so it
-// must not be answered by accident.
-func TestRouterDoesNotYetServeTheDistributionRoot(t *testing.T) {
+// A client reads the version check to decide whether to send a credential at
+// all. Answered 200 with no challenge, it concludes none is wanted and sends
+// none, and every pull after it is refused for a reason the operator cannot see
+// from the configuration — so an unauthenticated version check must challenge.
+func TestRouterChallengesAnUnauthenticatedVersionCheck(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	NewRouter(&config.Config{}).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v2/", nil))
+	NewRouter(&config.Config{}, nil).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v2/", nil))
 
-	if recorder.Code != http.StatusNotFound {
-		t.Errorf("GET /v2/ = %d, want 404 until the pull endpoints land", recorder.Code)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /v2/ = %d, want 401", recorder.Code)
+	}
+	if got := recorder.Header().Get("Www-Authenticate"); got != `Basic realm="`+Realm+`"` {
+		t.Errorf("challenge = %q, want a Basic challenge naming this proxy", got)
+	}
+}
+
+// A path that is not a pull endpoint must not be mistaken for one.
+func TestRouterDoesNotServeWritesOrDiscovery(t *testing.T) {
+	router := NewRouter(&config.Config{}, nil)
+
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPut, "/v2/acme/ghcr.io/acme/app/manifests/1.2", nil),
+		httptest.NewRequest(http.MethodPost, "/v2/acme/ghcr.io/acme/app/blobs/uploads/", nil),
+		httptest.NewRequest(http.MethodDelete, "/v2/acme/ghcr.io/acme/app/manifests/1.2", nil),
+	} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusNotFound {
+			t.Errorf("%s %s = %d, want 404", request.Method, request.URL.Path, recorder.Code)
+		}
 	}
 }
 
@@ -119,7 +141,7 @@ func TestServeStopsListeningAfterTheDrain(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
-	go func() { served <- serve(ctx, listener, NewRouter(&config.Config{}), 5*time.Second) }()
+	go func() { served <- serve(ctx, listener, NewRouter(&config.Config{}, nil), 5*time.Second) }()
 
 	response, err := http.Get("http://" + address + HealthPath)
 	if err != nil {
@@ -159,7 +181,7 @@ func TestStartFailsOnAPortItCannotBind(t *testing.T) {
 	defer cancel()
 
 	port := held.Addr().(*net.TCPAddr).Port
-	err = Start(ctx, &config.Config{Port: port, ShutdownTimeoutSec: 1})
+	err = Start(ctx, &config.Config{Port: port, ShutdownTimeoutSec: 1}, nil)
 	if err == nil {
 		t.Fatalf("Start bound port %d although it is already held", port)
 	}
