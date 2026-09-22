@@ -62,8 +62,51 @@ The first label of the host is `<port>-<id>`, where `<id>` takes one of three fo
 | `<box ID>` | Raw box ID, kept for terminal URLs on port 22222                        | `getPortPreviewUrl`                                                                                |
 | `<token>`  | Signed preview token, which the API resolves to a box ID               | `getSignedPortPreviewUrl`                                                                          |
 
-A host without a `<port>-` label serves only the utility routes listed in
+A host without a `<port>-` or `app-<name>` label serves only the utility routes listed in
 [`apps/API.md`](../API.md#preview-proxy-api).
+
+## Official box endpoints
+
+The API can bind `app-<name>.<proxy domain>` to a box and guest port. These
+single-label names reuse the deployment's existing wildcard DNS record and TLS
+certificate. A regional proxy URL takes precedence over the global proxy domain.
+
+```http
+PUT /api/box-endpoints/fleet
+Authorization: Bearer <api-key>
+Content-Type: application/json
+
+{"boxIdOrName":"fleet","port":8080}
+```
+
+The response includes `url`, for example `https://app-fleet.proxy.example.com`.
+Listing uses `GET /api/box-endpoints`; `DELETE /api/box-endpoints/fleet` revokes
+the binding. Mutations require `write:boxes` in the selected organization.
+Names are globally unique, 3–48 lowercase letters, digits or hyphens, starting
+with a letter and ending with a letter or digit. Ports are 1–65535 except 22222.
+
+The proxy resolves the binding through `GET /api/box-endpoints/resolve/{name}`
+with its service credential, checks the request Host against the assigned URL,
+then uses the existing authentication and runner tunnel path. Regional proxy
+credentials resolve only bindings in their region. Lookup is bounded to five
+seconds and is not cached: rebinding and revocation affect the next request;
+existing streams may finish. API lookup failures fail closed.
+
+A binding does not change box visibility. Private boxes retain preview
+authentication, and CONNECT remains available only for public boxes. To publish
+an unauthenticated service, make its box public separately. HTTP paths, query
+strings, Host and WebSocket upgrades are preserved.
+
+Rebinding within the same organization and region keeps the URL. Revocation or
+box deletion retains the name reservation to prevent another tenant taking over
+the origin. Ownership or region changes on the box invalidate resolution.
+Issued URLs are persisted; operators must retain their DNS/proxy origin when
+changing deployment configuration. Apply the pre-deploy migration and deploy
+the API before deploying the proxy.
+
+Custom domains are outside this API: a CNAME alone neither changes browser
+TLS/SNI nor registers its Host. A customer-managed reverse proxy must terminate
+TLS for the custom domain and send the official hostname as upstream Host/SNI.
 
 ## Request paths
 
@@ -117,7 +160,9 @@ re-checks it with the API.
 | Situation                                                  | HTTP or WebSocket                                                   | `CONNECT`                    |
 | ---------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------- |
 | The box is private                                         | `307` to the OIDC login unless a credential works, for API clients too | `403`, whatever the credential |
-| The host has no `<port>-<id>` label                        | `404`, except the utility routes                                    | `400`                        |
+| The host has neither a preview label nor a resolved endpoint | `404`, except the utility routes                                 | `400`                        |
+| An `app-` binding is invalid, revoked, or has a different Host | `404`                                                           | `404`                        |
+| An `app-` binding lookup fails                             | `502`                                                              | `502`                        |
 | The API still fails the visibility check after its retries | `400`                                                               | `502`                        |
 | The runner or the guest port is unreachable                | `502`                                                               | `502`                        |
 
@@ -164,6 +209,7 @@ is internal and changes together with the API and the runner.
 | Service | Call                                                                                                     | Credential                                              |
 | ------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | API     | `GET /api/config` at startup, for unset OIDC settings                                                    | `PROXY_API_KEY`                                         |
+| API     | `GET /api/box-endpoints/resolve/{name}` for official hostnames                                          | `PROXY_API_KEY`                                         |
 | API     | `GET /api/preview/{boxId}/public`, `/validate/{token}`; `GET /api/preview/{token}/{port}/box-id`         | `PROXY_API_KEY`                                         |
 | API     | `GET /api/preview/{boxId}/access`                                                                        | The caller's bearer token                               |
 | API     | `GET /api/runners/by-box/{boxId}`, `POST /api/box/{boxId}/last-activity`                                 | `PROXY_API_KEY`                                         |
@@ -191,11 +237,8 @@ working directory override it, but loading stops at the first file that is missi
 
 ## Build and test
 
-```bash
-cd apps/proxy
-go build ./cmd/proxy
-go test ./...
-```
+From the repository root, run `make test:apps:proxy` (optionally
+`FILTER=Endpoint` for the official-hostname tests).
 
 From `apps/`, the Nx project `proxy` wraps the same commands in its `build`, `serve`, `test`, and
 `lint` targets ([`project.json`](project.json)). `make build:apps` and `make test:apps` cover the

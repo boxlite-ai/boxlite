@@ -14,7 +14,7 @@ The model is implementation-grounded:
 - Column types, constraints, and index definitions come from the migrations in
   [`api/src/migrations`](./api/src/migrations/): the baseline
   `1741087887225-migration.ts` creates 17 tables, and the
-  [`pre-deploy`](./api/src/migrations/pre-deploy/) set adds 5 more.
+  [`pre-deploy`](./api/src/migrations/pre-deploy/) set includes the official endpoint bindings.
 - Satellite stores come from [`dex/config.yaml`](./dex/config.yaml),
   [`otel-collector/config.yaml`](./otel-collector/config.yaml), and the
   ClickHouse queries in
@@ -27,7 +27,7 @@ control plane only through `runner` telemetry columns and `job` results.
 
 ## Overview
 
-The 21 tables sort into three planes. **Tenancy** is who a caller is and what
+The tables sort into three planes. **Tenancy** is who a caller is and what
 they may do; **fleet** is the microVMs and the machines that run them;
 **metering** is what gets billed.
 
@@ -48,6 +48,7 @@ flowchart LR
 
     subgraph fleet["Fleet"]
         t_box["box"]
+        t_endpoint["box_endpoint"]
         t_activity["box_last_activity"]
         t_migration["box_migration"]
         t_runner["runner"]
@@ -72,6 +73,9 @@ flowchart LR
     t_assigninv ==>|"roleId"| t_role
     t_activity ==>|"boxId"| t_box
     t_migration ==>|"boxId"| t_box
+    t_endpoint ==>|"boxId · SET NULL"| t_box
+    t_endpoint -.->|"organizationId"| t_org
+    t_endpoint -.->|"region"| t_region
 
     t_orguser -.->|"userId"| t_user
     t_apikey -.->|"organizationId, userId"| t_org
@@ -96,8 +100,8 @@ box request is matched against the pool by shape, not by id.
 
 ## Referential integrity
 
-The schema declares **9 foreign keys across 21 tables**. All of them live
-inside the tenancy cluster or on the two tables owned outright by a box.
+Foreign keys live inside the tenancy cluster, on the tables owned outright
+by a box, and on official endpoint bindings whose targets can be deleted.
 Every edge that crosses a plane boundary — including `box.organizationId`,
 the most widely joined column in the system — is a bare `uuid` or
 `character varying` column with no constraint behind it.
@@ -118,6 +122,7 @@ that no longer resolves.
 | `organization_role_assignment_invitation`| `roleId`                     | `organization_role.id`         | foreign key | `NO ACTION` |
 | `box_last_activity`                      | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
 | `box_migration`                          | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
+| `box_endpoint` | `boxId` | `box.id` | foreign key | `SET NULL` |
 | `organization_user`                      | `userId`                     | `user.id`                      | application | — |
 | `api_key`                                | `organizationId`, `userId`   | `organization.id`, `user.id`   | application | — |
 | `webhook_initialization`                 | `organizationId`             | `organization.id`              | application | — |
@@ -382,6 +387,26 @@ or `archived`.
 **Other indexes:** `(state)` · `(desiredState)` · `(runnerId)` ·
 `(runnerId, state)` · `(organizationId)` · `(region)` ·
 `(cpu, mem, disk, gpu)` · `(authToken)` · `(image)`.
+
+### `box_endpoint`
+
+Official hostnames bound to a box port. The primary key reserves a globally
+unique name even after revocation or box deletion. The service checks that the
+current box organization and region still match before resolving a binding.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `name` | `varchar(48)` | Primary key; lowercase DNS label, 3–48 characters, starts with a letter, ends alphanumeric |
+| `organizationId` | `uuid` | Owning organization; indexed; application reference |
+| `boxId` | `varchar(12)` | Nullable, indexed FK to `box.id`, `ON DELETE SET NULL` |
+| `region` | `varchar` | Original region; application reference; rebinds cannot change it |
+| `port` | `integer` | Check: 1–65535 excluding 22222 |
+| `url` | `varchar` | Issued URL; remains stable on rebind |
+| `enabled` | `boolean` | Default true; false after explicit revocation |
+| `createdAt`, `updatedAt` | `timestamptz` | Default now |
+
+Migration: `1790076000000-add-box-endpoints-migration.ts` in `pre-deploy`.
+There is no binding cache in the proxy; existing streams may finish after revocation.
 
 ### `runner`
 

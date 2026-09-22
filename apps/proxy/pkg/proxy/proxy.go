@@ -184,7 +184,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 			return
 		}
 
-		_, _, _, err := proxy.parseHost(ctx.Request.Host)
+		_, _, _, err := proxy.parseRequestHost(ctx.Request)
 		// if the host is not valid, we don't proxy the request
 		if err != nil {
 			switch ctx.Request.Method {
@@ -210,7 +210,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", config.ProxyPort),
-		Handler:           connectAwareHandler(http.HandlerFunc(proxy.handleTunnelConnect), router, shutdownWg),
+		Handler:           proxy.withBoxEndpoint(connectAwareHandler(http.HandlerFunc(proxy.handleTunnelConnect), router, shutdownWg)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

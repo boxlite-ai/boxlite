@@ -137,7 +137,7 @@ func (p *Proxy) getAuthUrl(ctx *gin.Context, boxId string) (string, error) {
 		return "", fmt.Errorf("failed to initialize OIDC endpoint: %w", err)
 	}
 
-	_, _, baseHost, err := p.parseHost(ctx.Request.Host)
+	_, _, baseHost, err := p.parseRequestHost(ctx.Request)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse request host: %w", err)
 	}

@@ -52,7 +52,7 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 	// Extract port and box ID from the host header.
 	// Expected format: 1234-<boxId | token>.proxy.domain
 	var err error
-	targetPort, boxIdOrSignedToken, _, err = p.parseHost(ctx.Request.Host)
+	targetPort, boxIdOrSignedToken, _, err = p.parseRequestHost(ctx.Request)
 	if err != nil {
 		ctx.Error(common_errors.NewBadRequestError(err))
 		return nil, err

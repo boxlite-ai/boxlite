@@ -64,6 +64,8 @@ help:
 	@echo "    make test:integration:c     - Run C SDK integration tests (requires VM)"
 	@echo "    make test:all:c             - Run C SDK full suite (unit + integration)"
 	@echo "    make test:apps              - Run the apps workspace test matrix"
+	@echo "    make test:apps:api          - Run API tests (TEST_PATH=path pattern, FILTER=test name)"
+	@echo "    make test:apps:proxy        - Run preview proxy tests (FILTER=test name)"
 	@echo "    make test:skill:boxlite-diagrams - Run diagram skill validator tests"
 	@echo "    make test:e2e:setup         - Bootstrap local stack (PG/Redis/Registry/API/Runner) + fixture data; idempotent"
 	@echo "    make test:e2e               - Run E2E suite (SDK→API→Runner→VM); see apps/e2e/README.md"

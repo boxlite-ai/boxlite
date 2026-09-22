@@ -79,7 +79,7 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 }
 
 func (p *Proxy) tunnelTarget(request *http.Request) (string, uint16, error) {
-	port, boxID, _, err := p.parseHost(request.Host)
+	port, boxID, _, err := p.parseRequestHost(request)
 	if err != nil || boxID == "" {
 		return "", 0, fmt.Errorf("invalid tunnel host")
 	}

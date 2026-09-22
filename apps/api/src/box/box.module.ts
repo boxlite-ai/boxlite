@@ -5,6 +5,10 @@
  */
 
 import { Module } from '@nestjs/common'
+import { BoxEndpoint } from './entities/box-endpoint.entity'
+import { BoxEndpointController } from './controllers/box-endpoint.controller'
+import { BoxEndpointService } from './services/box-endpoint.service'
+import { BoxEndpointProxyGuard } from './guards/box-endpoint-proxy.guard'
 import { DataSource } from 'typeorm'
 import { BoxController } from './controllers/box.controller'
 import { BoxService } from './services/box.service'
@@ -58,10 +62,19 @@ import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.s
     UserModule,
     OrganizationModule,
     RegionModule,
-    TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, Region, Job, BoxLastActivity, BoxMigration]),
+    TypeOrmModule.forFeature([Box, BoxEndpoint, Runner, WarmPool, Volume, Region, Job, BoxLastActivity, BoxMigration]),
   ],
-  controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
+  controllers: [
+    BoxController,
+    BoxEndpointController,
+    RunnerController,
+    PreviewController,
+    VolumeController,
+    JobController,
+  ],
   providers: [
+    BoxEndpointService,
+    BoxEndpointProxyGuard,
     BoxService,
     BoxManager,
     BoxWarmPoolService,

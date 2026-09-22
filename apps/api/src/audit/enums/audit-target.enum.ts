@@ -12,6 +12,7 @@ export enum AuditTarget {
   ORGANIZATION_USER = 'organization_user',
   RUNNER = 'runner',
   BOX = 'box',
+  BOX_ENDPOINT = 'box_endpoint',
   USER = 'user',
   VOLUME = 'volume',
   REGION = 'region',

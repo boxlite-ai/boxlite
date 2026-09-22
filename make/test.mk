@@ -542,6 +542,14 @@ test\:apps: _ensure-apps-deps dev\:go
 	@$(MAKE) test:apps:infra
 	@cd apps && GOFLAGS=-tags=boxlite_dev yarn nx run-many --target=test --all --parallel=$$(getconf _NPROCESSORS_ONLN) $(if $(FILTER),-- --testNamePattern '$(FILTER)',)
 
+PHONY_TARGETS += test\:apps\:api test\:apps\:proxy
+
+test\:apps\:api: _ensure-apps-deps
+	@cd apps/api && yarn jest --runInBand $(if $(TEST_PATH),--testPathPatterns '$(TEST_PATH)',) $(if $(FILTER),--testNamePattern '$(FILTER)',)
+
+test\:apps\:proxy:
+	@cd apps/proxy && go test ./... $(if $(FILTER),-run '$(FILTER)',)
+
 test\:rest\:inventory: _ensure-apps-deps
 	@cd apps && yarn node ../scripts/test/rest/inventory.mjs
 
