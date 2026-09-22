@@ -66,8 +66,14 @@ enable_testing()
 
 # Register tests
 foreach(TARGET ${TEST_TARGETS})
-    add_test(NAME ${TARGET} COMMAND ${TARGET})
+    add_test(NAME ${TARGET} COMMAND bash
+        "${BOXLITE_ROOT}/scripts/test/run-c-test.sh" "$<TARGET_FILE:${TARGET}>")
 endforeach()
+
+add_test(NAME test_c_test_wrapper COMMAND bash
+    "${BOXLITE_ROOT}/scripts/test/run-c-test.sh" bash
+    "${BOXLITE_ROOT}/scripts/test/test-c-test-wrapper.sh")
+set_tests_properties(test_c_test_wrapper PROPERTIES LABELS "unit" TIMEOUT 30)
 
 # Label integration tests (require VM)
 set_tests_properties(test_simple_api PROPERTIES LABELS "integration")
