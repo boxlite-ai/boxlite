@@ -29,6 +29,7 @@ import (
 	"github.com/boxlite-ai/runner/pkg/api/docs"
 	"github.com/boxlite-ai/runner/pkg/api/middlewares"
 	"github.com/boxlite-ai/runner/pkg/common"
+	"github.com/boxlite-ai/runner/pkg/runner/v2/poller"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
@@ -51,6 +52,7 @@ type ApiServerConfig struct {
 	TLSKeyFile  string
 	EnableTLS   bool
 	LogRequests bool
+	JobPoller   *poller.Service
 }
 
 func NewApiServer(config ApiServerConfig) *ApiServer {
@@ -62,6 +64,7 @@ func NewApiServer(config ApiServerConfig) *ApiServer {
 		tlsKeyFile:  config.TLSKeyFile,
 		enableTLS:   config.EnableTLS,
 		logRequests: config.LogRequests,
+		jobPoller:   config.JobPoller,
 	}
 }
 
@@ -75,6 +78,7 @@ type ApiServer struct {
 	httpServer  *http.Server
 	router      *gin.Engine
 	logRequests bool
+	jobPoller   *poller.Service
 }
 
 func (a *ApiServer) Start(ctx context.Context) error {
@@ -117,6 +121,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 
 	protected := a.router.Group("/")
 	protected.Use(middlewares.AuthMiddleware(a.apiToken))
+	a.registerJobConcurrencyRoutes()
 
 	metricsController := protected.Group("/metrics")
 	{
