@@ -1404,6 +1404,31 @@ mod tests {
         RestBox::new(client_for(port), resp.to_box_info().expect("to_box_info"))
     }
 
+    #[tokio::test]
+    async fn ssh_control_is_unsupported_on_rest() {
+        let backend = Arc::new(rest_box_for(1, "ssh-test"));
+        let sandbox = crate::LiteBox::new(backend.clone(), backend.clone(), backend);
+        let ssh = sandbox.ssh();
+        drop(sandbox);
+        assert!(matches!(
+            ssh.status().await,
+            Err(BoxliteError::Unsupported(_))
+        ));
+        assert!(matches!(
+            ssh.disable().await,
+            Err(BoxliteError::Unsupported(_))
+        ));
+        assert!(matches!(
+            ssh.configure(crate::SshConfig {
+                listen_address: String::new(),
+                host_private_key: String::new(),
+                accounts: vec![],
+            })
+            .await,
+            Err(BoxliteError::Unsupported(_))
+        ));
+    }
+
     /// Send a minimal HTTP/1.1 200 OK with a JSON body.
     async fn write_status_response(stream: &mut TcpStream, body: &str) {
         let resp = format!(
