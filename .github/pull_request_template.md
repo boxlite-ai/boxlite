@@ -3,7 +3,8 @@
 <!-- Explain the problem and result. Use bullets, a real example, a table,
 call graph, sequence diagram, or short prose—whichever is clearest.
 These headings are optional. No diagram or source annotation is required.
-Keep the whole body within 200 words and 2000 characters. No walls of text. -->
+Keep the whole body within 120 words, with no paragraph over 80 and no list
+item over 40. No walls of text. -->
 
 ## Verification
 

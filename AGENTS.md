@@ -42,7 +42,7 @@
 - High-cohesion facade (the shared Design rule's exemplar here): [`ImageManager`](src/boxlite/src/images/manager.rs) exposes `new`/`pull`/`list`/`load_from_local` and hides `Arc<ImageStore>`, blob sources, and manifest handling.
 - Facade exception — stateless utilities: [`jailer/common/`](src/boxlite/src/jailer/common/) async-signal-safe helpers.
 
-<!-- agent-tooling:guidance:begin rev=9161969b137c sha256=c08584e9d27d -->
+<!-- agent-tooling:guidance:begin rev=80d15440ee9f sha256=8c5c935f87eb -->
 
 > Managed by **boxlite-ai/agent-tooling** — do not edit between the markers. Change `plugins/boxlite-agent-tooling/guidance/workflow.md` there, then rerun `./.agent-tooling/install.sh` here.
 
@@ -119,7 +119,7 @@ Every change goes: understand → research → design → implement → test →
 **Communication**
 
 - Help the human understand quickly. Choose a call graph, sequence diagram, real example, bullets, table, or short prose—whichever explains the point best. These are recommendations, not mandatory forms; do not force a diagram, source annotations, or fixed sections.
-- Walls of text are always forbidden. Keep paragraphs and items short, remove repetition, and link detailed evidence. Requests for depth allow more focused sections, not dense text. Keep material risks, failures, and uncertainty visible.
+- Walls of text are always forbidden. Keep paragraphs and items short, remove repetition, and link detailed evidence. GitHub PRs (including drafts), issues, comments, reviews, discussions, and release notes use the same reply-summary prompt. Requests for depth allow more focused sections, not dense text. Keep material risks, failures, and uncertainty visible.
 - Every PR description must explain how the change produces its intended result through the key steps or decisions, using the form best suited to that PR. Listing modified files is not an explanation. State the problem, resulting behavior, and decisive verification once. Review the explanation against the diff, including for drafts and after description edits. Link detailed evidence; omit work logs and exhaustive test counts. Repository templates are starting points.
 
 Adapted from Clean Code (Robert C. Martin) via the polygala-inc AGENTS.md distillation.

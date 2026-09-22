@@ -167,16 +167,18 @@ point; choose bullets, a real example, a table, a diagram, or short prose by cla
 No diagram, source annotation, or section order is mandatory.
 
 - Explain the problem and resulting behavior once. Keep the whole description within
-  **200 words and 2000 characters**, including diagrams and Markdown. No walls of text.
+  **120 words**, fenced blocks included, with no paragraph over 80 words and no list
+  item over 40. Table pipes and box-drawing characters do not count as words. No walls of text.
 - Keep material risks and untested behavior visible. Link detailed evidence instead
   of pasting logs, file inventories, or exhaustive test counts.
 - Include decisive verification as `command → observed result`. For a fix, briefly
   report the observed failure with all production changes reverted and the pass with
   the complete fix restored. Link the relevant issue when one exists.
 
-The shared hook checks nonempty, inspectable bodies for non-draft creates and
-body edits. Draft creates, body-preserving operations, web/API edits, and later bot
-additions are outside this content check; the writing rules still apply.
+The shared hook applies these limits to the text agents post to GitHub: PR bodies,
+drafts included, and issues, comments, reviews, discussions, and release notes, whether
+sent through `gh` flags or API `body=` fields. It rejects text it cannot inspect. Later
+bot additions are outside this check; the writing rules still apply.
 
 Illustrative example; behavior and test results are hypothetical:
 
