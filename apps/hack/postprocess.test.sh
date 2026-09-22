@@ -8,6 +8,7 @@
 #   - TS: an existing User-Agent is replaced, not duplicated
 #   - TS: generated API imports are pruned to the identifiers each file uses
 #   - TS: generated parameter docs keep required/default and enum cells valid
+#   - TS: listOrganizations keeps Axios options first and referredCode second
 #   - TS: missing header, or neither User-Agent nor spread -> non-zero exit
 #   - Go: UserAgent literal replaced with the ClientVersion expression
 #   - Go: version.go written with the go:embed accessor for the package
@@ -93,6 +94,40 @@ let from: Date; //Inclusive start. (optional) (default to undefined)
 | **granularity** | [**&#39;hour&#39; | &#39;day&#39;**]**Array<&#39;hour&#39; &#124; &#39;day&#39; &#124; &#39;11184809&#39;>** | Spacing between snapshots. | (optional) defaults to 'day'|
 | **states** | **Array<&#39;creating&#39; &#124; &#39;started&#39; &#124; &#39;archived&#39; &#124; &#39;11184809&#39;>** | States to include. | (optional) defaults to undefined|
 EOF
+
+  cat > "$dir/api/organizations-api.ts" <<'EOF'
+/**
+ * @param {string} [referredCode] Invitation code.
+ * @param {*} [options] Override http request option.
+ */
+const creator = {
+    listOrganizations: async (referredCode?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => ({})
+};
+const fp = {
+    async listOrganizations(referredCode?: string, options?: RawAxiosRequestConfig) {
+        return creator.listOrganizations(referredCode, options);
+    }
+};
+const factory = {
+    listOrganizations(referredCode?: string, options?: RawAxiosRequestConfig) {
+        return fp.listOrganizations(referredCode, options);
+    }
+};
+class OrganizationsApi {
+    public listOrganizations(referredCode?: string, options?: RawAxiosRequestConfig) {
+        return factory.listOrganizations(referredCode, options);
+    }
+}
+EOF
+
+  cat > "$dir/docs/OrganizationsApi.md" <<'EOF'
+# **listOrganizations**
+> Array<Organization> listOrganizations()
+const response = await apiInstance.listOrganizations(
+    referredCode
+);
+| **referredCode** | **string** | Invitation code. | (optional)|
+EOF
 }
 
 ts_dir="$TMP_ROOT/ts-insert"
@@ -143,6 +178,25 @@ check "TS: scalar enum docs render one escaped union cell" $?
 grep -q "| \*\*states\*\* | \*\*Array<&#39;creating&#39; &#124; &#39;started&#39; &#124; &#39;archived&#39;>\*\* |" "$ts_dir/docs/UsageApi.md" &&
   ! grep -q 'states.*11184809' "$ts_dir/docs/UsageApi.md"
 check "TS: array enum docs omit the generator fallback member" $?
+
+grep -Fq 'listOrganizations: async (options: RawAxiosRequestConfig = {}, referredCode?: string)' "$ts_dir/api/organizations-api.ts" &&
+  [[ "$(grep -Fc 'listOrganizations(options?: RawAxiosRequestConfig, referredCode?: string)' "$ts_dir/api/organizations-api.ts")" -eq 3 ]]
+check "TS: all listOrganizations entry points keep options first" $?
+
+[[ "$(grep -Fc '.listOrganizations(options, referredCode)' "$ts_dir/api/organizations-api.ts")" -eq 3 ]]
+check "TS: listOrganizations forwards options and referredCode in order" $?
+
+node - "$ts_dir" <<'NODE'
+const assert = require('node:assert/strict')
+const { readFileSync } = require('node:fs')
+const api = readFileSync(`${process.argv[2]}/api/organizations-api.ts`, 'utf8')
+const docs = readFileSync(`${process.argv[2]}/docs/OrganizationsApi.md`, 'utf8')
+assert.match(api, /\* @param \{\*\} \[options\][^\n]*\n \* @param \{string\} \[referredCode\]/)
+assert.match(docs, /listOrganizations\(options\?, referredCode\?\)/)
+assert.match(docs, /listOrganizations\(\n    undefined,[^\n]*\n    referredCode/)
+assert.match(docs, /\| \*\*options\*\*[^\n]*\n\| \*\*referredCode\*\*/)
+NODE
+check "TS: listOrganizations documentation matches the argument order" $?
 
 ts_bad_dir="$TMP_ROOT/ts-noheader"
 mkdir -p "$ts_bad_dir"

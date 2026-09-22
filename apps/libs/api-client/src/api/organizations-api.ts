@@ -1015,9 +1015,10 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
          * 
          * @summary List organizations
          * @param {*} [options] Override http request option.
+         * @param {string} [referredCode] Invitation code used only when creating a new local account and its default organization. Ignored for existing accounts; never filters the list. Trimmed and uppercased; blank means no code.
          * @throws {RequiredError}
          */
-        listOrganizations: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        listOrganizations: async (options: RawAxiosRequestConfig = {}, referredCode?: string): Promise<RequestArgs> => {
             const localVarPath = `/organizations`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -1035,6 +1036,10 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
+
+            if (referredCode !== undefined) {
+                localVarQueryParameter['referredCode'] = referredCode;
+            }
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
@@ -1863,10 +1868,11 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
          * 
          * @summary List organizations
          * @param {*} [options] Override http request option.
+         * @param {string} [referredCode] Invitation code used only when creating a new local account and its default organization. Ignored for existing accounts; never filters the list. Trimmed and uppercased; blank means no code.
          * @throws {RequiredError}
          */
-        async listOrganizations(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<Organization>>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.listOrganizations(options);
+        async listOrganizations(options?: RawAxiosRequestConfig, referredCode?: string): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<Organization>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.listOrganizations(options, referredCode);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.listOrganizations']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -2278,10 +2284,11 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
          * 
          * @summary List organizations
          * @param {*} [options] Override http request option.
+         * @param {string} [referredCode] Invitation code used only when creating a new local account and its default organization. Ignored for existing accounts; never filters the list. Trimmed and uppercased; blank means no code.
          * @throws {RequiredError}
          */
-        listOrganizations(options?: RawAxiosRequestConfig): AxiosPromise<Array<Organization>> {
-            return localVarFp.listOrganizations(options).then((request) => request(axios, basePath));
+        listOrganizations(options?: RawAxiosRequestConfig, referredCode?: string): AxiosPromise<Array<Organization>> {
+            return localVarFp.listOrganizations(options, referredCode).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -2678,10 +2685,11 @@ export class OrganizationsApi extends BaseAPI {
      * 
      * @summary List organizations
      * @param {*} [options] Override http request option.
+     * @param {string} [referredCode] Invitation code used only when creating a new local account and its default organization. Ignored for existing accounts; never filters the list. Trimmed and uppercased; blank means no code.
      * @throws {RequiredError}
      */
-    public listOrganizations(options?: RawAxiosRequestConfig) {
-        return OrganizationsApiFp(this.configuration).listOrganizations(options).then((request) => request(this.axios, this.basePath));
+    public listOrganizations(options?: RawAxiosRequestConfig, referredCode?: string) {
+        return OrganizationsApiFp(this.configuration).listOrganizations(options, referredCode).then((request) => request(this.axios, this.basePath));
     }
 
     /**

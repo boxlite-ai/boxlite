@@ -2794,6 +2794,13 @@ func (a *OrganizationsAPIService) ListOrganizationRolesExecute(r OrganizationsAP
 type OrganizationsAPIListOrganizationsRequest struct {
 	ctx context.Context
 	ApiService OrganizationsAPI
+	referredCode *string
+}
+
+// Invitation code used only when creating a new local account and its default organization. Ignored for existing accounts; never filters the list. Trimmed and uppercased; blank means no code.
+func (r OrganizationsAPIListOrganizationsRequest) ReferredCode(referredCode string) OrganizationsAPIListOrganizationsRequest {
+	r.referredCode = &referredCode
+	return r
 }
 
 func (r OrganizationsAPIListOrganizationsRequest) Execute() ([]Organization, *http.Response, error) {
@@ -2834,6 +2841,9 @@ func (a *OrganizationsAPIService) ListOrganizationsExecute(r OrganizationsAPILis
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
 
+	if r.referredCode != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "referredCode", r.referredCode, "form", "")
+	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
 

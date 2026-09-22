@@ -317,7 +317,17 @@ paths:
   /organizations:
     get:
       operationId: listOrganizations
-      parameters: []
+      parameters:
+      - description: Invitation code used only when creating a new local account and
+          its default organization. Ignored for existing accounts; never filters the
+          list. Trimmed and uppercased; blank means no code.
+        explode: true
+        in: query
+        name: referredCode
+        required: false
+        schema:
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -327,6 +337,11 @@ paths:
                   $ref: "#/components/schemas/Organization"
                 type: array
           description: List of organizations
+        "400":
+          description: "invalid_referral_code: expected a single 10-character invitation\
+            \ code"
+        "422":
+          description: "invitation_unavailable: inviter does not exist or is suspended"
       security:
       - bearer: []
       - oauth2:
