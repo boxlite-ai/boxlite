@@ -16,6 +16,18 @@ import (
 	"time"
 )
 
+// SecretConfig holds a secret's placeholder mapping for authentication headers.
+type SecretConfig struct {
+	Name        string   `json:"name"`
+	Hosts       []string `json:"hosts"`
+	Placeholder string   `json:"placeholder"`
+	Value       string   `json:"value"`
+}
+
+func (s SecretConfig) String() string {
+	return "SecretConfig{Name:" + s.Name + ", Placeholder:" + s.Placeholder + ", Value:[REDACTED]}"
+}
+
 // BoxCA is an ephemeral ECDSA P-256 certificate authority for MITM.
 type BoxCA struct {
 	cert      *x509.Certificate
@@ -162,7 +174,9 @@ func (ca *BoxCA) GenerateHostCert(hostname string) (*tls.Certificate, error) {
 	return tlsCert, nil
 }
 
-// substituteHeaders replaces secret placeholders in request headers and URL query.
+// substituteHeaders replaces placeholders only in supported authentication headers.
+// Bodies, URLs and other headers are guest-controlled content that even a trusted
+// service may store or echo, so injecting credentials there would expose them.
 func substituteHeaders(req *http.Request, secrets []SecretConfig) {
 	if len(secrets) == 0 {
 		return
@@ -175,13 +189,14 @@ func substituteHeaders(req *http.Request, secrets []SecretConfig) {
 	r := strings.NewReplacer(pairs...)
 
 	for key, vals := range req.Header {
+		switch strings.ToLower(key) {
+		case "authorization", "x-api-key", "api-key":
+		default:
+			continue
+		}
 		for i, v := range vals {
 			req.Header[key][i] = r.Replace(v)
 		}
-	}
-
-	if req.URL != nil && req.URL.RawQuery != "" {
-		req.URL.RawQuery = r.Replace(req.URL.RawQuery)
 	}
 }
 

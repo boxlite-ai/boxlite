@@ -334,7 +334,7 @@ pub struct JsSecret {
     /// Human-readable name for the secret.
     pub name: String,
 
-    /// The real secret value. Never enters the guest.
+    /// The real secret value, injected by the host proxy into authentication headers.
     pub value: String,
 
     /// Hostnames where the secret should be injected.

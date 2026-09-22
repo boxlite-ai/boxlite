@@ -42,7 +42,7 @@ export class BoxSecret {
   name: string
 
   @ApiProperty({
-    description: 'Real secret value. Never enters the guest VM.',
+    description: 'Real secret value, injected by the host proxy into authentication headers.',
     example: 'sk-...',
   })
   value: string

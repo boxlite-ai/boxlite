@@ -89,7 +89,7 @@ export interface Secret {
   /** Human-readable name for the secret. */
   name: string;
 
-  /** Real secret value. Never enters the guest VM. */
+  /** Real secret value, injected by the host proxy into authentication headers. */
   value: string;
 
   /** Matching hosts for secret substitution. */

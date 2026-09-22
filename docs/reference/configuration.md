@@ -126,7 +126,17 @@ Host-side secret substitution rules for outbound HTTPS requests.
 - `placeholder`: optional guest-visible token, defaults to `<BOXLITE_SECRET:{name}>`
 
 **Notes:**
-- The guest sees only the placeholder, never the real secret value.
+- Only the placeholder is injected into the guest environment. The host proxy
+  substitutes the real value in `Authorization`, `X-API-Key`, and `Api-Key`
+  header values (header names are case-insensitive).
+- Request bodies, URLs (including query strings), and all other headers pass
+  through without secret substitution. These fields can be stored or echoed by
+  the destination service. Clients that used substitution there must switch to
+  an API that accepts one of the supported authentication headers.
+- Configure only hosts trusted to receive the credential. BoxLite does not
+  filter responses or control what the service does with authentication
+  headers; a service that reflects, stores, or forwards them can expose the
+  real value. The guest can exercise the credential's permissions at that host.
 - The placeholder is also exposed as `BOXLITE_SECRET_<NAME>` inside the guest.
 - **A secret is an egress grant as well as a credential.** Every host this
   matches becomes reachable on port 443 without a rule of its own — declaring

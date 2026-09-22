@@ -833,7 +833,9 @@ frames rather than slow the guest down. `rx_kbps` is paced the same way on both.
 
 ### Secret
 
-Outbound HTTPS secret substitution rule.
+Outbound HTTPS secret substitution rule. Substitution is limited to
+`Authorization`, `X-API-Key`, and `Api-Key` headers. See the
+[secret configuration notes](../configuration.md#secrets) for the trust boundary.
 
 ```rust
 pub struct Secret {

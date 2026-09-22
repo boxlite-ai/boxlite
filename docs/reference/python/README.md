@@ -219,6 +219,9 @@ use `box.network.tunnel(port)`; each returned tunnel is one-shot.
 
 #### Secret format
 
+Substitution is limited to `Authorization`, `X-API-Key`, and `Api-Key` headers.
+See the [secret configuration notes](../configuration.md#secrets) for the trust boundary.
+
 ```python
 from boxlite import Secret
 
