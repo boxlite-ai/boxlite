@@ -14,11 +14,19 @@ describe('UserService default organization compatibility', () => {
     }
     const entityManager = {
       save: jest.fn(async (entity) => entity),
+      query: jest.fn().mockResolvedValue([]),
+      findOneBy: jest.fn().mockResolvedValue(null),
     }
     const dataSource = {
       transaction: jest.fn(async (callback) => callback(entityManager)),
     }
-    const service = new UserService({} as never, eventEmitter as never, dataSource as never)
+    const service = new UserService(
+      {} as never,
+      eventEmitter as never,
+      dataSource as never,
+      { record: jest.fn().mockResolvedValue({}) } as never,
+      {} as never,
+    )
     jest.spyOn(service as never, 'generatePrivateKey').mockResolvedValue({
       privateKey: 'private-key',
       publicKey: 'public-key',

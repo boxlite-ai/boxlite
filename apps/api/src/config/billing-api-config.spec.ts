@@ -29,7 +29,7 @@ describe('BILLING_API_URL startup configuration', () => {
 
   function loadBillingApiUrl(): string | undefined {
     const { configuration } = require('./configuration') as typeof import('./configuration')
-    return configuration.billingApiUrl
+    return configuration().billingApiUrl
   }
 
   it('keeps admission disabled when BILLING_API_URL is absent', () => {

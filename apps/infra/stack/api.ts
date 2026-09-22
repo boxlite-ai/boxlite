@@ -361,6 +361,21 @@ export function buildApi(input: ApiInputs) {
           ),
         }),
 
+        // Registration events use the shared connection and an independent delivery switch.
+        ...(!process.env.BILLING_API_URL &&
+          process.env.USAGE_EXPORT_URL && {
+            USAGE_EXPORT_URL: process.env.USAGE_EXPORT_URL,
+            USAGE_EXPORT_TOKEN: usageExportToken.value,
+          }),
+        BUSINESS_EVENTS_ENABLED: envOr('BUSINESS_EVENTS_ENABLED', 'false'),
+        BUSINESS_EVENTS_INTERVAL_MS: envOr('BUSINESS_EVENTS_INTERVAL_MS', '30000'),
+        BUSINESS_EVENTS_BATCH_SIZE: envOr('BUSINESS_EVENTS_BATCH_SIZE', '20'),
+        BUSINESS_EVENTS_CONCURRENCY: envOr('BUSINESS_EVENTS_CONCURRENCY', '4'),
+        BUSINESS_EVENTS_TIMEOUT_MS: envOr('BUSINESS_EVENTS_TIMEOUT_MS', '10000'),
+        BUSINESS_EVENTS_VISIBILITY_MS: envOr('BUSINESS_EVENTS_VISIBILITY_MS', '120000'),
+        BUSINESS_EVENTS_MAX_ATTEMPTS: envOr('BUSINESS_EVENTS_MAX_ATTEMPTS', '10'),
+        BUSINESS_EVENTS_MAX_BACKOFF_MS: envOr('BUSINESS_EVENTS_MAX_BACKOFF_MS', '900000'),
+
         // Status sync (incident.io) — pushes component health to the public status
         // page (apps/infra/docs/status-page.md). Gated on the alert source id so a
         // stage that never configured incident.io carries none of these keys.

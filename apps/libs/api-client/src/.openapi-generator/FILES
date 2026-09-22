@@ -91,6 +91,7 @@ docs/OidcConfig.md
 docs/Organization.md
 docs/OrganizationBoxDefaultLimitedNetworkEgress.md
 docs/OrganizationInvitation.md
+docs/OrganizationReferralCodeDto.md
 docs/OrganizationRole.md
 docs/OrganizationSuspension.md
 docs/OrganizationUnsuspension.md
@@ -209,6 +210,7 @@ models/metrics-response.ts
 models/oidc-config.ts
 models/organization-box-default-limited-network-egress.ts
 models/organization-invitation.ts
+models/organization-referral-code-dto.ts
 models/organization-role.ts
 models/organization-suspension.ts
 models/organization-unsuspension.ts

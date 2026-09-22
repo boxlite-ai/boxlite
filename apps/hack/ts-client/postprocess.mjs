@@ -22,7 +22,10 @@ const configPath = `${srcDir}/configuration.ts`
 let config = readFileSync(configPath, 'utf8')
 
 function importedIdentifier(specifier) {
-  return specifier.replace(/^type\s+/, '').split(/\s+as\s+/).at(-1)
+  return specifier
+    .replace(/^type\s+/, '')
+    .split(/\s+as\s+/)
+    .at(-1)
 }
 
 function pruneUnusedImports(source, modulePath) {
@@ -44,7 +47,10 @@ function pruneUnusedImports(source, modulePath) {
       return identifier && new RegExp(`\\b${identifier}\\b`).test(sourceWithoutImport)
     })
 
-  return source.replace(match[0], usedSpecifiers.length ? `import { ${usedSpecifiers.join(', ')} } from '${modulePath}';` : '')
+  return source.replace(
+    match[0],
+    usedSpecifiers.length ? `import { ${usedSpecifiers.join(', ')} } from '${modulePath}';` : '',
+  )
 }
 
 function fixParameterDocumentation(source) {
@@ -64,9 +70,7 @@ function fixParameterDocumentation(source) {
           const memberList = members.split(' &#124; ')
           const validMembers = memberList.filter((member) => member !== fallbackMember)
 
-          return validMembers.length === memberList.length
-            ? arrayType
-            : `**Array<${validMembers.join(' &#124; ')}>**`
+          return validMembers.length === memberList.length ? arrayType : `**Array<${validMembers.join(' &#124; ')}>**`
         })
 
         if (!line.includes('(optional)')) {
@@ -77,6 +81,57 @@ function fixParameterDocumentation(source) {
       return line
     })
     .join('\n')
+}
+
+// Keep the pre-existing options-only SDK contract when OpenAPI adds the query.
+function preserveListOrganizationsOptions(source) {
+  const signature = 'listOrganizations(referredCode?: string, options?: RawAxiosRequestConfig)'
+  const creator = 'listOrganizations: async (referredCode?: string, options: RawAxiosRequestConfig = {})'
+  const call = '.listOrganizations(referredCode, options)'
+  const marker = '/**\n * OrganizationsApi - axios parameter creator'
+  if (
+    source.split(signature).length !== 4 ||
+    source.split(creator).length !== 2 ||
+    source.split(call).length !== 4 ||
+    !source.includes(marker)
+  ) {
+    throw new Error('Unexpected generated listOrganizations shape; review the options compatibility transform')
+  }
+  return source
+    .replace(
+      marker,
+      `export type ListOrganizationsOptions = RawAxiosRequestConfig & {
+    /** Invitation link code for first registration; trim and uppercase, blank means ordinary registration. */
+    referredCode?: string;
+};
+
+${marker}`,
+    )
+    .replace(
+      creator + ': Promise<RequestArgs> => {',
+      `listOrganizations: async ({ referredCode, ...options }: ListOrganizationsOptions = {}): Promise<RequestArgs> => {
+            if (referredCode !== undefined && typeof referredCode !== 'string') {
+                throw new TypeError('referredCode must be a string');
+            }`,
+    )
+    .replaceAll(signature, 'listOrganizations(options?: ListOrganizationsOptions)')
+    .replaceAll(call, '.listOrganizations(options)')
+    .replace(
+      /\* @param \{string\} \[referredCode\][^\n]*\n\s*\* @param \{\*\} \[options\] Override http request option\./g,
+      '* @param {ListOrganizationsOptions} [options] Request options, including the optional invitation code.',
+    )
+}
+
+function fixListOrganizationsDocumentation(source) {
+  return source.replace(/# \*\*listOrganizations\*\*[\s\S]*?(?=\n# \*\*|$)/, (section) =>
+    section
+      .replace('listOrganizations()', 'listOrganizations(options?)')
+      .replace('    referredCode\n', '    { referredCode }\n')
+      .replace(
+        '| **referredCode** |',
+        '| **options** | **ListOrganizationsOptions** | Axios request options and optional invitation code. | (optional)|\n| **options.referredCode** |',
+      ),
+  )
 }
 
 // The generated User-Agent value is a TS template literal, so the
@@ -112,7 +167,9 @@ if (existsSync(apiDir)) {
   for (const fileName of readdirSync(apiDir).filter((fileName) => fileName.endsWith('.ts'))) {
     const apiPath = `${apiDir}/${fileName}`
     const generatedApi = readFileSync(apiPath, 'utf8')
-    const prunedApi = pruneUnusedImports(pruneUnusedImports(generatedApi, '../common'), '../base')
+    const compatibleApi =
+      fileName === 'organizations-api.ts' ? preserveListOrganizationsOptions(generatedApi) : generatedApi
+    const prunedApi = pruneUnusedImports(pruneUnusedImports(compatibleApi, '../common'), '../base')
 
     if (prunedApi !== generatedApi) writeFileSync(apiPath, prunedApi)
   }
@@ -123,7 +180,9 @@ if (existsSync(docsDir)) {
   for (const fileName of readdirSync(docsDir).filter((fileName) => fileName.endsWith('.md'))) {
     const docsPath = `${docsDir}/${fileName}`
     const generatedDocs = readFileSync(docsPath, 'utf8')
-    const fixedDocs = fixParameterDocumentation(generatedDocs)
+    const fixedDocs = fixParameterDocumentation(
+      fileName === 'OrganizationsApi.md' ? fixListOrganizationsDocumentation(generatedDocs) : generatedDocs,
+    )
 
     if (fixedDocs !== generatedDocs) writeFileSync(docsPath, fixedDocs)
   }

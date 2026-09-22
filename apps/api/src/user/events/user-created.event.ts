@@ -12,5 +12,6 @@ export class UserCreatedEvent {
     public readonly entityManager: EntityManager,
     public readonly user: User,
     public readonly defaultOrganizationDefaultRegionId?: string,
+    public readonly invitation?: { inviterOrganizationId: string; referredCode: string },
   ) {}
 }

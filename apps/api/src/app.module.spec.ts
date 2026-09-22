@@ -14,6 +14,7 @@ import { MODULE_METADATA } from '@nestjs/common/constants'
 import { AppModule } from './app.module'
 import { UsageModule } from './usage/usage.module'
 import { StatusSyncModule } from './status-sync/status-sync.module'
+import { BusinessEventPublisherModule } from './business-events/business-event-publisher.module'
 
 // The usage ledger is driven entirely by events and cron jobs — nothing imports
 // it and no request path touches it — so dropping this registration disables
@@ -27,9 +28,10 @@ describe('AppModule registrations', () => {
 
   // Same failure mode as the usage ledger: the status sync is cron-only, so
   // dropping this registration silently freezes the public status page.
-  it('registers the status sync', () => {
+  it('registers status sync and business event publishing', () => {
     const imports = Reflect.getMetadata(MODULE_METADATA.IMPORTS, AppModule) as Array<unknown>
 
     expect(imports).toContain(StatusSyncModule)
+    expect(imports).toContain(BusinessEventPublisherModule)
   })
 })

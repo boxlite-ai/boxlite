@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { businessEventsConfig } from '../business-events/business-events.config'
+
 /**
  * A whole number at least 1, or a hard failure.
  *
@@ -359,7 +361,7 @@ export function boxMigrationConfig(env: NodeJS.ProcessEnv = process.env) {
   return { archivePrefix: `${scheme}${segments.join('/')}/` }
 }
 
-const configuration = {
+const configuration = () => ({
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
   environment: process.env.ENVIRONMENT,
@@ -520,6 +522,7 @@ const configuration = {
   billingApiUrl: billingApiUrlConfig(),
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
   usageExport: usageExportConfig(),
+  businessEvents: businessEventsConfig(),
   incidentIo: incidentIoConfig(),
   defaultRunner: {
     domain: process.env.DEFAULT_RUNNER_DOMAIN,
@@ -681,6 +684,6 @@ const configuration = {
     key: process.env.ENCRYPTION_KEY,
     salt: process.env.ENCRYPTION_SALT,
   },
-}
+})
 
 export { configuration }

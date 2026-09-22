@@ -59,7 +59,8 @@
           "TS_NODE_PROJECT": "api/tsconfig.app.json",
           "TS_NODE_TRANSPILE_ONLY": "true",
           "NODE_OPTIONS": "--require tsconfig-paths/register",
-          "SKIP_CONNECTIONS": "true"
+          "SKIP_CONNECTIONS": "true",
+          "BUSINESS_EVENTS_ENABLED": "false"
         }
       }
     },

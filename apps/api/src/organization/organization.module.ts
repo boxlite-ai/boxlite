@@ -32,10 +32,12 @@ import { Region } from '../region/entities/region.entity'
 import { EncryptionModule } from '../encryption/encryption.module'
 import { UsageModule } from '../usage/usage.module'
 import { UsageController } from '../usage/controllers/usage.controller'
+import { OrganizationReferralModule } from '../organization-referral/organization-referral.module'
 
 @Module({
   imports: [
     UserModule,
+    OrganizationReferralModule,
     RegionModule,
     TypeOrmModule.forFeature([
       Organization,

@@ -19,6 +19,7 @@ All URIs are relative to *http://localhost:3000*
 |[**getOrganizationByBoxId**](#getorganizationbyboxid) | **GET** /organizations/by-box-id/{boxId} | Get organization by box ID|
 |[**getOrganizationInvitationsCountForAuthenticatedUser**](#getorganizationinvitationscountforauthenticateduser) | **GET** /organizations/invitations/count | Get count of organization invitations for authenticated user|
 |[**getOrganizationOtelConfigByBoxAuthToken**](#getorganizationotelconfigbyboxauthtoken) | **GET** /organizations/otel-config/by-box-auth-token/{authToken} | Get organization OTEL config by box auth token|
+|[**getOrganizationReferralCode**](#getorganizationreferralcode) | **GET** /organizations/{organizationId}/referral-code | Get or initialize an organization invitation code|
 |[**getRegionById**](#getregionbyid) | **GET** /regions/{id} | Get region by ID|
 |[**leaveOrganization**](#leaveorganization) | **POST** /organizations/{organizationId}/leave | Leave organization|
 |[**listAvailableRegions**](#listavailableregions) | **GET** /regions | List all available regions for the organization|
@@ -807,6 +808,59 @@ const { status, data } = await apiInstance.getOrganizationOtelConfigByBoxAuthTok
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
+# **getOrganizationReferralCode**
+> OrganizationReferralCodeDto getOrganizationReferralCode()
+
+Returns the selected organization code after membership authorization; the Dashboard builds the invitation URL.
+
+### Example
+
+```typescript
+import {
+    OrganizationsApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new OrganizationsApi(configuration);
+
+let organizationId: string; //Selected organization ID
+
+const { status, data } = await apiInstance.getOrganizationReferralCode(
+    organizationId
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **organizationId** | [**string**] | Selected organization ID | |
+
+
+### Return type
+
+**OrganizationReferralCodeDto**
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
+|**403** | Organization access denied or invitation_unavailable |  -  |
+|**503** | referral_code_unavailable |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
 # **getRegionById**
 > Region getRegionById()
 
@@ -1154,7 +1208,7 @@ const { status, data } = await apiInstance.listOrganizationRoles(
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **listOrganizations**
-> Array<Organization> listOrganizations()
+> Array<Organization> listOrganizations(options?)
 
 
 ### Example
@@ -1168,11 +1222,19 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-const { status, data } = await apiInstance.listOrganizations();
+let referredCode: string; //Invitation link code for first registration; trim and uppercase, blank means ordinary registration. (optional) (default to undefined)
+
+const { status, data } = await apiInstance.listOrganizations(
+    { referredCode }
+);
 ```
 
 ### Parameters
-This endpoint does not have any parameters.
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **options** | **ListOrganizationsOptions** | Axios request options and optional invitation code. | (optional)|
+| **options.referredCode** | [**string**] | Invitation link code for first registration; trim and uppercase, blank means ordinary registration. | (optional) defaults to undefined|
 
 
 ### Return type
@@ -1193,6 +1255,12 @@ This endpoint does not have any parameters.
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | List of organizations |  -  |
+|**400** | invalid_referral_code |  -  |
+|**403** | email_verification_required |  -  |
+|**409** | registration_already_finalized |  -  |
+|**410** | registration_unavailable |  -  |
+|**422** | invitation_unavailable |  -  |
+|**503** | registration_busy |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

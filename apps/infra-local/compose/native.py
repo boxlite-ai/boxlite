@@ -219,6 +219,8 @@ class _Component:
 def _components(p: _Paths) -> dict[str, _Component]:
     apps = p.apps
     api_env = {
+        # Commerce is optional locally; older .env files lack this switch.
+        "BUSINESS_EVENTS_ENABLED": os.environ.get("BUSINESS_EVENTS_ENABLED", "false"),
         # M5-native dev override: the runner reports system-wide CPU/mem/disk
         # (the whole Mac), which drags availabilityScore below the prod cutoff
         # and makes the API reject box-create with "No available runners". Relax

@@ -31,7 +31,7 @@ describe('OIDC Management API configuration', () => {
 
   function loadOidcConfiguration() {
     const { configuration } = require('./configuration') as typeof import('./configuration')
-    return configuration.oidc
+    return configuration().oidc
   }
 
   it.each([

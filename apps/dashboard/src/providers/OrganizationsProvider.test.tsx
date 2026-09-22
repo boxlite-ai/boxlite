@@ -14,6 +14,9 @@ const organizationsApiMock = vi.hoisted(() => ({
   listOrganizations: vi.fn(),
 }))
 
+vi.mock('@/hooks/useConfig', () => ({ useConfig: () => ({ oidc: { issuer: 'https://issuer.test' } }) }))
+vi.mock('react-oidc-context', () => ({ useAuth: () => ({ user: { profile: { sub: 'ordinary-user' } } }) }))
+
 vi.mock('@/hooks/useApi', () => ({
   useApi: () => ({
     organizationsApi: organizationsApiMock,
@@ -53,6 +56,7 @@ describe('OrganizationsProvider', () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     localStorage.clear()
+    sessionStorage.clear()
     organizationsApiMock.listOrganizations.mockReset()
   })
 

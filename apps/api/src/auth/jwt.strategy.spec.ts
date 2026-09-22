@@ -21,9 +21,7 @@ function buildStrategy() {
   const createdUser = { id: 'user-1', role: 'user', email: 'new@boxlite.dev' }
 
   const userService = {
-    findOne: jest.fn().mockResolvedValue(null), // new user → triggers create()
-    create: jest.fn().mockResolvedValue(createdUser),
-    update: jest.fn(),
+    authenticate: jest.fn().mockResolvedValue(createdUser),
   } as unknown as UserService
 
   const configService = {
@@ -53,9 +51,10 @@ describe('JwtStrategy.validate — auto-created user', () => {
     // UserCreatedEvent → handleUserCreatedEvent creates the default org with
     // defaultRegionId=undefined. Assert the strategy forwards the configured
     // region id into the create DTO.
-    expect(userService.create).toHaveBeenCalledTimes(1)
-    expect(userService.create).toHaveBeenCalledWith(
+    expect(userService.authenticate).toHaveBeenCalledTimes(1)
+    expect(userService.authenticate).toHaveBeenCalledWith(
       expect.objectContaining({ defaultOrganizationDefaultRegionId: DEFAULT_REGION_ID }),
+      { referredCode: undefined, confirmInvitation: false },
     )
   })
 
@@ -66,8 +65,7 @@ describe('JwtStrategy.validate — auto-created user', () => {
     await expect(
       strategy.validate(request, { sub: 'auth0|user-1', email: 'new@boxlite.dev', email_verified: false }),
     ).rejects.toThrow(EmailVerificationRequiredException)
-    expect(userService.findOne).not.toHaveBeenCalled()
-    expect(userService.create).not.toHaveBeenCalled()
+    expect(userService.authenticate).not.toHaveBeenCalled()
   })
 
   it('allows social identities through even when their provider claim is false', async () => {
@@ -76,7 +74,7 @@ describe('JwtStrategy.validate — auto-created user', () => {
 
     await strategy.validate(request, { sub: 'google-oauth2|user-1', email: 'new@boxlite.dev', email_verified: false })
 
-    expect(userService.create).toHaveBeenCalledTimes(1)
+    expect(userService.authenticate).toHaveBeenCalledTimes(1)
   })
 })
 

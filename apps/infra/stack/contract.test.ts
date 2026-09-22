@@ -688,16 +688,19 @@ test('a billing URL is advertised only where a billing service answers', () => {
   assert.match(liveConfig, /BILLING_API_URL: process\.env\.BILLING_API_URL,/)
   assert.doesNotMatch(liveConfig, /BILLING_API_URL: envOr\(/)
 
-  // Wallet, plan and usage are sections of one /dashboard/billing page, so the gate moved from
-  // the route table into that page: it must refuse to render any section — none of which can
-  // load without the billing origin — before it reads one, and return the placeholder instead.
+  // Wallet, plan and usage need Commerce. Referral sharing uses the control plane and remains
+  // available alongside the placeholder when Commerce has no public billing URL.
   const billing = liveText(
     'script',
     readFileSync(new URL('../../dashboard/src/pages/Billing.tsx', import.meta.url), 'utf8'),
   )
   const gate = billing.indexOf('if (!config.billingApiUrl)')
   assert.notEqual(gate, -1, 'Billing page must gate on config.billingApiUrl')
-  assert.match(billing.slice(gate), /return <BillingComingSoon \/>/)
+  const billingTabs = billing.indexOf('<Tabs value=', gate)
+  assert.ok(billingTabs > gate)
+  const withoutCommerce = billing.slice(gate, billingTabs)
+  assert.match(withoutCommerce, /<BillingComingSoon[\s/>]/)
+  assert.match(withoutCommerce, /<ReferralCodeSection[\s/>]/)
   // Opening tag, not the whole self-closing element: what has to hold is that the section renders
   // past the gate, and that is just as true once a section takes a prop. Pinning `<X />` made this
   // fail on #1256 giving UsageSection an onGoToWallet prop, which changed nothing about the gate.
@@ -705,7 +708,7 @@ test('a billing URL is advertised only where a billing service answers', () => {
     // `<Name` followed by a delimiter, so the tag is matched whether or not it takes props but a
     // different component sharing the prefix cannot stand in for it.
     const rendered = billing.search(new RegExp(`<${section}[\\s/>]`))
-    assert.ok(rendered > gate, `<${section}> must render only past the billing gate`)
+    assert.ok(rendered > billingTabs, `<${section}> must render only past the billing gate`)
   }
 
   // The per-surface paths that used to be gated are now redirects into that page. A redirect
@@ -758,6 +761,13 @@ test('usage is exported to the ingest origin, never to the dashboard billing URL
   assert.match(environmentExample, /^# USAGE_EXPORT_URL=/m)
   assert.match(environmentExample, /boxlite-commerce\/<stage>\/usage-ingest-token/)
   assert.doesNotMatch(environmentExample, /^USAGE_EXPORT_TOKEN=/m)
+})
+
+// Publishing is opt-in, so the stack must not turn it on for a stage that never configured
+// Commerce: the API refuses to boot when delivery is enabled without a URL and token. Usage
+// export derives its switch from the credential; this one has to read as an explicit 'false'.
+test('business event delivery stays off unless a stage turns it on', () => {
+  assert.match(liveConfig, /BUSINESS_EVENTS_ENABLED: envOr\('BUSINESS_EVENTS_ENABLED', 'false'\)/)
 })
 
 test('the Api sends through the SES identity this stack verifies', () => {

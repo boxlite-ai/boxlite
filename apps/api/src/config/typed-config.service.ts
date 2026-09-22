@@ -14,7 +14,7 @@ import { fromTemporaryCredentials } from '@aws-sdk/credential-providers'
 import { ClientOptions } from '@opensearch-project/opensearch'
 import { RedisOptions } from 'ioredis'
 
-type Configuration = typeof configuration
+type Configuration = ReturnType<typeof configuration>
 
 // Helper type to get nested property paths
 type Paths<T> = T extends object

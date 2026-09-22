@@ -17,7 +17,7 @@ import { OidcMetadataService } from './oidc-metadata.service'
   imports: [
     NestConfigModule.forRoot({
       isGlobal: true,
-      load: [() => configuration],
+      load: [configuration],
     }),
     HttpModule,
   ],
