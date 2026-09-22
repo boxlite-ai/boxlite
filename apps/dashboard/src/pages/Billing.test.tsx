@@ -6,11 +6,14 @@
 
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import Billing from './Billing'
 
+const config = vi.hoisted(() => ({ billingApiUrl: 'https://billing.example.test' }))
+
 vi.mock('@/hooks/useConfig', () => ({
-  useConfig: () => ({ billingApiUrl: 'https://billing.example.test' }),
+  useConfig: () => config,
 }))
 
 vi.mock('@/components/billing/BillingAlerts', () => ({ BillingAlerts: () => null }))
@@ -56,6 +59,32 @@ describe('Billing layout', () => {
     act(() => root?.unmount())
     root = null
     document.body.innerHTML = ''
+    config.billingApiUrl = 'https://billing.example.test'
+  })
+
+  it('shows the invitation code before the placeholder when billing is unavailable', () => {
+    config.billingApiUrl = ''
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+
+    act(() => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter>
+          <Billing />
+        </MemoryRouter>,
+      )
+    })
+
+    const invitation = document.querySelector('[data-testid="referral-code-section"]')
+    const placeholder = document.querySelector('h1')
+    expect(invitation).not.toBeNull()
+    expect(placeholder?.textContent).toBe('Billing is on the way')
+    expect(invitation?.compareDocumentPosition(placeholder as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(document.querySelector('[data-slot="tabs-list"]')).toBeNull()
+    expect(document.querySelector('[data-testid="plan-section"]')).toBeNull()
+    expect(document.querySelector('[data-testid="wallet-section"]')).toBeNull()
+    expect(document.body.textContent).not.toContain('Usage section')
   })
 
   it('keeps the title, tabs, and active panel in one wide-page container', () => {

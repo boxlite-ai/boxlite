@@ -90,10 +90,10 @@ function Billing() {
   if (!config.billingApiUrl) {
     return (
       <>
-        <BillingComingSoon />
         <div className={BILLING_PAGE_CONTAINER}>
           <ReferralCodeSection />
         </div>
+        <BillingComingSoon />
       </>
     )
   }
