@@ -5,11 +5,12 @@
  */
 
 import { Request } from 'express'
-import { HttpStatus } from '@nestjs/common'
+import { ExecutionContext, HttpStatus } from '@nestjs/common'
 import * as jose from 'jose'
 import { JwtStrategy, requireVerifiedAuth0DatabaseEmail } from './jwt.strategy'
 import { UserService } from '../user/user.service'
 import { TypedConfigService } from '../config/typed-config.service'
+import { RegistrationAuthGuard } from './registration-auth.guard'
 import {
   EMAIL_VERIFICATION_REQUIRED_CODE,
   EmailVerificationRequiredException,
@@ -56,6 +57,7 @@ describe('JwtStrategy.validate — auto-created user', () => {
     expect(userService.create).toHaveBeenCalledTimes(1)
     expect(userService.create).toHaveBeenCalledWith(
       expect.objectContaining({ defaultOrganizationDefaultRegionId: DEFAULT_REGION_ID }),
+      undefined,
     )
   })
 
@@ -77,6 +79,56 @@ describe('JwtStrategy.validate — auto-created user', () => {
     await strategy.validate(request, { sub: 'google-oauth2|user-1', email: 'new@boxlite.dev', email_verified: false })
 
     expect(userService.create).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('JwtStrategy Organization registration referral', () => {
+  const payload = { sub: 'new-user', email: 'new@boxlite.dev', email_verified: true }
+  const guard = new RegistrationAuthGuard()
+  function requestWithCode(referredCode: unknown, registrationRoute = true): Request {
+    const request = { query: { referredCode }, get: jest.fn() } as unknown as Request
+    if (registrationRoute) guard.getRequest({ switchToHttp: () => ({ getRequest: () => request }) } as ExecutionContext)
+    return request
+  }
+
+  it.each([
+    [undefined, undefined],
+    ['', undefined],
+    ['  ', undefined],
+    [' abcd2345ef ', 'ABCD2345EF'],
+  ])('forwards normalized registration input %p to user creation', async (input, expected) => {
+    const { strategy, userService } = buildStrategy()
+    await strategy.validate(requestWithCode(input), payload)
+    expect(userService.create).toHaveBeenCalledWith(expect.objectContaining({ id: payload.sub }), expected)
+  })
+
+  it.each(['short', 'ABCD0123EF', ['ABCD2345EF', '7KMNP4XZQ2'], { code: 'ABCD2345EF' }])(
+    'rejects malformed new-account input %p before creating state',
+    async (input) => {
+      const { strategy, userService } = buildStrategy()
+      await expect(strategy.validate(requestWithCode(input), payload)).rejects.toMatchObject({
+        response: { statusCode: 400, code: 'invalid_referral_code' },
+      })
+      expect(userService.create).not.toHaveBeenCalled()
+    },
+  )
+
+  it('ignores even malformed input for an existing account', async () => {
+    const { strategy, userService } = buildStrategy()
+    jest
+      .spyOn(userService, 'findOne')
+      .mockResolvedValue({ id: payload.sub, name: 'Existing', email: payload.email, emailVerified: true } as any)
+    await expect(strategy.validate(requestWithCode(['bad', 'input']), payload)).resolves.toMatchObject({
+      userId: payload.sub,
+    })
+    expect(userService.create).not.toHaveBeenCalled()
+    expect(userService.update).not.toHaveBeenCalled()
+  })
+
+  it('ignores referral query parameters on other JWT routes', async () => {
+    const { strategy, userService } = buildStrategy()
+    await strategy.validate(requestWithCode('ABCD2345EF', false), payload)
+    expect(userService.create).toHaveBeenCalledWith(expect.any(Object), undefined)
   })
 })
 

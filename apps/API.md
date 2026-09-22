@@ -104,6 +104,14 @@ serves and the events it emits are catalogued below alongside its routes.
 <details>
 <summary><b>Organizations, membership, and invitations</b> · 24 routes</summary>
 
+`GET /api/organizations` accepts optional `referredCode` during automatic local
+account creation. It records the trimmed, uppercased code and inviter's organization
+ID on the new account's default organization. Missing or blank codes preserve the
+existing flow. Existing accounts ignore the parameter; it never filters the list.
+For new accounts, malformed codes return `400 invalid_referral_code`; missing or
+suspended inviters return `422 invitation_unavailable`. Failure rolls back account
+creation. This does not grant membership in the inviter's organization.
+
 | Method   | Path                                                                     | What it does                                             |
 | -------- | ------------------------------------------------------------------------ | -------------------------------------------------------- |
 | `GET`    | `/api/organizations`                                                     | Lists organizations available to the caller.             |

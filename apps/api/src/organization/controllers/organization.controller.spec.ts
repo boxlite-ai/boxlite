@@ -10,6 +10,8 @@ import { SystemActionGuard } from '../../auth/system-action.guard'
 import { RequiredApiRole, RequiredSystemRole } from '../../common/decorators/required-role.decorator'
 import { SystemRole } from '../../user/enums/system-role.enum'
 import { OrganizationController } from './organization.controller'
+import { RegistrationAuthGuard } from '../../auth/registration-auth.guard'
+import { Organization } from '../entities/organization.entity'
 
 // suspend/unsuspend moved from @RequiredSystemRole(ADMIN) to
 // @RequiredApiRole([ADMIN, 'billing']) so Commerce can call them with its own
@@ -78,5 +80,37 @@ describe('OrganizationController referral code endpoint', () => {
       'SystemActionGuard',
       'OrganizationActionGuard',
     ])
+  })
+
+  it('enables registration input only on the list route', () => {
+    expect(Reflect.getMetadata(GUARDS_METADATA, OrganizationController.prototype.findAll)).toEqual([
+      RegistrationAuthGuard,
+    ])
+  })
+
+  it('does not accept invitation attribution through ordinary organization creation', async () => {
+    const organizationService = { create: jest.fn().mockResolvedValue(new Organization()) }
+    const controller = new OrganizationController(
+      organizationService as never,
+      {} as never,
+      {} as never,
+      { findOne: async () => ({ emailVerified: true }) } as never,
+      {} as never,
+    )
+    await controller.create(
+      { userId: 'user-1' } as never,
+      {
+        name: 'Team',
+        defaultRegionId: 'region-1',
+        referredCode: 'ABCD2345EF',
+        inviterOrganizationId: 'inviter',
+      } as never,
+    )
+    expect(organizationService.create).toHaveBeenCalledWith(
+      { name: 'Team', defaultRegionId: 'region-1' },
+      'user-1',
+      false,
+      true,
+    )
   })
 })
