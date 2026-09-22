@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { CopyButton } from '@/components/CopyButton'
 import { Panel, SectionTitle } from '@/components/ascii'
 import { Button } from '@/components/ui/button'
 import { queryKeys } from '@/hooks/queries/queryKeys'
@@ -52,7 +53,11 @@ export function ReferralCodeSection() {
             </Button>
           </div>
         ) : (
-          <code className="select-all break-all font-mono">{code}</code>
+          <div className="flex items-center gap-2">
+            <code className="select-all break-all font-mono">{code}</code>
+            {/* Reset copied feedback when switching organizations. */}
+            <CopyButton key={organizationId} value={code} tooltipText="Copy invitation code" size="icon-xs" />
+          </div>
         )}
       </Panel>
     </section>
