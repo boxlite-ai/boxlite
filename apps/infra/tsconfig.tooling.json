@@ -13,7 +13,7 @@
 //
 // Listing what to check rather than what to skip keeps this fail-safe: a new stack/ module that
 // needs the SST globals is simply absent here, and `test:apps:infra-config` — which runs the full
-// tsconfig.json in CI after `sst install` — is what covers it.
+// tsconfig.json after `sst install` — is what covers it when run explicitly.
 {
   "extends": "./tsconfig.json",
   "include": [

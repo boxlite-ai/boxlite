@@ -8,11 +8,12 @@
  * group to a standalone `GCE_VM_IP_PORT` NEG populated by GKE.
  *
  * The API key takes a different path from every ordinary environment value:
- * Secret Manager -> managed GKE CSI provider -> read-only Pod volume -> file.
- * No Kubernetes Secret and no secret-valued environment variable is created.
- * The Pod's Kubernetes service account impersonates the existing proxy Google
- * service account through Workload Identity, which preserves its Cloud Run
- * invoker identity and gives the CSI provider one narrowly scoped principal.
+ * Secret Manager -> this stack -> a Kubernetes Secret -> `secretKeyRef`. It
+ * travelled as a mounted file until the proxy stopped reading one, and the
+ * driver that was to sync the mount into a Secret never did — see
+ * `PROXY_API_KEY_SECRET` below. The Pod's Kubernetes service account still
+ * impersonates the existing proxy Google service account through Workload
+ * Identity, which preserves its Cloud Run invoker identity.
  */
 
 import type { WorkloadHost } from '../../cluster.ts'
@@ -22,25 +23,27 @@ import type { Placement } from '../../network.ts'
 import { RUNNER_PORT } from '../../runners.ts'
 import { certificateNameFor } from './certificate-name.ts'
 import { GKE_POD_CIDR, SUBNET_CIDR } from './network.ts'
-import { secretCoordinatesOf, versionedSecretRef } from './secret-env.ts'
+import { secretCoordinatesOf, splitSecretRef, versionedSecretRef } from './secret-env.ts'
 import { instanceFor } from 'naming'
 
 const NAMESPACE = 'boxlite'
 const KUBERNETES_SERVICE_ACCOUNT = 'proxy'
 const CONTAINER = 'proxy'
-const SECRET_PROVIDER_CLASS = 'proxy'
-const SECRET_VOLUME = 'proxy-secrets'
-const SECRET_MOUNT = '/var/run/secrets/boxlite'
 const PROXY_API_KEY = 'PROXY_API_KEY'
-const PROXY_API_KEY_PATH = 'proxy-api-key'
 /**
- * The Kubernetes Secret the CSI driver syncs the mounted file into.
+ * The Kubernetes Secret this stack writes the proxy's key into.
  *
- * The proxy reads one channel — `PROXY_API_KEY`, as every other deployment of
- * it does — so the value has to reach the container as a value. The driver
- * writes this object from the same mount, and `secretKeyRef` carries it into
- * the environment; a stage that read the file instead would need a second
- * delivery path in the app for one cloud.
+ * The proxy reads one channel — `PROXY_API_KEY`, declared
+ * `envconfig:"PROXY_API_KEY" validate:"required"` in
+ * `apps/proxy/cmd/proxy/config/config.go` — so the value has to reach the
+ * container as a value, and there is no file reader left to fall back to.
+ *
+ * Written here rather than by the CSI driver's `secretObjects`, which is what
+ * this used to declare. GKE's managed provider mounts the file and ignores the
+ * sync: every Pod reported `mounted: true` while the object never appeared, so
+ * a rollout sat in `CreateContainerConfigError: secret "proxy-api-key" not
+ * found` until the old ReplicaSet — which still read the file — was the only
+ * thing serving.
  *
  * The cost is deliberate and worth naming: the payload exists as a Kubernetes
  * Secret in etcd, readable by anything granted secrets in this namespace, where
@@ -83,11 +86,6 @@ type ProxyNeg = { selfLink: string; generatedId: string }
 export const isMissingNeg = (error: Error, name: string): boolean =>
   /not ?found|404/i.test(error.message) && error.message.includes(name)
 
-/** The managed CSI provider's value: JSON is also valid YAML. */
-export const secretProviderParameters = (reference: string): string =>
-  JSON.stringify([{ resourceName: versionedSecretRef(reference), path: PROXY_API_KEY_PATH }])
-
-const gsaMember = (email: string): string => `serviceAccount:${email}`
 
 export const gcpEdgeProvider =
   ({
@@ -117,11 +115,12 @@ export const gcpEdgeProvider =
      * carries the key as a value, copy it once into a stack-owned Secret Manager
      * version so this VM -> GKE replacement does not require an outage-causing
      * store migration first. New stages should pin a Secret Manager version in
-     * `env.selectGroup.secret`; that path never puts the payload in Pulumi state.
+     * `env.selectGroup.secret`; either path is read at deploy time to write the
+     * Kubernetes Secret, so both reach Pulumi state sealed by the passphrase.
      */
     const unexpectedSecrets = Object.keys(request.secrets).filter((key) => key !== PROXY_API_KEY)
     if (unexpectedSecrets.length > 0) {
-      throw new Error(`the GKE proxy has no file reader for ${unexpectedSecrets.join(', ')}`)
+      throw new Error(`the GKE proxy delivers one secret and was handed ${unexpectedSecrets.join(', ')}`)
     }
     const storedReference = request.secrets[PROXY_API_KEY]
     const inlineKey = request.environment[PROXY_API_KEY]
@@ -151,7 +150,6 @@ export const gcpEdgeProvider =
     }
 
     const reference = $util.output(secretReference)
-    const coordinates = reference.apply(secretCoordinatesOf)
     const mountedReference = reference.apply(versionedSecretRef)
 
     /*
@@ -176,13 +174,6 @@ export const gcpEdgeProvider =
       },
       { dependsOn: host.ready },
     )
-    const secretAccessor = new gcp.secretmanager.SecretIamMember('ProxySecretAccessor', {
-      project: coordinates.apply(({ project: secretProject }: { project: string }) => secretProject),
-      secretId: coordinates.apply(({ secret }: { secret: string }) => secret),
-      role: 'roles/secretmanager.secretAccessor',
-      member: placement.serviceAccount.apply(gsaMember),
-    })
-
     const k8s = { provider: host.provider }
     const namespace = new kubernetes.core.v1.Namespace('ProxyNamespace', { metadata: { name: NAMESPACE } }, k8s)
     const serviceAccount = new kubernetes.core.v1.ServiceAccount(
@@ -199,30 +190,35 @@ export const gcpEdgeProvider =
       },
       { ...k8s, dependsOn: [workloadIdentity] },
     )
-    const secretProvider = new kubernetes.apiextensions.CustomResource(
-      'ProxySecretProviderClass',
+    /*
+     * The payload, resolved here because the engine is the only thing that can
+     * deliver it. On the value channel it is already in hand; on the reference
+     * channel it is read from the version this stage pinned.
+     *
+     * Stated plainly, because it is the one property `storedReference` was
+     * chosen to protect: this read puts the payload into Pulumi state, sealed
+     * as a secret by the stage's passphrase. The alternative was a Kubernetes
+     * Secret that never exists, which is what the by-reference channel actually
+     * produced.
+     */
+    const apiKeyPayload: $util.Input<string> =
+      inlineKey !== undefined
+        ? inlineKey
+        : reference.apply((value: string) => {
+            const { project: secretProject, secret } = secretCoordinatesOf(value)
+            const { version } = splitSecretRef(value)
+            return gcp.secretmanager
+              .getSecretVersionOutput({ project: secretProject, secret, version })
+              .apply((found: { secretData: string }) => found.secretData)
+          })
+    const apiKeySecret = new kubernetes.core.v1.Secret(
+      'ProxyApiKeyKubernetesSecret',
       {
-        apiVersion: 'secrets-store.csi.x-k8s.io/v1',
-        kind: 'SecretProviderClass',
-        metadata: { name: SECRET_PROVIDER_CLASS, namespace: namespace.metadata.name },
-        spec: {
-          provider: 'gke',
-          parameters: { secrets: reference.apply(secretProviderParameters) },
-          /*
-           * Synced only while a pod mounts the volume — that is the driver's
-           * rule, not a choice here, and it is why the mount below stays even
-           * though nothing reads the file any more.
-           */
-          secretObjects: [
-            {
-              secretName: PROXY_API_KEY_SECRET,
-              type: 'Opaque',
-              data: [{ objectName: PROXY_API_KEY_PATH, key: PROXY_API_KEY }],
-            },
-          ],
-        },
+        metadata: { name: PROXY_API_KEY_SECRET, namespace: namespace.metadata.name },
+        type: 'Opaque',
+        stringData: { [PROXY_API_KEY]: $util.secret(apiKeyPayload) },
       },
-      { ...k8s, dependsOn: [...host.ready, secretAccessor, ...ownedSecretResources] },
+      { ...k8s, dependsOn: [namespace, ...ownedSecretResources] },
     )
 
     /*
@@ -321,7 +317,6 @@ export const gcpEdgeProvider =
                       valueFrom: { secretKeyRef: { name: PROXY_API_KEY_SECRET, key: PROXY_API_KEY } },
                     },
                   ],
-                  volumeMounts: [{ name: SECRET_VOLUME, mountPath: SECRET_MOUNT, readOnly: true }],
                   startupProbe: {
                     httpGet: { path: '/health', port: CONTAINER, scheme: 'HTTP' },
                     periodSeconds: 5,
@@ -346,16 +341,6 @@ export const gcpEdgeProvider =
                   securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ['ALL'] } },
                 },
               ],
-              volumes: [
-                {
-                  name: SECRET_VOLUME,
-                  csi: {
-                    driver: 'secrets-store-gke.csi.k8s.io',
-                    readOnly: true,
-                    volumeAttributes: { secretProviderClass: secretProvider.metadata.name },
-                  },
-                },
-              ],
             },
           },
         },
@@ -365,9 +350,8 @@ export const gcpEdgeProvider =
         dependsOn: [
           service,
           serviceAccount,
-          secretProvider,
+          apiKeySecret,
           workloadIdentity,
-          secretAccessor,
           ...host.ready,
           ...dependsOn,
           ...ownedSecretResources,
@@ -687,7 +671,6 @@ export const gcpEdgeProvider =
         loadBalancerIngress,
         runnerIngress,
         workloadIdentity,
-        secretAccessor,
         entry,
         challenge,
         apex,

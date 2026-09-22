@@ -22,7 +22,7 @@ on:
       - '.pre-commit-config.yaml'
       - '.github/workflows/**'
       - '.github/actions/**'
-      - 'apps/infra/**'
+      - '.github/ci-config.json'
       - 'scripts/release/**'
   # No path filter on pull_request: the `Lint (conclusion)` job is a required
   # status check, so this workflow must run on EVERY PR and report it. A
@@ -32,26 +32,31 @@ on:
   pull_request:
     branches: [ main ]
 
-jobs:
-  config:
-    uses: ./.github/workflows/config.yml
+concurrency:
+  group: lint-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+jobs:
   changes:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: read
     outputs:
+      platforms: ${{ steps.config.outputs.platforms }}
+      rust-toolchain: ${{ steps.config.outputs.rust-toolchain }}
       rust: ${{ steps.filter.outputs.rust }}
       python: ${{ steps.filter.outputs.python }}
       node: ${{ steps.filter.outputs.node }}
       c: ${{ steps.filter.outputs.c }}
       go: ${{ steps.filter.outputs.go }}
       quality: ${{ steps.filter.outputs.quality }}
-      infra: ${{ steps.filter.outputs.infra }}
       install_script: ${{ steps.filter.outputs.install_script }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dorny/paths-filter@v4
+      - uses: ./.github/actions/ci-config
+        id: config
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         id: filter
         with:
           # In a merge queue, diff against the merge-group base/head (no PR base
@@ -83,18 +88,8 @@ jobs:
               - 'make/quality.mk'
               - '.pre-commit-config.yaml'
               - '.github/workflows/lint.yml'
-            infra:
-              - 'apps/infra/**'
-              # Every workflow, not just deploy-infra.yml: the infra suite asserts across the
-              # whole directory (caller/callee permissions, Environment allowlists, the staging
-              # step), so a change to any workflow can break it. Naming one file here meant
-              # editing a reusable workflow skipped the suite that guards it.
-              - '.github/workflows/**'
-              # Composite actions the workflows call. A step bundle lives here rather than in
-              # the workflow that used to inline it, so an edit here changes what those
-              # workflows run and must face the same suite.
-              - '.github/actions/**'
-              - 'make/test.mk'
+              - '.github/actions/ci-config/**'
+              - '.github/ci-config.json'
             install_script:
               - 'scripts/release/**'
               - '.github/workflows/build-runtime.yml'
@@ -118,13 +113,13 @@ jobs:
 
   clippy:
     name: Run Clippy on ${{ matrix.os }}
-    needs: [config, changes]
+    needs: changes
     if: ${{ needs.changes.outputs.rust == 'true' || needs.changes.outputs.quality == 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
       matrix:
-        include: ${{ fromJson(needs.config.outputs.platforms) }}
+        include: ${{ fromJson(needs.changes.outputs.platforms) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -135,7 +130,7 @@ jobs:
 
       - name: Install guest cross target (macOS)
         if: runner.os == 'macOS'
-        run: rustup target add $(bash scripts/util.sh --target)
+        run: rustup target add "$(bash scripts/util.sh --target)"
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -212,10 +207,6 @@ jobs:
       - name: Check Node formatting
         run: make fmt:check:node
 
-      - name: Type check
-        working-directory: sdks/node
-        run: npx tsc --noEmit
-
   c:
     name: C SDK lint and format checks
     needs: changes
@@ -237,8 +228,8 @@ jobs:
         run: make fmt:check:c
 
   go:
-    name: Go lint and format checks
-    needs: [config, changes]
+    name: Go formatting
+    needs: changes
     if: ${{ needs.changes.outputs.go == 'true' || needs.changes.outputs.quality == 'true' }}
     runs-on: ubuntu-latest
     steps:
@@ -246,30 +237,11 @@ jobs:
         uses: actions/checkout@v5
 
       - uses: ./.github/actions/setup-go
+        with:
+          cache: 'false'
 
       - name: Check Go formatting
         run: make fmt:check:go
-
-      - uses: ./.github/actions/setup-rust
-        with:
-          toolchain: ${{ needs.config.outputs.rust-toolchain }}
-
-      - name: Install build dependencies
-        run: make setup:build
-
-      - uses: ./.github/actions/sccache
-
-      - name: Build Go SDK
-        run: make dev:go
-
-      - name: Run Go vet
-        run: make lint:go
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          working-directory: sdks/go
-          args: --timeout=5m --build-tags boxlite_dev
 
   install_script:
     name: Installer script smoke test
@@ -283,35 +255,6 @@ jobs:
       - name: Run installer script smoke test
         run: make test:install-script
 
-  infra:
-    name: SST deployment tests
-    permissions:
-      contents: read
-    needs: changes
-    if: ${{ needs.changes.outputs.infra == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: apps/infra/package-lock.json
-
-      - name: Enable Corepack
-        run: corepack enable
-
-      - name: Run infrastructure deployment tests
-        run: make test:apps:infra
-
-      - name: Install and type-check the SST deployment config
-        run: make test:apps:infra-config
-
   # Single required status check for branch protection / merge queue.
   # Passes only if every job above succeeded or was skipped (path-filtered).
   # `if: !cancelled()` is required: without it a failed dependency would skip
@@ -319,7 +262,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   lint-conclusion:
     name: Lint (conclusion)
-    needs: [config, changes, rustfmt, clippy, python, node, c, go, install_script, infra]
+    needs: [changes, rustfmt, clippy, python, node, c, go, install_script]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

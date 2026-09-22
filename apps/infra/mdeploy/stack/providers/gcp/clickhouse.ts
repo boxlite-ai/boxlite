@@ -21,7 +21,7 @@
  */
 
 import { publishClickStack } from './clickstack.ts'
-import { renderClickHouseSchema } from '../../../../scripts/clickhouse-host.js'
+import { renderClickHouseSchema } from '../../clickhouse-host.ts'
 import type { ClickHouse, ClickHouseProvider, ClickHouseRequest } from '../../clickhouse.ts'
 import type { NetworkBinding, WorkloadRole } from '../../network.ts'
 import { identityFor, instanceFor } from 'naming'

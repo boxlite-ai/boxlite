@@ -58,7 +58,16 @@ runs:
         fi
         sha="$(git rev-parse --verify --quiet "$candidate^{commit}" || true)"
         if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
-          echo "::error title=resolve-ref::'$candidate' is not a commit SHA and this checkout cannot resolve it; a shallow checkout carries no tags, so the caller needs fetch-depth: 0" >&2
+          # Which of the two it is, rather than a guess. A checkout with no tags
+          # at all is the shallow one; a checkout that has tags and not this one
+          # is a name that does not exist, and telling that caller to raise its
+          # fetch-depth sends them to a setting that is already correct.
+          if [ -z "$(git tag --list | head -n 1)" ]; then
+            echo "::error title=resolve-ref::'$candidate' is not a commit SHA and this checkout carries no tags at all; the caller needs fetch-depth: 0" >&2
+          else
+            near="$(git tag --list "*$candidate*" | head -n 3 | tr '\n' ' ')"
+            echo "::error title=resolve-ref::'$candidate' is not a commit SHA and no ref of that name exists here${near:+ (did you mean: $near)}" >&2
+          fi
           exit 1
         fi
         printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"

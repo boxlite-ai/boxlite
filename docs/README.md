@@ -4,13 +4,11 @@
 
 ## Guides
 
-- [AutoStop、AutoResume 与 AutoDelete](./guides/auto-stop-resume.md)
-
 ## Reference
 
 ## Architecture
 
-- [AutoStop / AutoResume / AutoDelete 设计](./architecture/auto-stop-resume-design.md)
+- [VMM design](./architecture/vmm/README.md) — BoxLite's own VMM, which replaces libkrun
 
 ## CI / Infrastructure
 

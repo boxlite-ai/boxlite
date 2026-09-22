@@ -311,6 +311,41 @@ test('--check answers whether the commit is staged and compiles nothing', async 
   assert.ok(!calls.some((call) => call.includes('put-object')), 'and must not write')
 })
 
+test('--check asks about the commit it was given, not the one checked out', async () => {
+  /*
+   * What `mdeploy-all`'s plan job actually hit: it checks out the branch tip and
+   * deploys the commit its `resolve` job named, and asked about HEAD it read a
+   * staged binary as absent, scheduled a build, and the build job — which does
+   * check out the resolved commit — finished in 69 seconds having staged
+   * nothing. `mbuild verify` took `--tag` from the start; this is the same
+   * question about the third artifact.
+   */
+  const asked = 'b'.repeat(40)
+  // The archive carries the commit in its own name, so a bucket holding the
+  // asked-about one holds it under that name and not the checkout's.
+  const askedArchive = STAGED_ARCHIVE.replace(REF, asked)
+  const calls: string[][] = []
+  const log: string[] = []
+  const staged = happy(calls, {
+    'list-objects-v2': ok(`runner/${asked}/${askedArchive}\nrunner/${asked}/${askedArchive}.sha256`),
+  })
+  assert.equal(await drive(staged, ['--stage', 'dev', '--check', '--tag', asked], log), 0)
+  assert.ok(log.includes('staged=complete'), `HEAD was asked about instead: ${JSON.stringify(log)}`)
+  assert.ok(
+    log.some((line) => line.startsWith('address=') && line.includes(asked) && !line.includes(REF)),
+    `the address names the checkout rather than the commit asked about: ${JSON.stringify(log)}`,
+  )
+})
+
+test('--tag is refused on a build, which stages what it compiled', async () => {
+  // A read may ask about any commit; a build cannot stage bytes it did not
+  // produce, and the checkout is what it produced them from.
+  await assert.rejects(
+    () => drive(happy(), ['--stage', 'dev', '--tag', 'b'.repeat(40)]),
+    /--tag asks about a commit/,
+  )
+})
+
 test('--check on a commit nothing staged says so rather than staging it', async () => {
   const calls: string[][] = []
   const log: string[] = []

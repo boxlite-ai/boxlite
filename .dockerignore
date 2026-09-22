@@ -18,5 +18,8 @@ coverage
 apps/coverage
 *.log
 
+# Credentials google-github-actions/auth leaves in the workspace
+gha-creds-*.json
+
 # Git
 .git

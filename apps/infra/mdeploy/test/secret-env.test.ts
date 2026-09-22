@@ -118,9 +118,9 @@ test('the one Kubernetes reference names a Kubernetes Secret, not a Secret Manag
   /*
    * The proxy is the only workload on this cloud that is not Cloud Run, and its
    * key arrives through Kubernetes' own `valueFrom.secretKeyRef`. What that may
-   * name is an object in the cluster — the one the CSI driver syncs from the
-   * mount. A Secret Manager address there would be read as a Secret name, and
-   * the container would start with an empty key rather than fail.
+   * name is an object in the cluster — the one this stack writes. A Secret
+   * Manager address there would be read as a Secret name, and the container
+   * would start with an empty key rather than fail.
    */
   const edge = readFileSync(fileURLToPath(new URL('../stack/providers/gcp/edge.ts', import.meta.url)), 'utf8')
   const references = [...edge.matchAll(/valueFrom: \{ secretKeyRef: \{ name: ([A-Za-z_]+), key: ([A-Za-z_]+) \} \}/g)]
@@ -128,7 +128,7 @@ test('the one Kubernetes reference names a Kubernetes Secret, not a Secret Manag
   assert.deepEqual(
     references[0].slice(1, 3),
     ['PROXY_API_KEY_SECRET', 'PROXY_API_KEY'],
-    'the reference must name the synced Kubernetes Secret and the key inside it',
+    'the reference must name the Kubernetes Secret this stack writes and the key inside it',
   )
   assert.match(edge, /const PROXY_API_KEY_SECRET = '[a-z-]+'/, 'and that name is a Kubernetes object name')
 })

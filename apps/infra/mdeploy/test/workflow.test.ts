@@ -204,9 +204,9 @@ test('every job that reads a declaration is given one first', () => {
       assert.match(block, /stage-config: /, `${file} sets up without the declaration to restore`)
     }
     // Every job that runs one of the tools has to be one of those call sites.
-    const jobs = source.match(/\n  [a-z-]+:\n/g) ?? []
+    const jobs = source.match(/\n {2}[a-z-]+:\n/g) ?? []
     const runners = jobs.filter((_, index) => {
-      const body = source.split(jobs[index])[1]?.split(/\n  [a-z-]+:\n/)[0] ?? ''
+      const body = source.split(jobs[index])[1]?.split(/\n {2}[a-z-]+:\n/)[0] ?? ''
       return /npm run (--silent )?(mstage|mbuild|mdeploy|runner:)/.test(body)
     })
     assert.equal(runners.length, calls.length, `${file} runs a tool in a job that never set apps/infra up`)
@@ -233,4 +233,25 @@ test('the apply can ask the project what it holds, which needs a CLI installed',
   const install = workflow.indexOf('setup-gcloud')
   assert.notEqual(install, -1, 'nothing installs the CLI the guard reads through')
   assert.ok(install < apply, 'and it has to be there before the apply it guards')
+})
+
+test('every staged-runner question names the commit, the way the image question does', () => {
+  /*
+   * Two jobs in `mdeploy-all` ask whether a runner is already staged, and both
+   * used to ask about whatever was checked out. The plan job checks out the
+   * branch tip and deploys the commit `resolve` named, so on any branch that
+   * had moved it read a staged binary as absent, scheduled a build, and the
+   * build job — which does check out the resolved commit — finished in 69
+   * seconds having staged nothing.
+   *
+   * The image question beside each of them always carried `--tag`. Asserted
+   * across every call rather than at the two sites, because the next one added
+   * would otherwise inherit the same default.
+   */
+  const source = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mdeploy-all.yml', import.meta.url)), 'utf8')
+  const checks = [...source.matchAll(/runner:build -- [^\n|]*--check[^\n|]*/g)].map((match) => match[0])
+  assert.ok(checks.length >= 2, `expected both staged-runner questions, found ${checks.length}`)
+  for (const call of checks) {
+    assert.match(call, /--tag "\$\{\{ needs\.ref\.outputs\.sha \}\}"|--tag "\$SHA"/, `asks about the checkout: ${call}`)
+  }
 })

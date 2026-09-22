@@ -141,7 +141,7 @@ fn test_run_command_not_found() {
     ctx.cmd
         .args(["run", "--rm", "alpine:latest", "nonexistent_command"]);
     ctx.cmd.assert()
-        .failure() // Currently exits with 1, should be 127？
+        .failure() // Currently exits with 1, should be 127?
         .stderr(
             predicate::str::contains("not found")
                 .or(predicate::str::contains("No such file"))

@@ -594,7 +594,7 @@ pub struct BoxOptions {
     /// Inbound reachability of exposed services
     pub inbound_network: NetworkSpec,
 
-    /// Outbound HTTP(S) secret substitution rules
+    /// Outbound HTTPS secret substitution rules
     pub secrets: Vec<Secret>,
 
     /// Port mappings
@@ -754,7 +754,7 @@ pub enum NetworkSpec {
 }
 ```
 
-`allow_net` supports exact hosts, wildcard hosts, IPs, and CIDRs, and restricts both TCP and UDP egress. Hostname rules rely on TLS SNI / HTTP Host inspection, which only TCP carries, so an `allow_net` holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP open. `Disabled` removes the guest network interface entirely.
+`allow_net` supports exact hosts, wildcard hosts, IPs, and CIDRs, and restricts both TCP and UDP egress. Hostname rules rely on TLS SNI / HTTP Host inspection, which only TCP carries, so an `allow_net` holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP open. A host matched by a configured `Secret` is additionally reachable on port 443 without a rule of its own, so `allow_net` is not the only egress gate. The connection is dialed by name, and under a non-empty allowlist an answer in a private, loopback or CGNAT range is refused unless an IP or CIDR rule covers it. `Disabled` removes the guest network interface entirely.
 
 The inbound direction — whether services the box exposes are reachable from
 outside it — is the sibling field `BoxOptions::inbound_network`, which reuses
@@ -827,7 +827,7 @@ frames rather than slow the guest down. `rx_kbps` is paced the same way on both.
 
 ### Secret
 
-Outbound HTTP(S) secret substitution rule.
+Outbound HTTPS secret substitution rule.
 
 ```rust
 pub struct Secret {

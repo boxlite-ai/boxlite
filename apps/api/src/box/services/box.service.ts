@@ -81,6 +81,7 @@ import {
   AUTO_STOP_DISABLED,
   DEFAULT_AUTO_STOP_SECONDS,
   DEFAULT_AUTO_RESUME,
+  MIN_AUTO_STOP_SECONDS,
 } from '../constants/box-lifecycle.constants'
 
 // TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
@@ -825,19 +826,19 @@ export class BoxService {
     return url
   }
 
+  /**
+   * Sign access to a box's listening port through the shared preview proxy.
+   * The hostname carries the guest port while clients use the proxy's public listener.
+   */
   async getSignedPortPreviewUrl(
     boxIdOrName: string,
     organizationId: string,
     port: number,
     expiresInSeconds = 60,
   ): Promise<SignedPortPreviewUrlDto> {
-    if (port < 1 || port > 65535) {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
     }
-    if (port !== TERMINAL_PREVIEW_PORT) {
-      throw new BadRequestError(`Signed port preview is only supported for terminal port ${TERMINAL_PREVIEW_PORT}`)
-    }
-
     if (expiresInSeconds < 1 || expiresInSeconds > 60 * 60 * 24) {
       throw new BadRequestError('expiresInSeconds must be between 1 second and 24 hours')
     }
@@ -1479,6 +1480,11 @@ export class BoxService {
 
     if (!Number.isInteger(autoStop) || autoStop < AUTO_STOP_DISABLED) {
       throw new BadRequestError('Auto-stop interval must be a non-negative integer number of seconds')
+    }
+    if (autoStop !== AUTO_STOP_DISABLED && autoStop < MIN_AUTO_STOP_SECONDS) {
+      throw new BadRequestError(
+        `Auto-stop interval must be 0 (disabled) or at least ${MIN_AUTO_STOP_SECONDS} seconds; shorter windows cannot be kept alive by proxy traffic`,
+      )
     }
     if (!Number.isInteger(autoDelete) || autoDelete < AUTO_DELETE_DISABLED) {
       throw new BadRequestError('Auto-delete interval must be a non-negative integer number of seconds')

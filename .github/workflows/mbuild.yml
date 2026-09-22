@@ -47,7 +47,6 @@ on:
         options:
           - dev
           - prod
-          - gcp-dev
       from:
         description: Stage to promote from; ignored by publish
         required: false
@@ -55,7 +54,6 @@ on:
         options:
           - dev
           - prod
-          - gcp-dev
       to:
         description: Stage to promote to; ignored by publish
         required: false
@@ -63,7 +61,6 @@ on:
         options:
           - dev
           - prod
-          - gcp-dev
 
   # Called by an orchestrating workflow, which dispatches the same three
   # commands in order. The allowlist above is what a person types; a caller

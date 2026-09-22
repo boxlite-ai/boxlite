@@ -791,88 +791,60 @@ mod phase2_regression_tests {
         unsafe { boxlite_runtime_free(rt_ptr) };
     }
 
-    /// [C] Cooperative yield when the queue is full. With a tiny capacity
-    /// and a single Tokio worker shared between a producer and a canary,
-    /// the canary must still make progress while the producer is waiting
-    /// for queue space. This proves `push_event_with_capacity` yields
-    /// cooperatively rather than spinning or blocking the worker.
+    /// [C] A full queue yields and schedules another poll. Once drain frees
+    /// space, the pending push must enqueue its event exactly once.
     #[test]
     fn pump_yields_when_queue_full() {
-        const TEST_CAPACITY: usize = 4;
-        const NUM_EVENTS: usize = 100;
+        use std::future::Future;
+        use std::task::{Context, Poll, Wake, Waker};
 
-        // Single-worker so producer and canary contend for the SAME worker.
-        // If the producer didn't yield, the canary would never tick.
-        let rt_ptr = new_stub_runtime_handle(1);
-
-        let canary = Arc::new(AtomicU64::new(0));
-        let canary_stop = Arc::new(AtomicU64::new(0));
-        {
-            let rt = unsafe { &*rt_ptr };
-            let canary_for_task = canary.clone();
-            let stop_for_task = canary_stop.clone();
-            rt.tokio_rt.spawn(async move {
-                while stop_for_task.load(Ordering::Relaxed) == 0 {
-                    canary_for_task.fetch_add(1, Ordering::Relaxed);
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-            });
-        }
-
-        // Producer: posts NUM_EVENTS Stdout events with a tiny capacity.
-        // With capacity=4 and a slow drainer below, the producer will hit
-        // the full path many times.
-        extern "C" fn noop_stdout(_data: *const u8, _len: usize, _ud: *mut c_void) {}
-        {
-            let rt = unsafe { &*rt_ptr };
-            let queue = rt.queue.clone();
-            rt.tokio_rt.spawn(async move {
-                for i in 0..NUM_EVENTS {
-                    push_event_with_capacity(
-                        &queue,
-                        RuntimeEvent::Stdout {
-                            cb: noop_stdout,
-                            user_data: 0,
-                            data: vec![i as u8],
-                        },
-                        TEST_CAPACITY,
-                    )
-                    .await;
-                }
-            });
-        }
-
-        // Drain at a controlled rate: one event every 10ms, on a separate
-        // std thread (so the test thread is free to time the canary).
-        let canary_before = canary.load(Ordering::Relaxed);
-        let rt_addr = rt_ptr as usize;
-        let drainer = std::thread::spawn(move || {
-            let rt = rt_addr as *mut RuntimeHandle;
-            let mut error = FFIError::default();
-            let mut dispatched = 0;
-            while dispatched < NUM_EVENTS {
-                std::thread::sleep(Duration::from_millis(10));
-                let n = unsafe { boxlite_runtime_drain(rt, 0, &mut error as *mut _) };
-                assert!(n >= 0);
-                dispatched += n as usize;
+        struct WakeCounter(AtomicU64);
+        impl Wake for WakeCounter {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::Relaxed);
             }
-            unsafe { crate::boxlite_error_free(&mut error as *mut _) };
-        });
+        }
 
-        drainer.join().expect("drainer");
-        let canary_after = canary.load(Ordering::Relaxed);
-        canary_stop.store(1, Ordering::Relaxed);
+        const TEST_CAPACITY: usize = 4;
+        extern "C" fn noop_stdout(_data: *const u8, _len: usize, _ud: *mut c_void) {}
+        let event = || RuntimeEvent::Stdout {
+            cb: noop_stdout,
+            user_data: 0,
+            data: Vec::new(),
+        };
+        let rt_ptr = new_stub_runtime_handle(1);
+        let queue = unsafe { &*rt_ptr }.queue.clone();
+        let wakes = Arc::new(WakeCounter(AtomicU64::new(0)));
+        let waker = Waker::from(wakes.clone());
+        let mut cx = Context::from_waker(&waker);
+        for _ in 0..TEST_CAPACITY {
+            let mut push = std::pin::pin!(push_event_with_capacity(&queue, event(), TEST_CAPACITY));
+            assert_eq!(push.as_mut().poll(&mut cx), Poll::Ready(()));
+        }
 
-        // The drain takes >=NUM_EVENTS*10ms = 1000ms. The canary should
-        // have made many ticks during that time IF the producer yielded.
-        // If push_event_with_capacity busy-spinned, the single worker
-        // would have been monopolized and the canary would barely advance.
-        let progress = canary_after.saturating_sub(canary_before);
-        assert!(
-            progress >= 10,
-            "canary advanced only {progress} ticks; producer likely busy-spinning instead of yielding"
+        // Poll outside Tokio so yield_now wakes our waker directly. This
+        // checks cooperation without assuming how long a batch drain takes.
+        let mut push = std::pin::pin!(push_event_with_capacity(&queue, event(), TEST_CAPACITY));
+        for _ in 0..10 {
+            wakes.0.store(0, Ordering::Relaxed);
+            assert_eq!(push.as_mut().poll(&mut cx), Poll::Pending);
+            assert!(wakes.0.load(Ordering::Relaxed) > 0, "push must reschedule");
+            assert_eq!(queue.inner.lock().unwrap().len(), TEST_CAPACITY);
+        }
+
+        let mut error = FFIError::default();
+        assert_eq!(
+            unsafe { boxlite_runtime_drain(rt_ptr, 0, &mut error as *mut _) },
+            TEST_CAPACITY as c_int
         );
-
+        assert_eq!(push.as_mut().poll(&mut cx), Poll::Ready(()));
+        assert_eq!(queue.inner.lock().unwrap().len(), 1);
+        assert_eq!(
+            unsafe { boxlite_runtime_drain(rt_ptr, 0, &mut error as *mut _) },
+            1
+        );
+        assert!(queue.inner.lock().unwrap().is_empty());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
         unsafe { boxlite_runtime_free(rt_ptr) };
     }
 }

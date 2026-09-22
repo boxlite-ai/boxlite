@@ -37,7 +37,6 @@ on:
         options:
           - dev
           - prod
-          - gcp-dev
 
       image_tag:
         description: Commit SHA of the images to deploy, or a git tag naming one (defaults to this ref)

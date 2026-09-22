@@ -1,11 +1,11 @@
 # Architecture
 
-Related design: [AutoStop / AutoResume / AutoDelete](./auto-stop-resume-design.md)
-
 Container security design: [Linux capability API](./container-capabilities.md)
 
 Jailer network permission design:
 [guest networking, host IP grants, and AF_UNIX control plane](./jailer-network-permissions.md)
+
+VMM design: [BoxLite's own VMM, which replaces libkrun](./vmm/README.md)
 
 ## Overview
 

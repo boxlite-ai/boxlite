@@ -68,7 +68,7 @@ export const secretCoordinatesOf = (reference: string): { project: string; secre
   return { project, secret }
 }
 
-/** The full payload resource name the GKE CSI provider consumes. */
+/** The full payload resource name, pinned so a new version rolls the Pods. */
 export const versionedSecretRef = (reference: string): string => {
   const { project, secret, version } = parseSecretRef(reference)
   return `projects/${project}/secrets/${secret}/versions/${version}`

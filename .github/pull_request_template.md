@@ -1,26 +1,13 @@
-## Call graph
+## Summary
 
-```text
-Before
-  <command, SDK call, or API request the person triggers>
-  └─ fn_name (Type · path/file.rs:LOC)  ← BUG: what goes wrong
-
-After
-  <command, SDK call, or API request the person triggers>
-  └─ fn_name (Type · path/file.rs:LOC)  — new behavior; guarded by <test name>
-```
-
-Fixes #<n>
-<!-- bug fixes only: keep the Fixes line and the BUG marker; delete both otherwise -->
-
-## Why
-
-<the problem, why this change solves it, and the alternatives rejected>
-
-## User-facing change
-
-NONE
+<!-- Explain the problem and result. Use bullets, a real example, a table,
+call graph, sequence diagram, or short prose—whichever is clearest.
+These headings are optional. No diagram or source annotation is required.
+Keep the whole body within 200 words and 2000 characters. No walls of text. -->
 
 ## Verification
 
-<commands run and what they showed; for a fix, the test failing on the reverted change and passing on the restored one>
+<!-- Decisive command → observed result. Keep material risks, failures, and untested
+behavior visible. Link detailed evidence; do not paste logs or file inventories.
+For a fix, briefly report the observed failure with all production changes reverted
+and the pass with the complete fix restored. Link an issue if applicable. -->

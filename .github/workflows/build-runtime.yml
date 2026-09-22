@@ -4,7 +4,7 @@
 # populates the shared sccache cache.
 #
 # Triggers:
-# - push to main (via Warm Caches workflow_run): sccache warm-up only, no publish.
+# - weekly: validates distribution builds and refreshes compiler caches.
 # - release: published: builds and uploads
 #     - boxlite-runtime-v<version>-<target>.tar.gz   (for `cargo install` consumers)
 #     - boxlite-cli-v<version>-<target>.tar.gz       (self-contained CLI binary;
@@ -30,13 +30,15 @@
 name: Build Runtime
 
 on:
-  workflow_run:
-    workflows: ["Warm Caches"]
-    types: [completed]
-    branches: [main]
+  schedule:
+    - cron: '0 1 * * 1'
   release:
     types: [published]
   workflow_dispatch:
+
+concurrency:
+  group: build-runtime-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -50,9 +52,6 @@ jobs:
   build:
     name: Build Runtime (${{ matrix.target }})
     needs: config
-    if: >-
-      github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'success'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -67,11 +66,16 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
+          cache: ${{ runner.os != 'Linux' }}
 
       - uses: ./.github/actions/sccache
+        with:
+          tolerate-failure: ${{ github.event_name != 'schedule' }}
 
       - uses: ./.github/actions/build-guest
         if: runner.os == 'Linux'
+        with:
+          show-sccache-stats: ${{ github.event_name == 'schedule' }}
 
       - name: Build runtime (Linux)
         if: runner.os == 'Linux'

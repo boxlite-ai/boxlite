@@ -41,6 +41,26 @@ const ACT: Record<Intent, (stack: PulumiStack, options: { onOutput: (output: str
   remove: (stack, options) => stack.destroy(options),
 }
 
+/**
+ * Pulumi's progress spinner, which a log file has no use for.
+ *
+ * The engine writes it for a terminal — the intent, then a dot per tick, with
+ * no newline — and a workflow log has nothing to overwrite. Worse, this driver
+ * splits what it is handed into lines, so each dot arrives as a line of its
+ * own: of one dev apply's 1546 lines, 987 were a single `.` and 20 were
+ * `@ updating....`, so 65% of the output said only that time was passing.
+ *
+ * The intent is one word or several — an apply writes `@ updating`, a preview
+ * writes `@ previewing update` — so the words are matched as a group. A pattern
+ * cut to the apply's single word let every preview line through.
+ *
+ * Dropped rather than collapsed into one line, because the resource lines
+ * around them already carry the heartbeat: the engine re-emits `creating (7s)`,
+ * `creating (16s)`, `created (25s)` as an apply proceeds, which says both that
+ * it is alive and what it is waiting on.
+ */
+const PROGRESS = /^(@ [a-z]+(?: [a-z]+)*\.*|\.+)$/
+
 export class PulumiDeployError extends Error {
   constructor(message: string) {
     super(message)
@@ -231,7 +251,13 @@ export const pulumiDeploy = async ({
   })
 
   const onOutput = (output: string) => {
-    for (const line of output.split('\n')) if (line.trim()) log(line)
+    for (const line of output.split('\n')) {
+      const text = line.trim()
+      if (!text || PROGRESS.test(text)) continue
+      // The line as written, not trimmed: the engine's indentation is what
+      // distinguishes a resource from the diagnostic block that follows it.
+      log(line)
+    }
   }
   try {
     await ACT[intent](stack, { onOutput })

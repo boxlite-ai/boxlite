@@ -163,3 +163,63 @@ test('a preview is not refused, because it creates nothing to be refused about',
   await run().catch(() => {})
   assert.deepEqual(started, ['engine'], 'a preview must still reach the engine')
 })
+
+/*
+ * The engine writes a spinner for a terminal — `@ updating` and a dot per tick,
+ * with no newline — and a workflow log has nothing to overwrite. This driver
+ * splits what it is handed into lines, so each dot arrives as a line of its
+ * own: of the 1546 lines one dev apply wrote, 987 were a single `.` and 20 were
+ * `@ updating....`, so 65% of the output said only that time was passing.
+ *
+ * What must survive is everything else, indentation included: the engine's
+ * leading spaces are what separate a resource line from the diagnostic block
+ * under it.
+ */
+test("the engine's progress spinner does not reach the log", async () => {
+  const lines: string[] = []
+  let emit: ((output: string) => void) | undefined
+  await pulumiDeploy({
+    intent: 'diff',
+    config: { root: '/repo/apps/infra' } as any,
+    scope: scope({ home: 'gcp', project: 'boxlite-dev-project' }),
+    identity: identity('gcp') as any,
+    state: { bucket: 'boxlite-state' },
+    stageEnvironment: {
+      PULUMI_CONFIG_PASSPHRASE: 'passphrase',
+      STACK_DOMAIN: 'dev.boxlite.ai',
+      PROXY_DOMAIN: 'proxy.dev.boxlite.ai',
+    },
+    log: (line: string) => lines.push(line),
+    lookupAuthorizations: (() => ({ ok: true, held: [] })) as any,
+    createStackWith: (async () => ({
+      setAllConfig: async () => {},
+      preview: async (options: any) => {
+        emit = options.onOutput
+        return {}
+      },
+    })) as any,
+  }).catch(() => {})
+
+  assert.ok(emit, 'the engine was never handed an output sink')
+  emit('@ updating....\n')
+  // Two words, which a preview writes and an apply does not: `@ updating` was
+  // the whole of the first sample this was built from, and a pattern fitted to
+  // it let every `@ previewing update....` through.
+  emit('@ previewing update....\n')
+  emit('.')
+  emit('...\n')
+  emit(' +  gcp:compute:Router Router created (35s)\n')
+  emit('    error: 1 error occurred:\n')
+
+  /*
+   * Everything the engine wrote, named rather than filtered by the pattern
+   * under test: an assertion that re-applies `PROGRESS` agrees with whatever
+   * that pattern happens to miss, and the first version of it did — it passed
+   * while `@ previewing update....` went straight through.
+   */
+  assert.deepEqual(
+    lines.filter((line) => !line.startsWith('comparing every component')),
+    [' +  gcp:compute:Router Router created (35s)', '    error: 1 error occurred:'],
+    'only the resource line and the diagnostic survive, indentation intact',
+  )
+})

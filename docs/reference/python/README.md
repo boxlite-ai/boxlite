@@ -133,7 +133,7 @@ Configuration options for creating a box.
 | `volumes` | `List[Tuple \| Dict]` | `[]` | Volume mounts; tuple = host bind, dict = `managed_volume` or `host_path` |
 | `network` | `NetworkSpec \| None` | `None` | Structured network configuration. Omit for default enabled networking. |
 | `ports` | `List[Tuple \| Dict]` | `[]` | Local TCP forwarding; omit `host_port` in a dict for automatic allocation |
-| `secrets` | `List[Secret]` | `[]` | Outbound HTTP(S) secret substitution rules |
+| `secrets` | `List[Secret]` | `[]` | Outbound HTTPS secret substitution rules |
 | `advanced` | `AdvancedBoxOptions \| None` | `None` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
 | `auto_remove` | `bool` | `True` | Auto cleanup when stopped |
 | `detach` | `bool` | `False` | Survive parent process exit |
@@ -170,7 +170,13 @@ network = NetworkSpec(
 | `mode` | `str` | Required | `"enabled"` or `"disabled"` |
 | `allow_net` | `List[str]` | `[]` | Outbound allowlist used only when `mode="enabled"` |
 
-`mode="disabled"` removes the guest network interface entirely.
+A host matched by a configured `Secret` is additionally reachable on port 443
+without a rule of its own, so `allow_net` is not the only egress gate. The
+connection is dialed by name, and under a non-empty `allow_net` an answer in a
+private, loopback or CGNAT range is refused unless an IP or CIDR rule covers it.
+
+`mode="disabled"` removes the guest network interface entirely. No secret makes
+a host reachable in that mode — there is no network to reach it over.
 
 #### Volume Mount Format
 
@@ -224,6 +230,13 @@ secrets=[
     )
 ]
 ```
+
+Each host a secret matches becomes reachable on port 443 under a non-empty
+`allow_net` without a rule of its own — a secret is an egress grant as well as
+a credential. It is a by-name dial like any hostname rule, so a host answering
+with a private, loopback or CGNAT address is still refused unless an IP or CIDR
+rule covers that range. Those hosts on port 80, on any other port, or over UDP
+are governed by `allow_net` alone.
 
 ---
 

@@ -46,7 +46,7 @@ export const STAGE_FILENAME = '.mstage.config.json'
  * resolves the stage's coordinates and sign-in, and mdeploy takes `deploy` —
  * what shape the stage is deployed into, which no build has an opinion about.
  */
-const MSTAGE_STAGE_KEYS = ['home', 'region', 'project', 'zone', 'roleArn', 'protect', 'login']
+const MSTAGE_STAGE_KEYS = ['home', 'region', 'project', 'zone', 'promoteFrom', 'roleArn', 'protect', 'login']
 const MDEPLOY_STAGE_KEYS = ['deploy']
 const BORROWED_STAGE_KEYS = [...MSTAGE_STAGE_KEYS, ...MDEPLOY_STAGE_KEYS]
 
@@ -117,18 +117,39 @@ export type StageConfig = {
   /**
    * What this stage refuses to receive, and how long it waits to find out.
    *
-   * Per stage, like the registry it reads: `scanOnPush` is already a property
-   * of the repository a stage publishes into, and a threshold that could not
-   * differ would make prod no stricter than dev.
+   * Per stage, like the registry it reads: on ECR `scanOnPush` is a property of
+   * the repository a stage publishes into, and a threshold that could not differ
+   * would make prod no stricter than dev. On Artifact Registry nothing consumes
+   * that flag — scanning is a project-wide service — so there it records the
+   * intent and `bootstrap/gcp.ts`'s `SERVICES` decides.
    */
   scan: ScanPolicy
 }
 
-export type ScanPolicy = {
-  blockOn: ScanSeverity[]
-  /** How long to wait for a scan to report before giving up on it. */
-  timeoutSeconds: number
-}
+/**
+ * What a stage refuses to receive, and how long it waits to find out.
+ *
+ * `'DISABLED'` is the one way to receive anything: a stage that has decided it
+ * blocks on nothing. A state rather than a severity, and the whole value rather
+ * than an entry in the list — both on purpose. Artifact Analysis reports a
+ * bucket literally called `None`, so an off-switch spelled like a level, or
+ * placed among levels, would read equally as "block on nothing" and "block on
+ * those findings". An empty `[]` is refused for a different reason: it reads
+ * like a field somebody forgot to fill, and this is the one setting that must
+ * never be arrived at by accident.
+ *
+ * The parsed policy carries no `timeoutSeconds`, because with nothing to block
+ * on there is no scan to wait for. The declaration may still carry one and it
+ * is simply dropped: turning the gate off is a one-field edit, and refusing the
+ * budget left beside it would make it two for no gain.
+ */
+export type ScanPolicy =
+  | {
+      blockOn: ScanSeverity[]
+      /** How long to wait for a scan to report before giving up on it. */
+      timeoutSeconds: number
+    }
+  | { blockOn: 'DISABLED' }
 
 export type BuildConfig = {
   /** The stage file. Every refusal about a stage names this. */
@@ -312,9 +333,23 @@ const parseStages = (raw: unknown, where: string): Record<string, StageConfig> =
 
 const parseScan = (raw: unknown, where: string): ScanPolicy => {
   const block = assertObject(raw, where)
+  // Checked before the shape: `timeoutSeconds` is allowed to remain beside it
+  // and is dropped, so disabling the gate stays a one-field edit.
+  if (block.blockOn === 'DISABLED') {
+    assertKeys(block, ['blockOn', 'timeoutSeconds'], where, ['timeoutSeconds'])
+    return { blockOn: 'DISABLED' }
+  }
   assertKeys(block, ['blockOn', 'timeoutSeconds'], where)
+  // The near misses, named. Both spell an off-switch as a list entry, where it
+  // would be one severity among many and `NONE` collides with a real bucket.
+  const offSwitch = ['DISABLED', 'NONE']
+  if (Array.isArray(block.blockOn) && block.blockOn.some((entry) => offSwitch.includes(entry as string))) {
+    throw new BuildConfigError(
+      `${where}.blockOn turns the gate off as the whole value, not as an entry: "blockOn": "DISABLED"`,
+    )
+  }
   if (!Array.isArray(block.blockOn) || block.blockOn.length === 0) {
-    throw new BuildConfigError(`${where}.blockOn must be a non-empty array`)
+    throw new BuildConfigError(`${where}.blockOn must be a non-empty array, or "DISABLED" to block on nothing`)
   }
   for (const severity of block.blockOn) {
     if (!SEVERITIES.includes(severity as ScanSeverity)) {

@@ -1,4 +1,7 @@
-PHONY_TARGETS += fmt lint clippy lint\:apps fmt\:apps fmt\:check\:apps
+PHONY_TARGETS += fmt lint clippy clippy\:vmm lint\:apps fmt\:apps fmt\:check\:apps
+
+clippy\:vmm:
+	@cargo clippy -p boxlite-hypervisor -p boxlite-vmm --all-targets -- -D warnings
 
 # Smart format: only format changed components.
 fmt:

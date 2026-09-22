@@ -1,17 +1,20 @@
-# Run unit tests across all SDKs.
+# Run hosted-runner tests and collect coverage across the runtime and SDKs.
 #
-# This workflow runs unit tests only (no VM/integration tests).
-# GitHub runners do not support nested virtualization, so we cannot run
-# tests that require actual VMs.
+# Non-VM integration suites use test-only runtime construction because GitHub
+# runners cannot provide the virtualization needed by production startup.
 #
 # Test coverage:
-# - Rust: cargo-nextest (unit tests only, with llvm-cov coverage)
+# - Rust: units and non-VM integration, with llvm-cov coverage
 # - Python: pytest with -m "not integration"
-# - Node.js: vitest (all tests are unit tests)
+# - Node.js: vitest unit project
+# - Go: SDK, networking bridge, and the runner; API: Jest with Postgres and Redis
 name: Test
 
 on:
   merge_group:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -23,33 +26,35 @@ on:
       - 'src/deps/bubblewrap-sys/**'
       - 'src/deps/e2fsprogs-sys/**'
       - 'src/deps/libkrun-sys/**'
+      - 'src/deps/libgvproxy-sys/**'
       - 'src/**/*.rs'
       - '.cargo/**'
       - '.config/nextest.toml'
       - '.gitmodules'
-      - 'scripts/common.sh'
-      - 'scripts/build/build-guest-deps.sh'
-      - 'scripts/build/build-guest.sh'
-      - 'scripts/build/build-libseccomp.sh'
-      - 'scripts/util.sh'
       - 'scripts/setup/**'
-      - 'scripts/test/test-guest-artifacts.sh'
-      - 'scripts/test/test-guest-build-contracts.sh'
       - 'Makefile'
       - 'make/**'
       - 'rust-toolchain.toml'
       - 'sdks/**'
       - 'apps/api/**'
+      - 'apps/runner/**'
+      - 'apps/go.work'
+      - 'apps/go.work.sum'
+      - 'apps/infra/**'
       - 'apps/package.json'
       - 'apps/yarn.lock'
       - 'apps/nx.json'
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/test.yml'
+      - '.github/workflows/lint.yml'
+      - '.pre-commit-config.yaml'
       - '.github/workflows/config.yml'
       - '.github/actions/**'
+      - '.github/ci-config.json'
       - 'openapi/**'
       - 'codecov.yml'
+      - '!**/*.md'
   # No path filter on pull_request: the `Test (conclusion)` job is a required
   # status check, so this workflow must run on EVERY PR and report it. A
   # path-skipped workflow leaves the required check stuck "Pending" → PR blocked.
@@ -57,16 +62,17 @@ on:
   # unaffected); the conclusion job reports success-or-skipped.
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+
+concurrency:
+  group: test-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
 
 jobs:
-  # Load shared configuration
-  config:
-    uses: ./.github/workflows/config.yml
-
   # Detect which files changed to conditionally run tests
   changes:
     runs-on: ubuntu-latest
@@ -74,102 +80,131 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      rust: ${{ steps.filter.outputs.rust }}
-      cli: ${{ steps.filter.outputs.cli }}
-      python: ${{ steps.filter.outputs.python }}
-      node: ${{ steps.filter.outputs.node }}
-      go: ${{ steps.filter.outputs.go }}
-      api: ${{ steps.filter.outputs.api }}
-      guest_artifacts: ${{ steps.filter.outputs.guest_artifacts }}
-      setup: ${{ steps.filter.outputs.setup }}
+      platforms: ${{ steps.config.outputs.platforms }}
+      rust-toolchain: ${{ steps.config.outputs.rust-toolchain }}
+      python-test-matrix: ${{ steps.config.outputs.python-test-matrix }}
+      node-test-matrix: ${{ steps.config.outputs.node-test-matrix }}
+      # Keep file selection separate: deferred SDK coverage is not an empty diff.
+      sdk-tests-enabled: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+      rust: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.rust == 'true' }}
+      python: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.python == 'true' }}
+      node: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.node == 'true' }}
+      go: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.go == 'true' }}
+      api: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.api == 'true' }}
+      setup: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.setup == 'true' }}
+      infra: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.infra == 'true' }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dorny/paths-filter@v4
+      - name: Validate Makefile syntax
+        run: make -n help
+      - uses: ./.github/actions/ci-config
+        id: config
+        with:
+          full-matrix: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         id: filter
+        if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
         with:
           # In a merge queue, diff against the merge-group base/head (no PR base
           # exists). Empty on pull_request/push, where paths-filter ignores them.
           base: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || '' }}
           ref: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || '' }}
-          # rust and cli list every local package their test builds compile
+          # rust lists every local package its test builds compile
           # (cargo tree -e normal,build,dev --target all), plus everything else
           # the jobs read: manifests, toolchain, cargo, nextest, Codecov and CI
           # config, and the local composite actions they use. rust also matches
-          # the make tree it runs, the OpenAPI reference server whose tests it
+          # the Make recipes it runs, the OpenAPI reference server whose tests it
           # runs, and src/**/*.rs: a core unit test scans every Rust source
           # under src/ (no_config_json_in_tracing_sigil_workspace_wide).
           filters: |
             rust:
-              - 'src/boxlite/**'
-              - 'src/shared/**'
-              - 'src/guest/**'
-              - 'src/test-utils/**'
-              - 'src/deps/bubblewrap-sys/**'
-              - 'src/deps/e2fsprogs-sys/**'
-              - 'src/deps/libkrun-sys/**'
+              - 'src/boxlite/**/!(*.md)'
+              - 'src/cli/**/!(*.md)'
+              - 'src/shared/**/!(*.md)'
+              - 'src/guest/**/!(*.md)'
+              - 'src/hypervisor/**/!(*.md)'
+              - 'src/vmm/**/!(*.md)'
+              - 'sdks/c/src/**/!(*.md)'
+              - 'sdks/c/build.rs'
+              - 'sdks/python/src/**/!(*.md)'
+              - 'sdks/node/src/**/!(*.md)'
+              - 'sdks/node/build.rs'
+              - 'src/test-utils/**/!(*.md)'
+              - 'src/deps/bubblewrap-sys/**/!(*.md)'
+              - 'src/deps/e2fsprogs-sys/**/!(*.md)'
+              - 'src/deps/libkrun-sys/**/!(*.md)'
               - 'src/**/*.rs'
               - '.gitmodules'
               - 'Makefile'
-              - 'make/**'
-              - 'openapi/**'
+              - 'make/vars.mk'
+              - 'make/dev.mk'
+              - 'make/test.mk'
+              - 'make/coverage.mk'
+              - 'openapi/**/!(*.md)'
               - '**/Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
-              - '.cargo/**'
+              - '.cargo/**/!(*.md)'
               - '.config/nextest.toml'
               - 'codecov.yml'
-              - '.github/actions/setup-rust/**'
-              - '.github/workflows/config.yml'
-              - '.github/workflows/test.yml'
-            cli:
-              - 'src/cli/**'
-              - 'src/boxlite/**'
-              - 'src/shared/**'
-              - 'src/test-utils/**'
-              - 'src/deps/bubblewrap-sys/**'
-              - 'src/deps/e2fsprogs-sys/**'
-              - 'src/deps/libkrun-sys/**'
-              - '**/Cargo.toml'
-              - 'Cargo.lock'
-              - 'rust-toolchain.toml'
-              - '.cargo/**'
-              - '.config/nextest.toml'
-              - 'codecov.yml'
-              - '.github/actions/setup-rust/**'
-              - '.github/actions/sccache/**'
-              - '.github/workflows/config.yml'
+              - '.github/actions/setup-rust/**/!(*.md)'
+              - '.github/actions/setup-python/**/!(*.md)'
+              - '.github/ci-config.json'
+              - '.github/actions/ci-config/**/!(*.md)'
               - '.github/workflows/test.yml'
             python:
-              - 'sdks/python/**'
+              - 'sdks/python/**/!(*.md)'
+              - 'Makefile'
+              - 'make/vars.mk'
+              - 'make/dev.mk'
+              - 'make/test.mk'
+              - 'make/coverage.mk'
+              - 'codecov.yml'
+              - '.github/actions/setup-python/**/!(*.md)'
+              - '.github/ci-config.json'
+              - '.github/actions/ci-config/**/!(*.md)'
+              - '.github/workflows/test.yml'
             node:
-              - 'sdks/node/**'
+              - 'sdks/node/**/!(*.md)'
+              - 'Makefile'
+              - 'make/vars.mk'
+              - 'make/dev.mk'
+              - 'make/test.mk'
+              - 'make/coverage.mk'
+              - 'codecov.yml'
+              - '.github/ci-config.json'
+              - '.github/actions/ci-config/**/!(*.md)'
+              - '.github/workflows/test.yml'
             go:
-              - 'sdks/go/**'
+              - 'sdks/go/**/!(*.md)'
+              - 'src/deps/libgvproxy-sys/**/!(*.md)'
+              - 'apps/runner/**/!(*.md)'
+              - 'apps/go.work'
+              - 'apps/go.work.sum'
+              - 'Makefile'
+              - 'make/vars.mk'
+              - 'make/build.mk'
+              - 'make/setup.mk'
+              - 'make/dev.mk'
+              - 'make/test.mk'
+              - 'make/coverage.mk'
+              - 'make/quality.mk'
+              - '.pre-commit-config.yaml'
+              - 'codecov.yml'
+              - '.github/actions/setup-go/**/!(*.md)'
+              - '.github/actions/setup-rust/**/!(*.md)'
+              - '.github/actions/sccache/**/!(*.md)'
+              - '.github/ci-config.json'
+              - '.github/actions/ci-config/**/!(*.md)'
+              - '.github/workflows/test.yml'
+              - '.github/workflows/lint.yml'
             api:
-              - 'apps/api/**'
+              - 'apps/api/**/!(*.md)'
               - 'apps/package.json'
               - 'apps/yarn.lock'
               - 'apps/nx.json'
-            guest_artifacts:
-              - '.cargo/**'
-              - '.gitmodules'
-              - 'src/deps/e2fsprogs-sys/**'
-              - 'src/guest/**'
-              - 'src/shared/**'
-              - 'scripts/build/build-guest-deps.sh'
-              - 'scripts/build/build-guest.sh'
-              - 'scripts/build/build-libseccomp.sh'
-              - 'scripts/common.sh'
-              - 'scripts/util.sh'
-              - 'scripts/setup/**'
-              - 'scripts/test/test-guest-artifacts.sh'
-              - 'scripts/test/test-guest-build-contracts.sh'
-              - 'Makefile'
-              - 'make/**'
-              - 'rust-toolchain.toml'
-              - '**/Cargo.toml'
-              - 'Cargo.lock'
-              - '.github/workflows/config.yml'
+              - 'apps/jest.preset.js'
+              - 'codecov.yml'
               - '.github/workflows/test.yml'
             setup:
               - '.gitmodules'
@@ -178,17 +213,42 @@ jobs:
               - 'make/setup.mk'
               - 'make/test.mk'
               - '.github/workflows/test.yml'
+            infra:
+              - 'apps/infra/**/!(*.md)'
+              - '.github/**/!(*.md)'
+              - 'Makefile'
+              - 'make/test.mk'
+              - 'make/changes.mk'
 
-  # Rust unit tests with coverage: core, shared and rest passes via make coverage:lcov
+  infra:
+    name: Workflow and infrastructure checks
+    needs: changes
+    if: ${{ needs.changes.outputs.infra == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/infra/package-lock.json
+      - name: Type-check and test infrastructure scripts and workflows
+        run: make test:apps:infra
+
+  # Merge core, shared, REST, CLI, native VMM and Linux guest coverage.
+  # Codecov gates changed lines at 90% and reports total coverage separately.
   rust:
     name: Rust Tests (${{ matrix.platform.target }})
-    needs: [config, changes]
-    if: ${{ needs.changes.outputs.rust == 'true' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.rust == 'true' }}
     runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJson(needs.config.outputs.platforms) }}
+        platform: ${{ fromJson(needs.changes.outputs.platforms) }}
 
     permissions:
       contents: read
@@ -199,7 +259,10 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
         with:
-          toolchain: ${{ needs.config.outputs.rust-toolchain }}
+          toolchain: ${{ needs.changes.outputs.rust-toolchain }}
+
+      - uses: ./.github/actions/setup-python
+        # PyO3 unit tests embed an interpreter instead of building a wheel.
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -234,10 +297,6 @@ jobs:
         # server can name the class. stdlib only — no extra setup.
         run: make test:unit:openapi
 
-      - name: Run guest unit tests
-        if: runner.os == 'Linux'
-        run: make test:unit:guest
-
       - name: Run guest ownership tests
         if: runner.os == 'Linux'
         run: make test:guest-perms
@@ -248,18 +307,19 @@ jobs:
           files: target/coverage/lcov.info
           flags: rust-unit
           use_oidc: true
-          fail_ci_if_error: false
+          disable_search: true
+          fail_ci_if_error: true
 
-  # cli unit tests (integration tests in tests/ are ignored - require VM)
-  cli:
-    name: CLI Unit Tests (${{ matrix.platform.target }})
-    needs: [config, changes]
-    if: ${{ needs.changes.outputs.cli == 'true' }}
+  # Python SDK unit tests
+  python:
+    name: Python Tests (${{ matrix.platform.target }} / Python ${{ matrix.python-version }})
+    needs: changes
+    if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.python == 'true' }}
     runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJson(needs.config.outputs.platforms) }}
+        include: ${{ fromJson(needs.changes.outputs.python-test-matrix) }}
 
     permissions:
       contents: read
@@ -268,81 +328,36 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - uses: ./.github/actions/setup-rust
-        with:
-          toolchain: ${{ needs.config.outputs.rust-toolchain }}
-
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install system dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install protobuf
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - uses: ./.github/actions/sccache
-
-      - name: Run boxlite-cli unit tests with coverage
-        # Only run tests in src/ (name contains "::tests::"); skip integration tests in tests/ (require VM)
-        env:
-          BOXLITE_DEPS_STUB: "1"
-        run: cargo llvm-cov nextest -p boxlite-cli --profile ci -E 'test(::tests::)' --lcov --output-path lcov.info
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          files: lcov.info
-          flags: rust-cli
-          use_oidc: true
-          fail_ci_if_error: false
-
-  # Python SDK unit tests
-  python:
-    name: Python Tests (${{ matrix.platform.target }} / Python ${{ matrix.python-version }})
-    needs: [config, changes]
-    if: ${{ needs.changes.outputs.python == 'true' }}
-    runs-on: ${{ matrix.platform.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJson(needs.config.outputs.platforms) }}
-        python-version: ${{ fromJson(needs.config.outputs.python-versions) }}
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
       - uses: ./.github/actions/setup-python
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio
+      - name: Run Python unit tests with coverage
+        run: make coverage:python
 
-      - name: Run Python unit tests
-        working-directory: sdks/python
-        run: python -m pytest tests/ -v -m "not integration"
+      - name: Upload Python coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/python/coverage.xml
+          flags: python
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
 
   # Node.js SDK unit tests
   node:
     name: Node.js Tests (${{ matrix.platform.target }} / Node ${{ matrix.node-version }})
-    needs: [config, changes]
-    if: ${{ needs.changes.outputs.node == 'true' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.node == 'true' }}
     runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJson(needs.config.outputs.platforms) }}
-        node-version: ${{ fromJson(needs.config.outputs.node-versions) }}
+        include: ${{ fromJson(needs.changes.outputs.node-test-matrix) }}
 
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -369,42 +384,90 @@ jobs:
         run: npm ci
 
       - name: Run Node.js unit tests
+        if: matrix.node-version == '18'
         working-directory: sdks/node
         run: npm run test
+
+      - name: Run Node.js unit tests with coverage
+        if: matrix.node-version != '18'
+        run: make coverage:node
+
+      - name: Upload Node.js coverage to Codecov
+        if: matrix.node-version != '18'
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/node/lcov.info
+          flags: node
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
 
   # Go SDK unit tests
   go:
     name: Go Tests (${{ matrix.platform.target }})
-    needs: [config, changes]
-    if: ${{ needs.changes.outputs.go == 'true' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.go == 'true' }}
     runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJson(needs.config.outputs.platforms) }}
+        platform: ${{ fromJson(needs.changes.outputs.platforms) }}
 
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
       - uses: ./.github/actions/setup-go
 
+      - name: Check out native dependency workspaces
+        # Cargo's cache action reads the nested workspace metadata during setup.
+        run: make setup:submodules
+
       - uses: ./.github/actions/setup-rust
         with:
-          toolchain: ${{ needs.config.outputs.rust-toolchain }}
+          toolchain: ${{ needs.changes.outputs.rust-toolchain }}
+          cache-workspaces: |
+            . -> target
+            src/deps/libkrun-sys/vendor/libkrun -> target
+          cache-workspace-crates: 'true'
 
       - name: Install build dependencies
         run: make setup:build
 
       - uses: ./.github/actions/sccache
 
-      - name: Run Go unit tests
-        run: make test:unit:go
+      - name: Run Go SDK, networking, and runner tests with coverage
+        run: make coverage:go
+
+      # coverage:go has already built the native library needed by both analyzers.
+      - name: Run Go vet
+        if: matrix.platform.target == 'linux-x64-gnu'
+        run: make lint:go
+
+      - name: golangci-lint
+        if: matrix.platform.target == 'linux-x64-gnu'
+        uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84 # v6
+        with:
+          working-directory: sdks/go
+          args: --timeout=5m --build-tags boxlite_dev
+
+      - name: Upload Go coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/go-sdk.out,target/coverage/gvproxy.out,target/coverage/runner.out
+          flags: go
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
 
   guest_artifacts:
     name: Guest Artifacts (${{ matrix.os }} / ${{ matrix.target }} / ${{ matrix.profile }})
-    needs: [config, changes]
-    if: ${{ needs.changes.outputs.guest_artifacts == 'true' }}
+    needs: changes
+    # Qualify all five builds periodically without repeating them on routine CI runs.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -436,7 +499,7 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
         with:
-          toolchain: ${{ needs.config.outputs.rust-toolchain }}
+          toolchain: ${{ needs.changes.outputs.rust-toolchain }}
 
       - name: Set up build dependencies
         run: make setup:build
@@ -463,11 +526,12 @@ jobs:
   # API tests need real Redis and Postgres services for integration coverage.
   api:
     name: API Tests
-    needs: ["config", "changes"]
+    needs: changes
     if: ${{ needs.changes.outputs.api == 'true' }}
     runs-on: "ubuntu-latest"
-    permissions: # Repository-controlled tests need no write scopes.
+    permissions: # Read source; OIDC authenticates the coverage upload.
       contents: "read"
+      id-token: write
     services: # Integration dependencies used by API specs.
       redis: # Distributed-lock integration tests.
         image: "redis:7"
@@ -515,18 +579,52 @@ jobs:
       - name: Install app dependencies
         run: "yarn install --immutable"
       - name: Run API unit tests
-        run: "yarn nx run api:test"
+        run: "yarn nx run api:test --coverage --skip-nx-cache"
 
-  # End API test job.
+      - name: Upload API coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/api/lcov.info
+          flags: api
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
+
+  # A skipped test job cannot publish Codecov's separately required status.
+  # Validate the PR's changed files with Codecov instead of forcing a pass.
+  coverage-empty:
+    name: Codecov (no coverage changes)
+    needs: changes
+    if: >-
+      ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
+          needs.changes.result == 'success' &&
+          needs.changes.outputs.rust == 'false' &&
+          needs.changes.outputs.python == 'false' &&
+          needs.changes.outputs.node == 'false' &&
+          needs.changes.outputs.go == 'false' &&
+          needs.changes.outputs.api == 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Report coverage is unnecessary for this change
+        uses: codecov/codecov-action@v5
+        with:
+          run_command: empty-upload
+          use_oidc: true
+          fail_ci_if_error: true
 
   # Single required status check for branch protection / merge queue.
-  # Passes only if every job above succeeded or was skipped (path-filtered).
+  # Passes only if every job above succeeded or was skipped (path- or event-filtered).
   # `if: !cancelled()` is required: without it a failed dependency would skip
   # this job, and GitHub treats a skipped required check as success.
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [config, changes, rust, cli, python, node, go, setup, api, guest_artifacts]
+    needs: [changes, infra, rust, python, node, go, setup, api, guest_artifacts, coverage-empty]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

@@ -2,7 +2,9 @@
 // Copyright (c) 2026 BoxLite AI
 
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import {
   environmentApiPath,
@@ -62,4 +64,26 @@ test('parseReviewerIds accepts a comma-separated id list', () => {
 test('parseReviewerIds rejects a login so the failure is not deferred to the API', () => {
   assert.throws(() => parseReviewerIds('dorianzheng'), /numeric GitHub user ids/)
   assert.throws(() => parseReviewerIds('583231,dorianzheng'), /numeric GitHub user ids/)
+})
+
+test('every cloud identity is written to one stage, never shared across the repository', () => {
+  /*
+   * A per-project account in a repository-wide variable belongs to whichever
+   * stage bootstrapped last. `GCP_IMAGE_PUBLISHER` was exempted on the grounds
+   * that its reader declares no environment; `mbuild.yml`'s publish job
+   * declares `environment: ${{ inputs.stage || inputs.to }}` and is the only
+   * reader, so the exemption rested on nothing. Bootstrapping prod pointed
+   * dev's publish at `bl-app-publish@boxlite-prod-project`, which the dev pool
+   * cannot impersonate — three denied attempts, after every image was built.
+   *
+   * Read out of the source because the call is a `gh` subprocess: what has to
+   * hold is that none of these names is ever handed a null stage, and that is
+   * a property of the call site.
+   */
+  const source = readFileSync(fileURLToPath(new URL('./bootstrap.ts', import.meta.url)), 'utf8')
+  const shared = [...source.matchAll(/ghEnvironmentVariableSet\(\{[^}]*\}\)/g)]
+    .map((match) => match[0])
+    .filter((call) => /stage: null/.test(call))
+    .filter((call) => /name: '(GCP|AWS)_[A-Z_]+'/.test(call))
+  assert.deepEqual(shared, [], 'a cloud identity written repository-wide belongs to whoever bootstrapped last')
 })

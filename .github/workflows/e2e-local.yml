@@ -48,6 +48,7 @@ on:
       - 'Cargo.lock'
       - '.gitmodules'
       - '.github/workflows/e2e-local.yml'
+      - '!**/*.md'
   pull_request_target:
     types: [labeled, synchronize]
     branches: [main]
@@ -62,6 +63,7 @@ on:
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - '.gitmodules'
+      - '!**/*.md'
   workflow_dispatch:
     inputs:
       debug:

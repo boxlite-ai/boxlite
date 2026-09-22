@@ -1896,7 +1896,7 @@ components:
           items:
             $ref: "#/components/schemas/SecretSpec"
           description: |
-            Secret placeholder rules for outbound HTTP(S) requests.
+            Secret placeholder rules for outbound HTTPS requests.
             Matching requests replace `placeholder` with `value` on the host side.
         detach:
           type: boolean
@@ -1915,7 +1915,12 @@ components:
           type: integer
           minimum: 0
           default: 900
-          description: Idle time in seconds before AutoStop; 0 disables AutoStop
+          description: |
+            Idle time in seconds before AutoStop; 0 disables AutoStop. A floor
+            on non-zero values is vendor-specific — boxlite cloud rejects
+            anything below 60, because a shorter window is outrun by the
+            interval at which its proxy renews the idle timer; a single-tenant
+            server sweeping on its own timer has no such floor.
         auto_delete:
           type: integer
           minimum: 0
@@ -2114,6 +2119,11 @@ components:
             Optional outbound allowlist used only when `mode=enabled`.
             Empty or omitted means full outbound access.
             Supports hostnames, wildcard hostnames, IPs, and CIDRs.
+            A host matched by a configured secret is additionally reachable on
+            port 443 without a rule of its own, so this is not the only egress
+            gate. That connection is dialed by name, and under a non-empty
+            list an answer in a private, loopback or CGNAT range is refused
+            unless an IP or CIDR rule covers it.
 
     InboundNetworkSpec:
       type: object
@@ -2141,7 +2151,7 @@ components:
 
     SecretSpec:
       type: object
-      description: Outbound HTTP(S) secret substitution rule
+      description: Outbound HTTPS secret substitution rule
       required: [name, value]
       properties:
         name:

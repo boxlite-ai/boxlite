@@ -32,6 +32,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
+          cache: ${{ runner.os != 'Linux' }}
 
       - uses: ./.github/actions/sccache
 
@@ -42,8 +43,17 @@ jobs:
         uses: pypa/cibuildwheel@v3.2.0
         env:
           CIBW_BUILD_VERBOSITY: 0
+          BOXLITE_HOST_SCCACHE_DIR: ${{ env.SCCACHE_DIR }}
+          BOXLITE_HOST_SCCACHE_BIN: ${{ env.SCCACHE_PATH }}
         with:
           package-dir: sdks/python
+
+      - name: Return container cache to the runner
+        if: always() && runner.os == 'Linux'
+        run: |
+          if [ -d "$SCCACHE_DIR" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "$SCCACHE_DIR"
+          fi
 
       - name: Upload wheels as artifacts
         uses: actions/upload-artifact@v4
@@ -52,47 +62,10 @@ jobs:
           path: ./wheelhouse/*.whl
           retention-days: 7
 
-  test_wheels:
-    name: Test wheel on ${{ matrix.platform.os }} / Python ${{ matrix.python-version }}
-    needs: [ config, build_wheels ]
-    runs-on: ${{ matrix.platform.os }}
-    strategy:
-      fail-fast: true
-      matrix:
-        platform: ${{ fromJson(needs.config.outputs.platforms) }}
-        python-version: ${{ fromJson(needs.config.outputs.python-versions) }}
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - uses: ./.github/actions/setup-python
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Download wheels
-        uses: actions/download-artifact@v5
-        with:
-          name: wheels-${{ matrix.platform.os }}
-          path: wheelhouse
-
-      - name: Install wheel
-        run: |
-          # --no-index ensures wheel has no external dependencies (acts as lint)
-          pip install --find-links=wheelhouse --no-index boxlite
-
-      - name: Test import
-        run: |
-          python -c "import boxlite; print(f'BoxLite version: {boxlite.__version__}')"
-
-      # Note: Cannot run VM tests on GitHub-hosted runners due to nested virtualization limitations:
-      # - macOS-15 (ARM): Hypervisor framework not available in virtualized environment
-      # - ubuntu-latest: KVM not available on standard runners (only on larger paid runners)
-      # VM execution tests must be run manually on physical hardware or self-hosted runners
-
+  # cibuildwheel verifies each installed wheel before build_wheels can succeed.
   publish:
     name: Publish to PyPI
-    needs: [ build_wheels, test_wheels ]
+    needs: build_wheels
     runs-on: ubuntu-latest
     if: github.event_name == 'release' && github.event.action == 'published'
     permissions:
@@ -117,7 +90,7 @@ jobs:
 
   upload_to_release:
     name: Upload wheels to GitHub Release
-    needs: [ build_wheels, test_wheels ]
+    needs: build_wheels
     runs-on: ubuntu-latest
     if: github.event_name == 'release' && github.event.action == 'published'
     permissions:

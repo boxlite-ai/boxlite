@@ -151,7 +151,11 @@ pub unsafe extern "C" fn boxlite_options_set_network_disabled(opts: *mut CBoxlit
 /// A non-empty allowlist restricts both TCP and UDP egress. Hostname entries
 /// are enforced by TLS SNI / HTTP Host inspection, which only TCP carries, so
 /// an allowlist holding only hostnames denies all UDP egress — add the IP or
-/// CIDR to keep UDP open.
+/// CIDR to keep UDP open. A host matched by a configured secret is
+/// additionally reachable on port 443 without an entry of its own, so this
+/// allowlist is not the only egress gate. That connection is dialed by name,
+/// and under a non-empty allowlist an answer in a private, loopback or CGNAT
+/// range is refused unless an IP or CIDR rule covers it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_add_network_allow(
     opts: *mut CBoxliteOptions,

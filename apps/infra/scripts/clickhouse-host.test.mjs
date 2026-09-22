@@ -16,7 +16,7 @@ import {
   EC2_USER_DATA_MAX_BYTES,
   encodeClickHouseUserData,
   renderClickHouseSchema,
-} from './clickhouse-host.ts'
+} from 'mdeploy/clickhouse-host'
 
 const input = {
   region: 'ap-southeast-1',
@@ -129,7 +129,7 @@ test('loads the schema after SST relocates the module under .sst/platform', asyn
   const platformDirectory = join(directory, '.sst', 'platform')
   const bundledModule = join(platformDirectory, 'clickhouse-host.ts')
   mkdirSync(platformDirectory, { recursive: true })
-  copyFileSync(new URL('./clickhouse-host.ts', import.meta.url), bundledModule)
+  copyFileSync(new URL('../mdeploy/stack/clickhouse-host.ts', import.meta.url), bundledModule)
 
   const relocated = await import(pathToFileURL(bundledModule).href)
 

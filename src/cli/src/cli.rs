@@ -1151,7 +1151,7 @@ pub struct NetworkFlags {
     pub network: Option<String>,
 
     /// Restrict TCP and UDP egress to the listed hosts/IPs (repeatable);
-    /// everything else is DNS-sinkholed and dropped. Implies network=enabled.
+    /// everything else is refused at connect time. Implies network=enabled.
     /// Patterns: exact host, "*.example.com", IP, or CIDR. Hostname rules need
     /// TLS SNI / HTTP Host inspection, so a hostname-only list denies all UDP;
     /// add the IP or CIDR to keep UDP open. Incompatible with `--network

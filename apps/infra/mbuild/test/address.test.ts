@@ -192,6 +192,45 @@ test('the committed files declare the artifacts that are actually built', () => 
   )
 })
 
+test('a stage may declare that it blocks on nothing, and says so in a word', () => {
+  /*
+   * The escape hatch, and the shape of it is the point. An empty `blockOn`
+   * array would read like a field somebody forgot to fill; `"none"` reads like
+   * the decision it is, which is what a reviewer has to be able to see.
+   */
+  const config = declare({ dev: { ...ecrStage('boxlite-backoffice-dev'), scan: { blockOn: 'DISABLED' } } })
+  assert.deepEqual(config.stages.dev!.scan, { blockOn: 'DISABLED' })
+
+  /*
+   * The budget left beside it is dropped rather than refused. Turning the gate
+   * off is one field; making the operator delete a second one to be allowed to
+   * do it buys nothing, and the parsed policy carries no timeout either way.
+   */
+  const kept = declare({
+    dev: { ...ecrStage('boxlite-backoffice-dev'), scan: { blockOn: 'DISABLED', timeoutSeconds: 300 } },
+  })
+  assert.deepEqual(kept.stages.dev!.scan, { blockOn: 'DISABLED' }, 'the unused budget must not reach the policy')
+
+  /*
+   * Both near misses get the message that names the right placement. `['NONE']`
+   * is the one somebody reaches for first, and it is also the one that collides
+   * with the `None` bucket Artifact Analysis really reports.
+   */
+  for (const blockOn of [['DISABLED'], ['NONE'], ['NONE', 'CRITICAL']]) {
+    assert.throws(
+      () => declare({ dev: { ...ecrStage('boxlite-backoffice-dev'), scan: { blockOn, timeoutSeconds: 300 } } }),
+      /turns the gate off as the whole value, not as an entry/,
+      `${JSON.stringify(blockOn)} was not pointed at the right spelling`,
+    )
+  }
+
+  // The empty array stays refused, and now says what to write instead.
+  assert.throws(
+    () => declare({ dev: { ...ecrStage('boxlite-backoffice-dev'), scan: { blockOn: [], timeoutSeconds: 300 } } }),
+    /must be a non-empty array, or "DISABLED" to block on nothing/,
+  )
+})
+
 test('a stage that lives in GCP cannot declare an ECR repository', () => {
   // One decision spelled twice in one block, so the parser is where it is
   // held. An `ecr` repository on a stage whose workloads are Cloud Run

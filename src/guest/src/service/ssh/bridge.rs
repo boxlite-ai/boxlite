@@ -1,10 +1,8 @@
 //! Bridge one SSH channel to the guest's existing execution lifecycle.
 
 use crate::service::exec::error::ExecutionError;
-use crate::service::exec::registry::ExecutionRegistry;
 use crate::service::exec::TtyResize;
 use crate::service::server::GuestServer;
-use crate::service::ssh::auth::SSH_USER;
 use crate::service::ssh::limits::{
     CONTROL_CALL_TIMEOUT, FORWARD_CONNECT_TIMEOUT, PROCESS_TERMINATION_GRACE, STDIN_QUEUE_DEPTH,
 };
@@ -22,7 +20,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 /// Starting directory for a session helper. The helper chdirs to the passwd
-/// home itself once it is inside the container (`session::enter_root_home`),
+/// home itself once it is inside the container (`session::enter_home`),
 /// which is the only place that directory can be read, so the request just
 /// needs a directory every image is guaranteed to have.
 const SESSION_WORKDIR: &str = "/";
@@ -82,6 +80,7 @@ impl ChannelCompletion {
 
 #[derive(Clone)]
 struct StdinForwarder {
+    tasks: Arc<super::TaskGroup>,
     execution_id: String,
     sender: mpsc::Sender<ExecStdin>,
 }
@@ -96,27 +95,30 @@ impl StdinForwarder {
     }
 
     async fn send(&self, data: Vec<u8>, close: bool) -> Result<(), BridgeError> {
-        self.sender
-            .send(ExecStdin {
-                execution_id: self.execution_id.clone(),
-                data,
-                close,
-            })
-            .await
-            .map_err(|_| BridgeError::StdinClosed)
+        let message = ExecStdin {
+            execution_id: self.execution_id.clone(),
+            data,
+            close,
+        };
+        tokio::select! {
+            biased;
+            _ = self.tasks.cancelled() => Err(BridgeError::StdinClosed),
+            result = self.sender.send(message) => result.map_err(|_| BridgeError::StdinClosed),
+        }
     }
 }
 
 pub(crate) struct ChannelBridge {
+    tasks: Arc<super::TaskGroup>,
     server: Arc<GuestServer>,
     execution_id: String,
     stdin: StdinForwarder,
     output_activate: Option<oneshot::Sender<()>>,
-    output_cancel: Option<oneshot::Sender<()>>,
 }
 
 impl ChannelBridge {
     pub(crate) async fn start(
+        tasks: Arc<super::TaskGroup>,
         server: Arc<GuestServer>,
         command: Command,
         tty: Option<TtyConfig>,
@@ -124,6 +126,7 @@ impl ChannelBridge {
         channel_id: ChannelId,
         session_handle: SessionHandle,
     ) -> Result<Self, BridgeError> {
+        let tasks = tasks.child();
         let container_id = resolve_single_container(&server).await?;
         let launch = execution_launch(command, tty, env, &container_id);
         let completion = launch.completion;
@@ -175,11 +178,13 @@ impl ChannelBridge {
             // The execution is already registered and running, so this failure
             // path owes the same teardown every sibling below performs.
             Err(error) => {
-                cleanup_failed_execution_start(server.clone(), execution_id);
+                cleanup_failed_execution_start(tasks.clone(), server.clone(), execution_id);
                 return Err(error.into());
             }
         };
-        tokio::spawn(async move {
+        // Dropping this waiter would detach the core writer. Resource release
+        // aborts that writer; keep tracking its JoinHandle through completion.
+        tasks.spawn_tracked(move |_| async move {
             if let Ok(Err(error)) = input_task.await {
                 warn!(%error, "SSH stdin forwarding ended with an error");
             }
@@ -189,7 +194,7 @@ impl ChannelBridge {
             let ready = match await_streamlocal_ready(&server, &execution_id).await {
                 Ok(ready) => ready,
                 Err(error) => {
-                    cleanup_failed_execution_start(server.clone(), execution_id);
+                    cleanup_failed_execution_start(tasks.clone(), server.clone(), execution_id);
                     return Err(error);
                 }
             };
@@ -207,27 +212,32 @@ impl ChannelBridge {
             (OutputPumpStart::Attach, None)
         };
 
-        let (cancel_tx, cancel_rx) = oneshot::channel();
-        let output_task = spawn_output_pump(
+        let output = output_pump(
             server.clone(),
             execution_id.clone(),
             channel_id,
             session_handle,
             completion,
             output_start,
-            cancel_rx,
         );
-        spawn_execution_cleanup(server.registry.clone(), execution_id.clone(), output_task);
+        let output_task = tasks.spawn(output);
+        spawn_execution_cleanup(
+            tasks.clone(),
+            server.clone(),
+            execution_id.clone(),
+            output_task,
+        );
 
         Ok(Self {
+            tasks: tasks.clone(),
             server,
             execution_id: execution_id.clone(),
             stdin: StdinForwarder {
+                tasks,
                 execution_id,
                 sender: stdin_tx,
             },
             output_activate,
-            output_cancel: Some(cancel_tx),
         })
     }
 
@@ -272,12 +282,7 @@ impl ChannelBridge {
     }
 
     pub(crate) fn terminate_running(&mut self) {
-        let execution_id = self.execution_id.clone();
-        let server = self.server.clone();
-        tokio::spawn(terminate_process_group(server, execution_id));
-        if let Some(cancel) = self.output_cancel.take() {
-            let _ = cancel.send(());
-        }
+        self.tasks.cancel();
     }
 }
 
@@ -323,13 +328,7 @@ async fn terminate_process_group(server: Arc<GuestServer>, execution_id: String)
 
 impl Drop for ChannelBridge {
     fn drop(&mut self) {
-        // Transport loss may drop the russh handler without delivering a
-        // channel-close callback. Keep SSH-owned processes tied to the channel
-        // in that path as well; terminate_running takes the cancel sender so a
-        // normal channel-close does not start teardown twice.
-        if self.output_cancel.is_some() {
-            self.terminate_running();
-        }
+        self.tasks.cancel();
     }
 }
 
@@ -373,19 +372,10 @@ pub(super) fn session_exec_env(
     mut env: HashMap<String, String>,
     container_id: &str,
 ) -> HashMap<String, String> {
-    // Account identity is server-owned. Apply it after client-provided env so
-    // an env request cannot rename a root login or point it at another home.
-    //
-    // HOME and SHELL are dropped rather than overwritten: neither is knowable
-    // out here, so there is no correct value to send. The session sets both
-    // once it is inside the container, from the passwd entry it can finally
-    // read, and libcontainer seeds HOME ahead of it when absent. Dropping is
-    // belt-and-braces against a future path that forwards client env without
-    // reaching that session — it is not what makes the account values win.
-    env.remove("HOME");
-    env.remove("SHELL");
-    env.insert("USER".into(), SSH_USER.into());
-    env.insert("LOGNAME".into(), SSH_USER.into());
+    // Resolve identity only after entering the container and applying its UID.
+    for name in ["HOME", "SHELL", "USER", "LOGNAME"] {
+        env.remove(name);
+    }
     container_exec_env(env, container_id)
 }
 
@@ -484,9 +474,7 @@ fn internal_helper_launch(
         program,
         args,
         env: session_exec_env(env, container_id),
-        // Server-owned SSH work always runs as container root. A numeric
-        // identity works in scratch images that deliberately omit passwd.
-        user: Some("0:0".to_string()),
+        user: None,
         workload,
     }
 }
@@ -612,189 +600,166 @@ enum ExitNotification {
     Signal { number: i32, message: String },
 }
 
-fn spawn_output_pump(
+async fn output_pump(
     server: Arc<GuestServer>,
     execution_id: String,
     channel_id: ChannelId,
     session_handle: SessionHandle,
     completion: ChannelCompletion,
     output_start: OutputPumpStart,
-    mut cancel_rx: oneshot::Receiver<()>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let (mut output, buffered_stdout, mut stdout_offset) = match output_start {
-            OutputPumpStart::Attach => {
-                let attached = tokio::select! {
-                    _ = &mut cancel_rx => return,
-                    attached = tokio::time::timeout(
-                        CONTROL_CALL_TIMEOUT,
-                        server.attach_execution(&execution_id),
-                    ) => attached,
-                };
-                // Flatten first so each outcome is one arm and the compiler,
-                // not a panic, proves the match is exhaustive.
-                let attached = match attached {
-                    Ok(inner) => inner,
-                    Err(_) => Err(ExecutionError::Io("attach timed out".into())),
-                };
-                match attached {
-                    Ok(output) => (output, Vec::new(), 0),
-                    Err(error) => {
-                        warn!(%error, %execution_id, "SSH attach failed");
-                        terminate_process_group(server.clone(), execution_id.clone()).await;
-                        finish_channel(
-                            &session_handle,
-                            channel_id,
-                            completion,
-                            ExitNotification::Status(INDETERMINATE_EXIT_STATUS),
-                        )
-                        .await;
-                        return;
-                    }
-                }
-            }
-            OutputPumpStart::AwaitActivation {
-                output,
-                buffered_stdout,
-                stdout_offset,
-                mut activate_rx,
-            } => {
-                let activated = tokio::select! {
-                    _ = &mut cancel_rx => return,
-                    activated = &mut activate_rx => activated,
-                };
-                if activated.is_err() {
+) {
+    let (mut output, buffered_stdout, mut stdout_offset) = match output_start {
+        OutputPumpStart::Attach => {
+            let attached =
+                tokio::time::timeout(CONTROL_CALL_TIMEOUT, server.attach_execution(&execution_id))
+                    .await;
+            // Flatten first so each outcome is one arm and the compiler,
+            // not a panic, proves the match is exhaustive.
+            let attached = match attached {
+                Ok(inner) => inner,
+                Err(_) => Err(ExecutionError::Io("attach timed out".into())),
+            };
+            match attached {
+                Ok(output) => (output, Vec::new(), 0),
+                Err(error) => {
+                    warn!(%error, %execution_id, "SSH attach failed");
+                    terminate_process_group(server.clone(), execution_id.clone()).await;
+                    finish_channel(
+                        &session_handle,
+                        channel_id,
+                        completion,
+                        ExitNotification::Status(INDETERMINATE_EXIT_STATUS),
+                    )
+                    .await;
                     return;
                 }
-                (output, buffered_stdout, stdout_offset)
             }
-        };
-
-        if !buffered_stdout.is_empty() {
-            let _ = session_handle.data(channel_id, buffered_stdout).await;
         }
+        OutputPumpStart::AwaitActivation {
+            output,
+            buffered_stdout,
+            stdout_offset,
+            activate_rx,
+        } => {
+            let activated = activate_rx.await;
+            if activated.is_err() {
+                return;
+            }
+            (output, buffered_stdout, stdout_offset)
+        }
+    };
 
-        let mut stderr_offset = 0;
-        loop {
-            tokio::select! {
-                // A resolved oneshot receiver must not be polled again by the
-                // wait select below. Cancellation means the channel lifecycle
-                // owner is already terminating the process group, so the
-                // output task can finish immediately.
-                _ = &mut cancel_rx => return,
-                message = output.recv() => {
-                    match message {
-                        Some(Ok(message)) => match message.event {
-                            Some(boxlite_shared::exec_output::Event::Stdout(stdout)) => {
-                                if let Some(lost_bytes) = output_gap(
-                                    &mut stdout_offset,
-                                    stdout.offset,
-                                    stdout.data.len(),
-                                    stdout.total_bytes,
-                                ) {
-                                    match output_gap_disposition(completion) {
-                                        OutputGapDisposition::Report => {
-                                            let _ = session_handle
-                                                .data(
-                                                    channel_id,
-                                                    output_gap_message("stdout", lost_bytes),
-                                                )
-                                                .await;
-                                        }
-                                        OutputGapDisposition::Abort => {
-                                            warn!(%execution_id, lost_bytes, "SSH forwarding output gap");
-                                            terminate_process_group(server.clone(), execution_id.clone()).await;
-                                            finish_channel(
-                                                &session_handle,
-                                                channel_id,
-                                                completion,
-                                                ExitNotification::Status(INDETERMINATE_EXIT_STATUS),
-                                            )
-                                            .await;
-                                            return;
-                                        }
-                                    }
-                                }
-                                if !stdout.data.is_empty() {
-                                    let _ = session_handle.data(channel_id, stdout.data).await;
-                                }
+    if !buffered_stdout.is_empty() {
+        let _ = session_handle.data(channel_id, buffered_stdout).await;
+    }
+
+    let mut stderr_offset = 0;
+    loop {
+        let message = output.recv().await;
+        match message {
+            Some(Ok(message)) => match message.event {
+                Some(boxlite_shared::exec_output::Event::Stdout(stdout)) => {
+                    if let Some(lost_bytes) = output_gap(
+                        &mut stdout_offset,
+                        stdout.offset,
+                        stdout.data.len(),
+                        stdout.total_bytes,
+                    ) {
+                        match output_gap_disposition(completion) {
+                            OutputGapDisposition::Report => {
+                                let _ = session_handle
+                                    .data(channel_id, output_gap_message("stdout", lost_bytes))
+                                    .await;
                             }
-                            Some(boxlite_shared::exec_output::Event::Stderr(stderr)) => {
-                                if let Some(lost_bytes) = output_gap(
-                                    &mut stderr_offset,
-                                    stderr.offset,
-                                    stderr.data.len(),
-                                    stderr.total_bytes,
-                                ) {
-                                    match output_gap_disposition(completion) {
-                                        OutputGapDisposition::Report => {
-                                            let _ = session_handle
-                                                .extended_data(
-                                                    channel_id,
-                                                    1,
-                                                    output_gap_message("stderr", lost_bytes),
-                                                )
-                                                .await;
-                                        }
-                                        OutputGapDisposition::Abort => {
-                                            warn!(%execution_id, lost_bytes, "SSH forwarding output gap");
-                                            terminate_process_group(server.clone(), execution_id.clone()).await;
-                                            finish_channel(
-                                                &session_handle,
-                                                channel_id,
-                                                completion,
-                                                ExitNotification::Status(INDETERMINATE_EXIT_STATUS),
-                                            )
-                                            .await;
-                                            return;
-                                        }
-                                    }
-                                }
-                                if !stderr.data.is_empty() {
-                                    let _ = session_handle.extended_data(channel_id, 1, stderr.data).await;
-                                }
+                            OutputGapDisposition::Abort => {
+                                warn!(%execution_id, lost_bytes, "SSH forwarding output gap");
+                                terminate_process_group(server.clone(), execution_id.clone()).await;
+                                finish_channel(
+                                    &session_handle,
+                                    channel_id,
+                                    completion,
+                                    ExitNotification::Status(INDETERMINATE_EXIT_STATUS),
+                                )
+                                .await;
+                                return;
                             }
-                            None => {}
-                        },
-                        Some(Err(error)) => {
-                            warn!(%error, %execution_id, "SSH output stream failed");
-                            terminate_process_group(server.clone(), execution_id.clone()).await;
-                            finish_channel(
-                                &session_handle,
-                                channel_id,
-                                completion,
-                                ExitNotification::Status(INDETERMINATE_EXIT_STATUS),
-                            )
-                            .await;
-                            return;
                         }
-                        None => break,
+                    }
+                    if !stdout.data.is_empty() {
+                        let _ = session_handle.data(channel_id, stdout.data).await;
                     }
                 }
+                Some(boxlite_shared::exec_output::Event::Stderr(stderr)) => {
+                    if let Some(lost_bytes) = output_gap(
+                        &mut stderr_offset,
+                        stderr.offset,
+                        stderr.data.len(),
+                        stderr.total_bytes,
+                    ) {
+                        match output_gap_disposition(completion) {
+                            OutputGapDisposition::Report => {
+                                let _ = session_handle
+                                    .extended_data(
+                                        channel_id,
+                                        1,
+                                        output_gap_message("stderr", lost_bytes),
+                                    )
+                                    .await;
+                            }
+                            OutputGapDisposition::Abort => {
+                                warn!(%execution_id, lost_bytes, "SSH forwarding output gap");
+                                terminate_process_group(server.clone(), execution_id.clone()).await;
+                                finish_channel(
+                                    &session_handle,
+                                    channel_id,
+                                    completion,
+                                    ExitNotification::Status(INDETERMINATE_EXIT_STATUS),
+                                )
+                                .await;
+                                return;
+                            }
+                        }
+                    }
+                    if !stderr.data.is_empty() {
+                        let _ = session_handle
+                            .extended_data(channel_id, 1, stderr.data)
+                            .await;
+                    }
+                }
+                None => {}
+            },
+            Some(Err(error)) => {
+                warn!(%error, %execution_id, "SSH output stream failed");
+                terminate_process_group(server.clone(), execution_id.clone()).await;
+                finish_channel(
+                    &session_handle,
+                    channel_id,
+                    completion,
+                    ExitNotification::Status(INDETERMINATE_EXIT_STATUS),
+                )
+                .await;
+                return;
             }
+            None => break,
         }
+    }
 
-        // Output EOF and process exit are distinct. Programs may close stdout
-        // and stderr while continuing useful work, so the wait remains
-        // outstanding for their actual lifetime. Channel cancellation is the
-        // bounded escape path and triggers process-group teardown through
-        // ChannelBridge.
-        let exit = tokio::select! {
-            _ = &mut cancel_rx => return,
-            exit = server.wait_execution(&execution_id) => exit,
-        };
+    // Output EOF and process exit are distinct. Programs may close stdout
+    // and stderr while continuing useful work, so the wait remains
+    // outstanding for their actual lifetime. Channel cancellation is the
+    // bounded escape path; the tracked cleanup task terminates the group.
+    let exit = server.wait_execution(&execution_id).await;
 
-        let notification = match exit {
-            Ok(exit) => exit_notification(exit.exit_code, exit.signal, exit.error_message),
-            Err(error) => {
-                warn!(%error, %execution_id, "SSH wait failed");
-                terminate_process_group(server, execution_id.clone()).await;
-                ExitNotification::Status(INDETERMINATE_EXIT_STATUS)
-            }
-        };
+    let notification = match exit {
+        Ok(exit) => exit_notification(exit.exit_code, exit.signal, exit.error_message),
+        Err(error) => {
+            warn!(%error, %execution_id, "SSH wait failed");
+            terminate_process_group(server, execution_id.clone()).await;
+            ExitNotification::Status(INDETERMINATE_EXIT_STATUS)
+        }
+    };
 
-        finish_channel(&session_handle, channel_id, completion, notification).await;
-    })
+    finish_channel(&session_handle, channel_id, completion, notification).await;
 }
 
 fn output_gap(
@@ -858,16 +823,25 @@ fn output_gap_message(source: &str, lost_bytes: u64) -> Vec<u8> {
 /// release waits for both before closing descriptors and removing the registry
 /// entry.
 fn spawn_execution_cleanup(
-    registry: ExecutionRegistry,
+    tasks: Arc<super::TaskGroup>,
+    server: Arc<GuestServer>,
     execution_id: String,
     output_task: JoinHandle<()>,
 ) -> JoinHandle<()> {
-    tokio::spawn(async move {
+    tasks.spawn_tracked(move |cancel| async move {
+        let registry = &server.registry;
         let Some(state) = registry.get(&execution_id).await else {
             return;
         };
 
-        state.wait_process().await;
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                terminate_process_group(server.clone(), execution_id.clone()).await;
+                state.wait_process().await;
+            }
+            _ = state.wait_process() => {}
+        }
         if let Err(error) = output_task.await {
             warn!(%error, %execution_id, "SSH output task ended unexpectedly");
         }
@@ -878,11 +852,14 @@ fn spawn_execution_cleanup(
     })
 }
 
-fn cleanup_failed_execution_start(server: Arc<GuestServer>, execution_id: String) {
-    let cleanup_execution_id = execution_id.clone();
-    let output_task = tokio::spawn(async {});
-    spawn_execution_cleanup(server.registry.clone(), cleanup_execution_id, output_task);
-    tokio::spawn(terminate_process_group(server, execution_id));
+fn cleanup_failed_execution_start(
+    tasks: Arc<super::TaskGroup>,
+    server: Arc<GuestServer>,
+    execution_id: String,
+) {
+    let output_task = tasks.spawn(async {});
+    spawn_execution_cleanup(tasks.clone(), server, execution_id, output_task);
+    tasks.cancel();
 }
 
 fn exit_notification(exit_code: i32, signal: i32, error_message: String) -> ExitNotification {
@@ -1022,6 +999,7 @@ mod tests {
     use super::*;
     use crate::reaper::ExitSlot;
     use crate::service::exec::exec_handle::{ExecHandle, ExitStatus};
+    use crate::service::exec::registry::ExecutionRegistry;
     use crate::service::exec::state::ExecutionState;
     use nix::unistd::{pipe, Pid};
 
@@ -1099,8 +1077,8 @@ mod tests {
         // session can supply the real account values.
         assert!(!launch.env.contains_key("HOME"));
         assert!(!launch.env.contains_key("SHELL"));
-        assert_eq!(launch.env.get("USER").map(String::as_str), Some("root"));
-        assert_eq!(launch.env.get("LOGNAME").map(String::as_str), Some("root"));
+        assert!(!launch.env.contains_key("USER"));
+        assert!(!launch.env.contains_key("LOGNAME"));
         assert_eq!(
             launch.env.get("TERM").map(String::as_str),
             Some("xterm-256color")
@@ -1157,8 +1135,8 @@ mod tests {
             crate::service::ssh::workload::INTERNAL_PROGRAM
         );
         assert_eq!(launch.args, [crate::service::ssh::sftp::INTERNAL_SFTP_ARG]);
-        assert_eq!(launch.user.as_deref(), Some("0:0"));
-        assert_eq!(launch.env.len(), 3);
+        assert_eq!(launch.user, None);
+        assert_eq!(launch.env.len(), 1);
         assert_eq!(
             launch.env.get(executor_const::ENV_VAR).map(String::as_str),
             Some("container=container-1")
@@ -1180,8 +1158,8 @@ mod tests {
                 "/run/service.sock"
             ]
         );
-        assert_eq!(launch.user.as_deref(), Some("0:0"));
-        assert_eq!(launch.env.len(), 3);
+        assert_eq!(launch.user, None);
+        assert_eq!(launch.env.len(), 1);
         assert_eq!(
             launch.env.get(executor_const::ENV_VAR).map(String::as_str),
             Some("container=container-1")
@@ -1303,10 +1281,127 @@ mod tests {
         assert_eq!(signal_number(&Sig::Custom("UNKNOWN".into())), None);
     }
 
+    // Construct a channel without requiring a container or SSH transport.
+    fn test_stdin_forwarder(
+        tasks: Arc<super::super::TaskGroup>,
+    ) -> (StdinForwarder, mpsc::Receiver<ExecStdin>) {
+        let (sender, receiver) = mpsc::channel(STDIN_QUEUE_DEPTH);
+        (
+            StdinForwarder {
+                tasks,
+                execution_id: "exec-1".into(),
+                sender,
+            },
+            receiver,
+        )
+    }
+
+    async fn cancelled_full_stdin_queue(close: bool) {
+        let generation = Arc::new(super::super::TaskGroup::default());
+        let connection = generation.child();
+        let channel = connection.child();
+        let (forwarder, mut receiver) = test_stdin_forwarder(channel.clone());
+        for _ in 0..STDIN_QUEUE_DEPTH {
+            forwarder.data(vec![1]).await.unwrap();
+        }
+        {
+            let blocked = async {
+                if close {
+                    forwarder.eof().await
+                } else {
+                    forwarder.data(vec![2]).await
+                }
+            };
+            tokio::pin!(blocked);
+            assert!(futures::poll!(&mut blocked).is_pending());
+            tokio::task::yield_now().await;
+            assert!(futures::poll!(&mut blocked).is_pending());
+            generation.cancel();
+            let result = tokio::time::timeout(std::time::Duration::from_secs(1), blocked)
+                .await
+                .expect("cancelled stdin enqueue must stop waiting on the full queue");
+            assert!(matches!(result, Err(BridgeError::StdinClosed)));
+        }
+        assert_eq!(receiver.len(), STDIN_QUEUE_DEPTH);
+        for _ in 0..STDIN_QUEUE_DEPTH {
+            assert_eq!(receiver.recv().await.unwrap().data, vec![1]);
+        }
+        assert!(receiver.try_recv().is_err());
+        drop(forwarder);
+        drop(channel);
+        drop(connection);
+        generation.wait().await;
+    }
+
+    #[tokio::test]
+    async fn stdin_cancel_unblocks_full_data_queue() {
+        cancelled_full_stdin_queue(false).await;
+    }
+
+    #[tokio::test]
+    async fn stdin_cancel_unblocks_full_eof_queue() {
+        cancelled_full_stdin_queue(true).await;
+    }
+
+    #[tokio::test]
+    async fn stdin_cancel_rejects_data_and_eof_with_queue_space() {
+        let tasks = Arc::new(super::super::TaskGroup::default());
+        let (forwarder, mut receiver) = test_stdin_forwarder(tasks.clone());
+        forwarder.data(vec![1]).await.unwrap();
+        tasks.cancel();
+        assert!(matches!(
+            forwarder.data(vec![2]).await,
+            Err(BridgeError::StdinClosed)
+        ));
+        assert!(matches!(
+            forwarder.eof().await,
+            Err(BridgeError::StdinClosed)
+        ));
+        assert_eq!(receiver.recv().await.unwrap().data, vec![1]);
+        assert!(receiver.try_recv().is_err());
+        tasks.wait().await;
+    }
+
+    #[tokio::test]
+    async fn stdin_cancel_before_first_enqueue_rejects_data() {
+        let tasks = Arc::new(super::super::TaskGroup::default());
+        let (forwarder, mut receiver) = test_stdin_forwarder(tasks.clone());
+        let send = forwarder.data(vec![1]);
+        tasks.cancel();
+        assert!(matches!(send.await, Err(BridgeError::StdinClosed)));
+        assert!(receiver.try_recv().is_err());
+        tasks.wait().await;
+    }
+
+    #[tokio::test]
+    async fn stdin_cancel_channel_preserves_sibling() {
+        let connection = Arc::new(super::super::TaskGroup::default());
+        let channel = connection.child();
+        let sibling = connection.child();
+        let (forwarder, _receiver) = test_stdin_forwarder(channel.clone());
+        let (other, mut receiver) = test_stdin_forwarder(sibling.clone());
+        channel.cancel();
+        assert!(matches!(
+            forwarder.eof().await,
+            Err(BridgeError::StdinClosed)
+        ));
+        other.data(vec![3]).await.unwrap();
+        other.eof().await.unwrap();
+        let message = receiver.recv().await.unwrap();
+        assert_eq!(message.data, vec![3]);
+        assert!(!message.close);
+        assert!(receiver.recv().await.unwrap().close);
+        assert!(!connection.is_cancelled());
+        assert!(!sibling.is_cancelled());
+        drop((forwarder, other, channel, sibling));
+        connection.wait().await;
+    }
+
     #[tokio::test]
     async fn stdin_backpressure_preserves_more_than_one_queue_of_frames() {
         let (sender, mut receiver) = mpsc::channel(STDIN_QUEUE_DEPTH);
         let forwarder = StdinForwarder {
+            tasks: Default::default(),
             execution_id: "exec-1".into(),
             sender,
         };
@@ -1337,11 +1432,19 @@ mod tests {
 
     #[tokio::test]
     async fn attach_failure_still_releases_after_terminal_exit() {
-        let registry = ExecutionRegistry::new();
+        let root = tempfile::tempdir().unwrap();
+        let server = Arc::new(GuestServer::new(crate::layout::GuestLayout::with_base(
+            root.path(),
+        )));
+        let registry = server.registry.clone();
         let exit_tx = pending_execution(&registry, "attach-failed", 31_001).await;
         let output_task = tokio::spawn(async {});
-        let cleanup =
-            spawn_execution_cleanup(registry.clone(), "attach-failed".into(), output_task);
+        let cleanup = spawn_execution_cleanup(
+            Default::default(),
+            server,
+            "attach-failed".into(),
+            output_task,
+        );
 
         tokio::task::yield_now().await;
         assert!(registry.exists("attach-failed").await);
@@ -1356,13 +1459,18 @@ mod tests {
 
     #[tokio::test]
     async fn cancelled_output_waiter_survives_until_teardown_reaps_process() {
-        let registry = ExecutionRegistry::new();
+        let root = tempfile::tempdir().unwrap();
+        let server = Arc::new(GuestServer::new(crate::layout::GuestLayout::with_base(
+            root.path(),
+        )));
+        let registry = server.registry.clone();
         let exit_tx = pending_execution(&registry, "cancelled", 31_002).await;
         let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
         let output_task = tokio::spawn(async move {
             let _ = cancel_rx.await;
         });
-        let cleanup = spawn_execution_cleanup(registry.clone(), "cancelled".into(), output_task);
+        let cleanup =
+            spawn_execution_cleanup(Default::default(), server, "cancelled".into(), output_task);
 
         cancel_tx.send(()).unwrap();
         tokio::task::yield_now().await;
@@ -1380,13 +1488,18 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_execution_is_retained_until_output_is_drained() {
-        let registry = ExecutionRegistry::new();
+        let root = tempfile::tempdir().unwrap();
+        let server = Arc::new(GuestServer::new(crate::layout::GuestLayout::with_base(
+            root.path(),
+        )));
+        let registry = server.registry.clone();
         let exit_tx = pending_execution(&registry, "draining", 31_003).await;
         let (drained_tx, drained_rx) = oneshot::channel::<()>();
         let output_task = tokio::spawn(async move {
             let _ = drained_rx.await;
         });
-        let cleanup = spawn_execution_cleanup(registry.clone(), "draining".into(), output_task);
+        let cleanup =
+            spawn_execution_cleanup(Default::default(), server, "draining".into(), output_task);
 
         exit_tx.send(Some(ExitStatus::Code(0))).unwrap();
         tokio::task::yield_now().await;

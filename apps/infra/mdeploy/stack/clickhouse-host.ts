@@ -19,7 +19,7 @@ export interface ClickHouseUserDataInput {
 }
 
 const schemaSource = [
-  new URL('../clickhouse/otel-schema-v0.144.0.sql', import.meta.url),
+  new URL('../../clickhouse/otel-schema-v0.144.0.sql', import.meta.url),
   resolve(process.cwd(), 'clickhouse/otel-schema-v0.144.0.sql'),
   resolve(process.cwd(), 'apps/infra/clickhouse/otel-schema-v0.144.0.sql'),
 ].find((candidate) => existsSync(candidate))

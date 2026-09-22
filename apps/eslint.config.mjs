@@ -34,6 +34,8 @@ export default [
         {
           enforceBuildableLibDependency: true,
           allow: ['^.*/eslint(\\.base)?\\.config\\.[cm]?js$'],
+          // Bootstrap loads these helpers eagerly; mdeploy CLI entry points stay lazy.
+          checkDynamicDependenciesExceptions: ['mdeploy/hosts', 'mdeploy/runner-binary'],
           depConstraints: [
             {
               sourceTag: '*',

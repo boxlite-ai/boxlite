@@ -14,8 +14,12 @@ name: CodeQL
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
   workflow_dispatch:
   schedule:
     # Weekly full scan of the default branch (Mondays 03:31 UTC).

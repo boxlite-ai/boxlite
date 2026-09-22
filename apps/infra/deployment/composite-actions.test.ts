@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { runInNewContext } from 'node:vm'
 import { load as loadYaml } from 'js-yaml'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -239,14 +240,75 @@ test('the caller script lands once, however its block scalar was written', () =>
 })
 
 test('a caller that supplies no script still gets the prologue and the epilogue', () => {
-  // warm-caches.yml relies on this: for it the prologue *is* the payload, since running
-  // `make setup:build runtime` under sccache is the whole point of the job.
+  // Empty payloads still need the runtime setup and cache reporting around them.
   const generated = generatedScript('')
   assert.ok(
     generated.includes('make setup:build runtime\n\ncommand -v sccache'),
     `empty caller script did not collapse to a single blank line:\n${generated}`,
   )
 })
+
+for (const cached of [true, false]) {
+  test(`manylinux hands the disk cache to the container and returns ownership: cached=${cached}`, () => {
+    // Exercise the real Docker command with a path containing spaces. The stubs record
+    // process boundaries, including cleanup after a failed container build.
+    const dir = mkdtempSync(join(tmpdir(), 'boxlite manylinux '))
+    try {
+      const bin = join(dir, 'bin')
+      mkdirSync(bin)
+      mkdirSync(join(dir, 'sccache'), { recursive: true })
+      for (const [name, body] of Object.entries({
+        docker: 'printf "docker\\n" >> "$TRACE"; printf "%s\\n" "$@" > "$ARGS"; exit 17',
+        sudo: 'printf "ownership\\n" >> "$TRACE"; printf "%s\\n" "$@" > "$OWNER_ARGS"',
+        ...(cached ? { sccache: 'printf "sccache %s\\n" "$*" >> "$TRACE"' } : {}),
+      })) {
+        writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+      }
+      const result = runShell(String(readAction('run-in-manylinux').runs.steps[0].run), {
+        PATH: `${bin}:/usr/bin:/bin`, RUNNER_TEMP: dir, GITHUB_WORKSPACE: dir,
+        BUILD_SCRIPT: '', TARGET: 'linux-arm64-gnu', TRACE: join(dir, 'trace'),
+        SCCACHE_DIR: join(dir, 'sccache'),
+        ARGS: join(dir, 'args'), OWNER_ARGS: join(dir, 'owner-args'),
+        ACTIONS_RUNTIME_TOKEN: 'must-not-be-forwarded',
+      }, dir)
+      assert.equal(result.status, 17, 'cleanup must preserve the container failure')
+      const args = readFileSync(join(dir, 'args'), 'utf8').trim().split('\n')
+      assert.ok(args.includes(`${dir}:/work`), 'workspace mount must remain a single argument')
+      assert.ok(args.includes('quay.io/pypa/manylinux_2_28_aarch64'))
+      assert.equal(args.includes('SCCACHE_DIR=/cache/sccache'), cached)
+      assert.equal(args.includes('SCCACHE_GHA_ENABLED=false'), cached)
+      assert.equal(args.includes('RUSTC_WRAPPER=sccache'), cached)
+      assert.ok(!args.some((argument) => argument.includes('ACTIONS_RUNTIME_TOKEN')))
+      assert.deepEqual(readFileSync(join(dir, 'trace'), 'utf8').trim().split('\n'),
+        [...(cached ? ['sccache --stop-server'] : []), 'docker', 'ownership'])
+      const ownerArgs = readFileSync(join(dir, 'owner-args'), 'utf8').trim().split('\n')
+      assert.equal(ownerArgs[0], 'chown')
+      assert.equal(ownerArgs.at(-1), join(dir, 'sccache'))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+}
+
+for (const status of [0, 17]) {
+  test(`the container flushes its disk cache when the build exits ${status}`, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'boxlite-container-'))
+    try {
+      mkdirSync(join(dir, 'scripts'))
+      writeFileSync(join(dir, 'scripts/util.sh'), '#!/bin/sh\necho x86_64-unknown-linux-musl\n', { mode: 0o755 })
+      for (const name of ['git', 'make', 'sccache']) {
+        writeFileSync(join(dir, name), `#!/bin/sh\nprintf '${name} %s\\n' "$*" >> "$TRACE"\n`, { mode: 0o755 })
+      }
+      const result = runShell(generatedScript(`exit ${status}`), {
+        PATH: `${dir}:/usr/bin:/bin`, CARGO_HOME: dir, TRACE: join(dir, 'trace'),
+      }, dir)
+      assert.equal(result.status, status)
+      assert.match(readFileSync(join(dir, 'trace'), 'utf8'), /sccache --stop-server\n$/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+}
 
 /* ------------------------------------------------------------------------- sccache */
 
@@ -267,7 +329,7 @@ const sccacheEnvironment = ({
   expectStatus = 0,
 }: SccacheRun = {}) => {
   const action = readAction('sccache')
-  const step = action.runs.steps.find((candidate: any) => typeof candidate.run === 'string')
+  const step = action.runs.steps.find((candidate: any) => candidate.name === 'Enable sccache for this job')
   assert.ok(step, 'the sccache action no longer has a run step')
   // The harness supplies TOLERATE_FAILURE below, so on its own it would keep passing if the action
   // stopped mapping the input into the environment — at which point every tolerant caller would
@@ -328,21 +390,89 @@ const sccacheEnvironment = ({
 }
 
 test('sccache is switched on for the job, not merely installed', () => {
-  // The upstream action installs the binary and exports the cache credentials but sets neither
-  // RUSTC_WRAPPER nor SCCACHE_GHA_ENABLED, so a job that only installed it compiled uncached
-  // while still looking healthy. These two are the difference.
   const { exported, workspace } = sccacheEnvironment()
   assert.equal(exported.get('RUSTC_WRAPPER'), 'sccache')
-  assert.equal(exported.get('SCCACHE_GHA_ENABLED'), 'true')
+  assert.equal(exported.get('SCCACHE_GHA_ENABLED'), 'false')
   // sccache cannot cache incremental compilation, so the wrapper above is worth nothing without it.
   assert.equal(exported.get('CARGO_INCREMENTAL'), '0')
   assert.equal(exported.get('SCCACHE_BASEDIRS'), workspace)
-  // Re-exported for the later host steps and for the docker invocation in run-in-manylinux,
-  // which reads them from the job environment rather than from the installing step's process.
-  assert.equal(exported.get('ACTIONS_RESULTS_URL'), 'https://results.example/')
-  assert.equal(exported.get('ACTIONS_RUNTIME_TOKEN'), 'token-value')
-  assert.equal(exported.get('ACTIONS_CACHE_SERVICE_V2'), 'on')
+  assert.equal(exported.get('SCCACHE_DIR'), join(workspace, 'sccache'))
+  assert.equal(exported.get('SCCACHE_DIRECT'), 'false')
+  assert.equal(exported.get('ACTIONS_RUNTIME_TOKEN'), undefined)
 })
+
+test('compiler results use a bounded disk cache instead of per-object GHA writes', () => {
+  const { exported, workspace } = sccacheEnvironment()
+  assert.equal(exported.get('SCCACHE_GHA_ENABLED'), 'false', 'compiler results must not use the failing remote write path')
+  assert.equal(exported.get('SCCACHE_DIR'), join(workspace, 'sccache'))
+  assert.equal(exported.get('SCCACHE_CACHE_SIZE'), '1G')
+  const steps = readAction('sccache').runs.steps
+  const archive = steps.findIndex((step: any) => step.uses?.startsWith('actions/cache@'))
+  const install = steps.findIndex((step: any) => step.uses?.startsWith('mozilla-actions/sccache-action'))
+  assert.ok(archive >= 0 && archive < install, 'the stats post-step must run before the archive post-step saves its files')
+  assert.equal(steps[archive].with.path, '${{ runner.temp }}/sccache')
+})
+
+test('compiler cache save reuses the lockfile hash captured before container builds', () => {
+  const steps = readAction('sccache').runs.steps
+  const archive = steps.findIndex((step: any) => step.uses?.startsWith('actions/cache@'))
+  const directory = mkdtempSync(join(tmpdir(), 'boxlite-cache-key-'))
+  let containerFinished = false
+  let hashCalls = 0
+  const context: any = {
+    runner: { os: 'Linux', arch: 'ARM64', temp: directory },
+    github: { workflow: 'Build Runtime', job: 'build', run_id: '123', run_attempt: '1' },
+    steps: {},
+    hashFiles: () => {
+      assert.equal(containerFinished, false, 'cache save must not hash container-owned Cargo.lock files')
+      hashCalls++
+      return 'checkout-lockfile-hash'
+    },
+  }
+  const evaluate = (value: string) => value.replace(/\$\{\{\s*(.*?)\s*\}\}/g,
+    (_match, expression: string) => String(runInNewContext(expression, context)))
+  try {
+    // Execute the action's preparation shell and retain its outputs as the runner does.
+    for (const step of steps.slice(0, archive)) {
+      assert.ok(step.run && step.id, 'cache preparation must expose its result')
+      const output = join(directory, step.id)
+      const env = Object.fromEntries(Object.entries<string>(step.env ?? {}).map(([name, value]) => [name, evaluate(value)]))
+      const result = runShell(evaluate(step.run), { ...env, PATH: '/usr/bin:/bin', GITHUB_OUTPUT: output }, directory)
+      assert.equal(result.status, 0, result.stderr)
+      context.steps[step.id] = { outputs: Object.fromEntries(readFileSync(output, 'utf8').trim().split('\n').map((line) => {
+        const separator = line.indexOf('=')
+        return [line.slice(0, separator), line.slice(separator + 1)]
+      })) }
+    }
+    const restore = evaluate(JSON.stringify(steps[archive].with))
+    containerFinished = true
+    const save = evaluate(JSON.stringify(steps[archive].with))
+    assert.equal(save, restore, 'restore and save must use the same captured cache key')
+    assert.equal(hashCalls, 1, 'lockfiles must be hashed once before compilation')
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+for (const file of ['build-runtime.yml', 'build-c.yml', 'build-node.yml', 'build-wheels.yml']) {
+  for (const os of ['Linux', 'macOS']) {
+    test(`${file} uses the appropriate Cargo cache for ${os} distribution builds`, () => {
+      const workflow: any = loadYaml(readFileSync(join(WORKFLOWS_DIR, file), 'utf8'))
+      const job: any = Object.values<any>(workflow.jobs).find((candidate) =>
+        candidate.steps?.some((step: any) => step.uses === './.github/actions/build-guest'))
+      assert.ok(job, 'the distribution job must stage guest artifacts')
+      const setup = job.steps.find((step: any) => step.uses === './.github/actions/setup-rust')
+      const action = readAction('setup-rust')
+      const evaluate = (value: string, context: any) => String(value).replace(/\$\{\{\s*(.*?)\s*\}\}/g,
+        (_match, expression: string) => String(runInNewContext(expression, context)))
+      const cacheInput = evaluate(setup.with?.cache ?? action.inputs.cache?.default ?? 'true', { runner: { os } })
+      const upstream = action.runs.steps.find((step: any) => step.uses?.startsWith('actions-rust-lang/setup-rust-toolchain@'))
+      const cacheEnabled = evaluate(upstream.with?.cache ?? 'true', { inputs: { cache: cacheInput } })
+      assert.equal(cacheEnabled, String(os !== 'Linux'), 'Linux discards the host toolchain and target before its container build')
+      assert.ok(job.steps.some((step: any) => step.uses === './.github/actions/sccache'), 'compiler caching must remain enabled')
+    })
+  }
+}
 
 test('a missing sccache degrades the build rather than breaking it', () => {
   // tolerate-failure lets a failed install continue uncached. Exporting RUSTC_WRAPPER anyway
@@ -351,17 +481,12 @@ test('a missing sccache degrades the build rather than breaking it', () => {
   const { exported, stdout } = sccacheEnvironment({ onPath: false })
   assert.equal(exported.get('RUSTC_WRAPPER'), undefined)
   assert.match(stdout, /::warning::/, 'a job compiling uncached says so')
-  // The configuration published before the failure is left alone rather than retracted. That is
-  // all this pins: with no host binary nothing caches anywhere, because run-in-manylinux gates its
-  // entire -e list on host PATH too, and cibuildwheel's container — the only one that installs its
-  // own sccache — wraps cargo through the RUSTC_WRAPPER that is unset here.
-  assert.equal(exported.get('SCCACHE_GHA_ENABLED'), 'true')
+  assert.equal(exported.get('SCCACHE_GHA_ENABLED'), 'false')
 })
 
 test('a caller that refuses to tolerate a cache failure gets one', () => {
-  // warm-caches.yml passes tolerate-failure: 'false' because populating the cache is the whole
-  // job. A warning it then ignores would let that workflow "succeed" having cached nothing —
-  // and every workflow reading the cache afterwards would silently miss.
+  // Scheduled runtime builds require a working cache. Silently continuing would report a
+  // successful refresh even though subsequent builds could not reuse it.
   const { exported, stdout } = sccacheEnvironment({ onPath: false, tolerateFailure: 'false', expectStatus: 1 })
   assert.match(stdout, /::error::/, 'an intolerant caller is told with an error, not a warning')
   assert.equal(exported.get('RUSTC_WRAPPER'), undefined)
@@ -392,10 +517,10 @@ test('a tolerant job also survives a cache failure after startup', () => {
   )
 })
 
-test('a change under .github reaches this suite locally, not only in CI', () => {
+test('a change under .github reaches this suite locally', () => {
   // Without all three of these a workflow or action edit runs no local check at all: the
   // pre-push hook declines the change, and even if it fired, no component tag would map to a
-  // test. CI catches it via lint.yml's paths filter, but only after a push.
+  // test.
   // Compared as literal text: these files escape for shell and for make, so both carry
   // backslashes that a regex written from the visible characters would silently miss.
   const changes = readFileSync(join(REPO_ROOT, 'make/changes.mk'), 'utf8')

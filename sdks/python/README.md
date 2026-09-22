@@ -246,7 +246,7 @@ Configuration options for creating a box.
   - Protocol: `"tcp"`; UDP is rejected
   - Portable local/remote code uses `box.network.tunnel(port)`; each tunnel is
     a prepared one-shot tunnel; call `forward()` for a listener
-- `secrets: List[Secret]` - Host-side HTTP(S) secret substitution rules
+- `secrets: List[Secret]` - Host-side HTTPS secret substitution rules
 - `advanced: AdvancedBoxOptions | None` - Expert-only container options
   - `capabilities.add: List[str]` - Capabilities added to BoxLite's baseline
   - `capabilities.drop: List[str]` - Capabilities removed from the resulting set
@@ -265,7 +265,10 @@ Supplying it together with `outbound` raises `ValueError`. `spec.mode` and
 `allow_net` restricts both TCP and UDP egress. Hostname entries are enforced by
 inspecting TLS SNI / HTTP Host, which only TCP carries, so an `allow_net`
 holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP
-open.
+open. A host matched by a configured `Secret` is additionally reachable on port
+443 without a rule of its own, so `allow_net` is not the only egress gate. The
+connection is dialed by name, and under a non-empty `allow_net` an answer in a
+private, loopback or CGNAT range is refused unless an IP or CIDR rule covers it.
 
 `mode="disabled"` removes the guest network interface entirely.
 

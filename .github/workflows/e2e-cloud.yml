@@ -176,7 +176,7 @@ jobs:
       # localhost -d boxlite_dev` for snapshot state, and an
       # `UPDATE organization SET max_*_per_box` for quotas — because, as
       # its own comment puts it, the fixture lives next to the DB.
-      # e2e-local and e2e-stack run on a host that bootstrapped that DB;
+      # Local stack tests run on a host that bootstrapped that DB;
       # this runs on a GitHub runner against a remote API, so there is no
       # localhost Postgres and fixture_setup would exit on the quota patch.
       #

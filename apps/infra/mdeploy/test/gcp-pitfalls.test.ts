@@ -23,7 +23,7 @@ import { apiEnvironmentFrom } from '../src/api-environment.ts'
 import { publicHostsFor } from '../stack/api.ts'
 import { alertPolicyFilter } from '../stack/providers/gcp/alarms.ts'
 import { certificateNameFor, internalAuthorizationNameFor } from '../stack/providers/gcp/certificate-name.ts'
-import { renderClickHouseSchema } from '../../scripts/clickhouse-host.js'
+import { renderClickHouseSchema } from '../stack/clickhouse-host.ts'
 import {
   DISK_TYPE as CLICKHOUSE_DISK,
   MACHINE as CLICKHOUSE_MACHINE,
@@ -40,7 +40,7 @@ import {
 } from '../stack/providers/gcp/network.ts'
 import { BOOT_DISK_TYPE, MACHINE as RUNNER_MACHINE } from '../stack/providers/gcp/runners.ts'
 import { apiPrefixRouteRules } from '../stack/providers/gcp/api.ts'
-import { isMissingNeg, secretProviderParameters } from '../stack/providers/gcp/edge.ts'
+import { isMissingNeg } from '../stack/providers/gcp/edge.ts'
 import { instanceFor } from 'naming'
 
 /*
@@ -1046,10 +1046,20 @@ test('the GKE nodes may read the registry, without granting that role to the wor
   assert.equal(/roles\/artifactregistry\.reader/.test(sourceOf('edge')), false)
 })
 
-test('the cluster enables managed Secret Manager CSI and Workload Identity', () => {
+test('the cluster enables Workload Identity and installs no driver nothing mounts', () => {
+  /*
+   * The Secret Manager add-on was here for one reader: the proxy's CSI volume.
+   * That volume is gone — the stack writes the Kubernetes Secret directly — and
+   * the proxy is the only workload on this cluster, so the add-on would install
+   * a driver and a provider for nobody. Workload Identity stays: it is how the
+   * Pod's service account is the proxy's Google one.
+   */
   const source = sourceOf('cluster')
   assert.match(source, /workloadIdentityConfig: \{ workloadPool: `\$\{project\}\.svc\.id\.goog` \}/)
-  assert.match(source, /secretManagerConfig: \{ enabled: true \}/)
+  // Named, not deleted: a removed property left the provider with nothing to
+  // send, and GKE answered `Error 400: Must specify a field to update` on the
+  // apply that followed the add-on's removal.
+  assert.match(source, /secretManagerConfig: \{ enabled: false \}/, 'no CSI driver without a mount to serve')
   // The metadata server is Autopilot's own default; what still has to be said
   // is which identity its nodes run as, or they fall back to the project's
   // default Compute account.
@@ -1057,41 +1067,55 @@ test('the cluster enables managed Secret Manager CSI and Workload Identity', () 
   assert.match(source, /enablePrivateNodes: true/)
 })
 
-test('the proxy key reaches the container by reference, never as a manifest value', () => {
+test('the proxy key reaches the container as a Secret this stack writes', () => {
   /*
    * The app reads one channel — `PROXY_API_KEY` — so the value has to arrive as
-   * a value. What must never happen is it arriving as a *literal*: the
-   * Deployment manifest is readable by anything that can describe the workload,
-   * and Pulumi would keep a copy in the checkpoint besides.
+   * a value, and never as a *literal* in the Deployment manifest, which
+   * anything able to describe the workload can read.
    *
-   * So the CSI driver stays: it fetches from Secret Manager with the pod's own
-   * identity and syncs the object this container names by reference. The mount
-   * stays with it, because the driver syncs `secretObjects` only while a pod
-   * mounts the volume.
+   * It used to arrive through the CSI driver's `secretObjects`, and on GKE's
+   * managed provider that never happened: the driver mounts the file and
+   * ignores the sync. Every Pod reported `mounted: true` while the object it
+   * named did not exist, so a rollout stalled in `CreateContainerConfigError:
+   * secret "proxy-api-key" not found` and only the old ReplicaSet — which
+   * still read the file — kept serving.
+   *
+   * What this replaces asserted the opposite: that no `kubernetes.core.v1
+   * .Secret` is declared here, so the payload stayed out of Pulumi state. That
+   * property is genuinely lost, and it is what a Secret that exists costs.
    */
   const source = sourceOf('edge')
-  assert.match(source, /kind: 'SecretProviderClass'/)
-  assert.match(source, /provider: 'gke'/)
-  assert.match(source, /driver: 'secrets-store-gke\.csi\.k8s\.io'/)
+  assert.match(source, /kubernetes\.core\.v1\.Secret/, 'the stack has to write the object itself')
+  assert.match(source, /stringData: \{ \[PROXY_API_KEY\]: \$util\.secret\(apiKeyPayload\) \}/)
   assert.match(source, /delete plainEnvironment\[PROXY_API_KEY\]/, 'the key must not reach the plain environment')
   assert.match(source, /valueFrom: \{ secretKeyRef: \{ name: PROXY_API_KEY_SECRET, key: PROXY_API_KEY \} \}/)
-  assert.match(source, /secretObjects: \[/, 'the driver has to be told to sync it')
-  assert.match(source, /data: \[\{ objectName: PROXY_API_KEY_PATH, key: PROXY_API_KEY \}\]/)
-  assert.match(source, /volumeMounts: \[\{ name: SECRET_VOLUME/, 'the sync stops when nothing mounts it')
-  // Written by the driver from the mount, never by this stack: a Secret created
-  // here would carry the payload through Pulumi's state.
-  assert.equal(/kubernetes\.core\.v1\.Secret/.test(source), false)
-  assert.deepEqual(JSON.parse(secretProviderParameters('projects/p/secrets/proxy/versions/7')), [
-    { resourceName: 'projects/p/secrets/proxy/versions/7', path: 'proxy-api-key' },
-  ])
+  assert.equal(
+    /secretObjects: \[/.test(source),
+    false,
+    'the sync this provider ignores must not come back',
+  )
+  assert.equal(
+    /SecretProviderClass|secrets-store-gke\.csi\.k8s\.io/.test(source),
+    false,
+    'the CSI mount fed the file channel the proxy no longer has',
+  )
 })
 
-test('the Kubernetes identity maps to the existing proxy GSA and gets only secret access', () => {
+test('the Kubernetes identity maps to the existing proxy GSA and reaches no secret of its own', () => {
+  /*
+   * The pod-side grant went with the mount. It existed so the CSI driver could
+   * fetch the key with the pod's identity; the stack writes the Kubernetes
+   * Secret itself now, so a Pod that could still read Secret Manager would be
+   * carrying an access nothing in it uses.
+   */
   const source = sourceOf('edge')
   assert.match(source, /'iam\.gke\.io\/gcp-service-account': placement\.serviceAccount/)
   assert.match(source, /role: 'roles\/iam\.workloadIdentityUser'/)
-  assert.match(source, /role: 'roles\/secretmanager\.secretAccessor'/)
-  assert.match(source, /secretId: coordinates\.apply/)
+  assert.equal(
+    /roles\/secretmanager\.secretAccessor/.test(source),
+    false,
+    'the proxy reads its key from etcd, not from Secret Manager',
+  )
 })
 
 test('a zone GKE has not created a NEG in yet is skipped, and nothing else is', () => {

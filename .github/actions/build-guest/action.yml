@@ -1,6 +1,6 @@
 # Requirement: ./.github/actions/setup-rust and ./.github/actions/sccache should both be run before
 # this. They are not nested here on purpose — sccache is job-scoped, not guest-scoped: the manylinux
-# container step later in these same jobs mounts the sccache binary and reads the ACTIONS_* vars
+# container step later in these same jobs mounts the sccache binary and its disk cache
 # this action's siblings exported, so folding the setup in here would hide a job-wide prerequisite
 # inside one of its several consumers.
 #
@@ -23,7 +23,7 @@ description: >-
   and the tree is removed afterwards to reclaim runner disk. Nothing needs the
   intermediates: every caller restores .cache/<target>; SKIP_GUEST_BUILD=1 keeps
   boxlite-guest from being rebuilt, while the two tools remain available as build
-  outputs without entering the current runtime package. Four callers get that from
+  outputs without entering the current runtime package. Three callers get that from
   ./.github/actions/run-in-manylinux's prologue; build-wheels.yml gets it from
   cibuildwheel instead (sdks/python/pyproject.toml, before-all and environment).
   sccache keeps Rust compilation units separately, so those units remain reusable
@@ -32,8 +32,8 @@ description: >-
 inputs:
   show-sccache-stats:
     description: >-
-      Print sccache statistics after the build. warm-caches.yml sets this because
-      the numbers are its actual output; ordinary builds leave them out of the log.
+      Print sccache statistics after the build. Scheduled runtime builds use this
+      to report their cache refresh; ordinary builds leave them out of the log.
     required: false
     default: 'false'
 
@@ -49,6 +49,9 @@ runs:
         if [ "$SHOW_SCCACHE_STATS" = 'true' ]; then
           sccache --show-stats
         fi
+
+        # The container takes ownership of the same disk cache next.
+        command -v sccache >/dev/null && sccache --stop-server || true
 
         GUEST_TARGET=$(scripts/util.sh --target)
         rm -rf -- ".cache/$GUEST_TARGET/release"

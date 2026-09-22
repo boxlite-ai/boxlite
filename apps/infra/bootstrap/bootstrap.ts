@@ -105,7 +105,7 @@ import {
 import { validateDotenvSyntax } from '../deployment/key-policy.js'
 import { promptSecret, requireNonEmptySecret } from './secret-prompt.js'
 import { customApiArgs, spaApplicationArgs, tenantSettingsArgs } from './auth0.js'
-import { publicHostsFor } from '../mdeploy/stack/hosts.js'
+import { publicHostsFor } from 'mdeploy/hosts'
 import {
   environmentApiPath,
   githubEnvironmentPayload,
@@ -119,7 +119,7 @@ import { homeFor, loadConfig, type MstageConfig } from 'mstage/config'
 import { resolveHome } from 'mstage/home'
 import { resolveScope } from 'mstage/scope'
 import { loadBuildConfig, registryFor } from 'mbuild/config'
-import { bootstrapGcp, type GitHubRepository } from './gcp.js'
+import { bootstrapGcp, promotionSourceFor, type GitHubRepository } from './gcp.js'
 import { bootstrapAws } from './aws.js'
 
 // The one stage that must never end up with an unreviewed deploy path. Matches
@@ -995,11 +995,24 @@ async function bootstrapAwsRole({ region, stage, repo, accountId }: any): Promis
  * same reason as before: it is read before any AWS access exists, so it cannot come from the store,
  * and a stage outside the default region has nowhere else to say so.
  *
- * `stage` is nullable for the same reason `--env` is sometimes absent below:
- * GCP_IMAGE_PUBLISHER is read by a workflow with no `environment:` declared,
- * shared by every stage for the same reason the AWS ECR push role is
- * (bootstrap/aws's ecr-push-role-trust.json trusts both claim shapes too).
+ * `stage` is nullable because some values genuinely are repository-wide. A
+ * per-project identity is not one of them: every GCP variable below names an
+ * account that exists in one project, and a shared value is the hazard this
+ * comment already describes two paragraphs up.
  */
+/** A repository-wide variable this bootstrap no longer writes. Absence is fine. */
+function ghVariableDeleteIfPresent({ repo, name }: any) {
+  try {
+    execFileSync('gh', ['variable', 'delete', name, '--repo', repo], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+      timeout: 30_000,
+      killSignal: 'SIGTERM',
+    })
+  } catch {
+    // Never written, already removed, or not visible to this token.
+  }
+}
+
 function ghEnvironmentVariableSet({ repo, stage, name, value }: any) {
   const scope = stage ? ['--env', stage] : []
   execFileSync('gh', ['variable', 'set', name, '--repo', repo, ...scope, '--body', value], {
@@ -1127,6 +1140,7 @@ async function bootstrapGcpStage({
     // and mbuild refuses to publish into a repository that contradicts it.
     immutableTags: buildConfig.stages[stage]!.registry.immutableTags,
     github,
+    promotionSource: promotionSourceFor({ config, stage }),
     log: console.log,
   })
 
@@ -1139,12 +1153,28 @@ async function bootstrapGcpStage({
     value: result.workloadIdentityProvider,
   })
   ghEnvironmentVariableSet({ repo, stage, name: 'GCP_DEPLOYER', value: result.deployerEmail })
-  // Repository-wide, not `--env`: mbuild.yml's publish job runs before any
-  // stage-specific environment would apply, matching AWS_ECR_PUSH_ROLE_ARN.
-  ghEnvironmentVariableSet({ repo, stage: null, name: 'GCP_IMAGE_PUBLISHER', value: result.publisherEmail })
+  /*
+   * Per environment, like the two above it.
+   *
+   * This was repository-wide on the grounds that mbuild.yml's publish job runs
+   * before a stage-specific environment would apply. That job declares
+   * `environment: ${{ inputs.stage || inputs.to }}` and is the only reader, so
+   * the grounds were never true — and the publisher lives in the stage's own
+   * project, so one shared value meant whichever stage bootstrapped last owned
+   * it. Bootstrapping prod pointed dev's publish at
+   * `bl-app-publish@boxlite-prod-project`, which the dev pool cannot
+   * impersonate: `Permission 'iam.serviceAccounts.getAccessToken' denied`,
+   * three attempts, after every image had been built.
+   */
+  ghEnvironmentVariableSet({ repo, stage, name: 'GCP_IMAGE_PUBLISHER', value: result.publisherEmail })
+  // The shared one it replaces, removed rather than left to shadow nothing: a
+  // stale account id sitting where this used to be read is the next hour lost
+  // to the same error. Absent already is the normal case, so a failure here is
+  // not one.
+  ghVariableDeleteIfPresent({ repo, name: 'GCP_IMAGE_PUBLISHER' })
   console.log(`==> GitHub ${stage} environment`)
   console.log(
-    '    GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_DEPLOYER set; GCP_IMAGE_PUBLISHER set repository-wide',
+    '    GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_DEPLOYER, GCP_IMAGE_PUBLISHER set',
   )
 
   console.log(

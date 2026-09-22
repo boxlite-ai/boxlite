@@ -3,10 +3,9 @@
 
 name: Set up Rust
 description: >-
-  Installs the Rust toolchain a job compiles with. Every wrapped default is left
-  alone: this action passes only toolchain and components, so the upstream
-  action's caching, problem matchers and rustflags behave exactly as they did
-  when each call site invoked it directly.
+  Installs the Rust toolchain a job compiles with. Cargo caching defaults to on;
+  Linux distribution jobs disable it because they discard the host build tree
+  and toolchain before compiling in a container. Other upstream defaults remain unchanged.
 
 inputs:
   toolchain:
@@ -23,6 +22,24 @@ inputs:
       action identically, so this is the same as omitting it.
     required: false
     default: ''
+  cache:
+    description: >-
+      Restore and save Cargo's host registry and target directory. Disable when
+      the job removes that state before building in a container; sccache is separate.
+    required: false
+    default: 'true'
+  cache-workspaces:
+    description: >-
+      Cargo workspaces and their target directories, one workspace -> target
+      pair per line. Native Go builds also compile the vendored libkrun workspace.
+    required: false
+    default: '. -> target'
+  cache-workspace-crates:
+    description: >-
+      Retain workspace compilation outputs as well as dependencies. Cargo still
+      checks source freshness and rebuilds commit-dependent code on every invocation.
+    required: false
+    default: 'false'
 
 runs:
   using: composite
@@ -31,3 +48,6 @@ runs:
       with:
         toolchain: ${{ inputs.toolchain }}
         components: ${{ inputs.components }}
+        cache: ${{ inputs.cache }}
+        cache-workspaces: ${{ inputs.cache-workspaces }}
+        cache-workspace-crates: ${{ inputs.cache-workspace-crates }}
