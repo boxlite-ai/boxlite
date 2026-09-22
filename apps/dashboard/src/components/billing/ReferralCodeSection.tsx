@@ -10,6 +10,7 @@ import { queryKeys } from '@/hooks/queries/queryKeys'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useQuery } from '@tanstack/react-query'
+import { isAxiosError } from 'axios'
 
 export function ReferralCodeSection() {
   const { selectedOrganization } = useSelectedOrganization()
@@ -20,6 +21,7 @@ export function ReferralCodeSection() {
     isPending,
     isFetching,
     isError,
+    error,
     refetch,
   } = useQuery({
     queryKey: queryKeys.organization.referralCode(organizationId),
@@ -36,6 +38,14 @@ export function ReferralCodeSection() {
 
   if (!selectedOrganization) return null
 
+  const errorStatus = isAxiosError(error?.cause) ? error.cause.response?.status : undefined
+  let errorMessage = 'Could not load the invitation code.'
+  if (errorStatus === 403) {
+    errorMessage = 'Invitations are not available for this organization.'
+  } else if (errorStatus === 429) {
+    errorMessage = 'Too many requests. Please try again shortly.'
+  }
+
   return (
     <section aria-label="Invitation code" className="mt-8">
       <SectionTitle title="Invitation code" />
@@ -47,7 +57,7 @@ export function ReferralCodeSection() {
           <p role="status">Loading invitation code…</p>
         ) : isError ? (
           <div role="alert" className="flex flex-wrap items-center gap-3">
-            <span>Could not load the invitation code.</span>
+            <span>{errorMessage}</span>
             <Button variant="outline" disabled={isFetching} onClick={() => void refetch()}>
               {isFetching ? 'Retrying…' : 'Retry'}
             </Button>
