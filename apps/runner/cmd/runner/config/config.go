@@ -63,6 +63,9 @@ type Config struct {
 	GhcrToken                          string        `envconfig:"GHCR_TOKEN"`
 	DockerHubUsername                  string        `envconfig:"DOCKERHUB_USERNAME"`
 	DockerHubToken                     string        `envconfig:"DOCKERHUB_TOKEN"`
+	RegistryProxyHost                  string        `envconfig:"REGISTRY_PROXY_HOST"`
+	RegistryProxyUsername              string        `envconfig:"REGISTRY_PROXY_USERNAME"`
+	RegistryProxyPassword              string        `envconfig:"REGISTRY_PROXY_PASSWORD"`
 	MigrateWorkDir                     string        `envconfig:"MIGRATE_WORK_DIR"`
 }
 

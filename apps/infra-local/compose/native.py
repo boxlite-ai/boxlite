@@ -258,7 +258,15 @@ def _components(p: _Paths) -> dict[str, _Component]:
                 "API_PORT": str(PORT_RUNNER),
                 "RUNNER_DOMAIN": "127.0.0.1",
                 "BOXLITE_HOME_DIR": str(p.runner_home),
-                "INSECURE_REGISTRIES": "127.0.0.1:25000",
+                # The registry proxy is served over plain HTTP here, so its host is
+                # listed as insecure too: the runner folds that into the proxy's one
+                # entry rather than adding a second, credential-less one.
+                "INSECURE_REGISTRIES": f"127.0.0.1:25000,127.0.0.1:{PORT_REGISTRY_PROXY}",
+                # The password is this runner's own API key, which is what the
+                # proxy asks the API about; the username is not read.
+                "REGISTRY_PROXY_HOST": f"127.0.0.1:{PORT_REGISTRY_PROXY}",
+                "REGISTRY_PROXY_USERNAME": "runner",
+                "REGISTRY_PROXY_PASSWORD": _RUNNER_TOKEN,
                 "AWS_REGION": "us-east-1",
                 "OTEL_TRACING_ENABLED": "true",
                 "OTEL_EXPORTER_OTLP_ENDPOINT": _OTEL_OTLP_HTTP_URL,

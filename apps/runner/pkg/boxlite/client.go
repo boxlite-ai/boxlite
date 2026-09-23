@@ -51,6 +51,7 @@ type ClientConfig struct {
 	GhcrToken                    string
 	DockerHubUsername            string
 	DockerHubToken               string
+	RegistryProxy                RegistryProxy
 	AWSRegion                    string
 	AWSEndpointUrl               string
 	AWSAccessKeyId               string
@@ -125,16 +126,90 @@ func secretSpecs(secrets []dto.SecretDTO) []boxlite.Secret {
 	return specs
 }
 
+// RegistryProxy is where the runner sends a pull for an image whose registry
+// credentials only the platform holds, and the runner's own credential for it.
+// The password is the runner's API key: the proxy authenticates a caller by
+// asking the control plane whose key it is.
+type RegistryProxy struct {
+	Host     string
+	Username string
+	Password string
+}
+
+// complete reports whether all three were given, which is the only state in
+// which the proxy is used at all.
+//
+// The host is judged after it is reduced to one, not as written: a value that
+// reduces to nothing — a bare scheme, whitespace — is as unusable as one left
+// out, and treating it as given would drop the proxy without a word.
+func (p RegistryProxy) complete() bool {
+	return registryHost(p.Host) != "" && p.Username != "" && p.Password != ""
+}
+
+// missing names the variables a partly configured proxy lacks or cannot use.
+// Empty for a proxy that is complete or not configured at all.
+func (p RegistryProxy) missing() []string {
+	given := map[string]bool{
+		"REGISTRY_PROXY_HOST":     registryHost(p.Host) != "",
+		"REGISTRY_PROXY_USERNAME": p.Username != "",
+		"REGISTRY_PROXY_PASSWORD": p.Password != "",
+	}
+	var absent []string
+	for _, name := range []string{"REGISTRY_PROXY_HOST", "REGISTRY_PROXY_USERNAME", "REGISTRY_PROXY_PASSWORD"} {
+		if !given[name] {
+			absent = append(absent, name)
+		}
+	}
+	if len(absent) == len(given) {
+		return nil
+	}
+	return absent
+}
+
+// warnOnPartialRegistryProxy says so when a stage configured some of the proxy
+// and not the rest. That is almost always an unfinished setting rather than an
+// intent, and without a word it would look like the proxy being ignored.
+func warnOnPartialRegistryProxy(logger *slog.Logger, proxy RegistryProxy) {
+	if absent := proxy.missing(); len(absent) > 0 {
+		logger.Warn("Registry proxy is partly configured and will not be used", "missing", strings.Join(absent, ", "))
+	}
+}
+
 // buildImageRegistries assembles the runtime-scoped OCI registry list handed to boxlite-core:
 // the existing insecure (HTTP, no-auth) registries, plus — when ghcr credentials are provided —
 // a single authenticated ghcr.io HTTPS entry so core can pull private images
-// directly from ghcr (no self-hosted registry mirror required). Auth is runtime-scoped because
-// boxlite.Runtime.Create has no per-call credential parameter. When ghcrUsername/ghcrToken are
-// empty this is byte-for-byte the previous behavior (anonymous), so it is safe to ship dark.
-// Kept as a pure function so the wiring can be unit-tested without constructing a real runtime.
-func buildImageRegistries(insecureRegistries []string, ghcrUsername, ghcrToken string) []boxlite.ImageRegistry {
-	registries := make([]boxlite.ImageRegistry, 0, len(insecureRegistries)+1)
+// directly from ghcr (no self-hosted registry mirror required), plus — when the registry proxy
+// is fully configured — one authenticated entry for it, shaped as the ghcr one is. Auth is
+// runtime-scoped because boxlite.Runtime.Create has no per-call credential parameter. With no
+// ghcr credentials and no registry proxy this is byte-for-byte the previous behavior, so both
+// are safe to ship dark. Kept as a pure function so the wiring can be unit-tested without
+// constructing a real runtime.
+//
+// No host is named twice. The runtime matches a host to the first entry naming it and ignores
+// the rest, for transport and credential alike, so a registry proxy that is also listed as
+// insecure — the local stack's, served over plain HTTP — is one entry carrying both: HTTP from
+// the insecure list, the credential from the proxy. Two entries would let the credential-less
+// one win.
+//
+// The proxy is never searched. Search makes an unqualified reference like `alpine:3.20` try
+// this host, and nothing about an image a caller names without a registry should route it here.
+func buildImageRegistries(
+	insecureRegistries []string,
+	ghcrUsername, ghcrToken string,
+	proxy RegistryProxy,
+) []boxlite.ImageRegistry {
+	proxyHost := ""
+	if proxy.complete() {
+		proxyHost = registryHost(proxy.Host)
+	}
+
+	registries := make([]boxlite.ImageRegistry, 0, len(insecureRegistries)+2)
+	proxyIsInsecure := false
 	for _, host := range insecureRegistries {
+		if host == proxyHost {
+			proxyIsInsecure = true
+			continue
+		}
 		registries = append(registries, boxlite.ImageRegistry{
 			Host:       host,
 			Transport:  boxlite.RegistryTransportHTTP,
@@ -151,6 +226,22 @@ func buildImageRegistries(insecureRegistries []string, ghcrUsername, ghcrToken s
 			},
 		})
 	}
+	if proxyHost != "" {
+		entry := boxlite.ImageRegistry{
+			Host:      proxyHost,
+			Transport: boxlite.RegistryTransportHTTPS,
+			Search:    false,
+			Auth: boxlite.ImageRegistryAuth{
+				Username: proxy.Username,
+				Password: proxy.Password,
+			},
+		}
+		if proxyIsInsecure {
+			entry.Transport = boxlite.RegistryTransportHTTP
+			entry.SkipVerify = true
+		}
+		registries = append(registries, entry)
+	}
 	return registries
 }
 
@@ -160,8 +251,14 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	if config.HomeDir != "" {
 		opts = append(opts, boxlite.WithHomeDir(config.HomeDir))
 	}
+	logger := config.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	warnOnPartialRegistryProxy(logger, config.RegistryProxy)
+
 	insecureRegistries := normalizeRegistryHosts(config.InsecureRegistries)
-	registries := buildImageRegistries(insecureRegistries, config.GhcrUsername, config.GhcrToken)
+	registries := buildImageRegistries(insecureRegistries, config.GhcrUsername, config.GhcrToken, config.RegistryProxy)
 	// docker.io auth (local dev): boxlite-core pulls box base images (e.g. the
 	// debian base disk + public user images) from docker.io; without auth those
 	// hit the anonymous Docker Hub rate limit. Mirror the ghcr.io auth entry.
@@ -182,11 +279,6 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	rt, err := boxlite.NewRuntime(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create boxlite runtime: %w", err)
-	}
-
-	logger := config.Logger
-	if logger == nil {
-		logger = slog.Default()
 	}
 
 	return &Client{
