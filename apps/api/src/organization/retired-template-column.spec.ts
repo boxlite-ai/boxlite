@@ -16,17 +16,20 @@ const RETIRED_NAMES = ['template_deactivation_timeout_minutes', 'templateDeactiv
 /**
  * Where the name may still appear, and why.
  *
- * What is left is the two migrations, which stay forever — one created the
- * column and one drops it, and a migration is a record of what happened rather
- * than a statement about the schema today — and this file, which cannot search
- * for a name without containing it. The generated clients and the
- * dashboard fixture typed against them were here until the clients were
- * regenerated — the allowance test below is what made that debt impossible to
- * leave behind.
+ * The baseline migration, which created the column and stays forever: a
+ * migration is a record of what happened rather than a statement about the
+ * schema today. The migrations README, which records that the column is still
+ * in every database — the mapping went, the drop was deferred. And this file,
+ * which cannot search for a name without containing it.
+ *
+ * The generated clients and the dashboard fixture typed against them were here
+ * until the clients were regenerated. The allowance test below is what made
+ * that debt impossible to leave behind, and it holds the README entry to the
+ * same rule: when the drop lands and the row goes, the allowance has to go too.
  */
 const STILL_ALLOWED = [
   'apps/api/src/migrations/1741087887225-migration.ts',
-  'apps/api/src/migrations/post-deploy/1787200000000-drop-template-deactivation-timeout-migration',
+  'apps/api/src/migrations/README.md',
   'apps/api/src/organization/retired-template-column.spec.ts',
 ]
 
