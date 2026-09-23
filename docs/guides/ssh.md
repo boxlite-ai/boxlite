@@ -91,17 +91,19 @@ before reporting success. It does not wait for the normal channel-open timeout.
 Established TCP relays continue transferring until they finish or SSH disconnects;
 other reverse listeners remain active.
 
-Reverse Unix-socket listener cancellation preserves established connections and
-allows the helper to drain them for up to 30 seconds. Disconnect, Disable, and
-Configure restart instead terminate the helper: sending the stop request and
-receiving `STOPPED` share a one-second deadline. Acknowledgement triggers immediate
-SIGKILL; failure or timeout also triggers SIGKILL, without an additional TERM
-grace period. Cancellation during acknowledgement shortens its remaining deadline
-to at most one second, and cancellation during draining escalates immediately.
-Pending channel opens are cancelled and joined. Process reaping, stream cleanup,
-and execution registry release still complete before SSH stop succeeds. If the
-helper cannot confirm pathname removal, a warning records the execution ID and
-failure; the socket pathname may remain in the container.
+Reverse Unix-socket listener cancellation closes the helper's stdin. The helper
+closes its listener, removes its own socket pathname, and acknowledges `STOPPED`;
+established connections may then drain for up to 30 seconds. The pathname can be
+rebound while those connections finish, including responses after request EOF.
+Disconnect, Disable, and Configure restart instead send SIGTERM and wait for the
+helper to exit normally. Sending TERM and waiting for exit share a one-second
+deadline; failure or timeout escalates to SIGKILL. Connection shutdown interrupts
+both a pending listener-stop acknowledgement and relay draining to begin TERM
+cleanup. Pending channel opens are cancelled and joined. Process reaping, stream
+cleanup, and execution registry release complete before SSH stop succeeds. The
+ten-second SSH stop deadline still bounds the request, not the cleanup task:
+cleanup remains tracked after a timeout. A helper forced to exit with SIGKILL may
+leave its socket pathname in the container.
 
 Status contains only `enabled`, the actual bound `listen_address`, `generation`,
 a comment-free `host_public_key`, and its SHA-256 `host_key_fingerprint`. Generation

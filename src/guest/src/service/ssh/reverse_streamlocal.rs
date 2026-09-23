@@ -20,6 +20,7 @@ use russh::server::{Handle as SessionHandle, Msg};
 use russh::Channel;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::os::fd::AsFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,11 +52,25 @@ pub(crate) fn run_internal(args: InternalArgs) -> BoxliteResult<()> {
         .enable_all()
         .build()
         .map_err(|error| BoxliteError::Internal(format!("reverse streamlocal runtime: {error}")))?;
-    runtime.block_on(serve_reverse_streamlocal(
-        args,
-        tokio::io::stdin(),
-        tokio::io::stdout(),
-    ))
+    runtime.block_on(async {
+        // Execution supplies pipes. Unlike Tokio's blocking stdio adapters,
+        // these descriptors cannot keep the runtime alive after cancellation.
+        let control = std::io::stdin()
+            .as_fd()
+            .try_clone_to_owned()
+            .and_then(tokio::net::unix::pipe::Receiver::from_owned_fd)
+            .map_err(|error| {
+                BoxliteError::Execution(format!("reverse streamlocal stdin: {error}"))
+            })?;
+        let status = std::io::stdout()
+            .as_fd()
+            .try_clone_to_owned()
+            .and_then(tokio::net::unix::pipe::Sender::from_owned_fd)
+            .map_err(|error| {
+                BoxliteError::Execution(format!("reverse streamlocal stdout: {error}"))
+            })?;
+        serve_reverse_streamlocal(args, control, status).await
+    })
 }
 
 pub(crate) fn parse_internal_args(args: &[String]) -> BoxliteResult<InternalArgs> {
@@ -107,8 +122,52 @@ fn bind_owner_only(socket_path: impl AsRef<Path>) -> std::io::Result<UnixListene
 
 async fn serve_reverse_streamlocal<R, W>(
     args: InternalArgs,
+    control: R,
+    status: W,
+) -> BoxliteResult<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    // Install before the token read and bind, including startup in TERM handling.
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|error| {
+        BoxliteError::Execution(format!("reverse streamlocal SIGTERM: {error}"))
+    })?;
+    serve_until_terminated(args, control, status, async {
+        terminate.recv().await;
+    })
+    .await
+}
+
+async fn serve_until_terminated<R, W>(
+    args: InternalArgs,
+    control: R,
+    status: W,
+    terminate: impl std::future::Future<Output = ()>,
+) -> BoxliteResult<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut relays = JoinSet::new();
+    let result = tokio::select! {
+        biased;
+        _ = terminate => Ok(()),
+        result = serve_listener(args, control, status, &mut relays) => result,
+    };
+    // Dropping the listener future removes only its own pathname. Always join
+    // cancelled relays before allowing the helper process to exit.
+    relays.abort_all();
+    drain_join_set(&mut relays).await;
+    result
+}
+
+async fn serve_listener<R, W>(
+    args: InternalArgs,
     mut control: R,
     mut status: W,
+    relays: &mut JoinSet<()>,
 ) -> BoxliteResult<()>
 where
     R: AsyncRead + Unpin,
@@ -155,7 +214,6 @@ where
     })?;
 
     let permits = Arc::new(Semaphore::new(MAX_FORWARD_CONNECTIONS));
-    let mut relays = JoinSet::new();
     let mut stop = [0_u8; 16];
     let listener_result = loop {
         tokio::select! {
@@ -207,12 +265,12 @@ where
 
     // Established relays may drain after the listener pathname disappears, but
     // a peer cannot pin this internal execution forever.
-    if tokio::time::timeout(HELPER_RELAY_DRAIN_TIMEOUT, drain_join_set(&mut relays))
+    if tokio::time::timeout(HELPER_RELAY_DRAIN_TIMEOUT, drain_join_set(relays))
         .await
         .is_err()
     {
         relays.abort_all();
-        drain_join_set(&mut relays).await;
+        drain_join_set(relays).await;
     }
 
     listener_result.map_err(|error| {
@@ -263,7 +321,9 @@ async fn relay_to_ingress(
 async fn drain_join_set<T: 'static>(tasks: &mut JoinSet<T>) {
     while let Some(completed) = tasks.join_next().await {
         if let Err(error) = completed {
-            warn!(%error, "reverse streamlocal task failed");
+            if !error.is_cancelled() {
+                warn!(%error, "reverse streamlocal task failed");
+            }
         }
     }
 }
@@ -546,141 +606,78 @@ impl RunningHelper {
         let execution_id = response.execution_id;
         let registry = server.registry.clone();
 
+        Self::attach(connection_tasks, server, registry, execution_id, token).await
+    }
+
+    async fn attach(
+        connection_tasks: Arc<super::TaskGroup>,
+        server: Arc<GuestServer>,
+        registry: ExecutionRegistry,
+        execution_id: String,
+        token: String,
+    ) -> Result<Self, String> {
         let (stdin_tx, stdin_rx) = mpsc::channel::<ExecStdin>(HELPER_STDIN_QUEUE_DEPTH);
-        let opening = ExecStdin {
-            execution_id: execution_id.clone(),
-            data: Vec::new(),
-            close: false,
+        let mut stdin_task = None;
+        let mut output = None;
+        let ready = tokio::select! {
+            biased;
+            _ = connection_tasks.cancelled() => Err("reverse streamlocal startup cancelled".into()),
+            result = tokio::time::timeout(CONTROL_CALL_TIMEOUT, async {
+                let opening = ExecStdin {
+                    execution_id: execution_id.clone(),
+                    data: Vec::new(),
+                    close: false,
+                };
+                let input = server
+                    .send_execution_input(opening, Box::pin(ReceiverStream::new(stdin_rx).map(Ok)))
+                    .await
+                    .map_err(|error| format!("reverse streamlocal stdin setup failed: {error}"))?;
+                stdin_task = Some(connection_tasks.spawn_tracked(move |_| async move {
+                    if let Ok(Err(error)) = input.await {
+                        debug!(%error, "reverse streamlocal helper stdin ended");
+                    }
+                }));
+                stdin_tx.send(ExecStdin {
+                    execution_id: execution_id.clone(),
+                    data: token.into_bytes(),
+                    close: false,
+                }).await.map_err(|_| "reverse streamlocal stdin setup failed".to_string())?;
+                let receiver = server.attach_execution(&execution_id).await
+                    .map_err(|error| format!("reverse streamlocal attach failed: {error}"))?;
+                let output = output.insert(receiver);
+                read_marker(output, REVERSE_STREAMLOCAL_READY_MAGIC, Vec::new(),
+                    REVERSE_STREAMLOCAL_STOPPED_MAGIC.len()).await
+            }) => result.unwrap_or_else(|_| Err("reverse streamlocal startup timed out".into())),
         };
-        let input = match server
-            .send_execution_input(opening, Box::pin(ReceiverStream::new(stdin_rx).map(Ok)))
-            .await
-        {
-            Ok(task) => task,
-            // Matches every sibling failure below: the execution is registered
-            // and running, so it must be torn down rather than leaked.
-            Err(error) => {
-                spawn_failed_helper_cleanup(
-                    connection_tasks.clone(),
-                    server.clone(),
-                    registry,
-                    execution_id,
-                    None,
-                    None,
-                );
-                return Err(format!("reverse streamlocal stdin setup failed: {error}"));
-            }
-        };
-        let stdin_task = connection_tasks.spawn_tracked(move |_| async move {
-            if let Ok(Err(error)) = input.await {
-                debug!(%error, "reverse streamlocal helper stdin ended");
-            }
-        });
-        if stdin_tx
-            .send(ExecStdin {
-                execution_id: execution_id.clone(),
-                data: token.into_bytes(),
-                close: false,
-            })
-            .await
-            .is_err()
-        {
-            spawn_failed_helper_cleanup(
-                connection_tasks.clone(),
-                server.clone(),
+        match ready {
+            Ok(buffered_stdout) => Ok(Self {
+                connection_tasks,
+                server,
                 registry,
                 execution_id,
-                None,
-                Some(stdin_task),
-            );
-            return Err("reverse streamlocal stdin setup failed".into());
-        }
-
-        let attach =
-            tokio::time::timeout(CONTROL_CALL_TIMEOUT, server.attach_execution(&execution_id))
-                .await;
-        let mut output = match attach {
-            Ok(Ok(output)) => output,
-            Ok(Err(error)) => {
-                let _ = stdin_tx
-                    .send(ExecStdin {
-                        execution_id: execution_id.clone(),
-                        data: Vec::new(),
-                        close: true,
-                    })
-                    .await;
-                drop(stdin_tx);
-                spawn_failed_helper_cleanup(
-                    connection_tasks.clone(),
-                    server.clone(),
-                    registry,
-                    execution_id,
-                    None,
-                    Some(stdin_task),
-                );
-                return Err(format!("reverse streamlocal attach failed: {error}"));
-            }
-            Err(_) => {
-                let _ = stdin_tx
-                    .send(ExecStdin {
-                        execution_id: execution_id.clone(),
-                        data: Vec::new(),
-                        close: true,
-                    })
-                    .await;
-                drop(stdin_tx);
-                spawn_failed_helper_cleanup(
-                    connection_tasks.clone(),
-                    server.clone(),
-                    registry,
-                    execution_id,
-                    None,
-                    Some(stdin_task),
-                );
-                return Err("reverse streamlocal attach timed out".into());
-            }
-        };
-
-        let buffered_stdout = match read_marker(
-            &mut output,
-            REVERSE_STREAMLOCAL_READY_MAGIC,
-            Vec::new(),
-            REVERSE_STREAMLOCAL_STOPPED_MAGIC.len(),
-        )
-        .await
-        {
-            Ok(buffered) => buffered,
+                stdin: stdin_tx,
+                stdin_task: stdin_task.expect("ready helper has stdin task"),
+                output: output.expect("ready helper has output"),
+                buffered_stdout,
+            }),
             Err(error) => {
-                let _ = stdin_tx
-                    .send(ExecStdin {
-                        execution_id: execution_id.clone(),
-                        data: Vec::new(),
-                        close: true,
-                    })
-                    .await;
-                drop(stdin_tx);
-                spawn_failed_helper_cleanup(
-                    connection_tasks.clone(),
-                    server.clone(),
+                // Hand ownership to tracked cleanup before returning, even when
+                // startup was cancelled while an I/O queue was blocked.
+                spawn_execution_cleanup(
+                    connection_tasks,
+                    server,
                     registry,
                     execution_id,
-                    Some(output),
-                    Some(stdin_task),
+                    HelperIo {
+                        stdin: Some(stdin_tx),
+                        output,
+                        stdin_task,
+                    },
+                    HelperCleanup::Terminate,
                 );
-                return Err(error);
+                Err(error)
             }
-        };
-
-        Ok(Self {
-            connection_tasks,
-            server,
-            registry,
-            execution_id,
-            stdin: stdin_tx,
-            stdin_task,
-            output,
-            buffered_stdout,
-        })
+        }
     }
 
     async fn request_stop(&mut self) -> bool {
@@ -721,8 +718,6 @@ impl RunningHelper {
     async fn stop_listener(&mut self) -> bool {
         let connection_tasks = self.connection_tasks.clone();
         let execution_id = self.execution_id.clone();
-        // Keep the same future alive when connection cancellation shortens the
-        // deadline: read_marker may already have consumed part of STOPPED.
         let stop = async {
             if !self.request_stop().await {
                 return false;
@@ -733,10 +728,7 @@ impl RunningHelper {
         let deadline = tokio::time::Instant::now() + CONTROL_CALL_TIMEOUT;
         let result = tokio::select! {
             biased;
-            _ = connection_tasks.cancelled() => {
-                let deadline = deadline.min(tokio::time::Instant::now() + PROCESS_TERMINATION_GRACE);
-                tokio::time::timeout_at(deadline, &mut stop).await
-            }
+            _ = connection_tasks.cancelled() => return false,
             result = tokio::time::timeout_at(deadline, &mut stop) => result,
         };
         match result {
@@ -755,8 +747,11 @@ impl RunningHelper {
             self.server,
             self.registry,
             self.execution_id,
-            Some(self.output),
-            Some(self.stdin_task),
+            HelperIo {
+                stdin: Some(self.stdin),
+                output: Some(self.output),
+                stdin_task: Some(self.stdin_task),
+            },
             mode,
         );
     }
@@ -894,20 +889,19 @@ fn spawn_listener(
         // streams independently and may continue draining.
         drop(ingress);
         let was_cancelled = matches!(end, End::Cancelled);
+        if !was_cancelled || cancel.is_cancelled() {
+            pending_opens.abort_all();
+        }
         let stop = async move {
-            let stop_acknowledged = if matches!(end, End::HelperEnded) {
+            let stop_acknowledged = if !was_cancelled || connection_tasks.is_cancelled() {
                 false
             } else {
                 helper.stop_listener().await
             };
-            if !stop_acknowledged {
-                warn!(execution_id = %helper.execution_id, %socket_path,
-                    "reverse streamlocal stop unconfirmed; socket pathname may remain");
-            }
             helper.spawn_cleanup(if stop_acknowledged {
                 HelperCleanup::Drain
             } else {
-                HelperCleanup::Kill
+                HelperCleanup::Terminate
             });
             stop_acknowledged
         };
@@ -1062,29 +1056,15 @@ fn append_stopped_marker_prefix(buffer: &mut Vec<u8>, chunk: &[u8]) -> bool {
     true
 }
 
-fn spawn_failed_helper_cleanup(
-    connection_tasks: Arc<super::TaskGroup>,
-    server: Arc<GuestServer>,
-    registry: ExecutionRegistry,
-    execution_id: String,
+struct HelperIo {
+    stdin: Option<mpsc::Sender<ExecStdin>>,
     output: Option<mpsc::Receiver<Result<ExecOutput, tonic::Status>>>,
     stdin_task: Option<JoinHandle<()>>,
-) {
-    spawn_execution_cleanup(
-        connection_tasks,
-        server,
-        registry,
-        execution_id,
-        output,
-        stdin_task,
-        HelperCleanup::FailedStart,
-    );
 }
 
 enum HelperCleanup {
     Drain,
-    Kill,
-    FailedStart,
+    Terminate,
 }
 
 fn spawn_execution_cleanup(
@@ -1092,12 +1072,11 @@ fn spawn_execution_cleanup(
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
     execution_id: String,
-    output: Option<mpsc::Receiver<Result<ExecOutput, tonic::Status>>>,
-    stdin_task: Option<JoinHandle<()>>,
+    io: HelperIo,
     mode: HelperCleanup,
 ) {
     connection_tasks.clone().spawn_tracked(move |cancel| async move {
-        let output_task = output.map(|mut output| {
+        let output_task = io.output.map(|mut output| {
             connection_tasks.spawn_tracked(move |_| async move {
                 while let Some(message) = output.recv().await {
                     let Ok(message) = message else {
@@ -1121,24 +1100,23 @@ fn spawn_execution_cleanup(
                     _ = cancel.cancelled() => false,
                     _ = state.wait_process() => true,
                 },
-                HelperCleanup::Kill => false,
-                // Startup failures may still unlink through stdin EOF. Service
-                // cancellation must not add another grace after confirmation.
-                HelperCleanup::FailedStart => tokio::select! {
-                    biased;
-                    _ = cancel.cancelled() => false,
-                    exited = async {
-                        if tokio::time::timeout(PROCESS_TERMINATION_GRACE, state.wait_process()).await.is_ok() {
-                            return true;
-                        }
-                        let _ = tokio::time::timeout(
-                            CONTROL_CALL_TIMEOUT,
-                            server.kill_execution(&execution_id, 15, super::bridge::SIGNAL_TARGETS_PROCESS_GROUP),
-                        ).await;
-                        tokio::time::timeout(PROCESS_TERMINATION_GRACE, state.wait_process()).await.is_ok()
-                    } => exited,
-                },
+                HelperCleanup::Terminate => false,
             };
+            let exited = exited || tokio::time::timeout(PROCESS_TERMINATION_GRACE, async {
+                tokio::select! {
+                    biased;
+                    _ = state.wait_process() => true,
+                    result = server.kill_execution(&execution_id, 15, super::bridge::SIGNAL_TARGETS_PROCESS_GROUP) => {
+                        match result {
+                            Ok(_) => { state.wait_process().await; true }
+                            Err(error) => {
+                                warn!(%execution_id, %error, "reverse streamlocal helper TERM failed");
+                                false
+                            }
+                        }
+                    }
+                }
+            }).await.unwrap_or(false);
             if !exited {
                 match tokio::time::timeout(
                     CONTROL_CALL_TIMEOUT,
@@ -1154,10 +1132,11 @@ fn spawn_execution_cleanup(
         if let Some(state) = state {
             state.wait_process().await;
         }
+        drop(io.stdin);
         if let Some(task) = output_task {
             let _ = task.await;
         }
-        if let Some(task) = stdin_task {
+        if let Some(task) = io.stdin_task {
             let _ = task.await;
         }
         if !registry.release_ephemeral(&execution_id).await {

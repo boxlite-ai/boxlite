@@ -5,6 +5,7 @@ use crate::service::exec::{
 };
 use crate::service::ssh::forwarding_fixture::{completes, ForwardingSession};
 use nix::unistd::Pid;
+use std::os::fd::AsFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use tokio::sync::oneshot;
@@ -27,19 +28,47 @@ fn helper_subprocess() {
         .unwrap()
         .parse()
         .unwrap();
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(serve_reverse_streamlocal(
-            InternalArgs {
-                socket_path,
-                ingress,
-            },
-            tokio::io::stdin(),
-            tokio::io::stderr(),
-        ))
+    if std::env::var_os("BOXLITE_TEST_IGNORE_TERM").is_some() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let control = tokio::net::unix::pipe::Receiver::from_owned_fd(
+                    std::io::stdin().as_fd().try_clone_to_owned().unwrap(),
+                )
+                .unwrap();
+                let status = tokio::net::unix::pipe::Sender::from_owned_fd(
+                    std::io::stderr().as_fd().try_clone_to_owned().unwrap(),
+                )
+                .unwrap();
+                serve_until_terminated(
+                    InternalArgs {
+                        socket_path,
+                        ingress,
+                    },
+                    control,
+                    status,
+                    std::future::pending(),
+                )
+                .await
+                .unwrap();
+            });
+    } else {
+        // The test harness writes to stdout; reserve stderr for helper status.
+        use std::os::fd::AsRawFd;
+        let original_stdout = std::io::stdout().as_fd().try_clone_to_owned().unwrap();
+        assert_ne!(unsafe { nix::libc::dup2(2, 1) }, -1);
+        run_internal(InternalArgs {
+            socket_path,
+            ingress,
+        })
         .unwrap();
+        assert_ne!(
+            unsafe { nix::libc::dup2(original_stdout.as_raw_fd(), 1) },
+            -1
+        );
+    }
 }
 
 struct ChildGuard(std::process::Child, Option<ProcessInstance>);
@@ -78,13 +107,11 @@ async fn fixture_with_signals(
     ingress: SocketAddrV4,
     ignore_term: bool,
 ) -> (RunningHelper, ChildGuard) {
-    let reaper = Reaper::install();
-    let spawned = std::time::Instant::now();
     let mut command = Command::new(std::env::current_exe().unwrap());
     if ignore_term {
         command.env("BOXLITE_TEST_IGNORE_TERM", "1");
     }
-    let child = command
+    command
         .args([
             "--exact",
             "service::ssh::reverse_streamlocal::shutdown_tests::helper_subprocess",
@@ -96,26 +123,10 @@ async fn fixture_with_signals(
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let pid = Pid::from_raw(child.id() as i32);
-    let mut guard = ChildGuard(child, ProcessInstance::capture(pid));
-    let handle = ExecHandle::new(
-        pid,
-        guard.0.stdin.take().unwrap().into(),
-        guard.0.stderr.take().unwrap().into(),
-        None,
-    )
-    .unwrap();
-    let state = ExecutionState::new_init_session(
-        handle,
-        reaper.register(pid, spawned).await,
-        ProcessInstance::capture(pid),
-    );
+        .process_group(0);
+    let guard = register_helper(&server, &mut command).await;
     let registry = server.registry.clone();
     let execution_id = "reverse-helper-test".to_string();
-    assert!(registry.register(execution_id.clone(), state).await);
     let (stdin, input) = mpsc::channel(2);
     let opening = ExecStdin {
         execution_id: execution_id.clone(),
@@ -219,11 +230,10 @@ async fn shutdown_silent_helper(cancel_after_stop: bool, shutdown: Shutdown) {
     let (mut tcp, _) = ingress.accept().await.unwrap();
     let mut token = [0; INGRESS_TOKEN_BYTES];
     tcp.read_exact(&mut token).await.unwrap();
-    if !cancel_after_stop {
-        service_tasks.cancel();
+    if cancel_after_stop {
+        assert!(helper.stop_listener().await);
+        assert!(!path.exists());
     }
-    assert!(helper.stop_listener().await);
-    assert!(!path.exists());
     // Listener revocation preserves both an established request and a response
     // sent after request EOF.
     if cancel_after_stop {
@@ -240,7 +250,6 @@ async fn shutdown_silent_helper(cancel_after_stop: bool, shutdown: Shutdown) {
     }
     helper.spawn_cleanup(HelperCleanup::Drain);
     let state = server.registry.get("reverse-helper-test").await.unwrap();
-    let started = tokio::time::Instant::now();
     let stopped = tokio::time::timeout(Duration::from_secs(3), async {
         match shutdown {
             Shutdown::Disable => server.ssh_manager.disable().await.map(|_| ()),
@@ -266,7 +275,6 @@ async fn shutdown_silent_helper(cancel_after_stop: bool, shutdown: Shutdown) {
         }
     })
     .await;
-    let elapsed = started.elapsed();
     let released = server.registry.get("reverse-helper-test").await.is_none();
     // Cleanup precedes every defect assertion, including the old-code timeout.
     drop((unix, tcp, ingress));
@@ -278,23 +286,21 @@ async fn shutdown_silent_helper(cancel_after_stop: bool, shutdown: Shutdown) {
     let reaped = nix::sys::wait::waitpid(guard.pid(), Some(nix::sys::wait::WaitPidFlag::WNOHANG));
     drop(guard);
     server.ssh_manager.disable().await.unwrap();
+    assert!(!path.exists());
     assert_eq!(reaped, Err(nix::errno::Errno::ECHILD));
     assert!(
         stopped.is_ok(),
         "SSH Disable waited for the helper relay drain"
     );
     assert!(stopped.unwrap().is_ok(), "SSH shutdown failed");
-    assert!(
-        elapsed < PROCESS_TERMINATION_GRACE,
-        "confirmed helper received an extra termination grace: {elapsed:?}"
-    );
+
     assert!(
         released,
         "helper execution was not released before Disable completed"
     );
     assert!(matches!(
         exit,
-        crate::service::exec::exec_handle::ExitStatus::Signal(nix::sys::signal::Signal::SIGKILL)
+        crate::service::exec::exec_handle::ExitStatus::Code(0)
     ));
 }
 
@@ -342,6 +348,7 @@ async fn confirmation_during_shutdown(scenario: Confirmation) {
     connection_tasks
         .spawn_tracked(|_| async move { while original_output.recv().await.is_some() {} });
     let (blocked_input, blocked_receiver) = mpsc::channel(1);
+    let mut original_stdin = None;
     if matches!(scenario, Confirmation::FullInputQueue) {
         blocked_input
             .send(ExecStdin {
@@ -351,7 +358,7 @@ async fn confirmation_during_shutdown(scenario: Confirmation) {
             })
             .await
             .unwrap();
-        helper.stdin = blocked_input.clone();
+        original_stdin = Some(std::mem::replace(&mut helper.stdin, blocked_input.clone()));
     }
     let stdout = |bytes: &[u8]| ExecOutput {
         event: Some(exec_output::Event::Stdout(boxlite_shared::Stdout {
@@ -359,7 +366,6 @@ async fn confirmation_during_shutdown(scenario: Confirmation) {
             ..Default::default()
         })),
     };
-    let start = tokio::time::Instant::now();
     let acknowledged = {
         let status = status;
         let stop = helper.stop_listener();
@@ -370,8 +376,7 @@ async fn confirmation_during_shutdown(scenario: Confirmation) {
                 .send(Ok(stdout(&REVERSE_STREAMLOCAL_STOPPED_MAGIC[..split])))
                 .await
                 .unwrap();
-            // Poll through production parsing before cancellation. Restarting
-            // read_marker here would reject the remaining suffix.
+            // Consume part of STOPPED before connection cancellation interrupts it.
             assert!(futures::poll!(&mut stop).is_pending());
             connection_tasks.cancel();
             status
@@ -389,36 +394,35 @@ async fn confirmation_during_shutdown(scenario: Confirmation) {
         }
         tokio::time::timeout(Duration::from_millis(1500), &mut stop).await
     };
-    let elapsed = start.elapsed();
-    helper.spawn_cleanup(HelperCleanup::Kill);
+    helper.spawn_cleanup(HelperCleanup::Terminate);
     drop(blocked_receiver);
     drop(blocked_input);
+    drop(original_stdin);
     tokio::time::timeout(Duration::from_secs(5), connection_tasks.wait())
         .await
         .unwrap();
     let released = server.registry.get("reverse-helper-test").await.is_none();
     let reaped = nix::sys::wait::waitpid(guard.pid(), Some(nix::sys::wait::WaitPidFlag::WNOHANG));
     drop(guard);
+    assert!(matches!(
+        state.wait_process().await,
+        crate::service::exec::exec_handle::ExitStatus::Code(0)
+    ));
+    assert!(!path.exists());
     assert!(released);
     assert_eq!(reaped, Err(nix::errno::Errno::ECHILD));
     assert!(
         acknowledged.is_ok(),
-        "shutdown confirmation exceeded its one-second budget"
+        "connection cancellation waited for stop acknowledgement"
     );
-    assert_eq!(
-        acknowledged.unwrap(),
-        matches!(scenario, Confirmation::Fragmented)
+    assert!(
+        !acknowledged.unwrap(),
+        "connection cancellation must abandon STOPPED"
     );
-    if matches!(
-        scenario,
-        Confirmation::Missing | Confirmation::FullInputQueue
-    ) {
-        assert!(elapsed >= PROCESS_TERMINATION_GRACE);
-    }
 }
 
 #[tokio::test]
-async fn shutdown_keeps_fragmented_confirmation_progress() {
+async fn shutdown_interrupts_fragmented_confirmation() {
     confirmation_during_shutdown(Confirmation::Fragmented).await;
 }
 #[tokio::test]
@@ -430,7 +434,7 @@ async fn shutdown_rejects_invalid_confirmation() {
     confirmation_during_shutdown(Confirmation::Invalid).await;
 }
 #[tokio::test]
-async fn shutdown_bounds_stop_request_and_confirmation_together() {
+async fn shutdown_interrupts_a_full_stdin_queue() {
     confirmation_during_shutdown(Confirmation::FullInputQueue).await;
 }
 #[tokio::test]
@@ -574,6 +578,10 @@ async fn listener_revocation_preserves_forwarded_channel_and_response_after_eof(
                 .await
         );
         assert!(!fixture.path().exists());
+        let path = fixture.path();
+        let replacement = UnixListener::bind(&path).unwrap();
+        let _client = UnixStream::connect(&path).await.unwrap();
+        replacement.accept().await.unwrap();
         unix.write_all(b"after").await.unwrap();
         unix.shutdown().await.unwrap();
         let mut request = Vec::new();
@@ -585,7 +593,12 @@ async fn listener_revocation_preserves_forwarded_channel_and_response_after_eof(
         assert_eq!(&response, b"response");
         assert!(futures::poll!(std::pin::pin!(fixture.state.wait_process())).is_pending());
         // The response direction stays open: disconnect must cancel this drain.
+        let state = fixture.state.clone();
         fixture.finish().await;
+        assert!(matches!(
+            state.wait_process().await,
+            crate::service::exec::exec_handle::ExitStatus::Code(0)
+        ));
     })
     .await;
 }
@@ -781,14 +794,20 @@ async fn failed_helper_start(expected: FailedStartExit) {
                 .await
                 .unwrap();
         }
-        drop(stdin);
-        spawn_failed_helper_cleanup(
+        if matches!(expected, FailedStartExit::Natural) {
+            state.wait_process().await;
+        }
+        spawn_execution_cleanup(
             tasks.clone(),
             server.clone(),
             registry,
             execution_id,
-            Some(output),
-            Some(stdin_task),
+            HelperIo {
+                stdin: Some(stdin),
+                output: Some(output),
+                stdin_task: Some(stdin_task),
+            },
+            HelperCleanup::Terminate,
         );
         tasks.wait().await;
         let exit = state.wait_process().await;
@@ -796,7 +815,7 @@ async fn failed_helper_start(expected: FailedStartExit) {
         use nix::sys::signal::Signal;
         match expected {
             FailedStartExit::Natural => assert!(matches!(exit, ExitStatus::Code(0))),
-            FailedStartExit::Term => assert!(matches!(exit, ExitStatus::Signal(Signal::SIGTERM))),
+            FailedStartExit::Term => assert!(matches!(exit, ExitStatus::Code(0))),
             FailedStartExit::Kill => assert!(matches!(exit, ExitStatus::Signal(Signal::SIGKILL))),
         }
         assert!(server.registry.get("reverse-helper-test").await.is_none());
@@ -835,7 +854,7 @@ async fn failed_helper_start_allows_natural_exit() {
 }
 
 #[tokio::test]
-async fn failed_helper_start_escalates_to_term() {
+async fn failed_helper_start_terminates_normally() {
     failed_helper_start(FailedStartExit::Term).await;
 }
 
@@ -862,6 +881,355 @@ async fn premature_helper_exit_removes_listener_and_releases_execution() {
         assert_eq!(fixture.listeners.len(), 0);
         assert!(TcpStream::connect(fixture.ingress).await.is_err());
         fixture.finish().await;
+    })
+    .await;
+}
+
+async fn register_helper(server: &GuestServer, command: &mut Command) -> ChildGuard {
+    let reaper = Reaper::install();
+    let spawned = std::time::Instant::now();
+    let child = command.spawn().unwrap();
+    let pid = Pid::from_raw(child.id() as i32);
+    let mut guard = ChildGuard(child, ProcessInstance::capture(pid));
+    let handle = ExecHandle::new(
+        pid,
+        guard.0.stdin.take().unwrap().into(),
+        guard.0.stderr.take().unwrap().into(),
+        None,
+    )
+    .unwrap();
+    let state = ExecutionState::new_init_session(
+        handle,
+        reaper.register(pid, spawned).await,
+        ProcessInstance::capture(pid),
+    );
+    let registry = server.registry.clone();
+    let execution_id = "reverse-helper-test".to_string();
+    assert!(registry.register(execution_id.clone(), state).await);
+    guard
+}
+
+// Report the exact I/O boundary from inside the production helper future. The
+// parent never guesses signal readiness from a sleep or pathname polling.
+struct ObservedControl {
+    pipe: tokio::net::unix::pipe::Receiver,
+    report_pending: bool,
+}
+
+impl AsyncRead for ObservedControl {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let result = std::pin::Pin::new(&mut self.pipe).poll_read(cx, buffer);
+        if result.is_pending() && self.report_pending {
+            self.report_pending = false;
+            report_blocked();
+        }
+        result
+    }
+}
+
+struct BlockedStatus {
+    marker: &'static [u8],
+    reported: bool,
+}
+
+impl AsyncWrite for BlockedStatus {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        bytes: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        if bytes == self.marker {
+            if !self.reported {
+                self.reported = true;
+                report_blocked();
+            }
+            return std::task::Poll::Pending;
+        }
+        std::task::Poll::Ready(Ok(bytes.len()))
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+fn report_blocked() {
+    use std::io::Write;
+    if std::env::var("BOXLITE_TEST_BLOCKED_PHASE").as_deref() == Ok("startup") {
+        std::io::stdout().write_all(b"BLOCKED\n").unwrap();
+    } else {
+        std::io::stderr().write_all(b"BLOCKED\n").unwrap();
+    }
+}
+
+#[test]
+#[ignore = "invoked as an isolated helper subprocess"]
+fn blocked_io_helper_subprocess() {
+    let phase = std::env::var("BOXLITE_TEST_BLOCKED_PHASE").unwrap();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let control = ObservedControl {
+                pipe: tokio::net::unix::pipe::Receiver::from_owned_fd(
+                    std::io::stdin().as_fd().try_clone_to_owned().unwrap(),
+                )
+                .unwrap(),
+                report_pending: phase == "token",
+            };
+            let status = BlockedStatus {
+                marker: if phase == "stopped" {
+                    REVERSE_STREAMLOCAL_STOPPED_MAGIC
+                } else {
+                    REVERSE_STREAMLOCAL_READY_MAGIC
+                },
+                reported: false,
+            };
+            serve_reverse_streamlocal(
+                InternalArgs {
+                    socket_path: std::env::var("BOXLITE_TEST_HELPER_SOCKET").unwrap(),
+                    ingress: "127.0.0.1:1".parse().unwrap(),
+                },
+                control,
+                status,
+            )
+            .await
+            .unwrap();
+        });
+}
+
+async fn terminate_blocked_helper(phase: &str) {
+    let _serial = crate::reaper::reap_test_guard().await;
+    completes(async {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("blocked.sock");
+        let server = Arc::new(GuestServer::new(crate::layout::GuestLayout::with_base(
+            root.path(),
+        )));
+        let tasks = Arc::new(super::super::TaskGroup::default());
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "service::ssh::reverse_streamlocal::shutdown_tests::blocked_io_helper_subprocess",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("BOXLITE_TEST_BLOCKED_PHASE", phase)
+            .env("BOXLITE_TEST_HELPER_SOCKET", &path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        let guard = register_helper(&server, &mut command).await;
+        let execution_id = "reverse-helper-test".to_string();
+        let state = server.registry.get(&execution_id).await.unwrap();
+        let mut output = server.attach_execution(&execution_id).await.unwrap();
+        let (stdin, input) = mpsc::channel(2);
+        let input_task = server
+            .send_execution_input(
+                ExecStdin {
+                    execution_id: execution_id.clone(),
+                    data: vec![],
+                    close: false,
+                },
+                Box::pin(ReceiverStream::new(input).map(Ok)),
+            )
+            .await
+            .unwrap();
+        let stdin_task = tasks.spawn_tracked(|_| async move {
+            let _ = input_task.await;
+        });
+        if phase != "token" {
+            stdin
+                .send(ExecStdin {
+                    execution_id: execution_id.clone(),
+                    data: b"9e3d4f4f-e9e5-4896-a42c-9fe5f53244af".to_vec(),
+                    close: phase == "stopped",
+                })
+                .await
+                .unwrap();
+        }
+        read_marker(&mut output, b"BLOCKED\n", vec![], 0)
+            .await
+            .unwrap();
+        assert_eq!(path.exists(), phase == "ready");
+        spawn_execution_cleanup(
+            tasks.clone(),
+            server.clone(),
+            server.registry.clone(),
+            execution_id.clone(),
+            HelperIo {
+                stdin: Some(stdin),
+                output: Some(output),
+                stdin_task: Some(stdin_task),
+            },
+            HelperCleanup::Terminate,
+        );
+        tasks.wait().await;
+        assert!(
+            matches!(
+                state.wait_process().await,
+                crate::service::exec::exec_handle::ExitStatus::Code(0)
+            ),
+            "SIGTERM must exit normally while {phase} is blocked"
+        );
+        assert!(!path.exists());
+        assert!(!server.registry.exists(&execution_id).await);
+        assert_eq!(
+            nix::sys::wait::waitpid(guard.pid(), Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
+            Err(nix::errno::Errno::ECHILD)
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn term_interrupts_token_read() {
+    terminate_blocked_helper("token").await;
+}
+
+#[tokio::test]
+async fn term_interrupts_ready_output() {
+    terminate_blocked_helper("ready").await;
+}
+
+#[tokio::test]
+async fn term_interrupts_stopped_output() {
+    terminate_blocked_helper("stopped").await;
+}
+
+#[tokio::test]
+async fn shutdown_configure_terminates_active_helper() {
+    shutdown_silent_helper(false, Shutdown::Configure).await;
+}
+
+#[tokio::test]
+async fn shutdown_disconnect_terminates_active_helper() {
+    shutdown_silent_helper(false, Shutdown::Connection).await;
+}
+
+#[tokio::test]
+async fn term_preserves_replacement_socket() {
+    let _serial = crate::reaper::reap_test_guard().await;
+    completes(async {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("owned.sock");
+        let displaced = root.path().join("displaced.sock");
+        let server = Arc::new(GuestServer::new(crate::layout::GuestLayout::with_base(
+            root.path(),
+        )));
+        let tasks = Arc::new(super::super::TaskGroup::default());
+        let ingress = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let SocketAddr::V4(address) = ingress.local_addr().unwrap() else {
+            unreachable!()
+        };
+        let (helper, _guard) = fixture(server.clone(), tasks.clone(), &path, address).await;
+        let state = server.registry.get(&helper.execution_id).await.unwrap();
+        std::fs::rename(&path, &displaced).unwrap();
+        let replacement = UnixListener::bind(&path).unwrap();
+        helper.spawn_cleanup(HelperCleanup::Terminate);
+        tasks.wait().await;
+        assert!(matches!(
+            state.wait_process().await,
+            crate::service::exec::exec_handle::ExitStatus::Code(0)
+        ));
+        let _client = UnixStream::connect(&path).await.unwrap();
+        replacement.accept().await.unwrap();
+        assert!(!server.registry.exists("reverse-helper-test").await);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn startup_cancellation_hands_execution_to_tracked_cleanup() {
+    let _serial = crate::reaper::reap_test_guard().await;
+    completes(async {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("startup.sock");
+        let server = Arc::new(GuestServer::new(crate::layout::GuestLayout::with_base(
+            root.path(),
+        )));
+        let tasks = Arc::new(super::super::TaskGroup::default());
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "service::ssh::reverse_streamlocal::shutdown_tests::blocked_io_helper_subprocess",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("BOXLITE_TEST_BLOCKED_PHASE", "startup")
+            .env("BOXLITE_TEST_HELPER_SOCKET", &path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        let mut guard = register_helper(&server, &mut command).await;
+        let events =
+            tokio::net::unix::pipe::Receiver::from_owned_fd(guard.0.stdout.take().unwrap().into())
+                .unwrap();
+        let mut events = tokio::io::BufReader::new(events);
+        let state = server.registry.get("reverse-helper-test").await.unwrap();
+        let start = RunningHelper::attach(
+            tasks.clone(),
+            server.clone(),
+            server.registry.clone(),
+            "reverse-helper-test".into(),
+            "9e3d4f4f-e9e5-4896-a42c-9fe5f53244af".into(),
+        );
+        tokio::pin!(start);
+        let blocked = async {
+            use tokio::io::AsyncBufReadExt;
+            let mut line = String::new();
+            loop {
+                assert_ne!(events.read_line(&mut line).await.unwrap(), 0);
+                if line.contains("BLOCKED") {
+                    break;
+                }
+                line.clear();
+            }
+        };
+        tokio::select! {
+            _ = blocked => {},
+            _ = &mut start => panic!("startup returned before helper status was blocked"),
+        }
+        tasks.cancel();
+        let result = start.await;
+        if let Ok(helper) = result {
+            helper.spawn_cleanup(HelperCleanup::Terminate);
+            panic!("cancelled startup unexpectedly succeeded");
+        }
+        assert!(
+            result.err().unwrap().contains("cancelled"),
+            "startup must observe connection cancellation"
+        );
+        tasks.wait().await;
+        assert!(matches!(
+            state.wait_process().await,
+            crate::service::exec::exec_handle::ExitStatus::Code(0)
+        ));
+        assert!(!path.exists());
+        assert!(!server.registry.exists("reverse-helper-test").await);
+        assert_eq!(
+            nix::sys::wait::waitpid(guard.pid(), Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
+            Err(nix::errno::Errno::ECHILD)
+        );
     })
     .await;
 }
