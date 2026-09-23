@@ -217,7 +217,7 @@ exit "$CARGO_STATUS"
     // Isolate tool discovery so an installed nextest cannot hide the fallback.
     const result = spawnSync('/usr/bin/make', ['-f', join(REPO_ROOT, 'make/test.mk'), 'test:unit:cli', 'NEXTEST_PROFILE=ci'], {
       cwd: REPO_ROOT,
-      env: { ...process.env, PATH: directory, MAKEFLAGS: '', CARGO_LOG: log, CARGO_STATUS: String(exitCode) },
+      env: { ...process.env, PATH: directory, MAKEFLAGS: '', FILTER: '', NEXTEST_FILTER_EXPR: '', CARGO_LOG: log, CARGO_STATUS: String(exitCode) },
       encoding: 'utf8',
       timeout: 10_000,
     })
@@ -229,16 +229,40 @@ exit "$CARGO_STATUS"
   }
 }
 
-test('CLI unit tests fall back to Cargo without running VM integration binaries', () => {
+test('CLI unit tests fall back to Cargo with only non-VM integration binaries', () => {
   const { result, args } = cliUnitTests('cargo')
   assert.equal(result.status, 0, result.stderr)
-  assert.deepEqual(args, ['test', '-p', 'boxlite-cli', '--bins', '--', '--test-threads=1', '::tests::'])
+  assert.deepEqual(args, ['test', '-p', 'boxlite-cli', '--bins', '--test', 'auth', '--test', 'ssh', '--', '--test-threads=1'])
 })
 
 test('CLI unit tests use the requested nextest profile when installed', () => {
   const { result, args } = cliUnitTests('nextest')
   assert.equal(result.status, 0, result.stderr)
-  assert.deepEqual(args, ['nextest', 'run', '-p', 'boxlite-cli', '--profile', 'ci', '-E', 'test(::tests::)'])
+  assert.deepEqual(args, ['nextest', 'run', '-p', 'boxlite-cli', '--bins', '--test', 'auth', '--test', 'ssh', '--profile', 'ci'])
+})
+
+test('CLI coverage instruments the same non-VM integration binaries', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'boxlite-cli-coverage-'))
+  try {
+    const log = join(directory, 'cargo.log')
+    writeFileSync(join(directory, 'cargo'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CARGO_LOG"\n', { mode: 0o755 })
+    const result = spawnSync('/usr/bin/make', [
+      '-f', join(REPO_ROOT, 'make/test.mk'), '-f', join(REPO_ROOT, 'make/coverage.mk'),
+      'coverage:lcov', 'MAKE=/usr/bin/true',
+    ], {
+      cwd: directory,
+      env: { ...process.env, PATH: `${directory}:/usr/bin:/bin`, MAKEFLAGS: '', FILTER: '', NEXTEST_FILTER_EXPR: '', NEXTEST_PROFILE: '', CARGO_LOG: log },
+      encoding: 'utf8', timeout: 10_000,
+    })
+    assert.equal(result.status, 0, result.stderr)
+    const calls = readFileSync(log, 'utf8').trim().split('\n')
+    const cli = calls.filter((call) => call.includes('-p boxlite-cli'))
+    assert.deepEqual(cli, ['llvm-cov nextest --no-report --no-tests=fail -p boxlite-cli --bins --test auth --test ssh'])
+    assert.equal(calls.filter((call) => call === 'llvm-cov clean --workspace').length, 1)
+    assert.equal(calls[0], 'llvm-cov clean --workspace')
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 for (const runner of ['cargo', 'nextest'] as const) {
