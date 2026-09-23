@@ -7,7 +7,7 @@ Complete API reference for the BoxLite Rust SDK.
 The Rust SDK is the core implementation of BoxLite. It provides async-first APIs built on Tokio for creating and managing isolated VM environments.
 
 **Crate**: `boxlite`
-**Repository**: [github.com/anthropics/boxlite](https://github.com/anthropics/boxlite)
+**Repository**: [github.com/boxlite-ai/boxlite](https://github.com/boxlite-ai/boxlite)
 
 ---
 
