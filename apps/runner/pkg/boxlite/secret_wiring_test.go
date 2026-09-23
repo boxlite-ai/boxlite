@@ -42,6 +42,11 @@ func TestCreateAppliesSecrets(t *testing.T) {
 // runner's registry credentials and says so in the payload; if Create stops
 // forwarding that decision, every tenant image is pulled with the operator's
 // token again and nothing else fails.
+//
+// The option has to carry imagePullOptions(boxDto) itself, not merely be
+// applied: a literal in its place would compile, pass every other test, and
+// drop the decision just the same. TestImagePullOptionsKeepsEachDecision covers
+// what that function maps.
 func TestCreateAppliesAnonymousImagePull(t *testing.T) {
 	fileSet := token.NewFileSet()
 	parsed, err := parser.ParseFile(fileSet, "client.go", nil, 0)
@@ -54,8 +59,24 @@ func TestCreateAppliesAnonymousImagePull(t *testing.T) {
 		t.Fatal("Client.Create not found in client.go")
 	}
 
-	if findCall(create.Body, "boxlite", "WithAnonymousImagePull") == nil {
-		t.Fatal("Client.Create no longer calls boxlite.WithAnonymousImagePull; tenant images would be pulled with the runner's credentials")
+	withImagePull := findCall(create.Body, "boxlite", "WithImagePull")
+	if withImagePull == nil {
+		t.Fatal("Client.Create no longer calls boxlite.WithImagePull; tenant images would be pulled with the runner's credentials")
+	}
+	if len(withImagePull.Args) != 1 {
+		t.Fatalf("boxlite.WithImagePull takes one argument, Create passes %d", len(withImagePull.Args))
+	}
+	mapping, passesMapping := withImagePull.Args[0].(*ast.CallExpr)
+	if passesMapping {
+		function, isIdent := mapping.Fun.(*ast.Ident)
+		passesMapping = isIdent && function.Name == "imagePullOptions" && len(mapping.Args) == 1
+	}
+	if passesMapping {
+		argument, isIdent := mapping.Args[0].(*ast.Ident)
+		passesMapping = isIdent && argument.Name == "boxDto"
+	}
+	if !passesMapping {
+		t.Fatal("Client.Create must pass imagePullOptions(boxDto) to boxlite.WithImagePull, or the control plane's pull decisions are dropped")
 	}
 }
 

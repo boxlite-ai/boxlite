@@ -8,11 +8,11 @@
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper};
-use crate::images::{ContainerImageConfig, ImageDiskManager, PullPolicy, PulledImage};
+use crate::images::{ContainerImageConfig, ImageDiskManager, PulledImage};
 use crate::litebox::init::types::{ContainerRootfsPrepResult, USE_DISK_ROOTFS, USE_OVERLAYFS};
 use crate::pipeline::PipelineTask;
 use crate::runtime::layout::BoxFilesystemLayout;
-use crate::runtime::options::RootfsSpec;
+use crate::runtime::options::{ImagePullOptions, RootfsSpec};
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use async_trait::async_trait;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -36,7 +36,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             cmd_override,
             user_override,
             working_dir_override,
-            pull_policy,
+            image_pull,
         ) = {
             let ctx = ctx.lock().await;
             let layout = ctx
@@ -59,20 +59,12 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
                 ctx.config.options.cmd.clone(),
                 ctx.config.options.user.clone(),
                 ctx.config.options.working_dir.clone(),
-                PullPolicy {
-                    anonymous: ctx.config.options.anonymous_image_pull,
-                    // Never on a restart, whatever the create asked for. The
-                    // box keeps its existing COW disk here, so a tag that moved
-                    // upstream would pair a new build's entrypoint and env with
-                    // the old rootfs — and a registry that happens to be
-                    // unreachable would turn a restart that used to come up
-                    // from cache into a failure. `serde(skip)` only clears the
-                    // flag for a box reloaded in a new process; one restarted
-                    // inside the process that created it still carries it.
+                ImagePullOptions {
                     revalidate: should_revalidate(
-                        ctx.config.options.image_revalidate,
+                        ctx.config.options.image_pull.revalidate,
                         ctx.reuse_rootfs,
                     ),
+                    ..ctx.config.options.image_pull
                 },
             )
         };
@@ -88,7 +80,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             cmd_override.as_deref(),
             user_override.as_deref(),
             working_dir_override.as_deref(),
-            pull_policy,
+            image_pull,
         )
         .await
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -119,7 +111,7 @@ async fn run_container_rootfs(
     cmd_override: Option<&[String]>,
     user_override: Option<&str>,
     working_dir_override: Option<&str>,
-    pull_policy: PullPolicy,
+    image_pull: ImagePullOptions,
 ) -> BoxliteResult<(ContainerImageConfig, Disk, Option<PulledImage>)> {
     let disk_path = layout.disk_path();
 
@@ -141,7 +133,7 @@ async fn run_container_rootfs(
 
         // Load container config
         let image = match rootfs_spec {
-            RootfsSpec::Image(r) => pull_image(runtime, r, pull_policy).await?,
+            RootfsSpec::Image(r) => pull_image(runtime, r, image_pull).await?,
             RootfsSpec::RootfsPath(path) => {
                 let bundle_dir = std::path::Path::new(path);
 
@@ -180,7 +172,7 @@ async fn run_container_rootfs(
 
     // Fresh start: pull or load image
     let image = match rootfs_spec {
-        RootfsSpec::Image(r) => pull_image(runtime, r, pull_policy).await?,
+        RootfsSpec::Image(r) => pull_image(runtime, r, image_pull).await?,
         RootfsSpec::RootfsPath(path) => {
             let bundle_dir = std::path::Path::new(path);
 
@@ -319,7 +311,7 @@ fn apply_user_overrides(
 /// already has, so following a moved tag would pair the new build's entrypoint,
 /// env and user with the old filesystem, and a registry that happens to be
 /// unreachable would turn a restart that used to come up from cache into a
-/// failure. `BoxOptions::image_revalidate` is `serde(skip)`, which clears the
+/// failure. `ImagePullOptions::revalidate` is `serde(skip)`, which clears the
 /// flag only for a box reloaded in a new process; one restarted inside the
 /// process that created it still carries what its create asked for.
 fn should_revalidate(requested: bool, reuse_rootfs: bool) -> bool {
@@ -347,10 +339,10 @@ fn pulled_image_of(
 async fn pull_image(
     runtime: &crate::runtime::SharedRuntimeImpl,
     image_ref: &str,
-    policy: PullPolicy,
+    pull: ImagePullOptions,
 ) -> BoxliteResult<crate::images::ImageObject> {
     // ImageManager has internal locking - direct access
-    runtime.image_manager.pull(image_ref, policy).await
+    runtime.image_manager.pull(image_ref, pull).await
 }
 
 async fn prepare_overlayfs_layers(

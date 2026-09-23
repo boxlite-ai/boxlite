@@ -17,8 +17,8 @@ use chrono::{DateTime, Utc};
 use super::blob_source::{BlobSource, LocalBundleBlobSource, StoreBlobSource};
 use super::object::ImageObject;
 use crate::db::Database;
-use crate::images::store::{ImageStore, PullPolicy, SharedImageStore};
-use crate::runtime::options::ImageRegistry;
+use crate::images::store::{ImageStore, SharedImageStore};
+use crate::runtime::options::{ImagePullOptions, ImageRegistry};
 use crate::runtime::types::ImageInfo;
 use boxlite_shared::errors::BoxliteResult;
 use oci_client::Reference;
@@ -72,7 +72,7 @@ pub(super) struct LayerInfo {
 /// let manager = ImageManager::new(PathBuf::from("/tmp/images"), db, vec![])?;
 ///
 /// // Pull an image
-/// let image = manager.pull("python:alpine", PullPolicy::default()).await?;
+/// let image = manager.pull("python:alpine", ImagePullOptions::default()).await?;
 ///
 /// // Access image information
 /// println!("Image: {}", image.reference());
@@ -114,8 +114,12 @@ impl ImageManager {
     ///
     /// Thread Safety: `ImageStore` handles locking internally. Multiple
     /// concurrent pulls of the same image will only download once.
-    pub async fn pull(&self, image_ref: &str, policy: PullPolicy) -> BoxliteResult<ImageObject> {
-        let manifest = self.store.pull(image_ref, policy).await?;
+    pub async fn pull(
+        &self,
+        image_ref: &str,
+        pull: ImagePullOptions,
+    ) -> BoxliteResult<ImageObject> {
+        let manifest = self.store.pull(image_ref, pull).await?;
         let storage = self.store.storage().await;
         let blob_source = BlobSource::Store(StoreBlobSource::new(storage));
 

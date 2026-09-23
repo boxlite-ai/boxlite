@@ -118,6 +118,22 @@ func boxRuntimeEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]stri
 	return env
 }
 
+// imagePullOptions reads how to pull a box's image off its create request.
+//
+// Both answers are the control plane's, because the runner cannot know either.
+// This runner holds ghcr.io and docker.io credentials for its own images (see
+// NewClient) and core matches them by host, so a reference the control plane
+// accepted from a tenant must not reach them — and which references are the
+// operator's own is the control plane's knowledge. Whether a reference is
+// already pinned to a digest is likewise the control plane's. A field it left
+// unset means false, which is the SDK's default.
+func imagePullOptions(boxDto dto.CreateBoxDTO) boxlite.ImagePullOptions {
+	return boxlite.ImagePullOptions{
+		Anonymous:  boxDto.AnonymousImagePull != nil && *boxDto.AnonymousImagePull,
+		Revalidate: boxDto.ImageRevalidate != nil && *boxDto.ImageRevalidate,
+	}
+}
+
 // secretSpecs maps control-plane SecretDTOs onto the boxlite SDK's Secret
 // values. Extracted as a pure function so the mapping is unit-testable without
 // a live runtime (see secret_options_test.go). The SDK applies the
@@ -289,19 +305,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if boxDto.StorageQuota > 0 {
 		opts = append(opts, boxlite.WithDiskSize(int(boxDto.StorageQuota)))
 	}
-	// This runner holds ghcr.io and docker.io credentials for its own images
-	// (see NewClient), and core matches them by host. An image reference the
-	// control plane accepted from a tenant must not reach them, so the control
-	// plane says which pulls are anonymous — the runner cannot tell, because
-	// which references are the operator's own is the control plane's knowledge.
-	if boxDto.AnonymousImagePull != nil {
-		opts = append(opts, boxlite.WithAnonymousImagePull(*boxDto.AnonymousImagePull))
-	}
-	// Likewise the control plane's call: it knows whether this reference has
-	// already been pinned to a digest, and the runner does not.
-	if boxDto.ImageRevalidate != nil {
-		opts = append(opts, boxlite.WithImageRevalidate(*boxDto.ImageRevalidate))
-	}
+	opts = append(opts, boxlite.WithImagePull(imagePullOptions(boxDto)))
 
 	for k, v := range boxDto.Env {
 		opts = append(opts, boxlite.WithEnv(k, v))

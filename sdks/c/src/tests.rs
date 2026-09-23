@@ -396,6 +396,64 @@ fn create_box_rejects_null_callback() {
     let _ = std::fs::remove_dir_all(home_dir);
 }
 
+/// Each pull choice lands in its own field. The single-field calls are the
+/// point: swapped fields pass an all-set or none-set check, and pull every
+/// tenant image with the runtime's credentials.
+#[test]
+fn image_pull_keeps_each_choice_in_its_own_field() {
+    let image = CString::new("alpine:latest").unwrap();
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+    assert_eq!(
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts, &mut error) },
+        BoxliteErrorCode::Ok
+    );
+    unsafe {
+        boxlite_options_set_image_pull(
+            opts,
+            &BoxliteImagePullOptions {
+                anonymous: 1,
+                revalidate: 0,
+            },
+        );
+        assert_eq!(
+            (*opts).options.image_pull,
+            boxlite::ImagePullOptions {
+                anonymous: true,
+                revalidate: false,
+            }
+        );
+
+        boxlite_options_set_image_pull(
+            opts,
+            &BoxliteImagePullOptions {
+                anonymous: 0,
+                revalidate: 2,
+            },
+        );
+        assert_eq!(
+            (*opts).options.image_pull,
+            boxlite::ImagePullOptions {
+                anonymous: false,
+                revalidate: true,
+            },
+            "any nonzero value is true"
+        );
+
+        // Null leaves what is there, rather than resetting it to the default.
+        boxlite_options_set_image_pull(opts, ptr::null());
+        assert_eq!(
+            (*opts).options.image_pull,
+            boxlite::ImagePullOptions {
+                anonymous: false,
+                revalidate: true,
+            }
+        );
+
+        boxlite_options_free(opts);
+    }
+}
+
 #[test]
 #[allow(deprecated)]
 fn auto_remove_and_auto_delete_use_last_call_wins() {

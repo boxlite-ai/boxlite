@@ -16,7 +16,9 @@
 use crate::db::{CachedImage, Database, ImageIndexStore};
 use crate::images::manager::{ImageManifest, LayerInfo};
 use crate::images::storage::ImageStorage;
-use crate::runtime::options::{ImageRegistry, ImageRegistryAuth, RegistryTransport};
+use crate::runtime::options::{
+    ImagePullOptions, ImageRegistry, ImageRegistryAuth, RegistryTransport,
+};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use oci_client::Reference;
 use oci_client::client::{ClientConfig, ClientProtocol};
@@ -51,45 +53,6 @@ impl ImageStoreInner {
     }
 }
 
-/// What one pull may do that the runtime it runs on cannot decide for it.
-///
-/// Not configuration. The registry list and its credentials are built once,
-/// when the runtime is, and this changes neither: `anonymous` selects among
-/// them and `revalidate` says whether the ref-keyed cache may answer. Both
-/// belong to the box being started rather than to the runtime starting it,
-/// which is why neither can be settled once.
-///
-/// Credentials are matched by host, and that is what forces the first one to
-/// be per pull: a single runtime serves the operator's own images and a ref a
-/// tenant named from the same hosts. Without the split,
-/// `ghcr.io/<someone-else>/<private-image>` is fetched with the operator's
-/// token and handed to the tenant who named it.
-///
-/// Which of the two a ref is cannot be decided here, and cannot be decided by
-/// host either. It is whether the ref is in the operator's curated set —
-/// env-driven, and the control plane's to know — and an operator may point a
-/// curated entry at a private package, so a host rule would either strip the
-/// credential those need or hand it to every tenant ref on the same host. So
-/// the answer arrives with the pull.
-///
-/// `anonymous` covers credentials only. Which transport to use and whether to
-/// skip certificate verification stay keyed by host, because reaching a local
-/// insecure registry is about where the bytes come from, not about whose token
-/// opens the door.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PullPolicy {
-    /// Send no credentials, whatever the registry list holds for this host.
-    pub anonymous: bool,
-    /// Ask the registry even when this ref is already cached.
-    ///
-    /// The cache is keyed by the ref string, so a moving tag keeps resolving to
-    /// whatever it first pointed at. A caller that wants the tag followed — one
-    /// that has not yet pinned this ref to a digest — sets this; the pull still
-    /// reuses every layer it already has, because layers are keyed by their own
-    /// digests.
-    pub revalidate: bool,
-}
-
 // ============================================================================
 // IMAGE STORE (thread-safe facade)
 // ============================================================================
@@ -110,7 +73,7 @@ pub struct PullPolicy {
 /// let store = Arc::new(ImageStore::new(images_dir, db, vec![])?);
 ///
 /// // Pull image (thread-safe, releases lock during download)
-/// let manifest = store.pull("python:alpine", PullPolicy::default()).await?;
+/// let manifest = store.pull("python:alpine", ImagePullOptions::default()).await?;
 ///
 /// // Create BlobSource for accessing layers
 /// let storage = store.storage().await;
@@ -191,7 +154,11 @@ impl ImageStore {
     ///
     /// Thread-safe: Multiple concurrent pulls of the same image will only
     /// download once; others will get the cached result.
-    pub async fn pull(&self, image_ref: &str, policy: PullPolicy) -> BoxliteResult<ImageManifest> {
+    pub async fn pull(
+        &self,
+        image_ref: &str,
+        pull: ImagePullOptions,
+    ) -> BoxliteResult<ImageManifest> {
         use super::ReferenceIter;
 
         tracing::debug!(
@@ -212,7 +179,7 @@ impl ImageStore {
             // Fast path: check cache with read lock. Skipped when the caller
             // asked for revalidation — the cache answers by ref string, which
             // is the thing being re-checked.
-            if !policy.revalidate {
+            if !pull.revalidate {
                 let inner = self.inner.read().await;
                 if let Some(manifest) = self.try_load_cached(&inner, &ref_str)? {
                     tracing::info!("Using cached image: {}", ref_str);
@@ -222,7 +189,7 @@ impl ImageStore {
 
             // Slow path: pull from registry
             tracing::info!("Pulling image from registry: {}", ref_str);
-            match self.pull_from_registry(&reference, policy).await {
+            match self.pull_from_registry(&reference, pull).await {
                 Ok(manifest) => {
                     if !errors.is_empty() {
                         tracing::info!(
@@ -614,14 +581,14 @@ impl ImageStore {
     async fn pull_from_registry(
         &self,
         reference: &Reference,
-        policy: PullPolicy,
+        pull: ImagePullOptions,
     ) -> BoxliteResult<ImageManifest> {
         assert_registry_is_public(reference.registry(), &self.image_registries).await?;
 
         // The client is still built per host: anonymity is about credentials,
         // not about transport, so an insecure local registry stays reachable.
         let client = self.client_for(reference);
-        let auth = registry_auth_for(reference.registry(), &self.image_registries, policy);
+        let auth = registry_auth_for(reference.registry(), &self.image_registries, pull);
 
         // Step 1: Pull manifest (no lock needed)
         let (manifest, manifest_digest_str) = client
@@ -639,7 +606,7 @@ impl ImageStore {
 
         // Step 3: Extract image manifest (may pull platform-specific manifest for multi-platform images)
         let mut image_manifest = self
-            .extract_image_manifest(&client, reference, &manifest, manifest_digest_str, policy)
+            .extract_image_manifest(&client, reference, &manifest, manifest_digest_str, pull)
             .await?;
 
         // Step 4: Download layers (no lock during download, atomic file writes)
@@ -694,7 +661,7 @@ impl ImageStore {
         reference: &Reference,
         manifest: &oci_client::manifest::OciManifest,
         manifest_digest: String,
-        policy: PullPolicy,
+        pull: ImagePullOptions,
     ) -> BoxliteResult<ImageManifest> {
         match manifest {
             oci_client::manifest::OciManifest::Image(img) => {
@@ -708,7 +675,7 @@ impl ImageStore {
                 })
             }
             oci_client::manifest::OciManifest::ImageIndex(index) => {
-                self.extract_platform_manifest(client, reference, index, policy)
+                self.extract_platform_manifest(client, reference, index, pull)
                     .await
             }
         }
@@ -750,7 +717,7 @@ impl ImageStore {
         client: &oci_client::Client,
         reference: &Reference,
         index: &oci_client::manifest::OciImageIndex,
-        policy: PullPolicy,
+        pull: ImagePullOptions,
     ) -> BoxliteResult<ImageManifest> {
         let (platform_os, platform_arch) = Self::detect_platform();
 
@@ -775,7 +742,7 @@ impl ImageStore {
         let (platform_image, platform_digest) = client
             .pull_manifest(
                 &platform_reference,
-                &registry_auth_for(reference.registry(), &self.image_registries, policy),
+                &registry_auth_for(reference.registry(), &self.image_registries, pull),
             )
             .await
             .map_err(|e| BoxliteError::Storage(format!("failed to pull platform manifest: {e}")))?;
@@ -1283,7 +1250,7 @@ fn embedded_ipv4(high: u16, low: u16) -> std::net::Ipv4Addr {
 fn registry_auth_for(
     host: &str,
     image_registries: &[ImageRegistry],
-    policy: PullPolicy,
+    pull: ImagePullOptions,
 ) -> OciRegistryAuth {
     // Decided here rather than at the call sites because a pull resolves a
     // credential in more than one place — the manifest, then the
@@ -1291,7 +1258,7 @@ fn registry_auth_for(
     // that leaks at the second one leaks just the same. Layer and config
     // downloads reuse whatever this returned, through the client's own auth
     // cache, so they follow without asking again.
-    if policy.anonymous {
+    if pull.anonymous {
         return OciRegistryAuth::Anonymous;
     }
 
@@ -1467,14 +1434,14 @@ mod tests {
 
         for (host, expected) in cases {
             assert_eq!(
-                registry_auth_for(host, &registries, PullPolicy::default()),
+                registry_auth_for(host, &registries, ImagePullOptions::default()),
                 expected,
                 "host={host}"
             );
         }
     }
 
-    /// The confused deputy this policy exists for: the registries a runtime
+    /// The confused deputy an anonymous pull exists for: the registries a runtime
     /// holds credentials for are exactly the ones a tenant would name to have
     /// them spent. Matching by host is what makes the credential reachable, so
     /// the test pins the case where the host does match.
@@ -1492,7 +1459,7 @@ mod tests {
                 registry_auth_for(
                     host,
                     &registries,
-                    PullPolicy {
+                    ImagePullOptions {
                         anonymous: true,
                         ..Default::default()
                     }
@@ -1515,7 +1482,7 @@ mod tests {
             registry_auth_for(
                 "ghcr.io",
                 &registries,
-                PullPolicy {
+                ImagePullOptions {
                     anonymous: false,
                     ..Default::default()
                 }
@@ -1541,7 +1508,7 @@ mod tests {
             registry_auth_for(
                 "registry.local:5000",
                 &registries,
-                PullPolicy {
+                ImagePullOptions {
                     anonymous: true,
                     ..Default::default()
                 }
@@ -1677,7 +1644,7 @@ mod tests {
         let store = ImageStore::new(temp_dir.path().join("images"), db, vec![]).unwrap();
 
         let error = store
-            .pull("127.0.0.1:1/acme/app:v1", PullPolicy::default())
+            .pull("127.0.0.1:1/acme/app:v1", ImagePullOptions::default())
             .await
             .expect_err("an address inside the deployment must not be pulled from");
 
@@ -1958,7 +1925,7 @@ mod tests {
         let seeded = seed_cached_image(&store, image_ref).await;
 
         let cached = store
-            .pull(image_ref, PullPolicy::default())
+            .pull(image_ref, ImagePullOptions::default())
             .await
             .expect("a complete cache entry answers without a registry");
         assert_eq!(cached.manifest_digest, seeded.manifest_digest);
@@ -1966,7 +1933,7 @@ mod tests {
         let revalidated = store
             .pull(
                 image_ref,
-                PullPolicy {
+                ImagePullOptions {
                     revalidate: true,
                     ..Default::default()
                 },

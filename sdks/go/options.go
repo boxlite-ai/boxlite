@@ -218,29 +218,28 @@ type Secret struct {
 }
 
 type boxConfig struct {
-	name               string
-	cpus               int
-	memoryMiB          int
-	diskSizeGB         int
-	rootfsPath         string
-	env                [][2]string
-	volumes            []volumeEntry
-	ports              []PortSpec
-	workDir            string
-	user               string
-	entrypoint         []string
-	cmd                []string
-	autoRemove         *bool
-	autoStop           *uint32
-	autoDelete         *uint32
-	autoResume         *bool
-	detach             *bool
-	anonymousImagePull *bool
-	imageRevalidate    *bool
-	network            *NetworkSpec
-	networkErr         error // deferred WithNetwork validation error, surfaced at conversion
-	secrets            []Secret
-	advanced           *AdvancedBoxOptions // nil = runtime defaults; non-nil = caller-owned advanced opts applied via boxlite_options_set_advanced
+	name       string
+	cpus       int
+	memoryMiB  int
+	diskSizeGB int
+	rootfsPath string
+	env        [][2]string
+	volumes    []volumeEntry
+	ports      []PortSpec
+	workDir    string
+	user       string
+	entrypoint []string
+	cmd        []string
+	autoRemove *bool
+	autoStop   *uint32
+	autoDelete *uint32
+	autoResume *bool
+	detach     *bool
+	imagePull  *ImagePullOptions
+	network    *NetworkSpec
+	networkErr error // deferred WithNetwork validation error, surfaced at conversion
+	secrets    []Secret
+	advanced   *AdvancedBoxOptions // nil = runtime defaults; non-nil = caller-owned advanced opts applied via boxlite_options_set_advanced
 }
 
 // volumeEntry is one mount. Exactly one origin is set: managedVolume for a
@@ -420,27 +419,40 @@ func WithDetach(v bool) BoxOption {
 	return func(c *boxConfig) { c.detach = &v }
 }
 
-// WithAnonymousImagePull pulls this box's image without the registry
-// credentials the runtime was configured with.
+// ImagePullOptions says how a box's image is pulled, beyond where it is pulled
+// from. The zero value is the default: the runtime's registry credentials, and
+// the local image cache answering whenever it has the reference.
 //
-// For a caller that boots a box from an image reference someone else chose:
-// credentials are matched by host, so without this a reference naming a host
-// the runtime holds a token for is fetched with that token and its contents
-// handed to whoever named it. A caller pulling its own images should leave it
-// off, which is the default.
-func WithAnonymousImagePull(v bool) BoxOption {
-	return func(c *boxConfig) { c.anonymousImagePull = &v }
+// Both fields are for a caller that boots boxes from image references someone
+// else chose. A caller pulling its own images should leave them unset.
+type ImagePullOptions struct {
+	// Anonymous pulls without the registry credentials the runtime was
+	// configured with. Credentials are matched by host, so without this a
+	// reference naming a host the runtime holds a token for is fetched with
+	// that token and its contents handed to whoever named it. Persisted with
+	// the box, so a restart pulls the same way.
+	Anonymous bool
+	// Revalidate re-resolves the reference against the registry instead of
+	// answering from the cache, which is keyed by the reference string — a tag
+	// that moved upstream otherwise keeps producing the build it first resolved
+	// to. For a reference not yet pinned to a digest; layers already present
+	// are still reused. Applies to this create only, never to a restart.
+	Revalidate bool
 }
 
-// WithImageRevalidate re-resolves this box's image reference against the
-// registry instead of answering from the local image cache.
-//
-// The cache is keyed by the reference string, so a tag that moved upstream
-// keeps producing the build it first resolved to. For a caller that has not
-// pinned the reference to a digest yet; layers already present are still
-// reused, because they are keyed by their own digests.
-func WithImageRevalidate(v bool) BoxOption {
-	return func(c *boxConfig) { c.imageRevalidate = &v }
+// WithImagePull sets how this box's image is pulled. See ImagePullOptions.
+func WithImagePull(pull ImagePullOptions) BoxOption {
+	return func(c *boxConfig) { c.imagePull = &pull }
+}
+
+// cImagePullOptions converts pull to the struct boxlite_options_set_image_pull
+// takes. Its own function so a test can check which field lands where: see
+// cImagePullFieldsForTest.
+func cImagePullOptions(pull ImagePullOptions) C.BoxliteImagePullOptions {
+	return C.BoxliteImagePullOptions{
+		anonymous:  boolToCInt(pull.Anonymous),
+		revalidate: boolToCInt(pull.Revalidate),
+	}
 }
 
 // buildAndFreeCOptions runs buildCOptions, immediately frees the C
@@ -648,11 +660,9 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 	if cfg.detach != nil {
 		C.boxlite_options_set_detach(cOpts, boolToCInt(*cfg.detach))
 	}
-	if cfg.anonymousImagePull != nil {
-		C.boxlite_options_set_anonymous_image_pull(cOpts, boolToCInt(*cfg.anonymousImagePull))
-	}
-	if cfg.imageRevalidate != nil {
-		C.boxlite_options_set_image_revalidate(cOpts, boolToCInt(*cfg.imageRevalidate))
+	if cfg.imagePull != nil {
+		pull := cImagePullOptions(*cfg.imagePull)
+		C.boxlite_options_set_image_pull(cOpts, &pull)
 	}
 	if cfg.advanced != nil && cfg.advanced.handle != nil {
 		// Clone the caller-owned advanced options onto the box.

@@ -1,6 +1,6 @@
 use crate::db::{BoxStore, Database};
 use crate::experimental::ExperimentalFeatures;
-use crate::images::{ImageDiskManager, ImageManager, PullPolicy};
+use crate::images::{ImageDiskManager, ImageManager};
 use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
 use crate::lock::{FileLockManager, LockManager};
@@ -9,7 +9,7 @@ use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
 use crate::runtime::id::{BoxID, BoxIDMint};
 use crate::runtime::layout::{BoxFilesystemLayout, FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
-use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
+use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions, ImagePullOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
 use crate::vmm::VmmKind;
@@ -1856,7 +1856,7 @@ impl super::images::ImageBackend for LocalRuntime {
         // this path keeps them. The tenant-facing path is a box's own image.
         self.0
             .image_manager
-            .pull(image_ref, PullPolicy::default())
+            .pull(image_ref, ImagePullOptions::default())
             .await
     }
 

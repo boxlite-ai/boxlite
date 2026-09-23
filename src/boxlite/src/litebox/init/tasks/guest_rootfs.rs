@@ -4,11 +4,12 @@
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::Disk;
-use crate::images::{ImageDiskManager, PullPolicy};
+use crate::images::ImageDiskManager;
 use crate::pipeline::PipelineTask;
 use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
 use crate::runtime::constants::images;
 use crate::runtime::layout::BoxFilesystemLayout;
+use crate::runtime::options::ImagePullOptions;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::vmm::guest_artifacts::GuestArtifacts;
 use async_trait::async_trait;
@@ -126,7 +127,7 @@ async fn pull_guest_rootfs_image(
     // is the one image that may use whatever the registry list holds.
     runtime
         .image_manager
-        .pull(images::INIT_ROOTFS, PullPolicy::default())
+        .pull(images::INIT_ROOTFS, ImagePullOptions::default())
         .await
 }
 

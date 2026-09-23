@@ -454,6 +454,21 @@ typedef struct BoxliteSocketAddress {
   const char *path;
 } BoxliteSocketAddress;
 
+// How a box's image is pulled — `BoxOptions::image_pull`. Each field is a
+// boolean, nonzero for true.
+//
+// A struct rather than one argument per field, so a caller naming them cannot
+// pass them in the wrong order: swapping the two would pull a tenant's image
+// with the runtime's credentials.
+typedef struct BoxliteImagePullOptions {
+  // Pull without the registry credentials the runtime holds — for an image
+  // reference someone other than the runtime's owner chose.
+  int anonymous;
+  // Re-resolve the reference instead of answering from the cache — for one
+  // not yet pinned to a digest. Not persisted with the box.
+  int revalidate;
+} BoxliteImagePullOptions;
+
 typedef struct CredentialHandle CBoxliteCredential;
 
 typedef struct RestOptionsHandle CBoxliteRestOptions;
@@ -1045,21 +1060,11 @@ void boxlite_options_set_auto_resume_enabled(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
 
-// Pull this box's image without the registry credentials the runtime holds.
-//
-// For a caller that boots a box from an image reference someone else chose:
-// credentials are matched by host, so without this a reference naming a host
-// the runtime has a token for is fetched with that token. Off by default — a
-// caller pulling its own images keeps the registries it configured.
-void boxlite_options_set_anonymous_image_pull(CBoxliteOptions *opts, int val);
-
-// Re-resolve this box's image reference instead of answering from the cache.
-//
-// The image cache is keyed by the reference string, so a tag that moved
-// upstream keeps resolving to the build it first named. For a caller that has
-// not pinned the reference to a digest yet. Off by default, and deliberately
-// not persisted with the box: a restart boots what the box already has.
-void boxlite_options_set_image_revalidate(CBoxliteOptions *opts, int val);
+// Set how this box's image is pulled. Null `pull` is a no-op: whatever was set
+// before stays, and a box never set pulls with the runtime's credentials,
+// answered from cache when possible.
+void boxlite_options_set_image_pull(CBoxliteOptions *opts,
+                                    const struct BoxliteImagePullOptions *pull);
 
 // Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
 // `CBoxliteOptions`. Clones the advanced configuration into the box options —

@@ -582,16 +582,12 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             // BoxOptions through PyBoxOptions and the REST wire schema carries
             // `tty`; Node has no such caller yet.
             tty: false,
-            // Not surfaced either, and for the same reason plus one: re-resolving
-            // a tag is a decision for a caller that pins refs to digests on the
-            // client's behalf. An embedded SDK hands core the ref it was given.
-            image_revalidate: false,
-            // Also not surfaced: an anonymous pull exists for a caller that
-            // passes on an image ref someone else chose. An embedded SDK pulls
-            // its own refs against registries its own process configured, so it
-            // keeps them. The multi-tenant caller is the Go runner — see
-            // `BoxOptions::anonymous_image_pull`.
-            anonymous_image_pull: false,
+            // Not surfaced either: both pull options exist for a caller that
+            // passes on image refs someone else chose and pins them to digests
+            // on that party's behalf. An embedded SDK pulls its own refs,
+            // against registries its own process configured. The multi-tenant
+            // caller is the Go runner — see `ImagePullOptions`.
+            image_pull: boxlite::ImagePullOptions::default(),
             secrets,
         })
     }

@@ -252,32 +252,31 @@ pub unsafe extern "C" fn boxlite_options_set_detach(opts: *mut CBoxliteOptions, 
     options_set_detach(opts, val)
 }
 
-/// Pull this box's image without the registry credentials the runtime holds.
+/// How a box's image is pulled — `BoxOptions::image_pull`. Each field is a
+/// boolean, nonzero for true.
 ///
-/// For a caller that boots a box from an image reference someone else chose:
-/// credentials are matched by host, so without this a reference naming a host
-/// the runtime has a token for is fetched with that token. Off by default — a
-/// caller pulling its own images keeps the registries it configured.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_options_set_anonymous_image_pull(
-    opts: *mut CBoxliteOptions,
-    val: c_int,
-) {
-    options_set_anonymous_image_pull(opts, val)
+/// A struct rather than one argument per field, so a caller naming them cannot
+/// pass them in the wrong order: swapping the two would pull a tenant's image
+/// with the runtime's credentials.
+#[repr(C)]
+pub struct BoxliteImagePullOptions {
+    /// Pull without the registry credentials the runtime holds — for an image
+    /// reference someone other than the runtime's owner chose.
+    pub anonymous: c_int,
+    /// Re-resolve the reference instead of answering from the cache — for one
+    /// not yet pinned to a digest. Not persisted with the box.
+    pub revalidate: c_int,
 }
 
-/// Re-resolve this box's image reference instead of answering from the cache.
-///
-/// The image cache is keyed by the reference string, so a tag that moved
-/// upstream keeps resolving to the build it first named. For a caller that has
-/// not pinned the reference to a digest yet. Off by default, and deliberately
-/// not persisted with the box: a restart boots what the box already has.
+/// Set how this box's image is pulled. Null `pull` is a no-op: whatever was set
+/// before stays, and a box never set pulls with the runtime's credentials,
+/// answered from cache when possible.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_options_set_image_revalidate(
+pub unsafe extern "C" fn boxlite_options_set_image_pull(
     opts: *mut CBoxliteOptions,
-    val: c_int,
+    pull: *const BoxliteImagePullOptions,
 ) {
-    options_set_image_revalidate(opts, val)
+    options_set_image_pull(opts, pull)
 }
 
 /// Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
@@ -614,19 +613,18 @@ pub unsafe fn options_set_detach(handle: *mut OptionsHandle, val: c_int) {
     }
 }
 
-pub unsafe fn options_set_anonymous_image_pull(handle: *mut OptionsHandle, val: c_int) {
+pub unsafe fn options_set_image_pull(
+    handle: *mut OptionsHandle,
+    pull: *const BoxliteImagePullOptions,
+) {
     unsafe {
-        if !handle.is_null() {
-            (*handle).options.anonymous_image_pull = val != 0;
+        if handle.is_null() || pull.is_null() {
+            return;
         }
-    }
-}
-
-pub unsafe fn options_set_image_revalidate(handle: *mut OptionsHandle, val: c_int) {
-    unsafe {
-        if !handle.is_null() {
-            (*handle).options.image_revalidate = val != 0;
-        }
+        (*handle).options.image_pull = boxlite::ImagePullOptions {
+            anonymous: (*pull).anonymous != 0,
+            revalidate: (*pull).revalidate != 0,
+        };
     }
 }
 
