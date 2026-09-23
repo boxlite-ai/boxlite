@@ -58,6 +58,13 @@ explicit replacement, or `disable` before generating new keys automatically.
 There is no credential lock: concurrent configuration of one record is not
 serialized. Existing runtime locks still apply.
 
+Before submission, the CLI trims surrounding whitespace from the host private
+key and appends one LF. The same normalized key is written locally, recorded,
+and submitted. It derives the host public key with `ssh-keygen` before saving
+pending configuration or sending configure. Local validation failures preserve
+existing active and pending records and do not send configure. Private keys
+must remain unencrypted; normalization does not change the key contents.
+
 Automatic and manual configurations are saved locally before submission and
 confirmed after success, including the actual port returned for guest port `0`.
 A lost reply leaves pending material; the next invocation checks status to

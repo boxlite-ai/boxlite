@@ -130,7 +130,7 @@ impl Credentials {
         &mut self,
         sandbox: &LiteBox,
         material: String,
-        config: SshConfig,
+        mut config: SshConfig,
         current: &SshStatus,
         login: Option<&str>,
     ) -> Result<SshStatus> {
@@ -139,7 +139,9 @@ impl Credentials {
             .checked_add(1)
             .context("SSH generation exhausted")?;
         let dir = self.material_dir(&material)?;
+        config.host_private_key = format!("{}\n", config.host_private_key.trim());
         secure_write(&dir.join("host"), config.host_private_key.as_bytes())?;
+        let public = derive_public_key(&dir.join("host")).await?;
         let clients = self.find_clients(&config).await?;
         let selected = login.map(str::to_owned).or_else(|| {
             self.journal
@@ -160,7 +162,8 @@ impl Credentials {
             .context("Save pending SSH configuration before configure")?;
         let status = sandbox.ssh().configure(config).await.context("Configure guest SSH; local configuration retained for status confirmation on the next invocation")?;
         ensure!(
-            self.matches(&record, &status).await.context("SSH configure completed remotely but local confirmation failed; recovery material retained")?,
+            Self::matches_listener(&record, &status).context("SSH configure completed remotely but local confirmation failed; recovery material retained")?
+                && Self::matches_host(&record, &status, &public),
             "SSH configure returned an unexpected identity, listener or generation; local confirmation incomplete, recovery material retained"
         );
         self.confirm(&mut record, &status)?;
@@ -217,6 +220,14 @@ impl Credentials {
     }
 
     async fn matches(&self, record: &Record, status: &SshStatus) -> Result<bool> {
+        if !Self::matches_listener(record, status)? {
+            return Ok(false);
+        }
+        let public = derive_public_key(&self.material_dir(&record.material)?.join("host")).await?;
+        Ok(Self::matches_host(record, status, &public))
+    }
+
+    fn matches_listener(record: &Record, status: &SshStatus) -> Result<bool> {
         if !status.enabled || status.generation != record.generation {
             return Ok(false);
         }
@@ -235,17 +246,16 @@ impl Credentials {
             .listen_address
             .parse()
             .context("Invalid SSH status listener")?;
-        if expected.ip() != actual.ip()
-            || actual.port() == 0
-            || (expected.port() != 0 && expected.port() != actual.port())
-        {
-            return Ok(false);
-        }
-        let public = derive_public_key(&self.material_dir(&record.material)?.join("host")).await?;
-        Ok(public_key(&public) == public_key(&status.host_public_key)
+        Ok(expected.ip() == actual.ip()
+            && actual.port() != 0
+            && (expected.port() == 0 || expected.port() == actual.port()))
+    }
+
+    fn matches_host(record: &Record, status: &SshStatus, public: &str) -> bool {
+        public_key(public) == public_key(&status.host_public_key)
             && record.status.as_ref().is_none_or(|saved| {
                 public_key(&saved.host_public_key) == public_key(&status.host_public_key)
-            }))
+            })
     }
 
     async fn generated_config(&self, material: &str, login: &str) -> Result<SshConfig> {

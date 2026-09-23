@@ -33,7 +33,13 @@ func TestSSHLocalLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rt.ForceRemove(context.Background(), box.ID())
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		if err := rt.ForceRemove(cleanupCtx, box.ID()); err != nil {
+			t.Errorf("remove SSH test box: %v", err)
+		}
+	}()
 	defer box.Close()
 	ssh, err := box.SSH()
 	if err != nil {

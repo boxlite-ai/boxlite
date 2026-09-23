@@ -67,6 +67,7 @@ struct ServerState {
     authorizations: Vec<String>,
     block_confirmation: Option<std::path::PathBuf>,
     block_pending: Option<std::path::PathBuf>,
+    remove_keygen_after_apply: Option<std::path::PathBuf>,
     tunnel_ports: Vec<u16>,
 }
 
@@ -81,6 +82,7 @@ impl SshServer {
             authorizations: vec![],
             block_confirmation: None,
             block_pending: None,
+            remove_keygen_after_apply: None,
             tunnel_ports: vec![],
         }));
         let app = axum::Router::new()
@@ -155,7 +157,12 @@ async fn server_request(
         let config: Value = serde_json::from_slice(&body).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let key = dir.path().join("host");
-        std::fs::write(&key, config["host_private_key"].as_str().unwrap()).unwrap();
+        // The guest trims PEM whitespace; OpenSSH additionally requires a final LF.
+        std::fs::write(
+            &key,
+            format!("{}\n", config["host_private_key"].as_str().unwrap().trim()),
+        )
+        .unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
         let public = std::process::Command::new("ssh-keygen")
@@ -172,6 +179,9 @@ async fn server_request(
         if let Some(record) = state.block_confirmation.take() {
             std::fs::rename(&record, record.with_extension("pending")).unwrap();
             std::fs::create_dir(&record).unwrap();
+        }
+        if let Some(keygen) = state.remove_keygen_after_apply.take() {
+            std::fs::remove_file(keygen).unwrap();
         }
         if state.fail_after_apply {
             state.fail_after_apply = false;
@@ -1221,4 +1231,132 @@ fn ssh_convenience_flags_offer_login_and_reject_replace() {
             .failure()
             .stderr(contains("unexpected argument '--replace'"));
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_preflight_missing_keygen_preserves_journal() {
+    assert_preflight_failure(None, "Run ssh-keygen").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_preflight_failed_derivation_preserves_journal() {
+    assert_preflight_failure(
+        Some("#!/bin/sh\necho sentinel-private >&2\nexit 1\n"),
+        "not usable without a passphrase",
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_preflight_timeout_preserves_journal() {
+    assert_preflight_failure(
+        Some("#!/bin/sh\nexec /bin/sleep 60\n"),
+        "public key derivation timed out",
+    )
+    .await;
+}
+
+async fn assert_preflight_failure(script: Option<&str>, error: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let first = server.setup(home.path(), &[]);
+    let config = saved_config(&first, &["alice"], "0.0.0.0:2223");
+    server.state.lock().unwrap().fail_after_apply = true;
+    server
+        .cli(home.path())
+        .args(["ssh", "configure", "alias", "--file", "-"])
+        .write_stdin(config.to_string())
+        .assert()
+        .failure();
+    let record = credential_record(&first);
+    let before = std::fs::read(&record).unwrap();
+    let journal: Value = serde_json::from_slice(&before).unwrap();
+    assert!(!journal["active"].is_null() && !journal["pending"].is_null());
+    let tools = tempfile::tempdir().unwrap();
+    if let Some(script) = script {
+        let keygen = tools.path().join("ssh-keygen");
+        std::fs::write(&keygen, script).unwrap();
+        std::fs::set_permissions(&keygen, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let output = server
+        .cli(home.path())
+        .timeout(std::time::Duration::from_secs(40))
+        .env("PATH", tools.path())
+        .args(["ssh", "configure", "alias", "--file", "-"])
+        .write_stdin(config.to_string())
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    assert!(stderr.contains(error), "{stderr}");
+    assert!(!stderr.contains("sentinel-private"), "{stderr}");
+    for line in config["host_private_key"].as_str().unwrap().lines() {
+        assert!(!stderr.contains(line), "private key leaked");
+    }
+    assert_eq!(
+        server.state.lock().unwrap().configurations,
+        2,
+        "preflight failure sent configure"
+    );
+    assert_eq!(
+        std::fs::read(record).unwrap(),
+        before,
+        "preflight failure changed journal"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_preflight_normalizes_private_key_and_reuses_configuration() {
+    for padding in [false, true] {
+        let server = SshServer::start().await;
+        let home = tempfile::tempdir().unwrap();
+        let first = server.setup(home.path(), &[]);
+        let mut config = saved_config(&first, &["alice"], "0.0.0.0:0");
+        let normalized = config["host_private_key"].as_str().unwrap().to_owned();
+        config["host_private_key"] = json!(if padding {
+            format!(" \n\t{}\n \t", normalized.trim())
+        } else {
+            normalized.trim().to_owned()
+        });
+        configure_saved(&server, home.path(), &config);
+        let reused = server.setup(home.path(), &[]);
+        assert_eq!(reused["login"], "alice");
+        assert_eq!(reused["port"], 23456);
+        let record = credential_record(&first);
+        let journal: Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+        assert_eq!(journal["active"]["config"]["host_private_key"], normalized);
+        let host = record
+            .parent()
+            .unwrap()
+            .join(journal["active"]["material"].as_str().unwrap())
+            .join("host");
+        assert_eq!(std::fs::read_to_string(host).unwrap(), normalized);
+        assert_eq!(server.state.lock().unwrap().configurations, 2);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_preflight_confirmation_needs_no_keygen_after_submission() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let first = server.setup(home.path(), &[]);
+    let config = saved_config(&first, &["alice"], "0.0.0.0:2223");
+    let tools = tempfile::tempdir().unwrap();
+    let keygen = tools.path().join("ssh-keygen");
+    std::os::unix::fs::symlink("/usr/bin/ssh-keygen", &keygen).unwrap();
+    server.state.lock().unwrap().remove_keygen_after_apply = Some(keygen.clone());
+    server
+        .cli(home.path())
+        .env("PATH", tools.path())
+        .args(["ssh", "configure", "alias", "--file", "-"])
+        .write_stdin(config.to_string())
+        .assert()
+        .success();
+    assert!(!keygen.exists());
+    let journal: Value =
+        serde_json::from_slice(&std::fs::read(credential_record(&first)).unwrap()).unwrap();
+    assert!(journal["pending"].is_null());
+    assert_eq!(journal["active"]["config"], config);
+    assert_eq!(server.setup(home.path(), &[])["login"], "alice");
+    assert_eq!(server.state.lock().unwrap().configurations, 2);
 }
