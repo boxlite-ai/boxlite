@@ -87,6 +87,9 @@ func (a *runnerAuthenticator) authenticate(ctx context.Context, apiKey string) (
 		a.rejected.put(key, struct{}{}, a.negativeTTL)
 		return "", fmt.Errorf("%w: control plane refused the credential", ErrUnauthenticated)
 	case err != nil:
+		// The status alone, not the error beside it. The generated client's
+		// error says nothing the status line does not, and on this endpoint the
+		// body it could carry is a runner's own record — API key included.
 		return "", fmt.Errorf("%w: control plane answered %s", ErrAuthUnavailable, response.Status)
 	case runner == nil || runner.Id == "":
 		return "", fmt.Errorf("%w: control plane named no runner", ErrAuthUnavailable)

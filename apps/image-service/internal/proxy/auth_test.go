@@ -198,3 +198,54 @@ func TestCredentialKeyDoesNotHoldTheCredential(t *testing.T) {
 		t.Error("two credentials share a cache key")
 	}
 }
+
+// A control plane that answers but fails is as unavailable as one that does not
+// answer at all, and must not be recorded as a refusal: that would keep a real
+// runner out for the whole negative TTL after the control plane recovered.
+func TestAuthenticateReadsAFailingControlPlaneAsUnavailable(t *testing.T) {
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(failing.Close)
+
+	configuration := apiclient.NewConfiguration()
+	configuration.Servers = apiclient.ServerConfigurations{{URL: failing.URL}}
+	authenticator := newRunnerAuthenticator(apiclient.NewAPIClient(configuration), time.Minute, time.Minute)
+
+	_, err := authenticator.authenticate(context.Background(), "a-key")
+	if !errors.Is(err, ErrAuthUnavailable) {
+		t.Fatalf("authenticate failed with %v, want %v", err, ErrAuthUnavailable)
+	}
+	if _, remembered := authenticator.rejected.get(credentialKey("a-key")); remembered {
+		t.Error("a control-plane failure was remembered as a refusal of the credential")
+	}
+}
+
+// An answer that names no runner is not a runner, whatever its status says, and
+// admitting it would authenticate a caller as nobody in particular.
+func TestAuthenticateRefusesAnAnswerThatNamesNoRunner(t *testing.T) {
+	anonymous := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"","name":"","cpu":1,"memory":1,"disk":1,"class":"small","region":"eu",`+
+			`"state":"ready","unschedulable":false,"createdAt":"2026-01-01T00:00:00Z",`+
+			`"updatedAt":"2026-01-01T00:00:00Z","version":"1","apiVersion":"2","apiKey":"k"}`)
+	}))
+	t.Cleanup(anonymous.Close)
+
+	configuration := apiclient.NewConfiguration()
+	configuration.Servers = apiclient.ServerConfigurations{{URL: anonymous.URL}}
+	authenticator := newRunnerAuthenticator(apiclient.NewAPIClient(configuration), time.Minute, time.Minute)
+
+	runnerID, err := authenticator.authenticate(context.Background(), "a-key")
+	if !errors.Is(err, ErrAuthUnavailable) {
+		t.Fatalf("authenticate = %q, %v; want %v", runnerID, err, ErrAuthUnavailable)
+	}
+	// The same sentinel is what a body the client could not decode produces, so
+	// the reason is pinned too — or this would pass on the wrong branch.
+	if !strings.Contains(err.Error(), "named no runner") {
+		t.Errorf("refused for %q, want the answer's missing runner to be the reason", err)
+	}
+	if _, cached := authenticator.verified.get(credentialKey("a-key")); cached {
+		t.Error("an answer naming no runner was cached as a verified caller")
+	}
+}
