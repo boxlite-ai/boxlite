@@ -122,6 +122,9 @@ impl BoxImpl {
         }
 
         // Phase C: Provision each clone and record base disk refs.
+        // Each clone's disk is a copy of this one, so it runs the same build.
+        // Read before the loop: the guard must not be held across an await.
+        let resolved_image = self.state.read().resolved_image.clone();
         let mut clones = Vec::with_capacity(count);
         for (i, staging) in staging_dirs.into_iter().enumerate() {
             let litebox = match rt
@@ -130,6 +133,7 @@ impl BoxImpl {
                     names.get(i).cloned(),
                     self.config.options.clone(),
                     BoxStatus::Stopped,
+                    resolved_image.clone(),
                 )
                 .await
             {

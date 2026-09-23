@@ -37,15 +37,13 @@ pub struct ImageObject {
     blob_source: BlobSource,
 }
 
-/// What a pull resolved to, as the registry identifies it.
+/// What an image reference resolved to, as the registry identifies it.
 ///
-/// Carried out of a box's build so a caller that handed over a mutable tag can
-/// learn which build it actually got. Held in memory for the life of the box
-/// object and never persisted: a box this process only reattached to ran no
-/// rootfs stage and has nothing to report, and the caller re-resolves on the
-/// next create.
-#[derive(Debug, Clone)]
-pub struct PulledImage {
+/// Recorded with the box whose disk it built — see
+/// [`BoxInfo::resolved_image`](crate::runtime::types::BoxInfo::resolved_image)
+/// — so a caller that handed over a mutable tag can learn which build it got.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedImage {
     /// The registry's digest — see [`ImageObject::manifest_digest`].
     pub manifest_digest: String,
     /// Declared on-registry size in bytes — see [`ImageObject::total_layer_size`].

@@ -74,8 +74,26 @@ async fn test_clone_produces_independent_box() {
     assert_eq!(cloned_info.name.as_deref(), Some("cloned-box"));
     assert_eq!(cloned_info.status, BoxStatus::Stopped);
 
+    // The clone's disk is a copy of the source's, so it runs the same build.
+    // Its first start reuses that disk and resolves nothing of its own, so the
+    // record has to come across with the copy or it is never made.
+    assert!(
+        source_info.resolved_image.is_some(),
+        "the source's disk-building start should have recorded its image"
+    );
+    assert_eq!(cloned_info.resolved_image, source_info.resolved_image);
+
     // Both can start independently
     cloned.start().await.expect("Failed to start cloned box");
+    assert_eq!(
+        cloned
+            .info()
+            .await
+            .expect("get cloned box info")
+            .resolved_image,
+        source_info.resolved_image,
+        "starting the clone reuses its disk and must keep the record"
+    );
     cloned.stop().await.expect("Failed to stop cloned box");
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;

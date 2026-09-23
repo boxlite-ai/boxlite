@@ -37,9 +37,8 @@ type Client struct {
 	mu      sync.RWMutex
 	boxes   map[string]*boxlite.Box
 	// What each freshly created box's image resolved to, until it has been
-	// reported once. Only this process can answer, so an entry that outlives a
-	// restart is simply gone and the control plane re-resolves on the next
-	// create — see PulledImage.
+	// reported once. Held in memory only: an entry lost to a runner restart is
+	// simply gone, and the control plane re-resolves on the next create.
 	pendingImageReports map[string]PulledImage
 	awsRegion           string
 	awsEndpointUrl      string
@@ -402,7 +401,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		if err := bx.Start(ctx); err != nil {
 			return bx.ID(), "", fmt.Errorf("failed to start box: %w", err)
 		}
-		c.recordPulledImage(boxDto.Id, bx)
+		c.recordPulledImage(ctx, boxDto.Id, bx)
 	}
 
 	return bx.ID(), "boxlite", nil
@@ -414,17 +413,28 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 // Only a started box has an answer: GetOrCreate allocates a handle and
 // persists the box, and the image is not pulled until the first start
 // (rt_impl.rs — "The VM is not started until start() or exec() is called").
-// Asking any earlier reads an answer that does not exist yet. Infallible by
-// construction, so it can sit after Start without breaking the rule that
-// Start is Create's last fallible step.
-func (c *Client) recordPulledImage(boxId string, bx *boxlite.Box) {
-	digest, size, ok := bx.PulledImage()
-	if !ok {
+// Asking any earlier reads an answer that does not exist yet. It never fails
+// its caller, so it can sit after Start without breaking the rule that Start
+// is Create's last fallible step: info that cannot be read is logged and the
+// report dropped, which costs one re-resolution on the next create.
+func (c *Client) recordPulledImage(ctx context.Context, boxId string, bx *boxlite.Box) {
+	// Not cancelled with the request: the box has started either way, and a
+	// report dropped for that reason is one the control plane pays for later.
+	info, err := bx.Info(context.WithoutCancel(ctx))
+	if err != nil {
+		c.logger.WarnContext(ctx, "cannot read what the box's image resolved to; dropping the report",
+			"box", boxId, "error", err)
+		return
+	}
+	if info.ResolvedImage == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.pendingImageReports[boxId] = PulledImage{Digest: digest, SizeBytes: size}
+	c.pendingImageReports[boxId] = PulledImage{
+		Digest:    info.ResolvedImage.ManifestDigest,
+		SizeBytes: info.ResolvedImage.TotalLayerSize,
+	}
 }
 
 // Start starts a stopped box and returns the runtime version.
@@ -442,7 +452,7 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 	}
 	// The other place a box is first started: one created with SkipStart has
 	// pulled nothing until now.
-	c.recordPulledImage(boxId, bx)
+	c.recordPulledImage(ctx, boxId, bx)
 	return "boxlite", nil
 }
 

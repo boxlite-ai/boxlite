@@ -118,6 +118,15 @@ pub struct CBoxInfo {
     /// AutoStop measures idleness against; `0` when nothing was recorded, which
     /// is always the case for local runtimes.
     pub last_activity_at: i64,
+    /// Manifest digest `image` resolved to when this box's disk was built —
+    /// the build the box runs. Null when unknown: a box booted from a local
+    /// rootfs path, one imported from an archive, one whose disk predates the
+    /// record, or a backend that does not know it. Owned and freed with the
+    /// rest of this struct.
+    pub resolved_image_digest: *mut c_char,
+    /// Declared on-registry size, in bytes, of that image; `0` when
+    /// [`Self::resolved_image_digest`] is null.
+    pub resolved_image_size: i64,
 }
 
 #[repr(C)]
@@ -322,6 +331,15 @@ impl CBoxInfo {
                 .last_activity_at
                 .map(|at| at.timestamp_millis())
                 .unwrap_or(0),
+            resolved_image_digest: info
+                .resolved_image
+                .as_ref()
+                .map(|resolved| to_c_str(&resolved.manifest_digest))
+                .unwrap_or(ptr::null_mut()),
+            resolved_image_size: info
+                .resolved_image
+                .as_ref()
+                .map_or(0, |resolved| resolved.total_layer_size),
         }
     }
 }
@@ -336,6 +354,7 @@ pub unsafe fn free_box_info(info: *mut CBoxInfo) {
         free_str(info_ref.name);
         free_str(info_ref.image);
         free_str(info_ref.status);
+        free_str(info_ref.resolved_image_digest);
         free_network_info(info_ref.network);
     }
 }
@@ -578,8 +597,73 @@ mod tests {
     use crate::options::BoxlitePortProtocol;
     use crate::{FREE_STR_CALLS, FREE_STR_LOCK};
 
-    use super::{BoxliteNetworkMode, CNetworkInfo, free_network_info, network_to_c_ptr};
+    use super::{
+        BoxliteNetworkMode, CBoxInfo, CNetworkInfo, free_box_info, free_network_info,
+        network_to_c_ptr,
+    };
     use std::ffi::c_char;
+
+    fn box_info_resolved_to(resolved_image: Option<boxlite::ResolvedImage>) -> boxlite::BoxInfo {
+        boxlite::BoxInfo {
+            id: boxlite::BoxID::parse("box-c-info").unwrap(),
+            name: None,
+            status: boxlite::BoxStatus::Running,
+            created_at: std::time::SystemTime::UNIX_EPOCH.into(),
+            last_updated: std::time::SystemTime::UNIX_EPOCH.into(),
+            pid: None,
+            image: "alpine:3.21".to_string(),
+            cpus: 1,
+            memory_mib: 512,
+            network: None,
+            labels: std::collections::HashMap::new(),
+            auto_stop: 0,
+            auto_delete: 0,
+            auto_resume: true,
+            health_status: boxlite::HealthStatus::default(),
+            exit_code: None,
+            started_at: None,
+            last_activity_at: None,
+            resolved_image,
+        }
+    }
+
+    /// The digest reaches a C caller as a string it owns and frees with the
+    /// rest of the struct, and an unknown one is null rather than an empty
+    /// string a caller would report as a digest.
+    #[test]
+    fn box_info_carries_the_resolved_image() {
+        let _guard = FREE_STR_LOCK.lock().unwrap();
+        let digest = "sha256:0a7ed0d449b9318548e66674610d757de19b7645759f74b587b610b59d6b43fd";
+
+        let mut known =
+            CBoxInfo::from_box_info(&box_info_resolved_to(Some(boxlite::ResolvedImage {
+                manifest_digest: digest.to_string(),
+                total_layer_size: 3_974_501,
+            })));
+        assert_eq!(
+            unsafe { CStr::from_ptr(known.resolved_image_digest) }
+                .to_str()
+                .unwrap(),
+            digest
+        );
+        assert_eq!(known.resolved_image_size, 3_974_501);
+
+        let mut unknown = CBoxInfo::from_box_info(&box_info_resolved_to(None));
+        assert!(unknown.resolved_image_digest.is_null());
+        assert_eq!(unknown.resolved_image_size, 0);
+
+        let before = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+        unsafe { free_box_info(&mut known) };
+        let freed_known = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst) - before;
+        let before = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+        unsafe { free_box_info(&mut unknown) };
+        let freed_unknown = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst) - before;
+        assert_eq!(
+            freed_known,
+            freed_unknown + 1,
+            "the digest string must be freed with the struct"
+        );
+    }
 
     /// Callers compiled against the pre-split header read `mode`,
     /// `allow_net`, `allow_net_count` and `published_ports` at the offsets

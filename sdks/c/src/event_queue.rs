@@ -1301,6 +1301,8 @@ mod owned_ffi_ptr_nested_leak_tests {
             ))),
             started_at: 0,
             last_activity_at: 0,
+            resolved_image_digest: test_cstr("sha256:abc"),
+            resolved_image_size: 4096,
         });
 
         let owned = OwnedFfiPtr::new_with(payload, crate::info::free_box_info_ptr);
@@ -1309,9 +1311,9 @@ mod owned_ffi_ptr_nested_leak_tests {
         let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
         assert_eq!(
             after - before,
-            6,
+            7,
             "OwnedFfiPtr<CBoxInfo>::drop reclaimed {} inner CStrings; \
-             expected 6 (four BoxInfo strings + allow_net + host_ip). Inner allocations leak.",
+             expected 7 (five BoxInfo strings + allow_net + host_ip). Inner allocations leak.",
             after - before
         );
     }
@@ -1374,6 +1376,8 @@ mod owned_ffi_ptr_nested_leak_tests {
             network: std::ptr::null_mut(),
             started_at: 0,
             last_activity_at: 0,
+            resolved_image_digest: std::ptr::null_mut(),
+            resolved_image_size: 0,
         }];
         let items_ptr = items_vec.as_mut_ptr();
         let items_len = items_vec.len();

@@ -41,14 +41,14 @@ pub(crate) use crate::litebox::box_impl::LiveState;
 /// What a completed build hands back.
 ///
 /// A struct rather than a tuple because the third element is unlike the other
-/// two: `live` and `guard` are the box, `pulled_image` is something the caller
-/// may forward and may equally ignore.
+/// two: `live` and `guard` are the box, `resolved_image` is a fact about it the
+/// caller records.
 pub(crate) struct BuiltBox {
     pub(crate) live: LiveState,
     pub(crate) guard: types::CleanupGuard,
-    /// Present when this build pulled a registry image; see
-    /// [`crate::images::PulledImage`].
-    pub(crate) pulled_image: Option<crate::images::PulledImage>,
+    /// Present when this build made a new disk from a registry image; see
+    /// [`crate::litebox::state::BoxState::resolved_image`].
+    pub(crate) resolved_image: Option<crate::images::ResolvedImage>,
 }
 
 use crate::litebox::BoxStatus;
@@ -321,7 +321,7 @@ impl BoxBuilder {
             Ok::<BuiltBox, BoxliteError>(BuiltBox {
                 live: live_state,
                 guard,
-                pulled_image: ctx.pulled_image.take(),
+                resolved_image: ctx.resolved_image.take(),
             })
         };
 

@@ -12,7 +12,7 @@ pub use archive::{LayerExtractor, OverrideFileType, OverrideStat, SafeRoot};
 pub use config::ContainerImageConfig;
 pub use image_disk::ImageDiskManager;
 pub use manager::ImageManager;
-pub use object::{ImageObject, PulledImage};
+pub use object::{ImageObject, ResolvedImage};
 
 use oci_client::Reference;
 

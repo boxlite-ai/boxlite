@@ -452,6 +452,9 @@ impl BoxResponse {
             // "the box never entered Running".
             started_at: None,
             last_activity_at,
+            // Not published by the REST surface either: the control plane keeps
+            // the digest in its image catalog, not on the box it returns.
+            resolved_image: None,
         })
     }
 }

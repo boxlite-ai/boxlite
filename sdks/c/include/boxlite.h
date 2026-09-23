@@ -388,6 +388,15 @@ typedef struct CBoxInfo {
   // AutoStop measures idleness against; `0` when nothing was recorded, which
   // is always the case for local runtimes.
   int64_t last_activity_at;
+  // Manifest digest `image` resolved to when this box's disk was built —
+  // the build the box runs. Null when unknown: a box booted from a local
+  // rootfs path, one imported from an archive, one whose disk predates the
+  // record, or a backend that does not know it. Owned and freed with the
+  // rest of this struct.
+  char *resolved_image_digest;
+  // Declared on-registry size, in bytes, of that image; `0` when
+  // [`Self::resolved_image_digest`] is null.
+  int64_t resolved_image_size;
 } CBoxInfo;
 
 // Box info completion. On success the callback owns the non-null metadata and
@@ -643,23 +652,6 @@ enum BoxliteErrorCode boxlite_start_box(CBoxHandle *handle,
                                         CBoxliteError *out_error);
 
 char *boxlite_box_id(CBoxHandle *handle);
-
-// The registry digest of the image this box was created from, or null.
-//
-// Null whenever this process did not resolve the image — a box it only
-// reattached to, or one booted from a local rootfs path. Caller owns the
-// string and frees it with `boxlite_free_string`.
-//
-// Pair it with `boxlite_box_pulled_image_size` to report what a mutable tag
-// resolved to, and read both after starting the box: nothing is resolved until
-// the box starts.
-char *boxlite_box_pulled_image_digest(CBoxHandle *handle);
-
-// Declared on-registry size, in bytes, of the image this box was started
-// from. `-1` when this process did not resolve it, which is the same condition
-// that makes `boxlite_box_pulled_image_digest` return null; `0` is a real
-// answer, meaning the manifest declared no layer sizes.
-int64_t boxlite_box_pulled_image_size(CBoxHandle *handle);
 
 void boxlite_box_free(CBoxHandle *handle);
 

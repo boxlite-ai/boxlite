@@ -130,12 +130,6 @@ pub(crate) struct BoxImpl {
     /// Event listeners (from runtime options).
     pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
 
-    /// What this box's image resolved to, when a build in this process
-    /// resolved it. In memory only: a box this process reattached to never ran
-    /// the rootfs stage and has nothing to say, which is the case a caller
-    /// re-resolves on its next create.
-    pulled_image: std::sync::OnceLock<crate::images::PulledImage>,
-
     // --- Lazily initialized ---
     live: OnceCell<LiveState>,
 
@@ -192,7 +186,6 @@ impl BoxImpl {
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
             event_listeners: Vec::new(), // populated from runtime options
-            pulled_image: std::sync::OnceLock::new(),
             live: OnceCell::new(),
             watcher: std::sync::OnceLock::new(),
             container_start: Arc::new(OnceCell::new()),
@@ -1234,15 +1227,8 @@ impl BoxImpl {
         let crate::litebox::init::BuiltBox {
             live: live_state,
             guard: mut cleanup_guard,
-            pulled_image,
+            resolved_image,
         } = builder.build().await?;
-
-        // Only a build that ran the rootfs stage sets this, and only the first
-        // one wins: a restart resolves the same reference from cache, so it can
-        // only repeat what is already here.
-        if let Some(pulled) = pulled_image {
-            let _ = self.pulled_image.set(pulled);
-        }
 
         // The box is up. If we adopted one whose init was already running, that
         // init needs no `Container.Start`; recording it now keeps
@@ -1298,6 +1284,8 @@ impl BoxImpl {
             // clears ExitCode on start too). The guest drops its matching
             // exit file in Container.Init.
             state.exit_code = None;
+
+            state.record_resolved_image(resolved_image);
 
             // Initialize health status if health check is configured
             if self.config.options.advanced.health_check.is_some() {
@@ -1524,10 +1512,6 @@ impl BoxImpl {
 
 #[async_trait::async_trait]
 impl crate::runtime::backend::BoxBackend for BoxImpl {
-    fn pulled_image(&self) -> Option<crate::images::PulledImage> {
-        self.pulled_image.get().cloned()
-    }
-
     fn id(&self) -> &BoxID {
         self.id()
     }

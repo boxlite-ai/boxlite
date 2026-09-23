@@ -15,8 +15,8 @@ import (
 //
 // GetOrCreate allocates a handle and persists the box; the image is not pulled
 // until the first start ("The VM is not started until start() or exec() is
-// called", rt_impl.rs). So a read placed beside GetOrCreate compiles, returns
-// ok=false every time, and leaves the control plane never learning a digest —
+// called", rt_impl.rs). So a read placed beside GetOrCreate compiles, finds no
+// resolved image every time, and leaves the control plane never learning a digest —
 // with every unit test on both sides still passing, because the runner's sync
 // tests stub the report and the API's tests call the registrar directly.
 //

@@ -8,7 +8,7 @@
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper};
-use crate::images::{ContainerImageConfig, ImageDiskManager, PulledImage};
+use crate::images::{ContainerImageConfig, ImageDiskManager, ResolvedImage};
 use crate::litebox::init::types::{ContainerRootfsPrepResult, USE_DISK_ROOTFS, USE_OVERLAYFS};
 use crate::pipeline::PipelineTask;
 use crate::runtime::layout::BoxFilesystemLayout;
@@ -69,7 +69,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             )
         };
 
-        let (container_image_config, disk, pulled_image) = run_container_rootfs(
+        let (container_image_config, disk, resolved_image) = run_container_rootfs(
             &rootfs_spec,
             &env,
             &runtime,
@@ -88,7 +88,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
         let mut ctx = ctx.lock().await;
         ctx.container_image_config = Some(container_image_config);
         ctx.container_disk = Some(disk);
-        ctx.pulled_image = pulled_image;
+        ctx.resolved_image = resolved_image;
 
         Ok(())
     }
@@ -112,7 +112,7 @@ async fn run_container_rootfs(
     user_override: Option<&str>,
     working_dir_override: Option<&str>,
     image_pull: ImagePullOptions,
-) -> BoxliteResult<(ContainerImageConfig, Disk, Option<PulledImage>)> {
+) -> BoxliteResult<(ContainerImageConfig, Disk, Option<ResolvedImage>)> {
     let disk_path = layout.disk_path();
 
     // For restart, reuse existing COW disk
@@ -166,7 +166,7 @@ async fn run_container_rootfs(
         return Ok((
             container_image_config,
             disk,
-            pulled_image_of(rootfs_spec, &image),
+            resolved_image_of(rootfs_spec, reuse_rootfs, &image),
         ));
     }
 
@@ -220,7 +220,7 @@ async fn run_container_rootfs(
     Ok((
         container_image_config,
         disk,
-        pulled_image_of(rootfs_spec, &image),
+        resolved_image_of(rootfs_spec, reuse_rootfs, &image),
     ))
 }
 
@@ -318,22 +318,29 @@ fn should_revalidate(requested: bool, reuse_rootfs: bool) -> bool {
     requested && !reuse_rootfs
 }
 
-/// What to report about the image this box booted from, if anything.
-///
-/// Only a registry pull produces a reportable digest. A local bundle's manifest
-/// digest is computed on this host and names nothing a registry could resolve,
-/// so it is deliberately not reported rather than reported as if it were.
-fn pulled_image_of(
+/// What to record about the image this start read, if anything.
+fn resolved_image_of(
     rootfs_spec: &RootfsSpec,
+    reuse_rootfs: bool,
     image: &crate::images::ImageObject,
-) -> Option<PulledImage> {
-    match rootfs_spec {
-        RootfsSpec::Image(_) => Some(PulledImage {
-            manifest_digest: image.manifest_digest().to_string(),
-            total_layer_size: image.total_layer_size(),
-        }),
-        RootfsSpec::RootfsPath(_) => None,
-    }
+) -> Option<ResolvedImage> {
+    records_resolved_image(rootfs_spec, reuse_rootfs).then(|| ResolvedImage {
+        manifest_digest: image.manifest_digest().to_string(),
+        total_layer_size: image.total_layer_size(),
+    })
+}
+
+/// Whether the image this start read is the one the box's disk was built from.
+///
+/// Only when this start built the disk. A restart keeps the disk an earlier
+/// start made but reads the image again by reference, and a moving tag may by
+/// then resolve to a different build — so what it read says nothing about what
+/// the box runs, and recording it would overwrite the record that does.
+///
+/// And only for a registry pull. A local bundle's manifest digest is computed on
+/// this host and names nothing a registry could resolve.
+fn records_resolved_image(rootfs_spec: &RootfsSpec, reuse_rootfs: bool) -> bool {
+    matches!(rootfs_spec, RootfsSpec::Image(_)) && !reuse_rootfs
 }
 
 async fn pull_image(
@@ -408,7 +415,8 @@ async fn prepare_disk_rootfs(
 
 #[cfg(test)]
 mod tests {
-    use super::should_revalidate;
+    use super::{records_resolved_image, should_revalidate};
+    use crate::runtime::options::RootfsSpec;
 
     #[test]
     fn revalidation_is_what_the_create_asked_for() {
@@ -419,5 +427,31 @@ mod tests {
     #[test]
     fn a_box_reusing_its_rootfs_never_re_resolves() {
         assert!(!should_revalidate(true, true));
+    }
+
+    #[test]
+    fn the_start_that_builds_the_disk_records_what_it_pulled() {
+        assert!(records_resolved_image(
+            &RootfsSpec::Image("alpine:3.21".into()),
+            false
+        ));
+    }
+
+    /// A restart reads the image again by tag, and once another box has
+    /// re-resolved that tag, what it reads is not what the disk was built from.
+    #[test]
+    fn a_restart_records_nothing_because_it_built_nothing() {
+        assert!(!records_resolved_image(
+            &RootfsSpec::Image("alpine:3.21".into()),
+            true
+        ));
+    }
+
+    #[test]
+    fn a_local_rootfs_names_nothing_a_registry_could_resolve() {
+        assert!(!records_resolved_image(
+            &RootfsSpec::RootfsPath("/tmp/bundle".into()),
+            false
+        ));
     }
 }
