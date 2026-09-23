@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"net/http"
+	"sync"
 	"testing"
 
 	"github.com/boxlite-ai/image-service/internal/oci"
@@ -102,4 +103,77 @@ func TestAnUpstreamThatKeepsRefusingIsReportedAsDenied(t *testing.T) {
 		t.Errorf("the answer carried a challenge %q, which a client would loop on", got)
 	}
 	assertRefusal(t, response.Body.Bytes(), oci.CodeDenied)
+}
+
+// A token endpoint that fails is an outage upstream, not a refusal: answering it
+// as a denial would send an operator looking for a missing credential.
+func TestAFailingTokenEndpointIsReportedAsUnreachable(t *testing.T) {
+	upstream := newStubUpstream(t)
+	router, _ := testProxy(t, upstream, runnerPlane(t), "ghcr.io")
+	upstream.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Www-Authenticate", `Bearer realm="https://`+r.Host+`/token",service="`+r.Host+`"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+
+	response := pull(router, http.MethodGet, ghcrPath, runnerKey)
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("a pull whose token exchange failed = %d, want 502", response.Code)
+	}
+	assertRefusal(t, response.Body.Bytes(), oci.CodeUnsupported)
+}
+
+// A Basic challenge asks for a credential this release does not hold. The
+// runner's own key authenticates it to this proxy and must never be what is
+// offered upstream in its place.
+func TestABasicChallengeIsRetriedWithoutACredential(t *testing.T) {
+	upstream := newStubUpstream(t)
+	router, _ := testProxy(t, upstream, runnerPlane(t), "ghcr.io")
+	var (
+		mu   sync.Mutex
+		seen []string
+	)
+	upstream.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Get("Authorization"))
+		mu.Unlock()
+		w.Header().Set("Www-Authenticate", `Basic realm="registry"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+
+	response := pull(router, http.MethodGet, ghcrPath, runnerKey)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("a pull behind a Basic challenge = %d, want 403", response.Code)
+	}
+	assertRefusal(t, response.Body.Bytes(), oci.CodeDenied)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 {
+		t.Fatalf("upstream saw %d pulls, want the refused one and one retry", len(seen))
+	}
+	for i, authorization := range seen {
+		if authorization != "" {
+			t.Errorf("pull %d carried %q upstream, want no credential at all", i+1, authorization)
+		}
+	}
+}
+
+// A Bearer challenge without a realm names nowhere to fetch a token, so the
+// pull fails as unreachable rather than being retried blind.
+func TestABearerChallengeWithoutARealmIsReportedAsUnreachable(t *testing.T) {
+	upstream := newStubUpstream(t)
+	router, _ := testProxy(t, upstream, runnerPlane(t), "ghcr.io")
+	upstream.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Www-Authenticate", `Bearer service="ghcr.io"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+
+	response := pull(router, http.MethodGet, ghcrPath, runnerKey)
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("a pull behind a challenge with no realm = %d, want 502", response.Code)
+	}
+	assertRefusal(t, response.Body.Bytes(), oci.CodeUnsupported)
 }
