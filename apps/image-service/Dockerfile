@@ -40,7 +40,7 @@ ARG VERSION=0.0.1
 RUN --mount=type=cache,target=/root/.cache/go-build \
   VERSION=$VERSION yarn nx build image-service --configuration=production --nxBail=true
 
-FROM alpine:3.18 AS registry-proxy
+FROM alpine:3.22 AS registry-proxy
 
 RUN apk add --no-cache curl
 
@@ -49,6 +49,10 @@ WORKDIR /usr/local/bin
 COPY --from=build /boxlite/apps/dist/apps/registry-proxy boxlite-registry-proxy
 
 RUN chmod +x boxlite-registry-proxy
+
+# Nothing here needs root: the default port is above 1024 and nothing is
+# written to disk, so a process that holds runner keys runs without it.
+USER 65532:65532
 
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:4100/health" ]
 
