@@ -44,9 +44,18 @@ export class AddImageCatalog1787100000000 implements MigrationInterface {
     // what fills a shared runner's disk is the number of distinct images it
     // has to cache. Additive, so the running API simply ignores it.
     await queryRunner.query(`ALTER TABLE "organization" ADD "image_count_limit" integer NOT NULL DEFAULT 20`)
+
+    // Nullable with no default, and deliberately not backfilled. The value is
+    // whether a box's image was the operator's curated set *at the moment that
+    // box was created*, and the curated set is env-driven — a migration cannot
+    // know what it held then, and writing today's answer onto old rows would
+    // state a fact nobody checked. Null means "not recorded", and the reader
+    // falls back to the recomputation those rows have always had.
+    await queryRunner.query(`ALTER TABLE "box" ADD "imageIsOrgOwned" boolean`)
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`ALTER TABLE "box" DROP COLUMN "imageIsOrgOwned"`)
     await queryRunner.query(`ALTER TABLE "organization" DROP COLUMN "image_count_limit"`)
     await queryRunner.query(`DROP TABLE "image_tag"`)
     await queryRunner.query(`DROP INDEX IF EXISTS "public"."image_version_image_state_index"`)

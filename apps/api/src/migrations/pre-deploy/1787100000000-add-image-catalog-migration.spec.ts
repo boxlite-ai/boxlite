@@ -48,6 +48,24 @@ describe('AddImageCatalog1787100000000', () => {
     expect(sql).not.toContain('DROP COLUMN')
   })
 
+  /**
+   * Not a style preference. A `NOT NULL DEFAULT` would claim every existing box
+   * was decided one way, and the reader distinguishes "recorded false" from
+   * "never recorded" — the second is what keeps old rows on the behaviour they
+   * have always had instead of silently changing which ones pull anonymously.
+   *
+   * Checked on the box statements alone: the catalog tables beside them carry
+   * defaults of their own, and their foreign keys spell `ON UPDATE`.
+   */
+  it('records box image ownership without deciding it for existing boxes', async () => {
+    const statements = await runMigration('up')
+
+    expect(statements.filter((statement) => statement.includes('"box"'))).toEqual([
+      `ALTER TABLE "box" ADD "imageIsOrgOwned" boolean`,
+    ])
+    expect(statements.filter((statement) => /^\s*UPDATE\b/i.test(statement))).toEqual([])
+  })
+
   it('reverses everything it created', async () => {
     const statements = await runMigration('down')
     const sql = statements.join('\n')
@@ -58,6 +76,7 @@ describe('AddImageCatalog1787100000000', () => {
     expect(sql).toContain(`DROP TYPE "public"."image_source_kind_enum"`)
     expect(sql).toContain(`DROP TYPE "public"."image_version_state_enum"`)
     expect(sql).toContain(`ALTER TABLE "organization" DROP COLUMN "image_count_limit"`)
+    expect(sql).toContain(`ALTER TABLE "box" DROP COLUMN "imageIsOrgOwned"`)
 
     // The tag table references the version table, so it has to go first.
     expect(statements.findIndex((s) => s.includes(`DROP TABLE "image_tag"`))).toBeLessThan(
