@@ -81,9 +81,9 @@ struct PrepareArgs {
     /// Box ID or name
     #[arg(value_name = "BOX")]
     target: String,
-    /// Generate new keys and replace SSH, disconnecting existing sessions
+    /// SSH account (default for new configuration: boxlite)
     #[arg(long)]
-    replace: bool,
+    login: Option<String>,
     #[arg(long, value_enum, default_value = "yaml")]
     format: Format,
 }
@@ -149,9 +149,12 @@ pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<i32> {
     let ssh = sandbox.ssh();
     match args.command {
         SshCommand::Configure(args) => {
-            let status = ssh
-                .configure(config.expect("configure input read above"))
-                .await?;
+            let status = Credentials::configure(
+                global,
+                &sandbox,
+                config.expect("configure input read above"),
+            )
+            .await?;
             args.control.format.write(&status, std::io::stdout())?;
         }
         SshCommand::Status(args) => args.format.write(&ssh.status().await?, std::io::stdout())?,
@@ -159,14 +162,15 @@ pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<i32> {
             .format
             .write(&ssh.disable().await?, std::io::stdout())?,
         SshCommand::Setup(args) => {
-            let login = Credentials::prepare(global, &sandbox, args.replace).await?;
+            let login = Credentials::prepare(global, &sandbox, args.login.as_deref()).await?;
             args.format.write(&login, std::io::stdout())?;
         }
         SshCommand::Forward(args) => {
-            let login = Credentials::prepare(global, &sandbox, args.prepare.replace).await?;
+            let login =
+                Credentials::prepare(global, &sandbox, args.prepare.login.as_deref()).await?;
             let connection = sandbox
                 .network()
-                .tunnel(guest_address()?)
+                .tunnel(login.guest_address)
                 .await?
                 .connect()?;
             // Check tunnel availability before reporting success, but do not
@@ -179,7 +183,8 @@ pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<i32> {
             forward::Forwarder::run(args, global, id, login).await?;
         }
         SshCommand::Connect(args) => {
-            let login = Credentials::prepare(global, &sandbox, args.prepare.replace).await?;
+            let login =
+                Credentials::prepare(global, &sandbox, args.prepare.login.as_deref()).await?;
             // ProxyCommand opens the same runtime in another process.
             drop(ssh);
             drop(sandbox);
@@ -189,13 +194,6 @@ pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<i32> {
         }
     }
     Ok(0)
-}
-
-fn guest_address() -> Result<SocketAddr> {
-    Ok(SocketAddr::new(
-        boxlite::net::constants::GUEST_IP.parse()?,
-        22,
-    ))
 }
 
 #[cfg(test)]

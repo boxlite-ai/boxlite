@@ -7,7 +7,7 @@ use boxlite::BoxConnection;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 
-use super::{ForwardArgs, connection::Login, guest_address};
+use super::{ForwardArgs, connection::PreparedSshConnection};
 use crate::cli::GlobalFlags;
 
 const MAX_CONNECTIONS: usize = 64;
@@ -23,7 +23,7 @@ impl Forwarder {
         args: ForwardArgs,
         global: &GlobalFlags,
         id: String,
-        mut login: Login,
+        mut login: PreparedSshConnection,
     ) -> Result<()> {
         let listener = TcpListener::bind(args.listen)
             .await
@@ -37,7 +37,7 @@ impl Forwarder {
         let mut terminate =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         let result = tokio::select! {
-            result = forwarder.accept(global, &id) => result,
+            result = forwarder.accept(global, &id, login.guest_address) => result,
             signal = tokio::signal::ctrl_c() => signal.context("Wait for Ctrl-C"),
             _ = terminate.recv() => Ok(()),
         };
@@ -45,7 +45,12 @@ impl Forwarder {
         result
     }
 
-    async fn accept(&mut self, global: &GlobalFlags, id: &str) -> Result<()> {
+    async fn accept(
+        &mut self,
+        global: &GlobalFlags,
+        id: &str,
+        guest_address: std::net::SocketAddr,
+    ) -> Result<()> {
         loop {
             tokio::select! {
                 result = self.relays.join_next(), if !self.relays.is_empty() => {
@@ -55,7 +60,7 @@ impl Forwarder {
                     let (mut client, _) = accepted.context("Accept SSH forward connection")?;
                     // Serialize runtime acquisition here. Relays own only streams,
                     // so one slow session cannot retain the runtime directory lock.
-                    let connection = tokio::time::timeout(OPEN_TIMEOUT, open_connection(global, id)).await
+                    let connection = tokio::time::timeout(OPEN_TIMEOUT, open_connection(global, id, guest_address)).await
                         .map_err(|_| anyhow!("Open SSH tunnel timed out after 30 seconds"))
                         .and_then(|result| result);
                     match connection {
@@ -74,16 +79,16 @@ impl Forwarder {
     }
 }
 
-async fn open_connection(global: &GlobalFlags, id: &str) -> Result<BoxConnection> {
+async fn open_connection(
+    global: &GlobalFlags,
+    id: &str,
+    guest_address: std::net::SocketAddr,
+) -> Result<BoxConnection> {
     let runtime = global.create_runtime()?;
     let sandbox = runtime
         .get(id)
         .await?
         .ok_or_else(|| anyhow!("No such box: {id}"))?;
-    let connection = sandbox
-        .network()
-        .tunnel(guest_address()?)
-        .await?
-        .connect()?;
+    let connection = sandbox.network().tunnel(guest_address).await?.connect()?;
     Ok(connection)
 }

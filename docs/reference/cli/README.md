@@ -673,9 +673,9 @@ as a write half-close, and exits when the remote side closes or on cancellation.
 | `ssh configure BOX --file PATH` | Replace complete SSH configuration from JSON; `-` reads stdin | JSON status |
 | `ssh status BOX` | Query listener and host identity | JSON status |
 | `ssh disable BOX` | Disable SSH and disconnect sessions | JSON status |
-| `ssh setup BOX [--replace]` | Prepare keys and SSH without connecting | YAML login information |
-| `ssh forward BOX [--listen ADDRESS] [--replace]` | Prepare SSH and keep a TCP listener in the foreground | YAML login information |
-| `ssh connect BOX [--replace] [-- COMMAND…]` | Prepare SSH and invoke system SSH over a stdio tunnel | YAML login information on stderr |
+| `ssh setup BOX [--login NAME]` | Prepare keys and SSH without connecting | YAML login information |
+| `ssh forward BOX [--listen ADDRESS] [--login NAME]` | Prepare SSH and keep a TCP listener in the foreground | YAML login information |
+| `ssh connect BOX [--login NAME] [-- COMMAND…]` | Prepare SSH and invoke system SSH over a stdio tunnel | YAML login information on stderr |
 
 All six commands accept `--format json|yaml` and the box global flags
 (`--home`, `--config`, `--url`, `--profile`, `--path-prefix`, `--debug`).
@@ -685,15 +685,20 @@ Login output contains `box_id`, `login`, `port`, `identity_file`,
 `known_hosts_file`, `host_key_fingerprint`, and a shell-quoted `command`.
 Private key contents are never printed.
 
-Convenience commands use login `boxlite`, guest port 22, and separate local
-Ed25519 host/user keys. `forward` defaults to `127.0.0.1:2222`; `--listen` accepts
+When SSH is disabled, convenience commands generate fresh local Ed25519
+host/user keys and configure guest port 22 with login `boxlite` (or `--login NAME`).
+When SSH is enabled, they validate and reuse the saved account and actual guest
+port; `--login NAME` selects an account. Without it, the saved selection or sole
+available account is used; ambiguous accounts fail. `forward` defaults to `127.0.0.1:2222`; `--listen` accepts
 a numeric IPv4 or bracketed IPv6 socket address. Port `0` selects a free port;
 the printed command uses that bound port. Port conflicts fail. Ctrl-C closes
 the forwarder and active connections while preserving SSH configuration.
 
 Existing owned configuration is reused without disconnecting sessions.
-`--replace` generates new keys and explicitly permits replacement; a conflicting
-enabled configuration otherwise fails. `connect` returns the system SSH exit
+A missing, inconsistent, or unusable local record fails while leaving enabled
+SSH unchanged. Use `configure` for explicit replacement, or `disable` before
+automatic key regeneration. Both manual and automatic configurations are saved
+locally, including the actual guest listener port returned for port `0`. `connect` returns the system SSH exit
 code and inherits its terminal I/O. Keys require `ssh-keygen` on PATH; connect
 also requires `ssh`. Generated commands enforce a dedicated known_hosts file
 and strict host-key checks, and preserve target flags in their ProxyCommand.

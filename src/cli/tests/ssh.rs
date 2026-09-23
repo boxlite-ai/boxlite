@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 #[test]
@@ -64,6 +65,9 @@ struct ServerState {
     paths: Vec<String>,
     tunnel_uri: Option<String>,
     authorizations: Vec<String>,
+    block_confirmation: Option<std::path::PathBuf>,
+    block_pending: Option<std::path::PathBuf>,
+    tunnel_ports: Vec<u16>,
 }
 
 impl SshServer {
@@ -75,6 +79,9 @@ impl SshServer {
             paths: vec![],
             tunnel_uri: None,
             authorizations: vec![],
+            block_confirmation: None,
+            block_pending: None,
+            tunnel_ports: vec![],
         }));
         let app = axum::Router::new()
             .fallback(server_request)
@@ -120,6 +127,7 @@ async fn server_request(
 ) -> axum::response::Response {
     let path = req.uri().path().to_string();
     let method = req.method().to_string();
+    let query = req.uri().query().unwrap_or_default().to_owned();
     let authorization = req
         .headers()
         .get("authorization")
@@ -132,6 +140,9 @@ async fn server_request(
     state.paths.push(format!("{method} {path}"));
     state.authorizations.push(authorization);
     if path == "/v1/team/boxes/real-id/network/tunnel" && method == "POST" {
+        state
+            .tunnel_ports
+            .push(query.strip_prefix("port=").unwrap().parse().unwrap());
         return match &state.tunnel_uri {
             Some(uri) => Json(json!({"uri":uri})).into_response(),
             None => StatusCode::NOT_FOUND.into_response(),
@@ -155,6 +166,13 @@ async fn server_request(
         assert!(public.status.success());
         state.configurations += 1;
         state.status = json!({"enabled":true,"generation":state.status["generation"].as_u64().unwrap()+1,"listen_address":config["listen_address"],"host_public_key":String::from_utf8(public.stdout).unwrap().trim(),"host_key_fingerprint":"SHA256:test"});
+        if state.status["listen_address"] == "0.0.0.0:0" {
+            state.status["listen_address"] = json!("0.0.0.0:23456");
+        }
+        if let Some(record) = state.block_confirmation.take() {
+            std::fs::rename(&record, record.with_extension("pending")).unwrap();
+            std::fs::create_dir(&record).unwrap();
+        }
         if state.fail_after_apply {
             state.fail_after_apply = false;
             return (StatusCode::GATEWAY_TIMEOUT, "sentinel server secret").into_response();
@@ -164,11 +182,17 @@ async fn server_request(
     } else if path != "/v1/team/boxes/real-id/ssh" {
         return StatusCode::NOT_FOUND.into_response();
     }
+    if method == "GET"
+        && let Some(record) = state.block_pending.take()
+    {
+        std::fs::rename(&record, record.with_extension("active")).unwrap();
+        std::fs::create_dir(&record).unwrap();
+    }
     Json(state.status.clone()).into_response()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ssh_setup_reuses_conflicts_replaces_and_recovers_pending_keys() {
+async fn ssh_setup_reuses_conflicts_rotates_and_recovers_pending_keys() {
     use std::os::unix::fs::PermissionsExt;
     let server = SshServer::start().await;
     let home = tempfile::tempdir().unwrap();
@@ -196,8 +220,13 @@ async fn ssh_setup_reuses_conflicts_replaces_and_recovers_pending_keys() {
         .args(["ssh", "setup", "alias"])
         .assert()
         .failure()
-        .stderr(contains("--replace"));
-    let replaced = server.setup(home.path(), &["--replace"]);
+        .stderr(contains("remote configuration preserved"));
+    server
+        .cli(home.path())
+        .args(["ssh", "disable", "alias"])
+        .assert()
+        .success();
+    let replaced = server.setup(home.path(), &[]);
     assert_ne!(first["identity_file"], replaced["identity_file"]);
     server
         .cli(home.path())
@@ -205,11 +234,16 @@ async fn ssh_setup_reuses_conflicts_replaces_and_recovers_pending_keys() {
         .assert()
         .success();
     let restored = server.setup(home.path(), &[]);
-    assert_eq!(restored["identity_file"], replaced["identity_file"]);
+    assert_ne!(restored["identity_file"], replaced["identity_file"]);
+    server
+        .cli(home.path())
+        .args(["ssh", "disable", "alias"])
+        .assert()
+        .success();
     server.state.lock().unwrap().fail_after_apply = true;
     server
         .cli(home.path())
-        .args(["ssh", "setup", "alias", "--replace"])
+        .args(["ssh", "setup", "alias"])
         .assert()
         .failure();
     let count = server.state.lock().unwrap().configurations;
@@ -440,31 +474,6 @@ async fn ssh_real_openssh_parses_quoted_paths_and_proxy_percent_tokens() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ssh_prepare_lock_rejects_concurrent_writer() {
-    use nix::fcntl::{Flock, FlockArg};
-    let server = SshServer::start().await;
-    let home = tempfile::tempdir().unwrap();
-    let login = server.setup(home.path(), &[]);
-    let root = std::path::Path::new(login["identity_file"].as_str().unwrap())
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap();
-    let _lock = Flock::lock(
-        std::fs::File::open(root.join("lock")).unwrap(),
-        FlockArg::LockExclusiveNonblock,
-    )
-    .unwrap();
-    server
-        .cli(home.path())
-        .args(["ssh", "setup", "alias"])
-        .assert()
-        .failure()
-        .stderr(contains("already in progress"));
-    assert_eq!(server.state.lock().unwrap().configurations, 1);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ssh_keygen_missing_and_timeout_are_explicit_and_reaped() {
     use std::os::unix::fs::PermissionsExt;
     let server = SshServer::start().await;
@@ -587,7 +596,7 @@ async fn ssh_credentials_reject_corrupt_records_and_material_paths() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ssh_credentials_reject_symlink_directory_and_lock() {
+async fn ssh_credentials_reject_symlink_directory_and_ignore_old_lock() {
     use std::os::unix::fs::symlink;
     let server = SshServer::start().await;
     let home = tempfile::tempdir().unwrap();
@@ -607,7 +616,6 @@ async fn ssh_credentials_reject_symlink_directory_and_lock() {
         .unwrap()
         .parent()
         .unwrap();
-    std::fs::remove_file(root.join("lock")).unwrap();
     let protected = outside.path().join("protected");
     std::fs::write(&protected, "unchanged").unwrap();
     symlink(&protected, root.join("lock")).unwrap();
@@ -615,8 +623,7 @@ async fn ssh_credentials_reject_symlink_directory_and_lock() {
         .cli(home.path())
         .args(["ssh", "setup", "alias"])
         .assert()
-        .failure()
-        .stderr(contains("Open SSH preparation lock"));
+        .success();
     assert_eq!(std::fs::read_to_string(protected).unwrap(), "unchanged");
     assert_eq!(server.state.lock().unwrap().configurations, 1);
 }
@@ -863,5 +870,355 @@ async fn ssh_connect_signals_reap_system_ssh() {
             nix::sys::signal::kill(nix::unistd::Pid::from_raw(ssh_pid), None),
             Err(nix::errno::Errno::ESRCH)
         );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_manual_configuration_reuses_key_and_disable_rotates() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let first = server.setup(home.path(), &[]);
+    let dir = std::path::Path::new(first["identity_file"].as_str().unwrap())
+        .parent()
+        .unwrap();
+    let config = json!({"listen_address":"0.0.0.0:2223","host_private_key":std::fs::read_to_string(dir.join("host")).unwrap(),"accounts":[{"login":"alice","authorized_keys":[std::fs::read_to_string(dir.join("identity.pub")).unwrap()],"ca":null}]});
+    server
+        .cli(home.path())
+        .args(["ssh", "configure", "alias", "--file", "-"])
+        .write_stdin(config.to_string())
+        .assert()
+        .success();
+    let reused = server.setup(home.path(), &[]);
+    assert_eq!(reused["identity_file"], first["identity_file"]);
+    assert_eq!(reused["login"], "alice");
+    assert_eq!(reused["port"], 2223);
+    assert!(
+        reused["command"]
+            .as_str()
+            .unwrap()
+            .contains(&"'2223' '--stdio'".replace('\'', "'\\''"))
+    );
+    assert_eq!(server.state.lock().unwrap().configurations, 2);
+    server
+        .cli(home.path())
+        .args(["ssh", "disable", "alias"])
+        .assert()
+        .success();
+    let fresh = server.setup(home.path(), &[]);
+    assert_ne!(fresh["identity_file"], first["identity_file"]);
+    assert_ne!(
+        std::fs::read(fresh["identity_file"].as_str().unwrap()).unwrap(),
+        std::fs::read(first["identity_file"].as_str().unwrap()).unwrap()
+    );
+}
+
+fn saved_config(login: &Value, accounts: &[&str], address: &str) -> Value {
+    let dir = std::path::Path::new(login["identity_file"].as_str().unwrap())
+        .parent()
+        .unwrap();
+    let public = std::fs::read_to_string(dir.join("identity.pub")).unwrap();
+    json!({"listen_address":address,"host_private_key":std::fs::read_to_string(dir.join("host")).unwrap(),"accounts":accounts.iter().map(|login| json!({"login":login,"authorized_keys":[public],"ca":null})).collect::<Vec<_>>()})
+}
+
+fn configure_saved(server: &SshServer, home: &std::path::Path, config: &Value) {
+    server
+        .cli(home)
+        .args(["ssh", "configure", "alias", "--file", "-"])
+        .write_stdin(config.to_string())
+        .assert()
+        .success();
+}
+
+fn credential_record(login: &Value) -> std::path::PathBuf {
+    std::path::Path::new(login["identity_file"].as_str().unwrap())
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("state.json")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_manual_multiple_accounts_select_and_remember_login() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let first = server.setup(home.path(), &["--login", "initial"]);
+    assert_eq!(first["login"], "initial");
+    let config = saved_config(&first, &["alice", "bob"], "0.0.0.0:2223");
+    configure_saved(&server, home.path(), &config);
+    server
+        .cli(home.path())
+        .args(["ssh", "setup", "alias"])
+        .assert()
+        .failure()
+        .stderr(contains("Multiple SSH logins"));
+    let chosen = server.setup(home.path(), &["--login", "bob"]);
+    assert_eq!(chosen["login"], "bob");
+    assert_eq!(server.setup(home.path(), &[])["login"], "bob");
+    assert_eq!(
+        server.setup(home.path(), &["--login", "alice"])["login"],
+        "alice"
+    );
+    server
+        .cli(home.path())
+        .args(["ssh", "setup", "alias", "--login", "absent"])
+        .assert()
+        .failure()
+        .stderr(contains("No usable saved client credentials"));
+    assert_eq!(server.state.lock().unwrap().configurations, 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_manual_missing_private_key_preserves_configuration() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let first = server.setup(home.path(), &[]);
+    let mut config = saved_config(&first, &["external"], "0.0.0.0:2223");
+    config["accounts"][0]["ca"] =
+        json!({"public_key":config["accounts"][0]["authorized_keys"][0], "principal":"external"});
+    std::fs::remove_file(first["identity_file"].as_str().unwrap()).unwrap();
+    configure_saved(&server, home.path(), &config);
+    let journal: Value =
+        serde_json::from_slice(&std::fs::read(credential_record(&first)).unwrap()).unwrap();
+    assert_eq!(journal["active"]["config"], config);
+    for command in ["setup", "connect", "forward"] {
+        server
+            .cli(home.path())
+            .args(["ssh", command, "alias"])
+            .assert()
+            .failure()
+            .stderr(contains("No usable saved client credentials"));
+    }
+    assert_eq!(server.state.lock().unwrap().configurations, 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_matches_actual_private_key_ignoring_public_sidecar_and_comments() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let first = server.setup(home.path(), &[]);
+    let mut config = saved_config(&first, &["alice"], "0.0.0.0:2223");
+    let public = config["accounts"][0]["authorized_keys"][0]
+        .as_str()
+        .unwrap()
+        .split_whitespace()
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ");
+    config["accounts"][0]["authorized_keys"][0] = json!(format!("{public} another comment"));
+    let identity = std::path::Path::new(first["identity_file"].as_str().unwrap());
+    std::fs::write(identity.with_extension("pub"), "invalid sidecar").unwrap();
+    configure_saved(&server, home.path(), &config);
+    assert_eq!(server.setup(home.path(), &[])["login"], "alice");
+    std::fs::write(identity, "invalid private key").unwrap();
+    server
+        .cli(home.path())
+        .args(["ssh", "setup", "alias"])
+        .assert()
+        .failure()
+        .stderr(contains("No usable saved client credentials"));
+    assert_eq!(server.state.lock().unwrap().configurations, 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_manual_pending_recovers_and_checks_actual_listener() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let first = server.setup(home.path(), &[]);
+    let config = saved_config(&first, &["alice"], "0.0.0.0:0");
+    server.state.lock().unwrap().fail_after_apply = true;
+    server
+        .cli(home.path())
+        .args(["ssh", "configure", "alias", "--file", "-"])
+        .write_stdin(config.to_string())
+        .assert()
+        .failure();
+    let recovered = server.setup(home.path(), &[]);
+    assert_eq!(recovered["login"], "alice");
+    assert_eq!(recovered["port"], 23456);
+    let journal: Value =
+        serde_json::from_slice(&std::fs::read(credential_record(&first)).unwrap()).unwrap();
+    assert!(journal["pending"].is_null());
+    assert_eq!(journal["active"]["config"], config);
+    assert_eq!(
+        journal["active"]["status"]["listen_address"],
+        "0.0.0.0:23456"
+    );
+    for (field, invalid) in [
+        ("listen_address", json!("0.0.0.0:23457")),
+        ("host_public_key", json!("ssh-ed25519 changed")),
+        ("generation", json!(99)),
+    ] {
+        let original = server.state.lock().unwrap().status[field].clone();
+        server.state.lock().unwrap().status[field] = invalid;
+        server
+            .cli(home.path())
+            .args(["ssh", "setup", "alias"])
+            .assert()
+            .failure()
+            .stderr(contains("remote configuration preserved"));
+        server.state.lock().unwrap().status[field] = original;
+    }
+    assert_eq!(server.state.lock().unwrap().configurations, 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_legacy_record_upgrades_without_configuring() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let first = server.setup(home.path(), &[]);
+    let identity = std::path::Path::new(first["identity_file"].as_str().unwrap());
+    let material = identity
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    std::fs::write(
+        credential_record(&first),
+        json!({"active":{"material":material,"generation":1}}).to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        server.setup(home.path(), &[])["identity_file"],
+        first["identity_file"]
+    );
+    let upgraded: Value =
+        serde_json::from_slice(&std::fs::read(credential_record(&first)).unwrap()).unwrap();
+    assert_eq!(
+        upgraded["active"]["config"]["accounts"][0]["login"],
+        "boxlite"
+    );
+    assert_eq!(server.state.lock().unwrap().configurations, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_manual_unsupported_listener_is_saved_but_not_connected() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let first = server.setup(home.path(), &[]);
+    for address in ["127.0.0.1:2223", "[::]:2223"] {
+        let config = saved_config(&first, &["alice"], address);
+        configure_saved(&server, home.path(), &config);
+        server
+            .cli(home.path())
+            .args(["ssh", "setup", "alias"])
+            .assert()
+            .failure()
+            .stderr(contains("do not support listener"));
+    }
+    let config = saved_config(
+        &first,
+        &["alice"],
+        &format!("{}:2223", boxlite::net::constants::GUEST_IP),
+    );
+    configure_saved(&server, home.path(), &config);
+    assert_eq!(server.setup(home.path(), &[])["port"], 2223);
+    assert_eq!(server.state.lock().unwrap().configurations, 4);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_confirmation_save_failure_keeps_recoverable_material() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let first = server.setup(home.path(), &[]);
+    let config = saved_config(&first, &["alice"], "0.0.0.0:2223");
+    let record = credential_record(&first);
+    // Inject an atomic-rename failure after the remote mutation, preserving
+    // the pre-confirmation bytes so they can be restored after the obstacle.
+    server.state.lock().unwrap().block_confirmation = Some(record.clone());
+    server
+        .cli(home.path())
+        .args(["ssh", "configure", "alias", "--file", "-"])
+        .write_stdin(config.to_string())
+        .assert()
+        .failure()
+        .stderr(contains("local confirmation is incomplete"));
+    let pending: Value =
+        serde_json::from_slice(&std::fs::read(record.with_extension("pending")).unwrap()).unwrap();
+    assert_eq!(pending["pending"]["config"], config);
+    std::fs::remove_dir(&record).unwrap();
+    std::fs::rename(record.with_extension("pending"), &record).unwrap();
+    assert_eq!(server.setup(home.path(), &[])["login"], "alice");
+    assert_eq!(server.state.lock().unwrap().configurations, 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_save_failure_before_submission_does_not_configure() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let first = server.setup(home.path(), &[]);
+    let record = credential_record(&first);
+    server.state.lock().unwrap().block_pending = Some(record);
+    let config = saved_config(&first, &["alice"], "0.0.0.0:2223");
+    server
+        .cli(home.path())
+        .args(["ssh", "configure", "alias", "--file", "-"])
+        .write_stdin(config.to_string())
+        .assert()
+        .failure()
+        .stderr(contains("Save pending SSH configuration before configure"));
+    assert_eq!(server.state.lock().unwrap().configurations, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_saved_configuration_is_isolated_by_profile() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    server.setup(home.path(), &[]);
+    server
+        .cli(home.path())
+        .args(["--profile", "other", "ssh", "setup", "alias"])
+        .assert()
+        .failure()
+        .stderr(contains("saved configuration is missing or inconsistent"));
+    assert_eq!(server.state.lock().unwrap().configurations, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_forward_uses_saved_guest_port() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let first = server.setup(home.path(), &[]);
+    configure_saved(
+        &server,
+        home.path(),
+        &saved_config(&first, &["alice"], "0.0.0.0:2223"),
+    );
+    let probe = connect_peer(&server, b"", false).await;
+    let (mut child, port) = start_forward(&server, home.path()).await;
+    probe.await.unwrap();
+    let peer = connect_peer(&server, b"", false).await;
+    let stream = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+        .await
+        .unwrap();
+    peer.await.unwrap();
+    drop(stream);
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(child.id().unwrap() as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
+    assert!(child.wait().await.unwrap().success());
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.tunnel_ports, [2223, 2223]);
+    assert_eq!(state.configurations, 2);
+}
+
+#[test]
+fn ssh_convenience_flags_offer_login_and_reject_replace() {
+    for command in ["setup", "connect", "forward"] {
+        Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+            .args(["ssh", command, "--help"])
+            .assert()
+            .success()
+            .stdout(contains("--login"))
+            .stdout(contains("--replace").not());
+        Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+            .args(["ssh", command, "alias", "--replace"])
+            .assert()
+            .failure()
+            .stderr(contains("unexpected argument '--replace'"));
     }
 }

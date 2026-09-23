@@ -27,7 +27,7 @@ boxlite ssh connect mybox -- sh -c 'echo hello; exit 7'
 ```
 
 These commands create separate Ed25519 host and user keys, configure login
-`boxlite` on guest address `0.0.0.0:22`, and pin the host key in a dedicated
+`boxlite` (override with `--login NAME`) on guest address `0.0.0.0:22`, and pin the host key in a dedicated
 `known_hosts` file with strict verification. `forward --listen 127.0.0.1:2022`
 selects another local TCP address; an occupied port fails without fallback.
 `connect` uses `network tunnel --stdio` as the system SSH ProxyCommand, so no
@@ -43,14 +43,36 @@ Directories use mode `0700`; private keys and records use `0600`. User private
 keys never leave the client. Host private keys are submitted only by configure,
 and are not added to BoxOptions, the runtime database, snapshots, or archives.
 
-Repeated setup, forward, and connect reuse owned keys and leave existing
-sessions intact when host identity, listener, and generation match the record.
-After disable or a VM restart, they configure the saved keys again. An enabled
-configuration that does not match is refused; `--replace` explicitly generates
-new keys and replaces it, disconnecting sessions. A local preparation lock
-prevents concurrent updates. Keys are saved before configure; an ambiguous
-failure retains them so the next invocation can query state before deciding
-whether configuration is needed. Configure is never automatically retried.
+Repeated setup, forward, and connect reuse saved configuration without
+reconfiguring when the generation, actual listener, host key, and client private
+key match. They use the saved account and guest port. `--login NAME` selects an
+account; otherwise the previous selection is used, or the only account with a
+usable saved key. Multiple available accounts require an explicit selection.
+Convenience connections support IPv4 wildcard listeners and the Box guest IP;
+other listeners can be configured and saved but cannot use these commands.
+
+After disable or a VM restart leaves SSH disabled, preparation generates fresh
+host and client keys. Enabled SSH with missing, inconsistent, or unusable local
+credentials fails without changing remote configuration. Use `configure` for an
+explicit replacement, or `disable` before generating new keys automatically.
+There is no credential lock: concurrent configuration of one record is not
+serialized. Existing runtime locks still apply.
+
+Automatic and manual configurations are saved locally before submission and
+confirmed after success, including the actual port returned for guest port `0`.
+A lost reply leaves pending material; the next invocation checks status to
+recover it without resending configure. Saving failures are errors, including
+when SSH is already active remotely. Existing legacy records are validated and
+upgraded on reuse.
+
+Manual configure matches authorized keys against private keys already saved
+for this target and Box, using `ssh-keygen -y` rather than trusting `.pub` files.
+It succeeds and saves the submitted configuration even without a matching
+client key; convenience commands then report missing credentials. Accounts,
+authorized keys, and CA configuration are preserved. Preparation does not probe
+SSH authentication; the system SSH client performs authentication on connection.
+These records are local to this CLI: there is no cross-machine synchronization,
+SDK persistence, key import, agent search, or certificate issuance.
 
 For complete configuration control:
 

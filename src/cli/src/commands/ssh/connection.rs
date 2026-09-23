@@ -52,7 +52,12 @@ impl Target {
             let options = global.resolve_runtime_options()?;
             let home = std::fs::canonicalize(&options.home_dir)
                 .context("Resolve local runtime directory")?;
-            serde_json::to_string(&("local", home))?
+            // Preserve the original default-profile namespace for legacy records.
+            if profile == "default" {
+                serde_json::to_string(&("local", home))?
+            } else {
+                serde_json::to_string(&("local", home, profile))?
+            }
         };
         Ok(Self {
             identity,
@@ -62,9 +67,9 @@ impl Target {
 }
 
 #[derive(Serialize)]
-pub(super) struct Login {
+pub(super) struct PreparedSshConnection {
     box_id: String,
-    login: &'static str,
+    login: String,
     port: u16,
     identity_file: PathBuf,
     known_hosts_file: PathBuf,
@@ -73,12 +78,14 @@ pub(super) struct Login {
     #[serde(skip)]
     alias: String,
     #[serde(skip)]
+    pub(super) guest_address: SocketAddr,
+    #[serde(skip)]
     proxy: Option<String>,
     #[serde(skip)]
     hostname: String,
 }
 
-impl Login {
+impl PreparedSshConnection {
     pub(super) fn new(
         target: Target,
         id: &str,
@@ -86,13 +93,26 @@ impl Login {
         known_hosts_file: PathBuf,
         alias: String,
         status: &SshStatus,
+        account: String,
     ) -> Result<Self> {
+        let listener: SocketAddr = status
+            .listen_address
+            .parse()
+            .context("Invalid SSH listener address")?;
+        let guest_ip: std::net::IpAddr = boxlite::net::constants::GUEST_IP.parse()?;
+        ensure!(
+            listener.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+                || listener.ip() == guest_ip,
+            "SSH convenience connections do not support listener {}; use IPv4 wildcard or Box guest IP",
+            listener
+        );
+        let guest_address = SocketAddr::new(guest_ip, listener.port());
         let mut proxy_args = target.proxy_args;
         proxy_args.extend([
             "network".into(),
             "tunnel".into(),
             id.into(),
-            "22".into(),
+            listener.port().to_string(),
             "--stdio".into(),
         ]);
         // OpenSSH expands percent tokens before the user's shell parses
@@ -101,8 +121,9 @@ impl Login {
         let proxy = shell_command(&proxy_args).replace('%', "%%");
         let mut login = Self {
             box_id: id.into(),
-            login: "boxlite",
-            port: 22,
+            login: account,
+            port: listener.port(),
+            guest_address,
             identity_file,
             known_hosts_file,
             host_key_fingerprint: status.host_key_fingerprint.clone(),
@@ -150,7 +171,7 @@ impl Login {
         if let Some(proxy) = &self.proxy {
             args.extend(["-o".into(), format!("ProxyCommand={proxy}")]);
         }
-        args.extend(["-l".into(), self.login.into(), self.hostname.clone()]);
+        args.extend(["-l".into(), self.login.clone(), self.hostname.clone()]);
         Ok(args)
     }
 

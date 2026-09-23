@@ -65,13 +65,17 @@ fn ssh_vm_setup_connect_forward_reuse_disable_and_restart() {
         serde_json::json!({"home_dir":ctx.home}).to_string(),
     )
     .unwrap();
+    ctx.new_cmd()
+        .args(["ssh", "disable", "ssh-vm"])
+        .assert()
+        .success();
     let quoted = json_output(
         assert_cmd::Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
             .env("HOME", credential_home.path())
             .env_remove("BOXLITE_HOME")
             .arg("--config")
             .arg(&config_path)
-            .args(["ssh", "setup", "ssh-vm", "--replace", "--format", "json"]),
+            .args(["ssh", "setup", "ssh-vm", "--format", "json"]),
     );
     login_command(&quoted, "'printf' 'quoted-ready'")
         .env("HOME", credential_home.path())
@@ -79,14 +83,29 @@ fn ssh_vm_setup_connect_forward_reuse_disable_and_restart() {
         .assert()
         .success()
         .stdout("quoted-ready");
-    let login = json_output(ctx.new_cmd().args([
-        "ssh",
-        "setup",
-        "ssh-vm",
-        "--replace",
-        "--format",
-        "json",
-    ]));
+    ctx.new_cmd()
+        .args(["ssh", "disable", "ssh-vm"])
+        .assert()
+        .success();
+    let login = json_output(
+        ctx.new_cmd()
+            .args(["ssh", "setup", "ssh-vm", "--format", "json"]),
+    );
+    let dir = std::path::Path::new(login["identity_file"].as_str().unwrap())
+        .parent()
+        .unwrap();
+    let config = serde_json::json!({"listen_address":"0.0.0.0:2223","host_private_key":std::fs::read_to_string(dir.join("host")).unwrap(),"accounts":[{"login":"alice","authorized_keys":[std::fs::read_to_string(dir.join("identity.pub")).unwrap()],"ca":null}]});
+    ctx.new_cmd()
+        .args(["ssh", "configure", "ssh-vm", "--file", "-"])
+        .write_stdin(config.to_string())
+        .assert()
+        .success();
+    let login = json_output(
+        ctx.new_cmd()
+            .args(["ssh", "setup", "ssh-vm", "--format", "json"]),
+    );
+    assert_eq!(login["login"], "alice");
+    assert_eq!(login["port"], 2223);
     ctx.new_cmd()
         .args([
             "ssh",
@@ -196,16 +215,17 @@ fn ssh_vm_setup_connect_forward_reuse_disable_and_restart() {
         ctx.new_cmd()
             .args(["ssh", "setup", "ssh-vm", "--format", "json"]),
     );
-    assert_eq!(restored["identity_file"], login["identity_file"]);
+    assert_ne!(restored["identity_file"], login["identity_file"]);
+    login_command(&restored, "'true'").assert().success();
     ctx.new_cmd().args(["restart", "ssh-vm"]).assert().success();
     let restarted = json_output(
         ctx.new_cmd()
             .args(["ssh", "setup", "ssh-vm", "--format", "json"]),
     );
-    assert_eq!(restarted["identity_file"], login["identity_file"]);
-    assert_eq!(
+    assert_ne!(restarted["identity_file"], restored["identity_file"]);
+    assert_ne!(
         restarted["host_key_fingerprint"],
-        login["host_key_fingerprint"]
+        restored["host_key_fingerprint"]
     );
     login_command(&restarted, "'printf' 'restarted'")
         .assert()
@@ -253,6 +273,8 @@ fn ssh_serve_controls_use_real_guest() {
     let configuration_path = std::path::Path::new(home).join("ssh.json");
     std::fs::write(&configuration_path, configuration.to_string()).unwrap();
     let configured = serve.client(&[
+        "--home",
+        home,
         "ssh",
         "configure",
         "ssh-rest",
