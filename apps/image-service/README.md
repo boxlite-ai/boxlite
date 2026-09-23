@@ -153,6 +153,16 @@ is also what CI uploads.
   organization meter is a number the caller can choose, and only the runner
   meter beside it actually bounds anyone. It becomes enforceable when the
   control plane says whose pull this is.
+- Addresses in `198.18.0.0/15` are reachable, although that block is reserved
+  for benchmarking. VPN and split-DNS resolvers hand it out for ordinary public
+  hosts — on a machine running one, `ghcr.io` resolves into it — and refusing
+  it would refuse every pull there. The cost is that anything a network places
+  in that range is reachable through this proxy as a public host would be.
+  None of this stack's own ranges are in it
+  ([`providers/gcp/network.ts`](../infra/mdeploy/stack/providers/gcp/network.ts)),
+  but the cloud permits it as a subnet range. There is no setting to refuse it:
+  a deployment that must is a change to `offInternet` in
+  `internal/proxy/guard.go`.
 - An allowed registry names its own token endpoint, and any HTTPS one is
   accepted: Docker Hub's is on a different host from its registry, so the two
   cannot be required to match. Nothing is sent to it today, because the
