@@ -243,3 +243,19 @@ func TestServeStillSpeaksHTTP1(t *testing.T) {
 		t.Errorf("answered over %s, want HTTP/1.1", response.Proto)
 	}
 }
+
+// A listener that fails is a server that is not serving, and saying so is what
+// lets the process exit instead of reporting healthy with nothing behind it.
+func TestServeReportsAListenerThatFails(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	listener.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := serve(ctx, listener, http.NotFoundHandler(), time.Second); err == nil {
+		t.Fatal("serve on a closed listener returned no error")
+	}
+}

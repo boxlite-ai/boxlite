@@ -134,3 +134,22 @@ func TestTokenURLRefusesChallengesItCannotAnswer(t *testing.T) {
 		})
 	}
 }
+
+// A registry that sends a parameter without a value, or a quoted value it never
+// closes, has sent something this parser cannot read past. Stopping there keeps
+// what came before and never invents a realm out of the rest.
+func TestParseChallengeStopsAtAParameterItCannotRead(t *testing.T) {
+	for header, want := range map[string]map[string]string{
+		`Bearer service="ghcr.io",realm`:                  {"service": "ghcr.io"},
+		`Bearer service="ghcr.io",realm="https://ghcr.io`: {"service": "ghcr.io"},
+	} {
+		challenge, err := ParseChallenge(header)
+		if err != nil {
+			t.Errorf("ParseChallenge(%q) failed: %v", header, err)
+			continue
+		}
+		if len(challenge.Parameters) != len(want) || challenge.Parameters["service"] != want["service"] {
+			t.Errorf("ParseChallenge(%q).Parameters = %v, want %v", header, challenge.Parameters, want)
+		}
+	}
+}

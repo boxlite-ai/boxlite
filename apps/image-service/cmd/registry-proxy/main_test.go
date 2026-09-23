@@ -266,3 +266,15 @@ func waitUntilServing(t *testing.T, url string) {
 	}
 	t.Fatalf("%s never answered", url)
 }
+
+// Without a control plane there is no checking any caller, so the process must
+// refuse to start rather than come up and refuse every pull.
+func TestRunRefusesToStartWithoutAControlPlane(t *testing.T) {
+	previous := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	t.Setenv("BOXLITE_API_URL", "")
+
+	if got := run(); got != 2 {
+		t.Errorf("run() without a control plane = %d, want 2", got)
+	}
+}

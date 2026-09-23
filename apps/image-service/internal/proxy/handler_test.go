@@ -348,3 +348,25 @@ func TestACallerThatAsksForAnEncodingHasItForwarded(t *testing.T) {
 		t.Errorf("upstream saw Accept-Encoding %q, want the caller's gzip", pulls[0].acceptEncoding)
 	}
 }
+
+// A reference that is neither a tag nor a digest can name nothing upstream, so
+// it is refused here rather than spent as an upstream round trip.
+func TestAReferenceThatIsNotATagOrDigestIsRejected(t *testing.T) {
+	upstream := newStubUpstream(t)
+	router, _ := testProxy(t, upstream, runnerPlane(t), "ghcr.io")
+
+	for _, path := range []string{
+		"/v2/acme/ghcr.io/acme/app/manifests/-not-a-tag",
+		"/v2/acme/ghcr.io/acme/app/blobs/not-a-digest",
+	} {
+		response := pull(router, http.MethodGet, path, runnerKey)
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("GET %s = %d, want 400", path, response.Code)
+			continue
+		}
+		assertRefusal(t, response.Body.Bytes(), oci.CodeManifestInvalid)
+	}
+	if pulls := upstream.pulls(); len(pulls) != 0 {
+		t.Errorf("upstream saw %d pulls for references that name nothing", len(pulls))
+	}
+}

@@ -177,3 +177,19 @@ func TestABearerChallengeWithoutARealmIsReportedAsUnreachable(t *testing.T) {
 	}
 	assertRefusal(t, response.Body.Bytes(), oci.CodeUnsupported)
 }
+
+// A 401 that names no way to authenticate leaves nothing to answer, so the pull
+// fails as unreachable rather than being retried blind.
+func TestAnUpstreamRefusalWithoutAChallengeIsReportedAsUnreachable(t *testing.T) {
+	upstream := newStubUpstream(t)
+	router, _ := testProxy(t, upstream, runnerPlane(t), "ghcr.io")
+	upstream.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+
+	response := pull(router, http.MethodGet, ghcrPath, runnerKey)
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("a pull refused with no challenge = %d, want 502", response.Code)
+	}
+	assertRefusal(t, response.Body.Bytes(), oci.CodeUnsupported)
+}

@@ -306,3 +306,23 @@ func TestExchangeRejectsABodyThatIsNotAToken(t *testing.T) {
 		}
 	}
 }
+
+// A token endpoint that cannot be reached is an outage, not a refusal: the two
+// must stay apart so a caller is not told its credential was rejected.
+func TestExchangeReportsATokenEndpointItCannotReach(t *testing.T) {
+	endpoint := newTokenEndpoint(t, http.StatusOK, `{"token":"unused"}`)
+	address := endpoint.endpoint()
+	client := endpoint.client()
+	endpoint.server.Close()
+
+	challenge := Challenge{Scheme: SchemeBearer, Parameters: map[string]string{
+		"realm": "https://" + address + "/token",
+	}}
+	_, err := client.Exchange(context.Background(), challenge, PullScope("acme/app"), nil)
+	if err == nil {
+		t.Fatal("Exchange against a closed endpoint succeeded")
+	}
+	if errors.Is(err, ErrTokenRefused) {
+		t.Errorf("an unreachable endpoint was reported as a refusal: %v", err)
+	}
+}

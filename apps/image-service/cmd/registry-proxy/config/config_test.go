@@ -151,3 +151,15 @@ func clearEnvironment(t *testing.T) {
 		os.Unsetenv(name)
 	}
 }
+
+// A value that does not parse is a typo, and starting with a default in its
+// place would run something other than what was written.
+func TestGetConfigRefusesAValueThatDoesNotParse(t *testing.T) {
+	clearEnvironment(t)
+	t.Setenv("BOXLITE_API_URL", "https://api.example.com")
+	t.Setenv("REGISTRY_PROXY_PORT", "four-thousand-one-hundred")
+
+	if config, err := GetConfig(); err == nil {
+		t.Errorf("REGISTRY_PROXY_PORT that is not a number was accepted as %d", config.Port)
+	}
+}
