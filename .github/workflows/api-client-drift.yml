@@ -38,7 +38,7 @@ jobs:
     name: Regenerate API clients and diff
     runs-on: ubuntu-latest
     services:
-      # generate-openapi.ts boots the full NestJS app; SKIP_CONNECTIONS=true
+      # generate-control-plane-api.ts boots the full NestJS app; SKIP_CONNECTIONS=true
       # defers DB/queue connections but bootstrap still issues Redis commands
       # (notification pub/sub), so a real Redis avoids a retry-exhaustion race.
       redis:
@@ -91,7 +91,7 @@ jobs:
         run: |
           # The exported cloud spec must not re-grow box-operation endpoints —
           # those belong to openapi/box.openapi.yaml (served by boxlite-rest).
-          spec=dist/apps/api/openapi.json
+          spec=dist/apps/api/control-plane-api.json
           if [ ! -f "$spec" ]; then
             echo "::error::$spec not found; the openapi export step must run before this guard."
             exit 1

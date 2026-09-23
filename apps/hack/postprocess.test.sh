@@ -12,6 +12,9 @@
 #   - Go: UserAgent literal replaced with the ClientVersion expression
 #   - Go: version.go written with the go:embed accessor for the package
 #   - Go: missing UserAgent -> non-zero exit
+#   - Go: a spec name renames api/openapi.yaml and rewrites the FILES entry
+#   - Go: no spec name -> the generator's own layout is left untouched
+#   - Go: a missing spec, or a FILES without the entry, fails before any write
 #
 # These guard a silent-failure mode: the postprocessors used GNU-only `sed -i`,
 # which BSD sed rejects, so on macOS the User-Agent injection was dropped while
@@ -196,6 +199,67 @@ echo 'package apiclient' > "$go_bad_dir/configuration.go"
 node "$HACK_DIR/go-client/postprocess.mjs" "$go_bad_dir" apiclient my-go-client > /dev/null 2>&1
 [[ $? -ne 0 ]]
 check "Go: missing UserAgent is a hard error" $?
+
+# ── Go client: control-plane spec rename ────────────────────────────────────
+#
+# The generator always drops its spec copy at api/openapi.yaml. A client whose
+# spec describes one named API renames it, and the FILES manifest has to move
+# with it or the next regeneration diffs against a name the tree no longer has.
+
+write_go_spec_fixture() { # dir
+  mkdir -p "$1/api" "$1/.openapi-generator"
+  cat > "$1/configuration.go" <<'EOF'
+package apiclient
+
+func NewConfiguration() *Configuration {
+	cfg := &Configuration{
+		UserAgent:        "OpenAPI-Generator/1.0.0/go",
+	}
+	return cfg
+}
+EOF
+  printf 'openapi: 3.0.0\n' > "$1/api/openapi.yaml"
+  printf '.gitignore\napi/openapi.yaml\napi_admin.go\n' > "$1/.openapi-generator/FILES"
+}
+
+go_spec_dir="$TMP_ROOT/go-spec"
+write_go_spec_fixture "$go_spec_dir"
+node "$HACK_DIR/go-client/postprocess.mjs" "$go_spec_dir" apiclient my-go-client control-plane-api.yaml > /dev/null 2>&1
+check "Go: exits 0 when a spec name is given" $?
+
+[[ -f "$go_spec_dir/api/control-plane-api.yaml" && ! -e "$go_spec_dir/api/openapi.yaml" ]]
+check "Go: spec copy renamed to the requested name" $?
+
+grep -qx 'api/control-plane-api.yaml' "$go_spec_dir/.openapi-generator/FILES" &&
+  ! grep -q 'api/openapi.yaml' "$go_spec_dir/.openapi-generator/FILES"
+check "Go: FILES manifest entry rewritten to match" $?
+
+go_nospec_dir="$TMP_ROOT/go-nospec"
+write_go_spec_fixture "$go_nospec_dir"
+node "$HACK_DIR/go-client/postprocess.mjs" "$go_nospec_dir" apiclient my-go-client > /dev/null 2>&1
+[[ -f "$go_nospec_dir/api/openapi.yaml" ]] &&
+  grep -qx 'api/openapi.yaml' "$go_nospec_dir/.openapi-generator/FILES"
+check "Go: no spec name leaves the generator's layout untouched" $?
+
+go_missing_dir="$TMP_ROOT/go-missing"
+write_go_spec_fixture "$go_missing_dir"
+rm "$go_missing_dir/api/openapi.yaml"
+node "$HACK_DIR/go-client/postprocess.mjs" "$go_missing_dir" apiclient my-go-client control-plane-api.yaml > /dev/null 2>&1
+rc=$?
+[[ "$rc" -ne 0 ]] && grep -qx 'api/openapi.yaml' "$go_missing_dir/.openapi-generator/FILES"
+check "Go: missing spec copy is a hard error, manifest left alone" $?
+
+# Both preconditions are checked before either write: a rename that succeeded
+# ahead of a failing manifest check would leave a half-renamed tree, and the
+# drift diff that follows names no cause.
+go_stale_dir="$TMP_ROOT/go-stale"
+write_go_spec_fixture "$go_stale_dir"
+printf '.gitignore\napi_admin.go\n' > "$go_stale_dir/.openapi-generator/FILES"
+node "$HACK_DIR/go-client/postprocess.mjs" "$go_stale_dir" apiclient my-go-client control-plane-api.yaml > /dev/null 2>&1
+rc=$?
+[[ "$rc" -ne 0 ]] && [[ -f "$go_stale_dir/api/openapi.yaml" ]] &&
+  [[ ! -e "$go_stale_dir/api/control-plane-api.yaml" ]]
+check "Go: FILES without the entry fails before the rename" $?
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

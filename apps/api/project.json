@@ -48,11 +48,14 @@
           "transitive": true
         }
       ],
-      "outputs": ["{workspaceRoot}/dist/apps/api/openapi.json", "{workspaceRoot}/dist/apps/api/openapi.3.1.0.json"],
+      "outputs": [
+        "{workspaceRoot}/dist/apps/api/control-plane-api.json",
+        "{workspaceRoot}/dist/apps/api/control-plane-api.3.1.0.json"
+      ],
       "options": {
         "commands": [
           "mkdir -p dist/apps/api",
-          "yarn ts-node api/src/generate-openapi.ts -o dist/apps/api/openapi.json"
+          "yarn ts-node api/src/generate-control-plane-api.ts -o dist/apps/api/control-plane-api.json"
         ],
         "parallel": false,
         "env": {

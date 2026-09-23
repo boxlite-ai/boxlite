@@ -4,8 +4,8 @@ import * as path from 'path'
 import { NestFactory } from '@nestjs/core'
 import { AppModule } from './app.module'
 import { SwaggerModule } from '@nestjs/swagger'
-import { getOpenApiConfig } from './openapi.config'
-import { addWebhookDocumentation } from './openapi-webhooks'
+import { getControlPlaneApiConfig } from './control-plane-api.config'
+import { addWebhookDocumentation } from './control-plane-api-webhooks'
 import {
   BoxCreatedWebhookDto,
   BoxStateUpdatedWebhookDto,
@@ -19,14 +19,14 @@ async function generateOpenAPI() {
       logger: ['error'], // Reduce logging noise
     })
 
-    const config = getOpenApiConfig('http://localhost:3000')
+    const config = getControlPlaneApiConfig('http://localhost:3000')
 
     const document = {
       ...SwaggerModule.createDocument(app, config),
     }
-    const openapiPath = './dist/apps/api/openapi.json'
-    fs.mkdirSync(path.dirname(openapiPath), { recursive: true })
-    fs.writeFileSync(openapiPath, JSON.stringify(document, null, 2))
+    const specPath = './dist/apps/api/control-plane-api.json'
+    fs.mkdirSync(path.dirname(specPath), { recursive: true })
+    fs.writeFileSync(specPath, JSON.stringify(document, null, 2))
 
     // Generate 3.1.0 version of the OpenAPI specification
     // Needed for the webhook documentation
@@ -42,9 +42,9 @@ async function generateOpenAPI() {
       openapi: '3.1.0',
     }
     const documentWithWebhooks = addWebhookDocumentation(document_3_1_0)
-    const openapi310Path = './dist/apps/api/openapi.3.1.0.json'
-    fs.mkdirSync(path.dirname(openapi310Path), { recursive: true })
-    fs.writeFileSync(openapi310Path, JSON.stringify(documentWithWebhooks, null, 2))
+    const spec310Path = './dist/apps/api/control-plane-api.3.1.0.json'
+    fs.mkdirSync(path.dirname(spec310Path), { recursive: true })
+    fs.writeFileSync(spec310Path, JSON.stringify(documentWithWebhooks, null, 2))
 
     await app.close()
     console.log('OpenAPI specification generated successfully!')

@@ -17,7 +17,7 @@ import { HttpsOptions } from '@nestjs/common/interfaces/external/https-options.i
 import { TypedConfigService } from './config/typed-config.service'
 import { FailedAuthTrackerService } from './auth/failed-auth-tracker.service'
 import { DataSource, MigrationExecutor } from 'typeorm'
-import { getOpenApiConfig } from './openapi.config'
+import { getControlPlaneApiConfig } from './control-plane-api.config'
 import { AuditInterceptor } from './audit/interceptors/audit.interceptor'
 import { extname, join } from 'node:path'
 import { ApiKeyService } from './api-key/api-key.service'
@@ -127,7 +127,8 @@ async function bootstrap() {
   const globalPrefix = 'api'
   app.setGlobalPrefix(globalPrefix)
 
-  const documentFactory = () => SwaggerModule.createDocument(app, getOpenApiConfig(configService.get('oidc.issuer')))
+  const documentFactory = () =>
+    SwaggerModule.createDocument(app, getControlPlaneApiConfig(configService.get('oidc.issuer')))
   SwaggerModule.setup('api', app, documentFactory, {
     swaggerOptions: {
       initOAuth: {

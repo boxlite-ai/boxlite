@@ -1,5 +1,5 @@
 .gitignore
-api/openapi.yaml
+api/control-plane-api.yaml
 api_admin.go
 api_api_keys.go
 api_audit.go

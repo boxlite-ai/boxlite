@@ -27,13 +27,13 @@
         "{projectRoot}/*.go",
         "{projectRoot}/go.mod",
         "{projectRoot}/go.sum",
-        "{projectRoot}/api/openapi.yaml"
+        "{projectRoot}/api/control-plane-api.yaml"
       ],
       "options": {
         "commands": [
           "rm -f {projectRoot}/*.go",
-          "yarn run openapi-generator-cli generate --git-repo-id=boxlite/libs/api-client-go --git-user-id=boxlite-ai -i dist/apps/api/openapi.json -g go -t hack/go-client/openapi-templates --additional-properties=disallowAdditionalPropertiesIfNotPresent=false,packageName=apiclient,moduleVersion=$DEFAULT_PACKAGE_VERSION,generateInterfaces=true,enumClassPrefix=true,structPrefix=true,enumUnknownDefaultCase=true -o libs/api-client-go",
-          "node hack/go-client/postprocess.mjs libs/api-client-go apiclient api-client-go"
+          "yarn run openapi-generator-cli generate --git-repo-id=boxlite/libs/api-client-go --git-user-id=boxlite-ai -i dist/apps/api/control-plane-api.json -g go -t hack/go-client/openapi-templates --additional-properties=disallowAdditionalPropertiesIfNotPresent=false,packageName=apiclient,moduleVersion=$DEFAULT_PACKAGE_VERSION,generateInterfaces=true,enumClassPrefix=true,structPrefix=true,enumUnknownDefaultCase=true -o libs/api-client-go",
+          "node hack/go-client/postprocess.mjs libs/api-client-go apiclient api-client-go control-plane-api.yaml"
         ],
         "parallel": false
       },

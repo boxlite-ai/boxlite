@@ -6,7 +6,7 @@
 
 import { DocumentBuilder } from '@nestjs/swagger'
 
-const getOpenApiConfig = (oidcIssuer: string) =>
+const getControlPlaneApiConfig = (oidcIssuer: string) =>
   new DocumentBuilder()
     .setTitle('BoxLite')
     .addServer('http://localhost:3000')
@@ -25,4 +25,4 @@ const getOpenApiConfig = (oidcIssuer: string) =>
     })
     .build()
 
-export { getOpenApiConfig }
+export { getControlPlaneApiConfig }

@@ -10,8 +10,8 @@ The inventory is implementation-grounded:
 
 - Control-plane product routes come from the controllers under
   [`api/src`](./api/src/), match the generated
-  [`openapi.yaml`](./libs/api-client-go/api/openapi.yaml), and use the `/api`
-  prefix applied in [`main.ts`](./api/src/main.ts).
+  [`control-plane-api.yaml`](./libs/api-client-go/api/control-plane-api.yaml),
+  and use the `/api` prefix applied in [`main.ts`](./api/src/main.ts).
 - Hosted BoxLite-compatible routes come from the controllers in
   [`boxlite-rest`](./api/src/boxlite-rest/). They are excluded from the product
   OpenAPI document because their portable contract lives in
@@ -325,8 +325,9 @@ broadcasts to the organization's room over the authenticated WebSocket, while
 webhook events are delivered as signed HTTP requests through Svix to endpoints
 the organization manages in its consumer portal. Payload schemas are published
 in a `webhooks` block that
-[`openapi-webhooks.ts`](./api/src/openapi-webhooks.ts) adds to the generated
-`openapi.3.1.0.json` only — not to the checked-in `openapi.yaml` named above.
+[`control-plane-api-webhooks.ts`](./api/src/control-plane-api-webhooks.ts) adds
+to the generated `control-plane-api.3.1.0.json` only — not to the checked-in
+`control-plane-api.yaml` named above.
 The `template.*` values remain in the `WebhookEvent` enum but nothing emits
 them.
 

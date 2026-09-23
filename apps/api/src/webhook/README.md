@@ -171,8 +171,8 @@ All webhooks include event-specific data relevant to the resource being updated.
 2. Create an event handler in `webhook-event-handler.service.ts`
 3. Use the `@OnEvent()` decorator to listen for the event
 4. Define the payload structure for the new event type
-5. Add the events to the `openapi-webhooks.ts`
-6. Generate the openapi spec
+5. Add the events to the `control-plane-api-webhooks.ts`
+6. Generate the control-plane spec
 7. Upload the new schema to the Svix dashboard
 
 ### Testing
