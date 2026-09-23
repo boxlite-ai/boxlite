@@ -58,6 +58,7 @@ help:
 	@echo "    make test:integration:python - Run Python SDK integration tests"
 	@echo "    make test:all:python        - Run Python SDK unit + integration tests"
 	@echo "    make test:unit:node         - Run Node.js SDK unit tests"
+	@echo "    make test:unit:node-native  - Build and test native Node.js bindings (no VM)"
 	@echo "    make test:integration:node  - Run Node.js SDK integration tests (requires VM)"
 	@echo "    make test:all:node          - Run all Node.js SDK tests"
 	@echo "    make test:unit:go           - Run Go SDK unit tests"

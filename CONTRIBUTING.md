@@ -39,6 +39,9 @@ Key test entry points:
 - `make test:unit` - all unit suites
 - `make test:integration` - all integration suites
 - `make test:all:python` - Python unit + integration suites
+- `make test:unit:node-native` - build and test real Node.js REST bindings without a VM
+- `make test:all:node` - Node.js unit, native, and VM integration suites
+- `make test:changed:openapi` - OpenAPI error-contract and reference-server route tests
 - `make test:all:c` - C SDK suite via CMake/CTest
 
 ### Coverage

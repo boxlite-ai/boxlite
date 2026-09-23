@@ -31,6 +31,11 @@ CONFIG                                  ci-config action ◀── lint, test, c
 
 ## Workflows
 
+The Test workflow runs OpenAPI error and route suites with Rust changes. Its
+Linux x64 / Node 22 native job builds current Node bindings with VM dependencies
+stubbed, runs REST and GC lifetime tests, and feeds `Test (conclusion)`. Node or
+Rust changes select this job; it follows the same draft gate as other SDK jobs.
+
 **Callable** marks a workflow another one can invoke with `uses:`. `config.yml` is the only one that
 is *exclusively* callable; workflows with `workflow_dispatch` can also run on their own.
 

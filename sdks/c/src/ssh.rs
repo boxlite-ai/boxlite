@@ -378,7 +378,9 @@ mod tests {
                     );
                 } else {
                     assert!(completion.error.is_none());
-                    let status = &*completion.status;
+                    let status_ptr = std::ptr::NonNull::new(completion.status)
+                        .expect("successful SSH callback must return a status");
+                    let status = status_ptr.as_ref();
                     assert_eq!(status.generation, u64::MAX);
                     assert_eq!(status.enabled, operation != "disable");
                     assert_eq!(CStr::from_ptr(status.listen_address).to_bytes(), b"addr");

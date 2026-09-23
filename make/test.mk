@@ -1,4 +1,4 @@
-PHONY_TARGETS += test\:unit\:openapi-routes test\:unit\:api test\:unit\:runner
+PHONY_TARGETS += test\:unit\:openapi-routes test\:unit\:node-native test\:unit\:api test\:unit\:runner
 PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
@@ -164,7 +164,7 @@ test\:changed\:apps:
 
 # The Box API contract and the reference server that implements it.
 test\:changed\:openapi:
-	@$(MAKE) test:unit:openapi
+	$(call run_suites,test:unit:openapi test:unit:openapi-routes)
 
 # Workflow and composite-action changes. Runs the infra suite rather than the whole apps matrix:
 # that suite is what asserts across .github (caller/callee permissions, Environment allowlists,
@@ -229,7 +229,7 @@ test\:integration\:core:
 # SDK unit suites: Python unit + Node unit + C unit + Go unit.
 test\:unit\:sdk:
 	@echo "── SDK unit suites (python, node, c, go) ──"
-	$(call run_suites,test:unit:python test:unit:node test:unit:c test:unit:go)
+	$(call run_suites,test:unit:python test:unit:node test:unit:node-native test:unit:c test:unit:go)
 
 # SDK integration suites: Python integration + Node integration + C SDK test suite.
 test\:integration\:sdk:
@@ -472,6 +472,10 @@ test\:unit\:node: _ensure-node-deps
 	@echo "🧪 Running Node.js binding (Rust) unit tests..."
 	@cargo test -p boxlite-node --lib $(CARGOTEST_FILTER)
 
+# Real Node.js bindings, with REST fixtures instead of a VM.
+test\:unit\:node-native: _ensure-node-deps
+	@bash $(SCRIPT_DIR)/test/run-node-native.sh $(VITEST_FILTER)
+
 # Node.js SDK integration tests (requires VM environment).
 test\:integration\:node:
 	@$(MAKE) dev:node
@@ -480,7 +484,7 @@ test\:integration\:node:
 
 # Node.js SDK full suite.
 test\:all\:node:
-	$(call run_suites,test:unit:node test:integration:node)
+	$(call run_suites,test:unit:node test:unit:node-native test:integration:node)
 
 # C SDK unit tests (no VM required).
 test\:unit\:c:

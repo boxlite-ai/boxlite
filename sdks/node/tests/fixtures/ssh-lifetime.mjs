@@ -2,7 +2,13 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { setImmediate } from 'node:timers/promises';
-import { JsBoxlite, JsBoxliteRestOptions } from '../../native/boxlite.js';
+import { pathToFileURL } from 'node:url';
+
+const { JsBoxlite, JsBoxliteRestOptions } = await import(
+  process.env.BOXLITE_NODE_NATIVE_LOADER
+    ? pathToFileURL(process.env.BOXLITE_NODE_NATIVE_LOADER).href
+    : new URL('../../native/boxlite.js', import.meta.url).href
+);
 
 assert.equal(typeof global.gc, 'function');
 const pending = [];
