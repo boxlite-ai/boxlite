@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -127,5 +128,39 @@ func TestUpstreamClientStopsChasingARedirectLoop(t *testing.T) {
 
 	if _, err := newUpstreamClient(allowLoopback, time.Second).Get(loop.URL); err == nil {
 		t.Fatal("a redirect loop was followed forever")
+	}
+}
+
+// An upstream that accepts the connection and never answers would otherwise
+// hold the pull until the caller gives up, which for a runner can be as long as
+// the drain window. The wait for headers is bounded by the same setting as the
+// connect and handshake; the body, which a blob streams for minutes, is not.
+func TestUpstreamClientGivesUpOnAnUpstreamThatNeverAnswers(t *testing.T) {
+	answered := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-answered
+	}))
+	defer upstream.Close()
+	defer close(answered)
+
+	const timeout = 200 * time.Millisecond
+	// The context is the caller giving up. It is far past the timeout, so an
+	// error that arrives with it proves only that nothing else bounded the wait.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, upstream.URL, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	started := time.Now()
+	response, err := newUpstreamClient(allowLoopback, timeout).Do(request)
+	elapsed := time.Since(started)
+	if err == nil {
+		response.Body.Close()
+		t.Fatal("an upstream that never answered produced a response")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("gave up after %s, want about %s: only the caller's own deadline ended the wait", elapsed.Round(time.Millisecond), timeout)
 	}
 }

@@ -71,11 +71,15 @@ func upstreamClient(dial func(context.Context, string, string) (net.Conn, error)
 			// relaying one: the caller would receive different bytes under a
 			// digest that no longer covers them. What the caller asks for is
 			// forwarded and its answer passed back untouched instead.
-			DisableCompression:    true,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   timeout,
+			DisableCompression:  true,
+			ForceAttemptHTTP2:   true,
+			MaxIdleConns:        100,
+			IdleConnTimeout:     90 * time.Second,
+			TLSHandshakeTimeout: timeout,
+			// Bounds the wait for headers only. A blob streams for minutes once
+			// it starts, so the body is left to the caller, never to a timeout
+			// here.
+			ResponseHeaderTimeout: timeout,
 			ExpectContinueTimeout: time.Second,
 		},
 		CheckRedirect: func(_ *http.Request, via []*http.Request) error {

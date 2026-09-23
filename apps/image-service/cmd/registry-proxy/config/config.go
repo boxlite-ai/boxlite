@@ -48,10 +48,10 @@ type Config struct {
 	// caller-supplied and cannot be left to grow. Past the bound, callers share
 	// one meter rather than being refused.
 	TrackedMeters int `envconfig:"REGISTRY_PROXY_TRACKED_METERS" default:"4096" validate:"min=1"`
-	// UpstreamTimeout bounds connecting to a registry and its TLS handshake, not
-	// the body: a blob legitimately takes minutes to stream. It also bounds a
-	// whole control-plane request, which is a small JSON call with nothing to
-	// stream.
+	// UpstreamTimeout bounds connecting to a registry, its TLS handshake, and the
+	// wait for its response headers, not the body: a blob legitimately takes
+	// minutes to stream. It also bounds a whole control-plane request, which is
+	// a small JSON call with nothing to stream.
 	UpstreamTimeout time.Duration `envconfig:"REGISTRY_PROXY_UPSTREAM_TIMEOUT" default:"30s" validate:"min=1s"`
 
 	OtelLoggingEnabled bool   `envconfig:"OTEL_LOGGING_ENABLED"`

@@ -120,7 +120,7 @@ steps.
 | `REGISTRY_PROXY_REJECTION_TTL` | `30s` | How long a refused credential is remembered, so a caller with a bad key cannot turn this proxy into a load generator aimed at the control plane. |
 | `REGISTRY_PROXY_PULLS_PER_SECOND` / `REGISTRY_PROXY_PULL_BURST` | `50` / `200` | The rate each runner and each organization may pull at. Requests, not bytes: the burst has to clear a whole image. |
 | `REGISTRY_PROXY_TRACKED_METERS` | `4096` | How many runners and organizations are metered at once. Past it, callers share one meter rather than being refused. |
-| `REGISTRY_PROXY_UPSTREAM_TIMEOUT` | `30s` | Connect and TLS handshake. Not the body: a blob legitimately takes minutes. |
+| `REGISTRY_PROXY_UPSTREAM_TIMEOUT` | `30s` | Connect, TLS handshake, and the wait for response headers. Not the body: a blob legitimately takes minutes. |
 | `ENVIRONMENT` | — | Reported to telemetry. |
 | `OTEL_LOGGING_ENABLED` / `OTEL_TRACING_ENABLED` | `false` | Export logs and traces over OTLP. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Collector to export to. Both switches above are inert without it. |
