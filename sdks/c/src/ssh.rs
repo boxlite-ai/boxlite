@@ -255,4 +255,147 @@ mod tests {
             boxlite_ssh_status_free(std::ptr::null_mut());
         }
     }
+    #[derive(Default)]
+    struct Completion {
+        status: *mut CSshStatus,
+        error: Option<String>,
+        calls: usize,
+    }
+
+    extern "C" fn completed(status: *mut CSshStatus, error: *mut CBoxliteError, user: *mut c_void) {
+        unsafe {
+            let completion = &mut *user.cast::<Completion>();
+            completion.calls += 1;
+            completion.status = status;
+            if !error.is_null() && (*error).code != BoxliteErrorCode::Ok {
+                completion.error = Some(
+                    CStr::from_ptr((*error).message)
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ssh_submissions_drain_after_handle_release_and_transfer_result_ownership() {
+        let tokio_rt = crate::runtime::create_tokio_runtime().unwrap();
+        let server = tokio_rt.block_on(boxlite_test_utils::ssh_rest::SshRestServer::start());
+        let runtime =
+            boxlite::runtime::BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(&server.url))
+                .unwrap();
+        let sandbox = tokio_rt.block_on(runtime.get("ssh-test")).unwrap().unwrap();
+        let queue = Arc::new(EventQueue::new());
+        let mut runtime = crate::runtime::RuntimeHandle {
+            runtime,
+            tokio_rt: tokio_rt.clone(),
+            queue: queue.clone(),
+            liveness: Arc::new(crate::runtime::RuntimeLiveness::new()),
+        };
+        let mut sandbox = crate::box_handle::BoxHandle {
+            box_id: sandbox.id().clone(),
+            handle: Arc::new(sandbox),
+            tokio_rt,
+            queue,
+        };
+        let mut error = crate::error::FFIError::default();
+        unsafe {
+            let mut ssh = std::ptr::null_mut();
+            assert_eq!(
+                boxlite_box_ssh(&mut sandbox, &mut ssh, &mut error),
+                BoxliteErrorCode::Ok
+            );
+            assert_eq!(
+                boxlite_box_ssh(&mut sandbox, std::ptr::null_mut(), &mut error),
+                BoxliteErrorCode::InvalidArgument
+            );
+            crate::boxlite_error_free(&mut error);
+            assert_eq!(
+                boxlite_ssh_status(ssh, None, std::ptr::null_mut(), &mut error),
+                BoxliteErrorCode::InvalidArgument
+            );
+            crate::boxlite_error_free(&mut error);
+            assert_eq!(
+                boxlite_ssh_disable(ssh, None, std::ptr::null_mut(), &mut error),
+                BoxliteErrorCode::InvalidArgument
+            );
+            crate::boxlite_error_free(&mut error);
+            assert_eq!(
+                boxlite_ssh_configure(
+                    ssh,
+                    std::ptr::null(),
+                    Some(completed),
+                    std::ptr::null_mut(),
+                    &mut error
+                ),
+                BoxliteErrorCode::InvalidArgument
+            );
+            crate::boxlite_error_free(&mut error);
+            boxlite_ssh_free(ssh);
+        }
+        for operation in ["configure", "status", "disable", "error"] {
+            let mut completion = Completion::default();
+            let user = (&mut completion as *mut Completion).cast();
+            if operation == "error" {
+                server.fail();
+            }
+            unsafe {
+                let mut ssh = std::ptr::null_mut();
+                assert_eq!(
+                    boxlite_box_ssh(&mut sandbox, &mut ssh, &mut error),
+                    BoxliteErrorCode::Ok
+                );
+                let code = match operation {
+                    "configure" => {
+                        let config = CString::new(r#"{"listen_address":"addr","host_private_key":"private","accounts":[{"login":"alice","authorized_keys":["key"],"ca":{"public_key":"ca","principal":"alice"}}]}"#).unwrap();
+                        boxlite_ssh_configure(
+                            ssh,
+                            config.as_ptr(),
+                            Some(completed),
+                            user,
+                            &mut error,
+                        )
+                    }
+                    "disable" => boxlite_ssh_disable(ssh, Some(completed), user, &mut error),
+                    _ => boxlite_ssh_status(ssh, Some(completed), user, &mut error),
+                };
+                assert_eq!(code, BoxliteErrorCode::Ok);
+                boxlite_ssh_free(ssh);
+                assert_eq!(completion.calls, 0, "callbacks must run only during drain");
+                assert_eq!(
+                    crate::boxlite_runtime_drain(&mut runtime, 5000, &mut error),
+                    1
+                );
+                assert_eq!(completion.calls, 1);
+                if operation == "error" {
+                    assert!(completion.status.is_null());
+                    assert!(
+                        completion
+                            .error
+                            .as_deref()
+                            .unwrap()
+                            .contains("SSH request failed")
+                    );
+                } else {
+                    assert!(completion.error.is_none());
+                    let status = &*completion.status;
+                    assert_eq!(status.generation, u64::MAX);
+                    assert_eq!(status.enabled, operation != "disable");
+                    assert_eq!(CStr::from_ptr(status.listen_address).to_bytes(), b"addr");
+                    assert_eq!(CStr::from_ptr(status.host_public_key).to_bytes(), b"public");
+                    assert_eq!(
+                        CStr::from_ptr(status.host_key_fingerprint).to_bytes(),
+                        b"fp"
+                    );
+                    boxlite_ssh_status_free(completion.status);
+                }
+            }
+        }
+        let requests = server.requests();
+        assert_eq!(requests[1].0, "POST /v1/boxes/ssh-test/ssh/configure");
+        assert_eq!(requests[1].1["accounts"][0]["ca"]["principal"], "alice");
+        assert_eq!(requests[1].1["host_private_key"], "private");
+        assert_eq!(requests[2].0, "GET /v1/boxes/ssh-test/ssh");
+        assert_eq!(requests[3].0, "POST /v1/boxes/ssh-test/ssh/disable");
+    }
 }

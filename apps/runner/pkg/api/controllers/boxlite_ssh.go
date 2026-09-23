@@ -1,13 +1,25 @@
 package controllers
 
 import (
+	"context"
 	sdk "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 	"net/http"
 )
 
-func sshControl(ctx *gin.Context) (*sdk.SSH, error) {
+type sshOperations interface {
+	Status(context.Context) (*sdk.SSHStatus, error)
+	Disable(context.Context) (*sdk.SSHStatus, error)
+	Configure(context.Context, sdk.SSHConfig) (*sdk.SSHStatus, error)
+	Close() error
+}
+
+type sshController struct {
+	acquire func(*gin.Context) (sshOperations, error)
+}
+
+func sshControl(ctx *gin.Context) (sshOperations, error) {
 	r, err := runner.GetInstance(nil)
 	if err != nil {
 		return nil, err
@@ -20,7 +32,11 @@ func sshControl(ctx *gin.Context) (*sdk.SSH, error) {
 }
 
 func BoxliteSshStatus(ctx *gin.Context) {
-	ssh, err := sshControl(ctx)
+	sshController{acquire: sshControl}.status(ctx)
+}
+
+func (controller sshController) status(ctx *gin.Context) {
+	ssh, err := controller.acquire(ctx)
 	if err != nil {
 		respondCopyError(ctx, err)
 		return
@@ -35,7 +51,11 @@ func BoxliteSshStatus(ctx *gin.Context) {
 }
 
 func BoxliteSshDisable(ctx *gin.Context) {
-	ssh, err := sshControl(ctx)
+	sshController{acquire: sshControl}.disable(ctx)
+}
+
+func (controller sshController) disable(ctx *gin.Context) {
+	ssh, err := controller.acquire(ctx)
 	if err != nil {
 		respondCopyError(ctx, err)
 		return
@@ -50,12 +70,16 @@ func BoxliteSshDisable(ctx *gin.Context) {
 }
 
 func BoxliteSshConfigure(ctx *gin.Context) {
+	sshController{acquire: sshControl}.configure(ctx)
+}
+
+func (controller sshController) configure(ctx *gin.Context) {
 	var config sdk.SSHConfig
 	if err := ctx.ShouldBindJSON(&config); err != nil {
 		respondError(ctx, http.StatusBadRequest, "invalid SSH configuration JSON", "InvalidArgumentError", "invalid_argument")
 		return
 	}
-	ssh, err := sshControl(ctx)
+	ssh, err := controller.acquire(ctx)
 	if err != nil {
 		respondCopyError(ctx, err)
 		return

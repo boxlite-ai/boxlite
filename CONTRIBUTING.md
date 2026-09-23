@@ -49,7 +49,7 @@ is reported as an informational status. The local collection command checks
 test success; Codecov evaluates changed lines against the pull request's base.
 
 The Rust report combines core, shared, REST, CLI (including authentication
-integration tests), C/Node/Python native bindings, native VMM, and the
+and SSH integration tests), C/Node/Python native bindings, native VMM, and the
 runtime/shutdown/network tests that need no VM. Hosted runtime and C unit tests
 use the existing test-only runtime constructor; production runtime creation
 still validates the host. Linux also collects guest unit coverage. Vendored

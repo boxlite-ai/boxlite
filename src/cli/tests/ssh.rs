@@ -428,6 +428,7 @@ async fn ssh_real_openssh_parses_quoted_paths_and_proxy_percent_tokens() {
         .replacen("'ssh'", "'ssh' '-vv'", 1);
     let result = Command::new("/bin/sh")
         .args(["-c", &command])
+        .env("SHELL", "/bin/bash")
         .timeout(std::time::Duration::from_secs(10))
         .assert()
         .failure();
@@ -554,4 +555,313 @@ async fn ssh_profile_and_auth_environment_survive_proxy_command() {
             .paths
             .contains(&"POST /v1/team/boxes/real-id/network/tunnel".to_owned())
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_credentials_reject_corrupt_records_and_material_paths() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let login = server.setup(home.path(), &[]);
+    let root = std::path::Path::new(login["identity_file"].as_str().unwrap())
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let record = root.join("state.json");
+    for (contents, expected) in [
+        ("{".to_owned(), "Read SSH credential record"),
+        (
+            json!({"active":{"material":"../../outside","generation":1}}).to_string(),
+            "Invalid SSH material record",
+        ),
+    ] {
+        std::fs::write(&record, contents).unwrap();
+        server
+            .cli(home.path())
+            .args(["ssh", "setup", "alias"])
+            .assert()
+            .failure()
+            .stderr(contains(expected));
+    }
+    assert_eq!(server.state.lock().unwrap().configurations, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_credentials_reject_symlink_directory_and_lock() {
+    use std::os::unix::fs::symlink;
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    symlink(outside.path(), home.path().join("ssh")).unwrap();
+    server
+        .cli(home.path())
+        .args(["ssh", "setup", "alias"])
+        .assert()
+        .failure()
+        .stderr(contains("must be a real directory"));
+    assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+    std::fs::remove_file(home.path().join("ssh")).unwrap();
+    let login = server.setup(home.path(), &[]);
+    let root = std::path::Path::new(login["identity_file"].as_str().unwrap())
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    std::fs::remove_file(root.join("lock")).unwrap();
+    let protected = outside.path().join("protected");
+    std::fs::write(&protected, "unchanged").unwrap();
+    symlink(&protected, root.join("lock")).unwrap();
+    server
+        .cli(home.path())
+        .args(["ssh", "setup", "alias"])
+        .assert()
+        .failure()
+        .stderr(contains("Open SSH preparation lock"));
+    assert_eq!(std::fs::read_to_string(protected).unwrap(), "unchanged");
+    assert_eq!(server.state.lock().unwrap().configurations, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_setup_rejects_exhausted_generation_without_configuring() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    server.state.lock().unwrap().status["generation"] = json!(u64::MAX);
+    server
+        .cli(home.path())
+        .args(["ssh", "setup", "alias"])
+        .assert()
+        .failure()
+        .stderr(contains("SSH generation exhausted"));
+    assert_eq!(server.state.lock().unwrap().configurations, 0);
+}
+
+#[test]
+fn ssh_configure_rejects_missing_and_oversized_files() {
+    let home = tempfile::tempdir().unwrap();
+    let file = home.path().join("config.json");
+    Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+        .args(["ssh", "configure", "alias", "--file"])
+        .arg(&file)
+        .assert()
+        .failure()
+        .stderr(contains("Open SSH configuration file"));
+    std::fs::write(&file, vec![b'x'; 1024 * 1024 + 1]).unwrap();
+    Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+        .args(["ssh", "configure", "alias", "--file"])
+        .arg(&file)
+        .assert()
+        .failure()
+        .stderr(contains("exceeds 1 MiB"));
+}
+
+async fn start_forward(server: &SshServer, home: &std::path::Path) -> (tokio::process::Child, u16) {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let mut child = tokio::process::Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+        .arg("--home")
+        .arg(home)
+        .env_remove("BOXLITE_API_KEY")
+        .env_remove("BOXLITE_PROFILE")
+        .args([
+            "--url",
+            &server.url,
+            "--path-prefix",
+            "team",
+            "ssh",
+            "forward",
+            "alias",
+            "--listen",
+            "127.0.0.1:0",
+            "--format",
+            "json",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let login = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let mut document = String::new();
+        while let Some(line) = lines.next_line().await.unwrap() {
+            document.push_str(&line);
+            if let Ok(value) = serde_json::from_str::<Value>(&document) {
+                return value;
+            }
+        }
+        panic!("forward exited before reporting listener");
+    })
+    .await
+    .unwrap();
+    assert!(!login["command"].as_str().unwrap().contains("ProxyCommand"));
+    (child, login["port"].as_u64().unwrap() as u16)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_forward_recovers_relays_bytes_and_reaps_connections_on_signals() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for signal in [
+        nix::sys::signal::Signal::SIGTERM,
+        nix::sys::signal::Signal::SIGINT,
+    ] {
+        let server = SshServer::start().await;
+        let home = tempfile::tempdir().unwrap();
+        let probe = connect_peer(&server, b"", false).await;
+        let (mut child, port) = start_forward(&server, home.path()).await;
+        probe.await.unwrap();
+        let address = (std::net::Ipv4Addr::LOCALHOST, port);
+        // A failed transport must close this client without stopping the listener.
+        server.state.lock().unwrap().tunnel_uri = None;
+        let mut failed = tokio::net::TcpStream::connect(address).await.unwrap();
+        let mut byte = [0];
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(10), failed.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        let peer = connect_peer(&server, b"\0\xffresponse", true).await;
+        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+        client.write_all(b"\xff\0request").await.unwrap();
+        client.shutdown().await.unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            client.read_to_end(&mut response),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(response, b"\0\xffresponse");
+        assert_eq!(peer.await.unwrap(), b"\xff\0request");
+        // Keep a relay open while signaling, and observe EOF on both ends.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        server.state.lock().unwrap().tunnel_uri =
+            Some(format!("http://{}", listener.local_addr().unwrap()));
+        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+        let (mut remote, _) =
+            tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+        let mut header = Vec::new();
+        while !header.ends_with(b"\r\n\r\n") {
+            header.push(remote.read_u8().await.unwrap());
+        }
+        remote
+            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\nready")
+            .await
+            .unwrap();
+        let mut ready = [0; 5];
+        client.read_exact(&mut ready).await.unwrap();
+        assert_eq!(&ready, b"ready");
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(child.id().unwrap() as i32),
+            signal,
+        )
+        .unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(10), child.wait())
+                .await
+                .unwrap()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(remote.read(&mut byte).await.unwrap(), 0);
+        assert_eq!(client.read(&mut byte).await.unwrap(), 0);
+        assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_forward_reports_occupied_port() {
+    let server = SshServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let peer = connect_peer(&server, b"", false).await;
+    server
+        .cli(home.path())
+        .args([
+            "ssh",
+            "forward",
+            "alias",
+            "--listen",
+            &occupied.local_addr().unwrap().to_string(),
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("Bind SSH forward listener"));
+    peer.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_connect_signals_reap_system_ssh() {
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    for (signal, code) in [
+        (nix::sys::signal::Signal::SIGINT, 130),
+        (nix::sys::signal::Signal::SIGTERM, 143),
+    ] {
+        let server = SshServer::start().await;
+        let home = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        let script = tools.path().join("ssh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nprintf 'ready:%s\\n' \"$$\" >&2\nexec /bin/sleep 60\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut child = tokio::process::Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+            .arg("--home")
+            .arg(home.path())
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    tools.path().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .env_remove("BOXLITE_API_KEY")
+            .env_remove("BOXLITE_PROFILE")
+            .args([
+                "--url",
+                &server.url,
+                "--path-prefix",
+                "team",
+                "ssh",
+                "connect",
+                "alias",
+            ])
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
+        let ssh_pid: i32 = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while let Some(line) = stderr.next_line().await.unwrap() {
+                if let Some(pid) = line.strip_prefix("ready:") {
+                    return pid.parse().unwrap();
+                }
+            }
+            panic!("system SSH did not start");
+        })
+        .await
+        .unwrap();
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(child.id().unwrap() as i32),
+            signal,
+        )
+        .unwrap();
+        let status = tokio::time::timeout(std::time::Duration::from_secs(10), child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.code(), Some(code));
+        assert_eq!(
+            nix::sys::signal::kill(nix::unistd::Pid::from_raw(ssh_pid), None),
+            Err(nix::errno::Errno::ESRCH)
+        );
+    }
 }

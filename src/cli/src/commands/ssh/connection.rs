@@ -97,7 +97,8 @@ impl Login {
         ]);
         // OpenSSH expands percent tokens before the user's shell parses
         // ProxyCommand. Both languages must be escaped, in that order.
-        let proxy = format!("exec {}", shell_command(&proxy_args)).replace('%', "%%");
+        // OpenSSH supplies exec itself; a second exec fails under bash.
+        let proxy = shell_command(&proxy_args).replace('%', "%%");
         let mut login = Self {
             box_id: id.into(),
             login: "boxlite",

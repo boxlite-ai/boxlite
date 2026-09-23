@@ -22,6 +22,7 @@ pub mod cache;
 pub mod config_matrix;
 pub mod fault_injection;
 pub mod home;
+pub mod ssh_rest;
 pub mod sync_point;
 
 /// Shutdown timeout for test runtimes (seconds).

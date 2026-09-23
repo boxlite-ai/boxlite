@@ -604,6 +604,7 @@ name = "boxlite-c"
 version = "0.10.2"
 dependencies = [
  "boxlite",
+ "boxlite-test-utils",
  "cbindgen",
  "futures",
  "serde_json",
@@ -703,6 +704,7 @@ version = "0.10.2"
 dependencies = [
  "boxlite",
  "boxlite-shared",
+ "boxlite-test-utils",
  "futures",
  "napi",
  "napi-build",
@@ -716,6 +718,7 @@ name = "boxlite-python"
 version = "0.10.2"
 dependencies = [
  "boxlite",
+ "boxlite-test-utils",
  "futures",
  "pyo3",
  "pyo3-async-runtimes",
@@ -762,11 +765,13 @@ dependencies = [
 name = "boxlite-test-utils"
 version = "0.1.0"
 dependencies = [
+ "axum 0.8.9",
  "boxlite",
  "futures",
  "libc",
  "parking_lot",
  "paste",
+ "serde_json",
  "tempfile",
  "tokio",
 ]

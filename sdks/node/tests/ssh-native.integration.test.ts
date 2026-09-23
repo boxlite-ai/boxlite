@@ -77,3 +77,17 @@ test("SSH native REST binding preserves bigint and nested credentials", async ()
     await once(server, "close");
   }
 }, 15000);
+
+test("SSH native async receiver survives GC and is released after concurrent calls", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { fileURLToPath } = await import("node:url");
+  await promisify(execFile)(
+    process.execPath,
+    [
+      "--expose-gc",
+      fileURLToPath(new URL("./fixtures/ssh-lifetime.mjs", import.meta.url)),
+    ],
+    { timeout: 15000 },
+  );
+}, 20000);

@@ -44,6 +44,8 @@ RUST_UNIT_REST_ARGS   = -p boxlite --no-default-features --features rest --lib
 RUST_UNIT_VMM_ARGS    = -p boxlite-hypervisor -p boxlite-vmm --lib
 
 CLI_INTEGRATION_TESTS = $(basename $(notdir $(filter-out src/cli/tests/stress_disk.rs,$(wildcard src/cli/tests/*.rs))))
+CLI_NO_VM_TESTS := auth ssh
+CLI_UNIT_ARGS = -p boxlite-cli --bins $(addprefix --test ,$(CLI_NO_VM_TESTS))
 
 # $(call run_suites,<space-separated make targets>)
 # Runs each target via a recursive $(MAKE). With FAIL_FAST=false the loop
@@ -255,12 +257,12 @@ test\:unit\:rust:
 	cargo test $(RUST_UNIT_REST_ARGS) -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	exit $$rc
 
-# CLI integration binaries need a VM; this target runs only inline unit-test modules.
+# Inline unit tests and integration binaries backed by local mock services.
 test\:unit\:cli:
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite-cli $(NEXTEST_PROFILE_FLAG) -E 'test(::tests::)'; \
+		cargo nextest run $(CLI_UNIT_ARGS) $(NEXTEST_PROFILE_FLAG) $(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite-cli --bins -- --test-threads=1 '::tests::'; \
+		cargo test $(CLI_UNIT_ARGS) -- --test-threads=1 $(CARGOTEST_FILTER); \
 	fi
 
 # Hypervisor and VMM crate unit tests alone; they need no VM and no vendored

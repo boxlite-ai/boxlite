@@ -29,6 +29,7 @@ tracing = "0.1.44"
 serde_json = "1.0"
 
 [dev-dependencies]
+boxlite-test-utils = { path = "../../src/test-utils" }
 # `cargo test --no-default-features` links libpython but does not start an
 # interpreter; auto-initialize does that on first use so the binding's own
 # tests can build Python objects.

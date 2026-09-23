@@ -29,6 +29,9 @@ tracing = "0.1"
 [build-dependencies]
 napi-build = "2"
 
+[dev-dependencies]
+boxlite-test-utils = { path = "../../src/test-utils" }
+
 [profile.release]
 lto = true
 strip = true  # Strip symbols for smaller binaries

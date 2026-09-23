@@ -122,4 +122,66 @@ mod tests {
         );
         assert_eq!(config.host_private_key, "private");
     }
+    #[tokio::test]
+    async fn ssh_getter_and_async_methods_cross_rest_boundary() {
+        let server = boxlite_test_utils::ssh_rest::SshRestServer::start().await;
+        let runtime =
+            boxlite::runtime::BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(&server.url))
+                .unwrap();
+        let sandbox = crate::box_handle::JsBox {
+            handle: std::sync::Arc::new(runtime.get("ssh-test").await.unwrap().unwrap()),
+        };
+        let ssh = sandbox.ssh();
+        drop(sandbox);
+        let config = JsSshConfig {
+            listen_address: "addr".into(),
+            host_private_key: "private".into(),
+            accounts: vec![JsSshAccount {
+                login: "alice".into(),
+                authorized_keys: vec!["key".into()],
+                ca: Some(JsSshCaConfig {
+                    public_key: "ca".into(),
+                    principal: "alice".into(),
+                }),
+            }],
+        };
+        let status = ssh.configure(config).await.unwrap();
+        assert_eq!(status.generation.get_u64(), (false, u64::MAX, true));
+        assert_eq!(status.listen_address, "addr");
+        assert_eq!(status.host_key_fingerprint, "fp");
+        assert!(status.enabled);
+        assert_eq!(ssh.status().await.unwrap().host_public_key, "public");
+        assert!(!ssh.disable().await.unwrap().enabled);
+        let requests = server.requests();
+        assert_eq!(requests[1].1["accounts"][0]["ca"]["principal"], "alice");
+        assert_eq!(requests[1].1["host_private_key"], "private");
+        server.fail();
+        assert!(
+            ssh.status()
+                .await
+                .err()
+                .unwrap()
+                .reason
+                .contains("SSH request failed")
+        );
+        assert!(
+            ssh.disable()
+                .await
+                .err()
+                .unwrap()
+                .reason
+                .contains("SSH request failed")
+        );
+        let error = ssh
+            .configure(JsSshConfig {
+                listen_address: "addr".into(),
+                host_private_key: "private".into(),
+                accounts: vec![],
+            })
+            .await
+            .err()
+            .unwrap();
+        assert!(error.reason.contains("SSH request failed"));
+        assert!(!error.reason.contains("private"));
+    }
 }

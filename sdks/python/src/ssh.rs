@@ -176,4 +176,93 @@ mod tests {
         });
         assert_eq!(status.generation, u64::MAX);
     }
+    #[test]
+    fn ssh_python_getters_and_awaitables_cross_rest_boundary() {
+        use pyo3::types::PyDict;
+        let executor = tokio::runtime::Runtime::new().unwrap();
+        let server = executor.block_on(boxlite_test_utils::ssh_rest::SshRestServer::start());
+        let runtime =
+            boxlite::runtime::BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(&server.url))
+                .unwrap();
+        let sandbox = executor.block_on(runtime.get("ssh-test")).unwrap().unwrap();
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            globals
+                .set_item(
+                    "box",
+                    Py::new(
+                        py,
+                        crate::box_handle::PyBox {
+                            handle: std::sync::Arc::new(sandbox),
+                        },
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            globals
+                .set_item("SshConfig", py.get_type::<PySshConfig>())
+                .unwrap();
+            globals
+                .set_item("SshAccount", py.get_type::<PySshAccount>())
+                .unwrap();
+            globals
+                .set_item("SshCaConfig", py.get_type::<PySshCaConfig>())
+                .unwrap();
+            py.run(
+                c"
+import asyncio
+ssh = box.ssh
+del box
+ca = SshCaConfig('sentinel-ca', 'alice')
+account = SshAccount('alice', ['sentinel-key'], ca)
+config = SshConfig('addr', 'sentinel-private', [account])
+assert ca.public_key == 'sentinel-ca' and ca.principal == 'alice'
+assert account.login == 'alice' and account.authorized_keys == ['sentinel-key']
+assert account.ca.public_key == 'sentinel-ca'
+assert config.listen_address == 'addr' and config.host_private_key == 'sentinel-private'
+assert config.accounts[0].login == 'alice'
+for value in (ca, account, config):
+    assert 'sentinel' not in repr(value)
+async def success():
+    configured = await ssh.configure(config)
+    status = await ssh.status()
+    disabled = await ssh.disable()
+    for value in (configured, status, disabled):
+        assert value.generation == 18446744073709551615
+        assert value.listen_address == 'addr'
+        assert value.host_public_key == 'public'
+        assert value.host_key_fingerprint == 'fp'
+    assert configured.enabled and status.enabled and not disabled.enabled
+asyncio.run(success())
+",
+                Some(&globals),
+                None,
+            )
+            .unwrap();
+            server.fail();
+            py.run(
+                c"
+async def failure():
+    for call in (lambda: ssh.configure(config), ssh.status, ssh.disable):
+        try:
+            await call()
+        except RuntimeError as error:
+            assert 'SSH request failed' in str(error)
+            assert 'sentinel' not in str(error)
+        else:
+            raise AssertionError('REST error was swallowed')
+asyncio.run(failure())
+",
+                Some(&globals),
+                None,
+            )
+            .unwrap();
+        });
+        let requests = server.requests();
+        assert_eq!(
+            requests[1].1["accounts"][0]["ca"]["public_key"],
+            "sentinel-ca"
+        );
+        assert_eq!(requests[1].1["host_private_key"], "sentinel-private");
+    }
 }
