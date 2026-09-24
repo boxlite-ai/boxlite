@@ -10,7 +10,7 @@ These diagrams describe checked-in declarations, not a live project inventory.
 `$` marks a billing component before free allowances; conditional resources depend on stage configuration.
 BoxLite processes inside a paid host do not create a second compute charge.
 
-[Networking](networking.md) · [Cost catalog](../costs.md)
+[Networking](networking.md) · [Cost catalog](costs.md)
 
 ## GCP overview
 

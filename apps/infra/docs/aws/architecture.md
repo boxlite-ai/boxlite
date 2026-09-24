@@ -9,7 +9,7 @@ AWS runs the API, proxy and collector on ECS Fargate, with EC2 runners and manag
 This diagram describes source configuration, not a live account inventory.
 Review the [bootstrap compatibility boundary](../../bootstrap/aws/README.md#aws-mdeploy-compatibility) before choosing a deployment path.
 
-[Networking](networking.md) · [Cost inventory](../costs.md)
+[Networking](networking.md) · [Cost inventory](costs.md)
 
 ## AWS overview
 
