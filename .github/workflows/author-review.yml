@@ -25,7 +25,7 @@ concurrency:
 
 env:
   # Reviewed agent-tooling implementation; never float privileged workflow code.
-  AGENT_TOOLING_REV: 933b5ec899eb38c10a44429bf15a60155dcd332e
+  AGENT_TOOLING_REV: facf935cd5e1a2a21de7f792992b18cf0573ce3f
 
 jobs:
   acknowledgment:

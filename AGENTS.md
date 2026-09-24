@@ -42,7 +42,7 @@
 - High-cohesion facade (the shared Design rule's exemplar here): [`ImageManager`](src/boxlite/src/images/manager.rs) exposes `new`/`pull`/`list`/`load_from_local` and hides `Arc<ImageStore>`, blob sources, and manifest handling.
 - Facade exception — stateless utilities: [`jailer/common/`](src/boxlite/src/jailer/common/) async-signal-safe helpers.
 
-<!-- agent-tooling:guidance:begin rev=933b5ec899eb sha256=eb19d38bc4ea -->
+<!-- agent-tooling:guidance:begin rev=facf935cd5e1 sha256=50f95ef47e85 -->
 
 > Managed by **boxlite-ai/agent-tooling** — do not edit between the markers. Change `plugins/boxlite-agent-tooling/guidance/workflow.md` there, then rerun `./.agent-tooling/install.sh` here.
 
@@ -78,10 +78,11 @@ Every change goes: understand → research → design → implement → test →
 
 **PR size and decomposition (hard requirement)**
 
-- Target 100–200 changed lines; maximum 400 additions + deletions across the entire PR against its intended base. Count tests, docs, and generated text. Drafts have the same limit; splitting commits does not reduce PR size.
+- Target 100–200 changed lines; maximum 400 additions + deletions across the entire PR against its intended base (the immediately preceding branch for a stacked PR). Count tests, docs, and generated text. Drafts have the same limit; splitting commits does not reduce PR size.
 - Estimate before implementing; measure before creating a PR and before each update. If the base or size cannot be determined, resolve that uncertainty before publishing. Never omit tests, compress code, or hide changes to meet the limit.
 - For work exceeding the limit, prepare a concrete split plan. Create a parent GitHub issue and child issues with scope, dependencies, acceptance criteria, and estimated size; group them in a milestone, using a Project for multiple workstreams.
 - Each child becomes a coherent, working PR within the limit, including its relevant tests. Link the child and parent issues. Implement and validate one slice at a time; re-plan if a slice grows beyond the limit.
+- **Mandatory:** dependent slices must use native [GitHub PR stacks](https://docs.github.com/en/pull-requests/how-tos/create-pull-requests/creating-stacked-pull-requests) (`trunk ← PR1 ← PR2`). Preserve per-PR gates; link verified existing PR URLs with `gh stack link` and confirm GitHub stack membership. Rebase and revalidate affected layers after changes.
 - A human developer may authorize an oversized PR only after seeing its measured size, exact base/head, and proposed split. Ask once, without a preselected approval, for a typed response: `pr-size-exception: <specific reason this change must remain one PR>`.
 - The reason must identify the affected change, the concrete constraint, and why the proposed split is unsafe or impractical. Bare approvals, “urgent,” “too much work,” and generic convenience claims do not qualify. Never invent, paraphrase, or pre-fill the developer's reason.
 - Wait up to **3 minutes** from that question using a non-blocking prompt and an actual deadline. Continue reversible split preparation while waiting. Invalid replies do not restart the timer; an explicit cancellation or revised user instruction takes precedence.
@@ -132,7 +133,9 @@ Every change goes: understand → research → design → implement → test →
 
 **Communication**
 
-- Help the human understand quickly. Choose a call graph, sequence diagram, real example, bullets, table, or short prose—whichever explains the point best. These are recommendations, not mandatory forms; do not force a diagram, source annotations, or fixed sections.
+- Every human-facing output must include a `## TL;DR` section containing one simple sentence, as short as possible. This includes replies, progress updates, design docs, PR descriptions, GitHub comments, reviews, issues, and release notes, even when already concise.
+- Replies must begin with TL;DR; the entire section must contain fewer than 40 words.
+- Help the human understand quickly. Beyond the required TL;DR, choose a call graph, sequence diagram, real example, bullets, table, or short prose—whichever explains the point best. Do not force other sections, diagrams, or source annotations.
 - Walls of text are always forbidden. Keep paragraphs and items short, remove repetition, and link detailed evidence. GitHub PRs (including drafts), issues, comments, reviews, discussions, and release notes use the same reply-summary prompt. Requests for depth allow more focused sections, not dense text. Keep material risks, failures, and uncertainty visible.
 - Every PR description must explain how the change produces its intended result through the key steps or decisions, using the form best suited to that PR. Listing modified files is not an explanation. State the problem, resulting behavior, and decisive verification once. Review the explanation against the diff, including for drafts and after description edits. Link detailed evidence; omit work logs and exhaustive test counts. Repository templates are starting points.
 
