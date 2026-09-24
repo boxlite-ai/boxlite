@@ -95,7 +95,7 @@ not silently fall back to the latest object. `mstage` does not merge SST `_fallb
 mstage can store JSON references to SSM/Secrets Manager on AWS or Secret Manager on GCP.
 A reference is an address, not a plaintext secret. Declare reference keys in `env.selectGroup.secret`
 and also in a consumer group; the consumer must support resolving them. mdeploy rejects reference
-addresses in groups it would spend directly as environment values. See [mstage](../mstage/README.md).
+addresses in groups it would spend directly as environment values. See [mstage](../mstage/README.md#secret-references).
 
 ## Carry configuration into CI
 
