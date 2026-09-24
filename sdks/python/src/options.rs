@@ -459,9 +459,11 @@ impl TryFrom<PyOutboundNetworkSpec> for NetworkSpec {
 /// A secret to inject into outbound HTTPS requests via MITM proxy.
 ///
 /// The guest code uses a placeholder string (e.g., ``<BOXLITE_SECRET:openai>``)
-/// in HTTP headers. The host-side proxy replaces the placeholder with the
-/// real secret value before forwarding the request. The actual secret never
-/// enters the guest VM.
+/// in Authorization, X-API-Key, or Api-Key headers. The host-side proxy replaces
+/// the placeholder with the real value only in those headers (case-insensitive).
+/// Bodies, URLs, and other headers are unchanged. Only the placeholder is
+/// injected into the guest; matching hosts must be trusted not to expose
+/// authentication headers.
 ///
 /// Example::
 ///
@@ -482,7 +484,7 @@ pub(crate) struct PySecret {
     #[pyo3(get, set)]
     pub(crate) name: String,
 
-    /// The real secret value (never sent to the guest).
+    /// The real secret value, injected by the host proxy into authentication headers.
     #[pyo3(get, set)]
     pub(crate) value: String,
 

@@ -194,6 +194,9 @@ OCI `EXPOSE` declarations do not publish host ports.
 
 #### `Secret`
 
+Substitution is limited to `Authorization`, `X-API-Key`, and `Api-Key` headers.
+See the [secret configuration notes](../configuration.md#secrets) for the trust boundary.
+
 ```typescript
 interface Secret {
   name: string;

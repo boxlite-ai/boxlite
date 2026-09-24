@@ -433,11 +433,12 @@ pub struct BoxOptions {
     /// Secrets for MITM proxy injection into outbound HTTPS requests.
     ///
     /// Each secret maps a placeholder string to a real value. When the box
-    /// makes an HTTPS request to a matching host, placeholders in request
-    /// headers and body are replaced with the actual secret value.
+    /// makes an HTTPS request to a matching host, placeholders in Authorization,
+    /// X-API-Key, and Api-Key header values are replaced with the real value.
+    /// Bodies, URLs, and other headers are forwarded without substitution.
     ///
     /// The placeholder (e.g., `<BOXLITE_SECRET:openai>`) is visible to the
-    /// guest; the real value never enters the VM.
+    /// guest. Matching hosts must be trusted not to expose authentication headers.
     #[serde(default)]
     pub secrets: Vec<Secret>,
 }
@@ -445,8 +446,10 @@ pub struct BoxOptions {
 /// A secret for MITM proxy injection.
 ///
 /// When the guest sends an HTTPS request to one of the listed hosts,
-/// the MITM proxy replaces `placeholder` with `value` in headers and body.
-/// The real `value` never enters the guest VM.
+/// the MITM proxy replaces `placeholder` with `value` only in Authorization,
+/// X-API-Key, and Api-Key headers (case-insensitive). Bodies, URLs, and other
+/// headers are unchanged. Only the placeholder is injected into the guest;
+/// matching hosts must be trusted not to expose authentication headers.
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Secret {
     /// Human-readable name for this secret (e.g., "openai_api_key").
@@ -456,7 +459,7 @@ pub struct Secret {
     pub hosts: Vec<String>,
     /// Placeholder string visible to the guest (e.g., "<BOXLITE_SECRET:openai>").
     pub placeholder: String,
-    /// The actual secret value (e.g., "sk-..."). Never enters the VM.
+    /// The actual secret value (e.g., "sk-..."), injected by the host proxy.
     ///
     /// This field IS serialized (needed for DB persistence and shim config pipe).
     /// Debug/Display impls redact it. GvproxySecretConfig also redacts in Debug.

@@ -33,12 +33,9 @@ func isWebSocketUpgrade(req *http.Request) bool {
 // handleWebSocketUpgrade handles a WebSocket upgrade through the MITM proxy.
 // Optional upstreamTLSConfig overrides upstream TLS (nil = derive from hostname).
 //
-// Limitation: only request headers are substituted. WebSocket message frames
-// are relayed verbatim — placeholders in message bodies are NOT substituted.
-// This is by design: WebSocket is a streaming protocol and frames may be
-// fragmented arbitrarily, making reliable substitution impractical.
+// Only supported authentication headers are substituted. WebSocket message
+// frames are guest-controlled content and are relayed without substitution.
 func handleWebSocketUpgrade(w http.ResponseWriter, req *http.Request, destAddr string, secrets []SecretConfig, upstreamTLSConfig ...*tls.Config) {
-	// Substitute secrets in request headers
 	substituteHeaders(req, secrets)
 
 	hostname := req.Host
