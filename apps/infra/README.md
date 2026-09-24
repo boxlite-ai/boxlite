@@ -57,3 +57,7 @@ anchors, Mermaid rendering and any existing documentation contracts; a cloud app
 ## Related references
 
 - [gcp](docs/gcp/README.md) reference.
+
+## Related references
+
+- [aws](docs/aws/README.md) reference.

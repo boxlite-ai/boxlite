@@ -1,0 +1,13 @@
+## TL;DR
+
+Use these AWS guides for the stage’s architecture and operations.
+
+# AWS infrastructure
+
+[Cloud guide](README.md) · [Infrastructure index](../../README.md)
+
+| Task | Guide |
+| --- | --- |
+| Architecture and diagrams | [Architecture and diagrams](architecture.md) |
+
+Shared references: [configuration](../configuration.md), [deployment commands](../deployment.md), [mstage](../../mstage/README.md), [mbuild](../../mbuild/README.md), [mdeploy](../mdeploy.md), [Auth0 login/branding](../identity-and-mail.md), [status page](../status-page.md).
