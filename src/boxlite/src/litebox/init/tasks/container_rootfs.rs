@@ -552,6 +552,32 @@ mod tests {
         assert_eq!(image.manifest_digest(), FIRST);
     }
 
+    /// An image named without a registry is found through the search
+    /// registries, and its restart must read its own build there — not the
+    /// build the repository's `latest` names in the same cache.
+    #[tokio::test]
+    async fn a_restart_through_a_search_registry_reads_its_own_build() {
+        let host = registry_answering(404).await;
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).unwrap();
+        let images = ImageManager::new(
+            dir.path().join("images"),
+            db,
+            vec![ImageRegistry::http(&host).with_search(true)],
+        )
+        .unwrap();
+        let latest = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee2";
+        seed_cached_build(&images, &format!("{host}/library/app:v1"), FIRST).await;
+        seed_cached_build(&images, &format!("{host}/library/app@{NEWER}"), NEWER).await;
+        seed_cached_build(&images, &format!("{host}/library/app:latest"), latest).await;
+
+        let image = image_for_restart(&images, "app:v1", Some(&recorded(NEWER)))
+            .await
+            .unwrap();
+
+        assert_eq!(image.manifest_digest(), NEWER);
+    }
+
     #[tokio::test]
     async fn a_restart_with_nothing_recorded_reads_by_ref() {
         let (_dir, images, host) = images_behind_a_404().await;
