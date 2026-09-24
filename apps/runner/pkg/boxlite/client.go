@@ -408,6 +408,13 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	return bx.ID(), "boxlite", nil
 }
 
+// boxInfoReader is the one thing recordPulledImage needs from a box. A
+// *boxlite.Box satisfies it; a test stubs it, since a real box's Info crosses
+// the FFI.
+type boxInfoReader interface {
+	Info(ctx context.Context) (*boxlite.BoxInfo, error)
+}
+
 // recordPulledImage notes what a box's image reference resolved to, so the
 // control plane can be told once.
 //
@@ -418,7 +425,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 // its caller, so it can sit after Start without breaking the rule that Start
 // is Create's last fallible step: info that cannot be read is logged and the
 // report dropped, which costs one re-resolution on the next create.
-func (c *Client) recordPulledImage(ctx context.Context, boxId string, bx *boxlite.Box) {
+func (c *Client) recordPulledImage(ctx context.Context, boxId string, bx boxInfoReader) {
 	// Not cancelled with the request: the box has started either way, and a
 	// report dropped for that reason is one the control plane pays for later.
 	info, err := bx.Info(context.WithoutCancel(ctx))

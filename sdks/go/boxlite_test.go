@@ -674,6 +674,14 @@ func TestBuildCOptionsAllowsAutoRemoveAndAutoDelete(t *testing.T) {
 	}
 }
 
+func TestWithImagePull(t *testing.T) {
+	cfg := &boxConfig{}
+	WithImagePull(ImagePullOptions{Anonymous: true})(cfg)
+	if cfg.imagePull == nil || *cfg.imagePull != (ImagePullOptions{Anonymous: true}) {
+		t.Errorf("imagePull = %+v, want anonymous only", cfg.imagePull)
+	}
+}
+
 func TestWithDetach(t *testing.T) {
 	cfg := &boxConfig{}
 	WithDetach(true)(cfg)
