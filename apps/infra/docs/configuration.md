@@ -45,7 +45,7 @@ AWS account identity comes from resolved credentials. GCP project identity is de
 
 ## Set application values
 
-Run commands from `apps/infra` after [bootstrap](deployment.md).
+Run commands from `apps/infra` after [bootstrap](deployment.md#bootstrap-a-stage).
 Names are safe to inspect; `--values` and `--json` reveal stored values.
 
 ```bash

@@ -85,7 +85,7 @@ release dispatches run from `main`. The reusable image workflow and runner build
 GitHub Environment. Check actual environment reviewers and branch protections separately: source
 configuration is not evidence of the live GitHub settings.
 
-Use the [deployment walkthrough](deployment.md) for commands and the
+Use the [deployment walkthrough](deployment.md#deploy-through-github-actions) for commands and the
 [workflow reference](../../../.github/workflows/README.md) for the wider CI graph.
 
 ## Commands and protection

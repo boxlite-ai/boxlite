@@ -37,7 +37,7 @@ The current production workflow still requires a release ref; staging a commit d
 
 To select a staged runner in a local deployment, set `RUNNER_ARTIFACT_SOURCE=build` and
 `RUNNER_ARTIFACT_REF=<full-sha>` alongside a valid `BOXLITE_IMAGE_TAG`, then preview with mdeploy.
-The [one-dispatch workflow](deployment.md) prepares these values for you.
+The [one-dispatch workflow](deployment.md#deploy-through-github-actions) prepares these values for you.
 
 ## Upgrade or roll back a release
 

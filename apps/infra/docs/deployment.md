@@ -1,247 +1,136 @@
-# BoxLite Infra (SST on AWS)
+## TL;DR
 
-Deploys the BoxLite control plane: ECS Fargate services, an EC2 Runner with
-nested KVM, RDS Postgres, ElastiCache Redis, S3, and CloudFront.
+Declare and bootstrap a stage, prepare its artifacts, review a preview, then apply and verify the running services.
 
-- **Region** — `AWS_REGION`, default `ap-southeast-1`
-- **IaC** — SST v4 (Pulumi underneath)
-- **Cost** — ~$470/month always-on; see [Cost](#cost)
+# Deploy BoxLite on GCP or AWS
 
-**Where the "why" lives:** design rationale sits in comments next to the code it
-explains, mostly under `stack/` and `deployment/`. This file is the runbook.
+[Infrastructure index](../README.md) · [Configuration](configuration.md) · [mdeploy reference](mdeploy.md)
 
 ## Architecture
 
-```mermaid
-flowchart TB
-    browser(["Browser"])
-    sdk(["SDK / CLI"])
-    idp(["OIDC IdP<br/>Auth0 · Okta · Keycloak · Dex"])
-    ghcr(["ghcr.io"])
-
-    subgraph edge["public edge"]
-        cf["CloudFront<br/>STACK_DOMAIN"]
-        alb["Api ALB<br/>api.STACK_DOMAIN<br/>idle timeout 1h"]
-        nlb["Proxy NLB · TLS 443<br/>proxy + *.proxy.STACK_DOMAIN"]
-    end
-
-    subgraph vpc["VPC · private subnets"]
-        api["Api · NestJS<br/>:3000"]
-        proxy["Proxy<br/>:4000"]
-        runner["EC2 c8i.2xlarge Runner<br/>nested KVM · :3003"]
-        box[["box microVM"]]
-
-        subgraph store["state"]
-            pg[("RDS Postgres")]
-            redis[("ElastiCache Redis")]
-            s3[("S3")]
-        end
-
-        otel["OtelCollector<br/>:4318<br/>internal ALB"]
-    end
-
-    browser -->|"dashboard SPA"| cf
-    cf --> alb
-    browser -->|"/api/* · WS · SSE"| alb
-    sdk -->|"/api/*"| alb
-    browser -->|"port preview"| nlb
-
-    alb --> api
-    nlb --> proxy
-    proxy --> box
-    runner --> box
-
-    api --> pg
-    api --> redis
-    api -->|"vended STS creds"| s3
-    api -->|"schedule boxes"| runner
-    api -.->|"validate JWT via JWKS"| idp
-    api --> otel
-    runner -->|"pull box images"| ghcr
-```
+Start with the [high-level overview and detailed graphs](architecture.md).
+GCP hosts API/collector on Cloud Run, the proxy on GKE Autopilot, and runners on Compute Engine.
+AWS uses ECS Fargate and EC2 for the corresponding services.
 
 ## Prerequisites
 
-`npm run login` and `npm run bootstrap` set up everything except the accounts
-and the stack itself:
+| Provide | GCP | AWS |
+| --- | --- | --- |
+| Cloud account | Billing-enabled project and bootstrap permissions | Account and IAM/SSM/bootstrap permissions |
+| Region and capacity | GKE, Cloud SQL, Redis and nested-KVM runner capacity; a supported N4 zone | Corresponding ECS/RDS/Redis services and nested-KVM EC2 capacity |
+| Local tools | Node.js 22+, Git, gh, gcloud, Pulumi CLI | Node.js 22+, Git, gh, AWS CLI |
+| Build tools | Docker/buildx when publishing locally | Docker/buildx when publishing locally |
+| DNS | Cloudflare zone and scoped token | Cloudflare zone and scoped token |
+| Identity | An OIDC issuer, SPA client and API audience | Same |
 
-| You provide | Notes |
-| --- | --- |
-| An AWS account | `npm run login` runs `aws login` — no IAM user, no access keys |
-| A GitHub repo | `npm run login` runs `gh auth login` |
-| A Cloudflare domain + API token | One manual step — see [Cloudflare API token](#cloudflare-api-token) |
-| An OIDC tenant | Signup is always manual. `--provision-auth0` creates the SPA app and API **only on Auth0**, then prints the login-policy preview command; any other compliant IdP needs equivalent configuration by hand |
-| An existing stack that already has its first Runner | First-Runner provisioning is not implemented here; a *further* one is [scaling out](#scaling-runners-out) |
+Install repository dependencies with the Make target, then work from the infra directory:
+
+```bash
+make _ensure-infra-deps
+cd apps/infra
+cp .mstage.config.example.json .mstage.config.json
+```
+
+Edit the intended stage using [configuration ownership](configuration.md#declare-a-stage).
+For GCP, give `dev` a GCP declaration if using the manual workflow; the example's `dev2` name is
+usable locally but is not one of that workflow's choices. Set the exact cloud, project/account,
+region and protection before any cloud-writing command.
 
 ## Deploy an existing stack
 
-This updates an existing stack. It never replaces a Runner, and it creates one
-only when the dispatch explicitly names it — see [scaling out](#scaling-runners-out).
+For the legacy AWS path, `npm run bootstrap` stores `OIDC_CLIENT_ID` in the SST secret store.
+Prepare current mdeploy values and their digest through [configuration](configuration.md) before previewing.
+
+## Bootstrap a stage
 
 ```bash
-cd apps/infra
-npm install
-cp .env.example .env && $EDITOR .env   # STACK_DOMAIN, OIDC_ISSUER_BASE_URL, OIDC_AUDIENCE
-
-npm run login                          # browser sign-in: AWS, GitHub, Auth0
-npm run bootstrap -- --stage dev       # IAM role, GitHub Environment, secrets
-
-# Optional, and NOT idempotent — this creates the Auth0 SPA and API identities:
-npm run bootstrap -- --stage dev --provision-auth0
-
-gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false  # preview
-gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=true   # deploy
-
-# After the dashboard deploy publishes /auth0/*, preview and apply Free-plan branding:
-npm run auth0:universal-login -- preview --stage dev
-npm run auth0:universal-login -- apply --stage dev
+npm run mstage login -- --stage dev
+npm run mstage aws whoami -- --stage dev
+npm run bootstrap -- --stage dev
+npm run mstage config put -- --stage dev
 ```
 
-`npm run bootstrap` is safe to re-run. It prompts once per stage for the
-Cloudflare token and `OIDC_CLIENT_ID`, and loads your `.env` into the stage's SST
-secret store alongside `OIDC_CLIENT_ID`. The Cloudflare pair goes to SSM and to
-the stage's GitHub Environment instead, because reading the store initializes the
-Cloudflare provider. On that Environment it also sets the `AWS_ACCOUNT_ID` and
-`AWS_REGION` variables, which the deploy workflow needs before it has any AWS
-credentials. `--force` re-prompts for an already-seeded Cloudflare credential. Its
-full flag list is in the script's header comment.
+Use `login ... --force` when sign-in is needed. GCP needs both gcloud and ADC sessions.
+Bootstrap needs broader privileges than the deployer it creates. `--repo owner/name` selects the
+GitHub repository explicitly; `--reviewers` accepts numeric GitHub user IDs.
+A protected GCP stage requires `--confirm`.
 
-Universal Login assets ship in the dashboard/API deployment under `/auth0/`.
-Their exact sources, content-hashed filenames, license, headers, and update
-procedure are recorded in
-[`auth0/branding/ASSETS.md`](../auth0/branding/ASSETS.md). Deploy the dashboard
-first. The dedicated command resolves URLs from its reviewed stage target and
-fails before its first Auth0 write unless the live stack identity matches and
-every asset is reachable, has the expected media type, and permits the public
-Universal Login origin.
-It applies the Auth0 theme and custom prompt text only. Widget geometry remains
-Auth0-managed because custom Universal Login page templates require a paid plan.
+| Bootstrap result | GCP | AWS |
+| --- | --- | --- |
+| Cloud prerequisites | Service APIs, state/artifact buckets, Secret Manager bootstrap/key, Artifact Registry, OS Config enablement | IAM boundaries, GitHub OIDC role, ECR and runner artifact bucket |
+| CI identity | Workload Identity Federation, deployer and image publisher service accounts | GitHub OIDC deploy role |
+| GitHub Environment | GCP provider/deployer/publisher variables | AWS account/region and Cloudflare credentials |
+| Application values | Seed separately with mstage | Bootstrap imports reviewed `.env` stage settings; set application secrets separately |
 
-A deploy takes 10–15 minutes and prints the service URLs. On a transient
-registry error, just rerun — SST resumes from the failed step.
+For AWS bootstrap, prepare `cp .env.example .env` and fill its reviewed non-secret settings first.
+See [AWS bootstrap policy ownership](../bootstrap/aws/README.md).
+On GCP, bootstrap does not import the application's values or provision Auth0/SES.
 
-Identity setup and outbound mail are documented in [Identity and mail operations](identity-and-mail.md).
-
-## Symmetric artifact deployment
-
-Both deployable components use one source selector:
-
-| Mode      | API                                                        | Runner                                                           |
-| --------- | ---------------------------------------------------------- | ---------------------------------------------------------------- |
-| `build`   | immutable `boxlite-app-<stage>-api:v<version>-<sha>` in ECR    | CI builds that commit and stages a private S3 tarball + checksum |
-| `release` | immutable `boxlite-app-<stage>-api:<version>` in ECR           | GitHub Release tarball + checksum for the same `<version>`       |
-
-Both modes hand SST an image reference, so no deploy compiles the API. The one
-exception is a build with no API ref — set neither `BOXLITE_ARTIFACT_REF` nor
-`API_ARTIFACT_REF` and nothing was published for that checkout, so SST builds
-`apps/api/Dockerfile` as before. That is a plain local `npm run deploy`, and also
-`npm run runner:build-artifact:legacy`, which stages a Runner and sets only the Runner's
-ref. Whatever refs *are* set must equal the checkout: the Proxy and the
-OtelCollector are built from it on every path, so a ref naming another commit
-would deploy two.
-
-`.github/workflows/deploy-infra.yml` is the normal path. It accepts the full SHA
-of any commit already on `main` (current `main` by default), or the head of an
-open pull request in this repository — never a fork's — and builds each
-component in its own job — the Linux x64 C SDK and Runner on one leg, the API
-image on the other, sharing only the ref resolution — then stages the
-commit-keyed Runner object and deploys both. The Runner reports
-`<workspace-version>+<sha>` so two commits with the same Cargo version are still
-distinct upgrade targets; the API tag carries the same pair.
-
-`.github/workflows/deploy-release.yml` is the release path. It sets one stable
-`VERSION=X.Y.Z` for both components and compiles neither. The deploy wrapper
-verifies the ECR image and Runner release assets before invoking SST.
-
-`build-apps-api-image.yml` is where every API image is built. `deploy-infra.yml`
-calls it for the commit being deployed (`v<version>-<sha>`, into that stage);
-dispatching it with `operation=build` builds a released tag once into dev, and
-`operation=promote` copies that exact manifest registry-side, addressed by
-digest, rather than rebuilding. An ECR registry is one account in one region,
-and the job binds to the *target* stage's Environment, so `source_region` is how
-a promote is told where to read when the two stages differ — dev in
-`ap-southeast-1`, prod in `us-west-2`. Omitted, it reads the source in the
-target's region, which is right whenever both share one. The dispatched
-operations run from `main`: a release event runs on a tag ref, and the
-deployment Environments that hold the AWS role are branch-scoped, so a
-tag-triggered job never reaches its credentials.
-
-Either path first runs deployment safety tests that require every Runner to
-retain `protect: true` and the AMI/user-data ignore rules. The build path then
-runs a full `sst diff` under the mandatory `policies/runner` policy pack, which
-rejects replacing or deleting a Runner instance and any in-place Runner change
-other than provider association or tags — the same pack the apply runs under, so
-a plan it refuses can never be applied. Workflow dispatch
-defaults to a preview-only run; set `apply=true` only after reviewing it. An
-apply run repeats the same guarded preview before the full-stack deploy:
+Before the first deploy, populate every required key in the [environment manifest](../mstage.env.json),
+including the GCP `pulumi` group. Use secret stdin or a protected JSON file as described in
+[configuration](configuration.md#set-application-values). Generate a strong initial
+`PULUMI_CONFIG_PASSPHRASE` once; preserve it for existing state rather than replacing it on reruns.
+Then certify the imported configuration:
 
 ```bash
-npm run deploy -- --stage dev
+npm run mstage env set -- --stage dev --digest
+npm run mstage env digest -- --stage dev
+npm run mstage env list -- --stage dev --select-group deploy
 ```
 
-`--target` is rejected for deploys, always. Pulumi treats a targeted update as a
-partial one that still depends on resources it omits, so it cannot safely migrate
-a provider while those resources reference the old registration — deploying this
-stack with `--target Api` stopped SST on `StorageBucket` before any application
-resource reached AWS. Targeted `diff` remains available for read-only inspection.
+Configure OIDC callbacks for the actual dashboard host. See [identity and mail](identity-and-mail.md)
+for Auth0, optional SMTP/SES and branding. Recheck live GitHub Environment reviewers after bootstrap.
+Bootstrap creates prerequisites; it does not deploy application services or prove they are healthy.
 
-`--exclude` is accepted for exactly two scopes, which drop the mutable half of one
-deployable leg — its service or instance, and the binary-upgrade commands that go
-with it — while keeping every shared and provider resource in the plan. The leg's
-ref-independent scaffolding (`RunnerRole`, `RunnerProfile`, `RunnerSecurityGroup`,
-`RunnerArtifactS3Policy`) still reconciles, as a no-op:
+## Deploy through GitHub Actions
+
+The current entrypoint is [mdeploy-all.yml](../../../.github/workflows/mdeploy-all.yml).
+It defaults to a preview. Example: preview an open PR's merge result in `dev`:
 
 ```bash
-npm run deploy -- --stage dev                     # both legs
-npm run deploy -- --stage dev --exclude Runner    # Api leg only
-npm run deploy -- --stage dev --exclude Api       # Runner leg only
+gh workflow run mdeploy-all.yml --ref main   -f stage=dev -f ref='#123' -f components=api+runner -f apply=false
 ```
 
-`deployment/scope.ts` is the allowlist, and `deployment/capabilities.json` tells the
-preflight which artifacts to verify — an excluded leg is not deployed, so its
-artifact is not required to exist. Any other selector is refused. `deploy-infra.yml`
-exposes the same three scopes as its `components` input and skips the build jobs
-for a leg it excludes.
+Replace `#123` with the intended PR, or use a full commit SHA. Review the resolved SHA, stage identity,
+artifact identities and complete resource diff. Then dispatch that reviewed SHA with `apply=true`.
+A fresh PR ref can resolve to a different merge commit; pin the reviewed SHA when applying.
 
-A deploy needs a *deployed commit* whose tooling understands it, which is not the
-same commit as the workflow: `workflow_dispatch` reads the workflow definition
-from the dispatch ref while the deploy job checks out the selected one. So a
-`ref`/`pr` dispatch can pair a new workflow with tooling that predates it. The
-job reads that commit's `deployment/capabilities.json` right after checkout and
-refuses before assuming the deploy role — every deploy needs `stageConfigStore`,
-and a narrowed one additionally needs `componentSelection`. A commit that
-declares neither cannot be deployed by this workflow at all; rebase it, or name a
-newer `ref`.
+| Ref | Allowed stages | Artifact path |
+| --- | --- | --- |
+| Full SHA or open PR `#number` | `dev` | Ensure commit images and runner build exist |
+| Published `vX.Y.Z` release | `dev`, `prod` | Version-qualified images and published runner release |
 
-A narrowed deploy leaves the excluded leg on whatever commit an earlier run put
-there, so the stack is then mixed-commit; the residual partial-update risk above
-is why `apply` defaults to false and the guarded preview runs first. Run the
-first `--exclude Api` (`components=runner`) dispatch with `apply=false` and read
-the plan: only `--exclude Runner` has been exercised against this stack, and that
-scope is also the one that turns off the Api image preflight. The Runner
-EC2 identity and binary remain stable through the controls under
-[Operating rules](#operating-rules), and the matching artifact preflight always
-runs before deployment.
+Release dispatches run from `main`. Production accepts releases only. For a protected production apply:
 
-The workflows are manual/serialized, restricted to `main`, and bound to protected
-GitHub Environments. GitHub OIDC supplies short-lived AWS credentials; no AWS
-access keys are stored in GitHub, and no stage configuration either — a job reads
-that from the stage's SST secret store using the credentials it just assumed, so
-nothing is written to disk and there is no `.env` for a failed job to leave behind.
+```bash
+gh workflow run mdeploy-all.yml --ref main   -f stage=prod -f ref=vX.Y.Z -f components=api+runner -f apply=true -f confirm=true
+```
 
-`npm run bootstrap` (`bootstrap/aws.ts`, from the documents in `bootstrap/aws/`) reconciles three
-things that must exist **before** an SST deploy: the OIDC role, the immutable Api ECR repository,
-and the private Runner artifact bucket. That bucket expires only superseded object versions —
-first boot re-fetches the commit-keyed tarball at every instance launch, so
-expiring the current object would make a later replacement fail to boot. The role
-grants only the AWS control-plane actions
-used by this SST stack. IAM mutation is limited to `boxlite-<stage>-*` roles, policies, and
-instance profiles, so one stage cannot rewrite another's. Every role created by SST must carry the stage's runtime
-permissions boundary, which excludes IAM mutation and limits workloads to the
-data-plane APIs they need. Re-run bootstrap whenever its policy documents change — it reconciles
-rather than recreates, so a re-run is how an edit reaches AWS. `IAM_PERMISSIONS_BOUNDARY_STAGE`
-must match the `--stage` bootstrap was run with; deployment fails before creating roles if they
-differ. Keep required reviewers enabled on each Environment.
+Run a preview of that release first. `components=api` or `runner` narrows artifact preparation,
+not the entire infrastructure graph. Runs queue per stage; do not cancel a healthy apply to start another.
+Image releases are published/promoted through [mbuild-release](../../../.github/workflows/mbuild-release.yml).
+
+## Retained legacy AWS deployment
+
+`deploy-infra.yml`, `deploy-release.yml`, `build-apps-api-image.yml`, and `npm run deploy`
+remain in the repository. They use the legacy SST tree and its own artifact selectors.
+Use them only when intentionally operating that path; do not mix their selectors with mdeploy's.
+
+| Legacy operation | Behavior |
+| --- | --- |
+| `deploy-infra.yml` | Build deployment from a main commit or allowed same-repository PR head |
+| `deploy-release.yml` | Deploy existing release artifacts |
+| `build-apps-api-image.yml` | Build/promote the legacy API image |
+| `npm run deploy -- --stage dev` | Legacy guarded full-stack deploy |
+| `--exclude Runner` / `--exclude Api` | Legacy component scopes; excluded leg keeps its prior revision |
+
+The legacy wrapper refuses targeted applies, checks its
+[capability manifest](../deployment/capabilities.json), enforces the
+[runner policy pack](../policies/runner/), and runs its own post-deploy checks.
+Its API fallback can build locally when no published ref is selected; mdeploy expects published images.
+See [artifact selection](../artifacts/source.ts), [scope rules](../deployment/scope.ts),
+[wrapper](../deployment/sst.ts), and the [workflow reference](../../../.github/workflows/README.md).
+Preview before switching entrypoints; shared logical names are not proof of a no-op transition.
 
 ## Secrets & credentials
 
