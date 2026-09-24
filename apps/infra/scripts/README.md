@@ -4,7 +4,7 @@ Keep launcher paths stable because deployment state stores their command strings
 
 # Stable Pulumi launchers
 
-[Infrastructure index](../README.md) · [Runner operations](../docs/runners.md) · [mdeploy](../docs/mdeploy.md)
+[Infrastructure index](../README.md) · [Runner operations](../docs/runners.md) · [mdeploy](../mdeploy/README.md)
 
 These entrypoints appear in `command.local.Command` inputs. Moving or repointing one can rerun
 registration or binary updates when the engine compares its saved command with the new declaration.

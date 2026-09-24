@@ -461,7 +461,7 @@ udevadm trigger --name-match=kvm || true`,
      * waits for the fleet. The assignment exists when Pulumi returns and the
      * agents converge within their own cycle, so "deployed" and "serving the
      * new binary" are two moments now. The report API is what closes that gap —
-     * see `apps/infra/docs/mdeploy.md`.
+     * see `apps/infra/mdeploy/README.md`.
      */
     // `apiUrl` is an Output, so the rendered pair is one too — and each field
     // has to be unwrapped on its own before it can be handed to a script slot.

@@ -142,10 +142,10 @@ separate ownership and are not implicitly erased by removing application resourc
 
 Use [runner operations](runners.md#scale-out) to add capacity. Resource sizes, database availability,
 backups and ClickHouse mode come from the stage's `deploy` block.
-Use the separate [GCP cost catalog](costs.md) or [AWS inventory](costs.md).
+Use the separate [GCP cost catalog](gcp/costs.md) or [AWS inventory](aws/costs.md).
 Estimate from the selected region, configuration and traffic rather than a fixed monthly total.
 
 ## Reference
 
-[Architecture](architecture.md) · [mdeploy](mdeploy.md) · [mstage](../mstage/README.md) ·
+[Architecture](architecture.md) · [mdeploy](../mdeploy/README.md) · [mstage](../mstage/README.md) ·
 [mbuild](../mbuild/README.md) · [ClickHouse](clickhouse.md) · [Status page](status-page.md)

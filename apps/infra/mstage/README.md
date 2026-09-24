@@ -48,7 +48,7 @@ Neither command needs cloud credentials; GitHub writes require an authenticated 
 | `state` | Recover a stopped deployment's lock/checkpoint |
 
 mstage does not build artifacts or declare resources. Those belong to
-[mbuild](../mbuild/README.md) and [mdeploy](../docs/mdeploy.md).
+[mbuild](../mbuild/README.md) and [mdeploy](../mdeploy/README.md).
 
 ## The stage environment
 

@@ -1,45 +1,38 @@
-## TL;DR
-
-Start with the architecture graphs, then use the deployment guide and focused runbooks for your stage's cloud and deployment path.
-
 # BoxLite infrastructure
 
-BoxLite's cloud apps include the API/dashboard, proxy, VM runner fleet, collector, and supporting
-state/storage services. The current tools are mstage, mbuild and mdeploy; a legacy AWS SST path
-remains available. The guides describe source configuration and call out migration boundaries.
+BoxLite's hosted apps include the API/dashboard, proxy, VM runner fleet and collector.
+Each cloud has its own architecture and operational procedures; the shared tools are mstage, mbuild and mdeploy.
 
-## Start here
+## Choose a cloud
 
-| Task | Guide |
-| --- | --- |
-| Understand the system | [Architecture: overview, runtime, supporting services, AWS](docs/architecture.md) |
-| Bootstrap, preview, apply and verify | [Deployment](docs/deployment.md) |
-| Change stage settings or secrets | [Configuration](docs/configuration.md) |
-| Build, update, verify or scale runners | [Runner operations](docs/runners.md) |
-| Trace a request or connectivity failure | [Networking](docs/networking.md) |
-| Inspect access and resource protection | [Security](docs/security.md) |
-| Operate telemetry and ClickHouse | [Observability](docs/clickhouse.md) |
-| Configure OIDC, Auth0, SMTP or branding | [Identity and mail](docs/identity-and-mail.md) |
-| Operate the public status integration | [Status page](docs/status-page.md) |
-| Estimate the complete GCP billing surface | [Cost catalog](docs/costs.md) |
+| Task | [AWS guide](docs/aws/README.md) | [GCP guide](docs/gcp/README.md) |
+| --- | --- | --- |
+| Understand the system | [Architecture](docs/aws/architecture.md) | [Architecture](docs/gcp/architecture.md) |
+| Bootstrap and deploy | [Deployment](docs/aws/deployment.md) | [Deployment](docs/gcp/deployment.md) |
+| Operate runners | [Runner operations](docs/aws/runners.md) | [Runner operations](docs/gcp/runners.md) |
+| Trace connectivity | [Networking](docs/aws/networking.md) | [Networking](docs/gcp/networking.md) |
+| Inspect access | [Security](docs/aws/security.md) | [Security](docs/gcp/security.md) |
+| Operate telemetry | [ClickHouse](docs/aws/clickhouse.md) | [ClickHouse](docs/gcp/clickhouse.md) |
+| Configure identity/mail | [Identity and mail](docs/aws/identity-and-mail.md) | [Identity and mail](docs/gcp/identity-and-mail.md) |
+| Estimate costs | [Costs](docs/aws/costs.md) | [Costs](docs/gcp/costs.md) |
 
-## Tool references
+## Shared references
 
+- [Configuration and secrets](docs/configuration.md), [deployment commands](docs/deployment.md) and [runner artifact commands](docs/runners.md).
 - [mstage](mstage/README.md): identity, stage values, CI declarations and state recovery.
 - [mbuild](mbuild/README.md): container publication, verification and promotion.
-- [mdeploy](docs/mdeploy.md): cloud engines, inputs, intent and protection.
-- [AWS bootstrap](bootstrap/aws/README.md): policy ownership and legacy naming boundaries.
-- [Stable launchers](scripts/README.md): commands persisted in deployment state.
-- [Auth0 assets](auth0/branding/ASSETS.md): hashes, licenses and publication contract.
+- [mdeploy](mdeploy/README.md): engine selection, inputs, intent and protection.
+- [Observability configuration](docs/clickhouse.md), [Auth0 login and branding](docs/identity-and-mail.md), and [status page](docs/status-page.md).
+- [Stable launchers](scripts/README.md) and [Auth0 assets](auth0/branding/ASSETS.md).
 
 ## Deploy an existing stack
 
-Follow [the deployment runbook](docs/deployment.md), including its AWS compatibility check.
+Follow the selected cloud's deployment guide before the [shared preview/apply workflow](docs/deployment.md#deploy-an-existing-stack).
 A successful `npm run bootstrap` does not establish that every runtime prerequisite is present.
 
 ## Cloudflare API token
 
-See [DNS credentials](docs/deployment.md#cloudflare-api-token) for scope and storage locations.
+See [DNS credentials](docs/deployment.md#cloudflare-api-token) for token scope and the cloud guides for storage destinations.
 
 ## Validate changes
 
@@ -52,12 +45,4 @@ make test:apps:infra-config
 
 The first target typechecks tooling and runs the infrastructure suites. The second installs SST's
 platform and typechecks the full configuration. For documentation-only edits, check local links,
-anchors, Mermaid rendering and any existing documentation contracts; a cloud apply is not validation.
-
-## Related references
-
-- [gcp](docs/gcp/README.md) reference.
-
-## Related references
-
-- [aws](docs/aws/README.md) reference.
+anchors, Mermaid rendering and existing documentation contracts; a cloud apply is not validation.
