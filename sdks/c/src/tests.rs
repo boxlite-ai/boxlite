@@ -3,6 +3,7 @@ use crate::*;
 use boxlite::BoxliteError;
 use boxlite::runtime::BoxliteRuntime;
 use std::ffi::{CStr, CString};
+use std::mem::MaybeUninit;
 use std::os::raw::{c_int, c_void};
 use std::path::PathBuf;
 use std::ptr;
@@ -653,13 +654,17 @@ fn shutdown_rejects_null_callback() {
     let _ = std::fs::remove_dir_all(home_dir);
 }
 
+// The out-slot is MaybeUninit, not a pointer set to ptr::null_mut(). CodeQL's
+// invalid-pointer query follows a null initialiser through the out-parameter
+// into every test that reads the result, and no null check after the call
+// stops it. Both constructors write the slot whenever they return Ok.
 unsafe fn new_test_options() -> *mut CBoxliteOptions {
     let image = CString::new("alpine:latest").expect("image cstring");
-    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut slot = MaybeUninit::<*mut CBoxliteOptions>::uninit();
     let mut error = FFIError::default();
-    let code =
-        unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
+    let code = unsafe { boxlite_options_new(image.as_ptr(), slot.as_mut_ptr(), &mut error) };
     assert_eq!(code, BoxliteErrorCode::Ok);
+    let opts = unsafe { slot.assume_init() };
     assert!(
         !opts.is_null(),
         "boxlite_options_new returned null options pointer"
@@ -668,11 +673,11 @@ unsafe fn new_test_options() -> *mut CBoxliteOptions {
 }
 
 unsafe fn new_test_advanced_options() -> *mut CAdvancedBoxOptions {
-    let mut advanced: *mut CAdvancedBoxOptions = ptr::null_mut();
+    let mut slot = MaybeUninit::<*mut CAdvancedBoxOptions>::uninit();
     let mut error = FFIError::default();
-    let code =
-        unsafe { boxlite_advanced_options_new(&mut advanced as *mut _, &mut error as *mut _) };
+    let code = unsafe { boxlite_advanced_options_new(slot.as_mut_ptr(), &mut error) };
     assert_eq!(code, BoxliteErrorCode::Ok);
+    let advanced = unsafe { slot.assume_init() };
     assert!(
         !advanced.is_null(),
         "boxlite_advanced_options_new returned null options pointer"
