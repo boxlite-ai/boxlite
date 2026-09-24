@@ -12,6 +12,7 @@ import { Organization } from '../../organization/entities/organization.entity'
 import { Image } from '../entities/image.entity'
 import { ImageColdPullRateLimitedError, ImageCountLimitReachedError } from '../errors/image-admission.error'
 import { assertHostIsAllowed, imageRegistryAllowlist, isCuratedSelector, parseImageRef } from '../utils/image-ref.util'
+import { ResolvedImage } from './image-resolver.service'
 
 /** Image pulls one organization may start per window. */
 const COLD_PULL_LIMIT = 3
@@ -56,6 +57,26 @@ export class ImageAdmissionService {
     assertHostIsAllowed(host, allowlist)
 
     await this.assertWithinCatalogLimit(organization, `${host}/${repository}`)
+  }
+
+  /**
+   * Spend one of the organization's cold pulls, unless this create needs none.
+   *
+   * Only a ref the catalog could not answer is a cold pull. A hit is handed to
+   * the runner by digest, a build this deployment already pulled and booted,
+   * and the curated set is nobody's; charging those too capped every
+   * organization at three boxes a minute from its own images. A hit can still
+   * be pulled again by a runner that has not cached it, which the number of
+   * runners bounds: once per build per runner.
+   *
+   * Separate from `assert` because only the resolver knows whether it hit, and
+   * the resolver must not see an image `assert` refuses. Taking its answer as
+   * the argument is what orders the two.
+   */
+  async spendColdPullBudget(organization: Organization, resolved: ResolvedImage): Promise<void> {
+    if (!resolved.isOrgOwned || resolved.imageId) {
+      return
+    }
     await this.assertPullBudget(organization)
   }
 

@@ -233,8 +233,8 @@ export class BoxService {
 
       // Admission decides whether this organization may boot from this image at
       // all; it is the gate that replaced "curated images only". It runs after
-      // the suspension check because it spends a rate budget, and a create that
-      // was going to be refused anyway should not consume it.
+      // the suspension check, and the cold-pull budget is spent only after the
+      // resolver has answered, so a create refused on the way spends none.
       await this.imageAdmissionService.assert(organization, createBoxDto.image)
       // Resolution turns what the caller asked for into the ref a runner is
       // given: the curated set answers its own selectors without a query, and
@@ -243,6 +243,7 @@ export class BoxService {
       // as typed if it does not, which is how an image gets pulled the first
       // time.
       const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
+      await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
       const image = resolvedImage.ref
       const needsFreshBox = requiresFreshBox(createBoxDto, organization, resolvedImage)
 

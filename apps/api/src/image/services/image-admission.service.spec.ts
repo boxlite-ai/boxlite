@@ -11,9 +11,13 @@ import { Organization } from '../../organization/entities/organization.entity'
 import { Image } from '../entities/image.entity'
 import { ImageCountLimitReachedError } from '../errors/image-admission.error'
 import { ImageAdmissionService } from './image-admission.service'
+import { ResolvedImage } from './image-resolver.service'
 
 type RedisMock = { incr: jest.Mock; expire: jest.Mock; ttl: jest.Mock }
 type ImageRepositoryMock = { exists: jest.Mock; count: jest.Mock }
+
+/** What the resolver answers for a ref the catalog has never seen. */
+const CATALOG_MISS: ResolvedImage = { ref: 'quay.io/acme/app:v1', isOrgOwned: true }
 
 describe('ImageAdmissionService', () => {
   const organization = { id: 'org-1', imageCountLimit: 20 } as Organization
@@ -52,9 +56,8 @@ describe('ImageAdmissionService', () => {
     await expect(service.assert(organization, '169.254.169.254/acme/app:v1')).rejects.toThrow(BadRequestError)
   })
 
-  it('refuses a malformed ref before it spends any budget', async () => {
+  it('refuses a malformed ref', async () => {
     await expect(service.assert(organization, 'quay.io/../etc/passwd')).rejects.toThrow(BadRequestError)
-    expect(redis.incr).not.toHaveBeenCalled()
   })
 
   /**
@@ -62,10 +65,15 @@ describe('ImageAdmissionService', () => {
    * they predate must not start charging them for it. Checked with a spy rather
    * than by outcome: passing is what a broken gate would also do.
    */
-  it('lets a curated selector through without spending budget', async () => {
+  it('lets a curated selector through without a catalog lookup or budget', async () => {
     for (const selector of [undefined, 'python', 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0']) {
       await service.assert(organization, selector)
     }
+    await service.spendColdPullBudget(organization, {
+      ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0',
+      isOrgOwned: false,
+    })
+    expect(images.exists).not.toHaveBeenCalled()
     expect(redis.incr).not.toHaveBeenCalled()
   })
 
@@ -92,19 +100,6 @@ describe('ImageAdmissionService', () => {
       await expect(service.assert(organization, 'quay.io/acme/app:v1')).resolves.toBeUndefined()
     })
 
-    /**
-     * Nothing returns a pull slot: the counter has no decrement, because the
-     * API never learns a pull ended. Spending one on a create that was going to
-     * be refused would charge an organization for a box it cannot have.
-     */
-    it('spends no pull budget on a create the limit refuses', async () => {
-      images.count.mockResolvedValue(20)
-
-      await service.assert(organization, 'quay.io/acme/app:v1').catch(() => undefined)
-
-      expect(redis.incr).not.toHaveBeenCalled()
-    })
-
     it('counts and matches only images this organization still holds', async () => {
       await service.assert(organization, 'quay.io/acme/app:v1')
 
@@ -118,14 +113,20 @@ describe('ImageAdmissionService', () => {
   })
 
   describe('pull budget', () => {
+    /** A hit is handed out by digest: a build already pulled and booted here. */
+    it('spends nothing on a ref the catalog answered', async () => {
+      await service.spendColdPullBudget(organization, { ...CATALOG_MISS, imageId: 'image-1' })
+      expect(redis.incr).not.toHaveBeenCalled()
+    })
+
     it('sets the window on the first pull of a window', async () => {
-      await service.assert(organization, 'quay.io/acme/app:v1')
+      await service.spendColdPullBudget(organization, CATALOG_MISS)
       expect(redis.expire).toHaveBeenCalledWith('image:coldpull:org-1', 60)
     })
 
     it('does not reset the window on later pulls', async () => {
       redis.incr.mockResolvedValue(2)
-      await service.assert(organization, 'quay.io/acme/app:v1')
+      await service.spendColdPullBudget(organization, CATALOG_MISS)
       expect(redis.expire).not.toHaveBeenCalled()
     })
 
@@ -138,7 +139,7 @@ describe('ImageAdmissionService', () => {
       redis.incr.mockResolvedValue(4)
       redis.ttl.mockResolvedValue(42)
 
-      const error = await service.assert(organization, 'quay.io/acme/app:v1').catch((e) => e)
+      const error = await service.spendColdPullBudget(organization, CATALOG_MISS).catch((e) => e)
 
       expect(error.status).toBe(HttpStatus.TOO_MANY_REQUESTS)
       expect(Number.isSafeInteger(error.retryAfterSeconds)).toBe(true)
@@ -154,7 +155,7 @@ describe('ImageAdmissionService', () => {
       redis.incr.mockResolvedValue(4)
       redis.ttl.mockResolvedValue(42)
 
-      const error = await service.assert(organization, 'quay.io/acme/app:v1').catch((e) => e)
+      const error = await service.spendColdPullBudget(organization, CATALOG_MISS).catch((e) => e)
 
       expect(error.getResponse().message).toContain('at most 3 of them per 60s window')
       expect(error.getResponse().message).toContain('42s left')
@@ -169,7 +170,7 @@ describe('ImageAdmissionService', () => {
       redis.incr.mockResolvedValue(4)
       redis.ttl.mockResolvedValue(-1)
 
-      const error = await service.assert(organization, 'quay.io/acme/app:v1').catch((e) => e)
+      const error = await service.spendColdPullBudget(organization, CATALOG_MISS).catch((e) => e)
 
       expect(redis.expire).toHaveBeenCalledWith('image:coldpull:org-1', 60)
       expect(error.retryAfterSeconds).toBe(60)
