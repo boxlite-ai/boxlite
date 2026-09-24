@@ -42,7 +42,7 @@
 - High-cohesion facade (the shared Design rule's exemplar here): [`ImageManager`](src/boxlite/src/images/manager.rs) exposes `new`/`pull`/`list`/`load_from_local` and hides `Arc<ImageStore>`, blob sources, and manifest handling.
 - Facade exception — stateless utilities: [`jailer/common/`](src/boxlite/src/jailer/common/) async-signal-safe helpers.
 
-<!-- agent-tooling:guidance:begin rev=facf935cd5e1 sha256=50f95ef47e85 -->
+<!-- agent-tooling:guidance:begin rev=15819052960a sha256=6a40fe07953b -->
 
 > Managed by **boxlite-ai/agent-tooling** — do not edit between the markers. Change `plugins/boxlite-agent-tooling/guidance/workflow.md` there, then rerun `./.agent-tooling/install.sh` here.
 
@@ -60,11 +60,14 @@ Every change goes: understand → research → design → implement → test →
 
 **Research**
 
-- Cite real `file:line` refs from similar projects. The user routinely asks "research other projects" if this step is skipped.
+- Before choosing an approach, examine relevant existing code and comparable projects. Cite precise source references: `file:line` for code, preferably with commit-pinned links; exact sections for documentation.
+- Every design document must include **Related work and lessons**: sources, observed approaches, relevant differences in constraints, and what the proposal adopts, adapts, or rejects—and why. Review whether the evidence supports the design decisions.
+- Scale research depth to the change's uncertainty and impact; do not impose citation quotas. If no useful comparison exists, record what was searched and why it was unsuitable. Shared research may be linked and reused with its applicability explained.
 
 **Design**
 
-- Before writing any code, create a 1–3 page design doc. Host it in this preference order: GitHub issue > Notion > Linear issue. Cover the problem, proposed approach, alternatives and trade-offs, and validation plan. Walls of text are forbidden; use short paragraphs, bullets, tables, or diagrams. Every PR, including drafts, must link the doc and keep it aligned with the final scope.
+- Before writing any code, create a 1–3 page design doc covering the problem, related work and lessons, approach, alternatives and trade-offs, and validation. Host it in this preference order: GitHub issue > Notion > Linear issue. Every PR, including drafts, must link the doc and keep it aligned with the final scope.
+- Use reply-summary presentation: leading TL;DR under 40 words, with visuals, tables, or short bullets where useful. Walls of text are forbidden. Include a brief real example when helpful and link supporting detail. Design docs have no fixed total-word limit.
 - Don't be yes-man — challenge assumptions (yours too); ask whether a layer needs to know what you're about to teach it.
 - Search before implement — `grep` for existing code first.
 - Single responsibility — one function, one reason to change.
@@ -80,15 +83,18 @@ Every change goes: understand → research → design → implement → test →
 
 - Target 100–200 changed lines; maximum 400 additions + deletions across the entire PR against its intended base (the immediately preceding branch for a stacked PR). Count tests, docs, and generated text. Drafts have the same limit; splitting commits does not reduce PR size.
 - Estimate before implementing; measure before creating a PR and before each update. If the base or size cannot be determined, resolve that uncertainty before publishing. Never omit tests, compress code, or hide changes to meet the limit.
-- For work exceeding the limit, prepare a concrete split plan. Create a parent GitHub issue and child issues with scope, dependencies, acceptance criteria, and estimated size; group them in a milestone, using a Project for multiple workstreams.
-- Each child becomes a coherent, working PR within the limit, including its relevant tests. Link the child and parent issues. Implement and validate one slice at a time; re-plan if a slice grows beyond the limit.
+- For work exceeding the limit, prepare a concrete split plan in one tracking issue for the outcome. Reuse the existing issue, or create one if none exists. Use a checklist with each slice's scope, dependencies, acceptance criteria, estimated size, and PR link when available.
+- Use the installed tooling plugin's `.agents/prompts/split-pr-tracking-issue.md` template body, omitting its metadata and replacing its instructions with the plan. Keep the design, steps, open questions, and implementation history together.
+- Create separate issues only when work needs independent tracking, such as different owners, priorities, release schedules, or independently deferred outcomes. Splitting a PR alone does not require child issues, a milestone, or a Project.
+- Each slice becomes a coherent, working PR within the limit, including its relevant tests. Link the tracking issue and update its corresponding todo as the slice lands. Close the issue only when the agreed acceptance criteria are met. Implement and validate one slice at a time; re-plan if a slice grows beyond the limit.
 - **Mandatory:** dependent slices must use native [GitHub PR stacks](https://docs.github.com/en/pull-requests/how-tos/create-pull-requests/creating-stacked-pull-requests) (`trunk ← PR1 ← PR2`). Preserve per-PR gates; link verified existing PR URLs with `gh stack link` and confirm GitHub stack membership. Rebase and revalidate affected layers after changes.
-- A human developer may authorize an oversized PR only after seeing its measured size, exact base/head, and proposed split. Ask once, without a preselected approval, for a typed response: `pr-size-exception: <specific reason this change must remain one PR>`.
+- A human developer may authorize an oversized PR only after seeing its measured size, exact base/head, and proposed split. Ask once per attempt, without a preselected approval, for a typed response: `pr-size-exception: <specific reason this change must remain one PR>`.
 - The reason must identify the affected change, the concrete constraint, and why the proposed split is unsafe or impractical. Bare approvals, “urgent,” “too much work,” and generic convenience claims do not qualify. Never invent, paraphrase, or pre-fill the developer's reason.
 - Wait up to **3 minutes** from that question using a non-blocking prompt and an actual deadline. Continue reversible split preparation while waiting. Invalid replies do not restart the timer; an explicit cancellation or revised user instruction takes precedence.
 - Without a valid exception by the deadline, automatically follow the split plan and continue with small PRs; do not end the task waiting for permission. Silence is never approval for an oversized PR. If timed prompting is unavailable, keep the size limit and continue splitting.
-- Bind an exception to the shown repository, base/head, and measured diff; any change to that diff invalidates it. Preserve the developer's exact reason with that context in the PR description and parent issue. An exception waives only size, never tests, review, or `reviewed:` acknowledgment.
-- A late reply cannot authorize the expired request or unrelated slices. Reassess the current work before requesting any new exception; never repeat the same request merely to extend the deadline.
+- Bind an exception to the shown repository, base/head, and measured diff; any change to that diff invalidates it. Preserve the developer's exact reason with that context in the PR description and tracking issue. An exception waives only size, never tests, review, or `reviewed:` acknowledgment.
+- A late reply cannot authorize an expired request. Only a new explicit human instruction to ask again permits renewal. Remeasure through the guarded PR operation and show the current diff and split first; never renew autonomously.
+- Renew with `scripts/timed-user-prompt.sh renew STATE REQUEST_ID USER_REQUEST`, relaying the human instruction verbatim. Renewal archives the expired attempt and starts a new ID and deadline; it grants no approval.
 
 **Implement**
 
@@ -133,10 +139,13 @@ Every change goes: understand → research → design → implement → test →
 
 **Communication**
 
+- Keep private context out of public artifacts—even paraphrased—including memory citations and local paths.
+- Give delegates only authorized material. Implementing or publishing work does not authorize private disclosure.
+- Check exact content and destination. Omit uncertain material or obtain specific approval; changes invalidate approval. Hooks detect indicators, not permission.
 - Every human-facing output must include a `## TL;DR` section containing one simple sentence, as short as possible. This includes replies, progress updates, design docs, PR descriptions, GitHub comments, reviews, issues, and release notes, even when already concise.
 - Replies must begin with TL;DR; the entire section must contain fewer than 40 words.
 - Help the human understand quickly. Beyond the required TL;DR, choose a call graph, sequence diagram, real example, bullets, table, or short prose—whichever explains the point best. Do not force other sections, diagrams, or source annotations.
-- Walls of text are always forbidden. Keep paragraphs and items short, remove repetition, and link detailed evidence. GitHub PRs (including drafts), issues, comments, reviews, discussions, and release notes use the same reply-summary prompt. Requests for depth allow more focused sections, not dense text. Keep material risks, failures, and uncertainty visible.
+- Walls of text are always forbidden. Keep paragraphs and items short, remove repetition, and link detailed evidence. Design docs follow the 1–3-page guidance above. GitHub PRs (including drafts), issues, comments, reviews, discussions, and release notes use the same reply-summary prompt. Requests for depth allow more focused sections, not dense text. Keep material risks, failures, and uncertainty visible.
 - Every PR description must explain how the change produces its intended result through the key steps or decisions, using the form best suited to that PR. Listing modified files is not an explanation. State the problem, resulting behavior, and decisive verification once. Review the explanation against the diff, including for drafts and after description edits. Link detailed evidence; omit work logs and exhaustive test counts. Repository templates are starting points.
 
 Adapted from Clean Code (Robert C. Martin) via the polygala-inc AGENTS.md distillation.

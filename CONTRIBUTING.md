@@ -164,15 +164,17 @@ Write for a reviewer skimming in ~30 seconds. Describe the change, not the proce
 **PRs** — title is a Conventional-Commit subject. Use
 [`.github/pull_request_template.md`](./.github/pull_request_template.md) as a starting
 point; choose bullets, a real example, a table, a diagram, or short prose by clarity.
-No diagram, source annotation, or section order is mandatory.
+Start with a `## TL;DR` of one short sentence; diagrams, source annotations, and
+section order are optional.
 
 - Link the design doc on the `Design doc:` line: a 1–3 page GitHub issue, Notion
-  page, or Linear issue, in that preference order. Every PR needs one, drafts
-  included; keep it aligned with the final scope. Use `Fixes #<n>` only when the PR
-  closes that GitHub issue.
+  page, or Linear issue, in that preference order. It includes related work and
+  lessons: sources, relevant constraints, and what the design adopts, adapts, or
+  rejects, and why. Every PR needs one, drafts included; keep it aligned with the
+  final scope. Use `Fixes #<n>` only when the PR closes that GitHub issue.
 - Keep each PR within 400 changed lines (target 100–200), counting tests, docs, and
-  generated text. Split larger work into child issues under a parent issue, one
-  coherent PR per child.
+  generated text. Track larger work in one issue with a checklist of slices, one
+  coherent PR per slice; open separate issues only for independently tracked work.
 - Explain the problem, how the change produces the result, and the resulting
   behavior once. Keep the whole description within
   **120 words**, fenced blocks included, with no paragraph over 80 words and no list
@@ -185,15 +187,19 @@ No diagram, source annotation, or section order is mandatory.
 
 The shared hook applies these limits to the text agents post to GitHub: PR bodies,
 drafts included, and issues, comments, reviews, discussions, and release notes, whether
-sent through `gh` flags or API `body=` fields. It rejects text it cannot inspect. Later
-bot additions are outside this check; the writing rules still apply.
+sent through `gh` flags or API `body=` fields. It rejects text it cannot inspect, and
+titles or bodies carrying private context such as conversation attribution, memory
+citations, or local home paths. Later bot additions are outside this check; the
+writing rules still apply.
 
 Illustrative example; behavior and test results are hypothetical:
 
 ```markdown
-Design doc: https://github.com/example/repo/issues/123
+## TL;DR
 
 Reduce routine SDK CI work while retaining weekly compatibility coverage.
+
+Design doc: https://github.com/example/repo/issues/123
 
 - A PR changing both SDKs runs 11 jobs instead of 21.
 - Full platform combinations run weekly and on manual requests.
