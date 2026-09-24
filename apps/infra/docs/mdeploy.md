@@ -1,183 +1,55 @@
-# Deploying BoxLite
+## TL;DR
 
-Three tools, three config files, two clouds, one description of the stack.
+mdeploy selects the stage's cloud engine, validates its inputs, and applies one shared BoxLite resource model.
 
-This sits beside the incumbent `sst.config.ts` / `deployment/sst.ts` rather than
-replacing it. Both describe the same app and the same stage, and every module
-keeps the incumbent's logical resource names — so the new path adopts the
-existing state instead of building a second set beside it. That is what makes
-the cutover a diff to read rather than a migration to perform:
+# mdeploy reference
 
-```
-npm run mdeploy -- --stage dev --diff
-```
+[Infrastructure index](../README.md) · [Deployment walkthrough](deployment.md) · [Architecture](architecture.md)
 
-## The shape
+## Execution path
 
-```
-apps/infra/
-  mstage/                  shared: sign-in, stage coordinates, the config store, state repair
-  mbuild/                  shared: build, publish, promote and verify images
-  mdeploy/                 BoxLite's stack, and the two engines that apply it
-    sst.config.ts          AWS: the modules, composed for SST
-    pulumi/program.ts      GCP: the same modules, composed for Pulumi
-    globals.d.ts           what both engines inject, declared so tsc can see it
-    src/deploy.ts          which engine — resolved once, from one field
-    src/stack-env.ts       what one deploy reads out of the environment, for both engines
-    src/api-environment.ts what the control plane container reads
-    stack/                 what each module needs, described without a cloud
-    stack/providers/aws/   how AWS answers it
-    stack/providers/gcp/   how GCP answers it
-  mstage.config.json       which stages exist, where they live, and what the store may hand out
-  mbuild.config.json       what to build, and which repository receives it
-  mdeploy.config.json      what shape to deploy into
+```text
+mstage: stage declaration + identity + encrypted environment
+  → mdeploy: intent and protection checks
+    → GCP: Pulumi → GCP providers → GCS state
+    → AWS: SST → AWS providers → SST state
 ```
 
-`mstage` and `mbuild` know nothing about BoxLite. They are the same code
-`boxlite-backoffice` runs, with a different JSON file beside them. `mdeploy` is
-the outlier, and not because its code is repository-specific: its contracts name
-no cloud and no application, and what belongs to BoxLite is the *set* of modules
-— that there is a control plane, a box proxy, a collector and a fleet of hosts
-with nested virtualization.
+The current command is `npm run mdeploy -- --stage <stage>` from `apps/infra`.
+The retained `npm run deploy` command uses `deployment/sst.ts` and the legacy `stack/` tree;
+its flags, state assumptions and post-deploy checks are not interchangeable with mdeploy's.
+Preview any transition against the intended stage before applying it.
 
-## Which file holds what
+## Inputs
 
-A value belongs in `mdeploy.config.json` when changing it changes the
-infrastructure, and in `mstage.config.json` when changing it changes what a
-running thing reads. `STACK_DOMAIN` is a store value: moving a stage to another
-domain changes no resource shape. `DASHBOARD_DOMAIN` is the same kind of value
-and the same key with a narrower reach — it moves where the dashboard is served
-and leaves the control plane on `api.<STACK_DOMAIN>`, which is the name a runner
-is handed at first boot and the only name the in-VPC private zone answers for.
-A stage that names neither serves both from one domain. The dashboard's host is
-also the one Auth0 has to hold: it matches a `redirect_uri` exactly, so the
-callback and logout URLs name that host and not the stage domain —
-`npm run bootstrap -- --provision-auth0` registers them from these same two
-keys, and Auth0 has no upsert to repair them with afterwards. `runners.size` is `mdeploy`'s: it decides
-which machine family a host is created from, and on GCP whether nested
-virtualization is available at all.
+| Input | Owner |
+| --- | --- |
+| App identity, build artifacts, environment groups | Committed `mstage.env.json` |
+| Cloud, region/project, registry and resource sizing | Ignored `.mstage.config.json` |
+| Domains, fleet count, secrets and feature settings | Encrypted stage environment |
+| Container identity | Invocation's `BOXLITE_IMAGE_TAG` |
+| Runner release | Workspace `Cargo.toml`, or invocation's `VERSION` |
+| Runner commit build | `RUNNER_ARTIFACT_SOURCE=build` and `RUNNER_ARTIFACT_REF=<full-sha>` |
 
-Neither file holds a secret, and neither holds anything one deploy decides — an
-image tag comes from the invocation, because it is different every time.
+See [configuration](configuration.md) for writing and verifying each input.
+`BOXLITE_IMAGE_TAG` accepts a full lowercase SHA or `vX.Y.Z-<sha>` for release images.
+The environment describes the desired deployment; setting a tag does not build an artifact.
+Use [mbuild](../mbuild/README.md) and the [runner runbook](mdeploy.md) to prepare it first.
 
-The stage file is the one a runner cannot have: it names an account, so it is not
-committed, and every tool reads a file rather than a variable. `mstage config
-put` carries one stage's block into the GitHub environment of the same name, and
-`.github/actions/setup-infra` is the other end — it asks `mstage config get` for
-each stage the job names and merges the answers back into `.mstage.config.json`,
-so a stage nobody has `put` is refused in setup, by name, rather than minutes
-later by whichever tool read for it first. `boxlite-backoffice` restores it the
-same way, with the same action. A promotion needs two declarations and restores
-both out of the destination's environment: a job is bound to one environment,
-and it is not the source's.
+## Runner convergence
 
-The runner binary is the one case worth spelling out, because it is in neither
-file. Its version belongs to the *commit*: the workspace `Cargo.toml` is what the
-release workflow publishes under, so `mdeploy/stack/runner-binary.ts` reads it
-there and turns it into the two addresses a host installs from. A store value
-would pin a fleet to whatever was current the day someone seeded it, and drift
-from the commit the rest of the deploy is shipping.
+Runner hosts retain local box state and are protected against replacement. Boot-image/startup
+changes are ignored for existing hosts; binary and unit-environment updates have a separate path.
 
-```
-VERSION=0.9.5                      install a different published release
-RUNNER_ARTIFACT_SOURCE=build       opt in to a per-commit build instead
-RUNNER_ARTIFACT_REF=<40 hex>       the commit it was staged for
-```
+| Home | Update mechanism | Completion boundary |
+| --- | --- | --- |
+| GCP | One OS Config policy assignment, with a one-host disruption budget | Pulumi completion means the assignment exists; agents converge asynchronously |
+| AWS | Per-host SSM commands chained by the resource graph | Commands poll for completion before the next host |
 
-The staging bucket is not a variable: the composition root that knows the cloud
-composes it — `sst.config.ts` from the account id — so a GCP stage has none and
-`build` is refused there rather than resolved into an `s3://` address that would
-fail on the host.
-
-Resolved in the stack, and synchronously, which is why the digest is not part of
-it: both engines evaluate the stack without awaiting anything, so nothing there
-can read a `.sha256`. The host does instead — it fetches the manifest beside the
-tarball and refuses to install unless it names exactly that file. The cost is
-worth stating: the bytes are not pinned in the engine's state, so a republished
-asset under one version is a case no deploy can see. That is the incumbent
-path's exposure too, and the reason `immutableTags` exists for images.
-
-## How a new runner binary reaches a live host
-
-Every provider creates a runner with its boot script and image in
-`ignoreChanges`, and `protect: true` on top: a host holds `/var/lib/boxlite` and
-the libkrun VMs in its memory, so it is never replaced. That means the boot
-script runs exactly once and "installed at boot" is "never" for a host that
-already exists.
-
-So a deploy lands the binary in place. `UpgradeRunnerBinary*` — one command per
-host, chained so the dependency graph sequences them — runs a converge-guarded
-payload on each: leave a host already serving the target alone, leave one that is
-still bootstrapping alone, otherwise fetch the tarball and its manifest, verify,
-swap the binary, restart, and wait for the health route to report the new
-identity before the next host is touched. A failure stops the chain with the
-unvisited hosts still serving. A host running something *newer* than the target is
-refused rather than reverted, so a deliberate hand-install survives an unrelated
-deploy.
-
-The same command carries one more thing a host cannot be told after first boot:
-`/etc/boxlite/runner.env`. It is written once, by the boot script, and a stage
-that moves its domain leaves every existing host calling a name that no longer
-resolves — unreachable from the control plane, and so unable to be told. On AWS
-the convergence rides the same per-host command as the binary; on GCP it is a
-second resource in the one policy assignment, so a host still takes one turn.
-Either way a host that already agrees is left alone, which is what keeps a
-converged fleet from restarting its boxes on every deploy.
-
-Nothing in a deploy can lift that refusal, and that is deliberate: a stored flag
-would be a stage that quietly permits downgrades on every future deploy, which is
-the surprise the guard exists to prevent. Rolling backwards is a decision someone
-makes at a moment, watching the output:
-
-```
-npm run runner:update -- --stage dev --version 0.9.5 --allow-downgrade
-npm run runner:update -- --stage dev --host boxlite-runner-2     # one host
-npm run runner:update -- --stage prod --confirm                  # protected stages
-```
-
-It shares the payload, the transports and the one-host-at-a-time sequencing with
-the deploy rather than reimplementing them — `mdeploy/src/runner-update.ts` only
-answers the two questions a deploy answers structurally: which hosts, and in what
-order. It discovers the fleet from the cloud (`Name=boxlite-runner-*` / the
-instance name) rather than from the engine's state, because it has to work on a
-fleet whose last deploy failed halfway, and it walks the fleet's own order —
-`default`, then `2`, `3`, … — so "which hosts are still serving" means the same
-thing after a failure as it did before. Release targets only: a build is
-addressed by a commit, and installing one is what deploying that commit does.
-
-## Iterating on the runner itself
-
-An unreleased runner change reaches a stage as a per-commit build rather than a
-release. `npm run runner:build -- --stage dev` builds a Linux AMD64 runner from
-this checkout, stamps the commit into the health route's version, and stages it
-under the commit — then prints the deploy that installs it:
-
-```
-RUNNER_ARTIFACT_SOURCE=build RUNNER_ARTIFACT_REF=<ref> npm run mdeploy -- --stage dev
-```
-
-The checkout must be clean, submodules included: a commit-keyed object holding
-uncommitted work would claim bytes that commit does not produce, and nothing
-downstream could tell. Publication is write-once — everything downstream treats
-version+commit as an identity and looks at no content, so changed bytes need a
-new commit rather than a second upload. Either cloud stages it, into that
-stage's own artifacts bucket — S3 on AWS, Cloud Storage on GCP — under the one
-key `runner/<commit>/`, which is also the address the deploy resolves and the
-only prefix the hosts are let read. `npm run bootstrap -- --stage <stage>`
-creates the bucket; a stage without one installs a published release.
-
-The channel differs per cloud and needs one prerequisite each:
-
-| | AWS | GCP |
-|---|---|---|
-| transport | `ssm send-command`, polled to a terminal status | `gcloud compute ssh --tunnel-through-iap` |
-| what admits it | `AmazonSSMManagedInstanceCore` on the runner role | `RunnerIapFirewall`, plus OS Login on the instance |
-| deployer needs | the deploy role's existing SSM grants | `roles/iap.tunnelResourceAccessor`, `roles/compute.osAdminLogin` |
-| CLI on the deployer | `aws` | `gcloud` |
-
-Neither opens a way in for a person: the GCP rule admits Google's IAP forwarding
-range alone, and reaching that tunnel is an IAM question `bootstrap/gcp.ts`
-answers for the deployer and nobody else.
+Updates verify the artifact checksum and readiness. Already-converged hosts need no restart;
+release downgrade requires the explicit operator command. GCP's `runner:update` changes the
+fleet policy, and the next deployment reasserts the checkout's target. It does not support `--host`.
+See [runner verification and recovery](mdeploy.md) before calling a rollout complete.
 
 ## Two clouds, one stage at a time
 
