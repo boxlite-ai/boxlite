@@ -675,7 +675,7 @@ boxlite.BoxOptions(image="postgres")
 boxlite.BoxOptions(
     image="postgres",
     disk_size_gb=20,  # 20 GB disk
-    auto_delete=0,    # keep the box after stop
+    auto_delete=0,  # keep the box after stop
 )
 ```
 
