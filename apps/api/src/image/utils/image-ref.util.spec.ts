@@ -4,12 +4,7 @@
  */
 
 import { BadRequestError } from '../../exceptions/bad-request.exception'
-import {
-  assertHostIsAllowed,
-  imageRegistryAllowlist,
-  isCuratedSelector,
-  parseImageRef,
-} from './image-ref.util'
+import { assertHostIsAllowed, imageRegistryAllowlist, isCuratedSelector, parseImageRef } from './image-ref.util'
 
 describe('image ref utilities', () => {
   const savedEnv = { ...process.env }
@@ -82,13 +77,11 @@ describe('image ref utilities', () => {
   describe('imageRegistryAllowlist', () => {
     it('falls back to the built-in registries when unset', () => {
       delete process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
-      // docker.io and ghcr.io are absent on purpose: they are the two hosts
-      // the runner holds operator credentials for, and a tenant ref on either
-      // would be fetched with them until tenant pulls are made anonymous.
-      expect(imageRegistryAllowlist()).toEqual(['quay.io', 'gcr.io', 'public.ecr.aws'])
+      // ghcr.io is absent on purpose; FALLBACK_ALLOWLIST says why.
+      expect(imageRegistryAllowlist()).toEqual(['docker.io', 'quay.io', 'gcr.io', 'public.ecr.aws'])
     })
 
-    it('takes the env list when set, so a registry can be added without a deploy', () => {
+    it('takes the env list when set, so a registry can be added with no code change', () => {
       process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = ' quay.io , 127.0.0.1:25000 '
       expect(imageRegistryAllowlist()).toEqual(['quay.io', '127.0.0.1:25000'])
     })

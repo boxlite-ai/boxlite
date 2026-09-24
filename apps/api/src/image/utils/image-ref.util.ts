@@ -11,18 +11,16 @@ const ALLOWLIST_ENV = 'BOXLITE_IMAGE_REGISTRY_ALLOWLIST'
 
 /**
  * Registries a tenant-supplied image may name. Env-driven with a built-in
- * fallback, the same shape as the curated image set, so an operator can add a
- * registry without a deploy.
+ * fallback, the same shape as the curated image set, so an operator can widen
+ * or narrow it with no code change.
  *
- * `docker.io` and `ghcr.io` are deliberately absent, and their absence is
- * temporary. They are the two hosts the runner holds operator credentials for,
- * and credentials are runtime-scoped and matched by host, so until tenant pulls
- * are made anonymous a tenant ref on either one is fetched with the operator's
- * token. Widening this list is safe only once every runner carries that change
- * — and a deploy brings the API up before it upgrades the runners, so the two
- * cannot ride together.
+ * `ghcr.io` is left out on purpose. A deployed runner may hold an operator
+ * token for it, applied by host. The dispatch marks every non-curated ref as an
+ * anonymous pull, but a runner built before that flag still sends the token, so
+ * ghcr.io is added through the env once every runner honours the flag. No
+ * deployed runner holds Docker Hub credentials, so `docker.io` needs no wait.
  */
-const FALLBACK_ALLOWLIST = ['quay.io', 'gcr.io', 'public.ecr.aws']
+const FALLBACK_ALLOWLIST = ['docker.io', 'quay.io', 'gcr.io', 'public.ecr.aws']
 
 /** A registry ref is at most this long; anything beyond is a probe, not a name. */
 const MAX_REF_LENGTH = 512
