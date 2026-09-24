@@ -200,6 +200,7 @@ jobs:
               - '.github/workflows/lint.yml'
             api:
               - 'apps/api/**/!(*.md)'
+              - 'openapi/box.openapi.yaml'
               - 'apps/package.json'
               - 'apps/yarn.lock'
               - 'apps/nx.json'

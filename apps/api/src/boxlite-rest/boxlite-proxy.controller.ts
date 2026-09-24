@@ -234,8 +234,8 @@ export class BoxliteProxyController {
     //
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
 
-    // POL-205: tunnel URLs expose the box to the public internet. Require the
-    // caller to have explicitly opted in by setting public: true on the box.
+    // Tunnel URLs expose the box to the public internet. Only boxes persisted
+    // as public can use a tunnel.
     // A private box should be accessed via the authenticated API, not a
     // tunnel. Checked before the state gate below so a private box is never
     // woken (ensureReady is a real resume, not a free status read) only to
