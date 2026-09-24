@@ -120,4 +120,4 @@ configuration path; the caller must supply the required inputs.
 - [`sst.config.ts`](../mdeploy/sst.config.ts) / [`pulumi/program.ts`](../mdeploy/pulumi/program.ts): engine entrypoints.
 
 Run `make test:apps:infra` from the repository root for tooling checks. A passing local test or
-preview is not live rollout proof; follow the [deployment verification](deployment.md).
+preview is not live rollout proof; follow the [deployment verification](deployment.md#verify-the-result).

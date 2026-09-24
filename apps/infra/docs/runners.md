@@ -85,7 +85,7 @@ Do not disable protection merely to make an unexpected diff pass.
 4. Verify a box preview/tunnel and any persistent-volume mount used by the stage.
 
 ```bash
-gcloud compute os-config os-policy-assignment-reports list   --project=<project> --location=<zone> --assignment-id=<assignment-name>
+gcloud compute os-config os-policy-assignment-reports list   --project=<project> --location=<zone> --assignment=<assignment-name>
 ```
 
 If convergence fails, inspect the named host's OS Config/SSM result and service logs before retrying.

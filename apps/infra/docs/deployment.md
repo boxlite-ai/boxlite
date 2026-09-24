@@ -132,121 +132,59 @@ See [artifact selection](../artifacts/source.ts), [scope rules](../deployment/sc
 [wrapper](../deployment/sst.ts), and the [workflow reference](../../../.github/workflows/README.md).
 Preview before switching entrypoints; shared logical names are not proof of a no-op transition.
 
+## Deploy locally
+
+Local deployment uses the same stage configuration and artifact identities. Publish or promote
+images first with [mbuild](../mbuild/README.md), and prepare the selected [runner artifact](runners.md).
+The following example assumes release images `vX.Y.Z-<sha>` and runner release `X.Y.Z` already exist:
+
+```bash
+export BOXLITE_IMAGE_TAG='vX.Y.Z-<full-commit-sha>'
+export VERSION='X.Y.Z'
+npm run mstage login -- --stage dev
+npm run mstage env digest -- --stage dev
+npm run mbuild verify -- --tag <full-commit-sha> --version vX.Y.Z --stage dev
+npm run mdeploy -- --stage dev --diff
+npm run mdeploy -- --stage dev
+```
+
+Substitute real values and inspect the preview before the last command. Add `--confirm` for a
+protected stage. For a commit runner build, use the selectors in the [runner runbook](runners.md).
+`mdeploy --local-env` bypasses store loading and is an explicit diagnostic option, not the default.
+
 ## Secrets & credentials
 
-Nothing secret lives in git. A stage's configuration and its application secrets
-live in one place — its SST secret store, encrypted in the SST state bucket and
-readable by exactly the people who can already deploy that stage. The Cloudflare
-provider credentials are the one exception and are reachable two other ways, so
-offboarding still means revoking GitHub as well as AWS. Secrets are per-stage; seed
-each stage you run.
-
-| What | Stored in | Set by |
-| --- | --- | --- |
-| App secrets (`OIDC_CLIENT_ID`, Auth0 Management API, Svix, PostHog, `USAGE_EXPORT_TOKEN`) | SST secret store | `npm run bootstrap`; others via `npm run sst -- secret set <NAME> --stage <stage>` reading stdin. `USAGE_EXPORT_TOKEN` also authenticates Commerce plan reads for CREATE BOX admission |
-| SES SMTP credential (`SMTP_USER`, `SMTP_PASSWORD`) | SST secret store | `npm run bootstrap -- --stage <stage> --provision-ses`, which mints the send-only IAM user the deploy role cannot create and derives the SMTP password from its key. Rerunning rotates it |
-| Cloudflare creds (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`) | AWS SSM SecureString for local use; GitHub Environment secrets for CI (which win) | `npm run bootstrap` |
-| Stage config (`STACK_DOMAIN`, `OIDC_*`, toggles) | SST secret store | `npm run bootstrap`, from your local `.env` |
-
-Never pass secret values as command arguments or echo them. Rotate on any
-suspected disclosure. `npm run secrets -- --stage dev` lists what is set.
-
-`.env` is bootstrap's input, not a deploy's. Bootstrap loads it into the store, and
-`deployment/sst.ts` reads it back into the environment before invoking sst, so a
-local `npm run deploy` and a CI deploy resolve the same values from the same place.
-Editing `.env` therefore changes nothing until you rerun bootstrap.
-
-Two rules narrow what the store may put into a deploy's environment, because
-`sst secret set` accepts any name from anyone who can deploy:
-
-- only keys named by the `BOXLITE_STAGE_CONFIG` manifest bootstrap writes. That is
-  also what makes a key you delete from `.env` stop applying: `sst secret load`
-  merges, so the old value stays in the store and simply goes unread. Tidy it up
-  with `npm run sst -- secret remove <NAME> --stage <stage>` when you care.
-- never local credential context (`AWS_PROFILE`, `AWS_CLI_PATH`) or the artifact
-  selectors CI owns — see `FORBIDDEN_DEPLOYMENT_KEYS` in
-  `deployment/key-policy.ts`.
-
-A variable already set in the environment always wins over the store. That is how
-the deploy workflow keeps control of the selectors it sets, and how you override a
-stored value for a single command.
-
-The Cloudflare credentials cannot join the store, for two independent reasons.
-Reading the store initializes every provider `sst.config.ts` declares, Cloudflare
-included — `sst secret list` gets as far as the bootstrap state and then exits with
-`Cloudflare API not initialized` — so a token kept there would be needed in order to
-read itself. CI passes the two values as Environment secrets rather than reading the SSM copy.
-Whether the deploy role could read it is untested: it holds `ssm:GetParameter` and no
-identity-based `kms:Decrypt`, but `alias/aws/ssm` is an AWS-managed key whose key policy
-may admit the account via `kms:ViaService`, and the role trusts only the GitHub OIDC
-principal so it cannot be assumed locally to check. Measuring that from inside a job is
-what would let the Environment secrets go away.
-
-Otherwise two variables are configured on the GitHub side, per stage, and neither can live in the
-store because `configure-aws-credentials` reads both before any AWS credentials exist:
-
-- `AWS_ACCOUNT_ID`, from which the workflows compose
-  `arn:aws:iam::<id>:role/boxlite-<stage>-github-deploy`. Required.
-- `AWS_REGION`, needed only by a stage outside the workflows' default. Bootstrap writes it either
-  way, since it knows the region it just deployed into.
-
-Each stage's GitHub Environment must still exist under exactly the stage name — the trust policy pins
-`repo:<owner>/<repo>:environment:<stage>` — and that is where required reviewers are enforced.
-
-Run SST through the npm scripts, never bare `npx sst` — the wrapper loads the stage
-configuration from the secret store, enforces the Runner safety policy, and scrubs
-Pulumi event logs that can contain provider credentials. `sst dev` is disabled.
+[Configuration](configuration.md) owns the file/store/CI boundaries, and
+[security](security.md) explains runtime identity and protection. Inspect names with
+`npm run mstage env list -- --stage dev`; value exports belong in a secure destination.
 
 ### Cloudflare API token
 
-The one credential a browser login cannot provide: Cloudflare only issues a
-first API token through the dashboard.
+Provide an account-owned token with **Zone:Read** and **DNS:Edit**, restricted to the zone used by
+`STACK_DOMAIN` and `PROXY_DOMAIN`. Set `CLOUDFLARE_DEFAULT_ACCOUNT_ID` and `CLOUDFLARE_ZONE_ID`
+to the intended account/zone. Both are required by the current deployment group, alongside the token.
+The token is created in Cloudflare's dashboard; a provider login does not generate it.
 
-**[Create the token →](https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=%5B%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22edit%22%7D%5D&name=BoxLite%20deploy)**
+GCP mdeploy reads the credentials through the encrypted `deploy` group. AWS bootstrap also maintains
+the SSM/GitHub credential copies needed by the retained legacy SST path. Verify the path you use
+rather than assuming that updating one destination rotates all copies.
 
-That link opens the **account** token form with `Zone:Read` + `DNS:Edit`
-pre-selected. Pick the zone serving `STACK_DOMAIN`, confirm, and paste the value
-when `npm run bootstrap` prompts. Account-owned tokens survive the creator
-leaving the org; creating one needs Administrator or Super Administrator.
+## Verify the result
 
-Cloudflare offers no machine-to-machine OAuth grant for third-party clients, so
-this cannot be automated. Its `cf` CLI can mint a DNS-capable OAuth token, but
-it expires in about an hour and its refresh tokens are single-use — unusable as
-a stored CI secret. cert-manager, external-dns, and SST's own Cloudflare guide
-all require the same manual token.
+| Check | Evidence to inspect |
+| --- | --- |
+| Intended deployment | Resolved stage, cloud/project/account, commit and artifact identities |
+| Infrastructure | Successful apply with no unexpected replacement or deletion |
+| API and dashboard | Public HTTPS, `/api/health`, dashboard load and OIDC login |
+| Proxy | Healthy load-balancer backends and an actual box preview/tunnel |
+| Runners | Fleet registration, target health identity, box create/exec/stop |
+| Persistent volumes | Create/mount/write/read using a test volume if enabled |
+| Telemetry | A new test event reaches the configured destination and is queryable |
 
-## Common commands
-
-```bash
-# Preview a specific commit instead of current main: one already on main, or the head of an open
-# pull request in this repository (a fork's head is refused). Dispatch stays --ref main either way;
-# the job conditions test the launch branch, not this input.
-gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false -f ref=<full-commit-sha>
-
-gh workflow run build-apps-api-image.yml --ref main -f operation=build -f version=0.9.8
-gh workflow run build-apps-api-image.yml --ref main -f operation=promote -f stage=prod -f version=0.9.8 -f source_region=ap-southeast-1
-gh workflow run deploy-release.yml --ref main -f stage=prod -f version=0.9.8
-npm run runner:build-artifact:legacy -- --stage dev # local linux/amd64 build + private S3 stage
-
-npm run sst -- diff --stage dev      # preview changes
-npm run sst -- unlock --stage dev    # recover from "concurrent update detected"
-npm run sst -- shell --stage dev     # shell with SST-linked env vars
-npm run runner:update:legacy -- --stage dev # roll the Runner binary, one host at a time
-```
-
-Every deploy and removal requires an explicit `--stage` so the deployer, the
-verifier, and destructive operations cannot target different stages.
-
-`deploy`, `remove`, `sst`, and `secrets` all pass through the guarded deployment
-facade — do not call the SST binary directly. `runner:update:legacy` rolls one
-host at a time and stops on the first failure.
-
-Both runner commands carry `:legacy` because the unsuffixed names now belong to
-mdeploy — `npm run runner:update` and `npm run runner:build` act on the stages
-that path deploys, and reach a host over SSM or an IAP tunnel depending on the
-cloud. See [`mdeploy.md`](mdeploy.md). The two pairs exist only while both deploy paths do:
-each path's launcher is recorded in its own state, so neither can be repointed
-at the other's.
+On GCP, also inspect OS Config reports: an applied policy is not a converged fleet.
+Use the [runner](runners.md#verify-and-recover), [network](networking.md), and
+[ClickHouse](clickhouse.md) guides to locate the failing boundary.
+The legacy wrapper's automatic checks do not imply that mdeploy performs the same checks.
 
 ## Operating rules
 
