@@ -34,7 +34,7 @@ Preview any transition against the intended stage before applying it.
 See [configuration](configuration.md) for writing and verifying each input.
 `BOXLITE_IMAGE_TAG` accepts a full lowercase SHA or `vX.Y.Z-<sha>` for release images.
 The environment describes the desired deployment; setting a tag does not build an artifact.
-Use [mbuild](../mbuild/README.md) and the [runner runbook](mdeploy.md) to prepare it first.
+Use [mbuild](../mbuild/README.md) and the [runner runbook](runners.md) to prepare it first.
 
 ## Runner convergence
 
@@ -49,7 +49,7 @@ changes are ignored for existing hosts; binary and unit-environment updates have
 Updates verify the artifact checksum and readiness. Already-converged hosts need no restart;
 release downgrade requires the explicit operator command. GCP's `runner:update` changes the
 fleet policy, and the next deployment reasserts the checkout's target. It does not support `--host`.
-See [runner verification and recovery](mdeploy.md) before calling a rollout complete.
+See [runner verification and recovery](runners.md#verify-and-recover) before calling a rollout complete.
 
 ## Cloud implementations
 
@@ -88,77 +88,36 @@ configuration is not evidence of the live GitHub settings.
 Use the [deployment walkthrough](deployment.md) for commands and the
 [workflow reference](../../../.github/workflows/README.md) for the wider CI graph.
 
-## Commands
+## Commands and protection
 
-```
-npm run mstage login                                   who am I, on this stage's cloud
-npm run mstage env list     -- --stage dev             names only
-npm run mstage env list     -- --stage dev --values    values, asked for explicitly
-npm run mstage env digest   -- --stage dev             expect: / got:
-npm run mstage env set      -- --stage dev --digest KEY=VALUE
-npm run mstage state unlock -- --stage dev             what a killed deploy left
-npm run mstage config put   -- --stage dev             this stage's block, into its GitHub environment
-npm run mstage config get   -- --stage dev             it back, from the variable or the file
-npm run mstage state edit   -- --stage dev             the checkpoint, in $EDITOR
-
-npm run mbuild publish -- --tag <sha> --stage dev      build and push every artifact
-npm run mbuild promote -- --tag <sha> --from dev --to prod
-npm run mbuild verify  -- --tag <sha> --stage dev      does this stage hold this commit
-
-npm run runner:build   -- --stage dev                  build this commit's runner and stage it
-npm run runner:build   -- --stage dev --check          is it staged already, without building
-npm run runner:promote -- --tag <sha> --from dev --to prod
-
-npm run mdeploy -- --stage dev --diff                  read this before the first apply
+```bash
+npm run mdeploy -- --help
+npm run mdeploy -- --stage dev --diff
 npm run mdeploy -- --stage dev
-npm run mdeploy -- --stage dev --remove --confirm
+npm run mdeploy -- --stage prod --confirm
+npm run mdeploy -- --stage dev --refresh
 ```
 
-## What is verified, and what is not
+| Intent | Effect |
+| --- | --- |
+| Default | Apply the resource graph; protected stages require `--confirm` |
+| `--diff` | Preview resource changes |
+| `--refresh` | Reconcile deployment state with the cloud; protected stages require `--confirm` |
+| `--remove --confirm` | Remove an unprotected stage; always refused for a protected stage |
+| `--local-env` | Read ambient environment instead of the encrypted stage store |
 
-| | |
-|---|---|
-| mstage — sign-ins, the store, digests, object versions, state repair | 361 tests |
-| mbuild — addresses, the publish sequence, the scan gate, the workflow | 64 tests |
-| mdeploy — both configs, the environment, the wiring, both bundles | 211 tests |
-| the incumbent stack and its release guards, plus `bootstrap/gcp.ts` | 533 tests |
-| mstage, mbuild **and mdeploy** typecheck | `tsc` clean, without `sst install` |
-| every GCP provider, applied | `dev` and `prod`, in `us-east5` |
+`--diff`, `--refresh`, and `--remove` are mutually exclusive. All intents check the selected
+stage's login requirements. `--local-env` is an explicit diagnostic override, not the ordinary
+configuration path; the caller must supply the required inputs.
 
-`mdeploy` being inside the typecheck is the one place this diverges from the
-repository the pattern came from, where it was left outside. `globals.d.ts`
-declares what both engines inject, so a contract that a provider stopped
-satisfying is a compile error rather than a runtime one. What it does not check
-is a resource argument's spelling — that needs the providers' own types, and the
-file says so.
+## Implementation and validation
 
-## What is left
+- [`src/run.ts`](../mdeploy/src/run.ts): input parsing, login and protected-stage guards.
+- [`src/deploy.ts`](../mdeploy/src/deploy.ts): the cloud-specific engine/backend bundle.
+- [`src/config.ts`](../mdeploy/src/config.ts): deployment sizing schema.
+- [`src/stack-env.ts`](../mdeploy/src/stack-env.ts): values supplied to both cloud engines.
+- [`stack/index.ts`](../mdeploy/stack/index.ts): resource composition.
+- [`sst.config.ts`](../mdeploy/sst.config.ts) / [`pulumi/program.ts`](../mdeploy/pulumi/program.ts): engine entrypoints.
 
-- **A person's own grants.** `bootstrap/gcp.ts` creates everything an identity
-  needs beyond the project — the enabled APIs, the state bucket, the workload
-  identity pool, the deployer and publisher service accounts, the Artifact
-  Registry repository — and wires `GCP_WORKLOAD_IDENTITY_PROVIDER`,
-  `GCP_DEPLOYER` and `GCP_IMAGE_PUBLISHER` into GitHub the same way the AWS
-  half wires its own role ARN. `DEPLOYER_ROLES` is what CI federates into; a
-  *local* deploy runs as the person's application default credentials and holds
-  none of it, so the first local apply fails on whichever role that person
-  lacks — `roles/servicenetworking.networksAdmin`, for the Private Service
-  Access peering, is the one it reaches first. Impersonating the deployer
-  instead of granting the person is the shape this should take. Still manual
-  either way: the project and its billing account, which no bootstrap can
-  create.
-- **Building the images on a workstation.** `mbuild publish` builds locally, and
-  on Apple Silicon the api image cannot be built at all: colima's VM is aarch64
-  with no buildx, and under QEMU `cpu-features`' gyp build segfaults compiling
-  its own sources. `DOCKER_DEFAULT_PLATFORM=linux/amd64` is enough for a
-  tsc-only image and not for this one. Until mbuild can hand the build to
-  something amd64, a workstation publishes through Cloud Build into the same
-  repository, at the addresses `addressesFor` resolves.
-- **Retiring the incumbent.** `deploy-infra.yml`, `deploy-release.yml` and
-  `build-apps-api-image.yml` still run. Two publishers writing immutable tags
-  into one repository is a race that reads as a broken build, so retiring them
-  is the step after the first green `mdeploy` dispatch.
-- **The application on GCP.** Deploying the stack is not the same as running on
-  it: the API's object-storage client reaches for STS, and the runner's volume
-  mount is Mountpoint for S3. The deploy is portable ahead of the thing it
-  deploys.
+Run `make test:apps:infra` from the repository root for tooling checks. A passing local test or
+preview is not live rollout proof; follow the [deployment verification](deployment.md).

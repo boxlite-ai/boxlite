@@ -1,0 +1,99 @@
+## TL;DR
+
+Deploy runner binaries in place, then verify host convergence and box health separately from infrastructure completion.
+
+# Runner operations
+
+[Infrastructure index](../README.md) · [Deployment](deployment.md) · [mdeploy](mdeploy.md)
+
+## Identity and lifecycle
+
+Runners contain the Go service, Go SDK/FFI, Rust BoxLite runtime and nested-KVM box VMs.
+Their root disks contain image caches and local box state. Hosts are protected resources;
+changing the boot image or startup script does not replace an existing runner during ordinary deployment.
+
+| Artifact | Identity | Location |
+| --- | --- | --- |
+| Published release | `X.Y.Z`, from workspace version or `VERSION` override | GitHub Release tarball and checksum |
+| Development build | Version plus full commit SHA | Stage artifact bucket under `runner/<sha>/` |
+| Container images | Commit SHA or `vX.Y.Z-<sha>` | Stage container registry; independent of runner binary |
+
+Use new image tags or digests when box-image bytes change; a runner can retain an already-cached ref.
+
+## Build and promote
+
+Run from `apps/infra`. The checkout, including submodules, must be clean for a build.
+Use the repository Make targets for ordinary runner development; these commands publish deployment artifacts.
+
+```bash
+npm run runner:build -- --stage dev --check --tag <full-commit-sha>
+npm run runner:build -- --stage dev
+npm run runner:promote -- --tag <full-commit-sha> --from dev --to prod
+```
+
+Build creates Linux AMD64 bytes and stages them in GCS on GCP or S3 on AWS. Publication is write-once;
+a modified binary needs a new commit identity. Promotion copies staged bytes between compatible stages.
+The current production workflow still requires a release ref; staging a commit does not bypass that rule.
+
+To select a staged runner in a local deployment, set `RUNNER_ARTIFACT_SOURCE=build` and
+`RUNNER_ARTIFACT_REF=<full-sha>` alongside a valid `BOXLITE_IMAGE_TAG`, then preview with mdeploy.
+The [one-dispatch workflow](deployment.md) prepares these values for you.
+
+## Upgrade or roll back a release
+
+```bash
+npm run runner:update -- --stage dev --version <X.Y.Z>
+npm run runner:update -- --stage prod --version <X.Y.Z> --confirm
+npm run runner:update -- --stage dev --version <X.Y.Z> --allow-downgrade
+```
+
+Omitting `--version` selects the checkout's version. The release downgrade guard requires
+`--allow-downgrade` for an intentional rollback. Commit builds are installed through deployment.
+Read each host's outcome; a skipped or bootstrapping host is not proof it serves the target version.
+
+| Cloud | Rollout | Operator implications |
+| --- | --- | --- |
+| GCP | OS Config policy assignment; one-host disruption budget | `runner:update` rewrites the fleet policy and waits for reports; `--host` is refused |
+| AWS | Serial SSM commands | `--host <name>[,<name>...]` can select hosts; a failure stops subsequent updates |
+
+GCP's next mdeploy restores the checkout's policy target. A Pulumi apply returns before agents finish
+converging, so inspect reports and live health after an apply. IAP/OS Login can be used for permitted
+administration, but ordinary GCP runner updates do not require a per-user SSH session.
+
+## Scale out
+
+`RUNNERS` controls the declared fleet count. Set it in the encrypted stage store, update the digest,
+and preview the same artifact selection you intend to deploy:
+
+```bash
+npm run mstage env set -- RUNNERS=2 --stage dev --digest
+```
+
+Review that the diff creates the additional host without replacing existing hosts. Then apply and
+check registration, target version, capacity and a test box on the new host. Extra runners have
+individual registration tokens. Machine size and disk size come from `deploy.runners` in the stage declaration.
+
+Scale-in is a separate retirement operation: reducing a count attempts to delete a protected host.
+Drain or migrate boxes and preserve required local data before designing a reviewed retirement.
+Do not disable protection merely to make an unexpected diff pass.
+
+## Verify and recover
+
+1. Confirm each expected instance is running and the runner appears in the control plane.
+2. On GCP, inspect OS policy reports for every host and both binary/unit-environment policies.
+3. Check the runner health identity, then create, execute in, and stop a test box.
+4. Verify a box preview/tunnel and any persistent-volume mount used by the stage.
+
+```bash
+gcloud compute os-config os-policy-assignment-reports list   --project=<project> --location=<zone> --assignment-id=<assignment-name>
+```
+
+If convergence fails, inspect the named host's OS Config/SSM result and service logs before retrying.
+A checksum or readiness failure is different from a control-plane registration failure.
+For a deployment lock or pending checkpoint operation, use [mstage state recovery](../mstage/README.md#state-recovery).
+Infrastructure success, policy compliance, runner identity, and working boxes are separate checks.
+
+Sources: [binary identity](../mdeploy/stack/runner-binary.ts), [fleet declaration](../mdeploy/stack/runners.ts),
+[build](../mdeploy/src/runner-build.ts), [promotion](../mdeploy/src/runner-promote.ts),
+[operator update](../mdeploy/src/runner-update.ts), [GCP provider](../mdeploy/stack/providers/gcp/runners.ts),
+[AWS provider](../mdeploy/stack/providers/aws/runners.ts).
