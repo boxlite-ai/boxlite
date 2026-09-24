@@ -33,3 +33,4 @@ policies, cleans Pulumi event logs, and performs post-deploy verification.
 - [configuration](docs/configuration.md) reference.
 - [mbuild](mbuild/README.md) reference.
 - [runners](docs/runners.md) reference.
+- [identity-and-mail](docs/identity-and-mail.md) reference.
