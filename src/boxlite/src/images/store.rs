@@ -1442,27 +1442,36 @@ impl RegistryPullError {
     }
 
     /// Sorts a failed token exchange, which comes before the registry says
-    /// anything about the image. A token service that refuses an anonymous
-    /// request is down or throttling — an anonymous token is issued even for a
-    /// private repository, whose refusal comes on the manifest — so only
-    /// refused credentials are an answer.
+    /// anything about the image. The client keeps only the response body, not
+    /// its status, so the body decides. `TOOMANYREQUESTS` anywhere in it is a
+    /// rate limit, since throttling pages are rarely well-formed. A refusal
+    /// needs the error envelope's `UNAUTHORIZED` or `DENIED` code — a page
+    /// that merely says "denied" is a proxy's, not the registry's — and is an
+    /// answer, as is any refusal of credentials this caller supplied. Anything
+    /// else from an anonymous request is a service that did not answer.
     fn from_token_exchange(
         error: oci_client::errors::OciDistributionError,
         auth: &OciRegistryAuth,
     ) -> Self {
-        use oci_client::errors::OciDistributionError;
+        use oci_client::errors::{OciDistributionError, OciEnvelope, OciErrorCode};
 
         let OciDistributionError::AuthenticationFailure(reason) = &error else {
             return Self::from_registry("a registry token", error);
         };
+        let codes: Vec<OciErrorCode> = serde_json::from_str::<OciEnvelope>(reason)
+            .map(|envelope| envelope.errors.into_iter().map(|e| e.code).collect())
+            .unwrap_or_default();
         let throttled = reason.to_ascii_lowercase().contains("toomanyrequests");
+        let refused = codes
+            .iter()
+            .any(|code| matches!(code, OciErrorCode::Unauthorized | OciErrorCode::Denied));
         let error = BoxliteError::Storage(format!("failed to pull a registry token: {error}"));
         if throttled {
             Self::Throttled(error)
-        } else if matches!(auth, OciRegistryAuth::Anonymous) {
-            Self::Unanswered(error)
-        } else {
+        } else if refused || !matches!(auth, OciRegistryAuth::Anonymous) {
             Self::Failed(error)
+        } else {
+            Self::Unanswered(error)
         }
     }
 
@@ -2384,16 +2393,78 @@ pub(super) mod tests {
         }
     }
 
+    /// A token service that refuses the pull outright — the repository is
+    /// private now — has answered, and the cached copy must not stand in for
+    /// a build this caller may no longer read.
     #[tokio::test]
-    async fn a_throttled_token_service_with_nothing_cached_reports_the_rate_limit() {
-        let envelope = br#"{"errors":[{"code":"TOOMANYREQUESTS","message":"rate limited"}]}"#;
+    async fn refresh_reports_a_refused_token() {
+        for (status, code) in [(401, "UNAUTHORIZED"), (403, "DENIED")] {
+            let refusal = format!(r#"{{"errors":[{{"code":"{code}","message":"no"}}]}}"#);
+            let tokens = registry_serving(vec![(
+                "/token".into(),
+                status,
+                "application/json",
+                refusal.into_bytes(),
+            )])
+            .await;
+            let host = registry_behind_a_token_service(&format!("http://{tokens}/token")).await;
+            let temp_dir = tempfile::tempdir().unwrap();
+            let (store, image_ref, _seeded) = store_with_cached_image(&temp_dir, &host).await;
+
+            let error = store
+                .refresh(&image_ref)
+                .await
+                .expect_err("a refused token is the registry's answer, not a gap");
+            assert!(
+                !matches!(error, BoxliteError::ResourceExhausted(_))
+                    && error.to_string().contains("registry token"),
+                "{code}: {error}"
+            );
+        }
+    }
+
+    /// A proxy that answers for the token service with its own error page has
+    /// told nothing about the image, even when the page says access is denied.
+    #[tokio::test]
+    async fn refresh_uses_the_cache_when_a_proxy_answers_for_the_token_service() {
         let tokens = registry_serving(vec![(
             "/token".into(),
-            429,
-            "application/json",
-            envelope.to_vec(),
+            403,
+            "text/html",
+            b"<html><body>Access denied</body></html>".to_vec(),
         )])
         .await;
+        let host = registry_behind_a_token_service(&format!("http://{tokens}/token")).await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (store, image_ref, seeded) = store_with_cached_image(&temp_dir, &host).await;
+
+        let refreshed = store
+            .refresh(&image_ref)
+            .await
+            .expect("a proxy page is not the registry's answer");
+        assert_eq!(refreshed.manifest_digest, seeded.manifest_digest);
+    }
+
+    /// Throttling pages are rarely well-formed envelopes, so a rate limit is
+    /// read from the code wherever it appears in the body.
+    #[tokio::test]
+    async fn a_throttled_token_service_with_nothing_cached_reports_the_rate_limit() {
+        for (kind, body) in [
+            (
+                "application/json",
+                br#"{"errors":[{"code":"TOOMANYREQUESTS","message":"rate limited"}]}"#.to_vec(),
+            ),
+            ("text/plain", b"toomanyrequests: slow down".to_vec()),
+        ] {
+            assert_throttled_token_service_reports_the_rate_limit(kind, body).await;
+        }
+    }
+
+    async fn assert_throttled_token_service_reports_the_rate_limit(
+        kind: &'static str,
+        body: Vec<u8>,
+    ) {
+        let tokens = registry_serving(vec![("/token".into(), 429, kind, body)]).await;
         let host = registry_behind_a_token_service(&format!("http://{tokens}/token")).await;
         let temp_dir = tempfile::tempdir().unwrap();
         let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
