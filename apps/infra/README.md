@@ -1,29 +1,48 @@
 # BoxLite infrastructure
 
-SST deploys the BoxLite control plane to AWS and configures its Cloudflare edge. The package is
-organized by operational domain; each command enters one domain facade and `sst.config.ts` loads
-the stack facade.
+BoxLite's hosted apps include the API/dashboard, proxy, VM runner fleet and collector.
+Each cloud has its own architecture and operational procedures; the shared tools are mstage, mbuild and mdeploy.
 
-```text
-npm command -> domain CLI -> deployment facade -> SST -> stack/deployStack()
-            -> foundation -> observability -> API -> edge -> runners
-```
+## Choose a cloud
 
-## Start here
+| Task | [AWS guide](docs/aws/README.md) | [GCP guide](docs/gcp/README.md) |
+| --- | --- | --- |
+| Understand the system | [Architecture](docs/aws/architecture.md) | [Architecture](docs/gcp/architecture.md) |
+| Bootstrap and deploy | [Deployment](docs/aws/deployment.md) | [Deployment](docs/gcp/deployment.md) |
+| Operate runners | [Runner operations](docs/aws/runners.md) | [Runner operations](docs/gcp/runners.md) |
+| Trace connectivity | [Networking](docs/aws/networking.md) | [Networking](docs/gcp/networking.md) |
+| Inspect access | [Security](docs/aws/security.md) | [Security](docs/gcp/security.md) |
+| Operate telemetry | [ClickHouse](docs/aws/clickhouse.md) | [ClickHouse](docs/gcp/clickhouse.md) |
+| Configure identity/mail | [Identity and mail](docs/aws/identity-and-mail.md) | [Identity and mail](docs/gcp/identity-and-mail.md) |
+| Estimate costs | [Costs](docs/aws/costs.md) | [Costs](docs/gcp/costs.md) |
 
-- [Architecture](docs/architecture.md) — resource graph and source layout
-- [Deployment](docs/deployment.md) — prerequisites, bootstrap, preview, deploy, artifact modes, routine commands, and troubleshooting
-- [Security](docs/security.md) — credentials, policy enforcement, and protected resources
-- [Networking](docs/networking.md) — VPC layout and traffic flows
-- [ClickHouse](docs/clickhouse.md) — backend selection and private UI access
+## Shared references
 
-Use the repository make targets for validation:
+- [Configuration and secrets](docs/configuration.md), [deployment commands](docs/deployment.md) and [runner artifact commands](docs/runners.md).
+- [mstage](mstage/README.md): identity, stage values, CI declarations and state recovery.
+- [mbuild](mbuild/README.md): container publication, verification and promotion.
+- [mdeploy](mdeploy/README.md): engine selection, inputs, intent and protection.
+- [Observability configuration](docs/clickhouse.md), [Auth0 login and branding](docs/identity-and-mail.md), and [status page](docs/status-page.md).
+- [Stable launchers](scripts/README.md) and [Auth0 assets](auth0/branding/ASSETS.md).
+
+## Deploy an existing stack
+
+Follow the selected cloud's deployment guide before the [shared preview/apply workflow](docs/deployment.md#deploy-an-existing-stack).
+A successful `npm run bootstrap` does not establish that every runtime prerequisite is present.
+
+## Cloudflare API token
+
+See [DNS credentials](docs/deployment.md#cloudflare-api-token) for token scope and the cloud guides for storage destinations.
+
+## Validate changes
+
+Run from the repository root:
 
 ```bash
-make test:apps:infra         # type-checks what needs no `sst install`, then runs the suite
-make test:apps:infra-config  # installs the SST platform, then type-checks the whole package
+make test:apps:infra
+make test:apps:infra-config
 ```
 
-Never apply a preview merely to validate configuration. All deploys require an explicit stage and
-run through `deployment/sst.ts`, which loads provider credentials, enforces scope and Runner
-policies, cleans Pulumi event logs, and performs post-deploy verification.
+The first target typechecks tooling and runs the infrastructure suites. The second installs SST's
+platform and typechecks the full configuration. For documentation-only edits, check local links,
+anchors, Mermaid rendering and existing documentation contracts; a cloud apply is not validation.

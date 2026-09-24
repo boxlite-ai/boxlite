@@ -281,7 +281,7 @@ jobs:
           # `build-runner` and mbuild's publish compile this tree, so the
           # approval that releases them is what stands between a fork's build
           # code and this stage's credentials. It is a person unblocking a
-          # run, not a reading of the diff; `apps/infra/docs/mdeploy.md`
+          # run, not a reading of the diff; `apps/infra/mdeploy/README.md`
           # says what that is and is not worth.
           fork="$(jq -r '.isCrossRepository' <<<"$pr_json")"
           head="$(jq -r '.headRefOid' <<<"$pr_json")"
