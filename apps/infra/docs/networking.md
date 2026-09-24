@@ -1,108 +1,74 @@
-# BoxLite infra — network model
+## TL;DR
 
-Why the VPC is laid out the way it is: who can reach what, how things reach the
-internet, and the reasoning (with AWS docs) behind the two different egress
-patterns. Defined in [`stack/foundation.ts`](../stack/foundation.ts) and
-[`stack/runners.ts`](../stack/runners.ts).
+GCP uses private runner hosts, direct Cloud Run VPC egress, GKE proxy pods, and separate public and internal load balancers.
 
-## Layout (ap-southeast-1, 2 AZs)
+# Networking
 
-```text
-                              ☁  INTERNET
-                   (users ↓)        (↑ ghcr.io, Auth0, ClickHouse, ECR…)
-                        │                         ▲
-                        ▼                         │
-        ╔═══════════════════════════════════════════════════╗
-        ║              INTERNET GATEWAY (IGW)                ║  one per VPC
-        ╚════╦═══════════════╦════════════════╦═════════════╝
-   inbound   │    egress     │                │   (runner egress, direct)
-             ▼               │                │
-   ┌──── AZ-a ───────────────┼────┐   ┌───────┼──── AZ-b ──────────┐
-   │ PUBLIC subnet           │    │   │       │  PUBLIC subnet      │
-   │  [ALB node]  [NAT-a]  [Runner+pubIP]     │  [ALB node] [NAT-b] │
-   │      │          ▲          (direct out)  │      │         ▲    │
-   │ ─────┼──────────┼───────  │    │   │ ─────┼─────────┼──────────│
-   │ PRIVATE subnet  │ egress  │    │   │ PRIVATE subnet │ egress   │
-   │      ▼          │ (local) │    │   │      ▼         │ (local)  │
-   │  [Api/Proxy]────┘         │    │   │  [Api/Proxy]───┘          │
-   │  [DB] [Redis]             │    │   │  (tasks)                  │
-   └──────────────────────────┘    │   └───────────────────────────┘
-```
+[Infrastructure index](../README.md) · [Architecture graphs](architecture.md) · [Security](security.md)
 
-- **Public subnets:** internet-facing ALBs, the per-AZ NAT, and the EC2 runner.
-- **Private subnets:** Fargate service tasks (Api, Proxy, Otel), Postgres,
-  Redis. No public IPs.
+## GCP traffic paths
 
-## Traffic flows
+| Traffic | Path |
+| --- | --- |
+| Browser/SDK → API | Public HTTPS Application Load Balancer → serverless NEG → Cloud Run API |
+| Browser → dashboard | Same public load balancer → API image's bundled SPA |
+| Box preview/tunnel | Public TLS proxy Network Load Balancer → zonal NEGs → GKE proxy → runner |
+| Proxy → lookup/authorization | Private API name → internal HTTPS load balancer → Cloud Run API |
+| Runner → registration/callback | Same private API path |
+| API → runner | Direct VPC egress → runner TCP 3003 |
+| API → SQL/Redis | Direct VPC egress → Private Service Access → managed service |
+| API/collector → ClickHouse | Direct VPC egress → private VM TCP 8123 |
+| Private VM/GKE → internet | Cloud NAT when internet egress is enabled |
+| Backoffice → ClickHouse | Consumer PSC endpoint → service attachment → internal passthrough LB |
 
-| Flow | Path |
-|------|------|
-| User → API (ingress) | Internet → IGW → **ALB** (public) → Api task (private) |
-| Service → internet (egress) | task (private) → **NAT in its own AZ** → IGW → ghcr/Auth0/ClickHouse |
-| Runner → internet (egress) | runner (public IP) → IGW (**no NAT**) |
-| API → external, reply back | stateful return through the NAT (API initiated) |
+Cloud Run API ingress is restricted to internal/load-balancer traffic. The collector is internal-only.
+Their VPC egress mode is `PRIVATE_RANGES_ONLY`: public internet traffic does not automatically take
+Cloud NAT. There is no Serverless VPC Access connector in this resource graph.
+The API's built-in Cloud SQL connection uses its mounted Unix socket; Redis uses TLS and a mounted CA.
 
-The public ALB and NLB are the inbound paths; the **NAT is egress-only**. The
-service hosts themselves are never directly addressable from the internet.
+## GCP address spaces
 
-## Two egress patterns (and why)
+| Range | Purpose |
+| --- | --- |
+| `10.20.0.0/20` | Primary workload subnet |
+| `10.20.16.0/24` | Regional managed proxy subnet for the internal API load balancer |
+| `10.20.17.0/24` | PSC producer NAT subnet for ClickHouse publication |
+| `10.20.20.0/22` | Dedicated Cloud Run direct-egress subnet |
+| `10.20.32.0/19` | GKE proxy pod secondary range |
+| `10.20.64.0/22` | GKE service secondary range |
+| Allocated `/16` | Private Service Access range, selected by the provider |
 
-Both let a host reach the internet *outbound-only* — because both NAT and
-security groups are **stateful** (return traffic for a flow you started is
-allowed). The difference is the failure mode.
+Cloud Run→VM ingress rules match the dedicated subnet CIDR. Do not substitute source service
+accounts or network tags: [Direct VPC egress limitations](https://cloud.google.com/run/docs/configuring/vpc-direct-vpc)
+do not support those selectors for ingress firewall rules. The shared egress subnet admits both API
+and collector traffic where that range is allowed; it does not distinguish the two services.
+GKE proxy→runner access matches the pod range. Runner instances have no external IP.
 
-```text
- A — PRIVATE subnet + NAT            B — PUBLIC subnet + public IP + SG
- (Api, Proxy, DB, Redis …)          (Runner — must be EC2 w/ direct egress)
+## DNS and TLS
 
- no public IP, no inbound route      has a public IP + IGW route
- → internet has NO PATH in           → internet HAS a path; the SG is the gate
- → 2 layers (no-route + SG)          → 1 layer (SG only)
- → FAIL-CLOSED: open the SG to        → FAIL-OPEN: one `0.0.0.0/0` inbound rule
-   0.0.0.0/0 and it's still unreachable  and it's exposed
-```
+Cloudflare hosts public records for API, dashboard and wildcard box access. The private Cloud DNS
+zone resolves the API hostname to the internal load balancer inside the VPC. Public and private API
+paths use HTTPS; the proxy's public TLS terminates at the load balancer before TCP reaches port 4000.
+Certificate Manager serves wildcard proxy and regional internal-API certificates.
+Public API/dashboard certificates use the Compute managed-certificate resources.
 
-- **Services use A.** Defense-in-depth for hosts holding user data + secrets.
-- **The runner uses B** by necessity (EC2, high-bandwidth image-pull egress).
-  Because the SG is its *entire* inbound control surface, it is pinned to
-  `:3003` from the VPC CIDR only → an **egress-only public IP**, nothing inbound
-  from the internet. See `RunnerSecurityGroup` in `stack/runners.ts`.
+## AWS differences
 
-## Why two NAT instances
+Services, database and cache use private placement. Public ALB/NLB ingress reaches the services;
+EC2 NAT provides private-service outbound access. Runner hosts use public-subnet public-IP egress,
+with inbound reachability restricted by their security group. A public IP is not proof of public access.
+The current mdeploy provider admits runner traffic from the service security group; the retained
+legacy stack has its own rules. Inspect the active provider before comparing firewall behavior.
+The dashboard uses CloudFront; long-running API sessions use the API endpoint directly.
 
-One NAT (`t4g.nano`, fck-nat) **per AZ** — the VPC defaults to 2 AZs. Each
-private task egresses through the NAT **in its own AZ**:
+## Diagnose a failed path
 
-- **AZ fault isolation** — if AZ-a dies, AZ-b's tasks still egress via NAT-b. A
-  single shared NAT would strand the other AZ on an AZ outage.
-- **No cross-AZ data charge / latency** — local NAT means egress never crosses
-  the AZ boundary.
+Check DNS resolution, destination port, workload readiness, route/egress mode, then the exact firewall
+source selector. A healthy runner with no incoming requests can indicate a blocked path rather than
+a broken runner. For proxy failures, inspect pod readiness and NEG/backend health separately.
+Use an actual box preview or exec request to verify the full path after changing a network rule.
 
-Cost: ~$16/mo (2× t4g.nano + 2 public IPv4 + small EBS) — vs ~$86/mo for 2
-managed NAT Gateways. The lever to drop to one NAT is `az: 1` (single-AZ, no
-HA); not worth the destructive VPC change on a live stack.
-
-## AWS references (the claims above, verbatim)
-
-- **Security groups are stateful** → public-IP host *can* be outbound-only:
-  > "Security groups are stateful… if you send a request from an instance, the
-  > response traffic for that request is allowed to reach the instance
-  > regardless of the inbound security group rules."
-  — [Security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html)
-- **Inbound is default-deny** (the SG is the only gate for a public host):
-  > "The only traffic that reaches the instance is the traffic allowed by the
-  > security group rules."
-  — same page. And the fail-open warning:
-  > "If you specify 0.0.0.0/0 … this enables anyone to access your instances from
-  > any IP address using the specified protocol."
-- **NAT is outbound-only:**
-  > "instances in a private subnet can connect to services outside your VPC but
-  > external services can't initiate a connection with those instances… Connections
-  > must always be initiated from within the VPC."
-  — [NAT gateways](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html)
-  (We use a NAT *instance* via fck-nat — same source-NAT + connection-tracking.)
-- **Private subnet = no route in** (fail-closed), and AWS's recommendation:
-  > "Private subnet – The subnet does not have a direct route to an internet
-  > gateway." … "we recommend that you use private subnets. Use a bastion host or
-  > NAT device to provide internet access."
-  — [Subnets](https://docs.aws.amazon.com/vpc/latest/userguide/configure-subnets.html)
+Sources: GCP [network](../mdeploy/stack/providers/gcp/network.ts), [API](../mdeploy/stack/providers/gcp/api.ts),
+[proxy](../mdeploy/stack/providers/gcp/edge.ts), [cluster](../mdeploy/stack/providers/gcp/cluster.ts),
+[ClickStack publication](../mdeploy/stack/providers/gcp/clickstack.ts); AWS
+[network](../mdeploy/stack/providers/aws/network.ts); [legacy network](../stack/foundation.ts).
