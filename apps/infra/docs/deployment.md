@@ -127,6 +127,7 @@ Use them only when intentionally operating that path; do not mix their selectors
 The legacy wrapper refuses targeted applies, checks its
 [capability manifest](../deployment/capabilities.json), enforces the
 [runner policy pack](../policies/runner/), and runs its own post-deploy checks.
+Its runner updates enter [`scripts/runner-update-binary.mjs`](../scripts/runner-update-binary.mjs).
 Its API fallback can build locally when no published ref is selected; mdeploy expects published images.
 See [artifact selection](../artifacts/source.ts), [scope rules](../deployment/scope.ts),
 [wrapper](../deployment/sst.ts), and the [workflow reference](../../../.github/workflows/README.md).
@@ -186,148 +187,43 @@ Use the [runner](runners.md#verify-and-recover), [network](networking.md), and
 [ClickHouse](clickhouse.md) guides to locate the failing boundary.
 The legacy wrapper's automatic checks do not imply that mdeploy performs the same checks.
 
-## Operating rules
+## Recovery and teardown
 
-**The Runner holds state.** `/var/lib/boxlite` and the live microVMs are on its
-root disk, so `stack/runners.ts` marks it `protect: true` with
-`ignoreChanges: ['ami', 'userDataBase64']`. Routine deploys never replace it.
-The CI gate rejects any Runner delete, replace, or protected-property change — so
-scaling down remains a separate operation this repository does not implement,
-while scaling out is an ordinary deploy.
+| Symptom | Next check |
+| --- | --- |
+| Stage/config not found | Ignored declaration and CI environment variable; [configuration](configuration.md) |
+| Missing required key or digest mismatch | Correct the stage store, review values, then certify the intended group |
+| Missing image or runner artifact | Verify the exact commit/release in the correct stage; do not treat permission failure as absence |
+| GCP credential failure | Check both gcloud and ADC sessions, project and deployer/publisher identity |
+| Service cannot reach a runner | [Private routes, firewall source ranges and DNS](networking.md) |
+| Apply succeeded but runner is old | [OS Config compliance and live health](runners.md#verify-and-recover) |
+| Locked or interrupted deployment | Confirm no writer is running, then follow [state recovery](../mstage/README.md#state-recovery) |
+| Login, invitation or email failure | [Identity and mail](identity-and-mail.md) |
 
-### Scaling Runners out
+Do not clear a live deployment's lock or restart a healthy service merely because an apply is slow.
+An apply can partially succeed before failing; inspect cloud and state before retrying or rolling back.
 
-`RUNNERS` in the stage's secret store says how many Runners the stack declares.
-Raising it is the whole decision; the next deploy creates the host:
+Refresh reconciles the checkpoint; it does not apply a new desired resource graph:
 
 ```bash
-cd apps/infra
-npm run sst -- secret set RUNNERS 2 --stage dev     # declare it
-
-gh workflow run deploy-infra.yml --ref main \
-  -f stage=dev -f components=api+runner -f apply=false   # preview the create
-gh workflow run deploy-infra.yml --ref main \
-  -f stage=dev -f components=api+runner -f apply=true    # create it
+npm run mdeploy -- --stage dev --refresh
+npm run mdeploy -- --stage dev --diff
 ```
 
-The policy pack guards the hosts that already exist, not the count. A Runner the
-inventory declares and the state does not hold yet is a create, and a create has
-no state to be compared against — so the two fingerprint checks are skipped for
-it. Nothing else is: the new host still has to be `protect: true`, ignore exactly
-`ami` and `userDataBase64`, and carry the identity tags its inventory entry
-specifies. A Runner the state holds but the inventory has stopped declaring is
-still refused, because Pulumi reads an undeclared protected resource as a delete.
+For intentional removal of an unprotected disposable stage, the command is
+`npm run mdeploy -- --stage <stage> --remove --confirm`. Protected stages are refused.
+Independent resource protection and retained data can also prevent or outlive removal; inventory them
+before calling teardown complete. Bootstrap identities, registries and artifact/state buckets have
+separate ownership and are not implicitly erased by removing application resources.
 
-Keep the Runner in `components`. `--exclude Runner` leaves the new instance out of
-the plan, so the run reports success having created nothing and the host appears
-on whichever later deploy does include it.
+## Scaling and cost
 
-The API seeds only the default Runner. Extra ones are registered with the control
-plane after the deploy by `RegisterExtraRunners`, each with its own token.
-
-**Version bumps reach the fleet by rolling upgrade, not replacement.** A deploy
-runs `scripts/runner-update-binary.mjs` per host over SSM, chained so hosts
-upgrade one at a time. Each host verifies the selected artifact's checksum before
-stopping its service, and restores its backup if the new binary fails to report
-healthy.
-
-**Runners cache image refs exactly.** `BOXLITE_SYSTEM_IMAGES` (comma-separated
-`name=ref`) adds box images without a code deploy, but publish updated bytes
-under a new tag or digest — repushing a mutable tag leaves already-cached
-Runners serving the old image.
-
-**A Runner's version is its artifact's identity.** On the release path it is
-`Cargo.toml`'s `version` at the repo root; on the build path it is that version
-plus the deployed commit, so two commits sharing a Cargo version stay distinct
-upgrade targets. The accidental-downgrade guard applies only to the release
-path — commit builds have no meaningful older/newer ordering.
-
-**Proxy topology is protected.** The NLB, TLS listener, and target group refuse
-replacement. A deliberate migration is two deploys: first set the three Proxy
-`opts.protect` values to `false` and ship that metadata-only change, then do the
-reviewed migration. Never combine them.
-
-**Deploys self-verify.** After a successful deploy the wrapper checks that the
-NLB listener forwards to the Proxy service's target group with healthy targets,
-probes `/health` over both the base and a wildcard hostname, and confirms
-`/api/config` reports the expected issuer, version, and Proxy host. The check is
-read-only and exits nonzero on failure — it does **not** roll back. By the time
-it runs the deploy has already applied its changes, so a failure means the stack
-is live in the state that failed the check; recover by fixing forward or
-redeploying a known-good revision.
-
-**`/api/*` bypasses CloudFront on purpose.** CloudFront caps WebSockets at 10
-minutes, which would kill `exec`/`attach` sessions. Use
-`https://api.<STACK_DOMAIN>/api` for SDK and CLI profiles; the CloudFront path
-is only for short request/response calls.
-
-## Troubleshooting
-
-**"concurrent update detected"** — `npm run sst -- unlock --stage dev`, then retry.
-
-**Service stuck at `rolloutState: FAILED` with 1 running task** — stale event
-from an earlier failed deploy. If `runningCount == desiredCount`, ignore it.
-
-**`Failed to fetch OpenID configuration`** — the API cannot reach
-`<OIDC_ISSUER_BASE_URL>/.well-known/openid-configuration`. Check egress from the
-API container and that the issuer host works.
-
-**`unexpected issuer URI`** — `OIDC_ISSUER_BASE_URL` does not byte-match what
-the IdP's discovery doc reports as `issuer`. Auth0 includes a trailing slash.
-
-**`Callback URL mismatch`** — add `http://127.0.0.1:5555/callback` to the Auth0
-SPA app's Allowed Callback URLs. The CLI's loopback URL is a separate entry from
-the dashboard's.
-
-**`No end session endpoint` on logout** — the API's IdP discovery probe failed
-at startup. Fix connectivity; the next `/api/config` self-heals.
-
-**`Email verification required`** — an Auth0 database token lacks a strict
-`email_verified: true` claim. The API answers `403` with
-`code: email_verification_required`; the token itself is valid, so signing in
-again cannot clear it and the dashboard shows a "Verify your email address"
-screen rather than bouncing through login. For dashboard/desktop use browser
-login to finish the hosted verification Form. On SSH, finish verification
-through the dashboard in another browser, then retry device login. Verify the
-`boxlite-login-policy` Action is deployed and bound using the login-policy
-preview command above — without it an existing unverified account has no way to
-reach the Form, and the 403 never clears.
-
-**Runner never reaches `READY`** — its `BOXLITE_RUNNER_TOKEN` must equal the DB
-row's `apiKey`. Check `journalctl -u boxlite-runner` via `aws ssm start-session`.
-
-**Box preview cannot connect** — check that the NLB listener's target group
-matches the Proxy service attachment and has a healthy registered target.
-
-**Dashboard terminal cannot connect** — it uses the direct API host, not the
-Proxy. Verify `https://api.<STACK_DOMAIN>/api/config`.
-
-**Docker build "broken pipe"** — transient ECR push failure. Retry.
-
-## Cost
-
-ap-southeast-1 on-demand, approximate:
-
-| Resource | Monthly |
-| --- | --- |
-| EC2 c8i.2xlarge (Runner) | ~$325 |
-| Load balancers (2 ALB + 1 NLB) | ~$51 |
-| 3x Fargate 0.25 vCPU / 0.5 GB | ~$28 |
-| CloudFront + S3 + CloudWatch Logs | ~$20 |
-| 2x NAT EC2 (`t4g.nano`) + public IPv4 | ~$16 |
-| RDS `t4g.micro` Postgres | ~$15 |
-| ElastiCache Redis | ~$15 |
-| **Total** | **~$470** |
-
-Only the `prod` stage retains S3 buckets and RDS snapshots on removal
-(`removal: 'retain'`); every other stage is disposable. Whole-stack teardown
-needs a separate reviewed Proxy and Runner decommission runbook, which is not
-implemented here.
+Use [runner operations](runners.md#scale-out) to add capacity. Resource sizes, database availability,
+backups and ClickHouse mode come from the stage's `deploy` block.
+The [cost catalog](architecture.md) lists every GCP billing component declared by this stack and its bootstrap.
+Estimate from the selected region, configuration and traffic rather than a fixed monthly total.
 
 ## Reference
 
-- `.env.example` — every configuration variable, with required/optional tiers
-- `stack/*.ts` — the resource graph, one file per domain; comments carry the design rationale
-- `deployment/*.ts` — the guarded wrapper, scope, stage config, and post-deploy verification
-- `scripts/*.mjs` — launchers whose paths are pinned in Pulumi state; see `scripts/README.md`
-- `.github/workflows/deploy-infra.yml` — the guarded CI deployment
+[Architecture](architecture.md) · [mdeploy](mdeploy.md) · [mstage](../mstage/README.md) ·
+[mbuild](../mbuild/README.md) · [ClickHouse](clickhouse.md) · [Status page](status-page.md)
