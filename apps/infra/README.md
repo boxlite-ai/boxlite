@@ -27,3 +27,8 @@ make test:apps:infra-config  # installs the SST platform, then type-checks the w
 Never apply a preview merely to validate configuration. All deploys require an explicit stage and
 run through `deployment/sst.ts`, which loads provider credentials, enforces scope and Runner
 policies, cleans Pulumi event logs, and performs post-deploy verification.
+
+## Related references
+
+- [configuration](docs/configuration.md) reference.
+- [mbuild](mbuild/README.md) reference.
