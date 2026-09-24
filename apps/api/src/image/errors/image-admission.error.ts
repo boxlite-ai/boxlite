@@ -44,7 +44,8 @@ export const IMAGE_COUNT_LIMIT_CODE = 'image_count_limit_reached'
  * runner ends up caching every image an organization uses, so the number of
  * distinct images is what actually grows the fleet's disk. An image already in
  * the catalog is therefore never refused *by this limit* — it adds no kind.
- * The cold-pull budget is a separate gate and still applies to it.
+ * The cold-pull budget is a separate gate, spent only by a ref the catalog
+ * cannot answer — a new tag of a name it already holds, say.
  */
 export class ImageCountLimitReachedError extends HttpException {
   constructor(limit: number) {

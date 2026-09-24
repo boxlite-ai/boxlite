@@ -499,8 +499,8 @@ nothing returns it.
 
 Uniqueness is a partial index rather than a table constraint, so a soft-deleted
 name can be used again; `image_org_lastused_index` serves the count the
-admission gate takes before a cold pull, and the per-org listing when the
-catalog API ships.
+admission gate takes when a create names an image the organization does not
+hold yet, and the per-org listing when the catalog API ships.
 
 ### `image_version`
 

@@ -594,8 +594,7 @@ describe('BoxService public defaults', () => {
    * is decided by the seam between it and the resolver, not by either alone.
    */
   describe('cold-pull budget', () => {
-    function withRealAdmission(resolved: object) {
-      process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = 'quay.io'
+    function withRealAdmission(resolved: object, overrides: Record<string, unknown> = {}) {
       const redis = { incr: jest.fn().mockResolvedValue(1), expire: jest.fn(), ttl: jest.fn() }
       const images = { exists: jest.fn().mockResolvedValue(true), count: jest.fn().mockResolvedValue(0) }
       const { service } = makeCreateService({
@@ -604,12 +603,23 @@ describe('BoxService public defaults', () => {
           images as unknown as Repository<Image>,
         ),
         imageResolverService: { resolve: jest.fn().mockResolvedValue(resolved) },
+        ...overrides,
       })
       return { service, redis }
     }
 
+    let allowlistBefore: string | undefined
+    beforeEach(() => {
+      allowlistBefore = process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
+      process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = 'quay.io'
+    })
+
     afterEach(() => {
-      delete process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
+      if (allowlistBefore === undefined) {
+        delete process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
+      } else {
+        process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = allowlistBefore
+      }
     })
 
     it('spends none on a ref the catalog already pinned', async () => {
@@ -640,6 +650,65 @@ describe('BoxService public defaults', () => {
       ).rejects.toThrow(/limit of 20 images/)
 
       expect(redis.incr).not.toHaveBeenCalled()
+    })
+
+    /** A volume the create names but cannot have refuses it after resolution. */
+    it('spends none on a create whose volume is refused', async () => {
+      const { service, redis } = withRealAdmission(
+        { ref: 'quay.io/acme/app:v1', isOrgOwned: true },
+        { volumeService: { validateVolumes: jest.fn().mockRejectedValue(new Error('no such volume')) } },
+      )
+
+      await expect(
+        service.create(
+          {
+            name: 'volume-box',
+            image: 'quay.io/acme/app:v1',
+            volumes: [{ volumeId: 'missing', mountPath: '/data' }],
+          } as any,
+          { id: 'org-1' } as any,
+        ),
+      ).rejects.toThrow(/no such volume/)
+
+      expect(redis.incr).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['a negative auto-stop interval', { autoStop: -5 }],
+      ['a network allow list that is not one', { networkAllowList: 'bad host!' }],
+    ])('spends none on a create refused for %s', async (_reason, input) => {
+      const { service, redis } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
+
+      await expect(
+        service.create({ name: 'refused-box', image: 'quay.io/acme/app:v1', ...input } as any, { id: 'org-1' } as any),
+      ).rejects.toThrow(BadRequestError)
+
+      expect(redis.incr).not.toHaveBeenCalled()
+    })
+
+    it('spends none on a create no runner can take', async () => {
+      const { service, redis } = withRealAdmission(
+        { ref: 'quay.io/acme/app:v1', isOrgOwned: true },
+        { runnerService: { getRandomAvailableRunner: jest.fn().mockRejectedValue(new Error('no runner')) } },
+      )
+
+      await expect(
+        service.create({ name: 'unplaced-box', image: 'quay.io/acme/app:v1' } as any, { id: 'org-1' } as any),
+      ).rejects.toThrow(/no runner/)
+
+      expect(redis.incr).not.toHaveBeenCalled()
+    })
+
+    it('inserts no box when the budget refuses the create', async () => {
+      const { service, redis } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
+      redis.incr.mockResolvedValue(4)
+      redis.ttl.mockResolvedValue(30)
+
+      await expect(
+        service.create({ name: 'over-budget-box', image: 'quay.io/acme/app:v1' } as any, { id: 'org-1' } as any),
+      ).rejects.toThrow(/Too many image pulls/)
+
+      expect((service as any).boxRepository.insert).not.toHaveBeenCalled()
     })
 
     it('spends one on a ref the catalog has not seen', async () => {

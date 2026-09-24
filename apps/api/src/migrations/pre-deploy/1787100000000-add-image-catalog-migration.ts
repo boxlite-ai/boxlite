@@ -22,8 +22,9 @@ export class AddImageCatalog1787100000000 implements MigrationInterface {
     await queryRunner.query(
       `CREATE UNIQUE INDEX "image_org_name_active_unique" ON "image" ("organizationId", "name") WHERE "deletedAt" IS NULL`,
     )
-    // Serves the count the admission gate takes before every cold pull, and
-    // the per-org listing when the catalog API ships.
+    // Serves the count the admission gate takes when a create names an image
+    // the organization does not hold yet, and the per-org listing when the
+    // catalog API ships.
     await queryRunner.query(`CREATE INDEX "image_org_lastused_index" ON "image" ("organizationId", "lastUsedAt")`)
 
     // `digest` is the OCI manifest digest the runner reports, not the host's

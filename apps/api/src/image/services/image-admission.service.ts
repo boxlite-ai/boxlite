@@ -69,9 +69,10 @@ export class ImageAdmissionService {
    * be pulled again by a runner that has not cached it, which the number of
    * runners bounds: once per build per runner.
    *
-   * Separate from `assert` because only the resolver knows whether it hit, and
-   * the resolver must not see an image `assert` refuses. Taking its answer as
-   * the argument is what orders the two.
+   * Separate from `assert` because only the resolver knows whether it hit;
+   * taking its answer as the argument puts this after the resolver. Running
+   * `assert` first, so a refused image never reaches the catalog query, is the
+   * caller's to keep.
    */
   async spendColdPullBudget(organization: Organization, resolved: ResolvedImage): Promise<void> {
     if (!resolved.isOrgOwned || resolved.imageId) {
@@ -83,8 +84,8 @@ export class ImageAdmissionService {
   /**
    * Refuse a new image once the organization holds its limit.
    *
-   * Ordered before the pull budget so a create that cannot succeed does not
-   * spend one: the budget has no way to give a slot back.
+   * The caller checks it before spending the pull budget, so a create it
+   * refuses does not spend one: the budget has no way to give a slot back.
    */
   private async assertWithinCatalogLimit(organization: Organization, name: string): Promise<void> {
     const alreadyHeld = await this.imageRepository.exists({

@@ -15,8 +15,9 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, Update
 // used again. Volume takes the table-level constraint and cannot: its service
 // allows the reuse that the constraint then rejects.
 @Index('image_org_name_active_unique', ['organizationId', 'name'], { unique: true, where: '"deletedAt" IS NULL' })
-// Covers the count the admission gate takes before every cold pull, and the
-// per-org listing when the catalog API ships.
+// Covers the count the admission gate takes when a create names an image the
+// organization does not hold yet, and the per-org listing when the catalog API
+// ships.
 @Index('image_org_lastused_index', ['organizationId', 'lastUsedAt'])
 export class Image {
   @PrimaryGeneratedColumn('uuid')

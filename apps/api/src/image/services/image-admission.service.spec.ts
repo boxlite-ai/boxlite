@@ -115,7 +115,11 @@ describe('ImageAdmissionService', () => {
   describe('pull budget', () => {
     /** A hit is handed out by digest: a build already pulled and booted here. */
     it('spends nothing on a ref the catalog answered', async () => {
-      await service.spendColdPullBudget(organization, { ...CATALOG_MISS, imageId: 'image-1' })
+      await service.spendColdPullBudget(organization, {
+        ref: `quay.io/acme/app@sha256:${'a'.repeat(64)}`,
+        isOrgOwned: true,
+        imageId: 'image-1',
+      })
       expect(redis.incr).not.toHaveBeenCalled()
     })
 

@@ -233,8 +233,8 @@ export class BoxService {
 
       // Admission decides whether this organization may boot from this image at
       // all; it is the gate that replaced "curated images only". It runs after
-      // the suspension check, and the cold-pull budget is spent only after the
-      // resolver has answered, so a create refused on the way spends none.
+      // the suspension check, and before the resolver, so a refused image never
+      // reaches the catalog query.
       await this.imageAdmissionService.assert(organization, createBoxDto.image)
       // Resolution turns what the caller asked for into the ref a runner is
       // given: the curated set answers its own selectors without a query, and
@@ -243,7 +243,6 @@ export class BoxService {
       // as typed if it does not, which is how an image gets pulled the first
       // time.
       const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
-      await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
       const image = resolvedImage.ref
       const needsFreshBox = requiresFreshBox(createBoxDto, organization, resolvedImage)
 
@@ -352,14 +351,20 @@ export class BoxService {
       // falling back to "cozy-otter-{boxId}" if it collides with the per-org
       // @Unique(['organizationId', 'name']) constraint. Only the insert retries:
       // the chosen runner is still fine, it was the name that collided.
-      const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, () =>
-        createBoxDto.name
+      //
+      // The cold-pull budget is spent in here, once a runner is chosen and just
+      // before the insert: it has no way to give a slot back, so a create its
+      // own input or placement refuses must not spend one. Only the box limit
+      // and a name collision, which the insert itself settles, come after it.
+      const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
+        await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
+        return createBoxDto.name
           ? this.boxRepository.insert(box, options.maxCreatedBoxes)
           : persistWithGeneratedBoxName(box.id, (name) => {
               box.name = name
               return this.boxRepository.insert(box, options.maxCreatedBoxes)
-            }),
-      )
+            })
+      })
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
