@@ -57,8 +57,8 @@ npm run mstage env digest -- --stage dev
 ```
 
 Use `--confirm` for a protected stage. For a batch, pipe a JSON object into
-`mstage env set -- --stage dev`; `--select-group deploy` limits allowed keys and `--digest`
-updates the deployment fingerprint in the same write. Serialize edits: the store is a whole-object
+`mstage env set -- --stage dev`; `--select-group deploy` filters allowed keys. Inspect the
+import, then run `env set -- --stage dev --digest` separately to certify it. Serialize edits: the store is a whole-object
 read/modify/write operation, so concurrent writers can lose each other's changes.
 
 Groups in `mstage.env.json` define what each consumer may receive:
