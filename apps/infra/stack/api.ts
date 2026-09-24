@@ -163,8 +163,8 @@ export function buildApi(input: ApiInputs) {
         VERSION: releaseVersion,
         DEFAULT_REGION_ENFORCE_QUOTAS: 'false',
         DEFAULT_TEMPLATE: envOr('DEFAULT_TEMPLATE', 'boxlite/base'),
-        // Box base images: the three *_IMAGE refs below are the built-in curated set the API
-        // gates box creation to (apps/api curated-images.constant.ts); the runner pulls them
+        // Box base images: the three *_IMAGE refs below are the built-in curated set
+        // (apps/api curated-images.constant.ts); the runner pulls them
         // straight from ghcr.io, and these three are public so no GHCR_TOKEN is required.
         // BOXLITE_SYSTEM_IMAGES appends more images
         // (comma-separated `name=ref`) without a code deploy — empty means built-ins only.
@@ -178,6 +178,8 @@ export function buildApi(input: ApiInputs) {
         ),
         BOXLITE_SYSTEM_NODE_IMAGE: envOr('BOXLITE_SYSTEM_NODE_IMAGE', 'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0'),
         BOXLITE_SYSTEM_IMAGES: envOr('BOXLITE_SYSTEM_IMAGES', ''),
+        // Registries a tenant-supplied image may name; empty keeps the API's built-in list.
+        BOXLITE_IMAGE_REGISTRY_ALLOWLIST: envOr('BOXLITE_IMAGE_REGISTRY_ALLOWLIST', ''),
         ...(process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_URL && {
           BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME: envOr(
             'BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME',

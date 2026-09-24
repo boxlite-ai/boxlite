@@ -217,7 +217,7 @@ const systemImagesFrom = (environment: Environment): Record<string, string> => {
     ...passthrough('BOXLITE_SYSTEM_IMAGES'),
     // Registries a tenant-supplied image may be pulled from. Unset leaves the
     // API on its built-in list, so an operator only sets this to widen or
-    // narrow it — and can do that without a deploy.
+    // narrow it, with no code change.
     ...passthrough('BOXLITE_IMAGE_REGISTRY_ALLOWLIST'),
     ...(registry
       ? {
@@ -302,7 +302,11 @@ export const apiEnvironmentFrom = ({
        * it, and every file a box touches becomes a cross-region read.
        */
       ...(home === 'gcp' ? { VOLUME_STORAGE_BACKEND: 'gcs', GCS_LOCATION: region } : {}),
-      OTEL_ENABLED: String(!flag(environment, 'OTEL_DISABLED')),
+      // On unless the stage says otherwise, and it says so through the api
+      // group's own `OTEL_ENABLED`, which `...values` below lets win. There is
+      // no second switch: an inverted one read here would come from whatever
+      // shell ran the deploy, since no group can fetch it.
+      OTEL_ENABLED: 'true',
       ...dashboardFrom(environment, hosts),
       ...oidcFrom(environment, hosts),
       ...billingFrom(environment, delivered),

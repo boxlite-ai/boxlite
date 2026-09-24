@@ -176,9 +176,25 @@ test('a flag that is neither true nor false is refused here rather than at the s
   )
 })
 
-test('every key these gates expect is one the store is declared to fetch', () => {
+/** A stage key read through one of this module's accessors, by literal name. */
+const STAGE_READ = /\b(?:optional|flag|held|passthrough)\((?:[a-z]+,\s*)?'([A-Z][A-Z0-9_]*)'/g
+
+/**
+ * Every key the module reads, found from its calls rather than listed — the way
+ * `deployment/key-policy.test.ts` scans the incumbent stack. Comments are
+ * stripped first, so a key named in prose is not a key read.
+ */
+const keysReadBy = (url: URL): Set<string> => {
+  const live = readFileSync(url, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+  return new Set([...live.matchAll(STAGE_READ)].map((match) => match[1] as string))
+}
+
+test('every key this module reads is one the store is declared to fetch', () => {
   // A name this module reads but no group names would read as "not configured"
-  // on every deploy, with nothing saying why.
+  // on every deploy, with nothing saying why. Scanned, not listed: a list only
+  // covers the keys someone remembered to put on it.
   //
   // Read through mstage's own parser rather than off the raw JSON: a group may
   // be written as a bare array or as required/optional, and a test that
@@ -186,7 +202,12 @@ test('every key these gates expect is one the store is declared to fetch', () =>
   const path = new URL('../../mstage.env.json', import.meta.url)
   const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
   const fetched = new Set(Object.values(declared.envSelectGroup).flat())
+  const read = keysReadBy(new URL('../src/api-environment.ts', import.meta.url))
+  // The scan has to keep seeing how the module reads, or it passes by finding nothing.
   for (const key of [...BILLING_KEYS, ...STATUS_SYNC_KEYS]) {
+    assert.ok(read.has(key), `the scan no longer finds ${key}; update STAGE_READ`)
+  }
+  for (const key of read) {
     assert.ok(fetched.has(key), `${key} is read by api-environment.ts but no group in mstage.env.json fetches it`)
   }
 })
