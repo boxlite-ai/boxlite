@@ -55,7 +55,7 @@ A boundary update creates a managed-policy version; bootstrap prunes the oldest 
 when needed to stay within IAM's version limit.
 
 Stage state/secrets grants coexist with shared asset buckets, volume-prefix access, account-wide
-SSM instance targets and SES identity management. [Security](../../docs/security.md#aws-policy-scope-and-shared-grants)
+SSM instance targets and SES identity management. [Security](../../docs/security.md)
 records those limits. `cloudfront-keyvaluestore:*` is separate from `cloudfront:*`; the latter's
 wildcard does not cover another service prefix.
 

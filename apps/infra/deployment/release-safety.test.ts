@@ -594,7 +594,7 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
    * the two together are the whole picture: a grant that is account-wide because its resource has no
    * stage to scope to is a documented limit, and a new one appearing silently is not.
    *
-   * Pinned against docs/security.md, because a limit nobody wrote down is indistinguishable from one
+   * Pinned against docs/aws/security.md, because a limit nobody wrote down is indistinguishable from one
    * nobody noticed.
    */
   // The same statements the isolation test above reads.
@@ -736,13 +736,13 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
    * way: narrow or delete boxlite-volume-* later and security.md would still describe it as shared,
    * with nothing failing. So each documented pattern must also still match a real unscoped resource.
    */
-  const security = readFileSync(join(REPO_ROOT, 'apps/infra/docs/security.md'), 'utf8')
+  const security = readFileSync(join(REPO_ROOT, 'apps/infra/docs/aws/security.md'), 'utf8')
   for (const [pattern] of DOCUMENTED_IN_SECURITY_MD) {
     const claim = pattern.replace(/^:/, '').replace(/-$/, '-*')
-    assert.ok(security.includes(claim), `docs/security.md must still name ${claim} as a shared grant`)
+    assert.ok(security.includes(claim), `docs/aws/security.md must still name ${claim} as a shared grant`)
     assert.ok(
       unscoped.some(({ resource }: any) => resource.includes(pattern)),
-      `docs/security.md still describes ${claim} as reaching every stage, but no grant matches it — ` +
+      `docs/aws/security.md still describes ${claim} as reaching every stage, but no grant matches it — ` +
         'either the policy was narrowed and the note is now wrong, or the pattern here is stale',
     )
   }
