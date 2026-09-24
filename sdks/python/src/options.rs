@@ -435,7 +435,7 @@ impl TryFrom<PyNetworkSpec> for (NetworkSpec, NetworkSpec) {
                 mode: inbound.mode.parse::<NetworkMode>()?,
                 allow_net: inbound.allow_net,
             })?,
-            None => NetworkSpec::default_inbound(),
+            None => NetworkSpec::disabled(),
         };
         Ok((outbound, inbound))
     }
@@ -691,7 +691,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
 
         let (network, inbound_network) = match py_opts.network {
             Some(spec) => <(NetworkSpec, NetworkSpec)>::try_from(spec)?,
-            None => (NetworkSpec::default(), NetworkSpec::default_inbound()),
+            None => (NetworkSpec::default(), NetworkSpec::disabled()),
         };
 
         let ports = py_opts.ports.into_iter().map(PortSpec::from).collect();

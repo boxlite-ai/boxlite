@@ -765,7 +765,7 @@ pub enum NetworkSpec {
 The inbound direction — whether services the box exposes are reachable from
 outside it — is the sibling field `BoxOptions::inbound_network`, which reuses
 this same type: `Enabled` = reachable, `Disabled` = private (the default,
-`NetworkSpec::default_inbound()`). The two directions are independent, so a
+`NetworkSpec::disabled()`). The two directions are independent, so a
 box may refuse egress while the services it exposes stay reachable, or the
 reverse.
 

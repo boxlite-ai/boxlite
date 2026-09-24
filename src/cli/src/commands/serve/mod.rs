@@ -1182,7 +1182,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                 })?,
             )
         }
-        None => (NetworkSpec::default(), NetworkSpec::default_inbound()),
+        None => (NetworkSpec::default(), NetworkSpec::disabled()),
     };
 
     // SecurityOptions is deliberately NOT client-configurable over
