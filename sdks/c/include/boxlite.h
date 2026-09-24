@@ -476,21 +476,6 @@ typedef struct BoxliteSocketAddress {
   const char *path;
 } BoxliteSocketAddress;
 
-// How a box's image is pulled — `BoxOptions::image_pull`. Each field is a
-// boolean, nonzero for true.
-//
-// A struct rather than one argument per field, so a caller naming them cannot
-// pass them in the wrong order: swapping the two would pull a tenant's image
-// with the runtime's credentials.
-typedef struct BoxliteImagePullOptions {
-  // Pull without the registry credentials the runtime holds — for an image
-  // reference someone other than the runtime's owner chose.
-  int anonymous;
-  // Re-resolve the reference instead of answering from the cache — for one
-  // not yet pinned to a digest. Not persisted with the box.
-  int revalidate;
-} BoxliteImagePullOptions;
-
 typedef struct CredentialHandle CBoxliteCredential;
 
 typedef struct RestOptionsHandle CBoxliteRestOptions;
@@ -1068,12 +1053,6 @@ void boxlite_options_set_auto_delete_interval(CBoxliteOptions *opts, uint32_t se
 void boxlite_options_set_auto_resume_enabled(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
-
-// Set how this box's image is pulled. Null `pull` is a no-op: whatever was set
-// before stays, and a box never set pulls with the runtime's credentials,
-// answered from cache when possible.
-void boxlite_options_set_image_pull(CBoxliteOptions *opts,
-                                    const struct BoxliteImagePullOptions *pull);
 
 // Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
 // `CBoxliteOptions`. Clones the advanced configuration into the box options —

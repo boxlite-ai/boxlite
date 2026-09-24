@@ -16,9 +16,7 @@
 use crate::db::{CachedImage, Database, ImageIndexStore};
 use crate::images::manager::{ImageManifest, LayerInfo};
 use crate::images::storage::ImageStorage;
-use crate::runtime::options::{
-    ImagePullOptions, ImageRegistry, ImageRegistryAuth, RegistryTransport,
-};
+use crate::runtime::options::{ImageRegistry, ImageRegistryAuth, RegistryTransport};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use oci_client::Reference;
 use oci_client::client::{ClientConfig, ClientProtocol};
@@ -73,7 +71,7 @@ impl ImageStoreInner {
 /// let store = Arc::new(ImageStore::new(images_dir, db, vec![])?);
 ///
 /// // Pull image (thread-safe, releases lock during download)
-/// let manifest = store.pull("python:alpine", ImagePullOptions::default()).await?;
+/// let manifest = store.pull("python:alpine").await?;
 ///
 /// // Create BlobSource for accessing layers
 /// let storage = store.storage().await;
@@ -154,11 +152,24 @@ impl ImageStore {
     ///
     /// Thread-safe: Multiple concurrent pulls of the same image will only
     /// download once; others will get the cached result.
-    pub async fn pull(
-        &self,
-        image_ref: &str,
-        pull: ImagePullOptions,
-    ) -> BoxliteResult<ImageManifest> {
+    pub async fn pull(&self, image_ref: &str) -> BoxliteResult<ImageManifest> {
+        self.resolve(image_ref, CacheUse::First).await
+    }
+
+    /// Resolve an image against its registry even when it is cached, keeping
+    /// the cached copy for when the registry gives no answer.
+    ///
+    /// The cache answers by ref string and never re-checks it, so a tag keeps
+    /// resolving to whatever it pointed at when this host first pulled it.
+    /// Layers are keyed by their own digests, so asking again downloads only
+    /// what changed. The cache stands in only for a registry that did not
+    /// answer — see [`RegistryPullError`] — never for one that said the image
+    /// is gone or not this caller's to read.
+    pub async fn refresh(&self, image_ref: &str) -> BoxliteResult<ImageManifest> {
+        self.resolve(image_ref, CacheUse::Fallback).await
+    }
+
+    async fn resolve(&self, image_ref: &str, cache: CacheUse) -> BoxliteResult<ImageManifest> {
         use super::ReferenceIter;
 
         tracing::debug!(
@@ -172,24 +183,25 @@ impl ImageStore {
             .map_err(|e| BoxliteError::Storage(format!("invalid image reference: {e}")))?;
 
         let mut errors: Vec<(String, BoxliteError)> = Vec::new();
+        let mut throttled = false;
 
         for reference in candidates {
             let ref_str = reference.whole();
 
-            // Fast path: check cache with read lock. Skipped when the caller
-            // asked for revalidation — the cache answers by ref string, which
-            // is the thing being re-checked.
-            if !pull.revalidate {
+            // Fast path: check cache with read lock
+            if cache == CacheUse::First {
                 let inner = self.inner.read().await;
-                if let Some(manifest) = self.try_load_cached(&inner, &ref_str)? {
+                let cached = self.try_load_cached(&inner, &ref_str)?;
+                drop(inner);
+                if let Some(manifest) = cached {
                     tracing::info!("Using cached image: {}", ref_str);
-                    return Ok(manifest);
+                    return self.serve_cached(&reference, manifest).await;
                 }
-            } // Read lock released
+            }
 
             // Slow path: pull from registry
             tracing::info!("Pulling image from registry: {}", ref_str);
-            match self.pull_from_registry(&reference, pull).await {
+            match self.pull_from_registry(&reference).await {
                 Ok(manifest) => {
                     if !errors.is_empty() {
                         tracing::info!(
@@ -201,7 +213,21 @@ impl ImageStore {
                     }
                     return Ok(manifest);
                 }
-                Err(e) => {
+                Err(failure) => {
+                    let answered = matches!(failure, RegistryPullError::Failed(_));
+                    throttled |= matches!(failure, RegistryPullError::Throttled(_));
+                    let e = failure.into_error();
+                    if !answered && cache == CacheUse::Fallback {
+                        let cached = self.try_load_cached(&*self.inner.read().await, &ref_str)?;
+                        if let Some(manifest) = cached {
+                            tracing::warn!(
+                                reference = %ref_str,
+                                error = %e,
+                                "Registry gave no answer; using the cached image"
+                            );
+                            return self.serve_cached(&reference, manifest).await;
+                        }
+                    }
                     tracing::debug!(
                         reference = %ref_str,
                         error = %e,
@@ -223,6 +249,16 @@ impl ImageStore {
                 .iter()
                 .map(|(registry, err)| format!("  - {}: {}", registry, err))
                 .collect();
+
+            // A throttled registry says nothing about the image, so the caller
+            // is told to wait rather than that the pull failed.
+            if throttled {
+                return Err(BoxliteError::ResourceExhausted(format!(
+                    "image registry rate limit reached pulling '{}'; retry later:\n{}",
+                    image_ref,
+                    details.join("\n")
+                )));
+            }
 
             Err(BoxliteError::Storage(format!(
                 "Failed to pull image '{}' after trying {} {}:\n{}",
@@ -581,20 +617,26 @@ impl ImageStore {
     async fn pull_from_registry(
         &self,
         reference: &Reference,
-        pull: ImagePullOptions,
-    ) -> BoxliteResult<ImageManifest> {
+    ) -> Result<ImageManifest, RegistryPullError> {
         assert_registry_is_public(reference.registry(), &self.image_registries).await?;
 
-        // The client is still built per host: anonymity is about credentials,
-        // not about transport, so an insecure local registry stays reachable.
         let client = self.client_for(reference);
-        let auth = registry_auth_for(reference.registry(), &self.image_registries, pull);
+        let auth = registry_auth_for(reference.registry(), &self.image_registries);
+
+        // Step 0: Fetch the token first. Left to the manifest request, the
+        // client drops a failed token exchange and asks without one, so a token
+        // service that is down or throttling reads as a 401 on the image. The
+        // token is cached, so the requests below reuse it.
+        client
+            .auth(reference, &auth, oci_client::RegistryOperation::Pull)
+            .await
+            .map_err(|e| RegistryPullError::from_token_exchange(e, &auth))?;
 
         // Step 1: Pull manifest (no lock needed)
         let (manifest, manifest_digest_str) = client
             .pull_manifest(reference, &auth)
             .await
-            .map_err(|e| BoxliteError::Storage(format!("failed to pull manifest: {e}")))?;
+            .map_err(|e| RegistryPullError::from_registry("manifest", e))?;
 
         // Step 2: Save manifest (quick write lock)
         {
@@ -606,7 +648,7 @@ impl ImageStore {
 
         // Step 3: Extract image manifest (may pull platform-specific manifest for multi-platform images)
         let mut image_manifest = self
-            .extract_image_manifest(&client, reference, &manifest, manifest_digest_str, pull)
+            .extract_image_manifest(&client, reference, &manifest, manifest_digest_str)
             .await?;
 
         // Step 4: Download layers (no lock during download, atomic file writes)
@@ -626,11 +668,57 @@ impl ImageStore {
                 self.load_diff_ids_from_config(&inner, &image_manifest.config_digest)?;
         }
 
-        // Step 6: Update index using reference.whole() as the cache key
-        self.update_index(&reference.whole(), &image_manifest)
-            .await?;
+        // Step 6: Index it under the ref it was pulled by and the digest it resolved to
+        self.record_in_index(reference, &image_manifest).await?;
 
         Ok(image_manifest)
+    }
+
+    /// Index a pulled image under the digest it resolved to and, the first time
+    /// this host caches that ref, under the ref as well.
+    ///
+    /// The digest's entry is what a pinned pull finds: a restart reads its
+    /// disk's build by it, and so do curated pins and catalog hits. The ref's
+    /// entry keeps the build this host first cached for it, as it always has,
+    /// because a box made before builds were recorded restarts by reading it,
+    /// and moving it to follow the tag would pair a newer build's config with
+    /// that box's disk. A new disk never reads it — a refresh hands its answer
+    /// straight back — so nothing needs it to move.
+    async fn record_in_index(
+        &self,
+        reference: &Reference,
+        manifest: &ImageManifest,
+    ) -> BoxliteResult<()> {
+        let by_ref = reference.whole();
+        let by_digest = digest_key(reference, manifest);
+        if by_digest != by_ref {
+            self.update_index(&by_digest, manifest).await?;
+            let first = self.try_load_cached(&*self.inner.read().await, &by_ref)?;
+            if first.is_some() {
+                return Ok(());
+            }
+        }
+        self.update_index(&by_ref, manifest).await
+    }
+
+    /// Serve a cached image, making sure its build can be found by digest.
+    ///
+    /// A pull indexes both keys itself, but a cache written before digests were
+    /// indexed holds only the tag. Served from there — offline, say — the tag
+    /// reports a digest that a pinned pull (a curated pin, a catalog hit, a
+    /// restart) would then miss, and that pull needs the very registry that
+    /// just gave no answer.
+    async fn serve_cached(
+        &self,
+        reference: &Reference,
+        manifest: ImageManifest,
+    ) -> BoxliteResult<ImageManifest> {
+        let by_digest = digest_key(reference, &manifest);
+        let indexed = self.inner.read().await.index.get(&by_digest)?.is_some();
+        if !indexed {
+            self.update_index(&by_digest, &manifest).await?;
+        }
+        Ok(manifest)
     }
 
     /// Update index with newly pulled image.
@@ -661,8 +749,7 @@ impl ImageStore {
         reference: &Reference,
         manifest: &oci_client::manifest::OciManifest,
         manifest_digest: String,
-        pull: ImagePullOptions,
-    ) -> BoxliteResult<ImageManifest> {
+    ) -> Result<ImageManifest, RegistryPullError> {
         match manifest {
             oci_client::manifest::OciManifest::Image(img) => {
                 let layers = Self::layers_from_image(img)?;
@@ -675,7 +762,7 @@ impl ImageStore {
                 })
             }
             oci_client::manifest::OciManifest::ImageIndex(index) => {
-                self.extract_platform_manifest(client, reference, index, pull)
+                self.extract_platform_manifest(client, reference, index)
                     .await
             }
         }
@@ -717,8 +804,7 @@ impl ImageStore {
         client: &oci_client::Client,
         reference: &Reference,
         index: &oci_client::manifest::OciImageIndex,
-        pull: ImagePullOptions,
-    ) -> BoxliteResult<ImageManifest> {
+    ) -> Result<ImageManifest, RegistryPullError> {
         let (platform_os, platform_arch) = Self::detect_platform();
 
         tracing::debug!(
@@ -742,10 +828,10 @@ impl ImageStore {
         let (platform_image, platform_digest) = client
             .pull_manifest(
                 &platform_reference,
-                &registry_auth_for(reference.registry(), &self.image_registries, pull),
+                &registry_auth_for(reference.registry(), &self.image_registries),
             )
             .await
-            .map_err(|e| BoxliteError::Storage(format!("failed to pull platform manifest: {e}")))?;
+            .map_err(|e| RegistryPullError::from_registry("platform manifest", e))?;
 
         // Save platform manifest (quick lock)
         {
@@ -766,9 +852,7 @@ impl ImageStore {
                     diff_ids: Vec::new(), // Populated after config download
                 })
             }
-            _ => Err(BoxliteError::Storage(
-                "platform manifest is not a valid image".into(),
-            )),
+            _ => Err(BoxliteError::Storage("platform manifest is not a valid image".into()).into()),
         }
     }
 
@@ -827,7 +911,7 @@ impl ImageStore {
         client: &oci_client::Client,
         reference: &Reference,
         layers: &[LayerInfo],
-    ) -> BoxliteResult<()> {
+    ) -> Result<(), RegistryPullError> {
         use futures::future::join_all;
 
         // Check which layers need downloading (quick read lock)
@@ -887,7 +971,7 @@ impl ImageStore {
         client: &oci_client::Client,
         reference: &Reference,
         layer: &LayerInfo,
-    ) -> BoxliteResult<()> {
+    ) -> Result<(), RegistryPullError> {
         const MAX_RETRIES: u32 = 3;
 
         tracing::info!("Downloading layer: {}", layer.digest);
@@ -914,10 +998,9 @@ impl ImageStore {
                 {
                     Ok(result) => result,
                     Err(e) => {
-                        last_error = Some(format!(
-                            "Failed to stage layer {} download: {e}",
-                            layer.digest
-                        ));
+                        last_error = Some(RegistryPullError::Failed(BoxliteError::Storage(
+                            format!("Failed to stage layer {} download: {e}", layer.digest),
+                        )));
                         continue;
                     }
                 }
@@ -949,25 +1032,33 @@ impl ImageStore {
                             attempt,
                             layer.digest
                         );
-                        last_error =
-                            Some("layer integrity verification failed: hash mismatch".to_string());
+                        last_error = Some(RegistryPullError::Failed(BoxliteError::Storage(
+                            "layer integrity verification failed: hash mismatch".to_string(),
+                        )));
                     }
                     Err(e) => {
                         tracing::warn!("Layer commit error (attempt {}): {}", attempt, e);
-                        last_error = Some(format!("layer commit error: {e}"));
+                        last_error = Some(RegistryPullError::Failed(BoxliteError::Storage(
+                            format!("layer commit error: {e}"),
+                        )));
                     }
                 },
                 Err(e) => {
                     tracing::warn!("Layer download failed (attempt {}): {}", attempt, e);
-                    last_error = Some(format!("failed to pull layer {}: {e}", layer.digest));
+                    last_error = Some(RegistryPullError::from_registry(
+                        &format!("layer {}", layer.digest),
+                        e,
+                    ));
                     staged.abort().await;
                 }
             }
         }
 
-        Err(BoxliteError::Storage(last_error.unwrap_or_else(|| {
-            "download failed after retries".to_string()
-        })))
+        Err(last_error.unwrap_or_else(|| {
+            RegistryPullError::Failed(BoxliteError::Storage(
+                "download failed after retries".to_string(),
+            ))
+        }))
     }
 
     async fn download_config(
@@ -975,7 +1066,7 @@ impl ImageStore {
         client: &oci_client::Client,
         reference: &Reference,
         config_digest: &str,
-    ) -> BoxliteResult<()> {
+    ) -> Result<(), RegistryPullError> {
         // Check if already cached (quick read lock)
         {
             let inner = self.inner.read().await;
@@ -1009,7 +1100,7 @@ impl ImageStore {
             .await
         {
             staged.abort().await;
-            return Err(BoxliteError::Storage(format!("failed to pull config: {e}")));
+            return Err(RegistryPullError::from_registry("config", e));
         }
 
         // Verify and commit (atomic move to final location)
@@ -1017,7 +1108,8 @@ impl ImageStore {
             return Err(BoxliteError::Storage(format!(
                 "Config blob verification failed for {}",
                 config_digest
-            )));
+            ))
+            .into());
         }
 
         Ok(())
@@ -1059,6 +1151,24 @@ impl ImageStore {
     }
 }
 
+/// How long a registry may take to accept a connection, and then to send the
+/// next bytes, before the pull gives up on it.
+///
+/// Without a bound, a registry that drops packets or stalls after connecting
+/// blocks a box's first start for as long as the OS keeps the socket, and a
+/// refresh never reaches its fallback to the cache. A timeout is a transport
+/// failure, so it counts as no answer. The read bound resets on every read, so
+/// a large layer that keeps streaming is never cut off. Short under test, so a
+/// stalled registry can be exercised without waiting out the real bounds.
+#[cfg(not(test))]
+const REGISTRY_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+#[cfg(not(test))]
+const REGISTRY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+#[cfg(test)]
+const REGISTRY_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+#[cfg(test)]
+const REGISTRY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 fn client_config_for_registry(host: &str, image_registries: &[ImageRegistry]) -> ClientConfig {
     let registry = image_registries
         .iter()
@@ -1072,6 +1182,8 @@ fn client_config_for_registry(host: &str, image_registries: &[ImageRegistry]) ->
     ClientConfig {
         protocol,
         accept_invalid_certificates: registry.is_some_and(|registry| registry.skip_verify),
+        connect_timeout: Some(REGISTRY_CONNECT_TIMEOUT),
+        read_timeout: Some(REGISTRY_READ_TIMEOUT),
         ..Default::default()
     }
 }
@@ -1105,7 +1217,7 @@ fn client_config_for_registry(host: &str, image_registries: &[ImageRegistry]) ->
 async fn assert_registry_is_public(
     host: &str,
     image_registries: &[ImageRegistry],
-) -> BoxliteResult<()> {
+) -> Result<(), RegistryPullError> {
     if image_registries
         .iter()
         .any(|registry| registry.host == host)
@@ -1118,20 +1230,27 @@ async fn assert_registry_is_public(
     // A literal is already the answer. Handing it to a resolver would only
     // invite a different one than the address that gets connected to.
     if let Ok(address) = hostname.parse::<std::net::IpAddr>() {
-        return refuse_non_public(host, &address);
+        return refuse_non_public(host, &address).map_err(RegistryPullError::Unanswered);
     }
 
+    // Every failure here is one the registry never answered: nothing has been
+    // sent to it yet. So a refresh may still start from the cache — offline,
+    // or behind a resolver that answers with a proxy's fake address — and that
+    // is safe, because falling back contacts nothing.
+    //
     // The port is required by `lookup_host` and does not reach the result: only
     // the addresses are read, and they are the same whichever port is asked
     // for.
     let resolved = tokio::net::lookup_host((hostname, 443))
         .await
         .map_err(|e| {
-            BoxliteError::Image(format!("failed to resolve registry host '{host}': {e}"))
+            RegistryPullError::Unanswered(BoxliteError::Image(format!(
+                "failed to resolve registry host '{host}': {e}"
+            )))
         })?;
 
     for address in resolved {
-        refuse_non_public(host, &address.ip())?;
+        refuse_non_public(host, &address.ip()).map_err(RegistryPullError::Unanswered)?;
     }
 
     Ok(())
@@ -1247,21 +1366,128 @@ fn embedded_ipv4(high: u16, low: u16) -> std::net::Ipv4Addr {
     )
 }
 
-fn registry_auth_for(
-    host: &str,
-    image_registries: &[ImageRegistry],
-    pull: ImagePullOptions,
-) -> OciRegistryAuth {
-    // Decided here rather than at the call sites because a pull resolves a
-    // credential in more than one place — the manifest, then the
-    // platform-specific manifest of a multi-platform image — and a credential
-    // that leaks at the second one leaks just the same. Layer and config
-    // downloads reuse whatever this returned, through the client's own auth
-    // cache, so they follow without asking again.
-    if pull.anonymous {
-        return OciRegistryAuth::Anonymous;
+/// The index key a build is found by wherever it was pulled from: its
+/// repository pinned to the manifest digest it resolved to.
+fn digest_key(reference: &Reference, manifest: &ImageManifest) -> String {
+    Reference::with_digest(
+        reference.registry().to_string(),
+        reference.repository().to_string(),
+        manifest.manifest_digest.clone(),
+    )
+    .whole()
+}
+
+/// How much a pull trusts the ref-keyed cache.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CacheUse {
+    /// A cached image answers without asking the registry: [`ImageStore::pull`].
+    First,
+    /// The registry is asked first, and the cached image answers only when the
+    /// registry gives no answer: [`ImageStore::refresh`].
+    Fallback,
+}
+
+/// A registry pull that failed, sorted by whether a cached copy may stand in.
+///
+/// Only a registry that gave no answer may be covered for. A 401 or a 404 is
+/// the registry's answer, and serving the cached build over it would hide that
+/// the image is gone or no longer this caller's to read.
+#[derive(Debug)]
+enum RegistryPullError {
+    /// Nothing reached the registry — its host did not resolve, resolved to an
+    /// address the pull refuses, or could not be connected to — or it failed on
+    /// its side (5xx).
+    Unanswered(BoxliteError),
+    /// The registry throttled the pull (429). No answer about the image either,
+    /// so the cache may stand in; kept apart so that, with nothing cached, the
+    /// caller is told to retry later rather than that the pull failed.
+    Throttled(BoxliteError),
+    /// Anything else, including every answer the registry gave.
+    Failed(BoxliteError),
+}
+
+impl RegistryPullError {
+    /// Sorts a failed request to the registry — for the manifest, a platform
+    /// manifest, a layer or the config — by whether the registry answered.
+    ///
+    /// Every exchange is sorted the same way, not just the first: a registry
+    /// that answered the tag and then throttled or failed on the platform
+    /// manifest or a layer still gave no answer about the build. Blob requests
+    /// report their status through `RequestError`, so its status decides; one
+    /// with none never reached the registry.
+    fn from_registry(what: &str, error: oci_client::errors::OciDistributionError) -> Self {
+        use oci_client::errors::{OciDistributionError, OciErrorCode};
+
+        let status = match &error {
+            OciDistributionError::ServerError { code, .. } => Some(*code),
+            OciDistributionError::RequestError(e) => e.status().map(|s| s.as_u16()),
+            _ => None,
+        };
+        let throttled = status == Some(429)
+            || matches!(&error, OciDistributionError::RegistryError { envelope, .. }
+                if envelope.errors.iter().any(|e| e.code == OciErrorCode::Toomanyrequests));
+        let unanswered = match &error {
+            OciDistributionError::RequestError(_) => status.is_none_or(|code| code >= 500),
+            OciDistributionError::ServerError { code, .. } => *code >= 500,
+            _ => false,
+        };
+        let error = BoxliteError::Storage(format!("failed to pull {what}: {error}"));
+        if throttled {
+            Self::Throttled(error)
+        } else if unanswered {
+            Self::Unanswered(error)
+        } else {
+            Self::Failed(error)
+        }
     }
 
+    /// Sorts a failed token exchange, which comes before the registry says
+    /// anything about the image. A token service that refuses an anonymous
+    /// request is down or throttling — an anonymous token is issued even for a
+    /// private repository, whose refusal comes on the manifest — so only
+    /// refused credentials are an answer.
+    fn from_token_exchange(
+        error: oci_client::errors::OciDistributionError,
+        auth: &OciRegistryAuth,
+    ) -> Self {
+        use oci_client::errors::OciDistributionError;
+
+        let OciDistributionError::AuthenticationFailure(reason) = &error else {
+            return Self::from_registry("a registry token", error);
+        };
+        let throttled = reason.to_ascii_lowercase().contains("toomanyrequests");
+        let error = BoxliteError::Storage(format!("failed to pull a registry token: {error}"));
+        if throttled {
+            Self::Throttled(error)
+        } else if matches!(auth, OciRegistryAuth::Anonymous) {
+            Self::Unanswered(error)
+        } else {
+            Self::Failed(error)
+        }
+    }
+
+    fn into_error(self) -> BoxliteError {
+        match self {
+            Self::Unanswered(error) | Self::Throttled(error) | Self::Failed(error) => error,
+        }
+    }
+}
+
+impl From<BoxliteError> for RegistryPullError {
+    fn from(error: BoxliteError) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl std::fmt::Display for RegistryPullError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unanswered(error) | Self::Throttled(error) | Self::Failed(error) => error.fmt(f),
+        }
+    }
+}
+
+fn registry_auth_for(host: &str, image_registries: &[ImageRegistry]) -> OciRegistryAuth {
     let auth = image_registries
         .iter()
         .find(|registry| registry.host == host)
@@ -1335,7 +1561,7 @@ fn build_platform_ref(reference: &Reference, platform_digest: &str) -> String {
 // ============================================================================
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::db::Database;
     use std::path::Path;
@@ -1434,87 +1660,11 @@ mod tests {
 
         for (host, expected) in cases {
             assert_eq!(
-                registry_auth_for(host, &registries, ImagePullOptions::default()),
+                registry_auth_for(host, &registries),
                 expected,
                 "host={host}"
             );
         }
-    }
-
-    /// The confused deputy an anonymous pull exists for: the registries a runtime
-    /// holds credentials for are exactly the ones a tenant would name to have
-    /// them spent. Matching by host is what makes the credential reachable, so
-    /// the test pins the case where the host does match.
-    #[test]
-    fn anonymous_pull_sends_no_credential_the_host_would_otherwise_match() {
-        let password = test_registry_password();
-        let token = test_bearer_token();
-        let registries = [
-            ImageRegistry::https("ghcr.io").with_basic_auth("operator", password.as_str()),
-            ImageRegistry::https("docker.io").with_bearer_auth(token.as_str()),
-        ];
-
-        for host in ["ghcr.io", "docker.io"] {
-            assert_eq!(
-                registry_auth_for(
-                    host,
-                    &registries,
-                    ImagePullOptions {
-                        anonymous: true,
-                        ..Default::default()
-                    }
-                ),
-                OciRegistryAuth::Anonymous,
-                "host={host}"
-            );
-        }
-    }
-
-    /// The other half: turning anonymity on must not be the only way to get a
-    /// pull to work, or the operator's own images stop resolving.
-    #[test]
-    fn credentialed_pull_still_matches_the_host() {
-        let password = test_registry_password();
-        let registries =
-            [ImageRegistry::https("ghcr.io").with_basic_auth("operator", password.as_str())];
-
-        assert_eq!(
-            registry_auth_for(
-                "ghcr.io",
-                &registries,
-                ImagePullOptions {
-                    anonymous: false,
-                    ..Default::default()
-                }
-            ),
-            OciRegistryAuth::Basic("operator".to_string(), password),
-        );
-    }
-
-    /// Anonymity is about credentials only. A local insecure registry has to
-    /// stay reachable, and that is decided by a different function keyed by
-    /// host — this pins that the two are not the same switch.
-    #[test]
-    fn anonymous_pull_leaves_transport_and_tls_alone() {
-        let registries = [ImageRegistry::http("registry.local:5000")
-            .with_skip_verify(true)
-            .with_basic_auth("operator", test_registry_password().as_str())];
-
-        let config = client_config_for_registry("registry.local:5000", &registries);
-
-        assert!(matches!(config.protocol, ClientProtocol::Http));
-        assert!(config.accept_invalid_certificates);
-        assert_eq!(
-            registry_auth_for(
-                "registry.local:5000",
-                &registries,
-                ImagePullOptions {
-                    anonymous: true,
-                    ..Default::default()
-                }
-            ),
-            OciRegistryAuth::Anonymous,
-        );
     }
 
     /// The class this check exists for: the allowlist upstream is by name, and
@@ -1644,7 +1794,7 @@ mod tests {
         let store = ImageStore::new(temp_dir.path().join("images"), db, vec![]).unwrap();
 
         let error = store
-            .pull("127.0.0.1:1/acme/app:v1", ImagePullOptions::default())
+            .pull("127.0.0.1:1/acme/app:v1")
             .await
             .expect_err("an address inside the deployment must not be pulled from");
 
@@ -1843,6 +1993,21 @@ mod tests {
     /// config blob (whose bytes have to hash to the digest the manifest names)
     /// and the layer file, plus the index row that points at them.
     async fn seed_cached_image(store: &ImageStore, image_ref: &str) -> ImageManifest {
+        seed_cached_build(
+            store,
+            image_ref,
+            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0",
+        )
+        .await
+    }
+
+    /// [`seed_cached_image`] with the manifest digest chosen, so two builds of
+    /// one ref can sit in the cache side by side.
+    pub(crate) async fn seed_cached_build(
+        store: &ImageStore,
+        image_ref: &str,
+        manifest_digest: &str,
+    ) -> ImageManifest {
         use sha2::{Digest, Sha256};
 
         let config_bytes =
@@ -1850,8 +2015,7 @@ mod tests {
         let config_digest = format!("sha256:{}", hex::encode(Sha256::digest(config_bytes)));
         let layer_digest =
             "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd0".to_string();
-        let manifest_digest =
-            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0".to_string();
+        let manifest_digest = manifest_digest.to_string();
 
         let storage = store.storage().await;
         for path in [
@@ -1901,49 +2065,545 @@ mod tests {
         manifest
     }
 
-    /// The cache answers by ref string and never re-checks it, which is the
-    /// whole reason a caller may need to ask again. Pinned from both sides with
-    /// one cached image and an unreachable registry: without revalidation the
-    /// cached manifest comes back and nothing touches the network, with it the
-    /// pull has to go out and fails against a port nothing listens on.
-    #[tokio::test]
-    async fn revalidate_skips_the_ref_keyed_cache() {
-        let temp_dir = tempfile::tempdir().unwrap();
+    /// A registry that answers every request with one status and an empty
+    /// body, so a refresh can be shown an answer and a non-answer without a
+    /// network. The version probe gets the same status: with no
+    /// `WWW-Authenticate` header the client treats it as needing no auth and
+    /// goes on to the manifest request, which is the exchange being sorted.
+    pub(crate) async fn registry_answering(status: u16) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut request = [0u8; 4096];
+                    let _ = socket.read(&mut request).await;
+                    let response = format!(
+                        "HTTP/1.1 {status} Status\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        host
+    }
+
+    /// A registry that answers each path in `routes` and 404s the rest, so a
+    /// test can let the first exchanges of a pull through and fail a later one.
+    /// Every body is sent with its own digest, as a registry would.
+    async fn registry_serving(routes: Vec<(String, u16, &'static str, Vec<u8>)>) -> String {
+        use sha2::{Digest, Sha256};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        let routes = std::sync::Arc::new(routes);
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let routes = routes.clone();
+                tokio::spawn(async move {
+                    let mut request = [0u8; 8192];
+                    let read = socket.read(&mut request).await.unwrap_or(0);
+                    let head = String::from_utf8_lossy(&request[..read]).to_string();
+                    let target = head.split_whitespace().nth(1).unwrap_or_default();
+                    let path = target.split('?').next().unwrap_or_default();
+                    let (status, content_type, body) = routes
+                        .iter()
+                        .find(|(route, ..)| route == path)
+                        .map(|(_, status, kind, body)| (*status, *kind, body.clone()))
+                        .unwrap_or((404, "text/plain", Vec::new()));
+                    let digest = hex::encode(Sha256::digest(&body));
+                    let response = format!(
+                        "HTTP/1.1 {status} Status\r\nContent-Type: {content_type}\r\n\
+                         Docker-Content-Digest: sha256:{digest}\r\nContent-Length: {}\r\n\
+                         Connection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.write_all(&body).await;
+                });
+            }
+        });
+        host
+    }
+
+    /// A registry that sends every request to the token service at `realm`, the
+    /// way Docker Hub sends it to auth.docker.io, and refuses it without a token.
+    async fn registry_behind_a_token_service(realm: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        let response = format!(
+            "HTTP/1.1 401 Unauthorized\r\n\
+             WWW-Authenticate: Bearer realm=\"{realm}\",service=\"registry\"\r\n\
+             Content-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let response = response.clone();
+                tokio::spawn(async move {
+                    let mut request = [0u8; 4096];
+                    let _ = socket.read(&mut request).await;
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        host
+    }
+
+    /// The routes of a registry whose `acme/app:v1` is a multi-platform index,
+    /// with the platform manifest this host would pick answered by `status`.
+    fn index_whose_platform_manifest_answers(
+        status: u16,
+    ) -> Vec<(String, u16, &'static str, Vec<u8>)> {
+        let (os, architecture) = ImageStore::detect_platform();
+        let platform = format!("sha256:{}", "a".repeat(64));
+        let index = serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [{
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": platform,
+                "size": 100,
+                "platform": { "os": os, "architecture": architecture },
+            }],
+        });
+        vec![
+            ("/v2/".into(), 200, "application/json", b"{}".to_vec()),
+            (
+                "/v2/acme/app/manifests/v1".into(),
+                200,
+                "application/vnd.oci.image.index.v1+json",
+                index.to_string().into_bytes(),
+            ),
+            (
+                format!("/v2/acme/app/manifests/{platform}"),
+                status,
+                "application/json",
+                Vec::new(),
+            ),
+        ]
+    }
+
+    /// A registry that accepts every connection and never answers — the shape of
+    /// a stalled registry or a proxy holding the socket open.
+    async fn registry_that_stalls() -> String {
+        use tokio::io::AsyncReadExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut request = [0u8; 4096];
+                    let _ = socket.read(&mut request).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                    drop(socket);
+                });
+            }
+        });
+        host
+    }
+
+    /// A store whose one registry is `host`, configured so the pull gets past
+    /// the address check and reaches the registry, with `app:v1` cached.
+    async fn store_with_cached_image(
+        temp_dir: &tempfile::TempDir,
+        host: &str,
+    ) -> (ImageStore, String, ImageManifest) {
         let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
-        // Configured, so the pull gets past the address check and actually
-        // tries to connect — which is the thing this test is about. Without it
-        // the revalidating pull would be refused as an internal address, which
-        // is what the assertion below now catches.
         let store = ImageStore::new(
             temp_dir.path().join("images"),
             db,
-            vec![ImageRegistry::http("127.0.0.1:1")],
+            vec![ImageRegistry::http(host)],
+        )
+        .unwrap();
+        let image_ref = format!("{host}/acme/app:v1");
+        let seeded = seed_cached_image(&store, &image_ref).await;
+        (store, image_ref, seeded)
+    }
+
+    /// A restart reads its disk's build by the digest it resolved to, whatever
+    /// build the tag's entry names, and must find it with no
+    /// registry. Recorded through the call a pull makes; the registry refuses
+    /// connections, so only the index can answer.
+    #[tokio::test]
+    async fn a_pull_is_found_again_by_the_digest_it_resolved_to() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (store, image_ref, seeded) = store_with_cached_image(&temp_dir, "127.0.0.1:1").await;
+        let reference: Reference = image_ref.parse().unwrap();
+
+        store.record_in_index(&reference, &seeded).await.unwrap();
+
+        let by_digest = store
+            .pull(&format!("127.0.0.1:1/acme/app@{}", seeded.manifest_digest))
+            .await
+            .expect("indexed under its digest, so no registry is needed");
+        assert_eq!(by_digest.manifest_digest, seeded.manifest_digest);
+    }
+
+    /// A box made before builds were recorded restarts by reading its ref, so a
+    /// refresh that brings in a newer build must leave the ref's entry on the
+    /// build this host first cached — the one that box's disk was made from.
+    #[tokio::test]
+    async fn a_newer_build_leaves_the_ref_on_the_first_one_cached() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (store, image_ref, first) = store_with_cached_image(&temp_dir, "127.0.0.1:1").await;
+        let newer_digest =
+            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee1";
+        let newer = seed_cached_build(&store, "127.0.0.1:1/acme/app:unused", newer_digest).await;
+        let reference: Reference = image_ref.parse().unwrap();
+
+        store.record_in_index(&reference, &newer).await.unwrap();
+
+        let by_ref = store
+            .pull(&image_ref)
+            .await
+            .expect("the ref is still cached");
+        assert_eq!(by_ref.manifest_digest, first.manifest_digest);
+        let by_digest = store
+            .pull(&format!("127.0.0.1:1/acme/app@{newer_digest}"))
+            .await
+            .expect("the newer build is found by its digest");
+        assert_eq!(by_digest.manifest_digest, newer_digest);
+    }
+
+    /// Offline is the case the fallback exists for: a host that has the image
+    /// must still start it. Port 1 refuses the connection, so the registry
+    /// gives no answer at all.
+    #[tokio::test]
+    async fn refresh_uses_the_cache_when_the_registry_cannot_be_reached() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (store, image_ref, seeded) = store_with_cached_image(&temp_dir, "127.0.0.1:1").await;
+
+        let refreshed = store
+            .refresh(&image_ref)
+            .await
+            .expect("an unreachable registry must leave the cached image usable");
+        assert_eq!(refreshed.manifest_digest, seeded.manifest_digest);
+    }
+
+    /// A cache written before digests were indexed holds only the tag. Served
+    /// from there while the registry is down, the tag reports a digest that the
+    /// next box is pinned to — a curated pin, a catalog hit — and that pull has
+    /// to find the build too, with the same registry still silent.
+    #[tokio::test]
+    async fn a_build_refreshed_from_an_old_cache_is_found_again_by_its_digest() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (store, image_ref, seeded) = store_with_cached_image(&temp_dir, "127.0.0.1:1").await;
+
+        store
+            .refresh(&image_ref)
+            .await
+            .expect("served from the cache");
+
+        let pinned = store
+            .pull(&format!("127.0.0.1:1/acme/app@{}", seeded.manifest_digest))
+            .await
+            .expect("the build it served must be found by its digest without a registry");
+        assert_eq!(pinned.manifest_digest, seeded.manifest_digest);
+    }
+
+    #[tokio::test]
+    async fn a_build_pulled_from_an_old_cache_is_found_again_by_its_digest() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (store, image_ref, seeded) = store_with_cached_image(&temp_dir, "127.0.0.1:1").await;
+
+        store.pull(&image_ref).await.expect("served from the cache");
+
+        let pinned = store
+            .pull(&format!("127.0.0.1:1/acme/app@{}", seeded.manifest_digest))
+            .await
+            .expect("the build it served must be found by its digest without a registry");
+        assert_eq!(pinned.manifest_digest, seeded.manifest_digest);
+    }
+
+    /// Most public images are multi-platform: the tag answers with an index and
+    /// the build is a second request. A registry that answers the first and
+    /// fails or throttles the second has still said nothing about the build.
+    #[tokio::test]
+    async fn refresh_uses_the_cache_when_a_platform_manifest_gets_no_answer() {
+        for status in [503, 429] {
+            let host = registry_serving(index_whose_platform_manifest_answers(status)).await;
+            let temp_dir = tempfile::tempdir().unwrap();
+            let (store, image_ref, seeded) = store_with_cached_image(&temp_dir, &host).await;
+
+            let refreshed = store
+                .refresh(&image_ref)
+                .await
+                .unwrap_or_else(|e| panic!("status {status} on the platform manifest: {e}"));
+            assert_eq!(refreshed.manifest_digest, seeded.manifest_digest);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_throttled_platform_manifest_with_nothing_cached_reports_the_rate_limit() {
+        let host = registry_serving(index_whose_platform_manifest_answers(429)).await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
+        let store = ImageStore::new(
+            temp_dir.path().join("images"),
+            db,
+            vec![ImageRegistry::http(&host)],
         )
         .unwrap();
 
+        let error = store
+            .refresh(&format!("{host}/acme/app:v1"))
+            .await
+            .expect_err("nothing cached, so a throttled pull cannot succeed");
+        assert!(
+            matches!(error, BoxliteError::ResourceExhausted(_)),
+            "a rate limit must be reported as one, got {error:?}"
+        );
+    }
+
+    /// Docker Hub hands out tokens from a separate service. When that service
+    /// cannot be reached or fails, the registry has said nothing about the
+    /// image, and the client would otherwise go on to a 401 that reads as if
+    /// the image were private.
+    #[tokio::test]
+    async fn refresh_uses_the_cache_when_the_token_service_gets_no_answer() {
+        let failing = registry_answering(503).await;
+        for realm in [
+            "http://127.0.0.1:1/token".to_string(),
+            format!("http://{failing}/token"),
+        ] {
+            let host = registry_behind_a_token_service(&realm).await;
+            let temp_dir = tempfile::tempdir().unwrap();
+            let (store, image_ref, seeded) = store_with_cached_image(&temp_dir, &host).await;
+
+            let refreshed = store
+                .refresh(&image_ref)
+                .await
+                .unwrap_or_else(|e| panic!("token service at {realm}: {e}"));
+            assert_eq!(refreshed.manifest_digest, seeded.manifest_digest);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_throttled_token_service_with_nothing_cached_reports_the_rate_limit() {
+        let envelope = br#"{"errors":[{"code":"TOOMANYREQUESTS","message":"rate limited"}]}"#;
+        let tokens = registry_serving(vec![(
+            "/token".into(),
+            429,
+            "application/json",
+            envelope.to_vec(),
+        )])
+        .await;
+        let host = registry_behind_a_token_service(&format!("http://{tokens}/token")).await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
+        let store = ImageStore::new(
+            temp_dir.path().join("images"),
+            db,
+            vec![ImageRegistry::http(&host)],
+        )
+        .unwrap();
+
+        let error = store
+            .refresh(&format!("{host}/acme/app:v1"))
+            .await
+            .expect_err("nothing cached, so a throttled pull cannot succeed");
+        assert!(
+            matches!(error, BoxliteError::ResourceExhausted(_)),
+            "a rate limit must be reported as one, got {error:?}"
+        );
+    }
+
+    /// Docker Hub throttles with a 429 whose body is an error envelope coded
+    /// `TOOMANYREQUESTS`, which the client surfaces as a registry error rather
+    /// than a bare status. It is still a rate limit.
+    #[tokio::test]
+    async fn a_rate_limit_envelope_is_reported_as_a_rate_limit() {
+        let envelope = br#"{"errors":[{"code":"TOOMANYREQUESTS","message":"You have reached your pull rate limit."}]}"#;
+        let host = registry_serving(vec![
+            ("/v2/".into(), 200, "application/json", b"{}".to_vec()),
+            (
+                "/v2/acme/app/manifests/v1".into(),
+                429,
+                "application/json",
+                envelope.to_vec(),
+            ),
+        ])
+        .await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
+        let store = ImageStore::new(
+            temp_dir.path().join("images"),
+            db,
+            vec![ImageRegistry::http(&host)],
+        )
+        .unwrap();
+
+        let error = store
+            .refresh(&format!("{host}/acme/app:v1"))
+            .await
+            .expect_err("nothing cached, so a throttled pull cannot succeed");
+        assert!(
+            matches!(error, BoxliteError::ResourceExhausted(_)),
+            "a rate limit must be reported as one, got {error:?}"
+        );
+    }
+
+    /// A tag that moved to a new build is fetched layer by layer. A registry
+    /// that fails one of those downloads has not delivered the build, and the
+    /// cached one still stands in.
+    #[tokio::test]
+    async fn refresh_uses_the_cache_when_a_layer_gets_no_answer() {
+        let layer = format!("sha256:{}", "b".repeat(64));
+        let manifest = serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {
+                "mediaType": "application/vnd.oci.image.config.v1+json",
+                "digest": format!("sha256:{}", "c".repeat(64)),
+                "size": 2,
+            },
+            "layers": [{
+                "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+                "digest": layer,
+                "size": 10,
+            }],
+        });
+        let host = registry_serving(vec![
+            ("/v2/".into(), 200, "application/json", b"{}".to_vec()),
+            (
+                "/v2/acme/app/manifests/v1".into(),
+                200,
+                "application/vnd.oci.image.manifest.v1+json",
+                manifest.to_string().into_bytes(),
+            ),
+            (
+                format!("/v2/acme/app/blobs/{layer}"),
+                503,
+                "text/plain",
+                Vec::new(),
+            ),
+        ])
+        .await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (store, image_ref, seeded) = store_with_cached_image(&temp_dir, &host).await;
+
+        let refreshed = store
+            .refresh(&image_ref)
+            .await
+            .expect("a layer the registry failed to deliver leaves the cached build usable");
+        assert_eq!(refreshed.manifest_digest, seeded.manifest_digest);
+    }
+
+    /// A refused address has not been contacted, so the registry has said
+    /// nothing either: behind a resolver that answers with a proxy's fake
+    /// address, a host that has the image must still start it, as it did when
+    /// the cache answered first. Unconfigured, so the address check applies;
+    /// with nothing cached the same pull is refused, which
+    /// `pull_refuses_an_address_inside_the_deployment` pins.
+    #[tokio::test]
+    async fn refresh_uses_the_cache_when_the_registry_address_is_refused() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
+        let store = ImageStore::new(temp_dir.path().join("images"), db, vec![]).unwrap();
         let image_ref = "127.0.0.1:1/acme/app:v1";
         let seeded = seed_cached_image(&store, image_ref).await;
 
-        let cached = store
-            .pull(image_ref, ImagePullOptions::default())
+        let refreshed = store
+            .refresh(image_ref)
             .await
-            .expect("a complete cache entry answers without a registry");
-        assert_eq!(cached.manifest_digest, seeded.manifest_digest);
+            .expect("a refused address contacts nothing, so the cache still answers");
+        assert_eq!(refreshed.manifest_digest, seeded.manifest_digest);
+    }
 
-        let revalidated = store
-            .pull(
-                image_ref,
-                ImagePullOptions {
-                    revalidate: true,
-                    ..Default::default()
-                },
-            )
-            .await;
-        let error = revalidated.expect_err("revalidation must reach the registry, not the cache");
-        assert!(
-            !error.to_string().contains("not a public registry address"),
-            "this must fail at the connection, not at a guard in front of it: {error}"
-        );
+    /// A registry that holds the connection and never answers has not answered
+    /// either. The read bound is what turns it into no answer; without one the
+    /// refresh would wait on the socket and the box would never start.
+    #[tokio::test]
+    async fn refresh_uses_the_cache_when_the_registry_stalls() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let host = registry_that_stalls().await;
+        let (store, image_ref, seeded) = store_with_cached_image(&temp_dir, &host).await;
+
+        let refreshed = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            store.refresh(&image_ref),
+        )
+        .await
+        .expect("a stalled registry must be given up on, not waited on")
+        .expect("a stalled registry must leave the cached image usable");
+        assert_eq!(refreshed.manifest_digest, seeded.manifest_digest);
+    }
+
+    /// A registry that fails on its side or throttles has not said anything
+    /// about the image either, so the cached copy is still the best answer.
+    #[tokio::test]
+    async fn refresh_uses_the_cache_when_the_registry_fails_or_throttles() {
+        for status in [503, 500, 429] {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let host = registry_answering(status).await;
+            let (store, image_ref, seeded) = store_with_cached_image(&temp_dir, &host).await;
+
+            let refreshed = store
+                .refresh(&image_ref)
+                .await
+                .unwrap_or_else(|e| panic!("status {status} must fall back to the cache: {e}"));
+            assert_eq!(refreshed.manifest_digest, seeded.manifest_digest);
+        }
+    }
+
+    /// With nothing cached there is nothing to stand in, and a throttled pull
+    /// must say so: the caller is told to retry later, as a rate limit, not
+    /// that the pull failed. Both calls, since a cached pull that misses goes
+    /// to the registry the same way.
+    #[tokio::test]
+    async fn a_throttled_pull_with_nothing_cached_reports_the_rate_limit() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let host = registry_answering(429).await;
+        let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
+        let store = ImageStore::new(
+            temp_dir.path().join("images"),
+            db,
+            vec![ImageRegistry::http(&host)],
+        )
+        .unwrap();
+        let image_ref = format!("{host}/acme/app:v1");
+
+        for (call, result) in [
+            ("refresh", store.refresh(&image_ref).await),
+            ("pull", store.pull(&image_ref).await),
+        ] {
+            let error = result.expect_err("nothing cached, so a throttled pull cannot succeed");
+            assert!(
+                matches!(error, BoxliteError::ResourceExhausted(_)),
+                "{call}: a rate limit must be reported as one, got {error:?}"
+            );
+            assert!(error.to_string().contains("retry later"), "{call}: {error}");
+        }
+    }
+
+    /// The other half, and the reason a refresh asks the registry at all: an
+    /// answer — the image is gone, or not this caller's to read — must reach
+    /// the caller, not be covered by a build the cache happens to hold. `pull`
+    /// on the same store still answers from the cache, which is what shows the
+    /// refresh went to the registry first.
+    #[tokio::test]
+    async fn refresh_reports_what_the_registry_answered() {
+        for status in [404, 401] {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let host = registry_answering(status).await;
+            let (store, image_ref, seeded) = store_with_cached_image(&temp_dir, &host).await;
+
+            let cached = store
+                .pull(&image_ref)
+                .await
+                .expect("a complete cache entry answers without a registry");
+            assert_eq!(cached.manifest_digest, seeded.manifest_digest);
+
+            store.refresh(&image_ref).await.expect_err(&format!(
+                "status {status} is the registry's answer, not a gap"
+            ));
+        }
     }
 
     #[tokio::test]

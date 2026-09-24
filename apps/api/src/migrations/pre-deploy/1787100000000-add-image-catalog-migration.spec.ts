@@ -52,7 +52,7 @@ describe('AddImageCatalog1787100000000', () => {
    * Not a style preference. A `NOT NULL DEFAULT` would claim every existing box
    * was decided one way, and the reader distinguishes "recorded false" from
    * "never recorded" — the second is what keeps old rows on the behaviour they
-   * have always had instead of silently changing which ones pull anonymously.
+   * have always had instead of silently changing which ones the catalog records.
    *
    * Checked on the box statements alone: the catalog tables beside them carry
    * defaults of their own, and their foreign keys spell `ON UPDATE`.

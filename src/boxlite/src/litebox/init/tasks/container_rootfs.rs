@@ -8,11 +8,11 @@
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper};
-use crate::images::{ContainerImageConfig, ImageDiskManager, ResolvedImage};
+use crate::images::{ContainerImageConfig, ImageDiskManager, ImageManager, ResolvedImage};
 use crate::litebox::init::types::{ContainerRootfsPrepResult, USE_DISK_ROOTFS, USE_OVERLAYFS};
 use crate::pipeline::PipelineTask;
 use crate::runtime::layout::BoxFilesystemLayout;
-use crate::runtime::options::{ImagePullOptions, RootfsSpec};
+use crate::runtime::options::RootfsSpec;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use async_trait::async_trait;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -36,7 +36,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             cmd_override,
             user_override,
             working_dir_override,
-            image_pull,
+            built_from,
         ) = {
             let ctx = ctx.lock().await;
             let layout = ctx
@@ -59,13 +59,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
                 ctx.config.options.cmd.clone(),
                 ctx.config.options.user.clone(),
                 ctx.config.options.working_dir.clone(),
-                ImagePullOptions {
-                    revalidate: should_revalidate(
-                        ctx.config.options.image_pull.revalidate,
-                        ctx.reuse_rootfs,
-                    ),
-                    ..ctx.config.options.image_pull
-                },
+                ctx.built_from.clone(),
             )
         };
 
@@ -80,7 +74,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             cmd_override.as_deref(),
             user_override.as_deref(),
             working_dir_override.as_deref(),
-            image_pull,
+            built_from.as_ref(),
         )
         .await
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -111,7 +105,7 @@ async fn run_container_rootfs(
     cmd_override: Option<&[String]>,
     user_override: Option<&str>,
     working_dir_override: Option<&str>,
-    image_pull: ImagePullOptions,
+    built_from: Option<&ResolvedImage>,
 ) -> BoxliteResult<(ContainerImageConfig, Disk, Option<ResolvedImage>)> {
     let disk_path = layout.disk_path();
 
@@ -133,7 +127,9 @@ async fn run_container_rootfs(
 
         // Load container config
         let image = match rootfs_spec {
-            RootfsSpec::Image(r) => pull_image(runtime, r, image_pull).await?,
+            RootfsSpec::Image(r) => {
+                image_for_restart(&runtime.image_manager, r, built_from).await?
+            }
             RootfsSpec::RootfsPath(path) => {
                 let bundle_dir = std::path::Path::new(path);
 
@@ -172,7 +168,7 @@ async fn run_container_rootfs(
 
     // Fresh start: pull or load image
     let image = match rootfs_spec {
-        RootfsSpec::Image(r) => pull_image(runtime, r, image_pull).await?,
+        RootfsSpec::Image(r) => image_for_new_disk(&runtime.image_manager, r).await?,
         RootfsSpec::RootfsPath(path) => {
             let bundle_dir = std::path::Path::new(path);
 
@@ -305,17 +301,80 @@ fn apply_user_overrides(
     }
 }
 
-/// Whether this start may re-resolve the box's image reference.
+/// The image a new disk is built from.
 ///
-/// Never when the box is reusing its rootfs. A restart keeps the COW disk it
-/// already has, so following a moved tag would pair the new build's entrypoint,
-/// env and user with the old filesystem, and a registry that happens to be
-/// unreachable would turn a restart that used to come up from cache into a
-/// failure. `ImagePullOptions::revalidate` is `serde(skip)`, which clears the
-/// flag only for a box reloaded in a new process; one restarted inside the
-/// process that created it still carries what its create asked for.
-fn should_revalidate(requested: bool, reuse_rootfs: bool) -> bool {
-    requested && !reuse_rootfs
+/// The one pull that decides what a box runs, so the one that asks the
+/// registry: the cache is keyed by the ref string, and a tag cached here may
+/// have moved since, or have been cached by someone else's box. A digest names
+/// one build, so the cache is already the answer. `refresh` still starts from
+/// the cache when the registry gives no answer, so an offline host behaves as
+/// it did before.
+///
+/// A restart never comes here: it reads the build its disk was made from, see
+/// [`image_for_restart`].
+async fn image_for_new_disk(
+    images: &ImageManager,
+    image_ref: &str,
+) -> BoxliteResult<crate::images::ImageObject> {
+    if names_one_build(image_ref) {
+        images.pull(image_ref).await
+    } else {
+        images.refresh(image_ref).await
+    }
+}
+
+/// The image a restart reads its config from: the build its disk was made from.
+///
+/// A restart keeps its disk, so the entrypoint, env and user must come from
+/// that same build. The ref alone does not say which one: a new box built from
+/// a tag gets whatever the tag points to now, while the ref's cache entry keeps
+/// the build this host first cached for it. The digest recorded when the disk
+/// was built names the build, and the store indexes every pull under that
+/// digest too, so this is still answered from the cache. A box with nothing
+/// recorded — imported, or made by a release that recorded no build — reads by
+/// ref, which for a box made here names the build this host first cached, the
+/// one that release built its disk from. So does a box whose recorded build
+/// cannot be read.
+async fn image_for_restart(
+    images: &ImageManager,
+    image_ref: &str,
+    built_from: Option<&ResolvedImage>,
+) -> BoxliteResult<crate::images::ImageObject> {
+    if let Some(pinned) = built_from.map(|build| pinned_ref(image_ref, &build.manifest_digest)) {
+        match images.pull(&pinned).await {
+            Ok(image) => return Ok(image),
+            Err(e) => tracing::warn!(
+                image_ref,
+                pinned = %pinned,
+                error = %e,
+                "cannot read the build this box's disk was made from; reading the image by reference"
+            ),
+        }
+    }
+    images.pull(image_ref).await
+}
+
+/// `image_ref` pinned to `digest`: its registry and repository, any tag or
+/// digest it carried replaced. Kept as written rather than normalised, so an
+/// unqualified ref still resolves through the configured search registries.
+fn pinned_ref(image_ref: &str, digest: &str) -> String {
+    let name = image_ref
+        .split_once('@')
+        .map_or(image_ref, |(name, _)| name);
+    // A colon after the last slash is a tag; one before it is a registry port.
+    let name = match name.rsplit_once(':') {
+        Some((repository, tag)) if !tag.contains('/') => repository,
+        _ => name,
+    };
+    format!("{name}@{digest}")
+}
+
+/// Whether `image_ref` is pinned to a digest, and so names one build wherever
+/// it is resolved. A ref that does not parse is left to the pull to reject.
+fn names_one_build(image_ref: &str) -> bool {
+    image_ref
+        .parse::<oci_client::Reference>()
+        .is_ok_and(|reference| reference.digest().is_some())
 }
 
 /// What to record about the image this start read, if anything.
@@ -341,15 +400,6 @@ fn resolved_image_of(
 /// this host and names nothing a registry could resolve.
 fn records_resolved_image(rootfs_spec: &RootfsSpec, reuse_rootfs: bool) -> bool {
     matches!(rootfs_spec, RootfsSpec::Image(_)) && !reuse_rootfs
-}
-
-async fn pull_image(
-    runtime: &crate::runtime::SharedRuntimeImpl,
-    image_ref: &str,
-    pull: ImagePullOptions,
-) -> BoxliteResult<crate::images::ImageObject> {
-    // ImageManager has internal locking - direct access
-    runtime.image_manager.pull(image_ref, pull).await
 }
 
 async fn prepare_overlayfs_layers(
@@ -415,18 +465,146 @@ async fn prepare_disk_rootfs(
 
 #[cfg(test)]
 mod tests {
-    use super::{records_resolved_image, should_revalidate};
-    use crate::runtime::options::RootfsSpec;
+    use super::{
+        image_for_new_disk, image_for_restart, names_one_build, pinned_ref, records_resolved_image,
+    };
+    use crate::db::Database;
+    use crate::images::test_support::{registry_answering, seed_cached_build};
+    use crate::images::{ImageManager, ResolvedImage};
+    use crate::runtime::options::{ImageRegistry, RootfsSpec};
 
-    #[test]
-    fn revalidation_is_what_the_create_asked_for() {
-        assert!(should_revalidate(true, false));
-        assert!(!should_revalidate(false, false));
+    const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const FIRST: &str = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0";
+    const NEWER: &str = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee1";
+
+    /// An image manager whose one registry answers 404 to everything, so any
+    /// pull that asks it fails and only the cache can answer.
+    async fn images_behind_a_404() -> (tempfile::TempDir, ImageManager, String) {
+        let host = registry_answering(404).await;
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).unwrap();
+        let images = ImageManager::new(
+            dir.path().join("images"),
+            db,
+            vec![ImageRegistry::http(&host)],
+        )
+        .unwrap();
+        (dir, images, host)
     }
 
+    fn recorded(digest: &str) -> ResolvedImage {
+        ResolvedImage {
+            manifest_digest: digest.to_string(),
+            total_layer_size: 0,
+        }
+    }
+
+    /// The cache may hold the tag, but a new disk still asks the registry.
+    #[tokio::test]
+    async fn a_new_disk_from_a_tag_asks_the_registry() {
+        let (_dir, images, host) = images_behind_a_404().await;
+        let tag = format!("{host}/acme/app:v1");
+        seed_cached_build(&images, &tag, FIRST).await;
+
+        let answer = image_for_new_disk(&images, &tag).await;
+
+        assert!(answer.is_err(), "the registry's 404 must reach the caller");
+    }
+
+    #[tokio::test]
+    async fn a_new_disk_from_a_digest_is_answered_from_the_cache() {
+        let (_dir, images, host) = images_behind_a_404().await;
+        let pinned = format!("{host}/acme/app@{FIRST}");
+        seed_cached_build(&images, &pinned, FIRST).await;
+
+        let image = image_for_new_disk(&images, &pinned).await.unwrap();
+
+        assert_eq!(image.manifest_digest(), FIRST);
+    }
+
+    /// The tag's entry names another build; the restart reads its own.
+    #[tokio::test]
+    async fn a_restart_reads_the_build_its_disk_was_made_from() {
+        let (_dir, images, host) = images_behind_a_404().await;
+        let tag = format!("{host}/acme/app:v1");
+        seed_cached_build(&images, &tag, FIRST).await;
+        seed_cached_build(&images, &format!("{host}/acme/app@{NEWER}"), NEWER).await;
+
+        let image = image_for_restart(&images, &tag, Some(&recorded(NEWER)))
+            .await
+            .unwrap();
+
+        assert_eq!(image.manifest_digest(), NEWER);
+    }
+
+    /// A recorded build this host can no longer read — gone from the cache,
+    /// and the registry will not give it back — leaves the ref to answer.
+    #[tokio::test]
+    async fn a_restart_whose_build_cannot_be_read_reads_by_ref() {
+        let (_dir, images, host) = images_behind_a_404().await;
+        let tag = format!("{host}/acme/app:v1");
+        seed_cached_build(&images, &tag, FIRST).await;
+
+        let image = image_for_restart(&images, &tag, Some(&recorded(NEWER)))
+            .await
+            .unwrap();
+
+        assert_eq!(image.manifest_digest(), FIRST);
+    }
+
+    #[tokio::test]
+    async fn a_restart_with_nothing_recorded_reads_by_ref() {
+        let (_dir, images, host) = images_behind_a_404().await;
+        let tag = format!("{host}/acme/app:v1");
+        seed_cached_build(&images, &tag, FIRST).await;
+
+        let image = image_for_restart(&images, &tag, None).await.unwrap();
+
+        assert_eq!(image.manifest_digest(), FIRST);
+    }
+
+    /// A digest, with or without the tag it was read from, needs no registry.
     #[test]
-    fn a_box_reusing_its_rootfs_never_re_resolves() {
-        assert!(!should_revalidate(true, true));
+    fn a_digest_names_one_build() {
+        assert!(names_one_build(&format!("quay.io/acme/app@{DIGEST}")));
+        assert!(names_one_build(&format!("quay.io/acme/app:v1@{DIGEST}")));
+    }
+
+    /// A tag, written or implied, may have moved since this host cached it.
+    #[test]
+    fn a_tag_does_not() {
+        assert!(!names_one_build("quay.io/acme/app:v1"));
+        assert!(!names_one_build("alpine"));
+    }
+
+    /// What a restart asks for: the same repository, at the recorded build.
+    /// A registry port is not a tag, and an unqualified ref stays unqualified.
+    #[test]
+    fn a_restart_asks_for_the_recorded_build() {
+        let already_pinned = format!("quay.io/acme/app:v1@sha256:{}", "f".repeat(64));
+        for (image_ref, pinned) in [
+            ("quay.io/acme/app:v1", format!("quay.io/acme/app@{DIGEST}")),
+            ("quay.io/acme/app", format!("quay.io/acme/app@{DIGEST}")),
+            (
+                "127.0.0.1:25000/acme/app:v1",
+                format!("127.0.0.1:25000/acme/app@{DIGEST}"),
+            ),
+            (
+                "127.0.0.1:25000/acme/app",
+                format!("127.0.0.1:25000/acme/app@{DIGEST}"),
+            ),
+            ("alpine:3.21", format!("alpine@{DIGEST}")),
+            (
+                already_pinned.as_str(),
+                format!("quay.io/acme/app@{DIGEST}"),
+            ),
+        ] {
+            assert_eq!(
+                pinned_ref(image_ref, DIGEST),
+                pinned,
+                "image_ref={image_ref}"
+            );
+        }
     }
 
     #[test]
@@ -437,8 +615,8 @@ mod tests {
         ));
     }
 
-    /// A restart reads the image again by tag, and once another box has
-    /// re-resolved that tag, what it reads is not what the disk was built from.
+    /// A restart builds no disk, so what it reads says nothing about the build
+    /// its disk was made from; that record stays the one the first start made.
     #[test]
     fn a_restart_records_nothing_because_it_built_nothing() {
         assert!(!records_resolved_image(

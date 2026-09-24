@@ -10,6 +10,7 @@ import { Image } from '../entities/image.entity'
 import { ImageTag } from '../entities/image-tag.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { ImageSourceKind } from '../enums/image-source-kind.enum'
+import { CuratedImagePinService } from './curated-image-pin.service'
 import { IMPLICIT_TAG, isSha256Digest, parseImageRef } from '../utils/image-ref.util'
 
 /** What a runner reported about the image a box actually booted from. */
@@ -34,6 +35,8 @@ export type BootedImage = {
   ref: string
   /** False for the operator's curated set, which no tenant catalog may hold. */
   isOrgOwned: boolean
+  /** Where it booted, which is whose cache a curated pin describes. */
+  runnerId?: string
 }
 
 /**
@@ -52,14 +55,19 @@ export type BootedImage = {
  */
 @Injectable()
 export class ImageRegistrarService {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly curatedImagePins: CuratedImagePinService,
+  ) {}
 
   /**
    * Record what a box booted from.
    *
-   * Curated images are skipped: they are the operator's, shared by every
-   * organization, and putting them in a tenant's catalog would count them
+   * Curated images stay out of the catalog: they are the operator's, shared by
+   * every organization, and putting them in a tenant's catalog would count them
    * against that tenant's limit and let one tenant delete what everyone uses.
+   * What is kept for them instead is the build this runner booted, so the next
+   * curated box it is given reads its cache rather than asking the registry.
    *
    * Which it is comes from the box rather than from a fresh look at the curated
    * set, because that set moves: an operator who rotates a curated reference
@@ -67,20 +75,23 @@ export class ImageRegistrarService {
    * its organization's catalog, against that organization's limit.
    */
   async onBoxStarted(organizationId: string, image: BootedImage, reported: ReportedImage): Promise<void> {
-    if (!image.isOrgOwned) {
-      return
-    }
-    const imageRef = image.ref
-
     // Refused here rather than by the column, which would take a short bad
     // digest without complaint. The reason is downstream: this value becomes a
-    // `storageRef` a runner is expected to pull and a key the resolver matches
-    // against, so a digest of any other shape is a row that can never be used
-    // and a ref no registry answers. Refused on its own, too — the box is
-    // running either way and its state still has to be recorded.
+    // `storageRef` or a pinned ref a runner is expected to pull, and a key the
+    // resolver matches against, so a digest of any other shape is a row that
+    // can never be used and a ref no registry answers. Refused on its own, too —
+    // the box is running either way and its state still has to be recorded.
     if (!isSha256Digest(reported.digest)) {
       throw new Error(`Refusing to record image digest '${reported.digest}': not a sha256 digest`)
     }
+
+    if (!image.isOrgOwned) {
+      if (image.runnerId) {
+        await this.curatedImagePins.remember(image.runnerId, image.ref, reported.digest)
+      }
+      return
+    }
+    const imageRef = image.ref
 
     const { host, repository, tag, digest } = parseImageRef(imageRef)
     const name = `${host}/${repository}`

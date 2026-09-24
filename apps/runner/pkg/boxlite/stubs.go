@@ -26,10 +26,6 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 // recoverCreateDto rebuilds the create request RecoverBox hands to Create by
 // hand. Extracted as a pure function so the copy is testable without a live
 // runtime: a field not copied here is silently lost on a recovered box.
-//
-// AnonymousImagePull is the one deliberate omission: the image below is a fixed
-// operator-chosen ref, not one a tenant named, so it is the case the runner's
-// own credentials are for.
 func recoverCreateDto(boxId string, recoverDto dto.RecoverBoxDTO) dto.CreateBoxDTO {
 	return dto.CreateBoxDTO{
 		Id:               boxId,

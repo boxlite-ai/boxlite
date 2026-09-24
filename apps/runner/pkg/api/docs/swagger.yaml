@@ -17,9 +17,6 @@ definitions:
     type: object
   CreateBoxDTO:
     properties:
-      anonymousImagePull:
-        description: Pull the image without the registry credentials this runner holds.
-        type: boolean
       authToken:
         type: string
       cmd:
@@ -46,10 +43,6 @@ definitions:
         type: string
       image:
         type: string
-      imageRevalidate:
-        description: Re-resolve the image reference instead of answering from the
-          cache.
-        type: boolean
       memoryQuota:
         minimum: 1
         type: integer

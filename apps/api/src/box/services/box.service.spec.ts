@@ -328,6 +328,7 @@ describe('BoxService image reporting', () => {
     const box = {
       id: 'box-1',
       organizationId: 'org-1',
+      runnerId: 'runner-1',
       image: 'quay.io/acme/app:v1',
       imageIsOrgOwned,
       state: boxState,
@@ -358,7 +359,7 @@ describe('BoxService image reporting', () => {
 
     expect(registrar.onBoxStarted).toHaveBeenCalledWith(
       'org-1',
-      { ref: 'quay.io/acme/app:v1', isOrgOwned: true },
+      { ref: 'quay.io/acme/app:v1', isOrgOwned: true, runnerId: 'runner-1' },
       reported,
     )
   })
@@ -369,14 +370,14 @@ describe('BoxService image reporting', () => {
    * `false` through is the whole fix: recomputing here would ask the curated
    * set as it stands now, which is not the set this box was created against.
    */
-  it("passes on the ownership the box recorded, not a fresh look at the curated set", async () => {
+  it('passes on the ownership the box recorded, not a fresh look at the curated set', async () => {
     const { service, registrar } = makeService(BoxState.STARTED, false)
 
     await service.updateState('box-1', BoxState.STARTED, false, undefined, reported)
 
     expect(registrar.onBoxStarted).toHaveBeenCalledWith(
       'org-1',
-      { ref: 'quay.io/acme/app:v1', isOrgOwned: false },
+      { ref: 'quay.io/acme/app:v1', isOrgOwned: false, runnerId: 'runner-1' },
       reported,
     )
   })

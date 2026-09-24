@@ -30,7 +30,7 @@ describe('RunnerAdapterV0 createBox', () => {
       region: undefined,
     } as any
 
-    await adapter.createBox(box)
+    await adapter.createBox(box, 'base')
 
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -41,35 +41,16 @@ describe('RunnerAdapterV0 createBox', () => {
     )
   })
 
-  /**
-   * The older protocol reaches the same runner and the same DTO, so it needs
-   * the same credential rule. It is also the only adapter that serves box
-   * recovery, so a gap here would outlive the protocol's other uses.
-   */
-  it.each([
-    ['a curated short name', 'base', false],
-    ['a tenant ref on a credentialed host', 'ghcr.io/acme/app:v1', true],
-  ])('pulls %s anonymously: %s', async (_label, image, expected) => {
+  /** The caller may pin a curated tag to the build this runner already has. */
+  it('sends the image it is handed rather than the one on the box', async () => {
     const adapter = new RunnerAdapterV0()
     const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
     ;(adapter as any).boxApiClient = { create }
+    const pinned = `ghcr.io/boxlite-ai/boxlite-agent-base@sha256:${'a'.repeat(64)}`
 
-    await adapter.createBox({ id: 'box-1', image } as any)
+    await adapter.createBox({ id: 'box-1', image: 'base' } as any, pinned)
 
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ anonymousImagePull: expected }))
-  })
-
-  it.each([
-    ['a curated name', 'base', false],
-    ['a tenant tag', 'quay.io/acme/app:v1', true],
-  ])('asks the runner to re-resolve %s: %s', async (_label, image, expected) => {
-    const adapter = new RunnerAdapterV0()
-    const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
-    ;(adapter as any).boxApiClient = { create }
-
-    await adapter.createBox({ id: 'box-1', image } as any)
-
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ imageRevalidate: expected }))
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ image: pinned }))
   })
 
   it('passes secrets through to the runner recover body', async () => {

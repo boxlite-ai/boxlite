@@ -10,6 +10,7 @@ import { Image } from '../entities/image.entity'
 import { ImageTag } from '../entities/image-tag.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { isCuratedSelector } from '../utils/image-ref.util'
+import { CuratedImagePinService } from './curated-image-pin.service'
 import { ImageRegistrarService } from './image-registrar.service'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
@@ -23,6 +24,7 @@ const OTHER_DIGEST = `sha256:${'b'.repeat(64)}`
 describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
   let dataSource: DataSource
   let registrar: ImageRegistrarService
+  const curatedImagePins = { remember: jest.fn(async () => undefined) }
   let ownsSchema = false
 
   beforeAll(async () => {
@@ -44,7 +46,7 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
     await dataSource.query(`CREATE SCHEMA "${schemaName}"`)
     ownsSchema = true
     await dataSource.synchronize()
-    registrar = new ImageRegistrarService(dataSource)
+    registrar = new ImageRegistrarService(dataSource, curatedImagePins as unknown as CuratedImagePinService)
   })
 
   afterAll(async () => {
@@ -64,6 +66,7 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
     await dataSource.query(`DELETE FROM "${schemaName}"."image_tag"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image_version"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image"`)
+    curatedImagePins.remember.mockClear()
   })
 
   function report(ref: string, digest = DIGEST, sizeBytes = 4096) {
@@ -176,10 +179,43 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
     const rotatedAway = 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.0.1'
     expect(isCuratedSelector(rotatedAway)).toBe(false)
 
-    await registrar.onBoxStarted(ORG, { ref: rotatedAway, isOrgOwned: false }, { digest: DIGEST, sizeBytes: 4096 })
+    await registrar.onBoxStarted(
+      ORG,
+      { ref: rotatedAway, isOrgOwned: false, runnerId: 'runner-1' },
+      { digest: DIGEST, sizeBytes: 4096 },
+    )
 
     expect(await countOf('image')).toBe(0)
     expect(await countOf('image_version')).toBe(0)
+  })
+
+  /**
+   * What a curated image gets instead of a row: the runner that booted it is
+   * handed that build next time, so its next curated box reads the cache.
+   */
+  it('pins an operator image to the build the runner booted', async () => {
+    const curated = 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0'
+
+    await registrar.onBoxStarted(
+      ORG,
+      { ref: curated, isOrgOwned: false, runnerId: 'runner-1' },
+      { digest: DIGEST, sizeBytes: 4096 },
+    )
+
+    expect(curatedImagePins.remember).toHaveBeenCalledWith('runner-1', curated, DIGEST)
+  })
+
+  it('pins no operator image to a digest it cannot use', async () => {
+    const curated = 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0'
+
+    await expect(
+      registrar.onBoxStarted(
+        ORG,
+        { ref: curated, isOrgOwned: false, runnerId: 'runner-1' },
+        { digest: 'sha512:deadbeef', sizeBytes: 4096 },
+      ),
+    ).rejects.toThrow(/not a sha256 digest/)
+    expect(curatedImagePins.remember).not.toHaveBeenCalled()
   })
 
   /**

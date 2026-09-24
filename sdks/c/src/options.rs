@@ -256,33 +256,6 @@ pub unsafe extern "C" fn boxlite_options_set_detach(opts: *mut CBoxliteOptions, 
     options_set_detach(opts, val)
 }
 
-/// How a box's image is pulled — `BoxOptions::image_pull`. Each field is a
-/// boolean, nonzero for true.
-///
-/// A struct rather than one argument per field, so a caller naming them cannot
-/// pass them in the wrong order: swapping the two would pull a tenant's image
-/// with the runtime's credentials.
-#[repr(C)]
-pub struct BoxliteImagePullOptions {
-    /// Pull without the registry credentials the runtime holds — for an image
-    /// reference someone other than the runtime's owner chose.
-    pub anonymous: c_int,
-    /// Re-resolve the reference instead of answering from the cache — for one
-    /// not yet pinned to a digest. Not persisted with the box.
-    pub revalidate: c_int,
-}
-
-/// Set how this box's image is pulled. Null `pull` is a no-op: whatever was set
-/// before stays, and a box never set pulls with the runtime's credentials,
-/// answered from cache when possible.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_options_set_image_pull(
-    opts: *mut CBoxliteOptions,
-    pull: *const BoxliteImagePullOptions,
-) {
-    options_set_image_pull(opts, pull)
-}
-
 /// Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
 /// `CBoxliteOptions`. Clones the advanced configuration into the box options —
 /// the caller retains ownership of `advanced_opts` and is responsible for
@@ -614,21 +587,6 @@ pub unsafe fn options_set_detach(handle: *mut OptionsHandle, val: c_int) {
         if !handle.is_null() {
             (*handle).options.detach = val != 0;
         }
-    }
-}
-
-pub unsafe fn options_set_image_pull(
-    handle: *mut OptionsHandle,
-    pull: *const BoxliteImagePullOptions,
-) {
-    unsafe {
-        if handle.is_null() || pull.is_null() {
-            return;
-        }
-        (*handle).options.image_pull = boxlite::ImagePullOptions {
-            anonymous: (*pull).anonymous != 0,
-            revalidate: (*pull).revalidate != 0,
-        };
     }
 }
 

@@ -58,10 +58,6 @@ type ClientConfig struct {
 	Logger                       *slog.Logger
 	HomeDir                      string
 	InsecureRegistries           []string
-	GhcrUsername                 string
-	GhcrToken                    string
-	DockerHubUsername            string
-	DockerHubToken               string
 	AWSRegion                    string
 	AWSEndpointUrl               string
 	AWSAccessKeyId               string
@@ -118,22 +114,6 @@ func boxRuntimeEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]stri
 	return env
 }
 
-// imagePullOptions reads how to pull a box's image off its create request.
-//
-// Both answers are the control plane's, because the runner cannot know either.
-// This runner holds ghcr.io and docker.io credentials for its own images (see
-// NewClient) and core matches them by host, so a reference the control plane
-// accepted from a tenant must not reach them — and which references are the
-// operator's own is the control plane's knowledge. Whether a reference is
-// already pinned to a digest is likewise the control plane's. A field it left
-// unset means false, which is the SDK's default.
-func imagePullOptions(boxDto dto.CreateBoxDTO) boxlite.ImagePullOptions {
-	return boxlite.ImagePullOptions{
-		Anonymous:  boxDto.AnonymousImagePull != nil && *boxDto.AnonymousImagePull,
-		Revalidate: boxDto.ImageRevalidate != nil && *boxDto.ImageRevalidate,
-	}
-}
-
 // secretSpecs maps control-plane SecretDTOs onto the boxlite SDK's Secret
 // values. Extracted as a pure function so the mapping is unit-testable without
 // a live runtime (see secret_options_test.go). The SDK applies the
@@ -152,30 +132,22 @@ func secretSpecs(secrets []dto.SecretDTO) []boxlite.Secret {
 	return specs
 }
 
-// buildImageRegistries assembles the runtime-scoped OCI registry list handed to boxlite-core:
-// the existing insecure (HTTP, no-auth) registries, plus — when ghcr credentials are provided —
-// a single authenticated ghcr.io HTTPS entry so core can pull private images
-// directly from ghcr (no self-hosted registry mirror required). Auth is runtime-scoped because
-// boxlite.Runtime.Create has no per-call credential parameter. When ghcrUsername/ghcrToken are
-// empty this is byte-for-byte the previous behavior (anonymous), so it is safe to ship dark.
-// Kept as a pure function so the wiring can be unit-tested without constructing a real runtime.
-func buildImageRegistries(insecureRegistries []string, ghcrUsername, ghcrToken string) []boxlite.ImageRegistry {
-	registries := make([]boxlite.ImageRegistry, 0, len(insecureRegistries)+1)
+// buildImageRegistries assembles the runtime-scoped OCI registry list handed
+// to boxlite-core: the insecure (HTTP) registries only, and never a credential.
+//
+// Core matches credentials by host, and this runtime pulls the operator's
+// curated images and references tenants named from the same hosts. A
+// credential here would be spent on any tenant reference to its host, so the
+// runtime holds none and every image pulls anonymously — which is why the
+// curated images must be public. Kept as a pure function so that is testable
+// without constructing a real runtime.
+func buildImageRegistries(insecureRegistries []string) []boxlite.ImageRegistry {
+	registries := make([]boxlite.ImageRegistry, 0, len(insecureRegistries))
 	for _, host := range insecureRegistries {
 		registries = append(registries, boxlite.ImageRegistry{
 			Host:       host,
 			Transport:  boxlite.RegistryTransportHTTP,
 			SkipVerify: true,
-		})
-	}
-	if ghcrUsername != "" && ghcrToken != "" {
-		registries = append(registries, boxlite.ImageRegistry{
-			Host:      "ghcr.io",
-			Transport: boxlite.RegistryTransportHTTPS,
-			Auth: boxlite.ImageRegistryAuth{
-				Username: ghcrUsername,
-				Password: ghcrToken,
-			},
 		})
 	}
 	return registries
@@ -188,22 +160,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		opts = append(opts, boxlite.WithHomeDir(config.HomeDir))
 	}
 	insecureRegistries := normalizeRegistryHosts(config.InsecureRegistries)
-	registries := buildImageRegistries(insecureRegistries, config.GhcrUsername, config.GhcrToken)
-	// docker.io auth (local dev): boxlite-core pulls the operator's own base
-	// images (e.g. the debian base disk) from docker.io; without auth those hit
-	// the anonymous Docker Hub rate limit. Mirror the ghcr.io auth entry. It no
-	// longer covers a tenant's own images — those pull anonymously and take the
-	// anonymous limit with them.
-	if config.DockerHubUsername != "" && config.DockerHubToken != "" {
-		registries = append(registries, boxlite.ImageRegistry{
-			Host:      "docker.io",
-			Transport: boxlite.RegistryTransportHTTPS,
-			Auth: boxlite.ImageRegistryAuth{
-				Username: config.DockerHubUsername,
-				Password: config.DockerHubToken,
-			},
-		})
-	}
+	registries := buildImageRegistries(insecureRegistries)
 	if len(registries) > 0 {
 		opts = append(opts, boxlite.WithImageRegistries(registries...))
 	}
@@ -305,7 +262,6 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if boxDto.StorageQuota > 0 {
 		opts = append(opts, boxlite.WithDiskSize(int(boxDto.StorageQuota)))
 	}
-	opts = append(opts, boxlite.WithImagePull(imagePullOptions(boxDto)))
 
 	for k, v := range boxDto.Env {
 		opts = append(opts, boxlite.WithEnv(k, v))

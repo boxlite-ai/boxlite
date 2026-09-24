@@ -24,10 +24,6 @@ import type { DtoVolumeDTO } from './dto-volume-dto';
 import type { RegistryDTO } from './registry-dto';
 
 export interface CreateBoxDTO {
-    /**
-     * Pull the image without the registry credentials this runner holds.
-     */
-    'anonymousImagePull'?: boolean;
     'authToken'?: string;
     'cmd'?: Array<string>;
     'cpuQuota'?: number;
@@ -37,10 +33,6 @@ export interface CreateBoxDTO {
     'gpuQuota'?: number;
     'id': string;
     'image': string;
-    /**
-     * Re-resolve the image reference instead of answering from the cache.
-     */
-    'imageRevalidate'?: boolean;
     'memoryQuota'?: number;
     'metadata'?: { [key: string]: string; };
     'networkAllowList'?: string;

@@ -6,9 +6,7 @@
 import { supportedImages } from '../constants/curated-images.constant'
 import { isCuratedSelector } from '../../image/utils/image-ref.util'
 import { Box } from '../entities/box.entity'
-import { boxImageIsOrgOwned, boxImageNeedsRevalidate } from './image-ownership.util'
-
-const DIGEST_REF = `quay.io/acme/app@sha256:${'a'.repeat(64)}`
+import { boxImageIsOrgOwned } from './image-ownership.util'
 
 /** Whatever is curated now, rather than a literal that a ref bump would strand. */
 const CURATED_REF = supportedImages()[0].ref
@@ -58,25 +56,5 @@ describe('boxImageIsOrgOwned', () => {
     ])('falls back to reading %s', (_label, image, expected) => {
       expect(boxImageIsOrgOwned(box(image as string | undefined, null))).toBe(expected)
     })
-  })
-})
-
-describe('boxImageNeedsRevalidate', () => {
-  it.each([
-    ['a tenant tag', 'quay.io/acme/app:v1', true, true],
-    ['a tenant bare repository', 'quay.io/acme/app', true, true],
-    ['a tenant digest', DIGEST_REF, true, false],
-    ['a curated ref', CURATED_REF, false, false],
-  ])('%s ⇒ %s', (_label, image, recorded, expected) => {
-    expect(boxImageNeedsRevalidate(box(image as string, recorded as boolean))).toBe(expected)
-  })
-
-  /**
-   * A curated image the set has moved past must not start asking the registry:
-   * that is a round trip on the path every create took before any of this
-   * existed, and the answer would be a build nobody chose.
-   */
-  it('does not revalidate a curated box after the curated set moves on without it', () => {
-    expect(boxImageNeedsRevalidate(box(ROTATED_AWAY_REF, false))).toBe(false)
   })
 })

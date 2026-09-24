@@ -9,6 +9,7 @@
 //! - `ImageStore` handles all locking internally
 //! - `ImageObject` uses `BlobSource` for blob access
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -18,7 +19,7 @@ use super::blob_source::{BlobSource, LocalBundleBlobSource, StoreBlobSource};
 use super::object::ImageObject;
 use crate::db::Database;
 use crate::images::store::{ImageStore, SharedImageStore};
-use crate::runtime::options::{ImagePullOptions, ImageRegistry};
+use crate::runtime::options::ImageRegistry;
 use crate::runtime::types::ImageInfo;
 use boxlite_shared::errors::BoxliteResult;
 use oci_client::Reference;
@@ -72,7 +73,7 @@ pub(super) struct LayerInfo {
 /// let manager = ImageManager::new(PathBuf::from("/tmp/images"), db, vec![])?;
 ///
 /// // Pull an image
-/// let image = manager.pull("python:alpine", ImagePullOptions::default()).await?;
+/// let image = manager.pull("python:alpine").await?;
 ///
 /// // Access image information
 /// println!("Image: {}", image.reference());
@@ -114,28 +115,55 @@ impl ImageManager {
     ///
     /// Thread Safety: `ImageStore` handles locking internally. Multiple
     /// concurrent pulls of the same image will only download once.
-    pub async fn pull(
-        &self,
-        image_ref: &str,
-        pull: ImagePullOptions,
-    ) -> BoxliteResult<ImageObject> {
-        let manifest = self.store.pull(image_ref, pull).await?;
+    pub async fn pull(&self, image_ref: &str) -> BoxliteResult<ImageObject> {
+        let manifest = self.store.pull(image_ref).await?;
+        Ok(self.image_object(image_ref, manifest).await)
+    }
+
+    /// Resolve an image reference against its registry, even when it is cached.
+    ///
+    /// The cache is keyed by the ref string, so a tag answers with whatever it
+    /// pointed at when this host first pulled it. This asks the registry again
+    /// and reuses every layer already stored. When no answer comes back — the
+    /// registry cannot be reached, fails on its side, or throttles — the cached
+    /// image stands in, so an offline host still starts what it has.
+    pub async fn refresh(&self, image_ref: &str) -> BoxliteResult<ImageObject> {
+        let manifest = self.store.refresh(image_ref).await?;
+        Ok(self.image_object(image_ref, manifest).await)
+    }
+
+    #[cfg(test)]
+    pub(super) fn store(&self) -> &ImageStore {
+        &self.store
+    }
+
+    async fn image_object(&self, image_ref: &str, manifest: ImageManifest) -> ImageObject {
         let storage = self.store.storage().await;
         let blob_source = BlobSource::Store(StoreBlobSource::new(storage));
-
-        Ok(ImageObject::new(
-            image_ref.to_string(),
-            manifest,
-            blob_source,
-        ))
+        ImageObject::new(image_ref.to_string(), manifest, blob_source)
     }
 
     /// List all cached images.
+    ///
+    /// A pull indexes its build under the digest as well as the ref it was
+    /// pulled by, so a pinned pull can find it. That entry is not a second
+    /// image: it is listed only when no ref names the build — one a tag has
+    /// since moved past, or one pulled by digest — and then with no tag.
     pub async fn list(&self) -> BoxliteResult<Vec<ImageInfo>> {
         let raw_images = self.store.list().await?;
+        let is_pinned =
+            |reference: &str| Reference::from_str(reference).is_ok_and(|r| r.digest().is_some());
+        let named: HashSet<String> = raw_images
+            .iter()
+            .filter(|(reference, _)| !is_pinned(reference))
+            .map(|(_, cached)| cached.manifest_digest.clone())
+            .collect();
 
         let mut images = Vec::with_capacity(raw_images.len());
         for (reference, cached) in raw_images {
+            if is_pinned(&reference) && named.contains(&cached.manifest_digest) {
+                continue;
+            }
             // If parsing fails, default to UNIX_EPOCH to signal error
             let cached_at = DateTime::parse_from_rfc3339(&cached.cached_at)
                 .map(|dt| dt.with_timezone(&Utc))
@@ -145,10 +173,14 @@ impl ImageManager {
                 });
 
             let (repository, tag) = match Reference::from_str(&reference) {
-                Ok(r) => (
-                    r.repository().to_string(),
-                    r.tag().unwrap_or("latest").to_string(),
-                ),
+                Ok(r) => {
+                    let tag = match (r.tag(), r.digest()) {
+                        (Some(tag), _) => tag,
+                        (None, Some(_)) => "<none>",
+                        (None, None) => "latest",
+                    };
+                    (r.repository().to_string(), tag.to_string())
+                }
                 Err(_) => {
                     // Fallback if reference stored in DB is invalid
                     (reference.clone(), "<none>".to_string())
@@ -202,5 +234,37 @@ impl ImageManager {
         let blob_source = BlobSource::LocalBundle(LocalBundleBlobSource::new(path, cache_dir));
 
         Ok(ImageObject::new(reference, manifest, blob_source))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ImageManager;
+    use crate::db::Database;
+    use crate::images::store::tests::seed_cached_build;
+
+    const FIRST: &str = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0";
+    const NEWER: &str = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee1";
+
+    /// A pulled tag and the digest entry its pull wrote are one image; a build
+    /// no tag names still takes disk, so it is listed, with no tag.
+    #[tokio::test]
+    async fn a_pulled_tag_is_listed_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).unwrap();
+        let images = ImageManager::new(dir.path().join("images"), db, vec![]).unwrap();
+        seed_cached_build(images.store(), "quay.io/acme/app:v1", FIRST).await;
+        seed_cached_build(images.store(), &format!("quay.io/acme/app@{FIRST}"), FIRST).await;
+        seed_cached_build(images.store(), &format!("quay.io/acme/app@{NEWER}"), NEWER).await;
+
+        let listed = images.list().await.unwrap();
+        let rows: Vec<(&str, &str)> = listed
+            .iter()
+            .map(|image| (image.tag.as_str(), image.id.as_str()))
+            .collect();
+
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows.contains(&("v1", FIRST)), "{rows:?}");
+        assert!(rows.contains(&("<none>", NEWER)), "{rows:?}");
     }
 }

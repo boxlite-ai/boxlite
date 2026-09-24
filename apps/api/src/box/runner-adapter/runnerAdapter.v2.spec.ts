@@ -32,7 +32,7 @@ describe('RunnerAdapterV2 createBox', () => {
       region: undefined,
     } as any
 
-    await adapter.createBox(box)
+    await adapter.createBox(box, 'base')
 
     expect(jobService.createJob).toHaveBeenCalledWith(
       null,
@@ -48,52 +48,22 @@ describe('RunnerAdapterV2 createBox', () => {
     )
   })
 
-  /**
-   * The runner holds the operator's registry credentials and matches them by
-   * host, so the control plane has to say which pulls may use them. It is the
-   * only side that knows: whether a ref is one of the operator's own curated
-   * images is not visible from the ref alone.
-   */
-  describe('anonymous pulls', () => {
-    function makeAdapter() {
-      const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
-      const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
-      return { adapter, jobService }
-    }
+  /** The caller may pin a curated tag to the build this runner already has. */
+  it('sends the image it is handed rather than the one on the box', async () => {
+    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    await adapter.init({ id: 'runner-1' } as any)
+    const pinned = `ghcr.io/boxlite-ai/boxlite-agent-base@sha256:${'a'.repeat(64)}`
 
-    function payloadOf(jobService: any) {
-      return jobService.createJob.mock.calls[0][5]
-    }
+    await adapter.createBox({ id: 'box-1', image: 'base' } as any, pinned)
 
-    it.each([
-      ['a curated short name', 'base', false],
-      ['a curated ref', 'ghcr.io/boxlite-ai/boxlite-agent-python:v0.1.0', false],
-      ['a tenant ref', 'quay.io/acme/app:v1', true],
-      // The same host the operator's own images live on. Deciding by host
-      // would send credentials here, which is the hole this closes.
-      ['a tenant ref on a credentialed host', 'ghcr.io/acme/app:v1', true],
-    ])('pulls %s anonymously: %s', async (_label, image, expected) => {
-      const { adapter, jobService } = makeAdapter()
-      await adapter.init({ id: 'runner-1' } as any)
-
-      await adapter.createBox({ id: 'box-1', image, volumes: [] } as any)
-
-      expect(payloadOf(jobService).anonymousImagePull).toBe(expected)
-    })
-
-    // The seam only: which refs need re-resolving is boxImageNeedsRevalidate's
-    // own specification, and a curated ref is the one that must not pay for it.
-    it.each([
-      ['a curated name', 'base', false],
-      ['a tenant tag', 'quay.io/acme/app:v1', true],
-      ['a ref already pinned', `quay.io/acme/app@sha256:${'a'.repeat(64)}`, false],
-    ])('asks the runner to re-resolve %s: %s', async (_label, image, expected) => {
-      const { adapter, jobService } = makeAdapter()
-      await adapter.init({ id: 'runner-1' } as any)
-
-      await adapter.createBox({ id: 'box-1', image, volumes: [] } as any)
-
-      expect(payloadOf(jobService).imageRevalidate).toBe(expected)
-    })
+    expect(jobService.createJob).toHaveBeenCalledWith(
+      null,
+      JobType.CREATE_BOX,
+      'runner-1',
+      ResourceType.BOX,
+      'box-1',
+      expect.objectContaining({ image: pinned }),
+    )
   })
 })

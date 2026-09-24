@@ -237,49 +237,6 @@ mod registry_options_tests {
         );
     }
 
-    /// A box's options are persisted and replayed when it restarts, and a
-    /// restart must boot the image the box already has — but must still pull
-    /// it the way the box was created to. So of the two pull options, only
-    /// `anonymous` survives the round trip: `revalidate` is not written out,
-    /// and reads back as false even if something did write it.
-    #[test]
-    fn box_options_persist_anonymous_pull_but_not_revalidation() {
-        let options = BoxOptions {
-            image_pull: ImagePullOptions {
-                anonymous: true,
-                revalidate: true,
-            },
-            ..Default::default()
-        };
-
-        let json = serde_json::to_string(&options).unwrap();
-        assert!(
-            !json.contains("revalidate"),
-            "a re-resolution request must not outlive the create that asked for it: {json}"
-        );
-
-        let round_tripped: BoxOptions = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            round_tripped.image_pull,
-            ImagePullOptions {
-                anonymous: true,
-                revalidate: false,
-            },
-            "a restart must pull the box's image as anonymously as its create did"
-        );
-
-        assert_eq!(
-            serde_json::from_str::<BoxOptions>("{}").unwrap().image_pull,
-            ImagePullOptions::default()
-        );
-        assert!(
-            !serde_json::from_str::<BoxOptions>(r#"{"image_pull": {"revalidate": true}}"#)
-                .unwrap()
-                .image_pull
-                .revalidate
-        );
-    }
-
     #[test]
     fn options_reject_legacy_string_image_registries() {
         let result =
@@ -436,10 +393,6 @@ pub struct BoxOptions {
     #[serde(default)]
     pub advanced: AdvancedBoxOptions,
 
-    /// How this box's image is pulled. See [`ImagePullOptions`].
-    #[serde(default)]
-    pub image_pull: ImagePullOptions,
-
     /// Override the image's ENTRYPOINT directive.
     ///
     /// When set, completely replaces the image's ENTRYPOINT.
@@ -487,48 +440,6 @@ pub struct BoxOptions {
     /// guest; the real value never enters the VM.
     #[serde(default)]
     pub secrets: Vec<Secret>,
-}
-
-/// How a box's image is pulled, beyond where it is pulled from.
-///
-/// Not configuration. The registry list and its credentials are built once,
-/// with the runtime, and these change neither: `anonymous` selects among the
-/// credentials and `revalidate` says whether the ref-keyed cache may answer.
-/// Both belong to the box rather than to the runtime, because one runtime pulls
-/// the operator's own images and refs a tenant named from the same hosts, and
-/// credentials are matched by host — without the split,
-/// `ghcr.io/<someone-else>/<private-image>` is fetched with the operator's
-/// token and handed to the tenant who named it. Nor can the runtime tell the
-/// two apart by host: an operator may point a curated entry at a private
-/// package, so which kind a ref is has to come from the caller.
-///
-/// The fields live as long as different things, and their serde attributes say
-/// which: `anonymous` belongs to the box and is persisted with it, because a
-/// restart reads the image again; `revalidate` belongs to one create request
-/// and is never written out.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ImagePullOptions {
-    /// Send no credentials, whatever the runtime's registry list holds for this
-    /// host.
-    ///
-    /// Covers credentials only. Which transport to use and whether to skip
-    /// certificate verification stay keyed by host, because reaching a local
-    /// insecure registry is about where the bytes come from, not about whose
-    /// token opens the door.
-    #[serde(default)]
-    pub anonymous: bool,
-
-    /// Ask the registry even when this ref is already cached.
-    ///
-    /// The cache is keyed by the ref string, so a moving tag keeps resolving to
-    /// whatever it first pointed at. A caller that has not yet pinned the ref to
-    /// a digest sets this; the pull still reuses every layer it has, because
-    /// layers are keyed by their own digests.
-    ///
-    /// `skip`, not `default`: a restart must boot the image the box already
-    /// has, so a re-resolution request must not outlive the create that made it.
-    #[serde(skip)]
-    pub revalidate: bool,
 }
 
 /// A secret for MITM proxy injection.
@@ -631,7 +542,6 @@ impl Default for BoxOptions {
             auto_resume: None,
             detach: default_detach(),
             advanced: AdvancedBoxOptions::default(),
-            image_pull: ImagePullOptions::default(),
             entrypoint: None,
             cmd: None,
             user: None,

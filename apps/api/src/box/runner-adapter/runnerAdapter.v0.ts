@@ -22,7 +22,6 @@ import {
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
-import { boxImageIsOrgOwned, boxImageNeedsRevalidate } from '../utils/image-ownership.util'
 
 const isDebugEnabled = process.env.DEBUG === 'true'
 
@@ -250,10 +249,14 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
-  async createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined> {
+  async createBox(
+    box: Box,
+    image: string,
+    metadata?: { [key: string]: string },
+  ): Promise<StartBoxResponse | undefined> {
     const response = await this.boxApiClient.create({
       id: box.id,
-      image: box.image ?? '',
+      image,
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,
@@ -276,28 +279,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       authToken: box.authToken,
       organizationId: box.organizationId,
       regionId: box.region,
-      // Same rule as the v2 adapter: a ref this box did not get from the
-      // curated set was chosen by a tenant, and a runner's registry
-      // credentials are the operator's. Both adapters reach the same runner
-      // DTO, so leaving it out here would just move the hole to the older
-      // protocol — which is the one that still serves box recovery.
-      anonymousImagePull: boxImageIsOrgOwned(box),
-      // And whether the runner may answer from its own image cache. Half of
-      // that is the recorded ownership above; the other half is whether the
-      // ref is already pinned to a digest, which is read off `box.image`. Both
-      // are fixed when the box is created, so a replayed dispatch recomputes
-      // the same answer — except on a row that predates the column, where the
-      // first half has nothing to read and falls back to the curated set as it
-      // stands now.
-      //
-      // Settled that way for the box's whole life, which cuts both ways. A
-      // box created from an unpinned tag keeps revalidating, because the
-      // catalog pins the *next* create rather than this row — and the
-      // revalidation only reaches a registry when the runner has no rootfs to
-      // reuse (`should_revalidate` in `litebox/init/tasks/container_rootfs.rs`),
-      // which is also the only case where the cached answer would have been
-      // just as arbitrary.
-      imageRevalidate: boxImageNeedsRevalidate(box),
     })
 
     if (!response?.data?.daemonVersion) {

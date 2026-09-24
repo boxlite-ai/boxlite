@@ -14,11 +14,11 @@ const ALLOWLIST_ENV = 'BOXLITE_IMAGE_REGISTRY_ALLOWLIST'
  * fallback, the same shape as the curated image set, so an operator can widen
  * or narrow it with no code change.
  *
- * `ghcr.io` is left out on purpose. A deployed runner may hold an operator
- * token for it, applied by host. The dispatch marks every non-curated ref as an
- * anonymous pull, but a runner built before that flag still sends the token, so
- * ghcr.io is added through the env once every runner honours the flag. No
- * deployed runner holds Docker Hub credentials, so `docker.io` needs no wait.
+ * `ghcr.io` is left out on purpose. A runner holds no registry credential and
+ * pulls every image anonymously, but one built before that change may still
+ * hold an operator token for ghcr.io and apply it by host, so ghcr.io is added
+ * through the env once every runner serves a build that holds none. No deployed
+ * runner ever held Docker Hub credentials, so `docker.io` needs no wait.
  */
 const FALLBACK_ALLOWLIST = ['docker.io', 'quay.io', 'gcr.io', 'public.ecr.aws']
 

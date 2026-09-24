@@ -37,11 +37,10 @@ export type ResolvedImage = {
  * passed through so the runner can pull it and report what it got.
  *
  * A hit must come back digest-pinned. That is the assertion at the bottom, and
- * it is load-bearing rather than defensive: a runner's own image cache is keyed
- * by the ref string it was handed and never re-checked, so a host that once
- * pulled `app:stable` keeps serving that build for as long as the row lives. A
- * hit that came back unpinned would make which build a box gets depend on which
- * runner it landed on.
+ * it is load-bearing rather than defensive: the catalog promises that a ref
+ * boots the build it first resolved to, and a runner handed a tag asks the
+ * registry again whenever it builds a new disk from it. A hit that came back
+ * unpinned would let every new box follow `app:stable` upstream instead.
  */
 @Injectable()
 export class ImageResolverService {
@@ -133,10 +132,10 @@ export class ImageResolverService {
 }
 
 /**
- * A catalog hit has to be digest-pinned. A runner caches by the ref string it
- * was handed and does not re-check it, so an unpinned hit would leave which
- * build a box gets depending on which runner it landed on — a failure that is
- * silent everywhere else, which is why it is caught here.
+ * A catalog hit has to be digest-pinned. A runner re-resolves a tag it is
+ * handed whenever it builds a new disk, so an unpinned hit would let each box
+ * follow the tag upstream rather than boot the build the catalog recorded — a
+ * failure that is silent everywhere else, which is why it is caught here.
  *
  * Not a `BadRequestError`: the caller did nothing wrong, the resolver did.
  */

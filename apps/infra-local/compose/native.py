@@ -482,7 +482,7 @@ def _set_env_kv(path: Path, key: str, value: str) -> None:
     path.write_text("\n".join(out) + "\n")
 
 
-def _seed_api_env(p: _Paths, agent_img: str | None = None) -> None:
+def _seed_api_env(p: _Paths, agent_img: str) -> None:
     api_env = p.apps / "api" / ".env"
     if not api_env.exists():
         log("apps/api/.env missing — seeding from the infra-local template")
@@ -511,8 +511,7 @@ def _seed_api_env(p: _Paths, agent_img: str | None = None) -> None:
     _set_env_kv(api_env, "SMTP_SECURE", "false")
     _set_env_kv(api_env, "SMTP_USER", "")
     _set_env_kv(api_env, "SMTP_PASSWORD", "")
-    if agent_img:
-        _set_env_kv(api_env, "BOXLITE_SYSTEM_BASE_IMAGE", agent_img)
+    _set_env_kv(api_env, "BOXLITE_SYSTEM_BASE_IMAGE", agent_img)
     apps_env = p.apps / ".env"  # NestJS reads .env from cwd=apps/
     if not apps_env.is_symlink():
         try:
@@ -529,10 +528,9 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
             err(f"unknown component: {name} (valid: {' '.join(ALL_COMPONENTS)})")
             return 2
     # 0. Apple-Silicon bootstrap (idempotent no-ops once done): thread docker.io
-    # + ghcr.io creds through to L1 + runner, build the native lib.
+    # creds through to L1, build the native lib.
     _local_arm64.ensure_tools_on_path()
     _local_arm64.export_dockerhub_env()
-    _local_arm64.export_ghcr_env()
     _ensure_installed(p)
     _local_arm64.ensure_native_lib()
 
@@ -550,10 +548,9 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
         log("native binaries missing — building")
         build(cfg)
 
-    # 3.5 box base image: the published agent image is multi-arch now, so the
-    # runner pulls the host-matching arch straight from ghcr — no local build or
-    # L1-registry push. None when ghcr creds are absent (caller logs it and
-    # leaves the curated default in place).
+    # 3.5 box base image: the published agent image is multi-arch and public, so
+    # the runner pulls the host-matching arch straight from ghcr — no local build,
+    # L1-registry push, or credential.
     agent_img = _local_arm64.resolve_agent_image()
 
     # 4. API .env template + port + curated-image override + the apps/.env symlink

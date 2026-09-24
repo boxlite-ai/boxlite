@@ -4,18 +4,19 @@
  */
 
 import { Box } from '../entities/box.entity'
-import { isCuratedSelector, isDigestPinned } from '../../image/utils/image-ref.util'
+import { isCuratedSelector } from '../../image/utils/image-ref.util'
 
 /**
  * Whether a box's image belongs to its organization rather than to the
  * operator's curated set.
  *
- * One reader for the one question three call sites ask: whether to pull
- * anonymously, whether to revalidate a tag, and whether to record the image in
- * the organization's catalog. All three used to recompute it from `box.image`
- * against the curated set as it stands at that moment, which is not the set the
- * box was created against — an operator rotating a curated reference makes
- * every box still running the old one look tenant-owned.
+ * Asked when a box reports what its image resolved to, to decide whether the
+ * image goes into the organization's catalog or is pinned as a curated image,
+ * and when a box is dispatched, to decide whether a curated tag is handed over
+ * pinned to this runner's build. Recomputing it from `box.image`
+ * against the curated set as it stands at that moment would ask the wrong set —
+ * an operator rotating a curated reference makes every box still running the
+ * old one look tenant-owned — so the answer recorded at create is read back.
  *
  * A row written before the column exists has nothing recorded, and recomputing
  * is the best answer there is for it. That is the old behaviour, kept exactly,
@@ -23,17 +24,4 @@ import { isCuratedSelector, isDigestPinned } from '../../image/utils/image-ref.u
  */
 export function boxImageIsOrgOwned(box: Pick<Box, 'image' | 'imageIsOrgOwned'>): boolean {
   return box.imageIsOrgOwned ?? !isCuratedSelector(box.image)
-}
-
-/**
- * Whether the runner may answer this box's image from its own cache.
- *
- * Two conditions, and the first is why this lives here rather than beside the
- * ref-shape rules: the operator's curated images are never revalidated, and
- * whether this box's image is one of them is a recorded fact about the box, not
- * a property of the string. The second is: a ref already pinned to a digest has
- * nothing left to re-resolve.
- */
-export function boxImageNeedsRevalidate(box: Pick<Box, 'image' | 'imageIsOrgOwned'>): boolean {
-  return boxImageIsOrgOwned(box) && !isDigestPinned(box.image ?? '')
 }

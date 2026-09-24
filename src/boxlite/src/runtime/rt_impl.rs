@@ -9,7 +9,7 @@ use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
 use crate::runtime::id::{BoxID, BoxIDMint};
 use crate::runtime::layout::{BoxFilesystemLayout, FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
-use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions, ImagePullOptions};
+use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
 use crate::vmm::VmmKind;
@@ -1858,12 +1858,7 @@ impl super::images::ImageBackend for LocalRuntime {
                 "Cannot pull image: runtime has been shut down".into(),
             ));
         }
-        // A library caller configured the registries it is asking against, so
-        // this path keeps them. The tenant-facing path is a box's own image.
-        self.0
-            .image_manager
-            .pull(image_ref, ImagePullOptions::default())
-            .await
+        self.0.image_manager.pull(image_ref).await
     }
 
     async fn list_images(&self) -> BoxliteResult<Vec<crate::runtime::types::ImageInfo>> {

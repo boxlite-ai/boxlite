@@ -586,12 +586,6 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             // BoxOptions through PyBoxOptions and the REST wire schema carries
             // `tty`; Node has no such caller yet.
             tty: false,
-            // Not surfaced either: both pull options exist for a caller that
-            // passes on image refs someone else chose and pins them to digests
-            // on that party's behalf. An embedded SDK pulls its own refs,
-            // against registries its own process configured. The multi-tenant
-            // caller is the Go runner — see `ImagePullOptions`.
-            image_pull: boxlite::ImagePullOptions::default(),
             secrets,
         })
     }

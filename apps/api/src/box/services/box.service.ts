@@ -1426,7 +1426,7 @@ export class BoxService {
       try {
         await this.imageRegistrarService.onBoxStarted(
           box.organizationId,
-          { ref: box.image, isOrgOwned: boxImageIsOrgOwned(box) },
+          { ref: box.image, isOrgOwned: boxImageIsOrgOwned(box), runnerId: box.runnerId },
           reportedImage,
         )
       } catch (error) {

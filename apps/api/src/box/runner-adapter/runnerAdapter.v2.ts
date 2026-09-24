@@ -17,7 +17,6 @@ import { JobStatus } from '../enums/job-status.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
 import { BoxRepository } from '../repositories/box.repository'
-import { boxImageIsOrgOwned, boxImageNeedsRevalidate } from '../utils/image-ownership.util'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -114,14 +113,18 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     }
   }
 
-  async createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined> {
-    if (!box.image) {
+  async createBox(
+    box: Box,
+    image: string,
+    metadata?: { [key: string]: string },
+  ): Promise<StartBoxResponse | undefined> {
+    if (!image) {
       throw new Error(`Box ${box.id} has no image; cannot create on runner`)
     }
 
     const payload = {
       id: box.id,
-      image: box.image,
+      image,
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,
@@ -149,35 +152,6 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       authToken: box.authToken,
       organizationId: box.organizationId,
       regionId: box.region,
-      // A runner holds registry credentials for the hosts the curated images
-      // live on, and core matches them by host. Any other ref reached this box
-      // because a tenant named it, so it is pulled with no credentials at all —
-      // otherwise `ghcr.io/<another-org>/<private>` is fetched with the
-      // operator's token and handed to whoever asked for it.
-      //
-      // The test is the curated set, not the host. The built-in three are
-      // public, but an operator may override or append curated entries that
-      // are not — that is what the ghcr credential is for — so curated refs
-      // have to keep their credentials. Deciding by host would put every ref
-      // on those hosts back inside the operator's identity, which is the hole
-      // itself.
-      anonymousImagePull: boxImageIsOrgOwned(box),
-      // And whether the runner may answer from its own image cache. Half of
-      // that is the recorded ownership above; the other half is whether the
-      // ref is already pinned to a digest, which is read off `box.image`. Both
-      // are fixed when the box is created, so a replayed dispatch recomputes
-      // the same answer — except on a row that predates the column, where the
-      // first half has nothing to read and falls back to the curated set as it
-      // stands now.
-      //
-      // Settled that way for the box's whole life, which cuts both ways. A
-      // box created from an unpinned tag keeps revalidating, because the
-      // catalog pins the *next* create rather than this row — and the
-      // revalidation only reaches a registry when the runner has no rootfs to
-      // reuse (`should_revalidate` in `litebox/init/tasks/container_rootfs.rs`),
-      // which is also the only case where the cached answer would have been
-      // just as arbitrary.
-      imageRevalidate: boxImageNeedsRevalidate(box),
     }
 
     await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
