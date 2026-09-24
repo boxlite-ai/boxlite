@@ -78,6 +78,9 @@ sequenceDiagram
 `alice` selects SSH credentials. The process runs as the **container's configured
 user**; an SSH account does not create a separate Linux user.
 
+Continue with [SSH lifecycles](lifecycles.md) to follow startup, authentication,
+channel execution, forwarding, and shutdown through their completion points.
+
 ## Control API
 
 - SSH starts disabled; `Guest.Init` must finish before `Configure`.
