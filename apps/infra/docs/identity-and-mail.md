@@ -4,6 +4,20 @@ Configure identity and outbound mail separately from infrastructure deployment.
 
 # Identity and mail operations
 
+[Infrastructure index](../README.md) · [Deployment](deployment.md) · [Branding assets](../auth0/branding/ASSETS.md)
+
+## OIDC application setup
+
+Run infra commands from `apps/infra`. The API validates issuer/JWKS and audience; the dashboard
+needs the SPA client ID and callback/logout/web-origin URLs for its actual public host.
+`DASHBOARD_DOMAIN` overrides the dashboard host without moving `api.<STACK_DOMAIN>`.
+
+For a new AWS/Auth0 setup, `bootstrap --provision-auth0` creates the SPA and custom API.
+This option is not idempotent: repeating it creates duplicates. The GCP bootstrap path does not
+provision Auth0; create/configure the equivalent identities in the tenant, then store the values
+through [mstage](configuration.md). Other compatible OIDC providers need equivalent manual setup.
+Application invitation mail and the identity provider's verification/reset mail are separate systems.
+
 ## Auth0 email-first login policy
 
 Run this only for a dedicated BoxLite Auth0 tenant. Identifier First is a
@@ -39,13 +53,13 @@ can create; a tenant already sending through Resend, Mailgun or an SMTP relay
 keeps that provider and reconciles only the templates with `--templates-only`
 (below). A GCP-homed stage has no SES identity at all — it sends through the
 relay named by `MAIL_RELAY_HOST` and verifies nothing
-(`mdeploy/stack/providers/gcp/mail.ts`).
+([GCP mail provider](../mdeploy/stack/providers/gcp/mail.ts)).
 
 On the AWS path, use the stack's verified SES identity described in
 [Outbound mail](#outbound-mail). The Api's stored `SMTP_PASSWORD` is
 SigV4-derived and cannot be used as the raw AWS secret required by Auth0's SES
 provider. Create a separate send-only IAM access key for Auth0, scoped to that
-identity, then run the two reconcilers from this directory. Preview is the
+identity, then run the two reconcilers from `apps/infra`. Preview is the
 default and performs no writes:
 
 ```bash
@@ -111,9 +125,7 @@ npm run auth0:configure-email -- \
 For a non-production canary tenant only, skip `auth0:configure-email` and add
 `--allow-test-email-provider` to both `auth0:configure-login` commands. This
 uses Auth0's built-in sender and default templates; they do not appear as
-Management API provider/template resources. The built-in service sends from
-`no-reply@auth0user.net`, is limited to 10 messages per minute, and is not for
-production.
+Management API provider/template resources. The built-in sender is intended for testing, not production; verify current tenant limits before a canary.
 
 Login-policy apply refuses before its first write when the Auth0 CLI's session
 for the tenant lacks a scope it writes with, naming the missing ones: apply
@@ -143,53 +155,45 @@ API deploy. The API then rejects old unverified `auth0|...` access tokens across
 HTTP, Socket.IO, and the WebSocket proxy. It does not revoke refresh tokens or
 retroactively gate independently validating Commerce/Analytics services.
 
-**Adding a stage:** run `npm run bootstrap -- --stage <name>`, then add `<name>`
-to the `options` of whichever Environment-selecting inputs should reach it —
-`stage` in `.github/workflows/deploy-infra.yml` and `deploy-release.yml`, and
-both `stage` and `source_stage` in `build-apps-api-image.yml` (a stage absent from
-`source_stage` can never be promoted *from*). Those lists are allowlists, so a
-typo cannot target a protected Environment, and they are deliberately
-independent: see [.github/workflows/README.md](../../../.github/workflows/README.md)
-for which path currently reaches which stage.
-
 ## Outbound mail
 
-The stack verifies one Amazon SES domain identity (`MAIL_DOMAIN`, default
-`mail.boxlite.ai`) and publishes its DKIM and DMARC records through the same
-Cloudflare adapter the rest of the stack uses. The Api reaches SES over the SMTP
-interface on port 465, so `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASSWORD`
-stay a vendor-neutral contract — only `stack/mail.ts` knows the backend is SES.
-Two senders use that one identity: the Api's organization invitation, and Auth0's
-verification and reset codes.
+| Stage home | Application mail backend | Setup |
+| --- | --- | --- |
+| GCP | External SMTP relay on port 465 | Set `MAIL_DOMAIN`, `MAIL_RELAY_HOST`, `SMTP_USER` and `SMTP_PASSWORD`; verify the sender with the relay provider |
+| AWS | SES SMTP on port 465 | Declare `MAIL_DOMAIN`, deploy DNS/SES identity, provision SMTP credential, then verify sending |
+| Either, mail disabled | No sender domain | Invitations may be created without email delivery |
 
-```text
-bootstrap --stage <s> --provision-ses   IAM user boxlite-<s>-smtp, send-only on this identity
-  └─ access key                → SMTP_USER + SMTP_PASSWORD (SigV4-derived) in the secret store
-       └─ deploy               stack/mail.ts → SES identity + DKIM/DMARC → Api SMTP_* env
+GCP's mail provider creates no sender-verification resources and explicitly reports the relay as
+unverified. Configuring the BoxLite relay does not configure Auth0's email provider.
+Use mstage secret stdin for SMTP credentials and redeploy the API after changing its configuration.
+
+On AWS, `npm run bootstrap -- --stage <stage> --provision-ses` creates a send-only IAM user and
+stores `SMTP_USER` plus its SigV4-derived `SMTP_PASSWORD`. Rerunning rotates the credential.
+The operator performs this privileged step; the ordinary deploy role cannot create the IAM user.
+
+The AWS stack publishes the configured sender's DKIM/DMARC records. If the identity is not yet
+verified on first bootstrap, deploy it and rerun the SES provisioning step. Bootstrap requests SES
+production access only after verification, reports an existing review/case, and does not repeatedly
+resubmit a denied case. Check the account's current regional SES sandbox and quota status.
+
+An SES identity is unique to its account/region/domain. Give separate stages their intended domains
+or explicitly design shared ownership. Auth0's SES integration needs a separate raw send-only AWS
+credential; the application's derived SMTP password cannot substitute for it.
+
+Verify application invitations and identity-provider verification/reset emails independently.
+Sources: [GCP mail](../mdeploy/stack/providers/gcp/mail.ts), [AWS mail](../mdeploy/stack/providers/aws/mail.ts),
+[bootstrap](../bootstrap/bootstrap.ts), and [API environment](../mdeploy/src/api-environment.ts).
+
+## Universal Login branding
+
+Deploy the dashboard assets first, then preview the reviewed stage target:
+
+```bash
+npm run auth0:universal-login -- preview --stage dev
+npm run auth0:universal-login -- apply --stage dev
 ```
 
-- **The credential is bootstrap's, not the deploy's.** The deploy role holds IAM
-  on roles only, so it cannot create the user or its access key; `--provision-ses`
-  does that with the operator's credentials. Rerunning rotates the key and revokes
-  the previous one.
-- **The sandbox exit rides along, once the domain is verified.** A new SES account
-  sends 200 messages/day to verified recipients only, and `--provision-ses` asks
-  AWS to lift that — but only when `sesv2 get-email-identity` reports the sender
-  domain verified. On a first bootstrap it is not (the deploy creates the
-  identity), so the request is deferred with a message saying to deploy and rerun.
-  A request made with no identity behind it is the shape AWS denies, and there is
-  only one submission to spend: it reads `sesv2 get-account` and does nothing once
-  access is granted, nothing while a review is open, and reports the case id when a
-  review has closed DENIED or FAILED rather than resubmitting — AWS answers a
-  second submission with ConflictException, so a denial is worked through that
-  support case. Account-and-region wide, so the first stage bootstrapped in a
-  region covers the rest, and a failure here never fails the bootstrap.
-- **No credential, no mail.** `SMTP_HOST` resolves to empty unless both
-  `SMTP_USER` and `SMTP_PASSWORD` are set — nodemailer authenticates only with
-  both, so half a credential would send unauthenticated and be refused on every
-  message. The Api reports the empty host once at boot as email disabled;
-  invitations are still created, just not delivered.
-- **One stage per domain.** An SES identity is unique per account and region.
-  A second stage needs its own subdomain, or adopts the existing identity with
-  `sst.aws.Email.get`.
-- Sending costs $0.10 per 1,000 messages, which is why it has no line in [Cost]().
+The command verifies live stack identity, media types and public CORS before writes. Its target
+catalog is separate from the mstage declaration; update/review the intended tenant and origins before
+using it for a new stage. It manages theme, tenant image and prompt text; widget geometry remains
+Auth0-managed. [ASSETS.md](../auth0/branding/ASSETS.md) records hashes, licenses and update steps.

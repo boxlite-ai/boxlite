@@ -220,7 +220,7 @@ separate ownership and are not implicitly erased by removing application resourc
 
 Use [runner operations](runners.md#scale-out) to add capacity. Resource sizes, database availability,
 backups and ClickHouse mode come from the stage's `deploy` block.
-The [cost catalog](architecture.md) lists every GCP billing component declared by this stack and its bootstrap.
+The [cost catalog](costs.md) lists every GCP billing component declared by this stack and its bootstrap.
 Estimate from the selected region, configuration and traffic rather than a fixed monthly total.
 
 ## Reference
