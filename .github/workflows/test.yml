@@ -220,6 +220,9 @@ jobs:
               - 'Makefile'
               - 'make/test.mk'
               - 'make/changes.mk'
+              # The infra suite asserts Codecov's ignore list covers every test
+              # source, so a change to it has to run that suite.
+              - 'codecov.yml'
 
   infra:
     name: Workflow and infrastructure checks

@@ -199,6 +199,37 @@ test('patch coverage requires 90 percent and a report while total stays informat
   assert.equal(config.coverage.status.project.default.informational, true)
 })
 
+// The check below only guards the ignore list if editing that list runs it.
+test('a change to codecov.yml selects the suite that checks codecov.yml', () => {
+  assert.ok(testSuites(['codecov.yml']).includes('infra'))
+})
+
+// Codecov rejects the empty upload with "Testable files changed" when a changed
+// file is not ignored, so every test source has to match an ignore glob. Select by
+// any path carrying "test" or "spec" as a word: deliberately wider than the globs,
+// so a suite named by a convention nobody has added yet fails here rather than on
+// Codecov. That width is paid for by naming the production files that carry those
+// words. picomatch approximates Codecov's matcher, which ships no library to
+// test against.
+test('every test source is ignored, so a test-only change still qualifies for the empty upload', () => {
+  const production = [
+    '.github/workflows/test.yml',                    // runs the suites, is not one
+    'make/test.mk',                                  // the recipes it calls
+    'scripts/setup/setup-test.sh',                   // installs test tooling
+    'sdks/go/info_cgo_test_support_dev.go',          // dev-tag cgo bridge, shipped
+    'src/boxlite/examples/disk_attachment_test.rs',  // an example, built as one
+    'src/guest/src/container/spec.rs',               // the OCI runtime spec
+  ]
+  const ignore: string[] = (loadYaml(readFileSync(join(REPO_ROOT, 'codecov.yml'), 'utf8')) as any).ignore
+  const tracked = spawnSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 << 20 })
+  assert.equal(tracked.status, 0, tracked.stderr)
+  const testSources = tracked.stdout.trim().split('\n')
+    .filter((path) => /(^|[^a-z0-9])(test|spec)s?([^a-z0-9]|$)/i.test(path) && !production.includes(path))
+  assert.ok(testSources.length > 100, `expected the repo's test sources, found ${testSources.length}`)
+  const testable = testSources.filter((path) => !ignore.some((pattern) => matches(pattern, path)))
+  assert.deepEqual(testable, [], 'these test sources would count as a testable change')
+})
+
 function cliUnitTests(runner: 'cargo' | 'nextest', exitCode = 0) {
   const directory = mkdtempSync(join(tmpdir(), 'boxlite-cli-unit-'))
   try {

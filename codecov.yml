@@ -37,7 +37,21 @@ flags:
 
 ignore:
   - "src/deps/**/vendor/**" # Third-party sources, not BoxLite's networking bridge
-  - "**/tests/**"         # Test files themselves
+  # Test sources themselves. A changed test file that matches none of these is one
+  # Codecov calls testable, which makes it reject the empty upload test.yml sends
+  # when no coverage job ran. Directories first, then the naming conventions in
+  # tree: the `.test.`/`.spec.` infix, Go's `_test.go`, a `test_` prefix, and the
+  # `tests.rs` module.
+  - "**/tests/**"
+  - "**/test/**"
+  # The whole app is the end-to-end suite, so no naming convention marks its
+  # fixtures, conftest and per-SDK drivers as tests.
+  - "apps/e2e/**"
+  - "**/*.test.*"
+  - "**/*.spec.*"
+  - "**/*_test.go"
+  - "**/test_*.*"
+  - "**/tests.rs"
   - "src/test-utils/**"   # Test scaffolding pulled in by the core crate's tests
   # `coverage:go` measures the whole runner module with -coverpkg=./..., and
   # this package is generated. Codecov resolves the module's import paths back
