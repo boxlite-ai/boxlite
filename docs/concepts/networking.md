@@ -1,5 +1,9 @@
 # Networking
 
+## TL;DR
+
+BoxLite provides isolated networking with optional outbound secret substitution.
+
 BoxLite supports pluggable network backends for Box connectivity.
 
 ## Available backends
@@ -25,6 +29,16 @@ Box                    gvproxy                  Internet
 - Local one-shot service tunnels
 - Built-in DHCP and DNS
 - Network metrics (bytes sent/received)
+
+### Secret substitution certificates
+
+Each box uses a persisted, ten-year MITM CA whose private key stays on the host.
+Host certificates last at most 24 hours and renew on demand within the CA validity.
+On a full stop/start, CAs with at most 30 days remaining renew using the same key;
+container initialization replaces their old guest trust entries before startup.
+This migrates the original 24-hour CAs. Upgrading the host runtime and guest binary
+and fully restarting existing boxes is required; reattaching or resuming a running
+proxy does not renew its CA or reload application trust stores.
 
 ### libslirp (alternative)
 

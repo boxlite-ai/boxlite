@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// BoxCA is an ephemeral ECDSA P-256 certificate authority for MITM.
+// BoxCA signs short-lived host certificates with the persisted per-box CA.
 type BoxCA struct {
 	cert      *x509.Certificate
 	key       *ecdsa.PrivateKey
@@ -86,10 +86,17 @@ func (ca *BoxCA) CACertPool() (*x509.CertPool, error) {
 const maxCertCacheSize = 10000
 
 func (ca *BoxCA) GenerateHostCert(hostname string) (*tls.Certificate, error) {
+	return ca.generateHostCert(hostname, time.Now())
+}
+
+func (ca *BoxCA) generateHostCert(hostname string, now time.Time) (*tls.Certificate, error) {
+	if now.Before(ca.cert.NotBefore) || !now.Before(ca.cert.NotAfter) {
+		return nil, fmt.Errorf("MITM CA is invalid at %s (valid from %s until %s)", now, ca.cert.NotBefore, ca.cert.NotAfter)
+	}
 	if cached, ok := ca.certCache.Load(hostname); ok {
 		tlsCert := cached.(*tls.Certificate)
 		// Check TTL: regenerate if cert has expired
-		if tlsCert.Leaf != nil && time.Now().Before(tlsCert.Leaf.NotAfter) {
+		if tlsCert.Leaf != nil && !now.Before(tlsCert.Leaf.NotBefore) && now.Before(tlsCert.Leaf.NotAfter) {
 			return tlsCert, nil
 		}
 		// Expired — fall through to regenerate
@@ -106,7 +113,6 @@ func (ca *BoxCA) GenerateHostCert(hostname string) (*tls.Certificate, error) {
 		return nil, err
 	}
 
-	now := time.Now()
 	template := &x509.Certificate{
 		SerialNumber:          serial,
 		NotBefore:             now.Add(-1 * time.Minute),
@@ -114,6 +120,12 @@ func (ca *BoxCA) GenerateHostCert(hostname string) (*tls.Certificate, error) {
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
+	}
+	if template.NotAfter.After(ca.cert.NotAfter) {
+		template.NotAfter = ca.cert.NotAfter
+	}
+	if template.NotBefore.Before(ca.cert.NotBefore) {
+		template.NotBefore = ca.cert.NotBefore
 	}
 
 	if ip := net.ParseIP(hostname); ip != nil {
