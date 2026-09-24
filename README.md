@@ -143,12 +143,13 @@ REST-capable CLI commands also work against a running server with `--url`:
 ### 4 · Distribute it — your own agentic cloud
 
 <details>
-<summary>Deploy the control plane into your own GCP project or AWS account, with a shared control plane and a fleet of VM runners.</summary>
+<summary>Deploy into your own AWS account or GCP project, with a shared control plane and a fleet of VM runners.</summary>
 
 Start with the [architecture graphs](./apps/infra/docs/architecture.md), then follow the
 [deployment guide](./apps/infra/docs/deployment.md) for stage configuration, bootstrap, preview
-and verification. It covers GCP and the retained AWS path, including their compatibility boundary.
-The [infrastructure index](./apps/infra/README.md) links operations and the complete GCP cost catalog.
+and verification. Choose the [AWS guide](./apps/infra/docs/aws/README.md) or
+[GCP guide](./apps/infra/docs/gcp/README.md) for provider-specific setup, operations and costs.
+Neither cloud is preferred; the stage declaration selects the provider.
 
 </details>
 

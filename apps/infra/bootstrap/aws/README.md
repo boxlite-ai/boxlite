@@ -4,7 +4,7 @@ AWS bootstrap reconciles the legacy deployment's prerequisite policies, registry
 
 # AWS bootstrap reference
 
-[Infrastructure index](../../README.md) · [Deployment](../../docs/deployment.md) · [Security](../../docs/security.md)
+[Infrastructure index](../../README.md) · [Deployment](../../docs/aws/deployment.md) · [Security](../../docs/aws/security.md)
 
 Run `npm run bootstrap -- --stage <stage>` from `apps/infra` with an authorized AWS identity,
 authenticated `gh`, and reviewed `.env` input. The operator needs IAM write privileges beyond the
@@ -35,7 +35,7 @@ mbuild repositories separately from the legacy API repository.
 Consequently, bootstrap completion alone does not prepare a fresh AWS mdeploy stage, and mdeploy
 must not be described as automatically adopting the legacy state. Verify the app/state key, runtime
 boundary, registry, artifact bucket and role grants before previewing a migration. The existing
-[legacy AWS path](../../docs/deployment.md#retained-legacy-aws-deployment) remains documented.
+[legacy AWS path](../../docs/aws/deployment.md#retained-legacy-aws-deployment) remains documented.
 
 ## Policy documents
 
@@ -55,7 +55,7 @@ A boundary update creates a managed-policy version; bootstrap prunes the oldest 
 when needed to stay within IAM's version limit.
 
 Stage state/secrets grants coexist with shared asset buckets, volume-prefix access, account-wide
-SSM instance targets and SES identity management. [Security](../../docs/security.md)
+SSM instance targets and SES identity management. [Security](../../docs/aws/security.md#policy-scope-and-shared-grants)
 records those limits. `cloudfront-keyvaluestore:*` is separate from `cloudfront:*`; the latter's
 wildcard does not cover another service prefix.
 

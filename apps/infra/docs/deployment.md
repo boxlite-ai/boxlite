@@ -1,85 +1,32 @@
 ## TL;DR
 
-Declare and bootstrap a stage, prepare its artifacts, review a preview, then apply and verify the running services.
+Prepare the selected cloud first, then use the shared preview, apply, verification and recovery workflow.
 
-# Deploy BoxLite on GCP or AWS
+# Shared deployment workflow
 
-[Infrastructure index](../README.md) · [Configuration](configuration.md) · [mdeploy reference](mdeploy.md)
+[Infrastructure index](../README.md)
 
 ## Architecture
 
-Start with the [high-level overview and detailed graphs](architecture.md).
-GCP hosts API/collector on Cloud Run, the proxy on GKE Autopilot, and runners on Compute Engine.
-AWS uses ECS Fargate and EC2 for the corresponding services.
+Choose the [GCP architecture](gcp/architecture.md) or [AWS architecture](aws/architecture.md).
+These shared commands assume the corresponding cloud prerequisites have been prepared.
 
 ## Prerequisites
 
-| Provide | GCP | AWS |
-| --- | --- | --- |
-| Cloud account | Billing-enabled project and bootstrap permissions | Account and IAM/SSM/bootstrap permissions |
-| Region and capacity | GKE, Cloud SQL, Redis and nested-KVM runner capacity; a supported N4 zone | Corresponding ECS/RDS/Redis services and nested-KVM EC2 capacity |
-| Local tools | Node.js 22+, Git, gh, gcloud, Pulumi CLI | Node.js 22+, Git, gh, AWS CLI |
-| Build tools | Docker/buildx when publishing locally | Docker/buildx when publishing locally |
-| DNS | Cloudflare zone and scoped token | Cloudflare zone and scoped token |
-| Identity | An OIDC issuer, SPA client and API audience | Same |
-
-Install repository dependencies with the Make target, then work from the infra directory:
-
-```bash
-make _ensure-infra-deps
-cd apps/infra
-cp .mstage.config.example.json .mstage.config.json
-```
-
-Edit the intended stage using [configuration ownership](configuration.md#declare-a-stage).
-For GCP, give `dev` a GCP declaration if using the manual workflow; the example's `dev2` name is
-usable locally but is not one of that workflow's choices. Set the exact cloud, project/account,
-region and protection before any cloud-writing command.
+Follow the [GCP prerequisites](gcp/deployment.md#prerequisites) or
+[AWS prerequisites](aws/deployment.md#prerequisites) before cloud-writing commands.
+Stage names do not select a cloud; the ignored declaration's `home` field does.
 
 ## Bootstrap a stage
 
-```bash
-npm run mstage login -- --stage dev
-npm run mstage aws whoami -- --stage dev
-npm run bootstrap -- --stage dev
-npm run mstage config put -- --stage dev
-```
-
-Use `login ... --force` when sign-in is needed. GCP needs both gcloud and ADC sessions.
-Bootstrap needs broader privileges than the deployer it creates. `--repo owner/name` selects the
-GitHub repository explicitly; `--reviewers` accepts numeric GitHub user IDs.
-A protected GCP stage requires `--confirm`.
-
-| Bootstrap result | GCP | AWS |
-| --- | --- | --- |
-| Cloud prerequisites | Service APIs, state/artifact buckets, Secret Manager bootstrap/key, Artifact Registry, OS Config enablement | IAM boundaries, GitHub OIDC role, ECR and runner artifact bucket |
-| CI identity | Workload Identity Federation, deployer and image publisher service accounts | GitHub OIDC deploy role |
-| GitHub Environment | GCP provider/deployer/publisher variables | AWS account/region and Cloudflare credentials |
-| Application values | Seed separately with mstage | Bootstrap imports reviewed `.env` stage settings; set application secrets separately |
-
-For the retained AWS bootstrap path, prepare `cp .env.example .env` and fill its reviewed non-secret settings first.
-See [AWS bootstrap policy ownership](../bootstrap/aws/README.md).
-On GCP, bootstrap does not import the application's values or provision Auth0/SES.
-
-Before the first deploy, populate every required key in the [environment manifest](../mstage.env.json),
-including `OIDC_CLIENT_ID` and, on GCP, the `pulumi` group. Use secret stdin or a protected JSON file as described in
-[configuration](configuration.md#set-application-values). Generate a strong initial
-`PULUMI_CONFIG_PASSPHRASE` once; preserve it for existing state rather than replacing it on reruns.
-Then certify the imported configuration:
-
-```bash
-npm run mstage env set -- --stage dev --digest
-npm run mstage env digest -- --stage dev
-npm run mstage env list -- --stage dev --select-group deploy
-```
-
-Configure OIDC callbacks for the actual dashboard host. See [identity and mail](identity-and-mail.md)
-for Auth0, optional SMTP/SES and branding. Recheck live GitHub Environment reviewers after bootstrap.
-Bootstrap creates prerequisites; it does not deploy application services or prove they are healthy.
+Use the separate [GCP bootstrap procedure](gcp/deployment.md#bootstrap-a-stage) or
+[AWS bootstrap and compatibility check](aws/deployment.md#bootstrap-and-choose-the-deployment-path).
+`npm run bootstrap` prepares prerequisites; it does not prove application readiness.
+Required application values include `OIDC_CLIENT_ID`; set and verify them using [configuration](configuration.md).
 
 ## Deploy through GitHub Actions
 
-For GCP and AWS stages with verified mdeploy prerequisites, the entrypoint is [mdeploy-all.yml](../../../.github/workflows/mdeploy-all.yml).
+For a stage with verified mdeploy prerequisites, the entrypoint is [mdeploy-all.yml](../../../.github/workflows/mdeploy-all.yml).
 It defaults to a preview. Example: preview an open PR's merge result in `dev`:
 
 ```bash
@@ -107,31 +54,9 @@ Image releases are published/promoted through [mbuild-release](../../../.github/
 
 ## Retained legacy AWS deployment
 
-AWS bootstrap currently prepares the legacy `boxlite` app. mdeploy's AWS app is `boxlite-app`;
-its state, runtime-boundary and artifact prerequisites are different. Read the
-[AWS compatibility check](../bootstrap/aws/README.md#aws-mdeploy-compatibility) before using mdeploy
-on an existing AWS stage or assuming a fresh bootstrap prepared it.
-
-`deploy-infra.yml`, `deploy-release.yml`, `build-apps-api-image.yml`, and `npm run deploy`
-remain in the repository. They use the legacy SST tree and its own artifact selectors.
-Use them only when intentionally operating that path; do not mix their selectors with mdeploy's.
-
-| Legacy operation | Behavior |
-| --- | --- |
-| `deploy-infra.yml` | Build deployment from a main commit or allowed same-repository PR head |
-| `deploy-release.yml` | Deploy existing release artifacts |
-| `build-apps-api-image.yml` | Build/promote the legacy API image |
-| `npm run deploy -- --stage dev` | Legacy guarded full-stack deploy |
-| `--exclude Runner` / `--exclude Api` | Legacy component scopes; excluded leg keeps its prior revision |
-
-The legacy wrapper refuses targeted applies, checks its
-[capability manifest](../deployment/capabilities.json), enforces the
-[runner policy pack](../policies/runner/), and runs its own post-deploy checks.
-Its runner updates enter [`scripts/runner-update-binary.mjs`](../scripts/runner-update-binary.mjs).
-Its API fallback can build locally when no published ref is selected; mdeploy expects published images.
-See [artifact selection](../artifacts/source.ts), [scope rules](../deployment/scope.ts),
-[wrapper](../deployment/sst.ts), and the [workflow reference](../../../.github/workflows/README.md).
-Preview before switching entrypoints; shared logical names are not proof of a no-op transition.
+The [AWS deployment guide](aws/deployment.md#retained-legacy-aws-deployment) owns the retained SST path
+and its compatibility boundary. Its [runner update launcher](../scripts/runner-update-binary.mjs)
+is separate from current mdeploy orchestration.
 
 ## Deploy an existing stack
 
@@ -166,9 +91,7 @@ Provide an account-owned token with **Zone:Read** and **DNS:Edit**, restricted t
 to the intended account/zone. Both are required by the current deployment group, alongside the token.
 The token is created in Cloudflare's dashboard; a provider login does not generate it.
 
-GCP mdeploy reads the credentials through the encrypted `deploy` group. AWS bootstrap also maintains
-the SSM/GitHub credential copies needed by the retained legacy SST path. Verify the path you use
-rather than assuming that updating one destination rotates all copies.
+Follow the selected cloud’s [deployment guide](#bootstrap-a-stage) for credential storage and rotation destinations.
 
 ## Verify the result
 
@@ -182,7 +105,6 @@ rather than assuming that updating one destination rotates all copies.
 | Persistent volumes | Create/mount/write/read using a test volume if enabled |
 | Telemetry | A new test event reaches the configured destination and is queryable |
 
-On GCP, also inspect OS Config reports: an applied policy is not a converged fleet.
 Use the [runner](runners.md#verify-and-recover), [network](networking.md), and
 [ClickHouse](clickhouse.md) guides to locate the failing boundary.
 The legacy wrapper's automatic checks do not imply that mdeploy performs the same checks.
@@ -194,9 +116,9 @@ The legacy wrapper's automatic checks do not imply that mdeploy performs the sam
 | Stage/config not found | Ignored declaration and CI environment variable; [configuration](configuration.md) |
 | Missing required key or digest mismatch | Correct the stage store, review values, then certify the intended group |
 | Missing image or runner artifact | Verify the exact commit/release in the correct stage; do not treat permission failure as absence |
-| GCP credential failure | Check both gcloud and ADC sessions, project and deployer/publisher identity |
+| Credential failure | Check identity using the selected cloud’s deployment guide |
 | Service cannot reach a runner | [Private routes, firewall source ranges and DNS](networking.md) |
-| Apply succeeded but runner is old | [OS Config compliance and live health](runners.md#verify-and-recover) |
+| Apply succeeded but runner is old | [Cloud rollout reports and live health](runners.md#verify-and-recover) |
 | Locked or interrupted deployment | Confirm no writer is running, then follow [state recovery](../mstage/README.md#state-recovery) |
 | Login, invitation or email failure | [Identity and mail](identity-and-mail.md) |
 
@@ -220,7 +142,7 @@ separate ownership and are not implicitly erased by removing application resourc
 
 Use [runner operations](runners.md#scale-out) to add capacity. Resource sizes, database availability,
 backups and ClickHouse mode come from the stage's `deploy` block.
-The [cost catalog](costs.md) lists every GCP billing component declared by this stack and its bootstrap.
+Use the separate [GCP cost catalog](costs.md) or [AWS inventory](costs.md).
 Estimate from the selected region, configuration and traffic rather than a fixed monthly total.
 
 ## Reference

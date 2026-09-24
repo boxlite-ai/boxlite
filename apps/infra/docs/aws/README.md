@@ -9,6 +9,7 @@ Use these AWS guides for the stage’s architecture and operations.
 | Task | Guide |
 | --- | --- |
 | Architecture and diagrams | [Architecture and diagrams](architecture.md) |
+| Prerequisites, bootstrap and deployment | [Prerequisites, bootstrap and deployment](deployment.md) |
 | Traffic, DNS and connectivity | [Traffic, DNS and connectivity](networking.md) |
 | Identity and access boundaries | [Identity and access boundaries](security.md) |
 
