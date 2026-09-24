@@ -993,3 +993,8 @@ Default values used by BoxLite.
 - [Getting Started Guide](../../getting-started/quickstart-python.md) - Installation
 - [Configuration Reference](../configuration.md) - BoxOptions details
 - [Error Codes](../errors.md) - Error handling
+
+## SSH control
+
+SSH configure, status, and disable are available through the [SSH control guide](../../guides/ssh.md),
+including types, handle ownership, startup behavior, and REST semantics.

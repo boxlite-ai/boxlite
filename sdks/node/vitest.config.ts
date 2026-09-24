@@ -17,7 +17,22 @@ export default defineConfig({
         test: {
           name: "unit",
           include: ["tests/**/*.test.ts"],
-          exclude: ["tests/**/*.integration.test.ts"],
+          exclude: [
+            "tests/**/*.integration.test.ts",
+            "tests/**/*.native.test.ts",
+          ],
+        },
+      },
+      {
+        extends: true,
+        resolve: {
+          alias: process.env.BOXLITE_NODE_NATIVE_LOADER
+            ? { "../native/boxlite.js": process.env.BOXLITE_NODE_NATIVE_LOADER }
+            : {},
+        },
+        test: {
+          name: "native",
+          include: ["tests/**/*.native.test.ts"],
         },
       },
       {

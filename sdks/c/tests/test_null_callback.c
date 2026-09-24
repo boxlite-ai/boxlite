@@ -20,9 +20,12 @@
 #include <string.h>
 
 static const char *temp_home_dir(void) {
-  /* Fixed path is fine for a single-process test; concurrent test runs are
-   * not part of the supported workflow for this suite. */
-  return "/tmp/boxlite-c-null-cb";
+  const char *home = getenv("BOXLITE_HOME");
+  if (home == NULL || home[0] == '\0') {
+    fputs("Run this test through scripts/test/run-c-test.sh\n", stderr);
+    exit(1);
+  }
+  return home;
 }
 
 static CBoxliteRuntime *new_runtime(void) {

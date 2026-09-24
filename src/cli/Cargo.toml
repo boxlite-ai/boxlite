@@ -22,7 +22,8 @@ tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "macros", "sign
 notify = "6.1"
 futures = "0.3"
 term_size = "0.3"
-nix = { version = "0.30.1", features = ["term", "signal"] }
+nix = { version = "0.30.1", features = ["term", "signal", "fs"] }
+sha2 = "0.10"
 anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }

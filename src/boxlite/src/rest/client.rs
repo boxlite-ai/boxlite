@@ -223,6 +223,44 @@ impl ApiClient {
         })
     }
 
+    /// SSH peers may echo credentials in errors; preserve classification only.
+    pub(crate) async fn ssh_request(
+        &self,
+        method: Method,
+        path: &str,
+        config: Option<&crate::SshConfig>,
+    ) -> BoxliteResult<crate::SshStatus> {
+        let mut request = self.http.request(method, self.url(path));
+        if let Some(config) = config {
+            request = request.json(config);
+        } else {
+            request = request.header(CONTENT_LENGTH, 0);
+        }
+        let response = self
+            .authorize(request)
+            .await?
+            .send()
+            .await
+            .map_err(transport_error)?;
+        let status = response.status();
+        let bytes = response.bytes().await.map_err(transport_error)?;
+        if !status.is_success() {
+            let envelope = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap_or_default();
+            let code = envelope
+                .get("error")
+                .unwrap_or(&envelope)
+                .get("code")
+                .and_then(|code| code.as_str())
+                .unwrap_or("");
+            let sanitized = serde_json::json!({"error": {
+                "code": code, "message": "SSH request failed", "type": "Error"
+            }});
+            return Err(map_http_body(status, &sanitized.to_string()));
+        }
+        serde_json::from_slice(&bytes)
+            .map_err(|_| BoxliteError::Internal("invalid SSH status response".into()))
+    }
+
     /// Send a request and expect no response body (204).
     async fn send_no_content(&self, builder: RequestBuilder) -> BoxliteResult<()> {
         let builder = self.authorize(builder).await?;

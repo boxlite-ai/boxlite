@@ -5,6 +5,7 @@ use clap::{Args, Subcommand};
 
 use crate::cli::GlobalFlags;
 
+mod stdio;
 pub mod tunnel;
 
 #[derive(Args, Debug)]
@@ -15,7 +16,7 @@ pub struct NetworkArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum NetworkCommand {
-    /// Print a remote URL or forward a local listener to a box service.
+    /// Print a remote URL, forward a local listener, or relay raw stdio.
     Tunnel(tunnel::TunnelArgs),
 }
 

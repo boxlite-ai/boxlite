@@ -175,3 +175,8 @@ cd sdks/go && go test -tags boxlite_dev -v ./...
 ## License
 
 Apache-2.0
+
+## SSH control
+
+Use `box.SSH()` to obtain a handle, then `Configure(ctx, SSHConfig)`, `Status(ctx)`,
+or `Disable(ctx)`. Release it with `Close()`. See the [SSH guide](../../docs/guides/ssh.md).

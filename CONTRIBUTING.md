@@ -39,6 +39,9 @@ Key test entry points:
 - `make test:unit` - all unit suites
 - `make test:integration` - all integration suites
 - `make test:all:python` - Python unit + integration suites
+- `make test:unit:node-native` - build and test real Node.js REST bindings without a VM
+- `make test:all:node` - Node.js unit, native, and VM integration suites
+- `make test:changed:openapi` - OpenAPI error-contract and reference-server route tests
 - `make test:all:c` - C SDK suite via CMake/CTest
 
 ### Coverage
@@ -49,7 +52,7 @@ is reported as an informational status. The local collection command checks
 test success; Codecov evaluates changed lines against the pull request's base.
 
 The Rust report combines core, shared, REST, CLI (including authentication
-integration tests), C/Node/Python native bindings, native VMM, and the
+and SSH integration tests), C/Node/Python native bindings, native VMM, and the
 runtime/shutdown/network tests that need no VM. Hosted runtime and C unit tests
 use the existing test-only runtime constructor; production runtime creation
 still validates the host. Linux also collects guest unit coverage. Vendored

@@ -19,6 +19,58 @@ const picomatch = createRequire(import.meta.url)('picomatch') as (pattern: strin
 const workflow = (name: string): any => loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows', name), 'utf8'))
 const matches = (pattern: string, path: string) => picomatch(pattern, { dot: true })(path)
 
+for (const [target, required] of [
+  ['test:changed:openapi', 'test:unit:openapi-routes'],
+  ['test:all:node', 'test:unit:node-native'],
+  ['test:unit:sdk', 'test:unit:node-native'],
+] as const) {
+  test(`${target} executes ${required} and propagates its failure`, () => {
+    const directory = mkdtempSync(join(tmpdir(), 'boxlite-test-entry-'))
+    try {
+      const log = join(directory, 'calls')
+      const runner = join(directory, 'suite')
+      writeFileSync(runner, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$SUITE_LOG"\n[ "$1" != "$FAILED_SUITE" ]\n', { mode: 0o755 })
+      const result = spawnSync('make', ['-f', join(REPO_ROOT, 'make/test.mk'), target, `MAKE=${runner}`], {
+        cwd: REPO_ROOT, encoding: 'utf8', timeout: 10_000,
+        env: { ...process.env, MAKEFLAGS: '', SUITE_LOG: log, FAILED_SUITE: required },
+      })
+      assert.equal(result.error, undefined)
+      assert.ok(readFileSync(log, 'utf8').split('\n').includes(required), `${target} omitted ${required}`)
+      assert.notEqual(result.status, 0, 'suite failures must reach the aggregate')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+}
+
+test('OpenAPI CI includes reference-server route tests', () => {
+  assert.ok(workflow('test.yml').jobs.rust.steps.some((step: any) => step.run?.includes('make test:changed:openapi')))
+})
+
+test('native Node CI builds current bindings without a VM and follows the SDK gate', () => {
+  const job = workflow('test.yml').jobs['node-native']
+  assert.ok(job, 'native bindings need a CI job')
+  assert.equal(job['runs-on'], 'ubuntu-latest')
+  assert.equal(job.steps.find((step: any) => step.uses?.startsWith('actions/setup-node')).with['node-version'], 22)
+  assert.ok(job.steps.some((step: any) => step.run === 'make test:unit:node-native'))
+  for (const enabled of ['true', 'false']) for (const rust of ['true', 'false']) for (const node of ['true', 'false']) {
+    const expression = job.if.replace(/^\$\{\{\s*|\s*\}\}$/g, '').replaceAll('.sdk-tests-enabled', "['sdk-tests-enabled']")
+    assert.equal(runInNewContext(expression, { needs: { changes: { outputs: { 'sdk-tests-enabled': enabled, rust, node } } } }),
+      enabled === 'true' && (rust === 'true' || node === 'true'))
+  }
+})
+
+for (const result of ['success', 'skipped', 'failure', 'cancelled']) {
+  test(`Test conclusion propagates native Node ${result}`, () => {
+    const job = workflow('test.yml').jobs['test-conclusion']
+    assert.ok(job.needs.includes('node-native'))
+    const needs = Object.fromEntries(job.needs.map((name: string) => [name, { result: name === 'node-native' ? result : 'success' }]))
+    const execution = spawnSync('bash', ['-eo', 'pipefail', '-c', job.steps[0].run.replaceAll('${{ toJSON(needs) }}', JSON.stringify(needs))], { encoding: 'utf8', timeout: 10_000 })
+    assert.equal(execution.error, undefined)
+    assert.equal(execution.status === 0, result === 'success' || result === 'skipped')
+  })
+}
+
 function testSuites(paths: string[]) {
   const filter = workflow('test.yml').jobs.changes.steps.find((step: any) => step.uses?.startsWith('dorny/paths-filter'))
   const rules = loadYaml(filter.with.filters) as Record<string, string[]>
@@ -46,6 +98,7 @@ for (const [path, expected] of [
   ['apps/runner/cmd/runner/main.go', ['go']],
   ['sdks/python/boxlite/options.py', ['python']],
   ['sdks/node/lib/options.ts', ['node']],
+  ['scripts/test/run-node-native.sh', ['node']],
   ['src/cli/src/main.rs', ['rust']],
   ['make/coverage.mk', ['rust', 'python', 'node', 'go']],
   ['make/quality.mk', ['go']],
@@ -58,8 +111,8 @@ for (const [path, expected] of [
 
 // Anything the `go` filter selects on must also reach the workflow that runs
 // the filter, or a push to main changes the suite's inputs and tests nothing.
-for (const path of ['apps/runner/cmd/runner/main.go', 'apps/go.work', 'apps/go.work.sum']) {
-  test(`a push that selects the go suite reaches the Test workflow: ${path}`, () => {
+for (const path of ['apps/runner/cmd/runner/main.go', 'apps/go.work', 'apps/go.work.sum', 'scripts/test/run-node-native.sh']) {
+  test(`a push that selects a suite reaches the Test workflow: ${path}`, () => {
     assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
   })
 }
@@ -217,7 +270,7 @@ exit "$CARGO_STATUS"
     // Isolate tool discovery so an installed nextest cannot hide the fallback.
     const result = spawnSync('/usr/bin/make', ['-f', join(REPO_ROOT, 'make/test.mk'), 'test:unit:cli', 'NEXTEST_PROFILE=ci'], {
       cwd: REPO_ROOT,
-      env: { ...process.env, PATH: directory, MAKEFLAGS: '', CARGO_LOG: log, CARGO_STATUS: String(exitCode) },
+      env: { ...process.env, PATH: directory, MAKEFLAGS: '', FILTER: '', NEXTEST_FILTER_EXPR: '', CARGO_LOG: log, CARGO_STATUS: String(exitCode) },
       encoding: 'utf8',
       timeout: 10_000,
     })
@@ -229,16 +282,40 @@ exit "$CARGO_STATUS"
   }
 }
 
-test('CLI unit tests fall back to Cargo without running VM integration binaries', () => {
+test('CLI unit tests fall back to Cargo with only non-VM integration binaries', () => {
   const { result, args } = cliUnitTests('cargo')
   assert.equal(result.status, 0, result.stderr)
-  assert.deepEqual(args, ['test', '-p', 'boxlite-cli', '--bins', '--', '--test-threads=1', '::tests::'])
+  assert.deepEqual(args, ['test', '-p', 'boxlite-cli', '--bins', '--test', 'auth', '--test', 'ssh', '--', '--test-threads=1'])
 })
 
 test('CLI unit tests use the requested nextest profile when installed', () => {
   const { result, args } = cliUnitTests('nextest')
   assert.equal(result.status, 0, result.stderr)
-  assert.deepEqual(args, ['nextest', 'run', '-p', 'boxlite-cli', '--profile', 'ci', '-E', 'test(::tests::)'])
+  assert.deepEqual(args, ['nextest', 'run', '-p', 'boxlite-cli', '--bins', '--test', 'auth', '--test', 'ssh', '--profile', 'ci'])
+})
+
+test('CLI coverage instruments the same non-VM integration binaries', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'boxlite-cli-coverage-'))
+  try {
+    const log = join(directory, 'cargo.log')
+    writeFileSync(join(directory, 'cargo'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CARGO_LOG"\n', { mode: 0o755 })
+    const result = spawnSync('/usr/bin/make', [
+      '-f', join(REPO_ROOT, 'make/test.mk'), '-f', join(REPO_ROOT, 'make/coverage.mk'),
+      'coverage:lcov', 'MAKE=/usr/bin/true',
+    ], {
+      cwd: directory,
+      env: { ...process.env, PATH: `${directory}:/usr/bin:/bin`, MAKEFLAGS: '', FILTER: '', NEXTEST_FILTER_EXPR: '', NEXTEST_PROFILE: '', CARGO_LOG: log },
+      encoding: 'utf8', timeout: 10_000,
+    })
+    assert.equal(result.status, 0, result.stderr)
+    const calls = readFileSync(log, 'utf8').trim().split('\n')
+    const cli = calls.filter((call) => call.includes('-p boxlite-cli'))
+    assert.deepEqual(cli, ['llvm-cov nextest --no-report --no-tests=fail -p boxlite-cli --bins --test auth --test ssh'])
+    assert.equal(calls.filter((call) => call === 'llvm-cov clean --workspace').length, 1)
+    assert.equal(calls[0], 'llvm-cov clean --workspace')
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 for (const runner of ['cargo', 'nextest'] as const) {

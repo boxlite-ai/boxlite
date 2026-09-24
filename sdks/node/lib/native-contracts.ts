@@ -451,6 +451,7 @@ export interface JsBox {
     workingDir?: string | null,
   ): Promise<JsExecution>;
   readonly snapshot: JsSnapshotHandle;
+  readonly ssh: JsSshHandle;
   readonly network: JsNetworkHandle;
   cloneBox(
     options?: JsCloneOptions | null,
@@ -512,4 +513,31 @@ export interface NativeModule {
   ApiKeyCredential: ApiKeyCredentialConstructor;
   JsBoxliteRestOptions: NativeBoxliteRestOptionsConstructor;
   [key: string]: unknown;
+}
+
+export interface SshCaConfig {
+  publicKey: string;
+  principal: string;
+}
+export interface SshAccount {
+  login: string;
+  authorizedKeys: string[];
+  ca?: SshCaConfig;
+}
+export interface SshConfig {
+  listenAddress: string;
+  hostPrivateKey: string;
+  accounts: SshAccount[];
+}
+export interface SshStatus {
+  enabled: boolean;
+  generation: bigint;
+  listenAddress: string;
+  hostPublicKey: string;
+  hostKeyFingerprint: string;
+}
+export interface JsSshHandle {
+  configure(config: SshConfig): Promise<SshStatus>;
+  status(): Promise<SshStatus>;
+  disable(): Promise<SshStatus>;
 }

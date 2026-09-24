@@ -49,6 +49,7 @@ from ._images import SyncImageHandle
 from ._network import SyncNetworkHandle, SyncTunnelForwarder
 from ._simplebox import SyncSimpleBox
 from ._skillbox import SyncSkillBox
+from ._ssh import SyncSshHandle
 from ._sync_base import SyncBase, SyncContextManager
 
 __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
@@ -59,6 +60,7 @@ __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
     "SyncContextManager",
     # Native API mirrors
     "SyncBox",
+    "SyncSshHandle",
     "SyncImageHandle",
     "SyncNetworkHandle",
     "SyncTunnelForwarder",

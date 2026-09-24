@@ -543,6 +543,13 @@ The SDK uses a dual-layer architecture:
 
 See [../../CONTRIBUTING.md](../../CONTRIBUTING.md) for development guidelines.
 
+From the repository root, run `make test:unit:node-native` to build the current
+Rust bindings and run REST and forced-GC lifetime tests without a VM. This uses
+`BOXLITE_DEPS_STUB=1` to skip VM dependency packaging and keeps build artifacts
+under `target/node-native/`. Vitest's `native` project and its GC subprocess load
+the same generated binding. `make test:all:node` includes this suite alongside
+unit and VM integration tests; the `native` project has no VM setup script.
+
 ## License
 
 Apache 2.0 - See [../../LICENSE](../../LICENSE)

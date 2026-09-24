@@ -24,6 +24,13 @@ pub struct JsBox {
 
 #[napi]
 impl JsBox {
+    #[napi(getter)]
+    pub fn ssh(&self) -> crate::ssh::JsSshHandle {
+        crate::ssh::JsSshHandle {
+            handle: self.handle.ssh(),
+        }
+    }
+
     /// Get the box's unique identifier (ULID).
     #[napi(getter)]
     pub fn id(&self) -> String {

@@ -17,6 +17,7 @@ mod options;
 mod runtime;
 mod snapshot_options;
 mod snapshots;
+mod ssh;
 mod util;
 mod volumes;
 

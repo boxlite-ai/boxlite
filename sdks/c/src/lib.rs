@@ -21,6 +21,7 @@ mod network;
 mod options;
 mod rest;
 mod runtime;
+mod ssh;
 #[cfg(test)]
 mod tests;
 mod util;
@@ -81,5 +82,8 @@ pub use network::*;
 pub use options::*;
 pub use rest::*;
 pub use runtime::*;
+pub use ssh::*;
 pub use util::*;
 pub use volumes::*;
+
+pub type CSshHandle = ssh::SshControl;

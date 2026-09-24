@@ -217,6 +217,12 @@ pub(crate) type CTunnelForwarderWaitFn = extern "C" fn(*mut crate::CBoxliteError
 pub type CTunnelForwarderCloseCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CTunnelForwarderCloseFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
+/// Completion transfers status ownership to the caller; error is borrowed.
+pub type CSshCb =
+    Option<extern "C" fn(*mut crate::CSshStatus, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CSshFn =
+    extern "C" fn(*mut crate::CSshStatus, *mut crate::CBoxliteError, *mut c_void);
+
 // ─── Owned FFI payload ─────────────────────────────────────────────────────
 //
 // Wraps a `Box::into_raw`'d FFI struct that will eventually be transferred
@@ -311,6 +317,11 @@ impl<T> Drop for OwnedFfiPtr<T> {
 // dropped (e.g. the queue closed before drain dispatched it).
 
 pub enum RuntimeEvent {
+    Ssh {
+        cb: CSshFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<crate::CSshStatus>, BoxliteError>,
+    },
     /* Streaming */
     Stdout {
         cb: CBoxStdoutFn,

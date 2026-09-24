@@ -20,7 +20,7 @@ use crate::litebox::{
     AttachOptions, BoxCommand, BoxTunnel, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution,
 };
 use crate::metrics::BoxMetrics;
-use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
+use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend, SshBackend};
 use crate::runtime::id::BoxID;
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 
@@ -466,11 +466,13 @@ impl BoxBackend for RestBox {
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
         let box_backend: Arc<dyn BoxBackend> = rest_box.clone();
         let network_backend: Arc<dyn BoxNetworkBackend> = rest_box.clone();
+        let ssh_backend: Arc<dyn SshBackend> = rest_box.clone();
         let snapshot_backend: Arc<dyn SnapshotBackend> = rest_box;
         Ok(crate::LiteBox::new(
             box_backend,
             network_backend,
             snapshot_backend,
+            ssh_backend,
         ))
     }
 
@@ -1304,6 +1306,33 @@ fn box_metrics_from_response(resp: &BoxMetricsResponse) -> BoxMetrics {
     }
 }
 
+#[async_trait]
+impl SshBackend for RestBox {
+    async fn configure(&self, config: crate::SshConfig) -> BoxliteResult<crate::SshStatus> {
+        self.client
+            .ssh_request(
+                Method::POST,
+                &format!("/boxes/{}/ssh/configure", self.id),
+                Some(&config),
+            )
+            .await
+    }
+    async fn status(&self) -> BoxliteResult<crate::SshStatus> {
+        self.client
+            .ssh_request(Method::GET, &format!("/boxes/{}/ssh", self.id), None)
+            .await
+    }
+    async fn disable(&self) -> BoxliteResult<crate::SshStatus> {
+        self.client
+            .ssh_request(
+                Method::POST,
+                &format!("/boxes/{}/ssh/disable", self.id),
+                None,
+            )
+            .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Tests for the WebSocket attach pump.
@@ -1402,6 +1431,119 @@ mod tests {
         );
         let resp: BoxResponse = serde_json::from_str(&body).expect("BoxResponse");
         RestBox::new(client_for(port), resp.to_box_info().expect("to_box_info"))
+    }
+
+    #[tokio::test]
+    async fn ssh_rest_status_uses_public_handle() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_request_head(&mut stream).await;
+            assert!(
+                String::from_utf8_lossy(&request)
+                    .starts_with("GET /v1/boxes/ssh-test/ssh HTTP/1.1")
+            );
+            write_status_response(&mut stream, r#"{"enabled":true,"generation":18446744073709551615,"listen_address":"0.0.0.0:2222","host_public_key":"public","host_key_fingerprint":"SHA256:test"}"#).await;
+        });
+        let backend = Arc::new(rest_box_for(port, "ssh-test"));
+        let sandbox =
+            crate::LiteBox::new(backend.clone(), backend.clone(), backend.clone(), backend);
+        let ssh = sandbox.ssh();
+        drop(sandbox);
+        let status = ssh.status().await.expect("REST SSH status should succeed");
+        assert!(status.enabled);
+        assert_eq!(status.generation, u64::MAX);
+        assert_eq!(status.listen_address, "0.0.0.0:2222");
+        assert_eq!(status.host_public_key, "public");
+        assert_eq!(status.host_key_fingerprint, "SHA256:test");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ssh_rest_configure_disable_prefix_and_redaction() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            for operation in ["configure", "disable", "status"] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = read_request_head(&mut stream).await;
+                let split = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                let head = String::from_utf8_lossy(&request[..split]).to_lowercase();
+                let length: usize = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .unwrap_or("0")
+                    .trim()
+                    .parse()
+                    .unwrap();
+                while request.len() < split + length {
+                    let mut chunk = vec![0; split + length - request.len()];
+                    let n = stream.read(&mut chunk).await.unwrap();
+                    assert_ne!(n, 0);
+                    request.extend_from_slice(&chunk[..n]);
+                }
+                let suffix = if operation == "status" {
+                    "".to_string()
+                } else {
+                    format!("/{operation}")
+                };
+                let method = if operation == "status" { "get" } else { "post" };
+                assert!(head.starts_with(&format!(
+                    "{method} /v1/team/boxes/ssh-test/ssh{suffix} http/1.1"
+                )));
+                if operation == "configure" {
+                    let body: serde_json::Value =
+                        serde_json::from_slice(&request[split..]).unwrap();
+                    assert_eq!(body["host_private_key"], "sentinel-private");
+                    assert_eq!(body["accounts"][0]["ca"]["principal"], "principal");
+                    assert_eq!(body["accounts"][0]["authorized_keys"][0], "key");
+                    write_status_response(&mut stream, r#"{"enabled":true,"generation":9007199254740993,"listen_address":"addr","host_public_key":"key","host_key_fingerprint":"fp"}"#).await;
+                } else if operation == "disable" {
+                    let body = r#"{"error":{"code":"invalid_state","message":"sentinel-private"}}"#;
+                    stream.write_all(format!("HTTP/1.1 409 Conflict\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+                } else {
+                    write_status_response(&mut stream, r#"{"generation":"sentinel-private"}"#)
+                        .await;
+                }
+            }
+        });
+        let mut backend = rest_box_for(port, "ssh-test");
+        backend.client = ApiClient::new(
+            &BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")).with_path_prefix("team"),
+        )
+        .unwrap();
+        let backend = Arc::new(backend);
+        let sandbox =
+            crate::LiteBox::new(backend.clone(), backend.clone(), backend.clone(), backend);
+        let ssh = sandbox.ssh();
+        let status = ssh
+            .configure(crate::SshConfig {
+                listen_address: "addr".into(),
+                host_private_key: "sentinel-private".into(),
+                accounts: vec![crate::SshAccount {
+                    login: "alice".into(),
+                    authorized_keys: vec!["key".into()],
+                    ca: Some(crate::SshCaConfig {
+                        public_key: "ca".into(),
+                        principal: "principal".into(),
+                    }),
+                }],
+            })
+            .await
+            .unwrap();
+        assert_eq!(status.generation, 9007199254740993);
+        let error = ssh.disable().await.unwrap_err();
+        assert!(matches!(error, BoxliteError::InvalidState(_)));
+        assert!(!error.to_string().contains("sentinel"));
+        assert!(
+            !ssh.status()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("sentinel")
+        );
+        server.await.unwrap();
     }
 
     /// Send a minimal HTTP/1.1 200 OK with a JSON body.

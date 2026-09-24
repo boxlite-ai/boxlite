@@ -1079,6 +1079,105 @@ paths:
               schema:
                 $ref: "#/components/schemas/RuntimeMetrics"
 
+  /{prefix}/boxes/{box_id}/ssh:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    get:
+      operationId: statusBoxSsh
+      summary: Query guest SSH status
+      description: |
+        May start the box, subject to AutoResume. Configure fully replaces
+        credentials and disconnects existing sessions, even for identical input.
+        Configuration lives only in guest memory. Cancellation or timeout does
+        not undo changes already applied. No automatic retry or route fallback.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Listener state and public host identity; no credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SshStatus"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/ssh/configure:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: configureBoxSsh
+      summary: Configure guest SSH
+      description: |
+        May start the box, subject to AutoResume. Configure fully replaces
+        credentials and disconnects existing sessions, even for identical input.
+        Configuration lives only in guest memory. Cancellation or timeout does
+        not undo changes already applied. No automatic retry or route fallback.
+      tags: [Boxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SshConfig"
+      responses:
+        "200":
+          description: Listener state and public host identity; no credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SshStatus"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/ssh/disable:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: disableBoxSsh
+      summary: Disable guest SSH
+      description: |
+        May start the box, subject to AutoResume. Configure fully replaces
+        credentials and disconnects existing sessions, even for identical input.
+        Configuration lives only in guest memory. Cancellation or timeout does
+        not undo changes already applied. No automatic retry or route fallback.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Listener state and public host identity; no credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SshStatus"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
   /{prefix}/boxes/{box_id}/metrics:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -2428,6 +2527,51 @@ components:
         total_exec_errors:
           type: integer
           description: Total execution errors across all boxes (monotonic)
+
+    SshCaConfig:
+      type: object
+      required: [public_key, principal]
+      properties:
+        public_key: { type: string, writeOnly: true }
+        principal: { type: string, writeOnly: true }
+    SshAccount:
+      type: object
+      required: [login, authorized_keys]
+      properties:
+        login: { type: string }
+        authorized_keys:
+          type: array
+          items: { type: string }
+          writeOnly: true
+        ca:
+          allOf:
+            - $ref: "#/components/schemas/SshCaConfig"
+          nullable: true
+    SshConfig:
+      type: object
+      required: [listen_address, host_private_key, accounts]
+      properties:
+        listen_address: { type: string }
+        host_private_key: { type: string, writeOnly: true }
+        accounts:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/SshAccount"
+    SshStatus:
+      type: object
+      required: [enabled, generation, listen_address, host_public_key, host_key_fingerprint]
+      properties:
+        enabled: { type: boolean }
+        generation:
+          type: integer
+          format: uint64
+          minimum: 0
+          maximum: 18446744073709551615
+          description: Unsigned 64-bit generation; JavaScript clients must preserve integer precision.
+        listen_address: { type: string }
+        host_public_key: { type: string }
+        host_key_fingerprint: { type: string }
 
     BoxMetrics:
       type: object

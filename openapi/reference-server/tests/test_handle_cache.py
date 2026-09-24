@@ -98,7 +98,7 @@ def _make_box_info(box_id: str, *, name: str = "test-box", status: str = "create
     return SimpleNamespace(
         id=box_id,
         name=name,
-        state=SimpleNamespace(status=status, pid=12345),
+        state=SimpleNamespace(status=status, pid=12345, exit_code=None),
         created_at="2026-02-22T00:00:00+00:00",
         image="alpine:latest",
         cpus=2,

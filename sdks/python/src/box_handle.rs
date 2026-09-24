@@ -18,6 +18,13 @@ pub(crate) struct PyBox {
 #[pymethods]
 impl PyBox {
     #[getter]
+    fn ssh(&self) -> crate::ssh::PySshHandle {
+        crate::ssh::PySshHandle {
+            handle: self.handle.ssh(),
+        }
+    }
+
+    #[getter]
     fn id(&self) -> PyResult<String> {
         Ok(self.handle.id().to_string())
     }

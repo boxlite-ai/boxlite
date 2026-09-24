@@ -32,6 +32,7 @@ on:
       - '.config/nextest.toml'
       - '.gitmodules'
       - 'scripts/setup/**'
+      - 'scripts/test/run-node-native.sh'
       - 'Makefile'
       - 'make/**'
       - 'rust-toolchain.toml'
@@ -166,6 +167,7 @@ jobs:
               - '.github/workflows/test.yml'
             node:
               - 'sdks/node/**/!(*.md)'
+              - 'scripts/test/run-node-native.sh'
               - 'Makefile'
               - 'make/vars.mk'
               - 'make/dev.mk'
@@ -292,10 +294,7 @@ jobs:
         run: make coverage:lcov NEXTEST_PROFILE=ci
 
       - name: Run OpenAPI reference-server unit tests
-        # Keyed on BoxliteError's Display text (src/shared/src/errors.rs, in this
-        # filter), so a new variant must add its row there before the reference
-        # server can name the class. stdlib only — no extra setup.
-        run: make test:unit:openapi
+        run: make test:changed:openapi
 
       - name: Run guest ownership tests
         if: runner.os == 'Linux'
@@ -343,6 +342,31 @@ jobs:
           use_oidc: true
           disable_search: true
           fail_ci_if_error: true
+
+  # Real native bindings exercised without VM dependency packaging.
+  node-native:
+    name: Node.js Native Tests (Linux x64 / Node 22)
+    needs: changes
+    if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && (needs.changes.outputs.node == 'true' || needs.changes.outputs.rust == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ needs.changes.outputs.rust-toolchain }}
+          cache-workspaces: '. -> target/node-native/cargo'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sdks/node/package-lock.json
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libseccomp-dev
+      - name: Build and test native REST bindings without VM dependencies
+        run: make test:unit:node-native
 
   # Node.js SDK unit tests
   node:
@@ -624,7 +648,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [changes, infra, rust, python, node, go, setup, api, guest_artifacts, coverage-empty]
+    needs: [changes, infra, rust, python, node, node-native, go, setup, api, guest_artifacts, coverage-empty]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

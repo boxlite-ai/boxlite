@@ -598,6 +598,11 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_handle_event::<crate::CImageInfoList>(result, user_data, cb),
+            RuntimeEvent::Ssh {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CSshStatus>(result, user_data, cb),
             RuntimeEvent::VolumeCreate {
                 cb,
                 user_data,

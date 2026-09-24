@@ -1,3 +1,4 @@
+PHONY_TARGETS += test\:unit\:openapi-routes test\:unit\:node-native test\:unit\:api test\:unit\:runner
 PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
@@ -43,6 +44,8 @@ RUST_UNIT_REST_ARGS   = -p boxlite --no-default-features --features rest --lib
 RUST_UNIT_VMM_ARGS    = -p boxlite-hypervisor -p boxlite-vmm --lib
 
 CLI_INTEGRATION_TESTS = $(basename $(notdir $(filter-out src/cli/tests/stress_disk.rs,$(wildcard src/cli/tests/*.rs))))
+CLI_NO_VM_TESTS := auth ssh
+CLI_UNIT_ARGS = -p boxlite-cli --bins $(addprefix --test ,$(CLI_NO_VM_TESTS))
 
 # $(call run_suites,<space-separated make targets>)
 # Runs each target via a recursive $(MAKE). With FAIL_FAST=false the loop
@@ -161,7 +164,7 @@ test\:changed\:apps:
 
 # The Box API contract and the reference server that implements it.
 test\:changed\:openapi:
-	@$(MAKE) test:unit:openapi
+	$(call run_suites,test:unit:openapi test:unit:openapi-routes)
 
 # Workflow and composite-action changes. Runs the infra suite rather than the whole apps matrix:
 # that suite is what asserts across .github (caller/callee permissions, Environment allowlists,
@@ -216,7 +219,7 @@ test\:stress:
 # Core unit suites: Rust unit + FFI unit + gvproxy bridge unit.
 test\:unit\:core:
 	@echo "── Core unit suites (rust, openapi, ffi, gvproxy) ──"
-	$(call run_suites,test:unit:rust test:unit:openapi test:unit:ffi test:unit:gvproxy)
+	$(call run_suites,test:unit:rust test:unit:openapi test:unit:openapi-routes test:unit:ffi test:unit:gvproxy)
 
 # Core integration suites: Rust integration + CLI integration.
 test\:integration\:core:
@@ -226,7 +229,7 @@ test\:integration\:core:
 # SDK unit suites: Python unit + Node unit + C unit + Go unit.
 test\:unit\:sdk:
 	@echo "── SDK unit suites (python, node, c, go) ──"
-	$(call run_suites,test:unit:python test:unit:node test:unit:c test:unit:go)
+	$(call run_suites,test:unit:python test:unit:node test:unit:node-native test:unit:c test:unit:go)
 
 # SDK integration suites: Python integration + Node integration + C SDK test suite.
 test\:integration\:sdk:
@@ -254,12 +257,12 @@ test\:unit\:rust:
 	cargo test $(RUST_UNIT_REST_ARGS) -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	exit $$rc
 
-# CLI integration binaries need a VM; this target runs only inline unit-test modules.
+# Inline unit tests and integration binaries backed by local mock services.
 test\:unit\:cli:
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite-cli $(NEXTEST_PROFILE_FLAG) -E 'test(::tests::)'; \
+		cargo nextest run $(CLI_UNIT_ARGS) $(NEXTEST_PROFILE_FLAG) $(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite-cli --bins -- --test-threads=1 '::tests::'; \
+		cargo test $(CLI_UNIT_ARGS) -- --test-threads=1 $(CARGOTEST_FILTER); \
 	fi
 
 # Hypervisor and VMM crate unit tests alone; they need no VM and no vendored
@@ -399,12 +402,22 @@ test\:unit\:gvproxy:
 #
 # Discovery is restricted to the modules that import only the stdlib
 # (openapi/reference-server/errors.py, like config.py). The rest of that
-# directory needs python-dotenv, fastapi and pydantic, which no setup target
-# here installs — discovering the whole directory would fail this suite on
-# every checkout that does not intend to run the server.
+# directory needs the dependencies installed by test:unit:openapi-routes;
+# keep this fast stdlib-only entry point available separately.
 test\:unit\:openapi:
 	@echo "🧪 Running OpenAPI reference-server unit tests..."
 	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
+
+test\:unit\:openapi-routes: _ensure-python-deps
+	@. .venv/bin/activate && uv pip install fastapi uvicorn sse-starlette PyJWT python-multipart python-dotenv httpx
+	@. .venv/bin/activate && python -m unittest discover -s openapi/reference-server/tests -p 'test_*.py' -v
+
+# Focused service suites avoid unrelated infrastructure prerequisites.
+test\:unit\:api: _ensure-apps-deps
+	@cd apps && yarn nx test api --runInBand $(if $(FILTER),--testNamePattern='$(FILTER)',)
+
+test\:unit\:runner: dev\:go
+	@cd apps/runner && go test -tags boxlite_dev $(GOTEST_FILTER) ./pkg/api/controllers ./pkg/boxlite
 
 # CLI integration tests.
 test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
@@ -459,6 +472,10 @@ test\:unit\:node: _ensure-node-deps
 	@echo "🧪 Running Node.js binding (Rust) unit tests..."
 	@cargo test -p boxlite-node --lib $(CARGOTEST_FILTER)
 
+# Real Node.js bindings, with REST fixtures instead of a VM.
+test\:unit\:node-native: _ensure-node-deps
+	@bash $(SCRIPT_DIR)/test/run-node-native.sh $(VITEST_FILTER)
+
 # Node.js SDK integration tests (requires VM environment).
 test\:integration\:node:
 	@$(MAKE) dev:node
@@ -467,7 +484,7 @@ test\:integration\:node:
 
 # Node.js SDK full suite.
 test\:all\:node:
-	$(call run_suites,test:unit:node test:integration:node)
+	$(call run_suites,test:unit:node test:unit:node-native test:integration:node)
 
 # C SDK unit tests (no VM required).
 test\:unit\:c:

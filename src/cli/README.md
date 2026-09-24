@@ -22,6 +22,7 @@ The BoxLite CLI (`boxlite`) lets you create, run, and manage BoxLite boxes from 
 - **Exec** — Run commands in a running or safely resumable box
 - **Images** — Pull and list OCI images
 - **Copy** — Copy files between host and box (`boxlite cp`)
+- **SSH** — Configure guest SSH, prepare keys, forward a local port, or connect with system SSH
 - **Output formats** — Table, JSON, or YAML for list/images
 - **Shell completion** — Bash, Zsh, Fish
 
@@ -588,6 +589,21 @@ Display system-wide runtime information (version, paths, host/virtualization, bo
 boxlite info
 boxlite info --format json
 ```
+
+## SSH
+
+```bash
+boxlite ssh setup mybox                 # Print login information
+boxlite ssh forward mybox               # Keep localhost:2222 forwarding
+boxlite ssh connect mybox               # Interactive SSH
+boxlite ssh connect mybox -- echo hello # Execute a command
+boxlite ssh status mybox
+boxlite ssh disable mybox
+```
+
+See the [SSH guide](../../docs/guides/ssh.md#cli-quick-start) for configuration,
+key reuse, `--replace`, and REST tunnel requirements, and the
+[CLI reference](../../docs/reference/cli/README.md#boxlite-ssh) for all flags.
 
 ## Shell completion
 

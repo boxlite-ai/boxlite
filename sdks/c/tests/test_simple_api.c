@@ -10,6 +10,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+static void assert_ok(BoxliteErrorCode code, CBoxliteError *error) {
+  if (code != Ok) {
+    fputs("C API failed: ", stderr);
+    fputs(error->message ? error->message : "<none>", stderr);
+    fputc('\n', stderr);
+    boxlite_error_free(error);
+    exit(1);
+  }
+}
+
 void test_simple_create() {
   printf("\nTEST: Simple API - create box\n");
 
@@ -21,7 +31,7 @@ void test_simple_create() {
                                              512,           // memory_mib
                                              &box, &error);
 
-  assert(code == Ok);
+  assert_ok(code, &error);
   assert(box != NULL);
   printf("  ✓ Box created with simple API\n");
 
@@ -41,7 +51,7 @@ void test_simple_default_resources() {
                                              0, // memory_mib = default
                                              &box, &error);
 
-  assert(code == Ok);
+  assert_ok(code, &error);
   assert(box != NULL);
   printf("  ✓ Box created with default resources\n");
 
@@ -55,14 +65,14 @@ void test_simple_run_command() {
   CBoxliteError error = {0};
 
   BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
-  assert(code == Ok);
+  assert_ok(code, &error);
 
   // Run a simple command
   const char *args[] = {"hello", NULL};
   CBoxliteExecResult *result;
 
   code = boxlite_simple_run(box, "/bin/echo", args, 1, &result, &error);
-  assert(code == Ok);
+  assert_ok(code, &error);
   assert(result != NULL);
   assert(result->exit_code == 0);
   assert(result->stdout_text != NULL);
@@ -80,13 +90,13 @@ void test_simple_run_no_args() {
   CBoxliteError error = {0};
 
   BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
-  assert(code == Ok);
+  assert_ok(code, &error);
 
   // Run command with no args (NULL, 0)
   CBoxliteExecResult *result;
   code = boxlite_simple_run(box, "/bin/pwd", NULL, 0, &result, &error);
 
-  assert(code == Ok);
+  assert_ok(code, &error);
   assert(result->exit_code == 0);
   printf("  ✓ Command executed without args\n");
 
@@ -101,14 +111,14 @@ void test_simple_run_failure() {
   CBoxliteError error = {0};
 
   BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
-  assert(code == Ok);
+  assert_ok(code, &error);
 
   // Run command that will fail
   const char *args[] = {"/nonexistent", NULL};
   CBoxliteExecResult *result;
 
   code = boxlite_simple_run(box, "/bin/ls", args, 1, &result, &error);
-  assert(code == Ok);             // API call succeeds
+  assert_ok(code, &error);        // API call succeeds
   assert(result->exit_code != 0); // But command fails
   printf("  ✓ Command failed as expected: exit_code=%d\n", result->exit_code);
 
@@ -128,28 +138,28 @@ void test_simple_multiple_commands() {
   CBoxliteError error = {0};
 
   BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
-  assert(code == Ok);
+  assert_ok(code, &error);
 
   CBoxliteExecResult *result;
 
   // Command 1
   const char *args1[] = {"test1", NULL};
   code = boxlite_simple_run(box, "/bin/echo", args1, 1, &result, &error);
-  assert(code == Ok);
+  assert_ok(code, &error);
   assert(result->exit_code == 0);
   boxlite_result_free(result);
 
   // Command 2
   const char *args2[] = {"test2", NULL};
   code = boxlite_simple_run(box, "/bin/echo", args2, 1, &result, &error);
-  assert(code == Ok);
+  assert_ok(code, &error);
   assert(result->exit_code == 0);
   boxlite_result_free(result);
 
   // Command 3
   const char *args3[] = {"test3", NULL};
   code = boxlite_simple_run(box, "/bin/echo", args3, 1, &result, &error);
-  assert(code == Ok);
+  assert_ok(code, &error);
   assert(result->exit_code == 0);
   boxlite_result_free(result);
 
@@ -165,12 +175,12 @@ void test_simple_result_cleanup() {
   CBoxliteError error = {0};
 
   BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
-  assert(code == Ok);
+  assert_ok(code, &error);
 
   CBoxliteExecResult *result;
   const char *args[] = {"hello", NULL};
   code = boxlite_simple_run(box, "/bin/echo", args, 1, &result, &error);
-  assert(code == Ok);
+  assert_ok(code, &error);
 
   // Free result multiple times should be safe
   boxlite_result_free(result);
@@ -200,13 +210,13 @@ void test_simple_auto_cleanup() {
   CBoxliteError error = {0};
 
   BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
-  assert(code == Ok);
+  assert_ok(code, &error);
 
   // Run a command
   CBoxliteExecResult *result;
   const char *args[] = {"test", NULL};
   code = boxlite_simple_run(box, "/bin/echo", args, 1, &result, &error);
-  assert(code == Ok);
+  assert_ok(code, &error);
   boxlite_result_free(result);
 
   // Just free - should auto-stop and remove

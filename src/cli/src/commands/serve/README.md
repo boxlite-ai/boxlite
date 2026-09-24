@@ -37,7 +37,7 @@ execute(ServeArgs, GlobalFlags)
   ├─ tokio::spawn(reaper_loop(state))       — orphan reaper + lifecycle sweep
   │                                            (30 s tick)
   │
-  ├─ build_router(state)                    — register 26 routes on axum::Router
+  ├─ build_router(state)                    — register routes on axum::Router
   │
   ├─ TcpListener::bind(host:port)           — bind TCP socket
   │
@@ -451,3 +451,7 @@ shape:
 - [CLI Development Guide](../../../../../docs/contributing/development/cli.md) — building and testing the CLI
 - [Architecture](../../../../../docs/contributing/architecture/README.md) — core runtime architecture
 - [Rust Style Guide](../../../../../docs/contributing/development/rust-style.md) — coding standards
+
+SSH control uses `GET /v1/boxes/{box_id}/ssh` and POST to `/ssh/configure` or
+`/ssh/disable`. All three use the operation AutoResume resolver and activity
+middleware. Configure validation errors omit the request body.
