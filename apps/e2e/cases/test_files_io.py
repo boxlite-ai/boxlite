@@ -30,6 +30,7 @@ import pytest
 from conftest import drain
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_copy_in_text_roundtrips_byte_exact(box):
     """A tiny text file written on the host appears in the guest with

@@ -17,6 +17,43 @@ SERVICES = ((18080, b"python-sdk-tunnel-e2e-a"), (18082, b"python-sdk-tunnel-e2e
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "service_in_box_server.py"
 
 
+# Since #1370 (446e9aec, 2026-08-28) an unspecified inbound mode means private,
+# and the API refuses a tunnel on a private box. No SDK caller can opt out of
+# that: `CreateBoxNetworkSpec::from_options`
+# (src/boxlite/src/rest/types.rs:327-333) treats `inbound = enabled` with an
+# empty allow-list as "inbound at its default" and falls back to the pre-split
+# flat body, which carries no inbound field at all — so the server applies its
+# private default to a caller who explicitly asked for inbound access.
+#
+# Proved one variable at a time against api.dev.boxlite.ai on 2026-09-21:
+# POST with `network={"mode":"enabled"}` (what the SDK sends) → preview 404;
+# the same POST with `network={"outbound":…,"inbound":{"mode":"enabled"}}` →
+# preview 200. The server is right and the client is wrong, and the fix is a
+# core-options change (the runtime cannot tell "unset" from "enabled" today),
+# so these stay xfail until it lands rather than being weakened here.
+TUNNEL_NEEDS_PUBLIC_BOX = (
+    "SDK cannot create a public box since #1370: rest/types.rs:327-333 drops "
+    "the inbound field it was asked for, so the tunnel is refused"
+)
+
+
+def tunnelable_box(image: str) -> boxlite.BoxOptions:
+    """Options for a box a tunnel can actually be opened on.
+
+    `fix(api): default box visibility to private` (#1370, 446e9aec, 2026-08-28)
+    made an unspecified inbound mode mean private, and the API rejects a tunnel
+    on a private box outright (boxlite-proxy.controller.ts:243). These cases
+    predate that change and asked for no inbound policy, so every one of them
+    now fails with "is not public; set public: true before opening a tunnel" —
+    observed against api.dev.boxlite.ai on 2026-09-21. Asking for inbound
+    access is what a caller opening a tunnel has to do.
+    """
+    return boxlite.BoxOptions(
+        image=image,
+        network=boxlite.NetworkSpec(inbound=boxlite.InboundNetworkSpec(mode="enabled")),
+    )
+
+
 async def _get_over_tunnel(box: boxlite.Box, port: int, marker: bytes) -> bytes:
     tunnel = await box.network.tunnel(port)
     connection = await tunnel.connect()
@@ -140,10 +177,11 @@ async def _wait_for_http(box: boxlite.Box, port: int, marker: bytes) -> bytes:
     )
 
 
+@pytest.mark.xfail(strict=True, reason=TUNNEL_NEEDS_PUBLIC_BOX)
 @pytest.mark.asyncio
 async def test_python_sdk_tunnel_proxies_http_from_rest_box(rt, image):
     """Cloud tunnels isolate ports, serve concurrent clients, and die with the box."""
-    box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
+    box = await rt.create(tunnelable_box(image))
     try:
         pids = [await _start_service(box, port, marker) for port, marker in SERVICES]
         await _wait_for_http(box, *SERVICES[0])
@@ -210,9 +248,10 @@ async def test_python_sdk_tunnel_proxies_http_from_rest_box(rt, image):
         await rt.remove(box.id, force=True)
 
 
+@pytest.mark.xfail(strict=True, reason=TUNNEL_NEEDS_PUBLIC_BOX)
 @pytest.mark.asyncio
 async def test_python_sdk_tunnel_rejects_stopped_box(rt, image):
-    box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
+    box = await rt.create(tunnelable_box(image))
     try:
         await _start_service(box, *SERVICES[0])
         await _wait_for_http(box, *SERVICES[0])
@@ -233,11 +272,14 @@ async def test_python_sdk_tunnel_rejects_stopped_box(rt, image):
 
 @pytest.mark.xfail(
     strict=True,
-    reason="TCP half-close currently drops the guest response",
+    reason=(
+        "TCP half-close currently drops the guest response — though since "
+        "#1370 this case no longer reaches that path at all: " + TUNNEL_NEEDS_PUBLIC_BOX
+    ),
 )
 @pytest.mark.asyncio
 async def test_python_sdk_tunnel_preserves_tcp_half_close(rt, image):
-    box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
+    box = await rt.create(tunnelable_box(image))
     try:
         await _start_service(box, *SERVICES[0])
         await _wait_for_http(box, *SERVICES[0])
@@ -257,6 +299,7 @@ async def test_python_sdk_tunnel_preserves_tcp_half_close(rt, image):
         await rt.remove(box.id, force=True)
 
 
+@pytest.mark.xfail(strict=True, reason=TUNNEL_NEEDS_PUBLIC_BOX)
 @pytest.mark.asyncio
 async def test_python_sdk_tunnel_keeps_boxes_isolated(rt, image):
     # Appended one at a time inside try, not built as a list literal before
@@ -267,7 +310,7 @@ async def test_python_sdk_tunnel_keeps_boxes_isolated(rt, image):
     try:
         for _ in range(2):
             boxes.append(
-                await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
+                await rt.create(tunnelable_box(image))
             )
         markers = (b"python-box-a", b"python-box-b")
         await asyncio.gather(

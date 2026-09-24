@@ -132,6 +132,110 @@ For CI, store `BOXLITE_E2E_API_KEY` as a repository secret and pass it
 as an environment variable. No local bootstrap, Postgres, or runner
 services are needed — the remote stack provides everything.
 
+## The cloud legs (CI)
+
+`.github/workflows/e2e-cloud.yml` runs this suite against a deployed
+stage. It is dispatch-only, plus one call from `deploy-infra.yml`:
+
+| Stage | Target | Selection | Sweep |
+| --- | --- | --- | --- |
+| `dev` | `api.dev.boxlite.ai/api` | everything | yes |
+| `prod` | `api.boxlite.ai/api` | `-m smoke` | no |
+
+Each stage authenticates with its own repo secret — `BOXLITE_DEV_API_KEY` and
+`BOXLITE_PROD_API_KEY` — so a run only ever holds the key for the stage it
+targets.
+
+`smoke` marks the cases that are safe against a paying stage — one box at a
+time, no quota probing, no deliberate error storms. Mark a new case
+`@pytest.mark.smoke` only if it stays inside that budget.
+
+### What a green run does not cover
+
+Two limits worth knowing before reading a green dev run as proof:
+
+- The volume cases skip unless the stage's key carries volume permission —
+  `POST /v1/volumes` answers 403 without it, and dev's key did on 2026-09-22.
+  That takes the read-only-mount refusal with it, so that contract is pinned
+  but unexercised.
+- Short-exec stdout is dropped intermittently on a stage running without
+  #1569: the runner writes Close and drops TCP while the balancer is still
+  relaying the `101`, so a command that finishes before the client attaches
+  can return nothing with exit 0. `test_p0_6_exec_stdout_race.py` reports it.
+  Cases that grade a *negative* on stdout — "the secret is not in this dump" —
+  carry a sentinel so an empty stream fails instead of passing.
+
+### Known-broken on a cloud stage
+
+Tunnel and preview cases are `xfail(strict=True)`, not skipped, because no SDK
+caller can create a public box today. #1370 made an unspecified inbound mode
+mean private, and `CreateBoxNetworkSpec::from_options`
+(`src/boxlite/src/rest/types.rs:327-333`) drops the `inbound` field whenever
+its allow-list is empty — which is exactly what `mode="enabled"` looks like.
+Raw REST with the nested shape returns preview 200 against the same stage, so
+the server is not at fault. Telling "unset" from "enabled" needs an option
+change in the Rust core and every SDK, hence the marks rather than a local
+workaround. Strict means CI fails the day the SDK is fixed, which is when the
+marks should come off. What strict cannot do is tell that cause from a later
+break inside `tunnelable_box` itself — both read as "expected failure" — so a
+green run on those cases proves only that they still fail, not why.
+
+`test_cli_run_foreground_streams_command_output` carries the same mark for a
+different reason, and unlike the tunnel cases it is conditional. `boxlite run
+<image> <cmd>` without `-d` is create → WS `/boxes/{id}/attach` → `POST
+/start`, and on a cloud stage that upgrade comes back a bare 503 whose body
+(`upstream connect error or disconnect/reset before headers`) is an envelope
+the API never writes — so it is the load balancing in front of the API that
+refuses, though which hop is not established. Every other CLI case detaches,
+so nothing else touched that socket and the failure was invisible to a green
+suite. A local stack has no load balancer in front of `boxlite-api` on `:3000`
+(its `:3001` proxy serves box previews, not API ingress), so the mark applies
+only when the stage host is remote; what a local stack does with the attached
+form has not been tested. The create lands before the 503, so the case names
+its box and removes it by name in `finally` — the id is never printed.
+
+### Boxes must not outlive their run
+
+`auto_remove=True` is a no-op over REST and the API defaults `auto_delete` to
+disabled, so a box whose teardown never ran stays in the org for good. That is
+what killed the last dev run before this was fixed — run 30787280531: 53
+failures, every one `Organization quota exceeded: disk limit exceeded (max
+512GB)`.
+
+Two things keep that from recurring:
+
+- `conftest.bound_box_lifetime` fills in `auto_stop` / `auto_delete` on every
+  box created through the SDK, and `conftest.with_bounded_lifetime` names and
+  bounds the cases that hand-build a REST body, so the stage reclaims a
+  stranded box within minutes. They differ in one respect: the SDK door
+  applies the pair or neither, because the SDK rejects `auto_delete` that does
+  not exceed `auto_stop`; a hand-built body never meets that rule, and the API
+  checks only the floors, so each window is filled on its own there.
+- `apps/e2e/sweep.py` clears what earlier runs left behind — boxes named
+  `e2e-<random>`, which both doors produce (`conftest.e2e_box_name`):
+
+  ```bash
+  python3 apps/e2e/sweep.py                     # report only
+  python3 apps/e2e/sweep.py --apply             # delete what it reports
+  python3 apps/e2e/sweep.py --idle-minutes 120  # narrower window
+  python3 apps/e2e/sweep.py --any-name          # ignore the name prefix
+  ```
+
+  It only sees the organization its credential belongs to, only considers
+  boxes idle for a day, and only ones carrying that prefix. The prefix is what
+  makes it safe to run unattended: a report against dev on 2026-09-21 listed
+  `pol599-repro` and four siblings — someone's investigation, idle for a day,
+  indistinguishable from a stranded box by age alone.
+
+  What that leaves uncovered, deliberately: the polyglot drivers
+  (`apps/e2e/sdks/`) and the CLI cases create boxes with neither the prefix
+  nor a lifetime, so no sweep that CI runs can reclaim one. The ones the
+  cloud legs run — Node and the CLI — remove their box in a `finally`, so
+  there this only bites when a run is killed mid-driver; the Go and C drivers
+  exit past their own cleanup, and both legs `--ignore` those cases.
+  Clearing anything left behind means `--any-name`, by a human who has read
+  the report first — which is why CI never passes it.
+
 ## Running against local stack
 
 ```bash
@@ -173,6 +277,7 @@ apps/e2e/
 ├── bootstrap.sh             # Install services (local stack only)
 ├── fixture_setup.py         # Register snapshots / quota / profile (local stack only)
 ├── run.sh                   # bootstrap + fixture_setup + pytest
+├── sweep.py                 # Reclaim boxes earlier runs stranded (cloud)
 ├── two_sided.sh             # Validates that test catches bug + PR fixes it
 ├── pytest.ini
 ├── lib/
@@ -186,7 +291,12 @@ apps/e2e/
 └── cases/
     ├── conftest.py                  # rt / image / box fixtures (REST-only)
     ├── test_path_verification.py    # Meta-test: prove SDK→API→Runner path
+    ├── test_cloud_smoke.py          # /v1/me + /v1/config: the smoke core
     ├── test_lifecycle.py            # Box create / get_info / remove
+    ├── test_box_lifecycle_policy.py # auto_stop / auto_delete reaping
+    ├── test_box_metrics.py          # Per-box metrics through the runner
+    ├── test_volumes.py              # Managed volumes: CRUD + data reuse
+    ├── test_network_egress.py       # Outbound policy: block-all, allow_net
     ├── test_exec_*.py               # Exec stdout, attach, timeout
     ├── test_copy_roundtrip.py       # Copy in/out
     ├── test_cli_entry.py            # CLI smoke (run, exec, whoami)

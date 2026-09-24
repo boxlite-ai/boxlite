@@ -54,7 +54,7 @@ own.
 | `build-apps-api-image.yml` | dispatch, `workflow_call` | yes | The `apps/api` image: build a commit, build a release, or promote one between stages. Retiring alongside `deploy-infra` |
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. The incumbent, retiring after the first green `mdeploy-all` dispatch |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retiring alongside `deploy-infra` |
-| `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage. Run by `deploy-infra` after it applies |
+| `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: the whole suite on `dev`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
 | `mdeploy-all.yml` | dispatch | — | The only rollout path. A commit SHA builds for dev, and so does `#<number>` — a pull request, by the commit it would merge to; a release tag publishes into dev or promotes to prod, and is all prod accepts. Applies the stack itself |
 | `mbuild.yml` | `workflow_call` | call-only | The commit line's images, for a dev rollout. Callee only: nobody publishes a commit by hand |
 | `mbuild-release.yml` | dispatch, `workflow_call` | yes | The release line's images, tagged `v<X.Y.Z>-<sha>`: publish a version into dev, or promote it to prod. One job per artifact, and a version the target already holds is refused rather than skipped |

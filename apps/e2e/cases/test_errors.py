@@ -42,6 +42,7 @@ async def test_create_with_unknown_image_returns_typed_error(rt):
     )
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_invalid_token_returns_401_not_500():
     """A bad bearer token must return 401/403, not 500."""

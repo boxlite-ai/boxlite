@@ -63,10 +63,22 @@ def _assert_node_tunnel_passes(result):
     assert "TUNNEL_HTTP=ok" in result.stdout
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "SDK cannot create a public box since #1370: rest/types.rs:327-333 drops the inbound field it was asked for, so the tunnel is refused"
+    ),
+)
 def test_node_sdk_tunnel_proxies_http_from_rest_box(node_tunnel_env):
     _assert_node_tunnel_passes(_run_node_tunnel(node_tunnel_env))
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "SDK cannot create a public box since #1370: rest/types.rs:327-333 drops the inbound field it was asked for, so the tunnel is refused"
+    ),
+)
 def test_node_sdk_tunnel_rejects_stopped_box(node_tunnel_env):
     env = {**node_tunnel_env}
     env.pop("BOXLITE_E2E_SKIP_STOPPED_BOX")
@@ -75,7 +87,11 @@ def test_node_sdk_tunnel_rejects_stopped_box(node_tunnel_env):
 
 @pytest.mark.xfail(
     strict=True,
-    reason="TCP half-close currently drops the guest response",
+    reason=(
+        "TCP half-close currently drops the guest response — and since #1370 "
+        "the driver cannot open the tunnel at all: rest/types.rs:327-333 "
+        "drops the inbound field it was asked for"
+    ),
 )
 def test_node_sdk_tunnel_preserves_tcp_half_close(node_tunnel_env):
     env = {**node_tunnel_env}

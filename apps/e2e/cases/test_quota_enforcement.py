@@ -18,12 +18,15 @@ from typing import Any
 
 import pytest
 
-from conftest import DEFAULT_IMAGE
+from conftest import DEFAULT_IMAGE, with_bounded_lifetime
 from e2e_auth import auth_context, request_json
 
 
 def _post_box(spec: dict) -> tuple[int, dict[str, Any] | None]:
-    return request_json("POST", auth_context().v1("boxes"), spec)
+    # Bounded even though every spec here is meant to be rejected: a 4xx is not
+    # proof that no box was created — test_invalid_argument_negative_memory_returns_400
+    # documents a rejection path that creates one anyway.
+    return request_json("POST", auth_context().v1("boxes"), with_bounded_lifetime(spec))
 
 
 def _delete_box(box_id: str) -> None:
