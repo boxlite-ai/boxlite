@@ -66,7 +66,7 @@ attachment. The consumer endpoint and ClickStack UI belong to the separate Backo
 The current producer accepts endpoints from its own project. Connection acceptance and
 reader-secret access are distinct: `CLICKSTACK_CONSUMER_ACCOUNT` grants
 the named service account reader-secret access; it does not itself create a consumer endpoint.
-See [publication source](../mdeploy/stack/providers/gcp/clickstack.ts) and the full [data-path graph](architecture.md#gcp-runtime-and-data-paths).
+See [publication source](../mdeploy/stack/providers/gcp/clickstack.ts) and the full [data-path graph](architecture.md).
 
 ## AWS private UI
 

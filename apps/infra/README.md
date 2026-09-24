@@ -53,3 +53,7 @@ make test:apps:infra-config
 The first target typechecks tooling and runs the infrastructure suites. The second installs SST's
 platform and typechecks the full configuration. For documentation-only edits, check local links,
 anchors, Mermaid rendering and any existing documentation contracts; a cloud apply is not validation.
+
+## Related references
+
+- [gcp](docs/gcp/README.md) reference.
