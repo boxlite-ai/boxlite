@@ -1919,10 +1919,10 @@ components:
           $ref: "#/components/schemas/NetworkSpec"
           description: |
             Optional network policy. Omitting `network` defaults inbound
-            service access to `enabled` (public).
+            service access to `disabled` (private).
           default:
             inbound:
-              mode: enabled
+              mode: disabled
         secrets:
           type: array
           items:
@@ -2119,10 +2119,10 @@ components:
           $ref: "#/components/schemas/InboundNetworkSpec"
           description: |
             Optional inbound service access policy. Omission means
-            `mode=enabled` (public), including for legacy flat network
-            requests. Send `mode=disabled` to keep the box private.
+            `mode=disabled` (private), including for legacy flat network
+            requests. Send `mode=enabled` to make the box public.
           default:
-            mode: enabled
+            mode: disabled
         mode:
           deprecated: true
           type: string

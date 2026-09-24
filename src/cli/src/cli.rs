@@ -1159,8 +1159,8 @@ pub struct NetworkFlags {
     #[arg(long = "allow-net", value_name = "HOST")]
     pub allow_net: Vec<String>,
 
-    /// Inbound mode: "enabled" (default — services the box exposes are
-    /// publicly reachable) or "disabled" (private, unreachable from outside
+    /// Inbound mode: "enabled" (services the box exposes are publicly
+    /// reachable) or "disabled" (default — private, unreachable from outside
     /// the box).
     #[arg(long = "inbound", value_name = "MODE")]
     pub inbound: Option<String>,
@@ -1192,7 +1192,7 @@ impl NetworkFlags {
         };
 
         // Leave BoxOptions::default() (outbound Enabled/full access, inbound
-        // Enabled/public) untouched when no flag is given, so a bare `run`
+        // Disabled/private) untouched when no flag is given, so a bare `run`
         // behaves as before.
         if self.network.is_none() && self.allow_net.is_empty() && self.inbound.is_none() {
             return Ok(());
@@ -1203,7 +1203,7 @@ impl NetworkFlags {
         };
         let inbound_mode = match self.inbound.as_deref() {
             Some(value) => value.parse::<NetworkMode>()?,
-            None => NetworkMode::Enabled,
+            None => NetworkMode::Disabled,
         };
         opts.network = NetworkSpec::try_from(OutboundNetworkConfig {
             mode,
@@ -2321,6 +2321,8 @@ mod tests {
             .expect("disabled is valid");
 
         assert!(matches!(opts.network, NetworkSpec::Disabled));
+        // Without --inbound, inbound stays private.
+        assert!(matches!(opts.inbound_network, NetworkSpec::Disabled));
     }
 
     #[test]

@@ -815,7 +815,7 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 |------|-------------|
 | `--network <enabled\|disabled>` | Outbound mode; default `enabled`. Disabled mode creates no network interface. |
 | `--allow-net HOST` | Restrict TCP/UDP egress to exact hosts, `*.example.com`, IPs, or CIDRs; repeatable, implies enabled networking, and is incompatible with `--network disabled`. Hostname-only rules deny UDP unless an IP/CIDR is also allowed. |
-| `--inbound <enabled\|disabled>` | Inbound mode; default `enabled` (services exposed by the box are reachable). |
+| `--inbound <enabled\|disabled>` | Inbound mode; default `disabled` (services exposed by the box are private). |
 | `--net-tx-kbps KBPS` | Cap what the box sends (guest to internet), in kilobits/sec. `0` or unset leaves it uncapped. |
 | `--net-rx-kbps KBPS` | Cap what reaches the box (internet to guest), in kilobits/sec. `0` or unset leaves it uncapped. |
 

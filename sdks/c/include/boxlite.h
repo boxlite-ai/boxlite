@@ -1006,13 +1006,13 @@ void boxlite_options_set_network_disabled(CBoxliteOptions *opts);
 // range is refused unless an IP or CIDR rule covers it.
 void boxlite_options_add_network_allow(CBoxliteOptions *opts, const char *host);
 
-// Marks services the box exposes as publicly reachable (the default).
+// Marks services the box exposes as publicly reachable.
 // Mirrors `boxlite_options_set_network_enabled` for the inbound direction.
 void boxlite_options_set_network_inbound_enabled(CBoxliteOptions *opts);
 
 // Marks services the box exposes as private — unreachable from outside the
-// box. Mirrors `boxlite_options_set_network_disabled` for the inbound
-// direction.
+// box (the default). Mirrors `boxlite_options_set_network_disabled` for the
+// inbound direction.
 void boxlite_options_set_network_inbound_disabled(CBoxliteOptions *opts);
 
 void boxlite_options_add_secret(CBoxliteOptions *opts,

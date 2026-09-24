@@ -86,8 +86,9 @@ type OutboundNetworkSpec struct {
 // InboundNetworkSpec configures whether services running inside the box are
 // reachable from outside it. Aligned field-for-field with
 // OutboundNetworkSpec: ModeEnabled means publicly reachable, ModeDisabled
-// means private. AllowNet exists for shape symmetry only — no layer
-// enforces an inbound allowlist yet, so a non-empty value is rejected.
+// or an unset Mode means private. AllowNet exists for shape symmetry only —
+// no layer enforces an inbound allowlist yet, so a non-empty value is
+// rejected.
 type InboundNetworkSpec struct {
 	Mode     NetworkMode
 	AllowNet []string
@@ -588,9 +589,9 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 			return nil, fmt.Errorf("inbound.allow_net is not supported yet; remove it (inbound access is controlled by mode only)")
 		}
 		switch cfg.network.Inbound.Mode {
-		case "", NetworkModeEnabled:
+		case NetworkModeEnabled:
 			C.boxlite_options_set_network_inbound_enabled(cOpts)
-		case NetworkModeDisabled:
+		case "", NetworkModeDisabled:
 			C.boxlite_options_set_network_inbound_disabled(cOpts)
 		default:
 			C.boxlite_options_free(cOpts)

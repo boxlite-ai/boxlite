@@ -71,9 +71,9 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
     hosts: secret.hosts,
     placeholder: secret.placeholder,
   }))
-  // REST omits inbound to mean enabled; other creation paths retain their
-  // own visibility defaults in BoxService.
-  createDto.public = dto.network?.inbound?.mode !== 'disabled'
+  // Only an explicit inbound.mode=enabled makes the box public. Omitting
+  // inbound (including the legacy flat network shape) keeps it private.
+  createDto.public = dto.network?.inbound?.mode === 'enabled'
   if (dto.network) {
     const allowNet = dto.network.outbound?.allow_net?.map((entry) => entry.trim()).filter(Boolean)
     createDto.networkBlockAll = dto.network.outbound?.mode === 'disabled'

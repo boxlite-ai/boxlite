@@ -343,11 +343,22 @@ pub struct OutboundNetworkInfo {
 /// Records whether the guest's exposed ports/preview are publicly reachable.
 /// `allow_net` is always empty today — an inbound allowlist is not yet
 /// enforced by any layer.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InboundNetworkInfo {
     pub mode: NetworkMode,
     #[serde(default)]
     pub allow_net: Vec<String>,
+}
+
+/// Metadata that omits inbound reads as private, matching the inbound
+/// default of [`BoxOptions`](crate::runtime::options::BoxOptions).
+impl Default for InboundNetworkInfo {
+    fn default() -> Self {
+        Self {
+            mode: NetworkMode::Disabled,
+            allow_net: Vec::new(),
+        }
+    }
 }
 
 /// Public network metadata for a box.
@@ -698,8 +709,9 @@ mod tests {
             network.outbound.allow_net,
             vec!["api.example.com".to_string()]
         );
-        // The direction the pre-split shape could not express takes its default.
-        assert_eq!(network.inbound, InboundNetworkInfo::default());
+        // The direction the pre-split shape could not express reads as private.
+        assert_eq!(network.inbound.mode, NetworkMode::Disabled);
+        assert!(network.inbound.allow_net.is_empty());
         // And the deprecated mirrors follow outbound.
         assert_eq!(network.mode, NetworkMode::Disabled);
         assert_eq!(network.allow_net, vec!["api.example.com".to_string()]);
@@ -857,13 +869,13 @@ mod tests {
         );
         assert_eq!(
             network.inbound.mode,
-            crate::runtime::options::NetworkMode::Enabled
+            crate::runtime::options::NetworkMode::Disabled
         );
         assert_eq!(network.published_ports, Some(Vec::new()));
 
         let serialized = serde_json::to_value(&info).unwrap();
         assert_eq!(serialized["network"]["outbound"]["mode"], "enabled");
-        assert_eq!(serialized["network"]["inbound"]["mode"], "enabled");
+        assert_eq!(serialized["network"]["inbound"]["mode"], "disabled");
         assert_eq!(
             serialized["network"]["published_ports"],
             serde_json::json!([])
