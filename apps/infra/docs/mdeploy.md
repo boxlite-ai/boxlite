@@ -18,7 +18,8 @@ mstage: stage declaration + identity + encrypted environment
 The current command is `npm run mdeploy -- --stage <stage>` from `apps/infra`.
 The retained `npm run deploy` command uses `deployment/sst.ts` and the legacy `stack/` tree;
 its flags, state assumptions and post-deploy checks are not interchangeable with mdeploy's.
-Preview any transition against the intended stage before applying it.
+AWS bootstrap and mdeploy currently use different app names; read the
+[AWS compatibility boundary](../bootstrap/aws/README.md#aws-mdeploy-compatibility) before a transition.
 
 ## Inputs
 

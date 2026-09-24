@@ -4,7 +4,7 @@ BoxLite separates its control plane, proxy, and VM runners, with managed state a
 
 # Infrastructure architecture
 
-[Infrastructure index](../README.md) · [Deployment](deployment.md) · [Networking](networking.md)
+[Infrastructure index](../README.md) · [Deployment](deployment.md) · [Networking](networking.md) · [Cost catalog](costs.md)
 
 These diagrams describe the checked-in resource declarations, not an inventory of a live project.
 `$` marks a GCP billing component before free allowances; conditional resources depend on stage configuration.

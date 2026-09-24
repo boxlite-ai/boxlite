@@ -43,8 +43,8 @@ Autopilot's billing model accounts for its managed capacity; do not add an inven
   Bootstrap enables Container Analysis access; this alone is not evidence that paid automatic scanning
   is enabled. Check the project/repository scanning configuration and the stage's scan gate.
 - The ClickHouse producer service attachment has no separate PSC endpoint fee; its load balancer
-  remains billable. The consumer endpoint and applicable processing/transfer belong to the Backoffice
-  project. See [PSC pricing](https://cloud.google.com/vpc/pricing#private-service-connect).
+  remains billable. The consumer endpoint and applicable processing/transfer are owned by the Backoffice
+  stack (currently in the producer's project). See [PSC pricing](https://cloud.google.com/vpc/pricing#private-service-connect).
 - Cloud Router, VPC/subnet/firewall declarations, IAM identities and private service peering are not
   separate fixed compute instances. Their associated NAT, logging, transfer and managed services can bill.
 - Attached load-balancer forwarding-rule addresses follow their specific IP pricing treatment;

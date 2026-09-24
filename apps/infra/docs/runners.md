@@ -80,7 +80,7 @@ Do not disable protection merely to make an unexpected diff pass.
 ## Verify and recover
 
 1. Confirm each expected instance is running and the runner appears in the control plane.
-2. On GCP, inspect OS policy reports for every host and both binary/unit-environment policies.
+2. On GCP, inspect OS policy reports for every host and all declared policies, including binary/unit-environment policies after mdeploy.
 3. Check the runner health identity, then create, execute in, and stop a test box.
 4. Verify a box preview/tunnel and any persistent-volume mount used by the stage.
 
