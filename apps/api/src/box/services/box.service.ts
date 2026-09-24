@@ -282,9 +282,7 @@ export class BoxService {
       box.mem = mem
       box.disk = disk
 
-      // POL-205: default private. A caller who never mentions visibility gets
-      // a box that is not reachable from the public internet, rather than
-      // silently anonymously public.
+      // POL-205: an unset public value on the internal create DTO defaults private.
       box.public = createBoxDto.public ?? false
 
       if (createBoxDto.networkBlockAll !== undefined) {
