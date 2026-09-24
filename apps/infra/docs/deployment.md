@@ -36,11 +36,6 @@ For GCP, give `dev` a GCP declaration if using the manual workflow; the example'
 usable locally but is not one of that workflow's choices. Set the exact cloud, project/account,
 region and protection before any cloud-writing command.
 
-## Deploy an existing stack
-
-For the legacy AWS path, `npm run bootstrap` stores `OIDC_CLIENT_ID` in the SST secret store.
-Prepare current mdeploy values and their digest through [configuration](configuration.md) before previewing.
-
 ## Bootstrap a stage
 
 ```bash
@@ -62,12 +57,12 @@ A protected GCP stage requires `--confirm`.
 | GitHub Environment | GCP provider/deployer/publisher variables | AWS account/region and Cloudflare credentials |
 | Application values | Seed separately with mstage | Bootstrap imports reviewed `.env` stage settings; set application secrets separately |
 
-For AWS bootstrap, prepare `cp .env.example .env` and fill its reviewed non-secret settings first.
+For the retained AWS bootstrap path, prepare `cp .env.example .env` and fill its reviewed non-secret settings first.
 See [AWS bootstrap policy ownership](../bootstrap/aws/README.md).
 On GCP, bootstrap does not import the application's values or provision Auth0/SES.
 
 Before the first deploy, populate every required key in the [environment manifest](../mstage.env.json),
-including the GCP `pulumi` group. Use secret stdin or a protected JSON file as described in
+including `OIDC_CLIENT_ID` and, on GCP, the `pulumi` group. Use secret stdin or a protected JSON file as described in
 [configuration](configuration.md#set-application-values). Generate a strong initial
 `PULUMI_CONFIG_PASSPHRASE` once; preserve it for existing state rather than replacing it on reruns.
 Then certify the imported configuration:
@@ -84,7 +79,7 @@ Bootstrap creates prerequisites; it does not deploy application services or prov
 
 ## Deploy through GitHub Actions
 
-The current entrypoint is [mdeploy-all.yml](../../../.github/workflows/mdeploy-all.yml).
+For GCP and AWS stages with verified mdeploy prerequisites, the entrypoint is [mdeploy-all.yml](../../../.github/workflows/mdeploy-all.yml).
 It defaults to a preview. Example: preview an open PR's merge result in `dev`:
 
 ```bash
@@ -112,6 +107,11 @@ Image releases are published/promoted through [mbuild-release](../../../.github/
 
 ## Retained legacy AWS deployment
 
+AWS bootstrap currently prepares the legacy `boxlite` app. mdeploy's AWS app is `boxlite-app`;
+its state, runtime-boundary and artifact prerequisites are different. Read the
+[AWS compatibility check](../bootstrap/aws/README.md#aws-mdeploy-compatibility) before using mdeploy
+on an existing AWS stage or assuming a fresh bootstrap prepared it.
+
 `deploy-infra.yml`, `deploy-release.yml`, `build-apps-api-image.yml`, and `npm run deploy`
 remain in the repository. They use the legacy SST tree and its own artifact selectors.
 Use them only when intentionally operating that path; do not mix their selectors with mdeploy's.
@@ -133,7 +133,7 @@ See [artifact selection](../artifacts/source.ts), [scope rules](../deployment/sc
 [wrapper](../deployment/sst.ts), and the [workflow reference](../../../.github/workflows/README.md).
 Preview before switching entrypoints; shared logical names are not proof of a no-op transition.
 
-## Deploy locally
+## Deploy an existing stack
 
 Local deployment uses the same stage configuration and artifact identities. Publish or promote
 images first with [mbuild](../mbuild/README.md), and prepare the selected [runner artifact](runners.md).

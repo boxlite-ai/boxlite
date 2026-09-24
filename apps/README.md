@@ -1,3 +1,7 @@
+## TL;DR
+
+The API, proxy, collector and VM runners form BoxLite's cloud platform on GCP or AWS.
+
 # BoxLite cloud applications
 
 The applications under this directory form BoxLite's hosted control plane and
@@ -6,7 +10,10 @@ how the control plane schedules boxes, and where state and telemetry flow.
 
 ## Architecture
 
-### Current
+See the [GCP overview, detailed runtime and supporting-service graphs](infra/docs/architecture.md)
+for the current GCP provider and billing components.
+
+### AWS topology
 
 ```mermaid
 flowchart TB
@@ -87,8 +94,9 @@ flowchart TB
     otel otel_to_telemetry@-.->|"configured export"| telemetry
 ```
 
-The deployment runbook and operational constraints live in
-[`infra/docs/deployment.md`](./infra/docs/deployment.md).
+The [infrastructure index](infra/README.md) links deployment, configuration, runner operations,
+networking, security, observability and costs. Follow the [deployment runbook](infra/docs/deployment.md)
+for the intended cloud and deployment path.
 
 ## Service guides
 

@@ -14,7 +14,7 @@ Keep stage declarations in the ignored config file and application values in the
 | `.mstage.config.json` | Stage cloud, region/project/zone, login requirements, registry, scan policy, resource sizing and protection | No |
 | Encrypted stage store | Domains, feature settings, API keys and application secrets | No |
 | GitHub Environment variable | One stage declaration for CI, named `BOXLITE_MSTAGE_BOXLITE_APP_CONFIG` | No |
-| Bootstrap `.env` | Local input to bootstrap and the retained legacy deployment path | No |
+| Bootstrap `.env` | Input to the retained AWS bootstrap/deployment path | No |
 
 There is no separate `mbuild.config.json` or `mdeploy.config.json`. Both tools read the two mstage files.
 The loader walks up from the working directory; `MSTAGE_ENV_CONFIG` and `MSTAGE_CONFIG` can name explicit paths.
@@ -108,7 +108,8 @@ npm run --silent mstage config get -- --stage dev
 variable first, then the local file, and emits `{ "dev": { ... } }`. The setup action restores the
 ignored file for a job; promotion restores both source and destination declarations.
 
-The bootstrap `.env` and legacy SST manifest are a separate compatibility path. Updating an ignored
+The AWS bootstrap `.env` and legacy SST manifest belong to the legacy `boxlite` app.
+The current manifest names `boxlite-app`; see [AWS compatibility](../bootstrap/aws/README.md#aws-mdeploy-compatibility). Updating an ignored
 local file does not update the encrypted stage store or a GitHub Environment until its corresponding
 write command runs. Verify each destination after changing it.
 

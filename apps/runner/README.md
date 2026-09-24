@@ -1,3 +1,7 @@
+## TL;DR
+
+One runner service manages many BoxLite VMs and exposes their lifecycle, execution, files and telemetry.
+
 # BoxLite Runner
 
 The runner is the Go HTTP server that fronts a single `BoxliteRuntime` (the
@@ -6,9 +10,9 @@ API for SDK clients and the control-plane API. One runner process hosts many
 boxes; each box hosts many executions; each execution can be attached to at
 most one client at a time.
 
-Production deployment runs on bare EC2 (see
-[`apps/infra/sst.config.ts`](../infra/sst.config.ts)), listening on `:3003`
-behind the NestJS API service.
+Cloud deployment runs on Compute Engine or EC2 with nested KVM, listening on `:3003`
+behind the control-plane API. See [infrastructure architecture](../infra/docs/architecture.md)
+and [runner operations](../infra/docs/runners.md).
 
 For the system-wide context (CDN, load balancers, where the runner fits in
 the request path), see [`apps/README.md`](../README.md).
@@ -590,8 +594,8 @@ Optional features are toggled by env vars:
 - `BOXLITE_MAX_SESSION_LIFETIME`, `BOXLITE_RECONNECT_GRACE`,
   `BOXLITE_SHUTDOWN_GRACE` — exec reaping timers.
 
-The runner is normally bootstrapped by the SST EC2 user-data script;
-see `apps/infra/stack/runners.ts:buildRunnerUserData`. For local
+Cloud hosts use the [shared runner boot logic](../infra/mdeploy/stack/runner-boot.ts)
+with cloud-specific providers; the retained AWS stack has its own bootstrap path. For local
 development against the Rust SDK directly, see `boxlite serve` at
 [`src/cli/src/commands/serve/`](../../src/cli/src/commands/serve/)
 (Rust REST server with parity coverage).
