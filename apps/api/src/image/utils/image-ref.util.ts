@@ -121,7 +121,10 @@ export function parseImageRef(ref: string): ParsedImageRef {
     segments.length > 1 && (segments[0].includes('.') || segments[0].includes(':') || segments[0] === 'localhost')
   const host = hasHost ? segments[0] : 'docker.io'
   const pathSegments = hasHost ? segments.slice(1) : segments
-  const repository = pathSegments.length === 1 && !hasHost ? `library/${pathSegments[0]}` : pathSegments.join('/')
+  // Docker Hub keeps its official images under `library/`, whether or not the
+  // ref names the host, so `python` and `docker.io/python` are one catalog key.
+  const repository =
+    pathSegments.length === 1 && host === 'docker.io' ? `library/${pathSegments[0]}` : pathSegments.join('/')
 
   if (pathSegments.length === 0 || pathSegments.some((segment) => !PATH_SEGMENT_PATTERN.test(segment))) {
     throw new BadRequestError(`Image repository '${rest}' is not a valid OCI repository path`)

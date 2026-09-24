@@ -17,6 +17,10 @@ describe('image ref utilities', () => {
     it.each([
       ['docker.io/library/python:3.12', 'docker.io', 'library/python', '3.12', undefined],
       ['python', 'docker.io', 'library/python', undefined, undefined],
+      // Docker Hub's library namespace is implied by the host, not by leaving it out:
+      // both spellings are one image, so they must be one catalog key.
+      ['docker.io/python:3.12', 'docker.io', 'library/python', '3.12', undefined],
+      ['127.0.0.1:25000/app', '127.0.0.1:25000', 'app', undefined, undefined],
       ['acme/app', 'docker.io', 'acme/app', undefined, undefined],
       ['ghcr.io/boxlite-ai/agent-base:v0.1.0', 'ghcr.io', 'boxlite-ai/agent-base', 'v0.1.0', undefined],
       ['127.0.0.1:25000/acme/app:v1', '127.0.0.1:25000', 'acme/app', 'v1', undefined],
