@@ -120,7 +120,7 @@ Threshold behavior follows [Codecov's status configuration](https://docs.codecov
 4. Run quality and tests (`make lint && make fmt:check && make test`)
 5. Commit with clear messages — see [Commit & PR messages](#commit--pr-messages)
 6. Open a Pull Request
-7. CI converts unacknowledged PRs to draft. Read the current diff, then post the exact `/reviewed <full-head-SHA>` command from the bot comment. Only a new, unedited comment from the PR author counts. Once `Author reviewed the PR` passes, click **Ready for review**. A new commit, or editing/deleting the only acknowledgment, returns the PR to draft and requires a fresh comment. Forks use the same flow. Maintainer approval remains separate
+7. CI converts unacknowledged PRs to draft. Read the current diff, check that the description accurately explains it, then post the exact `/reviewed <full-head-SHA>` command from the bot comment. Only a new, unedited comment from the PR author counts. Once `Author reviewed the PR` passes, click **Ready for review**. A new commit, or editing/deleting the only acknowledgment, returns the PR to draft and requires a fresh comment. Forks use the same flow. Maintainer approval remains separate
 8. Sign the [BoxLite Contributor License Agreement](./docs/legal/CLA.md) when CLA Assistant asks you to do so
 
 ### Watching CI and PR feedback
@@ -166,14 +166,22 @@ Write for a reviewer skimming in ~30 seconds. Describe the change, not the proce
 point; choose bullets, a real example, a table, a diagram, or short prose by clarity.
 No diagram, source annotation, or section order is mandatory.
 
-- Explain the problem and resulting behavior once. Keep the whole description within
+- Link the design doc on the `Design doc:` line: a 1–3 page GitHub issue, Notion
+  page, or Linear issue, in that preference order. Every PR needs one, drafts
+  included; keep it aligned with the final scope. Use `Fixes #<n>` only when the PR
+  closes that GitHub issue.
+- Keep each PR within 400 changed lines (target 100–200), counting tests, docs, and
+  generated text. Split larger work into child issues under a parent issue, one
+  coherent PR per child.
+- Explain the problem, how the change produces the result, and the resulting
+  behavior once. Keep the whole description within
   **120 words**, fenced blocks included, with no paragraph over 80 words and no list
   item over 40. Table pipes and box-drawing characters do not count as words. No walls of text.
 - Keep material risks and untested behavior visible. Link detailed evidence instead
   of pasting logs, file inventories, or exhaustive test counts.
 - Include decisive verification as `command → observed result`. For a fix, briefly
   report the observed failure with all production changes reverted and the pass with
-  the complete fix restored. Link the relevant issue when one exists.
+  the complete fix restored.
 
 The shared hook applies these limits to the text agents post to GitHub: PR bodies,
 drafts included, and issues, comments, reviews, discussions, and release notes, whether
@@ -183,6 +191,8 @@ bot additions are outside this check; the writing rules still apply.
 Illustrative example; behavior and test results are hypothetical:
 
 ```markdown
+Design doc: https://github.com/example/repo/issues/123
+
 Reduce routine SDK CI work while retaining weekly compatibility coverage.
 
 - A PR changing both SDKs runs 11 jobs instead of 21.
