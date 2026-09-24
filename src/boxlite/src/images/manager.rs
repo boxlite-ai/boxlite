@@ -145,23 +145,42 @@ impl ImageManager {
 
     /// List all cached images.
     ///
-    /// A pull indexes its build under the digest as well as the ref it was
-    /// pulled by, so a pinned pull can find it. That entry is not a second
-    /// image: it is listed only when no ref names the build — one a tag has
-    /// since moved past, or one pulled by digest — and then with no tag.
+    /// A pull indexes its build under the digest it resolved to as well as the
+    /// ref it was pulled by, so a pinned pull can find it. That entry is not a
+    /// second image: it is listed only when nothing else names the build — not
+    /// a tag, and not the index digest a multi-platform image was pulled by —
+    /// and then with no tag.
     pub async fn list(&self) -> BoxliteResult<Vec<ImageInfo>> {
         let raw_images = self.store.list().await?;
-        let is_pinned =
-            |reference: &str| Reference::from_str(reference).is_ok_and(|r| r.digest().is_some());
-        let named: HashSet<String> = raw_images
-            .iter()
-            .filter(|(reference, _)| !is_pinned(reference))
-            .map(|(_, cached)| cached.manifest_digest.clone())
-            .collect();
+        let key_digest = |reference: &str| {
+            Reference::from_str(reference)
+                .ok()
+                .and_then(|r| r.digest().map(str::to_string))
+        };
+        let mut named = HashSet::new();
+        let mut named_by_index = HashSet::new();
+        for (reference, cached) in &raw_images {
+            match key_digest(reference) {
+                None => {
+                    named.insert(cached.manifest_digest.clone());
+                }
+                Some(digest) if digest != cached.manifest_digest => {
+                    named_by_index.insert(cached.manifest_digest.clone());
+                }
+                Some(_) => {}
+            }
+        }
 
         let mut images = Vec::with_capacity(raw_images.len());
         for (reference, cached) in raw_images {
-            if is_pinned(&reference) && named.contains(&cached.manifest_digest) {
+            let build = &cached.manifest_digest;
+            let is_alias = match key_digest(&reference) {
+                None => false,
+                Some(digest) => {
+                    named.contains(build) || (&digest == build && named_by_index.contains(build))
+                }
+            };
+            if is_alias {
                 continue;
             }
             // If parsing fails, default to UNIX_EPOCH to signal error
@@ -266,5 +285,27 @@ mod tests {
         assert_eq!(rows.len(), 2, "{rows:?}");
         assert!(rows.contains(&("v1", FIRST)), "{rows:?}");
         assert!(rows.contains(&("<none>", NEWER)), "{rows:?}");
+    }
+
+    /// A multi-platform image pulled by its index digest names one build twice:
+    /// by the index the caller asked for and by the platform manifest it
+    /// resolved to. Listed once, under what the caller pulled.
+    #[tokio::test]
+    async fn an_image_pulled_by_its_index_digest_is_listed_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).unwrap();
+        let images = ImageManager::new(dir.path().join("images"), db, vec![]).unwrap();
+        let index = format!("sha256:{}", "a".repeat(64));
+        let pulled = format!("quay.io/acme/app@{index}");
+        seed_cached_build(images.store(), &pulled, FIRST).await;
+        seed_cached_build(images.store(), &format!("quay.io/acme/app@{FIRST}"), FIRST).await;
+
+        let listed = images.list().await.unwrap();
+        let rows: Vec<&str> = listed
+            .iter()
+            .map(|image| image.reference.as_str())
+            .collect();
+
+        assert_eq!(rows, vec![pulled.as_str()]);
     }
 }
