@@ -39,6 +39,6 @@ The retained legacy wrapper additionally hydrates its `BOXLITE_STAGE_CONFIG` man
 Pulumi event logs. Those legacy controls should not be attributed to every mdeploy invocation.
 
 
-Runner updates use [SSM](../runners.md). The legacy deployment also has a runner policy pack and scope restrictions.
+Runner updates use [SSM](runners.md). The legacy deployment also has a runner policy pack and scope restrictions.
 
 Sources: [bootstrap policies](../../bootstrap/aws/), [runtime boundary](../../mdeploy/sst.config.ts), [legacy wrapper](../../deployment/sst.ts).

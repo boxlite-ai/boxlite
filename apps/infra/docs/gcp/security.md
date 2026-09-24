@@ -32,6 +32,6 @@ Follow the shared [secret-handling and resource-protection rules](../security.md
 - Volume access uses scoped temporary credentials and bucket-prefix permissions; stage naming alone does not isolate every volume bucket.
 
 
-Runner updates converge through [OS Config](../runners.md); host protection does not establish rollout health.
+Runner updates converge through [OS Config](runners.md); host protection does not establish rollout health.
 
 Sources: [bootstrap roles](../../bootstrap/gcp.ts), [runtime identities and firewall rules](../../mdeploy/stack/providers/gcp/network.ts).

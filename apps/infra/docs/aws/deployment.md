@@ -77,8 +77,8 @@ Preview before switching entrypoints; shared logical names are not proof of a no
 ## Verify and recover
 
 Run the shared [service checks](../deployment.md#verify-the-result) and inspect
-[SSM runner outcomes](../runners.md). Use [networking](networking.md) for ALB/NLB and security groups,
-and [ClickHouse](../clickhouse.md) for telemetry. The legacy wrapper's automatic smoke checks do not
+[SSM runner outcomes](runners.md). Use [networking](networking.md) for ALB/NLB and security groups,
+and [ClickHouse](clickhouse.md) for telemetry. The legacy wrapper's automatic smoke checks do not
 establish that current mdeploy runs the same checks.
 
 Bootstrap maintains SSM/GitHub Cloudflare credential copies for the legacy path; rotating one

@@ -70,9 +70,9 @@ Cloudflare credentials come from the encrypted `deploy` group.
 ## Verify and recover
 
 Run the shared [service checks](../deployment.md#verify-the-result), then inspect
-[OS Config reports and runner health](../runners.md). Pulumi apply returns before
+[OS Config reports and runner health](runners.md#verify-and-recover). Pulumi apply returns before
 the fleet necessarily converges. Check gcloud and ADC identity separately for credential failures.
-Use [networking](networking.md) for private routes/firewalls and [ClickHouse](../clickhouse.md) for ingestion failures.
+Use [networking](networking.md) for private routes/firewalls and [ClickHouse](clickhouse.md) for ingestion failures.
 For locks, refresh or removal, follow [shared recovery](../deployment.md#recovery-and-teardown).
 
 Sources: [bootstrap](../../bootstrap/gcp.ts), [Pulumi entrypoint](../../mdeploy/pulumi/program.ts).
