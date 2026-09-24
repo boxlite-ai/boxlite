@@ -1,10 +1,10 @@
 ## TL;DR
 
-Configure identity and outbound mail separately from infrastructure deployment.
+Keep cloud-specific sender setup separate from the shared OIDC, Auth0 login-policy and branding procedures.
 
-# Identity and mail operations
+# Shared identity and branding
 
-[Infrastructure index](../README.md) · [Deployment](deployment.md) · [Branding assets](../auth0/branding/ASSETS.md)
+[Infrastructure index](../README.md)
 
 ## OIDC application setup
 
@@ -12,10 +12,8 @@ Run infra commands from `apps/infra`. The API validates issuer/JWKS and audience
 needs the SPA client ID and callback/logout/web-origin URLs for its actual public host.
 `DASHBOARD_DOMAIN` overrides the dashboard host without moving `api.<STACK_DOMAIN>`.
 
-For a new AWS/Auth0 setup, `bootstrap --provision-auth0` creates the SPA and custom API.
-This option is not idempotent: repeating it creates duplicates. The GCP bootstrap path does not
-provision Auth0; create/configure the equivalent identities in the tenant, then store the values
-through [mstage](configuration.md). Other compatible OIDC providers need equivalent manual setup.
+For a new OIDC setup, follow the selected cloud’s [GCP](gcp/identity-and-mail.md) or [AWS](aws/identity-and-mail.md) procedure.
+Other compatible OIDC providers need equivalent manual setup.
 Application invitation mail and the identity provider's verification/reset mail are separate systems.
 
 ## Auth0 email-first login policy
@@ -46,63 +44,18 @@ attribute. Auth0 requires this one-time New Attributes Configuration activation
 before the Management API can configure email verification OTP. Preview fails
 before any writes when the activation is absent.
 
-The policy needs mail to leave the tenant, not a particular vendor: any enabled
-provider that is not Auth0's own built-in sender satisfies it. SES is the one
-backend this repo provisions itself, so it is the one `auth0:configure-email`
-can create; a tenant already sending through Resend, Mailgun or an SMTP relay
-keeps that provider and reconciles only the templates with `--templates-only`
-(below). A GCP-homed stage has no SES identity at all — it sends through the
-relay named by `MAIL_RELAY_HOST` and verifies nothing
-([GCP mail provider](../mdeploy/stack/providers/gcp/mail.ts)).
-
-On the AWS path, use the stack's verified SES identity described in
-[Outbound mail](#outbound-mail). The Api's stored `SMTP_PASSWORD` is
-SigV4-derived and cannot be used as the raw AWS secret required by Auth0's SES
-provider. Create a separate send-only IAM access key for Auth0, scoped to that
-identity, then run the two reconcilers from `apps/infra`. Preview is the
-default and performs no writes:
+Authenticate with the Management API scopes used by preview, apply and rollback:
 
 ```bash
-# Request the Management API scopes used by preview, apply, and rollback.
 npm run auth0:login-policy-login
-
-# Preview the tenant-wide SES provider and checked-in code templates.
-npm run auth0:configure-email -- \
-  --tenant <tenant.auth0.com> \
-  --from <verified-sender@example.com> \
-  --region <ses-aws-region>
-
-# Apply prompts for the SES access key ID and secret access key without echoing
-# either value. For non-interactive use, set AUTH0_EMAIL_SES_ACCESS_KEY_ID and
-# AUTH0_EMAIL_SES_SECRET_ACCESS_KEY only for this process.
-npm run auth0:configure-email -- \
-  --tenant <tenant.auth0.com> \
-  --from <verified-sender@example.com> \
-  --region <ses-aws-region> \
-  --apply
-
-npm run auth0:configure-login -- \
-  --tenant <tenant.auth0.com> \
-  --client-id <boxlite-spa-client-id> \
-  --connection <database-connection-name>
-
-# Inspect the exact tenant/client/connection/resource plan, then apply it:
-npm run auth0:configure-login -- \
-  --tenant <tenant.auth0.com> \
-  --client-id <boxlite-spa-client-id> \
-  --connection <database-connection-name> \
-  --apply
 ```
 
-The email reconciler creates the SES provider only when none exists and creates
-the `verify_email_by_code` and `reset_email_by_code` templates only when they
-are absent. It refuses to replace a different provider or customized template.
-Its mode-`0600` receipt under `.sst/auth0-backups/` contains the SES region and
-sender but never the access key. Rollback disables templates created by the run
-and deletes the provider only when the run created it and its non-secret
-fingerprint is unchanged.
+The policy requires an enabled email provider other than Auth0's built-in sender. Configure tenant mail
+through the [GCP identity/mail guide](gcp/identity-and-mail.md) or
+[AWS identity/mail guide](aws/identity-and-mail.md) before applying the login policy.
+The application's SMTP configuration does not configure Auth0's sender.
 
-For a tenant whose provider is already configured and is not SES, reconcile the
+For a tenant whose provider is already configured, reconcile the
 templates alone. `--templates-only` takes no `--region`, writes nothing to
 `emails/provider`, and never asks for a credential; it refuses unless the
 tenant already has the same enabled non-Auth0 provider the login policy
@@ -119,6 +72,21 @@ npm run auth0:configure-email -- \
   --tenant <tenant.auth0.com> \
   --from <provider-default-from-address> \
   --templates-only \
+  --apply
+```
+
+Preview the login policy, inspect the tenant/client/connection/resource plan, then apply:
+
+```bash
+npm run auth0:configure-login -- \
+  --tenant <tenant.auth0.com> \
+  --client-id <boxlite-spa-client-id> \
+  --connection <database-connection-name>
+
+npm run auth0:configure-login -- \
+  --tenant <tenant.auth0.com> \
+  --client-id <boxlite-spa-client-id> \
+  --connection <database-connection-name> \
   --apply
 ```
 
@@ -157,32 +125,10 @@ retroactively gate independently validating Commerce/Analytics services.
 
 ## Outbound mail
 
-| Stage home | Application mail backend | Setup |
-| --- | --- | --- |
-| GCP | External SMTP relay on port 465 | Set `MAIL_DOMAIN`, `MAIL_RELAY_HOST`, `SMTP_USER` and `SMTP_PASSWORD`; verify the sender with the relay provider |
-| AWS | SES SMTP on port 465 | Declare `MAIL_DOMAIN`, deploy DNS/SES identity, provision SMTP credential, then verify sending |
-| Either, mail disabled | No sender domain | Invitations may be created without email delivery |
-
-GCP's mail provider creates no sender-verification resources and explicitly reports the relay as
-unverified. Configuring the BoxLite relay does not configure Auth0's email provider.
-Use mstage secret stdin for SMTP credentials and redeploy the API after changing its configuration.
-
-On AWS, `npm run bootstrap -- --stage <stage> --provision-ses` creates a send-only IAM user and
-stores `SMTP_USER` plus its SigV4-derived `SMTP_PASSWORD`. Rerunning rotates the credential.
-The operator performs this privileged step; the ordinary deploy role cannot create the IAM user.
-
-The AWS stack publishes the configured sender's DKIM/DMARC records. If the identity is not yet
-verified on first bootstrap, deploy it and rerun the SES provisioning step. Bootstrap requests SES
-production access only after verification, reports an existing review/case, and does not repeatedly
-resubmit a denied case. Check the account's current regional SES sandbox and quota status.
-
-An SES identity is unique to its account/region/domain. Give separate stages their intended domains
-or explicitly design shared ownership. Auth0's SES integration needs a separate raw send-only AWS
-credential; the application's derived SMTP password cannot substitute for it.
-
-Verify application invitations and identity-provider verification/reset emails independently.
-Sources: [GCP mail](../mdeploy/stack/providers/gcp/mail.ts), [AWS mail](../mdeploy/stack/providers/aws/mail.ts),
-[bootstrap](../bootstrap/bootstrap.ts), and [API environment](../mdeploy/src/api-environment.ts).
+Use the [GCP SMTP procedure](gcp/identity-and-mail.md#application-mail) or
+[AWS SES procedure](aws/identity-and-mail.md#application-mail) for the application sender.
+When mail is disabled, invitations may be created without delivery. Verify application invitations
+and identity-provider verification/reset messages independently.
 
 ## Universal Login branding
 

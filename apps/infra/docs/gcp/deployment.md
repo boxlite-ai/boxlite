@@ -54,7 +54,7 @@ npm run mstage env digest -- --stage dev
 npm run mstage env list -- --stage dev --select-group deploy
 ```
 
-Configure OIDC callbacks for the actual dashboard host. See [identity and mail](../identity-and-mail.md)
+Configure OIDC callbacks for the actual dashboard host. See [identity and mail](identity-and-mail.md)
 for Auth0 and optional SMTP; use the [shared branding procedure](../identity-and-mail.md#universal-login-branding).
 Recheck live GitHub Environment reviewers after bootstrap.
 Bootstrap creates prerequisites; it does not deploy application services or prove they are healthy.
