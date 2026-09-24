@@ -164,7 +164,7 @@ pub unsafe extern "C" fn boxlite_options_add_network_allow(
     options_add_network_allow(opts, host)
 }
 
-/// Marks services the box exposes as publicly reachable (the default).
+/// Marks services the box exposes as publicly reachable.
 /// Mirrors `boxlite_options_set_network_enabled` for the inbound direction.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_network_inbound_enabled(opts: *mut CBoxliteOptions) {
@@ -172,8 +172,8 @@ pub unsafe extern "C" fn boxlite_options_set_network_inbound_enabled(opts: *mut 
 }
 
 /// Marks services the box exposes as private — unreachable from outside the
-/// box. Mirrors `boxlite_options_set_network_disabled` for the inbound
-/// direction.
+/// box (the default). Mirrors `boxlite_options_set_network_disabled` for the
+/// inbound direction.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_network_inbound_disabled(opts: *mut CBoxliteOptions) {
     options_set_network_inbound_disabled(opts)

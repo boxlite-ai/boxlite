@@ -367,9 +367,9 @@ describe('BoxService public defaults', () => {
   })
 
   it.each([
-    ['network omitted', undefined, true],
-    ['legacy flat network', { mode: 'enabled' }, true],
-    ['nested outbound only', { outbound: { mode: 'enabled' } }, true],
+    ['network omitted', undefined, false],
+    ['legacy flat network', { mode: 'enabled' }, false],
+    ['nested outbound only', { outbound: { mode: 'enabled' } }, false],
     ['inbound enabled', { inbound: { mode: 'enabled' } }, true],
     ['inbound disabled', { inbound: { mode: 'disabled' } }, false],
   ])('persists REST %s with the expected public value', async (_label, network, expectedPublic) => {

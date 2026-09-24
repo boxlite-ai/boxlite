@@ -374,11 +374,11 @@ describe('REST create inbound default contract', () => {
   const meta = { type: 'body' as const, metatype: CreateBoxDto }
 
   it.each([
-    ['network omitted', undefined, true],
-    ['empty network', {}, true],
-    ['legacy flat outbound enabled', { mode: 'enabled' }, true],
-    ['legacy flat outbound disabled', { mode: 'disabled' }, true],
-    ['nested outbound only', { outbound: { mode: 'enabled' } }, true],
+    ['network omitted', undefined, false],
+    ['empty network', {}, false],
+    ['legacy flat outbound enabled', { mode: 'enabled' }, false],
+    ['legacy flat outbound disabled', { mode: 'disabled' }, false],
+    ['nested outbound only', { outbound: { mode: 'enabled' } }, false],
     ['inbound enabled', { inbound: { mode: 'enabled' } }, true],
     ['inbound disabled', { inbound: { mode: 'disabled' } }, false],
   ])('maps %s to the expected public value', async (_label, network, expectedPublic) => {
@@ -391,8 +391,8 @@ describe('REST create inbound default contract', () => {
     const spec = parse(readFileSync(resolve(__dirname, '../../../../../openapi/box.openapi.yaml'), 'utf8'))
     const schemas = spec.components.schemas
 
-    expect(schemas.CreateBoxRequest.properties.network.default).toEqual({ inbound: { mode: 'enabled' } })
-    expect(schemas.NetworkSpec.properties.inbound.default).toEqual({ mode: 'enabled' })
+    expect(schemas.CreateBoxRequest.properties.network.default).toEqual({ inbound: { mode: 'disabled' } })
+    expect(schemas.NetworkSpec.properties.inbound.default).toEqual({ mode: 'disabled' })
   })
 })
 

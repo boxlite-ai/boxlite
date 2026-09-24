@@ -335,8 +335,8 @@ pub struct BoxOptions {
     /// `network` rather than a field inside it: the two directions are
     /// independent, and `network` keeps its pre-split meaning (egress
     /// only). Same type as `network` — both directions have identical
-    /// shape.
-    #[serde(default)]
+    /// shape. Defaults to `Disabled` (private), unlike `network`.
+    #[serde(default = "NetworkSpec::default_inbound")]
     pub inbound_network: NetworkSpec,
     /// Explicit host publication for the local runtime.
     ///
@@ -534,7 +534,7 @@ impl Default for BoxOptions {
             rootfs: RootfsSpec::default(),
             volumes: Vec::new(),
             network: NetworkSpec::default(),
-            inbound_network: NetworkSpec::default(),
+            inbound_network: NetworkSpec::default_inbound(),
             ports: Vec::new(),
             auto_remove: default_auto_remove(),
             auto_stop: None,
@@ -980,11 +980,20 @@ pub enum NetworkSpec {
     Disabled,
 }
 
+/// The outbound default: full egress.
 impl Default for NetworkSpec {
     fn default() -> Self {
         Self::Enabled {
             allow_net: Vec::new(),
         }
+    }
+}
+
+impl NetworkSpec {
+    /// The inbound default: services the box exposes are private until the
+    /// caller opts in.
+    pub fn default_inbound() -> Self {
+        Self::Disabled
     }
 }
 
