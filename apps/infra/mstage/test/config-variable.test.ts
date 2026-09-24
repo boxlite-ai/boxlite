@@ -119,6 +119,32 @@ test('a stage the file does not declare is refused with the ones it does', () =>
   )
 })
 
+test('a name every object inherits is not a stage, from the variable or the file', () => {
+  /*
+   * Both branches parse their stages out of JSON, so both carry
+   * `Object.prototype`: the variable branch asked `stage in block` and the
+   * file branch asked whether the value was `undefined`, and a function is
+   * neither absent nor undefined. Either one would hand `toString` back as
+   * this stage's declaration.
+   */
+  assert.throws(
+    () =>
+      resolveConfig({
+        app: 'backoffice',
+        stage: 'toString',
+        environment: { [variableNameFor('backoffice')]: JSON.stringify({ dev: { home: 'aws' } }) },
+        cwd: checkout(),
+      }),
+    /holds no stage "toString"\. It holds: dev/,
+    'the carried variable handed back an inherited name',
+  )
+  assert.throws(
+    () => resolveConfig({ app: 'backoffice', stage: 'toString', environment: {}, cwd: checkout() }),
+    /declares no stage "toString"\. Declared: dev, prod/,
+    'the stage file handed back an inherited name',
+  )
+})
+
 test('a variable that is not JSON says so rather than reaching a script', () => {
   assert.throws(
     () =>

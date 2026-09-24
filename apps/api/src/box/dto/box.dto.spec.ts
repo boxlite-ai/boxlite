@@ -19,3 +19,32 @@ describe('BoxDto public identity', () => {
     expect((dto as any).boxId).toBeUndefined()
   })
 })
+
+describe('BoxDto main command exit code', () => {
+  function box(): Box {
+    const box = new Box('us', 'loader')
+    box.id = 'box-1'
+    return box
+  }
+
+  // The code is read from the runner and handed in, so this conversion's only
+  // job is to keep 0 a value: it is what separates a command that succeeded
+  // from one that did not.
+  it.each([
+    ['a main command ended by a signal', 137, 137],
+    ['a main command that succeeded', 0, 0],
+  ])('reports the exit code of %s', (_case, read, expected) => {
+    expect(BoxDto.fromBox(box(), 'https://proxy.invalid', null, read).exitCode).toBe(expected)
+  })
+
+  // Absence is the only way to say "not recorded", and it has to survive
+  // serialization as a missing field — that is what the generated clients type
+  // against. A runtime that recorded none and a runner that could not be read
+  // both arrive here the same way, as nothing.
+  it('omits the exit code when there is none', () => {
+    const dto = BoxDto.fromBox(box(), 'https://proxy.invalid', null, undefined)
+
+    expect(dto.exitCode).toBeUndefined()
+    expect(JSON.parse(JSON.stringify(dto))).not.toHaveProperty('exitCode')
+  })
+})

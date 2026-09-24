@@ -6,19 +6,26 @@ name: Build Box Images
 on:
   pull_request:
     paths:
-      - 'apps/box-images/**' # Dockerfiles, VERSION and the build script define image contents.
+      - 'apps/box-images/*.Dockerfile'
+      - 'apps/box-images/build.sh'
+      - 'apps/box-images/VERSION'
       - '.dockerignore' # Docker context changes can change what lands in the image.
       - '.github/workflows/build-box-images.yml' # Workflow changes should validate themselves.
+      - '.github/actions/setup-buildx/**'
   push:
     branches: [main] # Catch anything that reached main without a PR run.
     paths:
-      - 'apps/box-images/**'
+      - 'apps/box-images/*.Dockerfile'
+      - 'apps/box-images/build.sh'
+      - 'apps/box-images/VERSION'
       - '.dockerignore'
       - '.github/workflows/build-box-images.yml'
+      - '.github/actions/setup-buildx/**'
   workflow_dispatch:
 
 permissions:
   contents: read # Checkout only needs repository read access; this job never pushes.
+  pull-requests: read
 
 concurrency:
   group: build-box-images-${{ github.ref }} # Serialize per branch/ref.
@@ -26,7 +33,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build box images (no publish)
+    name: Build affected box images (no publish)
     runs-on: ubuntu-latest
 
     steps:
@@ -35,10 +42,31 @@ jobs:
         with:
           persist-credentials: false # Later steps do not need git credentials.
 
-      - uses: ./.github/actions/setup-buildx
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          filters: |
+            shared:
+              - 'apps/box-images/build.sh'
+              - 'apps/box-images/VERSION'
+              - '.dockerignore'
+              - '.github/workflows/build-box-images.yml'
+              - '.github/actions/setup-buildx/**'
+            base:
+              - 'apps/box-images/base.Dockerfile'
+            python:
+              - 'apps/box-images/python.Dockerfile'
+            node:
+              - 'apps/box-images/node.Dockerfile'
 
-      - name: Build all flavors for both architectures
+      - uses: ./.github/actions/setup-buildx
+        if: github.event_name == 'workflow_dispatch' || steps.filter.outputs.changes != '[]'
+
+      - name: Build affected flavors for both architectures
+        if: github.event_name == 'workflow_dispatch' || steps.filter.outputs.changes != '[]'
         env:
+          IMAGES: ${{ (github.event_name == 'workflow_dispatch' || steps.filter.outputs.shared == 'true') && 'base,python,node' || join(fromJson(steps.filter.outputs.changes), ',') }}
           PUSH: '0' # PUSH=0 with two platforms validates every build step without publishing.
           PLATFORMS: linux/amd64,linux/arm64 # Both published architectures must keep building.
         run: bash apps/box-images/build.sh

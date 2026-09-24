@@ -105,7 +105,7 @@ import {
 import { validateDotenvSyntax } from '../deployment/key-policy.js'
 import { promptSecret, requireNonEmptySecret } from './secret-prompt.js'
 import { customApiArgs, spaApplicationArgs, tenantSettingsArgs } from './auth0.js'
-import { publicHostsFor } from '../mdeploy/stack/hosts.js'
+import { publicHostsFor } from 'mdeploy/hosts'
 import {
   environmentApiPath,
   githubEnvironmentPayload,
@@ -119,7 +119,7 @@ import { homeFor, loadConfig, type MstageConfig } from 'mstage/config'
 import { resolveHome } from 'mstage/home'
 import { resolveScope } from 'mstage/scope'
 import { loadBuildConfig, registryFor } from 'mbuild/config'
-import { bootstrapGcp, type GitHubRepository } from './gcp.js'
+import { bootstrapGcp, promotionSourceFor, type GitHubRepository } from './gcp.js'
 import { bootstrapAws } from './aws.js'
 
 // The one stage that must never end up with an unreviewed deploy path. Matches
@@ -1140,6 +1140,7 @@ async function bootstrapGcpStage({
     // and mbuild refuses to publish into a repository that contradicts it.
     immutableTags: buildConfig.stages[stage]!.registry.immutableTags,
     github,
+    promotionSource: promotionSourceFor({ config, stage }),
     log: console.log,
   })
 
@@ -1177,7 +1178,7 @@ async function bootstrapGcpStage({
   )
 
   console.log(
-    `done. Preview next: gh workflow run mdeploy.yml --repo ${repo} --ref main -f stage=${stage} -f apply=false`,
+    `done. Preview next: gh workflow run mdeploy-all.yml --repo ${repo} --ref main -f stage=${stage} -f apply=false`,
   )
 }
 

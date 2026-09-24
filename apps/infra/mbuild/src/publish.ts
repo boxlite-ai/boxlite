@@ -51,6 +51,25 @@ export class ScanRefusedError extends PublishError {
   }
 }
 
+/**
+ * A stage that does not hold what was asked about — the one verify answer a
+ * caller may act on rather than stop for.
+ *
+ * `isPublished` already separates "not there" from "could not tell": a denied
+ * read, an expired token or an unreachable registry throws `PublishError`. A
+ * caller that reads both as one exit status loses that separation again, and a
+ * release gate asking "does dev already hold this version" would take a denied
+ * read for a free slot and wave through a version it never read. Carried out
+ * to a distinct exit code in `bin/mbuild.ts`, for the same reason
+ * `ScanRefusedError` is: the caller that has to tell them apart is a shell.
+ */
+export class NotPublishedError extends PublishError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'NotPublishedError'
+  }
+}
+
 /** One external command. Non-zero exit is reported, never thrown away. */
 export type RunResult = { code: number; stdout: string; stderr: string }
 /**
@@ -672,7 +691,7 @@ export const verifyPublished = async ({
     // The address, not the artifact name: it carries the repository and tag a
     // person compares against the publish that should have written them.
     const addresses = missing.map((artifact) => addressFor({ config, registry, artifact, tag }))
-    throw new PublishError(`${stage} does not hold ${addresses.join(', ')}`)
+    throw new NotPublishedError(`${stage} does not hold ${addresses.join(', ')}`)
   }
   return artifacts.map((artifact) => ({ artifact, address: addressFor({ config, registry, artifact, tag }) }))
 }

@@ -280,7 +280,7 @@ export class BoxController {
   ): Promise<BoxDto> {
     const box = await this.boxService.findOneByIdOrName(boxIdOrName, authContext.organizationId)
 
-    return this.boxService.toBoxDto(box)
+    return this.boxService.toBoxDtoWithExitCode(box)
   }
 
   @Post(':boxIdOrName/recover')

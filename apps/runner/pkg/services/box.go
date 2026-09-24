@@ -25,13 +25,11 @@ func NewBoxService(logger *slog.Logger, boxlite *blclient.Client) *BoxService {
 }
 
 func (s *BoxService) GetBoxInfo(ctx context.Context, boxId string) (*models.BoxInfo, error) {
-	boxState, err := s.boxlite.GetBoxState(ctx, boxId)
+	info, err := s.boxlite.GetBoxInfo(ctx, boxId)
 	if err != nil {
-		s.log.Warn("Failed to get box state", "boxId", boxId, "error", err)
+		s.log.Warn("Failed to get box info", "boxId", boxId, "error", err)
 		return nil, err
 	}
 
-	return &models.BoxInfo{
-		BoxState: boxState,
-	}, nil
+	return &info, nil
 }

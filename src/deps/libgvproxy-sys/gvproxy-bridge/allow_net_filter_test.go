@@ -2,7 +2,6 @@ package main
 
 import (
 	"net"
-	"strings"
 	"sync"
 	"testing"
 
@@ -11,41 +10,11 @@ import (
 
 // testFilter builds a filter exactly the way gvproxy_create does — via the
 // production newAllowNetFilter, which owns the set of always-allowed internal
-// addresses — but injects deterministic stub resolutions instead of real DNS
-// lookups so the egress pin is testable offline. Going through the production
-// constructor keeps that address set from drifting between tests and a box.
+// addresses — so that address set cannot drift between tests and a box.
 func testFilter(rules ...string) *AllowNetFilter {
 	cfg := testGvproxyConfig()
 	cfg.AllowNet = rules
-	exact, wildcard := stubResolvedHostIPs(rules)
-	return newAllowNetFilter(cfg, exact, wildcard)
-}
-
-// stubResolvedHostIPs assigns each hostname rule a deterministic IPv4 so
-// AllowHostToIP can be exercised without real DNS. Exact hosts → 10.0.0.1;
-// wildcard suffixes → 10.0.0.2. Keys mirror buildAllowNet (lowercased).
-func stubResolvedHostIPs(rules []string) (map[string][]net.IP, map[string][]net.IP) {
-	exact := make(map[string][]net.IP)
-	wildcard := make(map[string][]net.IP)
-	for _, rule := range rules {
-		rule = strings.TrimSpace(rule)
-		if rule == "" || net.ParseIP(rule) != nil {
-			continue
-		}
-		if _, _, err := net.ParseCIDR(rule); err == nil {
-			continue
-		}
-		host := rule
-		if h, _, err := net.SplitHostPort(rule); err == nil {
-			host = h
-		}
-		if strings.HasPrefix(host, "*.") {
-			wildcard["."+strings.ToLower(host[2:])] = []net.IP{net.ParseIP("10.0.0.2").To4()}
-			continue
-		}
-		exact[strings.ToLower(host)] = []net.IP{net.ParseIP("10.0.0.1").To4()}
-	}
-	return exact, wildcard
+	return newAllowNetFilter(cfg)
 }
 
 func TestAllowNetFilter_ExactIP(t *testing.T) {
@@ -184,70 +153,9 @@ func TestResolveTCPDestination_HostAliasUsesPreNATIPForPolicy(t *testing.T) {
 	}
 }
 
-// TestAllowHostToIP_BlocksDomainFronting is the reproducer for the
-// domain-fronting bypass: a guest dialing an attacker IP while presenting an
-// allowed hostname must be rejected. With the old MatchesHostname-only gate,
-// this hostname/IP decoupling let the connection through.
-func TestAllowHostToIP_BlocksDomainFronting(t *testing.T) {
-	f := testFilter("allowed.example")
-	allowed := net.ParseIP("10.0.0.1") // stubResolvedHostIPs pins allowed.example here
-	attacker := net.ParseIP("203.0.113.7")
-
-	assertTrue(t, f.AllowHostToIP("allowed.example", allowed), "hostname + its resolved IP allowed")
-	assertFalse(t, f.AllowHostToIP("allowed.example", attacker), "hostname + attacker IP blocked (domain fronting)")
-}
-
-func TestAllowHostToIP_ExactHostname(t *testing.T) {
-	f := testFilter("api.example.com")
-	assertTrue(t, f.AllowHostToIP("api.example.com", net.ParseIP("10.0.0.1")), "resolved IP allowed")
-	assertFalse(t, f.AllowHostToIP("api.example.com", net.ParseIP("10.0.0.2")), "unresolved IP blocked")
-	assertFalse(t, f.AllowHostToIP("other.example.com", net.ParseIP("10.0.0.1")), "unlisted hostname blocked")
-}
-
-func TestAllowHostToIP_Wildcard(t *testing.T) {
-	f := testFilter("*.example.com")
-	// stubResolvedHostIPs pins wildcard suffixes to 10.0.0.2.
-	assertTrue(t, f.AllowHostToIP("foo.example.com", net.ParseIP("10.0.0.2")), "wildcard subdomain + base IP allowed")
-	assertFalse(t, f.AllowHostToIP("foo.example.com", net.ParseIP("203.0.113.7")), "wildcard subdomain + attacker IP blocked")
-	assertFalse(t, f.AllowHostToIP("evil.net", net.ParseIP("10.0.0.2")), "non-matching hostname blocked")
-}
-
-func TestAllowHostToIP_OverlappingWildcards_Union(t *testing.T) {
-	// a.sub.example.com matches both *.example.com and *.sub.example.com. The
-	// pin must accept destIP from either rule, not just whichever suffix is
-	// listed first in wildcardSuffixes.
-	f := NewAllowNetFilter([]string{"*.example.com", "*.sub.example.com"}, "192.168.127.1", "192.168.127.2")
-	f.SetResolvedHostIPs(nil, map[string][]net.IP{
-		".example.com":     {net.ParseIP("10.0.0.1").To4()},
-		".sub.example.com": {net.ParseIP("10.0.0.9").To4()},
-	})
-	assertTrue(t, f.AllowHostToIP("a.sub.example.com", net.ParseIP("10.0.0.9")), "narrower wildcard's IP allowed")
-	assertTrue(t, f.AllowHostToIP("a.sub.example.com", net.ParseIP("10.0.0.1")), "broader wildcard's IP allowed")
-	assertFalse(t, f.AllowHostToIP("a.sub.example.com", net.ParseIP("203.0.113.7")), "unresolved IP blocked")
-}
-
-func TestAllowHostToIP_ExactRuleDoesNotShadowWildcard(t *testing.T) {
-	// An exact rule whose DNS failed (empty pin) must not shadow a wildcard
-	// that also covers the hostname: the union of matching rules still applies.
-	f := NewAllowNetFilter([]string{"api.example.com", "*.example.com"}, "192.168.127.1", "192.168.127.2")
-	f.SetResolvedHostIPs(
-		map[string][]net.IP{"api.example.com": nil},
-		map[string][]net.IP{".example.com": {net.ParseIP("10.0.0.1").To4()}},
-	)
-	assertTrue(t, f.AllowHostToIP("api.example.com", net.ParseIP("10.0.0.1")), "wildcard authorizes when exact rule has no pin")
-	assertFalse(t, f.AllowHostToIP("api.example.com", net.ParseIP("203.0.113.7")), "unresolved IP still blocked")
-}
-
-func TestAllowHostToIP_EmptyOrMissingHostname(t *testing.T) {
-	f := testFilter("api.example.com")
-	assertFalse(t, f.AllowHostToIP("", net.ParseIP("10.0.0.1")), "empty hostname blocked")
-	assertFalse(t, f.AllowHostToIP("api.example.com", nil), "nil IP blocked")
-}
-
-func TestAllowHostToIP_IPOnlyRulesUnaffected(t *testing.T) {
-	// IP/CIDR-only allowlists have no hostname rules, so the pin is never
-	// consulted; MatchesIP continues to govern (decideTCPRoute never routes
-	// hostname inspection without HasHostnameRules).
+// IP/CIDR-only allowlists have no hostname rules, so decideTCPRoute never
+// routes them to inspection; MatchesIP alone governs.
+func TestAllowNetFilter_IPOnlyRulesNeverInspect(t *testing.T) {
 	f := testFilter("1.2.3.4")
 	assertFalse(t, f.HasHostnameRules(), "IP-only allowlist has no hostname rules")
 	assertTrue(t, f.MatchesIP(net.ParseIP("1.2.3.4")), "IP rule still matches")
@@ -265,4 +173,30 @@ func assertFalse(t *testing.T, v bool, msg string) {
 	if v {
 		t.Errorf("expected false: %s", msg)
 	}
+}
+
+func TestCanonicalHostname(t *testing.T) {
+	cases := map[string]string{
+		"api.example.com":   "api.example.com",
+		"API.Example.COM.":  "api.example.com",
+		" api.example.com ": "api.example.com",
+		"":                  "",
+		".":                 "",
+		"198.51.100.9":      "",
+		"[::1]":             "",
+		"::1":               "",
+	}
+	for in, want := range cases {
+		if got := canonicalHostname(in); got != want {
+			t.Errorf("canonicalHostname(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// An IP literal spelled as a hostname rule is not a hostname rule: it must
+// neither match itself by name nor turn on hostname inspection.
+func TestAllowNetFilter_IPLiteralHostHeaderNeverMatchesHostnameRules(t *testing.T) {
+	f := testFilter("api.example.com", "*.example.net")
+	assertFalse(t, f.MatchesHostname("198.51.100.9"), "IP literal is not a hostname")
+	assertFalse(t, f.MatchesHostname("[::1]"), "bracketed IPv6 literal is not a hostname")
 }

@@ -157,7 +157,7 @@ Needs an AWS account, a Cloudflare-managed domain, and Docker. Full guide → [`
 ## Next steps
 
 - More real-world scenarios → [Examples](./examples/)
-- How images, disks, networking, and isolation work → [Architecture](./docs/architecture/)
+- How images, disks, networking, and isolation work → [Concepts](./docs/concepts/)
 
 ## Features
 
@@ -181,7 +181,7 @@ Agent frameworks run on BoxLite:
 
 ## Architecture
 
-How BoxLite embeds a runtime and runs OCI containers inside micro-VMs. Details → [Architecture](./docs/architecture/).
+How BoxLite embeds a runtime and runs OCI containers inside micro-VMs. Details → [Concepts](./docs/concepts/).
 
 <details>
 <summary>Show diagram</summary>
@@ -222,7 +222,7 @@ How BoxLite embeds a runtime and runs OCI containers inside micro-VMs. Details �
 - [API & CLI Reference](./docs/reference/) — SDK API references (Python, Node.js, Rust, C), the `boxlite` CLI reference, and the REST API contract ([`openapi/box.openapi.yaml`](./openapi/box.openapi.yaml))
 - [Using BoxLite with AI agents](./docs/guides/ai-agent-integration.md) — concurrency, timeouts, security, file transfer
 - [Examples](./examples/) — Sample code for common use cases
-- [Architecture](./docs/architecture/) — How BoxLite works under the hood
+- [Concepts](./docs/concepts/) — How BoxLite works
 
 ## Supported Platforms
 

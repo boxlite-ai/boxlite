@@ -73,6 +73,8 @@ type Box struct {
 	UpdatedAt *string `json:"updatedAt,omitempty"`
 	// The timestamp of the last recorded activity on the box, absent when no activity has been recorded yet
 	LastActivityAt *string `json:"lastActivityAt,omitempty"`
+	// How the box's main command ended, present once the box has stopped and the runtime recorded it: its own code when it exited, or `128 + n` when a signal ended it. Stopping a box signals that command, so a stop is recorded here too. `0` is a real value, so a client must tell the missing field from a zero one. Only reading a single box carries it: this schema is shared with the box list and with the replies that change a box, which leave it out whether or not one was recorded.
+	ExitCode *int32 `json:"exitCode,omitempty"`
 	// The class of the box
 	// Deprecated
 	Class *string `json:"class,omitempty"`
@@ -846,6 +848,38 @@ func (o *Box) SetLastActivityAt(v string) {
 	o.LastActivityAt = &v
 }
 
+// GetExitCode returns the ExitCode field value if set, zero value otherwise.
+func (o *Box) GetExitCode() int32 {
+	if o == nil || IsNil(o.ExitCode) {
+		var ret int32
+		return ret
+	}
+	return *o.ExitCode
+}
+
+// GetExitCodeOk returns a tuple with the ExitCode field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *Box) GetExitCodeOk() (*int32, bool) {
+	if o == nil || IsNil(o.ExitCode) {
+		return nil, false
+	}
+	return o.ExitCode, true
+}
+
+// HasExitCode returns a boolean if a field has been set.
+func (o *Box) HasExitCode() bool {
+	if o != nil && !IsNil(o.ExitCode) {
+		return true
+	}
+
+	return false
+}
+
+// SetExitCode gets a reference to the given int32 and assigns it to the ExitCode field.
+func (o *Box) SetExitCode(v int32) {
+	o.ExitCode = &v
+}
+
 // GetClass returns the Class field value if set, zero value otherwise.
 // Deprecated
 func (o *Box) GetClass() string {
@@ -1031,6 +1065,9 @@ func (o Box) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.LastActivityAt) {
 		toSerialize["lastActivityAt"] = o.LastActivityAt
 	}
+	if !IsNil(o.ExitCode) {
+		toSerialize["exitCode"] = o.ExitCode
+	}
 	if !IsNil(o.Class) {
 		toSerialize["class"] = o.Class
 	}
@@ -1123,6 +1160,7 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "createdAt")
 		delete(additionalProperties, "updatedAt")
 		delete(additionalProperties, "lastActivityAt")
+		delete(additionalProperties, "exitCode")
 		delete(additionalProperties, "class")
 		delete(additionalProperties, "daemonVersion")
 		delete(additionalProperties, "runnerId")

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { FLAG_OPTIONS, OPTION_NAMES, VALUE_OPTIONS } from '../src/cli/argv.ts'
 import { OPTION_HELP, moduleUsage } from '../src/cli/help.ts'
-import { run } from '../src/cli/run.ts'
+import { LOGIN_PROVIDER_NAMES, run } from '../src/cli/run.ts'
 
 const helpFor = async (module: string) => {
   const lines: string[] = []
@@ -47,7 +47,10 @@ test('login lists every provider mstage can check, not only the enabled ones', a
   // .mstage.config.json selects which a repository requires; it does not define the
   // set, so a provider this repository has not enabled is still documented.
   const { text } = await helpFor('login')
-  for (const provider of ['aws', 'github', 'auth0']) {
+  // Read from the registry help is rendered from, the way the option test above
+  // reads `OPTION_NAMES`: a list written out here is one short of the registry
+  // the day a provider is added, under a name claiming it is the registry.
+  for (const provider of LOGIN_PROVIDER_NAMES) {
     assert.match(text, new RegExp(`^ {2}${provider}\\s{2,}\\S`, 'm'), `${provider} is missing from login help`)
   }
   assert.match(text, /omit the command to act on every provider any stage declares/)

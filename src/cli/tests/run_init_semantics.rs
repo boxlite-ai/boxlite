@@ -1,6 +1,6 @@
 //! Docker-parity semantics for `boxlite run IMAGE [COMMAND...]`.
 //!
-//! Contract under test (see docs/investigations/run-command-semantics-fix.md):
+//! Contract under test (see docs/contributing/investigations/run-command-semantics-fix.md):
 //! the user COMMAND replaces the image CMD and — composed with the image
 //! ENTRYPOINT — becomes the container's init (PID 1). The box's lifecycle
 //! follows init: when it exits, the box stops with init's exit code, and

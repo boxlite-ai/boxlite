@@ -7,7 +7,7 @@ use boxlite::runtime::options::{BoxOptions, BoxliteOptions, NetworkSpec};
 use boxlite::{BoxCommand, BoxliteRuntime};
 use futures::StreamExt;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc;
 use std::thread;
 
@@ -240,6 +240,37 @@ fn wget_url_command(url: &str) -> String {
     format!("wget -O- --timeout=5 {url} 2>&1; printf '\\nEXIT:%s\\n' $?")
 }
 
+/// Confirms the endpoint a negative allowlist probe targets is actually up.
+///
+/// A refused connection inside the box only implicates the allowlist if the
+/// destination answers when nothing is filtering. An outage or a closed port
+/// there fails exactly the way a blocked dial does, so without this the
+/// negative assertion passes while filtering is broken. Returns false when the
+/// host cannot supply the precondition, which the caller turns into a skip.
+fn unlisted_endpoint_is_up(test: &str, host: &str, port: u16) -> bool {
+    let addrs = match (host, port).to_socket_addrs() {
+        Ok(addrs) => addrs.filter(SocketAddr::is_ipv4).collect::<Vec<_>>(),
+        Err(err) => {
+            skip_missing_egress(test, &format!("cannot resolve {host}:{port}: {err}"));
+            return false;
+        }
+    };
+    if addrs
+        .iter()
+        .any(|addr| TcpStream::connect_timeout(addr, Duration::from_secs(5)).is_ok())
+    {
+        return true;
+    }
+    skip_missing_egress(
+        test,
+        &format!(
+            "{host}:{port} is unreachable from the host, so a refusal inside \
+             the box would prove nothing"
+        ),
+    );
+    false
+}
+
 const UDP_PROBE_MARKER: &str = "boxlite-udp-allow-net-probe";
 const UDP_PROBE_EXIT_PREFIX: &str = "UDP_PROBE_EXIT:";
 
@@ -251,6 +282,14 @@ fn nc_udp_command(host: &str, port: u16) -> String {
         "printf %s {UDP_PROBE_MARKER} | nc -u -w 2 {host} {port}; \
          printf '\\n{UDP_PROBE_EXIT_PREFIX}%s\\n' $?"
     )
+}
+
+/// TCP reachability, reported with its own exit status for the same reason
+/// `nc_udp_command` does: a missing `nc` must not read as a blocked
+/// connection. Unlike the UDP probe, `nc -z` does reflect whether the
+/// connection was established.
+fn nc_tcp_command(host: &str, port: u16) -> String {
+    format!("nc -w 3 -z {host} {port}; printf '\\nTCP_PROBE_EXIT:%s\\n' $?")
 }
 
 /// BusyBox `nc -u -w` exits 0 once the wait elapses, whether or not anything
@@ -390,9 +429,58 @@ fn start_host_http_server_expect_no_connection() -> (u16, mpsc::Sender<()>, thre
     (port, stop_tx, handle)
 }
 
+/// The container's resolver is the gateway, where gvproxy serves DNS. The
+/// guest writes that address as a literal because the guest agent cannot
+/// depend on the host crate, so this is what keeps the two from drifting
+/// apart silently.
 #[tokio::test]
 #[ignore = "requires VM runtime (run with make test)"]
-async fn dns_sinkhole_blocks_unlisted_host() {
+async fn container_resolver_is_the_gateway() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let litebox = runtime.create(common::alpine_opts(), None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    let out = run_stdout(&litebox, "cat", &["/etc/resolv.conf"]).await;
+    assert!(
+        out.contains(&format!(
+            "nameserver {}",
+            boxlite::net::constants::GATEWAY_IP
+        )),
+        "resolv.conf should name the gateway, got: {out}"
+    );
+
+    litebox.stop().await.unwrap();
+}
+
+/// allow_net is enforced when the gateway dials, not by filtering DNS. An
+/// unlisted name therefore resolves like any other — the first assertion pins
+/// that, checking the lookup succeeded and returned an address rather than
+/// merely lacking the old sinkhole answer — and still cannot be reached. Two
+/// controls keep the negative honest: the preflight shows example.org answers
+/// when nothing filters, and the allowed-host probe in between shows this box
+/// has a working network. Without them the final assertion would also pass on
+/// a broken box, or against a host that is simply down.
+///
+/// A query for an unlisted name does leave the box and reach the host
+/// resolver. That is a known, accepted consequence of treating allow_net as a
+/// connection-layer control.
+#[tokio::test]
+#[ignore = "requires VM runtime (run with make test)"]
+async fn unlisted_host_resolves_but_connection_is_refused() {
+    if !unlisted_endpoint_is_up(
+        "unlisted_host_resolves_but_connection_is_refused",
+        "example.org",
+        80,
+    ) {
+        return;
+    }
+
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -410,19 +498,65 @@ async fn dns_sinkhole_blocks_unlisted_host() {
     let litebox = runtime.create(opts, None).await.unwrap();
     litebox.start().await.unwrap();
 
-    // Blocked host should resolve to 0.0.0.0 (DNS sinkhole)
-    let out = run_stdout(&litebox, "nslookup", &["evil.com"]).await;
+    // DNS is unfiltered: the unlisted name resolves, and to a real address.
+    // Both halves are needed — `nslookup` failing outright also contains no
+    // "0.0.0.0", so the absence of the sinkhole answer proves nothing alone.
+    let dns = run_stdout(
+        &litebox,
+        "sh",
+        &["-c", "nslookup example.org; printf '\\nEXIT:%s\\n' $?"],
+    )
+    .await;
     assert!(
-        out.contains("0.0.0.0") || out.contains("NXDOMAIN") || out.contains("server can't find"),
-        "blocked host should be sinkholed, got: {out}"
+        dns.contains("EXIT:0") && dns.contains("Address") && !dns.contains("0.0.0.0"),
+        "allow_net no longer filters DNS; an unlisted name must resolve to a real \
+         address, got: {dns}"
+    );
+
+    // Control, same box: the listed host is reachable, so a failure below is
+    // the allowlist and not a dead network.
+    let allowed = run_stdout(
+        &litebox,
+        "sh",
+        &["-c", &wget_url_command("http://example.com/")],
+    )
+    .await;
+    assert!(
+        allowed.contains("EXIT:0"),
+        "listed host must stay reachable, got: {allowed}"
+    );
+
+    // Subject: the unlisted host is refused when the gateway dials.
+    let blocked = run_stdout(
+        &litebox,
+        "sh",
+        &["-c", &wget_url_command("http://example.org/")],
+    )
+    .await;
+    assert!(
+        blocked.contains("EXIT:") && !blocked.contains("EXIT:0"),
+        "unlisted host must be refused at connect time, got: {blocked}"
     );
 
     litebox.stop().await.unwrap();
 }
 
+/// A wildcard rule covers each subdomain on its own. Asserted at the
+/// connection layer: which address a subdomain resolves to is the gateway's
+/// business now, and is covered in the bridge's own tests. The subdomain probe
+/// is the in-box control for the negative; the preflight is what rules out a
+/// refusal that is really example.org being down.
 #[tokio::test]
 #[ignore = "requires VM runtime (run with make test)"]
-async fn dns_sinkhole_allows_listed_host() {
+async fn wildcard_allows_subdomain_connection_not_other_domains() {
+    if !unlisted_endpoint_is_up(
+        "wildcard_allows_subdomain_connection_not_other_domains",
+        "example.org",
+        80,
+    ) {
+        return;
+    }
+
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -432,7 +566,7 @@ async fn dns_sinkhole_allows_listed_host() {
 
     let opts = BoxOptions {
         network: NetworkSpec::Enabled {
-            allow_net: vec!["example.com".into()],
+            allow_net: vec!["*.example.com".into()],
         },
         ..common::alpine_opts()
     };
@@ -440,16 +574,35 @@ async fn dns_sinkhole_allows_listed_host() {
     let litebox = runtime.create(opts, None).await.unwrap();
     litebox.start().await.unwrap();
 
-    // Allowed host should resolve to a real IP (not 0.0.0.0)
-    let out = run_stdout(&litebox, "nslookup", &["example.com"]).await;
+    let sub = run_stdout(
+        &litebox,
+        "sh",
+        &["-c", &wget_url_command("http://www.example.com/")],
+    )
+    .await;
     assert!(
-        !out.contains("0.0.0.0"),
-        "allowed host should resolve to real IP, got: {out}"
+        sub.contains("EXIT:0"),
+        "a subdomain under the wildcard must be reachable, got: {sub}"
+    );
+
+    let other = run_stdout(
+        &litebox,
+        "sh",
+        &["-c", &wget_url_command("http://example.org/")],
+    )
+    .await;
+    assert!(
+        other.contains("EXIT:") && !other.contains("EXIT:0"),
+        "a domain outside the wildcard must be refused, got: {other}"
     );
 
     litebox.stop().await.unwrap();
 }
 
+/// An empty allowlist is full access. Asserted with a direct-IP connection,
+/// which is exactly what a non-empty allowlist forbids and what a name lookup
+/// cannot distinguish; this is the negative twin of
+/// `tcp_filter_blocks_direct_ip_connection`.
 #[tokio::test]
 #[ignore = "requires VM runtime (run with make test)"]
 async fn empty_allowlist_allows_all() {
@@ -468,18 +621,29 @@ async fn empty_allowlist_allows_all() {
     let litebox = runtime.create(opts, None).await.unwrap();
     litebox.start().await.unwrap();
 
-    let out = run_stdout(&litebox, "nslookup", &["example.com"]).await;
+    let out = run_stdout(&litebox, "sh", &["-c", &nc_tcp_command("1.1.1.1", 443)]).await;
     assert!(
-        !out.contains("0.0.0.0"),
-        "empty allowlist should allow all, got: {out}"
+        out.contains("TCP_PROBE_EXIT:0"),
+        "an empty allowlist must permit a direct-IP connection, got: {out}"
     );
 
     litebox.stop().await.unwrap();
 }
 
+/// A hostname-only allowlist authorizes no address, so the same fetch by IP is
+/// refused. Two controls keep the negative honest, as in
+/// `unlisted_host_resolves_but_connection_is_refused`: the preflight shows
+/// 8.8.8.8:80 answers when nothing filters, and the listed-host probe shows
+/// this box has a working network and a working `wget` — the old assertion
+/// accepted empty stdout, which a missing `wget` produces just as readily as a
+/// blocked dial.
 #[tokio::test]
 #[ignore = "requires VM runtime (run with make test)"]
 async fn tcp_filter_blocks_direct_ip_connection() {
+    if !unlisted_endpoint_is_up("tcp_filter_blocks_direct_ip_connection", "8.8.8.8", 80) {
+        return;
+    }
+
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -498,15 +662,25 @@ async fn tcp_filter_blocks_direct_ip_connection() {
     let litebox = runtime.create(opts, None).await.unwrap();
     litebox.start().await.unwrap();
 
-    // Direct IP connection to Google DNS (8.8.8.8) should be blocked by TCP filter
-    let out = run_stdout(
+    let allowed = run_stdout(
         &litebox,
-        "wget",
-        &["-q", "-O-", "--timeout=3", "http://8.8.8.8/"],
+        "sh",
+        &["-c", &wget_url_command("http://example.com/")],
     )
     .await;
     assert!(
-        out.is_empty() || out.contains("error") || out.contains("timed out"),
+        allowed.contains("EXIT:0"),
+        "listed host must stay reachable, got: {allowed}"
+    );
+
+    let out = run_stdout(
+        &litebox,
+        "sh",
+        &["-c", &wget_url_command("http://8.8.8.8/")],
+    )
+    .await;
+    assert!(
+        out.contains("EXIT:") && !out.contains("EXIT:0"),
         "direct IP should be blocked by TCP filter, got: {out}"
     );
 

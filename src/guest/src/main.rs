@@ -113,7 +113,7 @@ fn main() -> BoxliteResult<()> {
 
     // Start zygote BEFORE tokio creates any threads.
     // The zygote handles all clone3() calls in a single-threaded context,
-    // avoiding musl's __malloc_lock deadlock. See docs/investigations/concurrent-exec-deadlock.md
+    // avoiding musl's __malloc_lock deadlock. See docs/contributing/investigations/concurrent-exec-deadlock.md
     use container::zygote::{Zygote, ZYGOTE};
     let zygote = Zygote::start()?;
     ZYGOTE.set(zygote).expect("zygote already initialized");

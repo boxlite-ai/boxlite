@@ -4,6 +4,7 @@
  */
 
 import { ExecutionContext } from '@nestjs/common'
+import { GUARDS_METADATA, PATH_METADATA } from '@nestjs/common/constants'
 import { Reflector } from '@nestjs/core'
 import { SystemActionGuard } from '../../auth/system-action.guard'
 import { RequiredApiRole, RequiredSystemRole } from '../../common/decorators/required-role.decorator'
@@ -59,5 +60,23 @@ describe('OrganizationController suspend/unsuspend, evaluated through the real g
     const request = { user: { role: SystemRole.USER } }
 
     await expect(guard().canActivate(httpContext(request, method))).resolves.toBe(false)
+  })
+})
+
+describe('OrganizationController referral code endpoint', () => {
+  const handler = OrganizationController.prototype.getReferralCode
+
+  it('requires a user role and organization access on the referral-code route', () => {
+    const reflector = new Reflector()
+    const guards = Reflect.getMetadata(GUARDS_METADATA, handler) as Array<{ name: string }>
+
+    expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe('/:organizationId/referral-code')
+    expect(reflector.get(RequiredApiRole, handler)).toEqual([SystemRole.USER, SystemRole.ADMIN])
+    expect(guards.map((guard) => guard.name)).toEqual([
+      'CombinedAuthGuard',
+      'AuthenticatedRateLimitGuard',
+      'SystemActionGuard',
+      'OrganizationActionGuard',
+    ])
   })
 })

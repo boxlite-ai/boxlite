@@ -17,12 +17,18 @@ const organization = (overrides: Partial<Organization> = {}): Organization =>
     ...overrides,
   })
 
-// unsuspend() only ever touches organizationRepository; the rest of the
-// constructor's dependencies are unused stubs to satisfy DI.
 const makeService = (found: Organization | null) => {
+  const entityManager = {
+    query: jest.fn().mockResolvedValue([]),
+    findOne: jest.fn().mockResolvedValue(found),
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
+  }
   const organizationRepository = {
     findOne: jest.fn().mockResolvedValue(found),
     save: jest.fn().mockImplementation((org: Organization) => Promise.resolve(org)),
+    manager: {
+      transaction: jest.fn((callback) => callback(entityManager)),
+    },
   }
   const configService = { getOrThrow: jest.fn().mockReturnValue(false), get: jest.fn() }
 
@@ -37,8 +43,92 @@ const makeService = (found: Organization | null) => {
     {} as any,
   )
 
-  return { service, organizationRepository }
+  return { service, organizationRepository, entityManager }
 }
+
+describe('OrganizationService.getReferralCode', () => {
+  it('returns an existing code without writing', async () => {
+    const { service, entityManager } = makeService(organization({ referralCode: 'ABCD2345EF', suspended: false }))
+
+    await expect(service.getReferralCode('org-1')).resolves.toEqual({
+      organizationId: 'org-1',
+      referralCode: 'ABCD2345EF',
+    })
+    expect(entityManager.update).not.toHaveBeenCalled()
+  })
+
+  it('locks the organization row, generates a code, and persists only that code', async () => {
+    const { service, entityManager } = makeService(organization({ referralCode: null, suspended: false }))
+
+    const result = await service.getReferralCode('org-1')
+
+    expect(result.referralCode).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$/)
+    expect(entityManager.findOne).toHaveBeenCalledWith(Organization, {
+      where: { id: 'org-1' },
+      lock: { mode: 'pessimistic_write' },
+    })
+    expect(entityManager.update).toHaveBeenCalledWith(Organization, 'org-1', {
+      referralCode: result.referralCode,
+    })
+  })
+
+  it('retries a referral-code collision in a fresh transaction', async () => {
+    const { service, organizationRepository, entityManager } = makeService(
+      organization({ referralCode: null, suspended: false }),
+    )
+    entityManager.update.mockRejectedValueOnce({
+      driverError: { code: '23505', constraint: 'organization_referral_code_uq' },
+    })
+
+    await service.getReferralCode('org-1')
+
+    expect(organizationRepository.manager.transaction).toHaveBeenCalledTimes(2)
+    expect(entityManager.update).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not retry unrelated storage failures', async () => {
+    const { service, organizationRepository, entityManager } = makeService(
+      organization({ referralCode: null, suspended: false }),
+    )
+    const failure = { driverError: { code: '23505', constraint: 'unrelated_constraint' } }
+    entityManager.update.mockRejectedValue(failure)
+
+    await expect(service.getReferralCode('org-1')).rejects.toBe(failure)
+    expect(organizationRepository.manager.transaction).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([null, organization({ referralCode: null, suspended: true, suspendedUntil: null })])(
+    'rejects an unavailable organization',
+    async (found) => {
+      const { service, entityManager } = makeService(found)
+
+      await expect(service.getReferralCode('org-1')).rejects.toMatchObject({
+        response: { statusCode: 403, code: 'invitation_unavailable' },
+      })
+      expect(entityManager.update).not.toHaveBeenCalled()
+    },
+  )
+
+  it('allows a temporary suspension that has expired', async () => {
+    const { service } = makeService(
+      organization({ referralCode: 'ABCD2345EF', suspended: true, suspendedUntil: new Date(Date.now() - 1000) }),
+    )
+
+    await expect(service.getReferralCode('org-1')).resolves.toEqual({
+      organizationId: 'org-1',
+      referralCode: 'ABCD2345EF',
+    })
+  })
+
+  it('maps a row-lock timeout to a retryable response', async () => {
+    const { service, entityManager } = makeService(organization({ referralCode: null, suspended: false }))
+    entityManager.findOne.mockRejectedValue({ driverError: { code: '55P03' } })
+
+    await expect(service.getReferralCode('org-1')).rejects.toMatchObject({
+      response: { statusCode: 503, code: 'referral_code_unavailable' },
+    })
+  })
+})
 
 describe('OrganizationService.unsuspend', () => {
   it('unsuspends unconditionally when no ifReason is given', async () => {

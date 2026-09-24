@@ -90,6 +90,13 @@ flowchart TB
 The deployment runbook and operational constraints live in
 [`infra/docs/deployment.md`](./infra/docs/deployment.md).
 
+## Service guides
+
+- [`runner/README.md`](./runner/README.md) — the runner daemon: box lifecycle, execution and
+  attach, files, and metrics.
+- [`proxy/README.md`](./proxy/README.md) — the preview proxy: preview hosts, authentication, and
+  tunnels to guest ports.
+
 ## API catalog
 
 See [`API.md`](./API.md) for the categorized inventory of every application

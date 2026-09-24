@@ -1,4 +1,4 @@
-# Python Quick Start
+# Python quick start
 
 Get up and running with BoxLite Python SDK in 5 minutes.
 
@@ -18,7 +18,7 @@ python3 -c "import boxlite; print(boxlite.__version__)"
 # Output: installed boxlite package version
 ```
 
-## Basic Execution
+## Basic execution
 
 Create a file `hello.py`:
 
@@ -51,7 +51,7 @@ python hello.py
 4. Streams output back to your application
 5. Automatically cleans up when the context exits
 
-## Code Execution (AI Agents)
+## Code execution (AI agents)
 
 Create a file `codebox.py`:
 
@@ -92,7 +92,7 @@ python codebox.py
 When running code that imports third-party packages, install them inside the
 CodeBox first so the example behaves the same in clean images and reused boxes.
 
-## Running Examples
+## Running examples
 
 BoxLite includes 9 comprehensive Python examples:
 
@@ -128,7 +128,7 @@ python examples/python/07_advanced/use_native_api.py
 8. **run_interactive_shell.py** - Interactive shells (`04_interactive/`)
 9. **use_native_api.py** - Low-level Rust API (`07_advanced/`)
 
-## Next Steps
+## Next steps
 
 - **[Python SDK README](../../sdks/python/README.md)** - Complete API reference
   - Core API (Boxlite, BoxOptions, Box, Execution)

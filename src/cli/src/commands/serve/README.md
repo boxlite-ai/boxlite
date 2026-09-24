@@ -256,8 +256,8 @@ GET /v1/boxes/{box_id}/executions/{id}/attach
        │    ├─ Text {"type":"signal"}  → Refuse: error frame; else execution.signal()
        │    └─ Text {"type":"stdin_eof"}  → Refuse: error frame; else stdin.close() + drop
        │       (Refuse answers each kind once; the reader keeps draining so the
-       │        writer can flush its close — whichever task ends first aborts
-       │        the other.)
+       │        writer can flush its close, and past that close until the peer
+       │        answers it.)
        │
        ├─ tokio::spawn(writer)                 — server → client
        │    ├─ if already done → drain backlog only (fast path)
@@ -269,7 +269,16 @@ GET /v1/boxes/{box_id}/executions/{id}/attach
        │    │    done_rx.changed()→ drain remaining, break
        │    └─ if done: Text {"type":"exit","exit_code":N} + Close
        │
-       └─ select!(reader, writer)              — first to finish aborts the other
+       └─ select!(reader, writer)
+            ├─ reader first → abort writer
+            ├─ writer first, Close sent → wait up to ATTACH_PEER_CLOSE_WAIT
+            │                 (5 s) for the reader to see the peer's, and abort
+            │                 it only if that elapses. Cutting the reader off
+            │                 here leaves the client's in-flight stdin unread,
+            │                 and closing a socket with unread data sends RST —
+            │                 which discards the exit frame.
+            ├─ writer first, no Close (a send failed) → abort at once; there is
+            │                 no handshake open to wait for.
             └─ mark_disconnected()
 ```
 
@@ -439,6 +448,6 @@ shape:
 
 ## See Also
 
-- [CLI Development Guide](../../../../../docs/development/cli.md) — building and testing the CLI
-- [Architecture](../../../../../docs/architecture/README.md) — core runtime architecture
-- [Rust Style Guide](../../../../../docs/development/rust-style.md) — coding standards
+- [CLI Development Guide](../../../../../docs/contributing/development/cli.md) — building and testing the CLI
+- [Architecture](../../../../../docs/contributing/architecture/README.md) — core runtime architecture
+- [Rust Style Guide](../../../../../docs/contributing/development/rust-style.md) — coding standards

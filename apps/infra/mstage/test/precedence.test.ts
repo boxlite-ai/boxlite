@@ -38,6 +38,8 @@ test('the cloud is folded onto the scope once, so nothing downstream reads the f
 
 test('a stage the config never declared is refused with the list of real ones', () => {
   assert.throws(() => scope({ stage: 'dve' }), /Stage "dve" \(from --stage\) is not declared/)
+  // `in` would find `toString` on the parsed map and scope a run to a function.
+  assert.throws(() => scope({ stage: 'toString' }), /Stage "toString" \(from --stage\) is not declared/)
   assert.throws(() => scope({ stage: 'dve' }), /Declared stages: dev, prod, gcp-dev, unbound/)
 })
 

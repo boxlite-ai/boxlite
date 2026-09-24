@@ -111,10 +111,7 @@ impl SshWorkload {
         match self {
             Self::Shell => session::run_internal(session::SessionAction::Shell),
             Self::Exec { command } => session::run_internal(session::SessionAction::Exec(command)),
-            Self::Sftp => {
-                session::prepare_sftp_home()?;
-                sftp::run_internal()
-            }
+            Self::Sftp => sftp::run_internal(),
             Self::DirectStreamlocal { socket_path } => streamlocal::run_internal(socket_path),
             Self::ReverseStreamlocal {
                 socket_path,
@@ -148,11 +145,6 @@ impl BoxliteWorkloadExecutor {
         let args = process.args().as_deref().ok_or_else(|| {
             BoxliteError::Config("internal SSH workload requires process arguments".into())
         })?;
-        if process.user().uid() != 0 || process.user().gid() != 0 {
-            return Err(BoxliteError::Config(
-                "internal SSH workloads must run as container root".into(),
-            ));
-        }
         let parsed = SshWorkload::from_container_args(args)?.ok_or_else(|| {
             BoxliteError::Config("internal SSH workload placeholder is missing".into())
         })?;
@@ -179,6 +171,11 @@ impl Executor for BoxliteWorkloadExecutor {
         }
 
         install_direct_workload_panic_hook();
+        clear_non_root_capabilities().map_err(executor_error)?;
+        let profile = session::prepare_environment().map_err(executor_error)?;
+        if matches!(workload, SshWorkload::Sftp) {
+            session::enter_home(&profile).map_err(executor_error)?;
+        }
 
         // Youki normally marks these descriptors CLOEXEC and waits for execve
         // to close its notification pipe. Direct Rust workloads do not exec,
@@ -204,6 +201,29 @@ impl Executor for BoxliteWorkloadExecutor {
 
 fn executor_error(error: BoxliteError) -> ExecutorError {
     ExecutorError::Execution(Box::new(error))
+}
+
+fn clear_non_root_capabilities() -> BoxliteResult<()> {
+    if nix::unistd::Uid::effective().is_root() {
+        return Ok(());
+    }
+    // Direct helpers do not execve, so they must shed privileges explicitly.
+    // Keep the bounding ceiling unchanged, just as an ordinary non-root exec.
+    let mut capabilities = libcontainer::oci_spec::runtime::LinuxCapabilities::default();
+    capabilities.set_bounding(None);
+    capabilities.set_effective(Some(Default::default()));
+    capabilities.set_permitted(Some(Default::default()));
+    capabilities.set_inheritable(Some(Default::default()));
+    capabilities.set_ambient(Some(Default::default()));
+    libcontainer::capabilities::drop_privileges(
+        &capabilities,
+        &libcontainer::syscall::linux::LinuxSyscall,
+    )
+    .map_err(|error| {
+        BoxliteError::Execution(format!(
+            "failed to clear non-root SSH helper capabilities: {error}"
+        ))
+    })
 }
 
 fn close_inherited_fds() -> BoxliteResult<()> {
@@ -440,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_root_internal_workloads() {
+    fn accepts_non_root_internal_workloads() {
         let args = [INTERNAL_PROGRAM, sftp::INTERNAL_SFTP_ARG];
         let process = ProcessBuilder::default()
             .terminal(false)
@@ -460,7 +480,7 @@ mod tests {
 
         assert!(BoxliteWorkloadExecutor::new(SshWorkload::Sftp)
             .validate(&non_root_spec)
-            .is_err());
+            .is_ok());
     }
 
     fn spawn_subprocess(case: &str, cwd: &Path) -> Child {
@@ -507,25 +527,20 @@ mod tests {
         }
     }
 
-    fn root_record() -> (PathBuf, PathBuf) {
+    fn execution_user_record() -> (PathBuf, PathBuf) {
         let passwd = fs::read_to_string("/etc/passwd").unwrap();
         let fields = passwd
             .lines()
             .find_map(|line| {
                 let fields = line.split(':').collect::<Vec<_>>();
-                (fields.len() >= 7 && fields[0] == "root").then_some(fields)
+                (fields.len() >= 7 && fields[2] == nix::unistd::Uid::effective().to_string())
+                    .then_some(fields)
             })
-            .expect("Linux test environment has a root passwd entry");
+            .expect("Linux test environment has a passwd entry for the test runner");
         (fields[5].into(), fields[6].into())
     }
 
-    /// Mirror the fallback in `session::enter_root_home`.
-    ///
-    /// Existence is not enough: the session chdir's into this directory, so it
-    /// needs search permission. In a container the workload is root and always
-    /// has it; under `cargo test` the runner is whoever invoked it, and root's
-    /// home is typically 0700 — so an unprivileged run legitimately lands on
-    /// `/` and the expectation has to follow.
+    /// The login home falls back to / when the execution user cannot enter it.
     fn selected_home(home: PathBuf) -> PathBuf {
         let traversable =
             home.is_dir() && nix::unistd::access(&home, nix::unistd::AccessFlags::X_OK).is_ok();
@@ -621,9 +636,9 @@ mod tests {
     }
 
     #[test]
-    fn shell_workload_enters_root_home_and_uses_login_argv0() {
+    fn shell_workload_enters_execution_user_home_and_uses_login_argv0() {
         let inherited_cwd = tempfile::tempdir().unwrap();
-        let (home, shell) = root_record();
+        let (home, shell) = execution_user_record();
         let expected_home = selected_home(home);
         let expected_shell = fs::canonicalize(selected_shell(shell)).unwrap();
         let expected_argv0 = format!("-{}", expected_shell.file_name().unwrap().to_string_lossy());
@@ -672,7 +687,7 @@ mod tests {
     #[test]
     fn exec_workload_preserves_one_command_argument_and_exports_the_account_profile() {
         let inherited_cwd = tempfile::tempdir().unwrap();
-        let (home, shell) = root_record();
+        let (home, shell) = execution_user_record();
         let expected_home = selected_home(home);
         let expected_shell = selected_shell(shell);
         let command = r#"printf '\036%s\0%s\0%s\0%s\037' "$PWD" "$HOME" "$SHELL" 'literal spaces ; $(not reparsed)'"#;
@@ -716,9 +731,9 @@ mod tests {
     }
 
     #[test]
-    fn sftp_workload_enters_root_home() {
+    fn sftp_workload_enters_execution_user_home() {
         let inherited_cwd = tempfile::tempdir().unwrap();
-        let expected_home = selected_home(root_record().0);
+        let expected_home = selected_home(execution_user_record().0);
         let mut child = spawn_subprocess("sftp", inherited_cwd.path());
         wait_for_cwd(&mut child, &expected_home);
         child.kill().unwrap();

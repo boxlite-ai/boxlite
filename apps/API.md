@@ -102,13 +102,14 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Organizations, membership, and invitations</b> · 23 routes</summary>
+<summary><b>Organizations, membership, and invitations</b> · 24 routes</summary>
 
 | Method   | Path                                                                     | What it does                                             |
 | -------- | ------------------------------------------------------------------------ | -------------------------------------------------------- |
 | `GET`    | `/api/organizations`                                                     | Lists organizations available to the caller.             |
 | `POST`   | `/api/organizations`                                                     | Creates an organization.                                 |
 | `GET`    | `/api/organizations/{organizationId}`                                    | Gets an organization by ID.                              |
+| `GET`    | `/api/organizations/{organizationId}/referral-code`                      | Gets or initializes the organization's invitation code. |
 | `GET`    | `/api/organizations/{organizationId}/concurrency`                        | Gets a bounded concurrency timeline from usage periods.  |
 | `DELETE` | `/api/organizations/{organizationId}`                                    | Deletes an organization.                                 |
 | `PATCH`  | `/api/organizations/{organizationId}/name`                               | Changes an organization's name.                          |
@@ -471,7 +472,8 @@ environment variable, required)
 The proxy is host-routed: a host whose first label parses as `<port>-<box>`
 selects the preview forwarding paths, and any other host serves the base-host
 utility routes. The preview-warning acceptance route is handled before host
-routing, so it works on every host.
+routing, so it works on every host. How the proxy authenticates these requests
+and tunnels them to guest ports is in [`proxy/README.md`](./proxy/README.md).
 
 <details>
 <summary><b>Proxy routes</b> · 5 routes</summary>

@@ -17,14 +17,14 @@
  */
 
 import { loadConfig as loadStageConfig, type StageConfig } from 'mstage/config'
-import { loadBuildConfig, registryFor, type BuildConfig } from '../src/config.ts'
-import { resolveRegistry } from '../src/address.ts'
+import { loadBuildConfig, onlyArtifact, registryFor, type BuildConfig } from '../src/config.ts'
+import { assertTag, releaseTagFor, resolveRegistry } from '../src/address.ts'
 import { assertPromotable, coordinatesOf, type Coordinates } from '../src/coordinates.ts'
-import { promote, publish, ScanRefusedError, verifyPublished } from '../src/publish.ts'
+import { NotPublishedError, promote, publish, ScanRefusedError, verifyPublished } from '../src/publish.ts'
 import { run } from '../src/run.ts'
 
 /**
- * The exit code a scan refusal reports, and the only one that is not 1.
+ * The exit code a scan refusal reports.
  *
  * A caller retries a publish because a push and a token endpoint fail
  * transiently. The scan gate does not: its answer is about the image's own
@@ -38,11 +38,34 @@ import { run } from '../src/run.ts'
  */
 const SCAN_REFUSED_EXIT = 78
 
+/**
+ * The exit code "this stage does not hold it" reports.
+ *
+ * `verify` fails for two reasons a shell has to tell apart: the registry
+ * answered and the artifact is not there, or the registry could not be read at
+ * all. A gate that reads both as absence — mbuild-release asks one before it
+ * publishes a version — takes a denied read for a free slot and loses the
+ * refusal it exists for: `publish` asks again, skips every artifact it finds,
+ * and the run reports a publish of bytes it never wrote.
+ *
+ * 66 is `EX_NOINPUT` from `sysexits.h`, "an input did not exist", which is the
+ * question `verify` answers.
+ */
+const NOT_PUBLISHED_EXIT = 66
+
 const USAGE = [
-  'usage: npm run mbuild publish -- --tag <commit-sha> --stage <stage>',
-  '       npm run mbuild promote -- --tag <commit-sha> --from <stage> --to <stage>',
-  '       npm run mbuild verify -- --tag <commit-sha> --stage <stage>',
+  'usage: npm run mbuild publish -- --tag <commit-sha> --stage <stage> [--artifact <name>] [--version v<X.Y.Z>]',
+  '       npm run mbuild promote -- --tag <commit-sha> --from <stage> --to <stage> [--artifact <name>] [--version v<X.Y.Z>]',
+  '       npm run mbuild verify -- --tag <commit-sha> --stage <stage> [--artifact <name>] [--version v<X.Y.Z>]',
   '       npm run mbuild inspect -- --stage <stage>',
+  '',
+  '--artifact narrows the command to one declared artifact. Absent means every',
+  'one, which is what a deploy asks about.',
+  '',
+  '--version addresses the release build cut from that commit — tagged',
+  '`v<X.Y.Z>-<commit-sha>` — rather than the commit build tagged `<commit-sha>`.',
+  'They are different bytes at different addresses, and a stage that admits only',
+  'released images reads the difference off the tag.',
 ].join('\n')
 
 const option = (argv: string[], name: string): string | undefined => {
@@ -58,6 +81,33 @@ const required = (argv: string[], name: string): string => {
   return value
 }
 
+/**
+ * What `--artifact` selects: one declared artifact, or every one.
+ *
+ * Absent leaves the whole set, which is what a deploy asks about — "does this
+ * stage hold this commit" is a question about all of them. Named, it narrows
+ * to that one, which is what lets a workflow give each artifact its own job.
+ */
+const narrowed = (config: BuildConfig, argv: string[]): BuildConfig => {
+  const artifact = option(argv, 'artifact')
+  return artifact === undefined ? config : onlyArtifact(config, artifact)
+}
+
+/**
+ * The tag a command addresses: the commit build, or the release build cut from
+ * that commit at a version.
+ *
+ * `--version` rather than letting a caller pass `v1.2.3-<sha>` itself, for the
+ * reason every other part of an address is composed in `mbuild/address`: a
+ * caller that concatenates its own is a second place the convention lives, and
+ * the first typo in it publishes bytes nothing will look for.
+ */
+const tagOf = (argv: string[]): string => {
+  const sha = required(argv, 'tag')
+  const version = option(argv, 'version')
+  return version === undefined ? assertTag(sha) : releaseTagFor({ version, sha })
+}
+
 const accountId = async (): Promise<string> => {
   const identity = await run('aws', ['sts', 'get-caller-identity', '--query', 'Account', '--output', 'text'])
   if (identity.code !== 0) throw new Error(`Could not resolve the publishing account: ${identity.stderr.trim()}`)
@@ -67,11 +117,10 @@ const accountId = async (): Promise<string> => {
 /** mstage declares where every stage lives; this reads that rather than a copy. */
 const stageOf = (stage: string): StageConfig => {
   const stages = loadStageConfig().stages
-  const declared = stages[stage]
-  if (!declared) {
+  if (!Object.hasOwn(stages, stage)) {
     throw new Error(`mstage.config.json declares no stage "${stage}". Declared: ${Object.keys(stages).join(', ')}`)
   }
-  return declared
+  return stages[stage]!
 }
 
 const regionOf = (stage: string): string => {
@@ -126,7 +175,7 @@ const main = async (): Promise<number> => {
   }
 
   if (command === 'publish') {
-    const tag = required(argv, 'tag')
+    const tag = tagOf(argv)
     const stage = required(argv, 'stage')
     const registry = resolveRegistry({
       config,
@@ -134,7 +183,9 @@ const main = async (): Promise<number> => {
       region: regionOf(stage),
       ...(await coordinates(config, stage)),
     })
-    for (const outcome of await publish({ config, stage, registry, tag, run, log })) {
+    // The registry is a property of the stage, so it is resolved from the whole
+    // config; only what gets built is narrowed.
+    for (const outcome of await publish({ config: narrowed(config, argv), stage, registry, tag, run, log })) {
       console.log(`${outcome.artifact}=${outcome.address}`)
     }
     return 0
@@ -147,7 +198,7 @@ const main = async (): Promise<number> => {
    * depending on whether this run put them there.
    */
   if (command === 'verify') {
-    const tag = required(argv, 'tag')
+    const tag = tagOf(argv)
     const stage = required(argv, 'stage')
     const registry = resolveRegistry({
       config,
@@ -155,14 +206,14 @@ const main = async (): Promise<number> => {
       region: regionOf(stage),
       ...(await coordinates(config, stage)),
     })
-    for (const { artifact, address } of await verifyPublished({ config, stage, registry, tag, run })) {
+    for (const { artifact, address } of await verifyPublished({ config: narrowed(config, argv), stage, registry, tag, run })) {
       console.log(`${artifact}=${address}`)
     }
     return 0
   }
 
   if (command === 'promote') {
-    const tag = required(argv, 'tag')
+    const tag = tagOf(argv)
     const fromStage = required(argv, 'from')
     const toStage = required(argv, 'to')
     assertPromotable({
@@ -174,7 +225,7 @@ const main = async (): Promise<number> => {
     // reusing the source's would push the promoted image at the wrong one while
     // reporting the right name.
     const outcomes = await promote({
-      config,
+      config: narrowed(config, argv),
       tag,
       from: {
         stage: fromStage,
@@ -205,9 +256,16 @@ const main = async (): Promise<number> => {
   return 1
 }
 
+/** Everything a caller branches on. Every other failure is a plain 1. */
+const exitCodeFor = (error: unknown): number => {
+  if (error instanceof ScanRefusedError) return SCAN_REFUSED_EXIT
+  if (error instanceof NotPublishedError) return NOT_PUBLISHED_EXIT
+  return 1
+}
+
 try {
   process.exitCode = await main()
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error))
-  process.exitCode = error instanceof ScanRefusedError ? SCAN_REFUSED_EXIT : 1
+  process.exitCode = exitCodeFor(error)
 }

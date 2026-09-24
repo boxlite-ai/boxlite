@@ -73,7 +73,11 @@ const (
 // AllowNet restricts both TCP and UDP egress. Hostname entries are enforced
 // by TLS SNI / HTTP Host inspection, which only TCP carries, so a
 // hostname-only AllowNet denies all UDP egress — add the IP or CIDR to keep
-// UDP open.
+// UDP open. A host matched by a configured Secret is additionally reachable on
+// port 443 without an entry of its own, so AllowNet is not the only egress
+// gate. That connection is dialed by name, and under a non-empty AllowNet
+// an answer in a private, loopback or CGNAT range is refused unless an IP
+// or CIDR rule covers it.
 type OutboundNetworkSpec struct {
 	Mode     NetworkMode
 	AllowNet []string

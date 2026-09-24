@@ -173,7 +173,7 @@ export class CreateBoxDto {
   disk?: number
 
   @ApiPropertyOptional({
-    description: 'Auto-stop interval in seconds (0 means disabled)',
+    description: 'Auto-stop interval in seconds (0 means disabled, otherwise at least 60)',
     example: 900,
     type: 'integer',
   })
@@ -210,7 +210,7 @@ export class CreateBoxDto {
   volumes?: BoxVolume[]
 
   @ApiPropertyOptional({
-    description: 'Secret placeholder rules for outbound HTTP(S) requests',
+    description: 'Secret placeholder rules for outbound HTTPS requests',
     type: [BoxSecret],
     required: false,
   })

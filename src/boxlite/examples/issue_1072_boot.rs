@@ -1,6 +1,6 @@
 //! Manual verification for issue #1072 / PR #1079 — exercises all three
 //! behavior-change rows of the truth table in
-//! docs/architecture/jailer-network-permissions.md:
+//! docs/contributing/architecture/jailer-network-permissions.md:
 //!
 //! 1. `enabled / networkEnabled=false / jailer=true` → create is rejected.
 //! 2. `enabled / networkEnabled=false / jailer=false` → create is rejected.

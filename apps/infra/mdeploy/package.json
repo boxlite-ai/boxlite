@@ -7,6 +7,11 @@
   "bin": {
     "mdeploy": "bin/mdeploy.ts"
   },
+  "exports": {
+    "./hosts": "./stack/hosts.ts",
+    "./runner-binary": "./stack/runner-binary.ts",
+    "./clickhouse-host": "./stack/clickhouse-host.ts"
+  },
   "engines": {
     "node": ">=22"
   },

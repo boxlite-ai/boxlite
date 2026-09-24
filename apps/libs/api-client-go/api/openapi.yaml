@@ -425,6 +425,39 @@ paths:
       summary: Set default region for organization
       tags:
       - organizations
+  /organizations/{organizationId}/referral-code:
+    get:
+      operationId: getOrganizationReferralCode
+      parameters:
+      - description: Organization ID
+        explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationReferralCode"
+          description: ""
+        "403":
+          description: Organization access denied or invitation unavailable
+        "503":
+          description: Invitation code generation unavailable
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get or initialize an organization invitation code
+      tags:
+      - organizations
   /organizations/{organizationId}:
     delete:
       operationId: deleteOrganization
@@ -5021,6 +5054,24 @@ components:
       required:
       - defaultRegionId
       type: object
+    OrganizationReferralCode:
+      example:
+        organizationId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        referralCode: 7KMNP4XZQ2
+      properties:
+        organizationId:
+          format: uuid
+          type: string
+        referralCode:
+          example: 7KMNP4XZQ2
+          maxLength: 10
+          minLength: 10
+          pattern: "^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$"
+          type: string
+      required:
+      - organizationId
+      - referralCode
+      type: object
     OrganizationSuspension:
       example:
         reason: reason
@@ -5688,6 +5739,7 @@ components:
         createdAt: 2024-10-01T12:00:00Z
         updatedAt: 2024-10-01T12:00:00Z
         lastActivityAt: 2024-10-01T12:00:00Z
+        exitCode: 137
         class: small
         daemonVersion: 1.0.0
         runnerId: runner123
@@ -5808,6 +5860,16 @@ components:
             \ when no activity has been recorded yet"
           example: 2024-10-01T12:00:00Z
           type: string
+        exitCode:
+          description: "How the box's main command ended, present once the box has\
+            \ stopped and the runtime recorded it: its own code when it exited, or\
+            \ `128 + n` when a signal ended it. Stopping a box signals that command,\
+            \ so a stop is recorded here too. `0` is a real value, so a client must\
+            \ tell the missing field from a zero one. Only reading a single box carries\
+            \ it: this schema is shared with the box list and with the replies that\
+            \ change a box, which leave it out whether or not one was recorded."
+          example: 137
+          type: integer
         class:
           deprecated: true
           description: The class of the box
@@ -5882,6 +5944,7 @@ components:
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
           lastActivityAt: 2024-10-01T12:00:00Z
+          exitCode: 137
           class: small
           daemonVersion: 1.0.0
           runnerId: runner123
@@ -5920,6 +5983,7 @@ components:
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
           lastActivityAt: 2024-10-01T12:00:00Z
+          exitCode: 137
           class: small
           daemonVersion: 1.0.0
           runnerId: runner123

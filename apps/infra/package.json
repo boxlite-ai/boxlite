@@ -55,6 +55,8 @@
     "mdeploy": "file:mdeploy",
     "mstage": "file:mstage",
     "naming": "file:naming",
+    "picomatch": "4.0.4",
+    "smol-toml": "1.8.0",
     "sst": "^4.6.11",
     "ts-node": "10.9.1",
     "tsx": "^4.20.5",

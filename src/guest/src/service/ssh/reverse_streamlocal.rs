@@ -423,14 +423,18 @@ impl Drop for ListenerRegistration {
 
 /// Owns reverse streamlocal listeners created by one authenticated connection.
 pub(crate) struct ReverseStreamlocalManager {
+    tasks: Arc<super::TaskGroup>,
     listeners: ListenerRegistry,
+    cancel: tokio_util::sync::CancellationToken,
     connection_permits: Arc<Semaphore>,
 }
 
 impl ReverseStreamlocalManager {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(tasks: Arc<super::TaskGroup>) -> Self {
         Self {
+            tasks,
             listeners: ListenerRegistry::default(),
+            cancel: Default::default(),
             connection_permits: Arc::new(Semaphore::new(MAX_FORWARD_CONNECTIONS)),
         }
     }
@@ -472,14 +476,22 @@ impl ReverseStreamlocalManager {
         }
 
         let token = uuid::Uuid::new_v4().to_string();
-        let helper =
-            match RunningHelper::start(server, socket_path, ingress_address, token.clone()).await {
-                Ok(helper) => helper,
-                Err(error) => {
-                    debug!(%error, socket_path, "reverse streamlocal helper start failed");
-                    return false;
-                }
-            };
+        let helper = match RunningHelper::start(
+            self.tasks.clone(),
+            server,
+            socket_path,
+            ingress_address,
+            token.clone(),
+            self.cancel.clone(),
+        )
+        .await
+        {
+            Ok(helper) => helper,
+            Err(error) => {
+                debug!(%error, socket_path, "reverse streamlocal helper start failed");
+                return false;
+            }
+        };
 
         spawn_listener(
             ingress,
@@ -503,11 +515,14 @@ impl ReverseStreamlocalManager {
 
 impl Drop for ReverseStreamlocalManager {
     fn drop(&mut self) {
+        self.cancel.cancel();
         self.listeners.cancel_all();
     }
 }
 
 struct RunningHelper {
+    tasks: Arc<super::TaskGroup>,
+    cancel: tokio_util::sync::CancellationToken,
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
     execution_id: String,
@@ -519,10 +534,12 @@ struct RunningHelper {
 
 impl RunningHelper {
     async fn start(
+        tasks: Arc<super::TaskGroup>,
         server: Arc<GuestServer>,
         socket_path: &str,
         ingress: SocketAddrV4,
         token: String,
+        cancel: tokio_util::sync::CancellationToken,
     ) -> Result<Self, String> {
         let container_id = super::bridge::resolve_single_container(&server)
             .await
@@ -554,11 +571,18 @@ impl RunningHelper {
             // Matches every sibling failure below: the execution is registered
             // and running, so it must be torn down rather than leaked.
             Err(error) => {
-                spawn_failed_helper_cleanup(server.clone(), registry, execution_id, None, None);
+                spawn_failed_helper_cleanup(
+                    tasks.clone(),
+                    server.clone(),
+                    registry,
+                    execution_id,
+                    None,
+                    None,
+                );
                 return Err(format!("reverse streamlocal stdin setup failed: {error}"));
             }
         };
-        let stdin_task = tokio::spawn(async move {
+        let stdin_task = tasks.spawn_tracked(move |_| async move {
             if let Ok(Err(error)) = input.await {
                 debug!(%error, "reverse streamlocal helper stdin ended");
             }
@@ -573,6 +597,7 @@ impl RunningHelper {
             .is_err()
         {
             spawn_failed_helper_cleanup(
+                tasks.clone(),
                 server.clone(),
                 registry,
                 execution_id,
@@ -597,6 +622,7 @@ impl RunningHelper {
                     .await;
                 drop(stdin_tx);
                 spawn_failed_helper_cleanup(
+                    tasks.clone(),
                     server.clone(),
                     registry,
                     execution_id,
@@ -615,6 +641,7 @@ impl RunningHelper {
                     .await;
                 drop(stdin_tx);
                 spawn_failed_helper_cleanup(
+                    tasks.clone(),
                     server.clone(),
                     registry,
                     execution_id,
@@ -644,6 +671,7 @@ impl RunningHelper {
                     .await;
                 drop(stdin_tx);
                 spawn_failed_helper_cleanup(
+                    tasks.clone(),
                     server.clone(),
                     registry,
                     execution_id,
@@ -655,6 +683,8 @@ impl RunningHelper {
         };
 
         Ok(Self {
+            tasks,
+            cancel,
             server,
             registry,
             execution_id,
@@ -696,6 +726,7 @@ impl RunningHelper {
 
     fn spawn_cleanup(self, force_termination: bool) {
         spawn_execution_cleanup(
+            self.tasks,
             self.server,
             self.registry,
             self.execution_id,
@@ -731,7 +762,7 @@ fn helper_execution_launch(
             workdir: "/".to_string(),
             timeout_ms: 0,
             tty: None,
-            user: Some("0:0".to_string()),
+            user: None,
         },
         workload,
     }
@@ -746,7 +777,8 @@ fn spawn_listener(
     mut helper: RunningHelper,
     mut registration: ListenerRegistration,
 ) {
-    tokio::spawn(async move {
+    let tasks = helper.tasks.clone();
+    tasks.clone().spawn_tracked(move |cancel| async move {
         enum End {
             Cancelled,
             HelperEnded,
@@ -758,6 +790,7 @@ fn spawn_listener(
             tokio::select! {
                 biased;
                 _ = registration.cancelled() => break End::Cancelled,
+                _ = cancel.cancelled() => break End::Cancelled,
                 completed = pending_opens.join_next(), if !pending_opens.is_empty() => {
                     if let Some(Err(error)) = completed {
                         warn!(%error, "reverse streamlocal channel task failed");
@@ -803,6 +836,8 @@ fn spawn_listener(
                     let handle = session_handle.clone();
                     let path = socket_path.clone();
                     let expected_token = token.clone();
+                    let tasks = tasks.clone();
+                    let cancel = helper.cancel.clone();
                     pending_opens.spawn(async move {
                         let stream = match authenticate_ingress(stream, expected_token.as_bytes()).await {
                             Ok(stream) => stream,
@@ -817,7 +852,14 @@ fn spawn_listener(
                         )
                         .await;
                         match channel {
-                            Ok(Ok(channel)) => spawn_relay(channel, stream, permit),
+                            Ok(Ok(channel)) => {
+                                tasks.spawn(async move {
+                                    tokio::select! {
+                                        _ = cancel.cancelled() => {},
+                                        _ = relay(channel, stream, permit) => {},
+                                    }
+                                });
+                            }
                             Ok(Err(error)) => {
                                 debug!(%error, "SSH client rejected reverse streamlocal channel")
                             }
@@ -875,19 +917,17 @@ async fn authenticate_ingress(
     Ok(stream)
 }
 
-fn spawn_relay(
+async fn relay(
     channel: Channel<Msg>,
     mut stream: TcpStream,
     _permit: tokio::sync::OwnedSemaphorePermit,
 ) {
-    tokio::spawn(async move {
-        let mut channel = channel.into_stream();
-        if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut stream).await {
-            debug!(%error, "SSH reverse streamlocal relay ended with an error");
-        }
-        let _ = channel.shutdown().await;
-        let _ = stream.shutdown().await;
-    });
+    let mut channel = channel.into_stream();
+    if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut stream).await {
+        debug!(%error, "SSH reverse streamlocal relay ended with an error");
+    }
+    let _ = channel.shutdown().await;
+    let _ = stream.shutdown().await;
 }
 
 async fn finish_pending_opens(pending_opens: &mut JoinSet<()>) {
@@ -981,16 +1021,26 @@ fn append_stopped_marker_prefix(buffer: &mut Vec<u8>, chunk: &[u8]) -> bool {
 }
 
 fn spawn_failed_helper_cleanup(
+    tasks: Arc<super::TaskGroup>,
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
     execution_id: String,
     output: Option<mpsc::Receiver<Result<ExecOutput, tonic::Status>>>,
     stdin_task: Option<JoinHandle<()>>,
 ) {
-    spawn_execution_cleanup(server, registry, execution_id, output, stdin_task, true);
+    spawn_execution_cleanup(
+        tasks,
+        server,
+        registry,
+        execution_id,
+        output,
+        stdin_task,
+        true,
+    );
 }
 
 fn spawn_execution_cleanup(
+    tasks: Arc<super::TaskGroup>,
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
     execution_id: String,
@@ -998,9 +1048,9 @@ fn spawn_execution_cleanup(
     stdin_task: Option<JoinHandle<()>>,
     force_termination: bool,
 ) {
-    tokio::spawn(async move {
+    tasks.clone().spawn_tracked(move |_| async move {
         let output_task = output.map(|mut output| {
-            tokio::spawn(async move {
+            tasks.spawn_tracked(move |_| async move {
                 while let Some(message) = output.recv().await {
                     let Ok(message) = message else {
                         break;
@@ -1229,8 +1279,8 @@ mod tests {
         assert!(request.env.values().all(|value| !value.contains(TOKEN)));
         assert!(!request.env.contains_key("HOME"));
         assert!(!request.env.contains_key("SHELL"));
-        assert_eq!(request.env.get("USER").map(String::as_str), Some("root"));
-        assert_eq!(request.user.as_deref(), Some("0:0"));
+        assert!(!request.env.contains_key("USER"));
+        assert_eq!(request.user, None);
         assert_eq!(request.workdir, "/");
         assert!(matches!(
             launch.workload,

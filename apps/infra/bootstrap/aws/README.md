@@ -32,7 +32,7 @@ own repository without editing a file first.
 
 Trust is pinned through GitHub's OIDC provider to one repository and one stage
 Environment (`repo:<owner>/<repo>:environment:<stage>`). Every job in
-`mdeploy.yml` that assumes this role declares `environment: <stage>`, and
+`mdeploy-all.yml` that assumes this role declares `environment: <stage>`, and
 GitHub issues such a job exactly that `sub` claim — a role trusting only the
 branch form rejects them all with `Not authorized to perform
 sts:AssumeRoleWithWebIdentity`, which reads as a missing role rather than as

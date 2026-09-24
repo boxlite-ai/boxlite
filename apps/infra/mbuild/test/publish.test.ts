@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { parseBase, parseBuildConfig } from '../src/config.ts'
 import { resolveRegistry } from '../src/address.ts'
 import {
+  NotPublishedError,
   promote,
   publish,
   PublishError,
@@ -289,9 +290,10 @@ test('the dependencies that ship are audited once, before anything is built', as
 test('a repository whose lockfile is yarn is audited with yarn, in the directory holding it', async () => {
   /*
    * `npm --prefix <root> audit` is only an audit where the root is an npm
-   * workspace. Here it is not — the images build from `apps/`, locked by Yarn 4
-   * — so that command exits ENOLOCK and the gate can never pass, which is the
-   * same as no gate at all once someone works around it.
+   * workspace. Where it is not — a repository whose images build from a
+   * subdirectory locked by Yarn 4 — that command exits ENOLOCK and the gate
+   * can never pass, which is the same as no gate at all once someone works
+   * around it.
    *
    * yarn takes no directory flag that survives corepack, and corepack resolves
    * the version from where it is launched, so the directory has to be the
@@ -1002,6 +1004,33 @@ test('a stage missing any image is refused, named by the address that was looked
   await assert.rejects(
     () => verifyPublished({ config, stage: 'dev', registry: dev, tag: SHA, run: probe.run }),
     new RegExp(`dev does not hold \\S+/boxlite-backoffice-dev:${SHA}-api$`),
+  )
+})
+
+test('absence and an unreadable registry are answers of different kinds', async () => {
+  /*
+   * A caller acts on one and stops on the other. mbuild-release asks "does
+   * dev already hold this version" before it publishes, and continues when the
+   * answer is no; a denied read reported as the same failure waves a published
+   * version through that gate, for `publish` to skip and report as done.
+   *
+   * The registrars already separate the two — `isPublished` returns false only
+   * for the registry's own word for absence. This is the separation surviving
+   * the throw, which is what `bin/mbuild.ts` turns into the exit code the
+   * workflow's gates branch on.
+   */
+  const empty = registryDouble({ published: new Set() })
+  await assert.rejects(
+    () => verifyPublished({ config, stage: 'dev', registry: dev, tag: SHA, run: empty.run }),
+    (error: unknown) => error instanceof NotPublishedError,
+    'a stage that answered and holds nothing is absence',
+  )
+
+  const denied = registryDouble({ deniedReads: true })
+  await assert.rejects(
+    () => verifyPublished({ config, stage: 'dev', registry: dev, tag: SHA, run: denied.run }),
+    (error: unknown) => error instanceof PublishError && !(error instanceof NotPublishedError),
+    'a read that never landed must not be reported as absence',
   )
 })
 

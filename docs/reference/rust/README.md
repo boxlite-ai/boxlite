@@ -1,4 +1,4 @@
-# Rust API Reference
+# Rust API reference
 
 Complete API reference for the BoxLite Rust SDK.
 
@@ -7,11 +7,11 @@ Complete API reference for the BoxLite Rust SDK.
 The Rust SDK is the core implementation of BoxLite. It provides async-first APIs built on Tokio for creating and managing isolated VM environments.
 
 **Crate**: `boxlite`
-**Repository**: [github.com/anthropics/boxlite](https://github.com/anthropics/boxlite)
+**Repository**: [github.com/boxlite-ai/boxlite](https://github.com/boxlite-ai/boxlite)
 
 ---
 
-## Table of Contents
+## Table of contents
 
 - [Runtime Management](#runtime-management)
   - [BoxliteRuntime](#boxliteruntime)
@@ -30,7 +30,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [ExecResult](#execresult)
 - [Box Configuration](#box-configuration)
   - [BoxOptions](#boxoptions)
-  - [AdvancedBoxOptions](#advancedoptions)
+  - [AdvancedBoxOptions](#advancedboxoptions)
   - [RootfsSpec](#rootfsspec)
   - [VolumeSpec](#volumespec)
   - [NetworkSpec](#networkspec)
@@ -54,7 +54,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
 
 ---
 
-## Runtime Management
+## Runtime management
 
 ### BoxliteRuntime
 
@@ -175,7 +175,7 @@ let options = BoxliteOptions {
 
 ---
 
-## Box Handle
+## Box handle
 
 ### LiteBox
 
@@ -205,7 +205,8 @@ pub struct LiteBox {
 - `start()` initializes VM for `Configured` or `Stopped` boxes
 - Idempotent: calling on `Running` box is a no-op
 - `run()` implicitly calls `start()` if needed
-- `stop()` terminates VM; box can be restarted
+- `stop()` terminates the VM. With default options a local runtime then removes the box;
+  `auto_delete: Some(0)` keeps it
 
 #### Example
 
@@ -337,12 +338,12 @@ pub enum BoxStatus {
 | `can_remove` | `fn can_remove(&self) -> bool` | True if Configured, Stopped, or Unknown |
 | `can_run` | `fn can_run(&self) -> bool` | True if Configured, Running, or Stopped |
 
-#### State Machine
+#### State machine
 
-```
+```text
 create() → Configured (persisted to DB, no VM)
 start()  → Running (VM initialized)
-stop()   → Stopped (VM terminated, can restart)
+stop()   → Stopped (VM terminated); a local runtime removes it unless auto_delete is Some(0)
 ```
 
 ### BoxState
@@ -370,7 +371,7 @@ pub struct BoxState {
 
 ---
 
-## Network Tunnels
+## Network tunnels
 
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
@@ -395,7 +396,7 @@ Dropping the final handle requests cancellation.
 
 ---
 
-## Command Execution
+## Command execution
 
 ### BoxCommand
 
@@ -414,7 +415,7 @@ let cmd = BoxCommand::new("python3")
     .tty(true);
 ```
 
-#### Builder Methods
+#### Builder methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
@@ -519,7 +520,7 @@ while let Some(line) = stderr.next().await {
 }
 ```
 
-#### Concurrent Reading
+#### Concurrent reading
 
 ```rust
 use futures::StreamExt;
@@ -559,7 +560,7 @@ impl ExecResult {
 
 ---
 
-## Box Configuration
+## Box configuration
 
 ### BoxOptions
 
@@ -594,13 +595,18 @@ pub struct BoxOptions {
     /// Inbound reachability of exposed services
     pub inbound_network: NetworkSpec,
 
-    /// Outbound HTTP(S) secret substitution rules
+    /// Outbound HTTPS secret substitution rules
     pub secrets: Vec<Secret>,
 
     /// Port mappings
     pub ports: Vec<PortSpec>,
 
-    /// Auto-remove box when stopped (default: true)
+    /// Seconds after stop before the box is deleted: `Some(0)` keeps it, and a
+    /// local runtime deletes at stop for any other value. `None` (default) falls
+    /// back to `auto_remove` locally and to the server's policy on REST.
+    pub auto_delete: Option<u32>,
+
+    /// Deprecated: use `auto_delete`. Remove the box when it stops (default: true)
     pub auto_remove: bool,
 
     /// Run independently of parent process (default: false)
@@ -641,8 +647,8 @@ let options = BoxOptions {
         },
         ..Default::default()
     },
-    auto_remove: false,  // Keep box after stop
-    detach: true,        // Run independently
+    auto_delete: Some(0),  // Keep box after stop
+    detach: true,          // Run independently
     ..Default::default()
 };
 ```
@@ -754,7 +760,7 @@ pub enum NetworkSpec {
 }
 ```
 
-`allow_net` supports exact hosts, wildcard hosts, IPs, and CIDRs, and restricts both TCP and UDP egress. Hostname rules rely on TLS SNI / HTTP Host inspection, which only TCP carries, so an `allow_net` holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP open. `Disabled` removes the guest network interface entirely.
+`allow_net` supports exact hosts, wildcard hosts, IPs, and CIDRs, and restricts both TCP and UDP egress. Hostname rules rely on TLS SNI / HTTP Host inspection, which only TCP carries, so an `allow_net` holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP open. A host matched by a configured `Secret` is additionally reachable on port 443 without a rule of its own, so `allow_net` is not the only egress gate. The connection is dialed by name, and under a non-empty allowlist an answer in a private, loopback or CGNAT range is refused unless an IP or CIDR rule covers it. `Disabled` removes the guest network interface entirely.
 
 The inbound direction — whether services the box exposes are reachable from
 outside it — is the sibling field `BoxOptions::inbound_network`, which reuses
@@ -827,7 +833,7 @@ frames rather than slow the guest down. `rx_kbps` is paced the same way on both.
 
 ### Secret
 
-Outbound HTTP(S) secret substitution rule.
+Outbound HTTPS secret substitution rule.
 
 ```rust
 pub struct Secret {
@@ -912,7 +918,8 @@ pub struct SecurityOptions {
     /// Custom sandbox profile (macOS only)
     pub sandbox_profile: Option<PathBuf>,
 
-    /// Enable network in sandbox (macOS only)
+    /// Network grants of the host-side sandbox (seatbelt on macOS, Landlock on Linux);
+    /// does not disable guest networking
     pub network_enabled: bool,
 }
 ```
@@ -955,7 +962,7 @@ let security = SecurityOptions::builder()
     .build();
 ```
 
-#### Builder Methods
+#### Builder methods
 
 | Method | Description |
 |--------|-------------|
@@ -982,7 +989,7 @@ let security = SecurityOptions::builder()
 | `max_memory_bytes(n)` | RLIMIT_AS |
 | `max_cpu_time_seconds(n)` | RLIMIT_CPU |
 | `sandbox_profile(path)` | macOS sandbox profile |
-| `network_enabled(bool)` | macOS network access |
+| `network_enabled(bool)` | Host sandbox network grants, not guest networking |
 | `build()` | Build SecurityOptions |
 
 ### ResourceLimits
@@ -1060,7 +1067,7 @@ println!("Memory: {:?} bytes", metrics.memory_bytes());
 | `network_tcp_connections` | `Option<u64>` | Active TCP connections |
 | `network_tcp_errors` | `Option<u64>` | TCP connection errors |
 
-#### Stage Timing
+#### Stage timing
 
 | Field | Description |
 |-------|-------------|
@@ -1073,7 +1080,7 @@ println!("Memory: {:?} bytes", metrics.memory_bytes());
 
 ---
 
-## Type Utilities
+## Type utilities
 
 ### Bytes
 
@@ -1150,7 +1157,7 @@ let valid = ContainerID::is_valid("a".repeat(64).as_str());  // true
 
 ---
 
-## Error Types
+## Error types
 
 ### BoxliteError
 
@@ -1222,7 +1229,7 @@ Result type alias for BoxLite operations.
 pub type BoxliteResult<T> = Result<T, BoxliteError>;
 ```
 
-#### Error Handling Example
+#### Error handling example
 
 ```rust
 use boxlite::BoxliteError;
@@ -1237,7 +1244,7 @@ match runtime.create(options, None).await {
 
 ---
 
-## Complete Example
+## Complete example
 
 ```rust
 use boxlite::runtime::{BoxliteRuntime, BoxOptions};
@@ -1309,7 +1316,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ---
 
-## Thread Safety
+## Thread safety
 
 All public types are `Send + Sync`:
 
@@ -1341,10 +1348,10 @@ for handle in handles {
 
 ---
 
-## See Also
+## See also
 
 - [Getting Started Guide](../../getting-started/README.md)
-- [Architecture Overview](../../architecture/README.md)
-- [Configuration Reference](../README.md)
+- [Concepts](../../concepts/README.md)
+- [Configuration Reference](../configuration.md)
 - [Python SDK Reference](../python/README.md)
 - [Node.js SDK Reference](../nodejs/README.md)

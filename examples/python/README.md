@@ -86,5 +86,5 @@ directory.
 ## Next Steps
 
 - [Python SDK README](../../sdks/python/README.md) - Full API documentation
-- [Architecture](../../docs/architecture/README.md) - How BoxLite works
+- [Concepts](../../docs/concepts/README.md) - How BoxLite works
 - [Project README](../../README.md) - Overview

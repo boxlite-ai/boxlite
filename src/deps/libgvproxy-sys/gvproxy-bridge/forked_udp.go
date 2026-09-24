@@ -7,11 +7,12 @@ package main
 // creates an endpoint, and allowed datagrams are handed to that forwarder
 // untouched — same shape as Tailscale's wrapUDPProtocolHandler.
 //
-// Traffic that never reaches here: the gateway DNS resolver (bound to
+// Traffic that never reaches here: upstream's DNS server (bound to
 // GatewayIP:53, services.go:62) and DHCP (bound to :67, dhcp.go:93) are
-// registered endpoints, and gVisor's demuxer matches those before falling
-// back to this default handler (gvisor stack/nic.go:863-871). Internal
-// services therefore need no allowlist exemption.
+// registered endpoints, and gVisor's demuxer matches those before falling back
+// to this default handler (gvisor stack/nic.go:863-871). Internal services
+// therefore need no allowlist exemption, and the guest's DNS queries are
+// forwarded unfiltered: allow_net is enforced when the gateway dials.
 
 import (
 	"net"
@@ -55,8 +56,8 @@ func UDPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 //
 // Hostname rules cannot be evaluated here — UDP carries no SNI or Host header
 // to peek at — so an allowlist holding only hostnames denies all UDP egress.
-// A guest must not be able to sidestep a hostname rule by addressing the
-// resolved IP directly.
+// A guest must not be able to sidestep a hostname rule by addressing an
+// allowed name's current IP directly.
 func udpDestinationAllowed(dest tcpip.Address, filter *AllowNetFilter) bool {
 	// Link-local stays denied even when ec2MetadataAccess is on: IMDS speaks
 	// HTTP over TCP, so opening UDP to 169.254.0.0/16 would only add egress.

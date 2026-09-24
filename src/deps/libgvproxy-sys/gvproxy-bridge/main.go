@@ -216,8 +216,15 @@ type GvproxyInstance struct {
 	secretMatcher *SecretHostMatcher             // Hostname→secrets lookup (nil if no secrets)
 }
 
-func buildDNSZones(config GvproxyConfig, allowNetZones []types.Zone) []types.Zone {
-	dnsZones := make([]types.Zone, 0, len(config.DNSZones)+1)
+// buildDNSZones converts the zones the caller configures (the
+// host.boxlite.internal alias) into upstream's zone type, and that is all the
+// box's DNS server serves beyond forwarding. allow_net does not touch DNS: it
+// is enforced when the gateway dials (forked_tcp.go, egress_dialer.go), so a
+// name outside the allowlist resolves like any other and is refused at
+// connect. An earlier design sinkholed unlisted names here, which only ever
+// covered A queries and so never closed the channel it appeared to.
+func buildDNSZones(config GvproxyConfig) []types.Zone {
+	dnsZones := make([]types.Zone, 0, len(config.DNSZones))
 	for _, zone := range config.DNSZones {
 		dnsZone := types.Zone{
 			Name:      zone.Name,
@@ -231,12 +238,6 @@ func buildDNSZones(config GvproxyConfig, allowNetZones []types.Zone) []types.Zon
 		}
 		dnsZones = append(dnsZones, dnsZone)
 	}
-
-	if len(config.AllowNet) > 0 {
-		dnsZones = append(dnsZones, allowNetZones...)
-		logrus.WithField("rules", len(config.AllowNet)).Info("Network allowlist enabled (DNS sinkhole)")
-	}
-
 	return dnsZones
 }
 
@@ -253,15 +254,11 @@ func buildDNSZones(config GvproxyConfig, allowNetZones []types.Zone) []types.Zon
 //
 // Returns nil when allow_net is empty, which the transport handlers read as
 // "forward everything".
-func newAllowNetFilter(config GvproxyConfig, exactIPs, suffixIPs map[string][]net.IP) *AllowNetFilter {
-	f := NewAllowNetFilter(config.AllowNet, config.GatewayIP, config.GuestIP)
-	if f != nil {
-		f.SetResolvedHostIPs(exactIPs, suffixIPs)
-	}
-	return f
+func newAllowNetFilter(config GvproxyConfig) *AllowNetFilter {
+	return NewAllowNetFilter(config.AllowNet, config.GatewayIP, config.GuestIP)
 }
 
-func buildTapConfig(config GvproxyConfig, protocol types.Protocol, allowNetZones []types.Zone) *types.Configuration {
+func buildTapConfig(config GvproxyConfig, protocol types.Protocol) *types.Configuration {
 	nat := make(map[string]string)
 	gatewayVirtualIPs := []string{config.GatewayIP}
 	if config.HostIP != "" {
@@ -284,7 +281,7 @@ func buildTapConfig(config GvproxyConfig, protocol types.Protocol, allowNetZones
 		NAT:               nat,
 		GatewayVirtualIPs: gatewayVirtualIPs,
 		Protocol:          protocol,
-		DNS:               buildDNSZones(config, allowNetZones),
+		DNS:               buildDNSZones(config),
 		DNSSearchDomains:  config.DNSSearchDomains,
 		CaptureFile:       "",
 	}
@@ -353,22 +350,8 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		protocol = types.QemuProtocol
 	}
 
-	// Resolve hostname rules once so the gateway DNS zones and the TCP egress
-	// pin share the same IP set (see allow_net_filter.AllowHostToIP). This
-	// resolution is frozen for the box's lifetime: a domain that changes IP
-	// after startup is unreachable until the box is recreated. If re-resolution
-	// is ever added, it must refresh the pin from the same source.
-	// Skipped for an empty allow_net (the common case): building it would only
-	// allocate a root sinkhole zone and log "DNS sinkhole configured" for a box
-	// with no egress policy. buildDNSZones and newAllowNetFilter both already
-	// gate on len(config.AllowNet) > 0, so a nil resolution is safe to pass.
-	var resolved allowNetResolution
-	if len(config.AllowNet) > 0 {
-		resolved = buildAllowNet(config.AllowNet)
-	}
-
 	// Create gvisor-tap-vsock configuration from provided config
-	tapConfig := buildTapConfig(config, protocol, resolved.zones)
+	tapConfig := buildTapConfig(config, protocol)
 
 	// Set CaptureFile if provided
 	if config.CaptureFile != nil && *config.CaptureFile != "" {
@@ -475,14 +458,22 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		// Override the TCP and UDP handlers with the AllowNet filter and/or
 		// MITM secret substitution
 		if len(config.AllowNet) > 0 || instance.secretMatcher != nil {
+			// nil without an allow_net; the transport handlers read that as
+			// "no policy" and only the secret MITM path stays active.
 			var allowNetFilter *AllowNetFilter
 			if len(config.AllowNet) > 0 {
-				allowNetFilter = newAllowNetFilter(config, resolved.exactIPs, resolved.suffixIPs)
+				allowNetFilter = newAllowNetFilter(config)
+			}
+			dialer, err := newEgressDialer(allowNetFilter, config.Subnet)
+			if err != nil {
+				logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("allowNet: failed to build egress dialer")
+				initErr <- err
+				return
 			}
 			// Fatal on purpose: the handlers left behind are upstream's
 			// unfiltered forwarders, so a box that starts anyway would carry
 			// an allow_net the caller believes in and the network ignores.
-			if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, allowNetFilter, instance.ca, instance.secretMatcher); err != nil {
+			if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, allowNetFilter, dialer, instance.ca, instance.secretMatcher); err != nil {
 				logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("allowNet: failed to install transport handlers")
 				initErr <- fmt.Errorf("failed to install allow_net transport handlers: %w", err)
 				return

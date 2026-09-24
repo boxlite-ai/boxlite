@@ -23,7 +23,7 @@ import { apiEnvironmentFrom } from '../src/api-environment.ts'
 import { publicHostsFor } from '../stack/api.ts'
 import { alertPolicyFilter } from '../stack/providers/gcp/alarms.ts'
 import { certificateNameFor, internalAuthorizationNameFor } from '../stack/providers/gcp/certificate-name.ts'
-import { renderClickHouseSchema } from '../../scripts/clickhouse-host.js'
+import { renderClickHouseSchema } from '../stack/clickhouse-host.ts'
 import {
   DISK_TYPE as CLICKHOUSE_DISK,
   MACHINE as CLICKHOUSE_MACHINE,

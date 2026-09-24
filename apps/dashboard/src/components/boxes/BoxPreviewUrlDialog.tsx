@@ -58,9 +58,7 @@ export function BoxPreviewUrlDialog({
       <DialogContent className="font-mono sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle>Get a preview URL</DialogTitle>
-          <DialogDescription>
-            Make sure a server is already listening on that port inside the box.
-          </DialogDescription>
+          <DialogDescription>Make sure a server is already listening on that port inside the box.</DialogDescription>
         </DialogHeader>
 
         <form

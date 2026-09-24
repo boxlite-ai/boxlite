@@ -1,0 +1,60 @@
+name: Load CI configuration
+description: Read shared versions and platform matrices without a separate runner job.
+
+inputs:
+  full-matrix:
+    description: Test every version on every platform; false keeps all versions on Linux x64 and the latest elsewhere.
+    default: 'true'
+
+outputs:
+  platforms:
+    description: Build platforms.
+    value: ${{ steps.config.outputs.platforms }}
+  python-versions:
+    description: Supported Python versions.
+    value: ${{ steps.config.outputs.python-versions }}
+  node-versions:
+    description: Supported Node.js versions.
+    value: ${{ steps.config.outputs.node-versions }}
+  node-build-version:
+    description: Node.js build version.
+    value: ${{ steps.config.outputs.node-build-version }}
+  go-version:
+    description: Go build version.
+    value: ${{ steps.config.outputs.go-version }}
+  rust-toolchain:
+    description: Rust toolchain.
+    value: ${{ steps.config.outputs.rust-toolchain }}
+  artifact-retention-days:
+    description: Artifact retention in days.
+    value: ${{ steps.config.outputs.artifact-retention-days }}
+  python-test-matrix:
+    description: Python test matrix entries.
+    value: ${{ steps.config.outputs.python-test-matrix }}
+  node-test-matrix:
+    description: Node.js test matrix entries.
+    value: ${{ steps.config.outputs.node-test-matrix }}
+
+runs:
+  using: composite
+  steps:
+    - id: config
+      shell: bash
+      env:
+        FULL_MATRIX: ${{ inputs.full-matrix }}
+      run: |
+        case "$FULL_MATRIX" in
+          true|false) ;;
+          *) echo "::error::full-matrix must be true or false"; exit 1 ;;
+        esac
+        config="$GITHUB_ACTION_PATH/../../ci-config.json"
+        jq -r 'to_entries[] | "\(.key)=\(.value | if type == "string" then . else tojson end)"' "$config" >> "$GITHUB_OUTPUT"
+        for sdk in python node; do
+          matrix=$(jq -c --arg sdk "$sdk" --arg full "$FULL_MATRIX" '
+            .[$sdk + "-versions"] as $versions
+            | [.platforms[] as $platform | $versions[]
+               | select($full == "true" or $platform.target == "linux-x64-gnu" or . == $versions[-1])
+               | {platform: $platform, ($sdk + "-version"): .}]
+          ' "$config")
+          echo "$sdk-test-matrix=$matrix" >> "$GITHUB_OUTPUT"
+        done

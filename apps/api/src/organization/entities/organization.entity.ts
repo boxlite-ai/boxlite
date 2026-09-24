@@ -4,15 +4,19 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Column, CreateDateColumn, Entity, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm'
+import { Column, CreateDateColumn, Entity, OneToMany, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from 'typeorm'
 import { OrganizationUser } from './organization-user.entity'
 import { OrganizationRole } from './organization-role.entity'
 import { OrganizationInvitation } from './organization-invitation.entity'
 
 @Entity()
+@Unique('organization_referral_code_uq', ['referralCode'])
 export class Organization {
   @PrimaryGeneratedColumn('uuid')
   id: string
+
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  referralCode: string | null
 
   @Column()
   name: string

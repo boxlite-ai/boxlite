@@ -1,10 +1,10 @@
-# Getting Started
+# Getting started
 
 Get up and running with BoxLite in 5 minutes.
 
 ## Prerequisites
 
-### System Requirements
+### System requirements
 
 BoxLite requires a platform with hardware virtualization support:
 
@@ -18,7 +18,7 @@ BoxLite requires a platform with hardware virtualization support:
 **Not Supported:**
 - macOS Intel (x86_64) - Hypervisor.framework stability issues
 
-### Verify Virtualization Support
+### Verify virtualization support
 
 **macOS:**
 ```bash
@@ -71,11 +71,11 @@ python3 -c "open('/dev/kvm','rb').close(); print('kvm ok')"
 
 **Note:** If you see "Timeout waiting for guest ready (30s)" errors, it's likely a KVM permission issue. Ensure your user is in the `kvm` group and restart WSL with `wsl.exe --shutdown`.
 
-### No Daemon Required
+### No daemon required
 
 Unlike Docker, BoxLite doesn't require a daemon process. It's an embeddable library that runs directly in your application.
 
-## Choose Your SDK
+## Choose your SDK
 
 | SDK | Language/Toolchain | Best For |
 |-----|--------------------|----------|
@@ -85,16 +85,16 @@ Unlike Docker, BoxLite doesn't require a daemon process. It's an embeddable libr
 | **[C](./quickstart-c.md)** | C11-compatible compiler (GCC/Clang) | C/C++ applications, system integration |
 | **[Go](../../sdks/go/README.md)** | Go 1.24+ with CGO | Go services and native integrations |
 
-## Next Steps
+## Next steps
 
-### Learn More
+### Learn more
 
-- **[Architecture](../architecture/README.md)** - How BoxLite works under the hood
-- **[How-to Guides](../guides/README.md)** - Practical usage guides
+- **[Concepts](../concepts/README.md)** - How BoxLite works
+- **[Guides](../guides/README.md)** - Practical usage guides
 - **[Reference](../reference/README.md)** - Complete API documentation
 - **[FAQ](../faq.md)** - Common questions and answers
 
-### Get Help
+### Get help
 
 - **[GitHub Issues](https://github.com/boxlite-ai/boxlite/issues)** - Bug reports and feature requests
 - **[GitHub Discussions](https://github.com/boxlite-ai/boxlite/discussions)** - Questions and community support
@@ -105,7 +105,7 @@ Unlike Docker, BoxLite doesn't require a daemon process. It's an embeddable libr
 
 ## Troubleshooting
 
-### Installation Issues
+### Installation issues
 
 **Problem:** `pip install boxlite` fails
 
@@ -114,7 +114,7 @@ Unlike Docker, BoxLite doesn't require a daemon process. It's an embeddable libr
 - Update pip: `pip install --upgrade pip`
 - Check platform support (macOS ARM64, Linux x86_64/ARM64 only)
 
-### Runtime Issues
+### Runtime issues
 
 **Problem:** "KVM not available" error on Linux
 
@@ -128,7 +128,7 @@ sudo modprobe kvm kvm_intel  # or kvm_amd
 
 # Check /dev/kvm permissions
 ls -l /dev/kvm
-sudo chmod 666 /dev/kvm  # or add user to kvm group
+sudo usermod -aG kvm $USER  # then log out and back in
 ```
 
 **Problem:** Box fails to start
@@ -139,7 +139,7 @@ sudo chmod 666 /dev/kvm  # or add user to kvm group
 - Verify image name: Try `docker pull <image>` to test
 - Check hypervisor: Ensure KVM (Linux) or Hypervisor.framework (macOS) is available
 
-### Performance Issues
+### Performance issues
 
 **Problem:** Box is slow
 
@@ -156,4 +156,4 @@ metrics = await box.metrics()
 print(f"Memory: {metrics.memory_usage_bytes / (1024**2):.2f} MB")
 ```
 
-For more troubleshooting help, see [FAQ & Troubleshooting](../faq.md).
+For more troubleshooting help, see [Troubleshooting](../guides/troubleshooting.md).

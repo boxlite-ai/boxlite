@@ -201,7 +201,9 @@ describe('GCS volume bucket store', () => {
   // record points at — and the labels must not be written to something that is
   // about to be thrown away.
   it('deletes the bucket it refuses, and never labels it', async () => {
-    mockCreateBucket.mockResolvedValue([createdBucket({ iamConfiguration: { uniformBucketLevelAccess: { enabled: false } } })])
+    mockCreateBucket.mockResolvedValue([
+      createdBucket({ iamConfiguration: { uniformBucketLevelAccess: { enabled: false } } }),
+    ])
 
     await expect(buildStore(gcsConfig).create('boxlite-volume-abc', {})).rejects.toThrow(/uniform bucket-level access/)
     expect(mockDeleteBucket).toHaveBeenCalled()

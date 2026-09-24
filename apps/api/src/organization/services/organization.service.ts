@@ -6,6 +6,7 @@
 
 import {
   ForbiddenException,
+  HttpStatus,
   Injectable,
   NotFoundException,
   Logger,
@@ -14,6 +15,7 @@ import {
   ConflictException,
   BadRequestException,
 } from '@nestjs/common'
+import { randomInt } from 'node:crypto'
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, In, Not, Repository } from 'typeorm'
 import { CreateOrganizationInternalDto } from '../dto/create-organization.internal.dto'
@@ -47,6 +49,14 @@ import { EncryptionService } from '../../encryption/encryption.service'
 import { OtelConfigDto } from '../dto/otel-config.dto'
 import { boxLookupCacheKeyByAuthToken } from '../../box/utils/box-lookup-cache.util'
 import { BoxRepository } from '../../box/repositories/box.repository'
+import { OrganizationReferralCodeDto } from '../dto/organization-referral-code.dto'
+import { OrganizationReferralCodeException } from '../../exceptions/organization-referral-code.exception'
+
+const REFERRAL_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+const REFERRAL_UNIQUE_CONSTRAINT = 'organization_referral_code_uq'
+const MAX_REFERRAL_CODE_ATTEMPTS = 5
+
+type DatabaseFailure = { code?: string; constraint?: string; driverError?: DatabaseFailure }
 
 @Injectable()
 export class OrganizationService implements OnModuleInit, TrackableJobExecutions, OnApplicationShutdown {
@@ -113,6 +123,37 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     return this.organizationRepository.findOne({
       where: { id: organizationId },
     })
+  }
+
+  async getReferralCode(organizationId: string): Promise<OrganizationReferralCodeDto> {
+    for (let attempt = 0; attempt < MAX_REFERRAL_CODE_ATTEMPTS; attempt++) {
+      try {
+        return await this.organizationRepository.manager.transaction(async (entityManager) => {
+          await entityManager.query("SET LOCAL lock_timeout = '5s'")
+          const organization = await entityManager.findOne(Organization, {
+            where: { id: organizationId },
+            lock: { mode: 'pessimistic_write' },
+          })
+
+          if (!organization || this.isOrganizationSuspended(organization)) {
+            throw new OrganizationReferralCodeException(HttpStatus.FORBIDDEN, 'invitation_unavailable')
+          }
+          if (organization.referralCode) return { organizationId, referralCode: organization.referralCode }
+
+          const referralCode = this.generateReferralCode()
+          await entityManager.update(Organization, organizationId, { referralCode })
+          return { organizationId, referralCode }
+        })
+      } catch (error) {
+        const failure = this.databaseFailure(error)
+        if (failure.code === '55P03') {
+          throw new OrganizationReferralCodeException(HttpStatus.SERVICE_UNAVAILABLE, 'referral_code_unavailable')
+        }
+        if (failure.code !== '23505' || failure.constraint !== REFERRAL_UNIQUE_CONSTRAINT) throw error
+      }
+    }
+
+    throw new OrganizationReferralCodeException(HttpStatus.SERVICE_UNAVAILABLE, 'referral_code_unavailable')
   }
 
   async findByIds(organizationIds: string[]): Promise<Organization[]> {
@@ -702,14 +743,25 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   }
 
   assertOrganizationIsNotSuspended(organization: Organization): void {
-    if (!organization.suspended) {
-      return
-    }
-
     // suspensionReason is free text an admin or support agent wrote and is never echoed back —
     // it can carry details about a case (e.g. a fraud investigation) beyond "you are suspended".
-    if (organization.suspendedUntil ? organization.suspendedUntil > new Date() : true) {
+    if (this.isOrganizationSuspended(organization)) {
       throw new ForbiddenException('Organization is suspended')
     }
+  }
+
+  private isOrganizationSuspended(organization: Organization): boolean {
+    return (
+      organization.suspended && (!organization.suspendedUntil || organization.suspendedUntil.getTime() > Date.now())
+    )
+  }
+
+  private generateReferralCode(): string {
+    return Array.from({ length: 10 }, () => REFERRAL_ALPHABET[randomInt(REFERRAL_ALPHABET.length)]).join('')
+  }
+
+  private databaseFailure(error: unknown): DatabaseFailure {
+    const failure = error as DatabaseFailure
+    return failure.driverError ?? failure
   }
 }

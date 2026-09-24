@@ -47,18 +47,18 @@ service Guest {
   rpc Thaw(ThawRequest) returns (ThawResponse);
 }
 
-// Live control for the embedded SSH listener. SSH is deliberately separate
-// from Guest.Init so credentials and listener policy can be rotated without
-// rebuilding or restarting the guest.
+// In-memory SSH control; requires successful Guest.Init.
 service Ssh {
-  // Enable SSH or replace policy for subsequent authentication attempts.
-  // Pre-auth transports close; authenticated connections retain their snapshot.
+  // After Guest.Init, validate configuration and fully restart SSH, even when
+  // unchanged. Disconnect existing clients and wait for SSH execution and
+  // forwarding cleanup before binding. Invalid configuration preserves the
+  // current service; a bind failure leaves SSH disabled.
   rpc Configure(SshConfigureRequest) returns (SshConfigureResponse);
-
-  // Return the currently active listener state.
+  // Return current listener state and public host identity, without secrets.
   rpc Status(SshStatusRequest) returns (SshStatusResponse);
-
-  // Stop accepts and close pre-auth transports. Authenticated sessions may drain.
+  // Idempotently stop SSH, disconnect clients, and wait for SSH task cleanup.
+  // Configure and Disable return DeadlineExceeded if draining exceeds ten
+  // seconds; pending cleanup remains tracked for the next Configure or Disable.
   rpc Disable(SshDisableRequest) returns (SshDisableResponse);
 }
 
@@ -220,42 +220,53 @@ message ThawResponse {
 }
 
 // ============================================================================
-// SSH Service Messages
+// SSH runtime configuration
 // ============================================================================
 
 message SshConfigureRequest {
-  // Guest TCP socket address, for example "0.0.0.0:22".
-  string listen_address = 1;
-  // OpenSSH public key for the CA trusted to sign user certificates.
-  string ca_public_key = 2;
-  // Required certificate principal (normally the host-owned Box ID).
-  string principal = 3;
-}
+  // Do not reinterpret legacy string fields as a nested configuration.
+  reserved 1, 2, 3;
+  reserved "listen_address", "ca_public_key", "principal";
 
-message SshConfigureResponse {
-  SshStatus status = 1;
+  SshConfig config = 4;
 }
-
+message SshConfigureResponse { SshStatus status = 1; }
 message SshStatusRequest {}
-
-message SshStatusResponse {
-  SshStatus status = 1;
-}
-
+message SshStatusResponse { SshStatus status = 1; }
 message SshDisableRequest {}
-
-message SshDisableResponse {
-  SshStatus status = 1;
+message SshDisableResponse { SshStatus status = 1; }
+message SshStatus {
+  // Whether the SSH listener is running.
+  bool enabled = 1;
+  // Actual bound address, including the selected port; empty when disabled.
+  string listen_address = 2;
+  // Successful listener starts in this VM; initially zero, retained on Disable.
+  uint64 generation = 3;
+  // SHA-256 fingerprint of the host public key; empty when disabled.
+  string host_key_fingerprint = 4;
+  // OpenSSH host public key without a comment; empty when disabled.
+  string host_public_key = 5;
 }
 
-message SshStatus {
-  bool enabled = 1;
-  // Actual bound address. Empty while disabled.
-  string listen_address = 2;
-  // Increases when SSH state changes in this guest process; resets on restart.
-  uint64 generation = 3;
-  // SHA-256 fingerprint of the persistent guest host key. Empty while disabled.
-  string host_key_fingerprint = 4;
+message SshConfig {
+  string listen_address = 1;
+  // Caller-provided, unencrypted OpenSSH private key.
+  string host_private_key = 2;
+  reserved 3, 4;
+  reserved "ca", "authorized_keys";
+  // Authentication identities; all execute as the container's default user.
+  repeated SshAccount accounts = 5;
+}
+
+message SshAccount {
+  string login = 1;
+  repeated string authorized_keys = 2;
+  SshCaConfig ca = 3;
+}
+
+message SshCaConfig {
+  string public_key = 1;
+  string principal = 2;
 }
 
 // ============================================================================

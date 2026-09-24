@@ -1,4 +1,4 @@
-# Rust Quick Start
+# Rust quick start
 
 Get up and running with BoxLite Rust crate in 5 minutes.
 
@@ -12,7 +12,7 @@ Add BoxLite to your project:
 cargo add boxlite tokio futures --features tokio/macros,tokio/rt-multi-thread
 ```
 
-## Basic Execution
+## Basic execution
 
 Create a file `src/main.rs`:
 
@@ -52,7 +52,7 @@ Run it:
 cargo run
 ```
 
-## From Source (Development)
+## From source (development)
 
 For contributing or local development:
 
@@ -76,10 +76,10 @@ cargo test
 
 See [CONTRIBUTING.md](../../CONTRIBUTING.md) for detailed build instructions.
 
-## Next Steps
+## Next steps
 
-- **[Architecture Documentation](../architecture/README.md)** - Understand how BoxLite works
+- **[Concepts](../concepts/README.md)** - Understand how BoxLite works
   - Core components (Runtime, LiteBox, VMM, Portal)
   - Image management and rootfs preparation
   - Host-guest communication protocol
-- **[Reference Documentation](../reference/README.md#rust-api)** - Rust API reference
+- **[Reference](../reference/README.md#rust-api)** - Rust API reference

@@ -1,0 +1,611 @@
+# The release line for the container images, through mbuild.
+#
+# `mbuild.yml` publishes a commit; this publishes a *release*. They are two
+# lines, and the tag is what separates them: a commit build is `<sha>`, a
+# release build is `v<X.Y.Z>-<sha>` (`mbuild/src/address.ts`'s `releaseTagFor`,
+# composed there rather than here, and reached through `mbuild --version`).
+# Same commit, different bytes, different address — which is what lets a stage
+# admit only released images by reading its tag, and the reason the
+# discriminator is in the address rather than in a record beside it.
+#
+# The version rather than a bare marker, because "which release is this" is the
+# question an operator actually asks of a running stage.
+#
+# The second difference is what a re-dispatch means. A commit publish is
+# idempotent on purpose: mbuild skips an artifact already in the registry so a
+# half-finished run resumes. A release must not do that. Naming a version that
+# is already out is an operator mistake, and the answer to it is a refusal, not
+# a silent no-op reporting success over bytes nobody just wrote.
+#
+# So the gates are why this file exists beside `mbuild.yml`: every artifact is
+# refused if the stage it is going to already holds it. Asked per artifact
+# rather than per stage, which is also what lets the three build beside each
+# other — one job each, through `mbuild --artifact`.
+#
+# Repeated rather than calling `mbuild.yml`, because the gate has to run in the
+# job that acts. A `guard` job that read the registry and then handed off would
+# bind the stage's Environment twice, and a second job on one Environment is a
+# second wait on its reviewers — the cost PR #1523 removed from the deploy path.
+#
+# Nothing here names ECR, Artifact Registry, a region or a repository. The stage
+# declaration says which cloud it lives in and `mbuild inspect` reads it, so a
+# stage moving clouds is an edit to `.mstage.config.json`, not to this file.
+name: mbuild-release
+
+# Which operation, and on what. Both halves in the run's own title: an Actions
+# list showing four `mbuild-release` rows says nothing about which one moved
+# prod.
+run-name: >-
+  ${{ inputs.command == 'publish' && format('publish {0} to dev', inputs.tag)
+  || format('promote {0} from dev to prod', inputs.tag) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: >-
+          publish builds the release into dev; promote moves the bytes dev
+          already serves to prod.
+        required: true
+        default: publish
+        type: choice
+        options: [publish, promote]
+      tag:
+        description: 'The release tag, as this repository spells it: v<X.Y.Z>. It must exist and name a commit on main.'
+        required: true
+        type: string
+
+  # Called by `mdeploy-all.yml`, which is the only rollout path. The allowlist
+  # above is what a person types; a caller passes a string because
+  # `workflow_call` has no choice type — and the caller is a workflow in this
+  # repository whose own input is an allowlist.
+  workflow_call:
+    inputs:
+      command:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
+      sha:
+        description: >-
+          The commit the caller already resolved this tag to. Cross-checked
+          rather than trusted: this workflow resolves the tag itself, and a
+          disagreement means the tag moved between the two reads.
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  # Deliberately `mbuild.yml`'s own group names rather than this workflow's: a
+  # group is one namespace for the whole repository, so sharing it is what makes
+  # a release and a commit publish queue against each other instead of pushing
+  # the same immutable tag at once.
+  group: mbuild-${{ inputs.command }}-${{ inputs.command == 'publish' && 'dev' || 'prod' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  # gh ships on a runner and is never signed in, and the stage declaration names
+  # github a required provider — so every step that reaches mstage fails on the
+  # session before it fails on anything worth reading. At workflow level because
+  # mbuild asks the same question itself, after the check below already passed.
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  # The version becomes a commit here and nowhere else, and the artifacts to
+  # build are read out of that commit rather than out of this branch's tip: a
+  # release that added a fourth image should build four, and one that predates
+  # the third should not be asked for it.
+  #
+  # No Environment. Every refusal below is about this repository's own refs, so
+  # none of it needs a stage's secrets — and a job that bound one would cost an
+  # approval before the run could even tell the operator their tag was a typo.
+  resolve:
+    name: resolve ${{ inputs.tag }}
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+      artifacts: ${{ steps.artifacts.outputs.names }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          # Tags and the commits they name, and main, which the containment
+          # check below compares against. A shallow checkout carries neither.
+          fetch-depth: 0
+
+      - name: Require a released version
+        id: version
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -Eeuo pipefail
+          # A commit refused by name rather than by shape. It would fail the
+          # version check below anyway, but "must be v<X.Y.Z>" tells an operator
+          # who pasted a SHA nothing about what they actually did wrong: this
+          # workflow releases a tagged version, and resolves the commit itself.
+          if [[ "$TAG" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+            echo "::error title=tag::'$TAG' looks like a commit. This workflow releases a tagged version — give the v<X.Y.Z> tag, and use mdeploy-all's commit path to deploy bare bytes."
+            exit 1
+          fi
+          # `v` and a stable X.Y.Z, which is how this repository spells a release
+          # tag. The same shape mbuild's RELEASE_VERSION accepts, so what passes
+          # here is what `--version` will take below.
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error title=tag::tag must be a release tag of the form v<X.Y.Z>, with no pre-release suffix (got '$TAG')"
+            exit 1
+          fi
+          # Fully qualified, and asserted here rather than left to the resolve
+          # below. `refs/tags/` is what refuses a branch of the same name —
+          # `git rev-parse v1.2.3` answers for either — and a version nobody
+          # tagged has to be refused before a registry is asked about bytes that
+          # were never built.
+          ref="refs/tags/${TAG}"
+          if ! git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
+            near="$(git tag --list "${TAG%%.*}.*" | sort -V | tail -n 3 | tr '\n' ' ')"
+            echo "::error title=tag::no tag ${ref} in this repository; cut the release first${near:+ (this repository has: ${near})}"
+            exit 1
+          fi
+          printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
+
+      # `branch` is what refuses a tag whose commit main does not contain — the
+      # release's bytes and the branch that produces them, checked together.
+      - id: ref
+        uses: ./.github/actions/resolve-ref
+        with:
+          ref: ${{ steps.version.outputs.ref }}
+          branch: ${{ github.ref_name }}
+
+      # A caller resolved this tag too, and the whole point of resolving once is
+      # that nothing downstream addresses a different commit. Compared rather
+      # than trusted or ignored: if the tag moved between the caller's read and
+      # this one, the run has to stop rather than publish one commit under a
+      # version the caller will deploy from another.
+      - name: Agree with the caller about which commit this is
+        if: inputs.sha != ''
+        shell: bash
+        env:
+          CALLER: ${{ inputs.sha }}
+          SHA: ${{ steps.ref.outputs.sha }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -Eeuo pipefail
+          if [ "$CALLER" != "$SHA" ]; then
+            echo "::error title=tag moved::the caller resolved $TAG to $CALLER and this run resolves it to $SHA; nothing was published"
+            exit 1
+          fi
+          echo "$TAG is $SHA for both"
+
+      # Old mbuild takes an unknown flag and ignores it, so a release cut before
+      # --artifact and --version existed would build every artifact, publish it
+      # at the commit address, and report success — leaving the version it was
+      # asked for unpublished, and the promotion below with nothing to move.
+      # mbuild's package version is the contract that says otherwise, and it is
+      # read out of the released commit in this job, which binds no Environment:
+      # a tag too old is refused before an approval is spent or a registry is
+      # reached.
+      #
+      # The contract is every answer the gates below read, not just the flags.
+      # Absence became exit 66 while the version still said 0.1.0, so 0.1.0
+      # does not say whether a commit answers it and some of them do. 0.1.1 is
+      # the first version that declares it, and an mbuild that reports absence
+      # as a plain failure has each gate stop on "could not tell" against a
+      # registry that answered. So 0.1.1 is what this minimum names, and 0.1.0
+      # is refused whichever of the two it happens to carry.
+      - name: Require the mbuild contract a release reads
+        shell: bash
+        env:
+          SHA: ${{ steps.ref.outputs.sha }}
+          # Raised when a release starts needing something mbuild learned later.
+          MINIMUM: '0.1.1'
+        run: |
+          set -Eeuo pipefail
+          manifest='apps/infra/mbuild/package.json'
+          # A commit without the file, and one whose manifest will not parse,
+          # are the same answer as a version too old: `|| version=''` is what
+          # lets them all reach the refusal below rather than abort the step.
+          version="$(git show "${SHA}:${manifest}" 2>/dev/null | jq -r '.version // ""')" || version=''
+          # Shape before comparison: `sort -V` orders anything it is handed, so
+          # a version it cannot read sorts somewhere rather than being refused.
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            # Whatever was in that commit's manifest, on its way into a log
+            # that reads `::` as a workflow command: quoted down to a bounded
+            # inert slice, so the report says what was there without the file
+            # getting to say anything to Actions.
+            read_as="$(printf '%s' "$version" | tr -cd '[:alnum:].+_-' | cut -c1-32)"
+            echo "::error title=mbuild::${SHA} has no readable mbuild version in ${manifest} (read: ${read_as:-none}); a release needs ${MINIMUM} or later"
+            exit 1
+          fi
+          # The older of the two must be MINIMUM, which equal also satisfies.
+          if [ "$(printf '%s\n%s\n' "$version" "$MINIMUM" | sort -V | head -n 1)" != "$MINIMUM" ]; then
+            echo "::error title=mbuild::${SHA} carries mbuild ${version}, which either ignores --artifact and --version or answers absence with a plain failure rather than exit 66; the gates below read both. A release needs ${MINIMUM} or later; cut it from a commit that has one."
+            exit 1
+          fi
+          echo "$SHA carries mbuild $version"
+
+      # Read out of the released commit with `git show` rather than a second
+      # checkout: one file is wanted, and the working tree is still main's.
+      - name: Read the artifacts this release declares
+        id: artifacts
+        shell: bash
+        env:
+          SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          declaration="$(git show "${SHA}:apps/infra/mstage.env.json")"
+          names="$(printf '%s' "$declaration" | jq -c '.artifacts | keys')"
+          if [ "$names" = '[]' ]; then
+            echo "::error title=artifacts::${SHA} declares no artifacts in apps/infra/mstage.env.json"
+            exit 1
+          fi
+          echo "names=$names" >> "$GITHUB_OUTPUT"
+          echo "$SHA declares $names"
+
+  publish:
+    name: publish ${{ inputs.tag }} · ${{ matrix.artifact }}
+    needs: [resolve]
+    # main and nowhere else. Unlike the commit workflows, dev has no escape
+    # here: a release is what other stages promote from, so the bytes it names
+    # have to come from the branch this repository will keep producing.
+    if: ${{ inputs.command == 'publish' && github.ref == 'refs/heads/main' }}
+    environment: dev
+    runs-on: ubuntu-latest
+    strategy:
+      # Each artifact is its own image with its own registry tag; cancelling the
+      # siblings when one fails leaves a partial release that is harder to read
+      # than three separate outcomes. A re-dispatch refuses whatever landed and
+      # publishes whatever did not, which is the state this reports.
+      fail-fast: false
+      matrix:
+        artifact: ${{ fromJSON(needs.resolve.outputs.artifacts) }}
+    steps:
+      # The tree this image is built from, which is the whole point of naming a
+      # version. `mbuild publish` builds whatever is on disk, so a job that
+      # stayed on main's tip would tag main's bytes with the release's commit —
+      # and an immutable tag makes that permanent.
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      - uses: ./.github/actions/setup-infra
+        with:
+          stages: dev
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+
+      # docker writes the registry token to disk in cleartext, so it is written
+      # outside HOME, where a cache key or an artifact upload that globs the
+      # home directory cannot reach it.
+      - name: Keep registry credentials out of HOME
+        run: |
+          set -Eeuo pipefail
+          mkdir -p -m 700 "$RUNNER_TEMP/docker"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >> "$GITHUB_ENV"
+
+      - name: Resolve the stage
+        id: config
+        working-directory: apps/infra
+        run: |
+          set -Eeuo pipefail
+          if ! output="$(npm run --silent mbuild inspect -- --stage dev 2>&1)"; then
+            echo "::error title=stage::$output"
+            exit 1
+          fi
+          echo "$output"
+          echo "$output" >> "$GITHUB_OUTPUT"
+
+      - name: Federate an AWS identity
+        if: steps.config.outputs.kind == 'ecr'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-dev-github-deploy
+          aws-region: ${{ steps.config.outputs.region }}
+          role-session-name: mbuild-release-publish-${{ github.run_id }}
+
+      - name: Federate a GCP identity
+        if: steps.config.outputs.kind == 'artifact-registry'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_IMAGE_PUBLISHER }}
+
+      # mbuild reaches Artifact Registry through the CLI — `gcloud artifacts
+      # repositories describe` is how it answers whether a tag is already there,
+      # and `gcloud auth configure-docker` is its login — and the federation
+      # above writes a credential without installing one. The CLI only;
+      # answering "who am I" a second time is what the step above already did.
+      - name: Install gcloud
+        if: steps.config.outputs.kind == 'artifact-registry'
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify the session through mstage
+        working-directory: apps/infra
+        run: |
+          set -Eeuo pipefail
+          for attempt in 1 2 3; do
+            if npm run --silent mstage login; then exit 0; fi
+            echo "mstage reports no usable session (attempt $attempt/3); retrying in $((attempt * 5))s"
+            sleep $((attempt * 5))
+          done
+          echo "::error title=mstage::No usable session for ${{ steps.config.outputs.kind }} after 3 attempts"
+          exit 1
+
+      # The gate. mbuild's own answer to "is this already there" is to skip the
+      # artifact and report success, which is right for a commit and wrong for a
+      # release: a dispatcher who named last month's version would be told the
+      # publish succeeded. Asked before anything is built, so the refusal costs
+      # a registry read rather than a full image build.
+      - name: Refuse an artifact dev already holds
+        working-directory: apps/infra
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+          TAG: ${{ inputs.tag }}
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          set -Eeuo pipefail
+          # 66 is the one failure this gate may continue past: the registry
+          # answered, and the artifact is not there. Every other status is a
+          # read that never landed — a denied token, an expired federation —
+          # and continuing past one throws the refusal away: `publish` re-asks,
+          # skips the artifact it finds (`publish.ts:634`), and the run reports
+          # a publish it never did, which is the answer this gate exists for.
+          held=0
+          npm run --silent mbuild verify -- --tag "$SHA" --stage dev --artifact "$ARTIFACT" --version "$TAG" || held=$?
+          if [ "$held" -eq 0 ]; then
+            echo "::error title=already published::dev already holds $ARTIFACT for $TAG ($SHA). Publishing again would overwrite nothing and report success; nothing was done."
+            exit 1
+          fi
+          if [ "$held" -ne 66 ]; then
+            echo "::error title=registry::could not tell whether dev holds $ARTIFACT for $TAG ($SHA); mbuild verify exited $held. Nothing was published."
+            exit 1
+          fi
+          echo "dev does not hold $ARTIFACT at $TAG yet; publishing."
+
+      - name: Build and upload
+        working-directory: apps/infra
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+          TAG: ${{ inputs.tag }}
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          set -Eeuo pipefail
+          # Retried, but not blindly. mbuild exits 78 when the image scan
+          # refuses a publish, and that answer does not change on a second ask.
+          # Only the push and the token endpoint around it fail transiently.
+          for attempt in 1 2 3; do
+            npm run --silent mbuild publish -- --tag "$SHA" --stage dev --artifact "$ARTIFACT" --version "$TAG" && exit 0
+            status=$?
+            if [ "$status" -eq 78 ]; then
+              echo "::error title=publish::$ARTIFACT at $SHA was refused by the image scan gate; findings are above"
+              exit 1
+            fi
+            echo "Publish failed (attempt $attempt/3, exit $status); retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
+          echo "::error title=publish::Could not publish $ARTIFACT at $SHA to dev after 3 attempts"
+          exit 1
+
+      - name: Report
+        if: always()
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          {
+            echo "### mbuild-release publish ${{ inputs.tag }} · \`${{ matrix.artifact }}\`"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| version | \`${{ inputs.tag }}\` |"
+            echo "| commit | \`$SHA\` |"
+            echo "| image tag | \`${{ inputs.tag }}-$SHA\` |"
+            echo "| artifact | \`${{ matrix.artifact }}\` |"
+            echo "| stage | \`dev\` |"
+            echo "| registry | \`${{ steps.config.outputs.kind }}\` in \`${{ steps.config.outputs.region }}\` |"
+            echo "| result | \`${{ job.status }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # dev's declaration, read where it exists.
+  #
+  # A promotion composes the source address as well as the destination's, and
+  # `vars` is scoped to the environment a job binds to — so the only way to read
+  # dev's block is a job that binds dev's environment. Carried to the jobs below
+  # as an output rather than copied into prod's own variable, so there is one
+  # copy of each stage's declaration and it cannot go stale against the
+  # environment that owns it. One job, not one per artifact: the declaration is
+  # the stage's, not the image's.
+  source:
+    name: read dev
+    # Binds dev, so it waits for `resolve` like every other job that binds an
+    # Environment. Without it a tag `resolve` is about to refuse still starts
+    # dev's reviewer wait, which is the approval this workflow refuses to spend
+    # on a typo.
+    needs: [resolve]
+    if: ${{ inputs.command == 'promote' && github.ref == 'refs/heads/main' }}
+    environment: dev
+    runs-on: ubuntu-latest
+    outputs:
+      config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+    steps:
+      # A job is what binds an environment, and a job needs a step. The value is
+      # already in the output above; this only says which stage was read.
+      - run: echo "carrying dev's declaration to prod"
+
+  promote:
+    name: promote ${{ inputs.tag }} · ${{ matrix.artifact }}
+    needs: [resolve, source]
+    if: ${{ !cancelled() && !failure() && inputs.command == 'promote' && github.ref == 'refs/heads/main' }}
+    environment: prod
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        artifact: ${{ fromJSON(needs.resolve.outputs.artifacts) }}
+    steps:
+      # No checkout of the released commit. A promotion copies a manifest
+      # between registries, so the release's tree buys it nothing — this
+      # checkout is only for the actions and the apps/infra install.
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-infra
+        with:
+          # Both ends: a promotion composes the source address as well as the
+          # destination's.
+          stages: dev prod
+          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+          stage-config-from: ${{ needs.source.outputs.config }}
+
+      - name: Keep registry credentials out of HOME
+        run: |
+          set -Eeuo pipefail
+          mkdir -p -m 700 "$RUNNER_TEMP/docker"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >> "$GITHUB_ENV"
+
+      - name: Resolve the stage
+        id: config
+        working-directory: apps/infra
+        run: |
+          set -Eeuo pipefail
+          if ! output="$(npm run --silent mbuild inspect -- --stage prod 2>&1)"; then
+            echo "::error title=stage::$output"
+            exit 1
+          fi
+          echo "$output"
+          echo "$output" >> "$GITHUB_OUTPUT"
+
+      # prod's identity, for both halves. The destination is the one that has to
+      # write, and it reaches dev's registry through a read the source project
+      # granted it — `bootstrap` makes that grant.
+      - name: Federate an AWS identity
+        if: steps.config.outputs.kind == 'ecr'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-prod-github-deploy
+          aws-region: ${{ steps.config.outputs.region }}
+          role-session-name: mbuild-release-promote-${{ github.run_id }}
+
+      - name: Federate a GCP identity
+        if: steps.config.outputs.kind == 'artifact-registry'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_IMAGE_PUBLISHER }}
+
+      - name: Install gcloud
+        if: steps.config.outputs.kind == 'artifact-registry'
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify the session through mstage
+        working-directory: apps/infra
+        run: |
+          set -Eeuo pipefail
+          for attempt in 1 2 3; do
+            if npm run --silent mstage login; then exit 0; fi
+            echo "mstage reports no usable session (attempt $attempt/3); retrying in $((attempt * 5))s"
+            sleep $((attempt * 5))
+          done
+          echo "::error title=mstage::No usable session for ${{ steps.config.outputs.kind }} after 3 attempts"
+          exit 1
+
+      # The destination first, because that is the stop condition: mbuild would
+      # skip an artifact prod already holds and report the promotion done, which
+      # over a version already serving traffic reads as a successful rollout
+      # that moved nothing.
+      - name: Refuse an artifact prod already holds
+        working-directory: apps/infra
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+          TAG: ${{ inputs.tag }}
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          set -Eeuo pipefail
+          # 66, and only 66, is absence. See the same gate in `publish`.
+          held=0
+          npm run --silent mbuild verify -- --tag "$SHA" --stage prod --artifact "$ARTIFACT" --version "$TAG" || held=$?
+          if [ "$held" -eq 0 ]; then
+            echo "::error title=already promoted::prod already holds $ARTIFACT for $TAG ($SHA); nothing was promoted."
+            exit 1
+          fi
+          if [ "$held" -ne 66 ]; then
+            echo "::error title=registry::could not tell whether prod holds $ARTIFACT for $TAG ($SHA); mbuild verify exited $held. Nothing was promoted."
+            exit 1
+          fi
+          echo "prod does not hold $ARTIFACT at $TAG yet; promoting."
+
+      # And the source, before anything is pulled. mbuild refuses a promotion
+      # whose source is missing the artifact, but it refuses after logging into
+      # both registries; asking here names the version rather than the address.
+      - name: Require the artifact dev serves
+        working-directory: apps/infra
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+          TAG: ${{ inputs.tag }}
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          set -Eeuo pipefail
+          # Refuses either way, and says which: "publish it first" sends the
+          # dispatcher somewhere useful only when dev really is empty here.
+          held=0
+          npm run --silent mbuild verify -- --tag "$SHA" --stage dev --artifact "$ARTIFACT" --version "$TAG" || held=$?
+          if [ "$held" -eq 66 ]; then
+            echo "::error title=not published::dev does not hold $ARTIFACT for $TAG ($SHA). Run this workflow's publish command first."
+            exit 1
+          fi
+          if [ "$held" -ne 0 ]; then
+            echo "::error title=registry::could not tell whether dev holds $ARTIFACT for $TAG ($SHA); mbuild verify exited $held. Nothing was promoted."
+            exit 1
+          fi
+
+      - name: Download and upload
+        working-directory: apps/infra
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+          TAG: ${{ inputs.tag }}
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          set -Eeuo pipefail
+          for attempt in 1 2 3; do
+            if npm run --silent mbuild promote -- --tag "$SHA" --from dev --to prod --artifact "$ARTIFACT" --version "$TAG"; then
+              exit 0
+            fi
+            echo "Promotion failed (attempt $attempt/3); retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
+          echo "::error title=promote::Could not promote $ARTIFACT at $SHA from dev to prod after 3 attempts"
+          exit 1
+
+      - name: Report
+        if: always()
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          {
+            echo "### mbuild-release promote ${{ inputs.tag }} · \`${{ matrix.artifact }}\`"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| version | \`${{ inputs.tag }}\` |"
+            echo "| commit | \`$SHA\` |"
+            echo "| image tag | \`${{ inputs.tag }}-$SHA\` |"
+            echo "| artifact | \`${{ matrix.artifact }}\` |"
+            echo "| from | \`dev\` |"
+            echo "| to | \`prod\` |"
+            echo "| registry | \`${{ steps.config.outputs.kind }}\` in \`${{ steps.config.outputs.region }}\` |"
+            echo "| result | \`${{ job.status }}\` |"
+            echo
+            echo "Deploy it with:"
+            echo
+            echo '```'
+            echo "gh workflow run mdeploy-all.yml --ref main \\"
+            echo "  -f stage=prod -f ref=${{ inputs.tag }} -f apply=true -f confirm=true"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

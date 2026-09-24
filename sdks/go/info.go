@@ -96,6 +96,12 @@ type BoxInfo struct {
 	// measures idleness against. The zero time means no activity was
 	// recorded, which is always the case for local runtimes.
 	LastActivityAt time.Time
+	// ExitCode is how the box's main command ended, set once the runtime
+	// recorded it and nil otherwise. Stopping a box signals that command, so
+	// this also carries what the stop produced. It is a pointer, not a plain
+	// int, because 0 is the exit code of every command that succeeded and so
+	// cannot double as "no exit code recorded".
+	ExitCode *int
 	// ResolvedImage is what Image resolved to when this box's disk was built —
 	// the build the box actually runs, where Image is the reference as given.
 	// Nil for a box booted from a local rootfs path, for one imported from an
@@ -206,6 +212,14 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 	if ms := int64(info.last_activity_at); ms > 0 {
 		boxLastActivityAt = time.UnixMilli(ms)
 	}
+	// Null is the absence, so `0` needs no special handling here: the C side
+	// allocates only when the runtime recorded a code. Testing the value
+	// instead would drop every clean exit.
+	var boxExitCode *int
+	if info.exit_code != nil {
+		code := int(*info.exit_code)
+		boxExitCode = &code
+	}
 	return BoxInfo{
 		ID:         cString(info.id),
 		Name:       cString(info.name),
@@ -223,6 +237,7 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 
 		StartedAt:      boxStartedAt,
 		LastActivityAt: boxLastActivityAt,
+		ExitCode:       boxExitCode,
 		ResolvedImage:  cResolvedImageToGo(info),
 	}
 }

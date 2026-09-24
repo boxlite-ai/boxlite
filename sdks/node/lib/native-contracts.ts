@@ -269,6 +269,12 @@ export interface JsBoxStateInfo {
   status: string;
   running: boolean;
   pid?: number;
+  /**
+   * How the box's main command ended, present once the runtime recorded it.
+   * Stopping a box signals that command, so this carries what the stop
+   * produced too. `0` is a real value; check for `undefined`, not falsiness.
+   */
+  exitCode?: number;
 }
 
 export interface JsPublishedPort {

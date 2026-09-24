@@ -1,0 +1,9 @@
+[package]
+name = "boxlite-hypervisor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+description = "Host hypervisor backends for BoxLite's VMM"

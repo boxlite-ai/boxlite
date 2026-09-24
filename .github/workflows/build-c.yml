@@ -114,6 +114,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
+          cache: ${{ runner.os != 'Linux' }}
 
       - uses: ./.github/actions/sccache
 

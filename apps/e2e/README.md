@@ -19,6 +19,10 @@ also **not** what `npm run e2e:local` starts — that command brings up the loca
 Dex environment for the dashboard. Drive this suite through the
 `make test:e2e*` targets.
 
+The wider REST API test flow, from the contract inventory and this suite to the
+CLI matrix and both authentication modes, is in
+[`rest-api-e2e.md`](rest-api-e2e.md).
+
 ## What the suite verifies
 
 Every test in `cases/` uses the REST-mode runtime built by `conftest.py::rt`.

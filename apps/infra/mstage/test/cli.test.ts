@@ -110,6 +110,20 @@ test('a provider this repository does not declare is refused', async () => {
   )
 })
 
+test('a provider name every object inherits is refused, not padded into a report', async () => {
+  // The name comes from argv and the map is built out of the parsed stage
+  // file, so `in` answered for `toString` and the run reached `padEnd` on a
+  // provider that was never declared — a TypeError where the refusal above
+  // belongs.
+  for (const inherited of ['toString', 'constructor', 'hasOwnProperty']) {
+    await assert.rejects(
+      () => run({ argv: ['login', inherited], environment: { MSTAGE_CONFIG: EXAMPLE }, log() {} }),
+      new RegExp(`No stage here uses "${inherited}"\\.`),
+      `${inherited} was taken for a declared provider`,
+    )
+  }
+})
+
 test('login providers come from the stage file, not from mstage itself', () => {
   const stages = parseStages(
     '/repo/.mstage.config.json',

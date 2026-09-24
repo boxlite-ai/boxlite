@@ -388,6 +388,19 @@ typedef struct CBoxInfo {
   // AutoStop measures idleness against; `0` when nothing was recorded, which
   // is always the case for local runtimes.
   int64_t last_activity_at;
+  // Owned record of how the box's main command ended; null when the runtime
+  // recorded none. Stopping a box signals that command, so this carries what
+  // the stop produced as well as a self-chosen exit.
+  //
+  // Absence cannot be a sentinel the way it is for [`Self::pid`] and
+  // [`Self::started_at`]: `0` is the exit code of every command that
+  // succeeded, so a reader that took `0` for "nothing recorded" would
+  // report every clean exit as an absent one. A pointer makes that reading
+  // impossible rather than merely wrong — there is no value to mistake —
+  // and follows [`Self::network`], the struct's other owned optional.
+  //
+  // [`free_box_info`] releases it.
+  int *exit_code;
   // Manifest digest `image` resolved to when this box's disk was built —
   // the build the box runs. Null when unknown: a box booted from a local
   // rootfs path, one imported from an archive, one whose disk predates the
@@ -1010,7 +1023,11 @@ void boxlite_options_set_network_disabled(CBoxliteOptions *opts);
 // A non-empty allowlist restricts both TCP and UDP egress. Hostname entries
 // are enforced by TLS SNI / HTTP Host inspection, which only TCP carries, so
 // an allowlist holding only hostnames denies all UDP egress — add the IP or
-// CIDR to keep UDP open.
+// CIDR to keep UDP open. A host matched by a configured secret is
+// additionally reachable on port 443 without an entry of its own, so this
+// allowlist is not the only egress gate. That connection is dialed by name,
+// and under a non-empty allowlist an answer in a private, loopback or CGNAT
+// range is refused unless an IP or CIDR rule covers it.
 void boxlite_options_add_network_allow(CBoxliteOptions *opts, const char *host);
 
 // Marks services the box exposes as publicly reachable (the default).

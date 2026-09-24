@@ -116,7 +116,7 @@ export async function buildClickHouseStorage(input: {
   const writerSecret: ManagedSecret = createClickHouseSecret('ClickHouseWriterSecret', 'clickhouse-writer')
   const readerSecret: ManagedSecret = createClickHouseSecret('ClickHouseReaderSecret', 'clickhouse-reader')
   const { encodeClickHouseUserData, CLICKHOUSE_IMAGE, CLICKHOUSE_RETENTION_HOURS, renderClickHouseSchema } = await import(
-    '../scripts/clickhouse-host.js'
+    'mdeploy/clickhouse-host'
   )
 
   const role = new aws.iam.Role('ClickHouseRole', {

@@ -227,9 +227,10 @@ pub struct BoxState {
     /// Serde default keeps existing DB rows readable without migration.
     #[serde(default)]
     pub error_reason: Option<String>,
-    /// Exit code of the container's init process (docker semantics: set
-    /// when the box stopped because its main command exited). Serde default
-    /// keeps existing DB rows readable without migration.
+    /// How the container's init process ended (docker semantics), set once
+    /// the runtime recorded it — its own code, or `128 + n` when a signal
+    /// ended it, as stopping a box does. Serde default keeps existing DB rows
+    /// readable without migration.
     #[serde(default)]
     pub exit_code: Option<i32>,
     /// When the box most recently entered [`BoxStatus::Running`] (docker's

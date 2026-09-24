@@ -21,51 +21,21 @@
 # half-finished run instead of failing on an immutable tag it wrote itself.
 name: mbuild
 
+# Callee only.
+#
+# Nobody publishes a commit by hand any more: `mdeploy-all.yml` is the one
+# rollout path, and this is its development leg — the images a dev deploy needs
+# for a commit that no release names. A release goes through
+# `mbuild-release.yml` instead, which refuses a version already in the
+# registry rather than skipping it.
+#
+# That removes the reason the inputs below were an allowlist. The rule they
+# enforced — a free-text stage is a dispatcher reaching an Environment nobody
+# granted them — has no dispatcher left to guard against; the only caller is a
+# workflow in this repository whose own `stage` is a choice.
+# `apps/infra/deployment/release-safety.test.ts` checks that a workflow with no
+# dispatch is reachable only this way.
 on:
-  workflow_dispatch:
-    inputs:
-      command:
-        description: Build and push a commit, or move one between stages
-        required: true
-        type: choice
-        options: [publish, promote]
-        default: publish
-      tag:
-        description: Commit SHA, or a git tag naming one (defaults to this ref)
-        required: false
-      # A choice rather than free text, and not for convenience: this value
-      # selects the job's deployment Environment, and an Environment carries the
-      # secrets and the reviewers of the stage it names. A typo in a free-text
-      # field is a dispatcher reaching an Environment nobody granted them.
-      # Enforced across every workflow by
-      # apps/infra/deployment/release-safety.test.ts.
-      stage:
-        description: Stage to publish to; ignored by promote
-        required: true
-        default: dev
-        type: choice
-        options:
-          - dev
-          - prod
-      from:
-        description: Stage to promote from; ignored by publish
-        required: false
-        type: choice
-        options:
-          - dev
-          - prod
-      to:
-        description: Stage to promote to; ignored by publish
-        required: false
-        type: choice
-        options:
-          - dev
-          - prod
-
-  # Called by an orchestrating workflow, which dispatches the same three
-  # commands in order. The allowlist above is what a person types; a caller
-  # passes a string because `workflow_call` has no choice type — and the caller
-  # is a workflow in this repository whose own input is an allowlist.
   workflow_call:
     inputs:
       command:
@@ -113,7 +83,7 @@ jobs:
   # either stage passes through here.
   declaration:
     name: read ${{ inputs.from }}
-    if: github.ref == 'refs/heads/main' && inputs.command == 'promote'
+    if: ${{ (github.ref == 'refs/heads/main' || (inputs.stage || inputs.to) == 'dev') && inputs.command == 'promote' }}
     environment: ${{ inputs.from }}
     runs-on: ubuntu-latest
     outputs:
@@ -128,7 +98,8 @@ jobs:
     # Waits for that job only when there is one — a publish reads one stage.
     needs: [declaration]
     if: >-
-      ${{ !cancelled() && !failure() && github.ref == 'refs/heads/main' }}
+      ${{ !cancelled() && !failure()
+      && (github.ref == 'refs/heads/main' || (inputs.stage || inputs.to) == 'dev') }}
     # The job that reaches a protected Environment reaches the cloud role behind
     # it, so it runs from main and nowhere else. `!failure()` rather than a bare
     # `needs`, because the job above is skipped for a publish and a skipped
@@ -140,31 +111,34 @@ jobs:
       # destination; the source is reached with the same identity, which is why
       # both stages have to live in one account.
       TARGET_STAGE: ${{ inputs.stage || inputs.to }}
-      IMAGE_TAG: ${{ inputs.tag || github.sha }}
+      IMAGE_TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-          # Tags and the commits they name, so the step below can resolve one. A
-          # shallow checkout carries neither, and a dispatcher naming a release
-          # would get "not a ref this checkout can resolve" for a tag that does
-          # exist.
-          fetch-depth: 0
+          # This workflow's own actions, and nothing else: the tree the images
+          # are built from is checked out below, at the commit the caller named.
+          fetch-depth: 1
 
-      # A tag is a name; mbuild addresses bytes. The action dereferences an
-      # annotated tag and fails loudly on a ref this checkout cannot resolve.
-      - id: ref
-        uses: ./.github/actions/resolve-ref
-        with:
-          ref: ${{ inputs.tag }}
-          fallback: ${{ github.sha }}
-
-      - name: Address the commit the ref names
+      # The caller resolved this and proved where it came from — `mdeploy-all`'s
+      # `resolve` job turns a tag, a commit or a pull request into one SHA and
+      # refuses each shape for its own reasons. Re-resolving here would be a
+      # second answer to "which commit", and it could not reach the same one: a
+      # pull request's merge commit sits on no branch, so the branch check this
+      # step used to make would refuse exactly the ref the caller just proved.
+      # The shape is re-checked rather than trusted, the way
+      # `build-apps-api-image.yml` re-checks its own.
+      - name: Address the commit the caller resolved
         shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          printf 'IMAGE_TAG=%s\n' '${{ steps.ref.outputs.sha }}' >> "$GITHUB_ENV"
-          printf 'RESOLVED_FROM=%s\n' '${{ steps.ref.outputs.resolved-from }}' >> "$GITHUB_ENV"
+          if [[ ! "$TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=tag::a caller passes one full lowercase commit SHA, already resolved (got '$TAG')"
+            exit 1
+          fi
+          printf 'IMAGE_TAG=%s\n' "$TAG" >> "$GITHUB_ENV"
 
       # The tree the images are built from, which is the whole point of naming a
       # commit. `mbuild publish` passes the tag to docker as a build argument
@@ -186,7 +160,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           persist-credentials: false
-          ref: ${{ steps.ref.outputs.sha }}
+          ref: ${{ inputs.tag }}
 
       # apps/infra is not one of the root workspaces and carries its own
       # lockfile, so a root install leaves mstage, mbuild and sst unresolved and
@@ -340,9 +314,6 @@ jobs:
             echo "| | |"
             echo "|---|---|"
             echo "| commit | \`$IMAGE_TAG\` |"
-            # Only when a ref was resolved, so the row says something rather
-            # than repeating the commit under a second name.
-            [ -n "${RESOLVED_FROM:-}" ] && echo "| resolved from | \`$RESOLVED_FROM\` |"
             echo "| stage | \`$TARGET_STAGE\` |"
             echo "| registry | \`${{ steps.config.outputs.kind }}\` in \`${{ steps.config.outputs.region }}\` |"
             echo "| repository | \`${{ steps.config.outputs.repository }}\` |"

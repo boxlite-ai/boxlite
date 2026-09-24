@@ -111,6 +111,39 @@ test('a preview does not need the window a rollout does', () => {
   assert.equal(windowFor('diff'), REQUIRED_PREVIEW_SECONDS)
   assert.equal(windowFor('deploy'), REQUIRED_CREDENTIAL_SECONDS)
   assert.equal(windowFor('remove'), REQUIRED_CREDENTIAL_SECONDS, 'a teardown holds the same lock as a rollout')
+  // A refresh holds the lock and rewrites the state it read. It changes no
+  // resource, which is why it is easy to file beside the preview and wrong to.
+  assert.equal(windowFor('refresh'), REQUIRED_CREDENTIAL_SECONDS, 'a refresh writes the state a rollout writes')
+})
+
+test('a refresh reaches the engine as a refresh, not as the preview it resembles', async () => {
+  /*
+   * What an interrupted run leaves behind: Pulumi records an operation before
+   * starting it, so a driver killed in between leaves the record and every
+   * later run opens with `pending operations from previous deployment` over
+   * resources it calls unknown. The engine's own advice is a refresh, and
+   * before this intent existed the only way to take it was a script outside
+   * this repository holding the backend URL and the passphrase by hand.
+   */
+  const asked: string[] = []
+  await pulumiDeploy({
+    intent: 'refresh',
+    config: { root: '/repo/apps/infra' } as any,
+    scope: scope({ home: 'gcp', project: 'boxlite-dev-project' }),
+    identity: identity('gcp') as any,
+    state: { bucket: 'boxlite-state' },
+    stageEnvironment: { PULUMI_CONFIG_PASSPHRASE: 'passphrase' },
+    log: () => {},
+    lookupAuthorizations: (() => ({ ok: true, held: [] })) as any,
+    createStackWith: (async () => ({
+      setAllConfig: async () => {},
+      up: async () => asked.push('up'),
+      preview: async () => asked.push('preview'),
+      destroy: async () => asked.push('destroy'),
+      refresh: async () => asked.push('refresh'),
+    })) as any,
+  }).catch(() => {})
+  assert.deepEqual(asked, ['refresh'], `the intent reached the wrong engine call: ${JSON.stringify(asked)}`)
 })
 
 /*

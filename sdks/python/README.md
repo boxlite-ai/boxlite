@@ -236,7 +236,7 @@ Configuration options for creating a box.
 - `image: str` - OCI image URI (default: `"python:slim"`)
 - `cpus: int` - Number of CPUs (default: 1, max: host CPU count)
 - `memory_mib: int` - Memory in MiB (default: 512, range: 128-65536)
-- `disk_size_gb: int | None` - Persistent disk size in GB (default: None)
+- `disk_size_gb: int | None` - Container disk size in GB, never smaller than the image (default: None, the image size)
 - `working_dir: str` - Working directory in container (default: `"/root"`)
 - `env: List[Tuple[str, str]]` - Environment variables as (key, value) pairs
 - `volumes: List[Tuple | Dict]` - Volume mounts; a tuple is a host bind, a dict takes `managed_volume` (id or name) or `host_path`
@@ -246,11 +246,12 @@ Configuration options for creating a box.
   - Protocol: `"tcp"`; UDP is rejected
   - Portable local/remote code uses `box.network.tunnel(port)`; each tunnel is
     a prepared one-shot tunnel; call `forward()` for a listener
-- `secrets: List[Secret]` - Host-side HTTP(S) secret substitution rules
+- `secrets: List[Secret]` - Host-side HTTPS secret substitution rules
 - `advanced: AdvancedBoxOptions | None` - Expert-only container options
   - `capabilities.add: List[str]` - Capabilities added to BoxLite's baseline
   - `capabilities.drop: List[str]` - Capabilities removed from the resulting set
-- `auto_remove: bool` - Auto cleanup after stop (default: True)
+- `auto_delete: int | None` - `0` keeps the box after stop; above `0`, a REST runtime deletes it that many seconds after stop and a local runtime at stop. Default `None` keeps the runtime's default (`auto_remove` locally)
+- `auto_remove: bool` - Deprecated: use `auto_delete`. Auto cleanup after stop (default: True)
 
 `NetworkSpec` uses:
 
@@ -265,7 +266,10 @@ Supplying it together with `outbound` raises `ValueError`. `spec.mode` and
 `allow_net` restricts both TCP and UDP egress. Hostname entries are enforced by
 inspecting TLS SNI / HTTP Host, which only TCP carries, so an `allow_net`
 holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP
-open.
+open. A host matched by a configured `Secret` is additionally reachable on port
+443 without a rule of its own, so `allow_net` is not the only egress gate. The
+connection is dialed by name, and under a non-empty `allow_net` an answer in a
+private, loopback or CGNAT range is refused unless an IP or CIDR rule covers it.
 
 `mode="disabled"` removes the guest network interface entirely.
 
@@ -276,7 +280,7 @@ options = boxlite.BoxOptions(
     image="postgres:latest",
     cpus=2,
     memory_mib=1024,
-    disk_size_gb=10,  # 10 GB persistent disk
+    disk_size_gb=10,  # 10 GB disk
     env=[
         ("POSTGRES_PASSWORD", "secret"),
         ("POSTGRES_DB", "mydb"),
@@ -323,14 +327,11 @@ Handle to a running or stopped box.
 
 **Methods:**
 
-- `exec(*args, **kwargs) -> Execution`
-  Execute a command in the box (async)
+- `exec(command, args=None, env=None, tty=False, user=None, timeout_secs=None, cwd=None) -> Execution`
+  Execute a command in the box (async); `args` is a list
 
 - `stop() -> None`
   Stop the box gracefully (async)
-
-- `remove() -> None`
-  Delete the box and its data (async)
 
 - `info() -> Awaitable[BoxInfo]`
   Get box metadata (async)
@@ -349,16 +350,15 @@ Handle to a running or stopped box.
 box = await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
 
 # Execute commands
-execution = await box.exec("echo", "Hello")
+execution = await box.exec("echo", ["Hello"])
 result = await execution.wait()
 
 # Get box info
 info = await box.info()
 print(f"Box {info.id}: {info.state.status}")
 
-# Stop and remove
+# Stop; by default this also removes the box
 await box.stop()
-await box.remove()
 ```
 
 ### Command Execution
@@ -391,7 +391,7 @@ Represents a running command execution.
 
 ```python
 # Streaming output
-execution = await box.exec("python", "-c", "for i in range(5): print(i)")
+execution = await box.exec("python", ["-c", "for i in range(5): print(i)"])
 
 stdout = execution.stdout()
 async for line in stdout:
@@ -409,7 +409,7 @@ Async iterators for streaming output.
 **Usage:**
 
 ```python
-execution = await box.exec("ls", "-la")
+execution = await box.exec("ls", ["-la"])
 
 # Stream stdout line by line
 stdout = execution.stdout()
@@ -545,8 +545,9 @@ All I/O operations are async. Use `await` for operations and `async for` for str
 async with boxlite.SimpleBox(image="alpine") as box:
     result = await box.exec("echo", "Hello")
 
-# Stream output (async iterator)
-execution = await box.exec("python", "script.py")
+# Stream output (async iterator) from a low-level Box
+low_level_box = await runtime.create(boxlite.BoxOptions(image="python:slim"))
+execution = await low_level_box.exec("python", ["script.py"])
 async for line in execution.stdout():
     print(line)
 ```
@@ -566,8 +567,7 @@ box = await runtime.create(boxlite.BoxOptions(image="alpine"))
 try:
     await box.exec("command")
 finally:
-    await box.stop()
-    await box.remove()
+    await box.stop()  # also removes the box by default
 ```
 
 ### Streaming I/O
@@ -575,7 +575,7 @@ finally:
 Stream output line-by-line as it's produced:
 
 ```python
-execution = await box.exec("tail", "-f", "/var/log/app.log")
+execution = await box.exec("tail", ["-f", "/var/log/app.log"])
 
 # Process output in real-time
 stdout = execution.stdout()
@@ -668,13 +668,14 @@ boxlite.BoxOptions(
 ### Persistent Storage
 
 ```python
-# Ephemeral (default) - data lost on box removal
+# Default - the box and its disk are removed when it stops
 boxlite.BoxOptions(image="postgres")
 
-# Persistent - data survives stop/restart via QCOW2 disk
+# Kept - the box and its QCOW2 disk survive stop/restart
 boxlite.BoxOptions(
     image="postgres",
-    disk_size_gb=20,  # 20 GB persistent disk
+    disk_size_gb=20,  # 20 GB disk
+    auto_delete=0,    # keep the box after stop
 )
 ```
 
@@ -952,9 +953,9 @@ make dist:python
 ## Further Documentation
 
 - [BoxLite Main README](../../README.md) - Project overview
-- [Architecture Documentation](../../docs/architecture/README.md) - How BoxLite works
+- [Concepts](../../docs/concepts/README.md) - How BoxLite works
 - [Getting Started Guide](../../docs/getting-started/README.md) - Installation and setup
-- [How-to Guides](../../docs/guides/README.md) - Practical guides
+- [Guides](../../docs/guides/README.md) - Practical guides
 - [API Reference](../../docs/reference/README.md) - Complete API documentation
 
 ## License

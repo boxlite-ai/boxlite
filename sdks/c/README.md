@@ -414,7 +414,8 @@ BoxliteErrorCode boxlite_start_box(
     CBoxliteError* out_error
 );
 
-// Stop box (can restart later)
+// Stop box; a local runtime also removes it unless its options called
+// boxlite_options_set_auto_delete_interval(opts, 0)
 BoxliteErrorCode boxlite_stop_box(
     CBoxHandle* handle,
     CBoxliteError* out_error
@@ -1146,7 +1147,7 @@ boxlite_options_set_memory(opts, 256);
 
 The C SDK is a thin wrapper around the Rust `boxlite` crate:
 
-```
+```text
 sdks/c/src/lib.rs
   ↓ (exports C ABI)
 sdks/c/src/runtime.rs    (runtime management)

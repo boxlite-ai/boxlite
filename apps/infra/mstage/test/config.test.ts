@@ -29,6 +29,7 @@ test('a complete config keeps every declared stage field', () => {
     login: {},
     project: null,
     zone: null,
+    promoteFrom: null,
     roleArn: null,
     protect: false,
     deploy: {},
@@ -49,6 +50,60 @@ test('a stage may pin the zone its machines are created in', () => {
   // rather than written in here — a stage with nothing to say about placement
   // should not have to say it.
   assert.equal(parse({ stages: { dev: { home: 'aws', region: 'ap-southeast-1' } } }).stages.dev!.zone, null)
+})
+
+/*
+ * `promoteFrom`: the standing answer to a question only a whole file can hold.
+ *
+ * The reads a promotion makes are granted on the *source* and held by the
+ * destination's accounts, so `bootstrap` has to be told which stage that is.
+ * A rollout cannot answer it: `mdeploy-all` promotes from dev and reaches
+ * nothing that runs on a workstation.
+ */
+test('a stage names the stage it is promoted from', () => {
+  const config = parse({
+    stages: {
+      dev2: { home: 'gcp', region: 'asia-southeast1', project: 'dev-project' },
+      prod2: { home: 'gcp', region: 'asia-southeast1', project: 'prod-project', promoteFrom: 'dev2' },
+    },
+  })
+  assert.equal(config.stages.prod2!.promoteFrom, 'dev2')
+  // Silence is a stage nothing is promoted into, which is most of them.
+  assert.equal(config.stages.dev2!.promoteFrom, null)
+})
+
+test('a source declared in another cloud is refused, because one session does the whole move', () => {
+  // `runner:promote` refuses this at run time too, but by then a bootstrap has
+  // already granted nothing and CI has already spent the job.
+  assert.throws(
+    () =>
+      parse({
+        stages: {
+          dev: { home: 'aws', region: 'ap-southeast-1' },
+          prod2: { home: 'gcp', region: 'asia-southeast1', project: 'p', promoteFrom: 'dev' },
+        },
+      }),
+    /stage "prod2" lives in gcp and promotes from "dev", which lives in aws/,
+  )
+  assert.throws(
+    () => parse({ stages: { dev: { home: 'aws', region: 'ap-southeast-1', promoteFrom: 'dev' } } }),
+    /promotes from itself/,
+  )
+})
+
+test('a source that is simply not in this file is carried, not refused', () => {
+  /*
+   * The case that makes the check above narrow on purpose. `setup-infra`
+   * restores the declarations a job reaches — one for a deploy, both ends for a
+   * promotion — so prod's block arrives on its own for every ordinary deploy.
+   * Refusing an absent source here would fail all of them over a field no
+   * deploy reads; `bootstrap`, which reads a whole file, is where the name has
+   * to resolve.
+   */
+  const config = parse({
+    stages: { prod2: { home: 'gcp', region: 'asia-southeast1', project: 'p', promoteFrom: 'dev2' } },
+  })
+  assert.equal(config.stages.prod2!.promoteFrom, 'dev2')
 })
 
 test('each stage says which cloud it is in, and two clouds sit in one file', () => {
@@ -75,6 +130,23 @@ test('a stage that lives in gcp must name its project', () => {
 
 test('homeFor refuses a stage the config never declared rather than guessing the default', () => {
   assert.throws(() => homeFor(parse({}), 'dve'), /declares no stage "dve"\. Declared: dev, prod/)
+})
+
+test('a name every object inherits is not a stage the file declares', () => {
+  /*
+   * The stage name comes from `--stage` and the map comes out of `JSON.parse`,
+   * so it carries `Object.prototype` with it. A lookup that reads through the
+   * chain answers "declared" for `toString` and returns a function; the caller
+   * then reads `.home` or `.region` off it and fails somewhere downstream with
+   * no stage name in the message.
+   */
+  for (const inherited of ['toString', 'constructor', 'hasOwnProperty']) {
+    assert.throws(
+      () => homeFor(parse({}), inherited),
+      new RegExp(`declares no stage "${inherited}"\\. Declared: dev, prod`),
+      `${inherited} resolved to a home`,
+    )
+  }
 })
 
 test('a GCP stage declares the project it lives in; an AWS stage declares no tenant at all', () => {

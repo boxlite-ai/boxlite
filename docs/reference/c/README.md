@@ -1,4 +1,4 @@
-# C SDK API Reference
+# C SDK API reference
 
 Complete API reference for the BoxLite C SDK.
 
@@ -10,7 +10,7 @@ The C SDK provides C-compatible FFI bindings for integrating BoxLite into C/C++ 
 **Header**: `boxlite.h`
 **C Standard**: C11-compatible compiler (GCC/Clang)
 
-### API Styles
+### API styles
 
 The SDK provides two API styles:
 
@@ -26,7 +26,7 @@ The SDK provides two API styles:
 
 ---
 
-## Table of Contents
+## Table of contents
 
 - [Quick Start](#quick-start)
 - [Error Handling](#error-handling)
@@ -52,9 +52,9 @@ The SDK provides two API styles:
 
 ---
 
-## Quick Start
+## Quick start
 
-### Simple API (Recommended)
+### Simple API (recommended)
 
 ```c
 #include <stdio.h>
@@ -86,7 +86,7 @@ int main() {
 }
 ```
 
-### Native API (Full Control)
+### Native API (full control)
 
 ```c
 #include <stdio.h>
@@ -185,7 +185,7 @@ export LD_LIBRARY_PATH=/path/to/boxlite/target/release:$LD_LIBRARY_PATH
 
 ---
 
-## Error Handling
+## Error handling
 
 The C SDK introduces structured error handling with error codes and detailed messages.
 
@@ -229,7 +229,7 @@ typedef struct CBoxliteError {
 } CBoxliteError;
 ```
 
-### Error Handling Patterns
+### Error handling patterns
 
 **Pattern 1: Basic Check**
 
@@ -365,7 +365,7 @@ BoxliteErrorCode boxlite_simple_run(
 | `out_result` | `CBoxliteExecResult**` | Output: execution result |
 | `out_error` | `CBoxliteError*` | Output: error information |
 
-#### Result Structure
+#### Result structure
 
 ```c
 typedef struct CBoxliteExecResult {
@@ -417,7 +417,7 @@ Safe to call with NULL.
 
 ## Native API
 
-### Runtime Management
+### Runtime management
 
 #### boxlite_version
 
@@ -545,7 +545,7 @@ Safe to call with NULL. Automatically frees all boxes.
 
 ---
 
-### Box Management
+### Box management
 
 #### boxlite_create_box
 
@@ -693,7 +693,7 @@ Safe to call with NULL. Use when you need to release a box handle without freein
 
 ---
 
-### Network Tunnels
+### Network tunnels
 
 ```c
 BoxliteErrorCode boxlite_box_network(
@@ -762,7 +762,7 @@ local-only host listener that accepts repeated connections.
 
 ---
 
-### Command Execution
+### Command execution
 
 #### boxlite_execute
 
@@ -802,7 +802,7 @@ BoxliteErrorCode boxlite_execute(
 | `out_execution` | `CExecutionHandle**` | Output: execution handle |
 | `out_error` | `CBoxliteError*` | Output: error information |
 
-#### Callback Signature
+#### Callback signature
 
 ```c
 void callback(const char* text, int is_stderr, void* user_data);
@@ -846,7 +846,7 @@ if (code == Ok) {
 
 ---
 
-#### Execution Control
+#### Execution control
 
 ```c
 BoxliteErrorCode boxlite_execution_write(CExecutionHandle* execution, const char* data, int len, CBoxliteError* out_error);
@@ -884,7 +884,7 @@ if (code == Ok) {
 
 ---
 
-### Discovery & Introspection
+### Discovery & introspection
 
 #### boxlite_list_info
 
@@ -1052,7 +1052,7 @@ BoxliteErrorCode boxlite_box_metrics(
 
 ---
 
-## Memory Management
+## Memory management
 
 ### Rules
 
@@ -1106,7 +1106,7 @@ Safe to call with NULL.
 
 ---
 
-## Thread Safety
+## Thread safety
 
 | Component | Thread Safety |
 |-----------|---------------|
@@ -1115,7 +1115,7 @@ Safe to call with NULL.
 | `CBoxliteSimple` | **NOT** thread-safe - do not share across threads |
 | Callbacks | Invoked on the thread calling `boxlite_runtime_drain()` |
 
-### Safe Multi-threaded Usage
+### Safe multi-threaded usage
 
 ```c
 // CORRECT: Share runtime, create per-thread boxes
@@ -1145,7 +1145,7 @@ for (int i = 0; i < 4; i++) {
 
 ---
 
-## Platform Requirements
+## Platform requirements
 
 | Platform | Architecture | Status | Requirements |
 |----------|-------------|--------|--------------|
@@ -1159,7 +1159,7 @@ for (int i = 0; i < 4; i++) {
 
 ## Migration from v0.1.x
 
-### Error Handling Change
+### Error handling change
 
 **v0.1.x (old):**
 ```c
@@ -1184,7 +1184,7 @@ if (code != Ok) {
 }
 ```
 
-### Execute Change
+### Execute change
 
 **v0.1.x:**
 ```c
@@ -1211,7 +1211,7 @@ if (code != Ok) {
 }
 ```
 
-### Migration Checklist
+### Migration checklist
 
 - [ ] Replace `char* error = NULL` with `CBoxliteError error = {0}`
 - [ ] Initialize output pointers to NULL (e.g., `CBoxliteRuntime* runtime = NULL`)
@@ -1223,7 +1223,7 @@ if (code != Ok) {
 
 ---
 
-## API Summary
+## API summary
 
 | Function | Description |
 |----------|-------------|
@@ -1253,9 +1253,9 @@ if (code != Ok) {
 
 ---
 
-## Common Patterns
+## Common patterns
 
-### Streaming Output
+### Streaming output
 
 ```c
 void output_callback(const char* text, int is_stderr, void* user_data) {
@@ -1273,7 +1273,7 @@ if (boxlite_execute(box, &cmd, output_callback, NULL, &execution, &error) == Ok)
 }
 ```
 
-### Reattach to Box
+### Reattach to box
 
 ```c
 // Get box ID
@@ -1286,7 +1286,7 @@ boxlite_get(runtime, box_id, &box2, &error);
 boxlite_free_string(box_id);
 ```
 
-### Get Box Info
+### Get box info
 
 ```c
 InfoRequest request = {0};
@@ -1304,7 +1304,7 @@ if (code == Ok) {
 
 ---
 
-## Common Mistakes
+## Common mistakes
 
 ### Uninitialized error struct
 
@@ -1346,7 +1346,7 @@ static void list_callback(CBoxInfoList* list, CBoxliteError* error,
 
 ---
 
-## Build & Link
+## Build & link
 
 ### CMake
 
@@ -1363,7 +1363,7 @@ add_executable(my_app main.c)
 target_link_libraries(my_app ${BOXLITE_LIB_DIR}/libboxlite.dylib)
 ```
 
-### Direct Compilation
+### Direct compilation
 
 ```bash
 # macOS
@@ -1387,9 +1387,9 @@ export LD_LIBRARY_PATH=/path/to/boxlite/target/release:$LD_LIBRARY_PATH
 
 ---
 
-## See Also
+## See also
 
 - **[C SDK README](../../../sdks/c/README.md)** - Full SDK documentation
 - **[C Quick Start](../../getting-started/quickstart-c.md)** - 5-minute guide
 - **[C Examples](../../../examples/c/)** - Working examples
-- **[Architecture](../../architecture/README.md)** - How BoxLite works
+- **[Concepts](../../concepts/README.md)** - How BoxLite works

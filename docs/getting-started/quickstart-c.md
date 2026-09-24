@@ -1,4 +1,4 @@
-# C Quick Start
+# C quick start
 
 Get up and running with BoxLite C SDK in 5 minutes.
 
@@ -43,7 +43,7 @@ ls -la sdks/c/include/boxlite.h
 
 ---
 
-## Simple API (Easiest)
+## Simple API (easiest)
 
 Create a file `hello.c`:
 
@@ -111,7 +111,7 @@ export LD_LIBRARY_PATH=/path/to/boxlite/target/release:$LD_LIBRARY_PATH
 
 ---
 
-## Native API (Full Control)
+## Native API (full control)
 
 For advanced use cases with streaming output and custom configuration.
 
@@ -189,7 +189,7 @@ Build and run using the same commands as above.
 
 ---
 
-## Running Examples
+## Running examples
 
 BoxLite includes 8 comprehensive C examples:
 
@@ -228,7 +228,7 @@ make
 
 ---
 
-## Error Handling
+## Error handling
 
 The C SDK uses structured error handling:
 
@@ -263,7 +263,7 @@ See [C SDK API Reference](../reference/c/README.md#boxliteerrorcode) for the com
 
 ---
 
-## Next Steps
+## Next steps
 
 - **[C SDK README](../../sdks/c/README.md)** - Complete SDK documentation
   - Simple API and Native API details

@@ -10,7 +10,7 @@ import (
 	"context"
 
 	"github.com/boxlite-ai/runner/pkg/api/dto"
-	"github.com/boxlite-ai/runner/pkg/models/enums"
+	"github.com/boxlite-ai/runner/pkg/models"
 )
 
 // BoxBackend abstracts box lifecycle operations.
@@ -24,7 +24,7 @@ type BoxBackend interface {
 	Destroy(ctx context.Context, boxId string) error
 	RecoverBox(ctx context.Context, boxId string, recoverDto dto.RecoverBoxDTO) error
 	UpdateNetworkSettings(ctx context.Context, boxId string, settings dto.UpdateNetworkSettingsDTO) error
-	GetBoxState(ctx context.Context, boxId string) (enums.BoxState, error)
+	GetBoxInfo(ctx context.Context, boxId string) (models.BoxInfo, error)
 
 	// Migration — move a box between runners through a portable archive.
 	// ExportBox returns the archive path the runtime wrote inside destDir.

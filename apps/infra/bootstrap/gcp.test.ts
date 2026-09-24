@@ -4,7 +4,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { GcpBootstrapError, attributeCondition, bootstrapGcp, type Run, type RunResult } from './gcp.js'
+import {
+  GcpBootstrapError,
+  attributeCondition,
+  bootstrapGcp,
+  promotionSourceFor,
+  type Run,
+  type RunResult,
+} from './gcp.js'
 
 const GITHUB = {
   issuer: 'https://token.actions.githubusercontent.com',
@@ -30,7 +37,18 @@ const QUERIES = [
  * existence questions are answered; every change succeeds, which is what
  * makes a failing change its own test below.
  */
-const recorder = ({ existing = false, readsBeforeVisible = 0, etagConflicts = 0 } = {}) => {
+const recorder = ({
+  existing = false,
+  readsBeforeVisible = 0,
+  etagConflicts = 0,
+  conditioned = [],
+}: {
+  existing?: boolean
+  readsBeforeVisible?: number
+  etagConflicts?: number
+  /** Policies this fixture says already hold a condition, by the name the binding names them. */
+  conditioned?: string[]
+} = {}) => {
   const calls: string[][] = []
   const stdin: string[] = []
   /*
@@ -73,6 +91,27 @@ const recorder = ({ existing = false, readsBeforeVisible = 0, etagConflicts = 0 
      * the account the line above created.
      */
     if (asked.includes('add-iam-policy-binding')) {
+      /*
+       * gcloud's own refusal, raised between the read and the write.
+       *
+       * A policy that already holds a condition will not take a binding that
+       * says nothing about having one: a terminal prompts for it, and `--quiet`
+       * over a closed stdin — what `execRun` gives every call — is this error.
+       * First in this branch because that is where gcloud raises it: no policy
+       * is written, so neither the propagation window below nor an ETag
+       * conflict can be what a caller sees.
+       */
+      const target = args[args.indexOf('add-iam-policy-binding') + 1] as string
+      if (conditioned.includes(target) && !args.some((argument) => argument.startsWith('--condition'))) {
+        return {
+          code: 1,
+          stdout: '',
+          stderr:
+            `ERROR: (gcloud.${args.slice(0, args.indexOf('add-iam-policy-binding') + 1).join('.')}) Adding a ` +
+            'binding without specifying a condition to a policy containing conditions is prohibited in ' +
+            'non-interactive mode. Run the command again with `--condition=None`',
+        }
+      }
       const member = args.find((argument) => argument.startsWith('--member=serviceAccount:'))
       const email = member?.replace('--member=serviceAccount:', '') ?? ''
       if ((pending.get(email) ?? 0) > 0) {
@@ -115,7 +154,7 @@ const recorder = ({ existing = false, readsBeforeVisible = 0, etagConflicts = 0 
 }
 
 /** One invocation, with the coordinates a real run would read from mstage/mbuild config. */
-const invoke = (run: Run) =>
+const invoke = (run: Run, overrides: Partial<Parameters<typeof bootstrapGcp>[0]> = {}) =>
   bootstrapGcp({
     run,
     project: 'boxlite-gcp-dev',
@@ -129,7 +168,24 @@ const invoke = (run: Run) =>
     log: () => {},
     // The retry is proved without spending it; the real default is a timer.
     wait: async () => {},
+    ...overrides,
   })
+
+/**
+ * Which projects a run reached, read off the calls rather than counted.
+ *
+ * `gcloudFor` puts `--project` on every call, so this is the whole of "did
+ * anything touch a project other than this stage's" — the property the
+ * promotion grants are the only exception to.
+ */
+const projectsTouched = (calls: string[][]): string[] =>
+  [...new Set(calls.map((call) => call[call.indexOf('--project') + 1] as string))].sort()
+
+const SOURCE = {
+  stage: 'gcp-src',
+  project: 'boxlite-gcp-src',
+  bucket: 'boxlite-gcp-src-artifacts-boxlite-gcp-src',
+}
 
 test('a fresh project gets every prerequisite mdeploy and mbuild cannot create for themselves', async () => {
   const gcloud = recorder()
@@ -504,4 +560,187 @@ test('a failing gcloud call stops the run and carries the reason', async () => {
     () => invoke(run),
     (error: Error) => error instanceof GcpBootstrapError && /PERMISSION_DENIED/.test(error.message),
   )
+})
+
+/*
+ * The grants a promotion needs, made in the project that has to admit them.
+ *
+ * One session does the whole move — the destination's, because that is the one
+ * that writes — so the accounts reading the source belong to the stage being
+ * bootstrapped while the policies admitting them belong to the source. Neither
+ * end can make the grant alone, and the destination is the end that knows both
+ * account names because it just created them.
+ */
+test('a stage promoted into lets both of its accounts read the source', async () => {
+  const gcloud = recorder()
+  await invoke(gcloud.run, { promotionSource: SOURCE })
+
+  assert.deepEqual(
+    projectsTouched(gcloud.calls),
+    ['boxlite-gcp-dev', 'boxlite-gcp-src'],
+    'the source project is the one place a bootstrap reaches outside its own',
+  )
+
+  /*
+   * Two accounts, not one, and that asymmetry is the bug this was written for:
+   * `mbuild.yml` federates `GCP_IMAGE_PUBLISHER` while `mdeploy-all.yml` federates
+   * `GCP_DEPLOYER`, so granting the deployer both would leave the image leg
+   * failing on `artifactregistry.repositories.get` while the runner leg passed.
+   */
+  const registry = gcloud.applied('projects add-iam-policy-binding', 'boxlite-gcp-src')
+  assert.equal(registry.length, 1, 'the registry grant is made once, on the source project')
+  assert.ok(
+    registry[0]!.includes('--member=serviceAccount:bl-app-publish@boxlite-gcp-dev.iam.gserviceaccount.com'),
+    'the account mbuild.yml federates cannot pull the source images',
+  )
+  assert.ok(registry[0]!.includes('--role=roles/artifactregistry.reader'), 'the registry grant is not a read')
+
+  const bucket = gcloud.applied('storage buckets add-iam-policy-binding')
+  assert.equal(bucket.length, 1, 'the bucket grant is made once')
+  assert.ok(bucket[0]!.includes(`gs://${SOURCE.bucket}`), 'the grant reaches a bucket that is not the source')
+  assert.ok(
+    bucket[0]!.includes('--member=serviceAccount:bl-app-gcp-dev-deploy@boxlite-gcp-dev.iam.gserviceaccount.com'),
+    'the account mdeploy-all.yml federates cannot read the staged binary',
+  )
+  /*
+   * Object reads, and the bucket rather than the project. `runner:promote`
+   * lists the prefix and copies what is under it and asks the bucket itself
+   * nothing, so nothing here needs `storage.buckets.get` — which is in no
+   * object role, and whose absence is what a wider-looking role would hide.
+   */
+  assert.ok(bucket[0]!.includes('--role=roles/storage.objectViewer'), 'the bucket grant is wider than the reads it serves')
+})
+
+/*
+ * The refusal that made this grant a no-op for a whole promotion.
+ *
+ * A source stage that stages its runner binary rather than installing a release
+ * holds a condition on the very bucket a promotion reads from — the deploy
+ * attaches `runner-artifacts-only` to it so a runner host reads the staged
+ * binary and nothing else of that bucket — and `add-iam-policy-binding` will
+ * not add an unconditioned binding to such a policy unless the command says
+ * that is what it means. Refused between reading that policy and writing it
+ * back, so the bucket keeps the policy it had and the admin-activity log a made
+ * grant would appear in stays empty — and the promotion fails days later at
+ * `storage.objects.get`.
+ */
+test('a source bucket whose policy already holds a condition still takes the grant', async () => {
+  const gcloud = recorder({ conditioned: [`gs://${SOURCE.bucket}`] })
+  const lines: string[] = []
+  await invoke(gcloud.run, { promotionSource: SOURCE, log: (line) => lines.push(line) })
+  assert.match(lines.join('\n'), /both grants applied/, 'the bucket grant never reached the source')
+})
+
+/*
+ * The same rule one policy earlier.
+ *
+ * Service-account policies carry no conditions today, so this site cannot fail
+ * against a real project yet — which is the reason to pin it rather than wait:
+ * the binding that decides who may act as the deployer is a poor place to
+ * discover that someone added a condition upstream.
+ */
+test('a deployer whose policy already holds a condition still takes its impersonation binding', async () => {
+  const deployer = 'bl-app-gcp-dev-deploy@boxlite-gcp-dev.iam.gserviceaccount.com'
+  const gcloud = recorder({ conditioned: [deployer] })
+  const lines: string[] = []
+  await invoke(gcloud.run, { log: (line) => lines.push(line) })
+  /*
+   * The line `bootstrapGcp` prints once the grant returns, rather than the call
+   * having been made: the refusal happens after the argv is composed, so a
+   * recorded call proves only that the attempt was spelled, not that it landed.
+   * Refused, this run throws out of `allowImpersonation` before printing it.
+   */
+  assert.match(
+    lines.join('\n'),
+    /environment gcp-dev may act as it/,
+    'the binding that lets the stage environment act as the deployer never landed',
+  )
+})
+
+test('a stage with no source reaches no project but its own', async () => {
+  const gcloud = recorder()
+  await invoke(gcloud.run)
+  assert.deepEqual(projectsTouched(gcloud.calls), ['boxlite-gcp-dev'])
+})
+
+test('a source that refuses the grant is reported with the command, not thrown', async () => {
+  /*
+   * An operator who administers this stage and not the source is ordinary —
+   * the two projects need not have the same administrators — and everything
+   * above this step has already happened. Throwing would discard a bootstrap
+   * that otherwise completed and leave the GitHub variables unwritten, so the
+   * refusal is carried out as the two commands and whoever holds that project
+   * runs them.
+   */
+  const gcloud = recorder()
+  const lines: string[] = []
+  const denied: Run = async (command, args, options) => {
+    const asked = args.join(' ')
+    if (asked.includes('add-iam-policy-binding') && asked.includes('boxlite-gcp-src')) {
+      return { code: 1, stdout: '', stderr: 'PERMISSION_DENIED: caller lacks resourcemanager.projects.setIamPolicy' }
+    }
+    return gcloud.run(command, args, options)
+  }
+
+  const result = await invoke(denied, { promotionSource: SOURCE, log: (line) => lines.push(line) })
+  assert.equal(
+    result.publisherEmail,
+    'bl-app-publish@boxlite-gcp-dev.iam.gserviceaccount.com',
+    'a bootstrap that completed must not be thrown away over a project it does not own',
+  )
+  const printed = lines.join('\n')
+  assert.match(printed, /gcloud projects add-iam-policy-binding boxlite-gcp-src/, 'the registry grant to run by hand')
+  /*
+   * With `--condition=None`, which is what makes it a command rather than a
+   * shape: without it an operator pasting this is prompted for a condition, and
+   * a non-interactive rerun is refused by the same rule that sent it here.
+   */
+  assert.match(
+    printed,
+    /gcloud storage buckets add-iam-policy-binding gs:\/\/boxlite-gcp-src-artifacts\S+ [^\n]*--condition=None/,
+    'and the bucket one, runnable as printed',
+  )
+  assert.match(printed, /PERMISSION_DENIED/, 'why it could not be made here')
+})
+
+/*
+ * The name is resolved against a whole file, which is the only place it can be.
+ *
+ * `mstage/config` deliberately lets a `promoteFrom` naming an absent stage
+ * through, because a CI job restores one declaration and not the file. That
+ * makes this the only check standing between a typo and a bootstrap that
+ * granted nothing — found when prod promotes, months later.
+ */
+test('a promoteFrom that resolves to nothing is refused here, where the whole file is readable', () => {
+  const config = {
+    app: 'boxlite',
+    path: '/repo/.mstage.config.json',
+    stages: {
+      dev2: { project: 'boxlite-gcp-src' },
+      prod2: { project: 'boxlite-gcp-dev', promoteFrom: 'dev-2' },
+    },
+  }
+  assert.throws(
+    () => promotionSourceFor({ config, stage: 'prod2' }),
+    /promotes from "dev-2" in \/repo\/\.mstage\.config\.json, which declares no such stage/,
+  )
+
+  assert.deepEqual(promotionSourceFor({ config: { ...config, stages: { ...config.stages, prod2: { project: 'boxlite-gcp-dev', promoteFrom: 'dev2' } } }, stage: 'prod2' }), {
+    stage: 'dev2',
+    project: 'boxlite-gcp-src',
+    // Composed by the rule `mdeploy/stack/runner-binary.ts` resolves addresses
+    // from, so the grant reaches the bucket `runner:promote` actually reads.
+    bucket: 'boxlite-dev2-artifacts-boxlite-gcp-src',
+  })
+
+  // Two stages in one project cross no boundary, and a binding saying so would
+  // read as one that is not there.
+  assert.equal(
+    promotionSourceFor({
+      config: { ...config, stages: { dev2: { project: 'p' }, prod2: { project: 'p', promoteFrom: 'dev2' } } },
+      stage: 'prod2',
+    }),
+    undefined,
+  )
+  assert.equal(promotionSourceFor({ config, stage: 'dev2' }), undefined, 'a stage nothing promotes into')
 })

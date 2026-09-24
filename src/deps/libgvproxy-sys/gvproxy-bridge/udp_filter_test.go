@@ -19,7 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,16 +67,43 @@ func startNetwork(t *testing.T, allowNet []string) *guestTap {
 // there is no buffer to fill.
 func startNetworkWith(t *testing.T, cfg GvproxyConfig) *guestTap {
 	t.Helper()
+	return startNetworkWithSeams(t, cfg, networkSeams{})
+}
 
-	// Mirror gvproxy_create: only resolve hostname rules when an allow_net is
-	// present. An empty allow_net is the common case and needs no resolution;
-	// the nil zones/maps are safe because buildDNSZones and newAllowNetFilter
-	// already gate on len(cfg.AllowNet) > 0.
-	var resolved allowNetResolution
-	if len(cfg.AllowNet) > 0 {
-		resolved = buildAllowNet(cfg.AllowNet)
+// networkSeams carries what gvproxy_create fills from a box's secrets (the
+// MITM slots) and the two seams that would otherwise reach the outside world:
+// the host resolver and the socket dialer. Both default to refusing, so a
+// test that forgets to script them fails fast instead of touching live DNS
+// or the network.
+type networkSeams struct {
+	ca            *BoxCA
+	secretMatcher *SecretHostMatcher
+	resolve       resolveFunc
+	dial          dialFunc
+}
+
+func refuseResolve(_ context.Context, host string) ([]net.IP, error) {
+	return nil, fmt.Errorf("test harness: unscripted resolution of %q", host)
+}
+
+func refuseDial(_ context.Context, network, addr string) (net.Conn, error) {
+	return nil, fmt.Errorf("test harness: unscripted dial of %s %s", network, addr)
+}
+
+// startNetworkWithSeams is startNetworkWith's body with the seams exposed. It
+// mirrors gvproxy_create: buildTapConfig → virtualnetwork.New →
+// installAllowNetHandlers with the same filter and dialer a box gets.
+func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) *guestTap {
+	t.Helper()
+
+	if seams.resolve == nil {
+		seams.resolve = refuseResolve
 	}
-	tapConfig := buildTapConfig(cfg, types.QemuProtocol, resolved.zones)
+	if seams.dial == nil {
+		seams.dial = refuseDial
+	}
+
+	tapConfig := buildTapConfig(cfg, types.QemuProtocol)
 	// Route the unlisted TEST-NET destination to a test-owned loopback
 	// listener. The forwarders dial the NAT-translated address; the allowlist
 	// still sees 198.51.100.9.
@@ -87,9 +114,20 @@ func startNetworkWith(t *testing.T, cfg GvproxyConfig) *guestTap {
 		t.Fatalf("virtualnetwork.New: %v", err)
 	}
 
+	var filter *AllowNetFilter
 	if len(cfg.AllowNet) > 0 {
-		filter := newAllowNetFilter(cfg, resolved.exactIPs, resolved.suffixIPs)
-		if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, filter, nil, nil); err != nil {
+		filter = newAllowNetFilter(cfg)
+	}
+	// Same condition as production: secrets alone are reason enough to
+	// replace the upstream forwarders.
+	if len(cfg.AllowNet) > 0 || seams.secretMatcher != nil {
+		dialer, err := newEgressDialer(filter, cfg.Subnet)
+		if err != nil {
+			t.Fatalf("newEgressDialer: %v", err)
+		}
+		dialer.resolve = seams.resolve
+		dialer.dial = seams.dial
+		if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, filter, dialer, seams.ca, seams.secretMatcher); err != nil {
 			t.Fatalf("installAllowNetHandlers: %v", err)
 		}
 	}
@@ -173,45 +211,6 @@ func (g *guestTap) answerARP(frame []byte) bool {
 	_ = g.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	_, _ = g.conn.Write(append(size[:], reply...))
 	return true
-}
-
-// awaitUDPPayload returns the payload of the next UDP datagram the gateway
-// sends to the guest from srcIP:srcPort.
-func (g *guestTap) awaitUDPPayload(t *testing.T, srcIP string, srcPort uint16) []byte {
-	t.Helper()
-	deadline := time.After(forwardWindow)
-	for {
-		select {
-		case frame := <-g.frames:
-			payload, ok := parseUDPPayload(frame, srcIP, srcPort)
-			if ok {
-				return payload
-			}
-		case <-deadline:
-			t.Fatalf("no UDP datagram from %s:%d reached the guest", srcIP, srcPort)
-		}
-	}
-}
-
-func parseUDPPayload(frame []byte, srcIP string, srcPort uint16) ([]byte, bool) {
-	if len(frame) < header.EthernetMinimumSize+header.IPv4MinimumSize {
-		return nil, false
-	}
-	if header.Ethernet(frame).Type() != header.IPv4ProtocolNumber {
-		return nil, false
-	}
-	ip := header.IPv4(frame[header.EthernetMinimumSize:])
-	if !ip.IsValid(len(ip)) || tcpip.TransportProtocolNumber(ip.Protocol()) != udp.ProtocolNumber {
-		return nil, false
-	}
-	if net.IP(ip.SourceAddressSlice()).String() != srcIP {
-		return nil, false
-	}
-	segment := header.UDP(ip.Payload())
-	if len(segment) < header.UDPMinimumSize || segment.SourcePort() != srcPort {
-		return nil, false
-	}
-	return segment.Payload(), true
 }
 
 func readFull(conn net.Conn, buf []byte) (int, error) {
@@ -327,44 +326,6 @@ func tcpSynFrame(t *testing.T, dstIP string, dstPort uint16) []byte {
 
 	return ipv4Frame(t, src, dst, tcp.ProtocolNumber, segment)
 }
-
-// --- minimal DNS wire format ------------------------------------------------
-//
-// Hand-rolled rather than pulled from miekg/dns, which is only an indirect
-// dependency here.
-
-func dnsQueryA(txnID uint16, name string) []byte {
-	query := make([]byte, 12, 32)
-	binary.BigEndian.PutUint16(query[0:], txnID)
-	binary.BigEndian.PutUint16(query[2:], 0x0100) // standard query, recursion desired
-	binary.BigEndian.PutUint16(query[4:], 1)      // QDCOUNT
-
-	for _, label := range strings.Split(name, ".") {
-		query = append(query, byte(len(label)))
-		query = append(query, label...)
-	}
-	query = append(query, 0)          // root label
-	query = append(query, 0, 1, 0, 1) // QTYPE=A, QCLASS=IN
-	return query
-}
-
-// parseSingleAResponse extracts the address from a reply carrying exactly one
-// A record. The rdata is the final four bytes of such a message, so the
-// answer section needs no name-compression handling.
-func parseSingleAResponse(msg []byte, txnID uint16) (net.IP, error) {
-	if len(msg) < 16 {
-		return nil, fmt.Errorf("reply too short: %d bytes", len(msg))
-	}
-	if got := binary.BigEndian.Uint16(msg[0:]); got != txnID {
-		return nil, fmt.Errorf("transaction id %#04x, want %#04x", got, txnID)
-	}
-	if answers := binary.BigEndian.Uint16(msg[6:]); answers != 1 {
-		return nil, fmt.Errorf("ANCOUNT %d, want exactly 1", answers)
-	}
-	return net.IP(msg[len(msg)-4:]).To4(), nil
-}
-
-// --- host-side receivers ----------------------------------------------------
 
 func listenUDP(t *testing.T) (*net.UDPConn, uint16) {
 	t.Helper()
@@ -526,31 +487,82 @@ func TestAllowNetForwardsListedHostAlias(t *testing.T) {
 	}
 }
 
-// TestAllowNetHostnameRulesAlsoBindUDP covers the hostname-only allowlist,
-// where TCP policy comes from SNI/Host inspection that UDP has no analogue
-// for. Half the test proves the DNS sinkhole is engaged; the other half
-// sends UDP straight to a hard-coded IP, which is how a guest sidesteps it.
+// TestAllowNetHostnameRulesAlsoBindUDP: a hostname-only allowlist denies all
+// UDP egress. UDP carries no SNI or Host header, so a hostname rule cannot be
+// evaluated for it, and a datagram sent straight to a hard-coded address is
+// how a guest would otherwise sidestep a rule it cannot present a name for.
+//
+// Both assertions here are negative, so neither can distinguish "policy is
+// engaged" from "this tap forwards nothing at all". The affirmative side is
+// TestEmptyAllowlistForwardsUDP and TestUnfilteredNetworkForwardsUnlistedTCP,
+// which drive the same harness with no allowlist and require both transports
+// to reach their listeners. The pairing lives at file level, not inside this
+// test, as it does for the sibling TestAllowNetBlocksUnlisted{TCP,UDP}.
+//
+// A DNS probe used to stand in as the in-test control, back when allow_net
+// sinkholed unlisted names. It cannot any more: DNS is unfiltered, so
+// "blocked.test resolves" is true under every configuration and proves
+// nothing. The TCP half is kept because it is the transport twin of the
+// subject, on an ephemeral port where decideTCPRoute blocks outright rather
+// than on 443/80 where the gateway would complete the handshake first.
 func TestAllowNetHostnameRulesAlsoBindUDP(t *testing.T) {
-	cfg := testGvproxyConfig()
 	conn, port := listenUDP(t)
+	ln, tcpPort := listenTCP(t)
 	tap := startNetwork(t, []string{"example.com"})
 
-	// The gateway resolver must sinkhole a name outside the allowlist,
-	// otherwise the rest of this test proves nothing about policy being on.
-	const txnID = 0xbe11
-	tap.send(t, udpFrame(t, cfg.GatewayIP, 53, dnsQueryA(txnID, "blocked.test")))
-	answer := tap.awaitUDPPayload(t, cfg.GatewayIP, 53)
-	sinkholed, err := parseSingleAResponse(answer, txnID)
-	if err != nil {
-		t.Fatalf("gateway DNS reply: %v", err)
-	}
-	if !sinkholed.Equal(net.IPv4zero) {
-		t.Fatalf("expected DNS sinkhole 0.0.0.0 for blocked.test, got %s", sinkholed)
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			accepted <- c
+		}
+	}()
+	tap.send(t, tcpSynFrame(t, unlistedIP, tcpPort))
+	select {
+	case c := <-accepted:
+		_ = c.Close()
+		t.Fatalf("allow_net=[example.com]: TCP to hard-coded %s must be blocked", unlistedIP)
+	case <-time.After(forwardWindow):
 	}
 
-	// Same box, same policy: a datagram to a hard-coded IP never consults it.
 	tap.send(t, udpFrame(t, unlistedIP, port, []byte(probePayload)))
 	assertDatagramDropped(t, conn, "allow_net=[example.com]: UDP to hard-coded %s", unlistedIP)
+}
+
+// TestStartupPerformsNoDNSLookups: nothing is resolved at box creation any
+// more. A name is resolved when the guest asks for it or connects to it,
+// never before — so a box with an unresolvable allow_net entry still starts,
+// and creation does not wait on the host resolver.
+func TestStartupPerformsNoDNSLookups(t *testing.T) {
+	var lookups atomic.Int32
+	counting := func(ctx context.Context, host string) ([]net.IP, error) {
+		lookups.Add(1)
+		return refuseResolve(ctx, host)
+	}
+
+	// Substituted before anything is built, so a lookup made while
+	// constructing the filter or the dialer is counted too. Passing the seam
+	// through networkSeams alone would not catch that: the harness assigns
+	// dialer.resolve only after newEgressDialer has returned, so construction
+	// would resolve through the untouched production path and the counter
+	// would read zero however the code regressed.
+	//
+	// What this does not reach: gvproxy_create itself. The harness mirrors it
+	// (startNetworkWithSeams) rather than calling it, so a resolution added
+	// directly to gvproxy_create is outside what any test in this package
+	// sees. The pieces it does build — newAllowNetFilter, newEgressDialer,
+	// installAllowNetHandlers — are where such a resolution would naturally
+	// go, and those are covered.
+	restore := systemResolve
+	systemResolve = counting
+	t.Cleanup(func() { systemResolve = restore })
+
+	cfg := testGvproxyConfig()
+	cfg.AllowNet = []string{"example.com", "*.example.net", "api.example.org:443"}
+	startNetworkWithSeams(t, cfg, networkSeams{resolve: counting})
+
+	if n := lookups.Load(); n != 0 {
+		t.Fatalf("box creation performed %d DNS lookups; hostname rules must not be resolved at start", n)
+	}
 }
 
 // TestEmptyAllowlistForwardsUDP guards the other direction: an empty
