@@ -10,7 +10,7 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
  * The operator-chosen images, which a box boots from by default and which any caller may
  * select by short name. This was once the only thing a box could boot from; admission now
  * decides that, and a tenant may name any image it allows. What stays here is the curated
- * set itself: it is env-driven so refs rotate without a deploy, it is the default when no
+ * set itself: it is env-driven so refs rotate with no code change, it is the default when no
  * image is given, and it is the one path that reaches no database and no rate limit --
  * which is why the selector check has to be exact rather than a host prefix.
  *
