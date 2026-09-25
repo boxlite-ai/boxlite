@@ -70,12 +70,14 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 	}
 
 	boxId := boxIdOrSignedToken
+	isDirectHost := isValidDirectPreviewBoxID(boxIdOrSignedToken)
 	if decodedBoxId, ok, decodeErr := decodeDirectPreviewBoxID(boxIdOrSignedToken); decodeErr != nil {
 		ctx.Error(common_errors.NewBadRequestError(decodeErr))
 		return nil, decodeErr
 	} else if ok {
 		boxId = decodedBoxId
 		boxIdOrSignedToken = decodedBoxId
+		isDirectHost = true
 	}
 
 	isPublic, err := p.getBoxPublic(ctx, boxIdOrSignedToken)
@@ -132,10 +134,24 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 	}
 
 	if targetPort != TERMINAL_PORT {
-		if _, err := strconv.ParseUint(targetPort, 10, 16); err != nil {
-			wrappedErr := fmt.Errorf("invalid target port: %w", err)
+		port, err := strconv.ParseUint(targetPort, 10, 16)
+		if err != nil || port == 0 {
+			wrappedErr := fmt.Errorf("invalid target port %q", targetPort)
 			ctx.Error(common_errors.NewBadRequestError(wrappedErr))
 			return nil, wrappedErr
+		}
+		if isDirectHost {
+			allowed, err := p.hasPublicTunnelAccess(ctx.Request.Context(), boxId, uint16(port))
+			if err != nil {
+				wrappedErr := fmt.Errorf("check tunnel access: %w", err)
+				ctx.Error(common_errors.NewInternalServerError(wrappedErr))
+				return nil, wrappedErr
+			}
+			if !allowed {
+				wrappedErr := errors.New("tunnel not found")
+				ctx.Error(common_errors.NewNotFoundError(wrappedErr))
+				return nil, wrappedErr
+			}
 		}
 		target, err := url.Parse("http://" + net.JoinHostPort(boxId, targetPort) + targetPath)
 		if err != nil {

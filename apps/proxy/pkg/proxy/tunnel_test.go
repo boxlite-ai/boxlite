@@ -120,6 +120,10 @@ func TestTunnelConnectRenewsBoxActivityBeforeStreaming(t *testing.T) {
 
 	renewed := make(chan string, 1)
 	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/preview/"+boxID+"/tunnels/3000" {
+			writer.WriteHeader(http.StatusOK)
+			return
+		}
 		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/last-activity") {
 			select {
 			case renewed <- request.URL.Path:

@@ -44,6 +44,15 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 		http.Error(writer, "box is not public", http.StatusForbidden)
 		return
 	}
+	allowed, err := p.hasPublicTunnelAccess(request.Context(), boxID, port)
+	if err != nil {
+		http.Error(writer, "tunnel access unavailable", http.StatusBadGateway)
+		return
+	}
+	if !allowed {
+		http.Error(writer, "tunnel not found", http.StatusNotFound)
+		return
+	}
 
 	// A CONNECT tunnel outlives any single HTTP request, so for tunnels the poll
 	// is the renewal rather than a fallback: bind its ticker to the stream, which
