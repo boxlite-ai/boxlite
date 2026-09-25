@@ -30,6 +30,8 @@ impl MemorySlots {
     ) -> io::Result<()> {
         self.validate(region)?;
         let end = region.guest_addr + region.size as u64;
+        // Half-open ranges let adjacent RAM regions meet without overlapping.
+        // Validation makes both end-address additions safe from overflow.
         if self.regions.iter().flatten().any(|existing| {
             region.guest_addr < existing.guest_phys_addr + existing.memory_size
                 && existing.guest_phys_addr < end
@@ -53,6 +55,7 @@ impl MemorySlots {
             memory_size: region.size as u64,
             userspace_addr: region.host_addr.as_ptr() as u64,
         };
+        // A rejected ioctl must not consume a slot or leave a phantom mapping.
         install(mapping)?;
         self.regions[slot] = Some(mapping);
         Ok(())
@@ -63,6 +66,8 @@ impl MemorySlots {
         region: &MemoryRegion,
         remove: impl FnOnce(kvm_userspace_memory_region) -> io::Result<()>,
     ) -> io::Result<()> {
+        // A guest address can be reused with different backing; reject requests
+        // whose host pointer or length no longer identifies the current mapping.
         let slot = self
             .regions
             .iter()
@@ -76,6 +81,8 @@ impl MemorySlots {
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotFound, "KVM memory region is not mapped")
             })?;
+        // Zero size asks KVM to delete the slot. Retain the record on failure:
+        // the guest may still access the backing, so it must remain allocated.
         remove(kvm_userspace_memory_region {
             slot: slot as u32,
             ..Default::default()

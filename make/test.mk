@@ -268,7 +268,8 @@ test\:unit\:cli:
 test\:unit\:vmm:
 	@cargo test $(RUST_UNIT_VMM_ARGS) -- $(CARGOTEST_FILTER)
 
-# Explicit hardware qualification. Missing /dev/kvm is an error, never a skip.
+# Missing /dev/kvm must fail hardware qualification, not report skipped tests as a pass.
+# Run the ignored hardware tests explicitly and bound a stalled guest with a timeout.
 test\:integration\:vmm\:kvm:
 	@test "$$(uname -s -m)" = "Linux x86_64" || { echo "Linux x86_64 is required" >&2; exit 1; }
 	@test -r /dev/kvm -a -w /dev/kvm || { echo "Read/write access to /dev/kvm is required" >&2; exit 1; }

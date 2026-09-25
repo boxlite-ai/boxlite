@@ -53,11 +53,11 @@ Guest physical addresses          KVM mapping   Host virtual addresses
 - The guest regions are adjacent even though the host allocations are far
   apart. Their host physical pages may also be scattered.
 
-[`MemorySlots`](../../../src/hypervisor/src/kvm/memory.rs) keeps the slot
+[`MemorySlots`](../../../../src/hypervisor/src/kvm/memory.rs) keeps the slot
 records outside guest RAM. Its vector index is the slot ID; `None` marks an
 unused slot. Records change only after the KVM ioctl succeeds. BoxLite keeps
 the backing allocations alive under the
-[memory lifetime contract](../../../src/hypervisor/src/vm.rs).
+[memory lifetime contract](../../../../src/hypervisor/src/vm.rs).
 
 ## 2. How it works
 

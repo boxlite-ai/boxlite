@@ -41,6 +41,8 @@ impl KvmVm {
                 format!("KVM API version {version}; expected {KVM_API_VERSION}"),
             ));
         }
+        // Reject unsupported hosts before allocating a partially usable VM.
+        // ImmediateExit lets the shutdown path complete I/O without resuming code.
         for capability in [
             Cap::UserMemory,
             Cap::Irqchip,
@@ -62,8 +64,9 @@ impl KvmVm {
         }
         let fd = kvm.create_vm().map_err(io::Error::from)?;
         // Intel KVM reserves three pages below 4 GiB for real-mode emulation.
-        // Keep them in the architecture's MMIO hole, outside guest RAM.
+        // Keep them in the architecture's MMIO hole, clear of RAM and devices.
         fd.set_tss_address(0xfffb_d000).map_err(io::Error::from)?;
+        // x86 KVM requires the IRQ chip before creating any vCPU.
         fd.create_irq_chip().map_err(io::Error::from)?;
         fd.create_pit2(kvm_pit_config {
             flags: KVM_PIT_SPEAKER_DUMMY,
@@ -80,10 +83,14 @@ impl KvmVm {
     ///
     /// # Safety
     ///
+    /// KVM accesses the original allocation; range checks cannot guarantee its
+    /// lifetime or synchronize accesses to its bytes.
     /// The caller must uphold [`crate::Vm::map_memory`]'s backing-memory,
     /// aliasing, synchronization and lifetime requirements.
     pub unsafe fn map_memory(&self, region: &MemoryRegion) -> Result<()> {
         let install = || {
+            // Keep validation, slot selection, the ioctl and bookkeeping atomic
+            // against other map/unmap calls; this does not protect guest RAM.
             let mut slots = self
                 .slots
                 .lock()
@@ -209,8 +216,11 @@ mod tests {
             }
             exit => panic!("unexpected exit: {exit:?}"),
         }
+        // The I/O exit leaves instruction completion pending until KVM_RUN.
+        // Complete it without reaching HLT, which can wait in the kernel.
         vcpu.set_kvm_immediate_exit(1);
         assert_eq!(vcpu.run().unwrap_err().errno(), libc::EINTR);
+        // Stop this user of the backing page before removing its guest mapping.
         drop(vcpu);
         vm.unmap_memory(&ram.region()).unwrap();
     }
