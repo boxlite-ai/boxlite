@@ -5,12 +5,14 @@
  */
 
 import Redis from 'ioredis'
-import { Controller, Get, Param, Logger, NotFoundException, UseGuards, Req } from '@nestjs/common'
+import { Controller, Get, Param, Logger, NotFoundException, UseGuards, Req, ParseIntPipe } from '@nestjs/common'
 import { BoxService } from '../services/box.service'
 import { ApiResponse, ApiOperation, ApiParam, ApiTags, ApiOAuth2, ApiBearerAuth } from '@nestjs/swagger'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { OrganizationUserService } from '../../organization/services/organization-user.service'
+import { TunnelService } from '../services/tunnel.service'
+import { ProxyGuard } from '../guards/proxy.guard'
 
 @ApiTags('preview')
 @Controller('preview')
@@ -21,7 +23,21 @@ export class PreviewController {
     @InjectRedis() private readonly redis: Redis,
     private readonly boxService: BoxService,
     private readonly organizationUserService: OrganizationUserService,
+    private readonly tunnelService: TunnelService,
   ) {}
+
+  @Get(':boxId/tunnels/:port')
+  @ApiOperation({ summary: 'Check public tunnel access', operationId: 'isPublicTunnelActive' })
+  @UseGuards(CombinedAuthGuard, ProxyGuard)
+  async isPublicTunnelActive(
+    @Param('boxId') boxId: string,
+    @Param('port', ParseIntPipe) port: number,
+  ): Promise<boolean> {
+    if (!(await this.tunnelService.isPublicAccessAllowed(boxId, port))) {
+      throw new NotFoundException('Tunnel not found')
+    }
+    return true
+  }
 
   @Get(':boxId/public')
   @ApiOperation({

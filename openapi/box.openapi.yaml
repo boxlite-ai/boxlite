@@ -1058,6 +1058,24 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+    delete:
+      operationId: revokeTunnel
+      summary: Revoke access to a box service port
+      tags: [Network]
+      parameters:
+        - name: port
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 65535
+      responses:
+        "204":
+          description: Tunnel revoked
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
   # -------------------------------------------------------------------------
   # Metrics
   # -------------------------------------------------------------------------

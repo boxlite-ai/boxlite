@@ -37,6 +37,7 @@ import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import { AUTO_RESUME_TIMEOUT_SECONDS, BoxAutoResumeService } from './box-auto-resume.service'
 import { BoxState } from '../box/enums/box-state.enum'
+import { TunnelService } from '../box/services/tunnel.service'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -70,6 +71,7 @@ export class BoxliteProxyController {
     private readonly boxService: BoxService,
     private readonly runnerService: RunnerService,
     private readonly autoResume: BoxAutoResumeService,
+    private readonly tunnelService: TunnelService,
   ) {}
 
   @All(':boxId/exec')
@@ -264,8 +266,20 @@ export class BoxliteProxyController {
       await this.resumeForTunnel(box.id, authContext, res)
     }
 
+    await this.tunnelService.declarePublic(box.id, port)
     const uri = await this.boxService.getNetworkTunnelUrl(boxId, authContext.organizationId, port)
     return { uri }
+  }
+
+  @Delete(':boxId/network/tunnel')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async revokeNetworkTunnel(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Query('port', ParseIntPipe) port: number,
+  ): Promise<void> {
+    const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+    await this.tunnelService.revoke(box.id, port)
   }
 
   // A resume that outlives its window is a "come back later", not a client
