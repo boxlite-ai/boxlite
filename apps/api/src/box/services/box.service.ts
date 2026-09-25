@@ -1435,8 +1435,10 @@ export class BoxService {
         )
       } catch (error) {
         // A lost registration costs the next create one re-resolution, which
-        // is the documented trade; failing the state update instead would
-        // leave the control plane believing a running box is still starting.
+        // is the documented trade; one refused for the image limit leaves the
+        // name unrecorded, so admission refuses the next create of it. Failing
+        // the state update instead would leave the control plane believing a
+        // running box is still starting.
         this.logger.error(`Failed to register image for box ${boxId}: ${error}`)
       }
     }

@@ -5,7 +5,7 @@
 
 import { Injectable } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
-import { DataSource } from 'typeorm'
+import { DataSource, EntityManager, IsNull } from 'typeorm'
 import { Image } from '../entities/image.entity'
 import { ImageTag } from '../entities/image-tag.entity'
 import { ImageVersion } from '../entities/image-version.entity'
@@ -51,7 +51,9 @@ export type BootedImage = {
  * Every write is idempotent. A report can arrive more than once for the same
  * box, and two boxes can report the same new ref at the same moment; both are
  * settled by unique constraints rather than by reading first, so there is no
- * window between the check and the insert.
+ * window between the check and the insert. The one read that decides — whether
+ * a new name still fits the organization's image limit — is taken under a lock
+ * on the organization row.
  */
 @Injectable()
 export class ImageRegistrarService {
@@ -97,6 +99,8 @@ export class ImageRegistrarService {
     const name = `${host}/${repository}`
 
     await this.dataSource.transaction(async (manager) => {
+      await this.assertRoomForImage(manager, organizationId, name)
+
       // `lastUsedAt` is what eviction and the usage view read, so the update
       // is the point of the upsert for an image that already exists.
       const image = await manager
@@ -169,5 +173,43 @@ export class ImageRegistrarService {
         .orIgnore()
         .execute()
     })
+  }
+
+  /**
+   * Refuse a name the organization does not hold once it holds its limit.
+   *
+   * Admission counts only images already recorded, so several first pulls in
+   * flight can each pass it; this count is the one that holds the limit. A
+   * name already held adds no kind of image, so the common path — a create
+   * the catalog answered — takes no lock. A new name locks the organization
+   * row, so two registrations cannot both count under the limit, and looks
+   * again once it has the lock, in case the other one recorded this name.
+   * The limit is read by column rather than through the organization entity,
+   * which this service has no other reason to know.
+   */
+  private async assertRoomForImage(manager: EntityManager, organizationId: string, name: string): Promise<void> {
+    const isHeld = () => manager.exists(Image, { where: { organizationId, name, deletedAt: IsNull() } })
+    if (await isHeld()) {
+      return
+    }
+
+    await manager.query("SET LOCAL lock_timeout = '5s'")
+    const [organization] = await manager.query(
+      `SELECT "image_count_limit" AS "limit" FROM "organization" WHERE "id" = $1 FOR UPDATE`,
+      [organizationId],
+    )
+    if (!organization) {
+      throw new Error(`Organization ${organizationId} not found; not recording image '${name}'`)
+    }
+    if (await isHeld()) {
+      return
+    }
+
+    const held = await manager.count(Image, { where: { organizationId, deletedAt: IsNull() } })
+    if (held >= organization.limit) {
+      throw new Error(
+        `Organization ${organizationId} holds its limit of ${organization.limit} images; not recording '${name}'`,
+      )
+    }
   }
 }

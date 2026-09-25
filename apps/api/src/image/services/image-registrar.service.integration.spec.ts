@@ -46,6 +46,11 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
     await dataSource.query(`CREATE SCHEMA "${schemaName}"`)
     ownsSchema = true
     await dataSource.synchronize()
+    // Just the columns registration reads; the organization entity and its
+    // relations are not this spec's to build.
+    await dataSource.query(
+      `CREATE TABLE "${schemaName}"."organization" ("id" uuid PRIMARY KEY, "image_count_limit" integer NOT NULL DEFAULT 20)`,
+    )
     registrar = new ImageRegistrarService(dataSource, curatedImagePins as unknown as CuratedImagePinService)
   })
 
@@ -66,11 +71,35 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
     await dataSource.query(`DELETE FROM "${schemaName}"."image_tag"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image_version"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image"`)
+    await dataSource.query(`DELETE FROM "${schemaName}"."organization"`)
+    await dataSource.query(`INSERT INTO "${schemaName}"."organization" ("id") VALUES ($1), ($2)`, [ORG, OTHER_ORG])
     curatedImagePins.remember.mockClear()
   })
 
+  function setImageLimit(limit: number) {
+    return dataSource.query(`UPDATE "${schemaName}"."organization" SET "image_count_limit" = $1 WHERE "id" = $2`, [
+      limit,
+      ORG,
+    ])
+  }
+
   function report(ref: string, digest = DIGEST, sizeBytes = 4096) {
     return registrar.onBoxStarted(ORG, { ref, isOrgOwned: true }, { digest, sizeBytes })
+  }
+
+  /** Waits, for at most 2s, until another backend waits on a lock `pid` holds. */
+  async function waitUntilBlockedBy(pid: number): Promise<void> {
+    const deadline = Date.now() + 2_000
+    while (Date.now() < deadline) {
+      const [{ blocked }] = await dataSource.query(
+        `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))) AS blocked`,
+        [pid],
+      )
+      if (blocked) {
+        return
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 25))
+    }
   }
 
   function countOf(table: string): Promise<number> {
@@ -251,6 +280,60 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
 
     expect(await countOf('image')).toBe(0)
     expect(await countOf('image_version')).toBe(0)
+  })
+
+  /**
+   * Admission counts only images already recorded, so first pulls in flight
+   * each pass it. The count that holds the limit is the one taken here.
+   */
+  describe('image limit', () => {
+    it('records no new image once the organization holds its limit', async () => {
+      await setImageLimit(1)
+      await report('quay.io/acme/a:v1')
+
+      await expect(report('quay.io/acme/b:v1')).rejects.toThrow(/limit of 1 images/)
+
+      expect(await countOf('image')).toBe(1)
+    })
+
+    it('still records a new build of an image the organization holds', async () => {
+      await setImageLimit(1)
+      await report('quay.io/acme/a:v1', DIGEST)
+
+      await report('quay.io/acme/a:v2', OTHER_DIGEST)
+
+      expect(await countOf('image')).toBe(1)
+      expect(await countOf('image_version')).toBe(2)
+    })
+
+    it('counts the new image another registration has not yet committed', async () => {
+      await setImageLimit(1)
+      // The other registration, held open once it has locked the organization
+      // and recorded its image, so the two cannot interleave any other way.
+      const other = dataSource.createQueryRunner()
+      await other.connect()
+      try {
+        await other.startTransaction()
+        const [{ pid }] = await other.query(`SELECT pg_backend_pid()::int AS pid`)
+        await other.query(`SELECT 1 FROM "${schemaName}"."organization" WHERE "id" = $1 FOR UPDATE`, [ORG])
+        await other.manager.insert(Image, { organizationId: ORG, name: 'quay.io/acme/b' })
+
+        const outcome = report('quay.io/acme/a:v1').then(
+          () => 'recorded',
+          (error: Error) => error.message,
+        )
+        await waitUntilBlockedBy(pid)
+        await other.commitTransaction()
+
+        expect(await outcome).toMatch(/limit of 1 images/)
+      } finally {
+        if (other.isTransactionActive) {
+          await other.rollbackTransaction()
+        }
+        await other.release()
+      }
+      expect(await countOf('image')).toBe(1)
+    })
   })
 
   it('keeps one organization out of another catalog', async () => {

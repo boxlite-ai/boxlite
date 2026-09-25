@@ -109,8 +109,11 @@ export class ImageAdmissionService {
   /**
    * Refuse a new image once the organization holds its limit.
    *
-   * The caller checks it before spending the pull budget, so a create it
-   * refuses does not spend one: the budget has no way to give a slot back.
+   * It counts only images already recorded, so first pulls still in flight can
+   * each pass it; the registrar's count, taken under a lock when a new name is
+   * recorded, is what holds the limit. The caller checks it before spending the
+   * pull budget, so a create it refuses does not spend one: the budget has no
+   * way to give a slot back.
    */
   private async assertWithinCatalogLimit(organization: Organization, name: string): Promise<void> {
     const alreadyHeld = await this.imageRepository.exists({
