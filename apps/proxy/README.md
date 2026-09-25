@@ -69,9 +69,9 @@ A host without a `<port>-` label serves only the utility routes listed in
 
 | Request                                    | Upstream                                                        | Authentication                    |
 | ------------------------------------------ | --------------------------------------------------------------- | --------------------------------- |
-| HTTP or WebSocket to any port except 22222 | Reverse proxy over a runner CONNECT tunnel to the guest port    | Private boxes only                |
+| HTTP or WebSocket to a declared port       | Reverse proxy over a runner CONNECT tunnel to the guest port    | Active public tunnel, or signed access |
 | Port 22222                                 | The runner's web terminal at `/boxes/<id>/toolbox/proxy/22222`  | Always                            |
-| `CONNECT`                                  | Raw TCP tunnel through the runner                               | Public boxes only; others get 403 |
+| `CONNECT`                                  | Raw TCP tunnel through the runner                               | Active public tunnel; others are denied |
 
 The HTTP path in code:
 
@@ -82,6 +82,7 @@ The HTTP path in code:
         ├─ parseHost (Proxy · apps/proxy/pkg/proxy/get_box_target.go:357) — port plus box ID or signed token
         ├─ getBoxPublic (Proxy · apps/proxy/pkg/proxy/get_box_target.go:250) — ask the API, cached 3 s
         ├─ Authenticate (Proxy · apps/proxy/pkg/proxy/auth.go:18) — private box or terminal port only
+        ├─ hasPublicTunnelAccess — check direct public guest ports before proxying
         └─ updateLastActivity (Proxy · apps/proxy/pkg/proxy/get_box_target.go:430) — renew activity every 50 s
       └─ dialGuestPort (Proxy · apps/proxy/pkg/proxy/get_box_target.go:165) — dial each new upstream connection
         ├─ getBoxRunnerInfo (Proxy · apps/proxy/pkg/proxy/get_box_target.go:211) — runner URL and key, cached 2 min
@@ -164,7 +165,7 @@ is internal and changes together with the API and the runner.
 | Service | Call                                                                                                     | Credential                                              |
 | ------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | API     | `GET /api/config` at startup, for unset OIDC settings                                                    | `PROXY_API_KEY`                                         |
-| API     | `GET /api/preview/{boxId}/public`, `/validate/{token}`; `GET /api/preview/{token}/{port}/box-id`         | `PROXY_API_KEY`                                         |
+| API     | `GET /api/preview/{boxId}/public`, `/validate/{token}`, `/tunnels/{port}`; `GET /api/preview/{token}/{port}/box-id` | `PROXY_API_KEY` |
 | API     | `GET /api/preview/{boxId}/access`                                                                        | The caller's bearer token                               |
 | API     | `GET /api/runners/by-box/{boxId}`, `POST /api/box/{boxId}/last-activity`                                 | `PROXY_API_KEY`                                         |
 | Runner  | `CONNECT /v1/boxes/{boxId}/network/tunnel?port={port}`; `/boxes/{boxId}/toolbox/proxy/22222/...`         | The runner's key from `by-box`, in `X-BoxLite-Authorization` |
