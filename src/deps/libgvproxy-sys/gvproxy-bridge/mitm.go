@@ -81,10 +81,10 @@ func (ca *BoxCA) CACertPool() (*x509.CertPool, error) {
 	return pool, nil
 }
 
-// GenerateHostCert generates a TLS certificate for the given hostname, signed by this CA.
-// Results are cached per-hostname.
 const maxCertCacheSize = 10000
 
+// GenerateHostCert generates a TLS certificate for the given hostname, signed by this CA.
+// Results are cached per-hostname.
 func (ca *BoxCA) GenerateHostCert(hostname string) (*tls.Certificate, error) {
 	return ca.generateHostCert(hostname, time.Now())
 }

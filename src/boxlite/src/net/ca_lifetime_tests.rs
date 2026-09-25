@@ -5,7 +5,7 @@ use x509_cert::{Certificate, der::DecodePem};
 #[path = "../../../guest/src/ca_trust.rs"]
 mod ca_trust;
 
-/// Model a legacy 24-hour CA with a caller-selected expiry.
+/// Model a 24-hour CA: expiry +31 days deliberately makes not_before +30 days.
 fn short_lived_ca(key: &KeyPair, expires: OffsetDateTime) -> String {
     let mut params = CertificateParams::default();
     params.distinguished_name = DistinguishedName::new();
