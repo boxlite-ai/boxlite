@@ -43,6 +43,8 @@ the underlying KVM descriptor inside the test; the public vCPU API is next.
 Linux x64 CI runs these tests with `make coverage:vmm:kvm`, adding their coverage
 to the unit profiles before upload; missing KVM access is a failure.
 
+The [execution design](../../docs/contributing/investigations/2026-09-25-kvm-vcpu-execution.md)
+tracks execution, kick and register slices in [#1698](https://github.com/boxlite-ai/boxlite/issues/1698).
 M1 proceeds in boot order: create the VM and map RAM, create/run vCPUs, load
 the kernel and boot metadata, attach legacy devices, then reach a test `/init`
 and return the guest's reset to the caller. The full M1 still includes Linux
