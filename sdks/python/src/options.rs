@@ -409,10 +409,10 @@ impl PyOutboundNetworkSpec {
 impl PyInboundNetworkSpec {
     /// Create an inbound network policy.
     ///
-    /// `mode` defaults to `"enabled"` (publicly reachable) and `allow_net`
-    /// defaults to an empty allow list, meaning no host-based restriction.
+    /// `mode` defaults to `"disabled"` (private) and `allow_net` defaults to
+    /// an empty allow list, meaning no host-based restriction.
     #[new]
-    #[pyo3(signature = (mode="enabled".to_string(), allow_net=vec![]))]
+    #[pyo3(signature = (mode="disabled".to_string(), allow_net=vec![]))]
     fn new(mode: String, allow_net: Vec<String>) -> Self {
         Self { mode, allow_net }
     }
@@ -435,7 +435,7 @@ impl TryFrom<PyNetworkSpec> for (NetworkSpec, NetworkSpec) {
                 mode: inbound.mode.parse::<NetworkMode>()?,
                 allow_net: inbound.allow_net,
             })?,
-            None => NetworkSpec::default(),
+            None => NetworkSpec::disabled(),
         };
         Ok((outbound, inbound))
     }
@@ -691,7 +691,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
 
         let (network, inbound_network) = match py_opts.network {
             Some(spec) => <(NetworkSpec, NetworkSpec)>::try_from(spec)?,
-            None => (NetworkSpec::default(), NetworkSpec::default()),
+            None => (NetworkSpec::default(), NetworkSpec::disabled()),
         };
 
         let ports = py_opts.ports.into_iter().map(PortSpec::from).collect();
@@ -1340,6 +1340,22 @@ mod tests {
 
         assert!(matches!(inbound, NetworkSpec::Disabled));
         assert!(matches!(outbound, NetworkSpec::Enabled { .. }));
+    }
+
+    /// A spec that only configures outbound leaves inbound private.
+    #[test]
+    fn outbound_only_network_spec_keeps_inbound_disabled() {
+        let (outbound, inbound) = <(NetworkSpec, NetworkSpec)>::try_from(PyNetworkSpec {
+            outbound: Some(PyOutboundNetworkSpec {
+                mode: "disabled".into(),
+                allow_net: vec![],
+            }),
+            inbound: None,
+        })
+        .unwrap();
+
+        assert!(matches!(outbound, NetworkSpec::Disabled));
+        assert!(matches!(inbound, NetworkSpec::Disabled));
     }
 
     /// A dropped alias must fail loudly. `ro` was accepted before the rename;

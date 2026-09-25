@@ -1,25 +1,26 @@
+## TL;DR
+
+Choose a cloud architecture guide; each keeps its diagrams and resource relationships together.
+
 # Infrastructure architecture
 
-`sst.config.ts` is the provider/app entrypoint. It dynamically imports the `stack/deployStack()`
-facade because SST initializes providers before it evaluates the resource graph.
+[Infrastructure index](../README.md)
 
-The intended declaration order is stable:
+| Cloud | Guide |
+| --- | --- |
+| AWS | [Architecture and diagrams](aws/architecture.md) |
+| GCP | [Architecture and diagrams](gcp/architecture.md) |
 
-1. foundation: VPC, database, Redis, storage, cluster, and shared IAM setup
-2. observability: OpenTelemetry into ClickHouse
-3. mail: the verified SES sender the API's invitations go out through
-4. API: the control-plane API and its artifact selection
-5. edge: Proxy, CDN, DNS, and routing
-6. runners: protected EC2 Runner instances, registration, and in-place binary updates
+The dashboard, API, proxy, collector and BoxLite runner/runtime are shared application components.
+Their cloud hosting, network paths and billing resources belong to the selected guide.
 
-Operational code is grouped separately:
+## Source ownership
 
-- `deployment/`: guarded SST execution, scope, config, and post-deploy verification
-- `artifacts/`: API and Runner artifact identity, publication, and preflight
-- `runner/`: inventory, state baselines, registration, and rolling updates
-- `bootstrap/`: AWS/GitHub/Auth0 provisioning and login
-- `shared/`: dependency-free utilities shared across domains
-- `policies/runner/`: mandatory Pulumi Runner safety policy
-
-Factories use ordinary functions and pass typed resource interfaces between layers. They do not
-introduce Pulumi `ComponentResource` parents, so existing parent hierarchies and URNs remain stable.
+| Responsibility | Source |
+| --- | --- |
+| Stage configuration, identity, encrypted environment and state access | [`mstage/`](../mstage/README.md) |
+| Container build, verification and promotion | [`mbuild/`](../mbuild/) |
+| Deploy intent and cloud engine selection | [`mdeploy/src/run.ts`](../mdeploy/src/run.ts), [`deploy.ts`](../mdeploy/src/deploy.ts) |
+| Resource composition and provider interfaces | [`mdeploy/stack/`](../mdeploy/stack/) |
+| Runner build, promotion and in-place updates | [`mdeploy/src/`](../mdeploy/src/) |
+| Account/project bootstrap and federated CI identity | [`bootstrap/`](../bootstrap/) |

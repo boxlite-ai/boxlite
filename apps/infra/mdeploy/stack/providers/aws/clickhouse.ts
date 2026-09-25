@@ -110,10 +110,6 @@ export const awsClickHouseProvider =
           passwordRef: $util.output(managed.readerSecretArn),
           credentialVersion: currentVersion('CLICKHOUSE_READER_PASSWORD_SECRET_ARN', managed.readerSecretArn, region),
         },
-        // A managed endpoint admits whoever holds its credential; there is no
-        // group to carry. The empty string is the honest answer, and the API's
-        // provider skips a grant it cannot attach.
-        binding: { cloud: 'aws', clientGrant: $util.output('') },
         id: $util.output(managed.url),
         ready: [],
       }
@@ -271,7 +267,6 @@ export const awsClickHouseProvider =
         passwordRef: reader.resource.arn,
         credentialVersion: reader.version.versionId,
       },
-      binding: { cloud: 'aws' as const, clientGrant: securityGroup.id },
       id: instance.id,
       ready: [ready],
     }

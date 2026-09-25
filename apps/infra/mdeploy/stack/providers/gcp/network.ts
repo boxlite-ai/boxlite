@@ -22,8 +22,18 @@
  * `egress-only-public`, and that is an organization policy rather than a
  * preference: `constraints/compute.vmExternalIpAccess` refuses an instance that
  * asks for an external address, so every workload's outbound goes through Cloud
- * NAT. The only ingress rule that names the runner's service account still
- * admits the API and the proxy and nothing else.
+ * NAT. Three ingress rules name the runner and each keys on what its own caller
+ * is: the control plane's on the serverless egress range below, the proxy's on
+ * the GKE Pod range in `edge.ts`, and IAP's on Google's tunnel range for port
+ * 22. Nothing else reaches it.
+ *
+ * Identity has one hole, and it is the reason `CLOUDRUN_EGRESS_CIDR` exists: a
+ * Cloud Run service's direct-egress packets arrive attributed to no service
+ * account, so a rule that admits one *by identity* admits nothing. Google offers
+ * no label for them either — a network tag in an ingress rule is unsupported for
+ * direct VPC egress — so the only source that reaches them is the range they
+ * leave from. Every rule from a Cloud Run workload to a VM is keyed on that
+ * range: here for the runner, and in `clickhouse.ts` for the telemetry host.
  */
 
 import { API_PORT } from '../../api.ts'
@@ -38,6 +48,76 @@ const INTERNAL_PORTS = [API_PORT, PROXY_PORT, RUNNER_PORT, OTLP_HTTP_PORT].map(S
 
 /** The subnet workloads sit in. Private Service Access gets its own below. */
 export const SUBNET_CIDR = '10.20.0.0/20'
+
+/**
+ * The subnet the Cloud Run services egress from, and the source of every rule
+ * that admits one to a VM.
+ *
+ * Its own range rather than a share of `SUBNET_CIDR`, and that is the whole
+ * point of it. A rule keyed on the workload subnet would admit every runner and
+ * the telemetry host itself — the widening `InternalFirewall` argues against
+ * below — whereas this one holds the serverless roles and nothing that can take
+ * an instance.
+ *
+ * What it cannot do is tell those roles apart, and that is the price of the
+ * supported mechanism rather than an oversight. A rule keyed here admits the
+ * control plane and the collector alike, so the runner's rule now also admits a
+ * collector that has no reason to call it, and ClickHouse's admits both the
+ * writer and the reader it already wanted. Narrowing further would need a subnet
+ * per role, which is a range each and a placement each; it is worth doing the
+ * day a serverless role appears that should not reach both hosts.
+ *
+ * A range because it is the only source this direction is documented to take.
+ * The page that shows a Cloud Run service being given network tags — it can be,
+ * and they serve in an *egress* rule — also lists "network tags or service
+ * identity in ingress firewall rules" among what direct VPC egress does not
+ * support: https://cloud.google.com/run/docs/configuring/vpc-direct-vpc.
+ * Assignable and usable as a source are different questions, and reading the
+ * first as the second is why a tag looked like it should work here.
+ *
+ * Measured on the dev stage on 2026-09-23, changing only this rule's source:
+ *
+ *   sourceServiceAccounts only   `/v1/boxes/*` exec  504 after 127.5s
+ *   + the range the API egresses from                201 after 0.52s
+ *
+ * 127 seconds is not a coincidence: it is Linux's default connect timeout at
+ * `tcp_syn_retries=6` (1+2+4+8+16+32+64), so the SYN was being dropped rather
+ * than refused — a deny that sends no RST. Naming the range ends it in one
+ * handshake. An identity on this rule reads correct and admits nothing.
+ *
+ * The tag was never measured against that pair, so it is not called broken
+ * here. What this file recorded before it is the reason not to key on it
+ * either: on 2026-09-20, on the same stage, a tag-keyed runner rule admitted
+ * nothing for forty minutes, and waiting did not end it — rewriting the rule
+ * did, and it served four minutes later. A selector that matches only
+ * sometimes is what an unsupported one looks like from the outside, and a rule
+ * that has to be rewritten before it starts working is not one to put a
+ * control plane behind.
+ *
+ * A `/22`, which is the size Cloud Run's own defaults ask for. Direct VPC
+ * egress holds two addresses per instance and a rollout holds both revisions'
+ * at once, so two services left at the default ceiling of 100 instances each
+ * want (100 + 100) × 2 × 2 = 800 addresses. The 1020 usable here — a subnet
+ * reserves four of its own — carry that; a `/23` offers 508 and does not.
+ *
+ * Sized for the default rather than for a ceiling this file sets, so that
+ * capping either service stays a decision about its own load and its database
+ * connections (#1610) instead of something this range forces. The range is
+ * also the more expensive half to change: it can be widened in place but
+ * never narrowed, and a narrower one is a new subnet every Cloud Run revision
+ * egressing through this one must be moved to.
+ *
+ * Too small fails in a way that names nothing: an instance that cannot start
+ * for want of a free address in the subnet reads nothing like a firewall
+ * problem. Widening the subnet does not widen the rule: the rule admits what
+ * sits here, and only these two services are placed here.
+ *
+ * Placed above `PSC_NAT_CIDR` on a `/22` boundary and inside the same `/16`,
+ * which is what keeps the Private Service Access allocator from ever taking
+ * it; the reasoning in `MANAGED_PROXY_CIDR` covers this range unchanged. It
+ * still ends well below the GKE Pod range at `10.20.32.0/19`.
+ */
+export const CLOUDRUN_EGRESS_CIDR = '10.20.20.0/22'
 
 /**
  * Alias ranges used by the GKE proxy Pods and Kubernetes Services.
@@ -137,6 +217,22 @@ export const gcpNetworkProvider =
       privateIpGoogleAccess: true,
     })
 
+    /*
+     * Where the Cloud Run services get their addresses, and the only subnet a
+     * rule below names as a source. Nothing that can take an instance is placed
+     * here — see `CLOUDRUN_EGRESS_CIDR` for why that is the point rather than a
+     * detail. `privateIpGoogleAccess` for the same reason the workload subnet
+     * has it: direct VPC egress requires Google's own access to the range.
+     */
+    const cloudRunEgress = new gcp.compute.Subnetwork('CloudRunEgressSubnetwork', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'cloudrun-egress' }),
+      project,
+      region,
+      network: network.id,
+      ipCidrRange: CLOUDRUN_EGRESS_CIDR,
+      privateIpGoogleAccess: true,
+    })
+
     const managedProxy = new gcp.compute.Subnetwork('ManagedProxySubnetwork', {
       name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'managed-proxy' }),
       project,
@@ -216,6 +312,16 @@ export const gcpNetworkProvider =
      * AWS security-group pair: a workload is admitted because of who it is, not
      * because of where it sits. A rule keyed on the subnet range would also
      * admit anything else that ever lands in it.
+     *
+     * Identity selects instances, and that bounds this rule to less than it
+     * reads as — the hole the file header describes, restated where a reader
+     * meets it. None of the three roles named on either end runs an instance
+     * under its account: the API and the collector are Cloud Run services, and
+     * the proxy's account is bound to its Pods through Workload Identity while
+     * their packets leave a node running under the cluster's own. Every path
+     * those three actually take is keyed elsewhere — `RunnerFirewall` below,
+     * the Pod range in `edge.ts`, `clickhouse.ts` for the telemetry host — so
+     * none of them is what the 504 was, and none of them crosses here.
      */
     const serviceIdentities = [accounts.api, accounts.proxy, accounts['otel-collector']].map((account) => account.email)
     const internal = new gcp.compute.Firewall('InternalFirewall', {
@@ -229,8 +335,25 @@ export const gcpNetworkProvider =
       targetServiceAccounts: serviceIdentities,
     })
 
-    // The runner answers the API here. GKE Pod addresses are admitted by the
-    // proxy edge beside the cluster that owns their secondary range.
+    /*
+     * The runner answers the API here. GKE Pod addresses are admitted by the
+     * proxy edge beside the cluster that owns their secondary range.
+     *
+     * A range on the source side, and this is the one rule in the file that
+     * cannot name its caller by identity. The API is a Cloud Run service
+     * reaching a VM, and `sourceServiceAccounts` does not match direct-egress
+     * traffic at all — the rule admits nothing, the deny at 65534 swallows the
+     * SYN, and `/v1/boxes/*` returns 504 after a full connect timeout while the
+     * runner sits healthy and logs nothing.
+     *
+     * A source tag is the trap that looks like the fix, and this rule carried
+     * one: Google lists tags and identity together among the sources direct VPC
+     * egress does not support on an ingress rule. `CLOUDRUN_EGRESS_CIDR` has the
+     * measurement — identity 504s after a 127-second connect timeout, the range
+     * serves in half a second. So the source is the range those packets leave
+     * from, which that subnet keeps as narrow as the caller. The target is an
+     * account again — only a source *tag* cannot be paired with one.
+     */
     const runnerIngress = new gcp.compute.Firewall('RunnerFirewall', {
       name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'runner' }),
       project,
@@ -238,7 +361,7 @@ export const gcpNetworkProvider =
       direction: 'INGRESS',
       priority: 1000,
       allows: [{ protocol: 'tcp', ports: [String(RUNNER_PORT)] }],
-      sourceServiceAccounts: [accounts.api.email],
+      sourceRanges: [CLOUDRUN_EGRESS_CIDR],
       targetServiceAccounts: [accounts.runner.email],
     })
 
@@ -269,6 +392,8 @@ export const gcpNetworkProvider =
     })
 
     // And the other direction: a runner registers itself and ships telemetry.
+    // The source is an instance and matches; the targets are the two Cloud Run
+    // services, which no VPC rule reaches — see `InternalFirewall` above.
     const runnerEgress = new gcp.compute.Firewall('RunnerToServicesFirewall', {
       name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'runner-to-services' }),
       project,
@@ -312,6 +437,11 @@ export const gcpNetworkProvider =
        */
       exposure: 'private',
       subnetwork: subnetwork.id,
+      // Offered to every role and read only by the two that are Cloud Run
+      // services. Separate from `subnetwork` because that one also places the
+      // API's internal address, which belongs beside its clients rather than in
+      // the range a firewall rule names as a source.
+      egressSubnetwork: cloudRunEgress.id,
       serviceAccount: accounts[role].email,
     })
 
@@ -326,6 +456,7 @@ export const gcpNetworkProvider =
       placementFor,
       ready: [
         privateServiceAccess,
+        cloudRunEgress,
         managedProxy,
         internal,
         runnerIngress,

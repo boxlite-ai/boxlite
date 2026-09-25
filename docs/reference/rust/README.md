@@ -764,14 +764,15 @@ pub enum NetworkSpec {
 
 The inbound direction — whether services the box exposes are reachable from
 outside it — is the sibling field `BoxOptions::inbound_network`, which reuses
-this same type: `Enabled` = reachable (the default), `Disabled` = private.
-The two directions are independent, so a box may refuse egress while the
-services it exposes stay reachable, or the reverse.
+this same type: `Enabled` = reachable, `Disabled` = private (the default,
+`NetworkSpec::disabled()`). The two directions are independent, so a
+box may refuse egress while the services it exposes stay reachable, or the
+reverse.
 
 ```rust
 let opts = BoxOptions {
     network: NetworkSpec::Disabled,                                  // no egress
-    inbound_network: NetworkSpec::Enabled { allow_net: vec![] },     // still reachable
+    inbound_network: NetworkSpec::Enabled { allow_net: vec![] },     // reachable
     ..Default::default()
 };
 ```
@@ -781,7 +782,7 @@ allowlist yet, so a non-empty value is rejected at create. Inbound is
 controlled by enabled/disabled alone.
 
 Pre-split code needs no change: `network` keeps its name, type and meaning,
-and box configs persisted without `inbound_network` load with it defaulted.
+and box configs persisted without `inbound_network` load with it `Disabled`.
 
 ### NetworkRateLimit
 

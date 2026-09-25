@@ -62,9 +62,24 @@ export type Placement =
   | {
       cloud: 'gcp'
       exposure: Exposure
-      /** The subnetwork a Cloud Run service egresses through, or a VM sits in. */
+      /**
+       * The subnetwork this role's own resources sit in: a VM, or the internal
+       * address a load balancer answers on. Where its clients are.
+       */
       subnetwork: $util.Output<string>
-      /** The identity firewall rules name, and that IAM grants attach to. */
+      /**
+       * The subnetwork a Cloud Run service's packets leave through, which is a
+       * different question from `subnetwork` and has to stay one.
+       *
+       * A rule admitting a Cloud Run workload to a VM can only name the range
+       * its packets come from, and a range is exactly as narrow as the subnet
+       * behind it — so the serverless roles egress from a subnet holding nothing
+       * else. Reading `subnetwork` here instead would move every resource that
+       * field places, the API's internal address included, into that subnet and
+       * widen the rule to whatever followed. See `CLOUDRUN_EGRESS_CIDR`.
+       */
+      egressSubnetwork: $util.Output<string>
+      /** The identity IAM grants attach to, and that Cloud Run admits invokers by. */
       serviceAccount: $util.Output<string>
     }
 

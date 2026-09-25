@@ -16,7 +16,7 @@
  * stops compiling.
  */
 
-export type DatabaseSize = 'small' | 'medium'
+export type DatabaseSize = 'small' | 'standard' | 'medium'
 
 export type DatabaseRequest = {
   /** The logical database inside the server. */

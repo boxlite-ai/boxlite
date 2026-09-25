@@ -1172,7 +1172,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                     inbound.mode.parse::<NetworkMode>()?,
                     inbound.allow_net.clone(),
                 ),
-                None => (NetworkMode::Enabled, Vec::new()),
+                None => (NetworkMode::Disabled, Vec::new()),
             };
             (
                 NetworkSpec::try_from(OutboundNetworkConfig { mode, allow_net })?,
@@ -1182,7 +1182,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                 })?,
             )
         }
-        None => (NetworkSpec::default(), NetworkSpec::default()),
+        None => (NetworkSpec::default(), NetworkSpec::disabled()),
     };
 
     // SecurityOptions is deliberately NOT client-configurable over
@@ -2669,23 +2669,27 @@ mod tests {
     }
 
     #[test]
-    fn build_box_options_legacy_network_defaults_inbound_to_enabled() {
-        // Legacy flat `network` never carried an inbound concept — it
-        // predates the outbound/inbound split — so inbound falls back to
-        // its default (Enabled/public) regardless of outbound mode.
-        let req: super::types::CreateBoxRequest = serde_json::from_str(
-            r#"{
-                "image": "alpine:latest",
-                "network": {
-                    "mode": "enabled"
-                }
-            }"#,
-        )
-        .expect("legacy flat body must deserialize");
-        let opts = build_box_options(&req).expect("build");
-        assert!(
-            matches!(opts.inbound_network, NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty())
-        );
+    fn build_box_options_omitted_inbound_defaults_to_disabled() {
+        // A request without inbound is private, whether `network` is absent,
+        // uses the legacy flat shape (which predates the split), or nests
+        // only outbound.
+        for network in [
+            None,
+            Some(r#"{"mode": "enabled"}"#),
+            Some(r#"{"outbound": {"mode": "enabled"}}"#),
+        ] {
+            let body = match network {
+                Some(network) => format!(r#"{{"image": "alpine:latest", "network": {network}}}"#),
+                None => r#"{"image": "alpine:latest"}"#.to_string(),
+            };
+            let req: super::types::CreateBoxRequest =
+                serde_json::from_str(&body).expect("body must deserialize");
+            let opts = build_box_options(&req).expect("build");
+            assert!(
+                matches!(opts.inbound_network, NetworkSpec::Disabled),
+                "network {network:?} must default inbound to disabled"
+            );
+        }
     }
 
     #[test]

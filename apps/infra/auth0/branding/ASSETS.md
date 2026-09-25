@@ -1,4 +1,10 @@
+## TL;DR
+
+Publish content-hashed Auth0 branding assets with the dashboard before applying the reviewed tenant branding.
+
 # Auth0 Universal Login assets
+
+[Infrastructure index](../../README.md) · [Identity operations](../../docs/identity-and-mail.md)
 
 The browser loads Universal Login branding from the selected stage's dashboard
 origin. Source files live in `apps/dashboard/public/auth0/`; Vite copies them
@@ -34,7 +40,7 @@ the email templates — are light and take the black wordmark through
 
 `branding/theme.json` and `branding/tenant.json` contain stage-relative
 `/auth0/*` paths. The Universal Login command resolves only those known fields
-against the selected target's `stackOrigin`; it does not substitute arbitrary
+against the selected [target catalog](../targets.json) entry's `stackOrigin`; it does not substitute arbitrary
 strings in the document. `branding/tenant.json` may declare `picture_url` and
 nothing else, so this reconciler cannot collide with the rest of the tenant
 settings that `bootstrap/auth0.ts` writes during provisioning.

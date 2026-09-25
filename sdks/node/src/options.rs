@@ -475,7 +475,7 @@ impl TryFrom<JsNetworkSpec> for (NetworkSpec, NetworkSpec) {
                 mode: inbound.mode.parse::<NetworkMode>()?,
                 allow_net: inbound.allow_net.unwrap_or_default(),
             })?,
-            None => NetworkSpec::default(),
+            None => NetworkSpec::disabled(),
         };
         Ok((outbound, inbound))
     }
@@ -499,7 +499,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
         // Convert network spec — the two directions become two fields
         let (network, inbound_network) = match js_opts.network {
             Some(spec) => <(NetworkSpec, NetworkSpec)>::try_from(spec)?,
-            None => (NetworkSpec::default(), NetworkSpec::default()),
+            None => (NetworkSpec::default(), NetworkSpec::disabled()),
         };
 
         // Convert ports
@@ -1045,7 +1045,7 @@ mod tests {
     }
 
     /// The pre-split shape configured the outbound direction; it must keep
-    /// doing exactly that, and leave inbound at its default.
+    /// doing exactly that, and leave inbound at its default (private).
     #[test]
     fn legacy_flat_network_spec_converts_to_outbound() {
         let (outbound, inbound) = <(NetworkSpec, NetworkSpec)>::try_from(JsNetworkSpec {
@@ -1057,7 +1057,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(outbound, NetworkSpec::Disabled));
-        assert!(matches!(inbound, NetworkSpec::Enabled { .. }));
+        assert!(matches!(inbound, NetworkSpec::Disabled));
     }
 
     #[test]

@@ -35,6 +35,7 @@ import {
   GKE_POD_CIDR,
   GKE_SERVICE_CIDR,
   MANAGED_PROXY_CIDR,
+  CLOUDRUN_EGRESS_CIDR,
   PSC_NAT_CIDR,
   SUBNET_CIDR,
 } from '../stack/providers/gcp/network.ts'
@@ -58,29 +59,7 @@ process.env.MSTAGE_CONFIG ??= fileURLToPath(new URL('../../.mstage.config.exampl
 const sourceOf = (module: string): string =>
   readFileSync(fileURLToPath(new URL(`../stack/providers/gcp/${module}.ts`, import.meta.url)), 'utf8')
 
-/**
- * Every project-level IAM resource this provider constructs, whichever
- * constructor it uses and however deeply it is nested.
- *
- * Scanning to a balanced close rather than matching a closing line. The first
- * version of this pinned `\n    })`, so it enumerated only blocks that closed
- * at exactly four spaces — a grant one level deeper, which is the shape
- * `RunnerArtifactsRead` already uses in this same file, went unseen and green.
- * `IAMBinding` is included because it is authoritative, and so the more
- * dangerous of the two to leave unbounded.
- *
- * It reads source text, which is the limit worth stating: it can see the
- * argument a constructor is written with, not the resource Pulumi synthesises
- * from it. A grant assembled from a variable would satisfy this and still be
- * unbounded.
- *
- * The scan skips comments and quoted literals, because a parenthesis inside
- * either is prose and not structure — counting them, as the first version did,
- * ends a block wherever someone writes one in a comment. What it still cannot
- * do is tell a regex literal from a division; nothing in these providers writes
- * one, and an unbalanced scan now throws rather than running to the end of the
- * file and returning a block that swallows the next grant's `condition:`.
- */
+/** Where the quoted literal opened at `open` ends, or -1 if it never does. */
 const endOfLiteral = (source: string, open: number): number => {
   const quote = source[open]
   for (let index = open + 1; index < source.length; index += 1) {
@@ -93,9 +72,28 @@ const endOfLiteral = (source: string, open: number): number => {
   return -1
 }
 
-const projectIamBlocks = (source: string): string[] => {
+/**
+ * Every constructor call `opener` matches, each scanned to its balanced close.
+ *
+ * Scanning to a balanced close rather than matching a closing line. The first
+ * version of this pinned `\n    })`, so it enumerated only blocks that closed
+ * at exactly four spaces — a grant one level deeper, which is the shape
+ * `RunnerArtifactsRead` already uses in this same file, went unseen and green.
+ *
+ * It reads source text, which is the limit worth stating: it can see the
+ * argument a constructor is written with, not the resource Pulumi synthesises
+ * from it. A grant assembled from a variable would satisfy this and still be
+ * unbounded.
+ *
+ * The scan skips comments and quoted literals, because a parenthesis inside
+ * either is prose and not structure — counting them, as the first version did,
+ * ends a block wherever someone writes one in a comment. What it still cannot
+ * do is tell a regex literal from a division; nothing in these providers writes
+ * one, and an unbalanced scan throws rather than running to the end of the file
+ * and returning a block that swallows the next grant's `condition:`.
+ */
+const blocksOpenedBy = (source: string, opener: RegExp): string[] => {
   const blocks: string[] = []
-  const opener = /new gcp\.projects\.IAM(?:Member|Binding)\(/g
   for (let match = opener.exec(source); match; match = opener.exec(source)) {
     let depth = 0
     let index = match.index + match[0].length - 1
@@ -127,10 +125,80 @@ const projectIamBlocks = (source: string): string[] => {
         break
       }
     }
-    assert.ok(closed, `the IAM grant at offset ${match.index} never closes, so this scan proves nothing`)
+    assert.ok(closed, `the block at offset ${match.index} never closes, so this scan proves nothing`)
     blocks.push(source.slice(match.index, index + 1))
   }
   return blocks
+}
+
+/**
+ * Every project-level IAM resource this provider constructs, whichever
+ * constructor it uses and however deeply it is nested.
+ *
+ * `IAMBinding` is included because it is authoritative, and so the more
+ * dangerous of the two to leave unbounded.
+ */
+const projectIamBlocks = (source: string): string[] =>
+  blocksOpenedBy(source, /new gcp\.projects\.IAM(?:Member|Binding)\(/g)
+
+/**
+ * The same text with its prose removed.
+ *
+ * An assertion about how a rule is keyed has to read the rule and not the
+ * comment above it. `clickhouse.ts` explains itself by naming
+ * `sourceServiceAccounts` in the very paragraph that says why it no longer uses
+ * one, so a search for the word finds that sentence and reports the defect it
+ * was written to record as still present.
+ *
+ * Unterminated input throws rather than returning what it managed to read, for
+ * the reason `blocksOpenedBy` gives: a negative assertion over truncated text
+ * passes because the text stopped, not because the property is absent. A
+ * trailing `//` with no newline is the one benign end, and ends the scan.
+ */
+const withoutComments = (source: string): string => {
+  let stripped = ''
+  for (let index = 0; index < source.length; index += 1) {
+    const pair = source.slice(index, index + 2)
+    if (pair === '//') {
+      const newline = source.indexOf('\n', index)
+      if (newline === -1) break
+      index = newline - 1
+      continue
+    }
+    if (pair === '/*') {
+      const end = source.indexOf('*/', index + 2)
+      assert.notEqual(end, -1, `the block comment at offset ${index} never closes, so this strip proves nothing`)
+      index = end + 1
+      continue
+    }
+    const character = source[index] as string
+    if (character === "'" || character === '"' || character === '`') {
+      const end = endOfLiteral(source, index)
+      assert.notEqual(end, -1, `the literal at offset ${index} never closes, so this strip proves nothing`)
+      stripped += source.slice(index, end + 1)
+      index = end
+      continue
+    }
+    stripped += character
+  }
+  return stripped
+}
+
+/**
+ * One firewall rule as it is written, with its prose stripped — so an assertion
+ * about how it is keyed cannot be satisfied by a different rule in the same
+ * file, nor by a comment explaining the keying it no longer uses.
+ *
+ * The whole point of scoping it. A file-wide search for a property name answers
+ * for whichever rule happens to use it — `gcp/network.ts` holds five, and three
+ * of them name a service account deliberately — so an assertion written that
+ * way either passes on a neighbour's spelling or fails on one it never meant.
+ */
+const firewallBlock = (source: string, resource: string): string => {
+  const named = new RegExp(`^new gcp\\.compute\\.Firewall\\(\\s*'${resource}'`)
+  const blocks = blocksOpenedBy(source, /new gcp\.compute\.Firewall\(/g).filter((block) => named.test(block))
+  assert.equal(blocks.length, 1, `expected exactly one ${resource}, found ${blocks.length}`)
+  return withoutComments(blocks[0] as string)
 }
 
 /**
@@ -587,32 +655,137 @@ test('the collector is invocable from the network, and the ingress is the whole 
   assert.equal(/GOOGLE_ID_TOKEN/.test(sourceOf('runners') + sourceOf('edge')), false)
 })
 
-test('the telemetry database admits every identity that speaks to it, not just the writer', () => {
+test('the telemetry database admits both of its callers, because both egress from one range', () => {
   /*
-   * The collector writes and the API reads, and the rule is keyed on service
-   * accounts — so an identity left out of it is *dropped* rather than refused:
-   * the reader gets a connect timeout against a database that is plainly
-   * running, ClickHouse logs nothing because nothing arrived, and the explicit
-   * deny at 65534 is the only trace. The composition root used to hand over the
-   * collector's account alone while the comment beside it said both, and no
-   * stage caught it because the one GCP stage keeps `CLICKHOUSE_MODE=disabled`.
+   * The collector writes and the API reads, and a caller left out of the rule is
+   * *dropped* rather than refused: the reader gets a connect timeout against a
+   * database that is plainly running, ClickHouse logs nothing because nothing
+   * arrived, and the explicit deny at 65534 is the only trace. The composition
+   * root used to hand over the collector alone while the comment beside it said
+   * both, and no stage caught it because the one GCP stage keeps
+   * `CLICKHOUSE_MODE=disabled`.
    *
-   * The roles are recorded as the bundle asks the network for them, so this
-   * fails when the wiring stops asking rather than when a string moves.
+   * What closes that hole is the subnet rather than a list. Both callers are
+   * Cloud Run services and both egress from `CLOUDRUN_EGRESS_CIDR`, so one range
+   * names both and there is no list left to hand over half of. The property that
+   * has to hold moves with it: a role recorded as `cloud-run` is placed in that
+   * subnet and admitted, and a role that becomes a Cloud Run service without
+   * being recorded there would egress from the workload subnet and be dropped.
    */
-  const asked: string[] = []
+  /*
+   * Both callers read the egress subnet, and only on the interface their packets
+   * leave through.
+   *
+   * `egressSubnetwork` is a second field rather than a different value for
+   * `subnetwork` because that one also places the API's internal address — the
+   * address the runners call the API on. Answering both questions with one field
+   * moved that address into the range this rule names as a source, replaced it,
+   * and widened the rule to whatever landed there next. A deploy is what found
+   * it: the apply replaced `ApiInternalAddress` and `ApiInternalForwardingRule`.
+   */
+  assert.match(sourceOf('api'), /networkInterfaces: \[\{ subnetwork: placement\.egressSubnetwork \}\]/)
+  assert.match(sourceOf('collector'), /networkInterfaces: \[\{ subnetwork: placement\.egressSubnetwork \}\]/)
+  // And nothing else reads it, so the address stays beside its clients.
+  for (const module of ['api', 'collector', 'runners', 'clickhouse', 'edge']) {
+    const reads = (sourceOf(module).match(/placement\.egressSubnetwork/g) ?? []).length
+    assert.equal(reads, module === 'api' || module === 'collector' ? 1 : 0, `${module} reads egressSubnetwork ${reads}x`)
+  }
+
+  /*
+   * And the chain between the two ends holds.
+   *
+   * The rule names a constant, the subnet is built from that same constant, and
+   * the placement hands out that subnet — three links, and the assertions above
+   * only pin the outer two. Repointing `egressSubnetwork` at the workload subnet
+   * leaves every one of them green and restores the 504 this exists to prevent,
+   * which is what the old `tagFor` assertions caught by spelling both ends with
+   * one function.
+   */
+  const networkModule = sourceOf('network')
+  assert.match(networkModule, /ipCidrRange: CLOUDRUN_EGRESS_CIDR/)
+  assert.match(networkModule, /egressSubnetwork: cloudRunEgress\.id/)
+  // And the range handed to the rule is that subnet's, not the workload one's.
+  assert.match(sourceOf('index'), /callerRanges: \[CLOUDRUN_EGRESS_CIDR\]/)
+
+  /*
+   * And building the module asks the network for no caller at all.
+   *
+   * This is what the old bug cannot survive: the caller list used to be read
+   * role by role off the placement, which is how the composition root came to
+   * hand over the collector alone while the comment beside it said both. A range
+   * the network module owns leaves nothing per-caller to look up, so anything
+   * read here again would be a list growing back.
+   */
+  const consulted: string[] = []
   const network = {
     binding: { cloud: 'gcp', network: 'net', subnetwork: 'subnet' },
-    placementFor: (role: string) => {
-      asked.push(role)
-      return { cloud: 'gcp', serviceAccount: `${role}@example.iam.gserviceaccount.com` }
-    },
+    placementFor: (role: string) => ({
+      cloud: 'gcp',
+      get serviceAccount() {
+        consulted.push(`${role}:serviceAccount`)
+        return `${role}@example.iam.gserviceaccount.com`
+      },
+      get subnetwork() {
+        consulted.push(`${role}:subnetwork`)
+        return 'subnet'
+      },
+      // Instrumented because it is the field this change added: a caller list
+      // rebuilt from it would otherwise read an untracked property and leave the
+      // assertion below green while the list grew back.
+      get egressSubnetwork() {
+        consulted.push(`${role}:egressSubnetwork`)
+        return 'egress-subnet'
+      },
+    }),
     ready: [],
   } as any
   gcpBundle().clickhouse({ network })
-  assert.deepEqual([...asked].sort(), ['api', 'otel-collector'])
-  // And the rule is keyed on the whole list it was handed rather than one of it.
-  assert.match(sourceOf('clickhouse'), /sourceServiceAccounts: callers/)
+  assert.deepEqual(consulted, [])
+})
+
+test('a Cloud Run service reaches a VM by source range, because tags do not reach an ingress rule', () => {
+  /*
+   * The 504 this pins, and the trap that replaced it.
+   *
+   * `sourceServiceAccounts` matches traffic from VM instances; a Cloud Run
+   * service reaching the network through direct VPC egress is attributed to no
+   * account at all, so a rule keyed that way admits nothing and the deny at
+   * 65534 takes the SYN. The control plane's `/v1/boxes/*` routes — exec, files,
+   * metrics — then time out after a full TCP connect against a runner that is
+   * healthy, answering the GKE proxy on the same port, and logging nothing.
+   *
+   * A source tag does not fix that: Google lists "network tags or service
+   * identity in ingress firewall rules" together among the things direct VPC
+   * egress does not support, so a tag swaps one unmatched selector for another.
+   * Measured on dev on 2026-09-23 by changing only this rule's source — identity
+   * alone gave 504 after a 127.5s connect timeout, and adding the range the API
+   * egresses from gave 201 in 0.52s. The supported source is that range.
+   *
+   * With the source a range the target may be an account again — Google refuses
+   * only a source *tag* paired with a target service account — so both rules
+   * name their host the way the other three rules in `gcp/network.ts` do.
+   */
+  const runner = firewallBlock(sourceOf('network'), 'RunnerFirewall')
+  assert.match(runner, /sourceRanges: \[CLOUDRUN_EGRESS_CIDR\]/)
+  assert.match(runner, /targetServiceAccounts: \[accounts\.runner\.email\]/)
+
+  const clickhouse = firewallBlock(sourceOf('clickhouse'), 'ClickHouseFirewall')
+  assert.match(clickhouse, /sourceRanges: callerRanges/)
+  assert.match(clickhouse, /targetServiceAccounts: \[host\.email\]/)
+
+  // Neither rule keeps a tag on either end.
+  assert.equal(/Tags/.test(runner), false)
+  assert.equal(/Tags/.test(clickhouse), false)
+
+  /*
+   * And nothing still carries one for these rules to key on: the two Cloud Run
+   * interfaces stamped it, the two hosts answered to it, and the placement
+   * spelled it. A tag left behind after this is a selector nothing reads, which
+   * is how the unsupported one survived a review in the first place.
+   */
+  for (const module of ['api', 'collector', 'runners', 'clickhouse', 'network']) {
+    assert.equal(/networkTag/.test(sourceOf(module)), false, `${module} still carries a network tag`)
+  }
 })
 
 /** The script as a host gets it, with three secret versions already resolved. */
@@ -838,6 +1011,28 @@ test('every Cloud SQL size names its edition beside its tier', () => {
       `${size} pairs ${machine.tier} with ${machine.edition}`,
     )
   }
+})
+
+test('each database size still names the tier its stages were sized against', () => {
+  /*
+   * A size is a name a stage declares, and the name lives outside this
+   * repository — in each stage's GitHub Environment. So a respelt tier here is
+   * not a compile error anywhere: the stage keeps declaring what it declared,
+   * and the next apply moves its database. The edition check above passes any
+   * spelling that pairs correctly, which is every spelling.
+   *
+   * `standard` was added rather than `small` being redefined, precisely so no
+   * existing declaration changed meaning. Pinning the pairs is what keeps that
+   * true.
+   */
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(DATABASE_MACHINE).map(([size, machine]) => [size, machine.tier])),
+    {
+      small: 'db-f1-micro',
+      standard: 'db-g1-small',
+      medium: 'db-custom-2-7680',
+    },
+  )
 })
 
 test('the instance is told to log connections, so a silent Postgres means something', () => {
@@ -1280,7 +1475,7 @@ test('the fixed GKE and proxy ranges neither overlap nor collide with Private Se
    * allocator. Moving either constant out of that `/16`, or letting the two
    * subnets overlap, breaks the argument silently and the deploy months later.
    */
-  const cidrs = [SUBNET_CIDR, MANAGED_PROXY_CIDR, PSC_NAT_CIDR, GKE_POD_CIDR, GKE_SERVICE_CIDR]
+  const cidrs = [SUBNET_CIDR, CLOUDRUN_EGRESS_CIDR, MANAGED_PROXY_CIDR, PSC_NAT_CIDR, GKE_POD_CIDR, GKE_SERVICE_CIDR]
   for (const [index, leftCidr] of cidrs.entries()) {
     for (const rightCidr of cidrs.slice(index + 1)) {
       const left = rangeOf(leftCidr)
@@ -1326,11 +1521,11 @@ test('the ClickStack publication is named what the console looks for', () => {
   assert.match(source, /enableProxyProtocol: false/)
 })
 
-test('the publication admits the two kinds of traffic that carry no service account', () => {
+test('the publication admits the two kinds of traffic that come from outside its neighbour range', () => {
   /*
-   * `clickhouse.ts`'s rule keys on service accounts, which is exact and covers
-   * every caller inside this network. Neither packet here carries one: a health
-   * probe originates in Google's own infrastructure, and a consumer's
+   * `clickhouse.ts`'s rule keys on the range its callers egress from, which
+   * covers every caller inside this network. Neither packet here comes from it:
+   * a health probe originates in Google's own infrastructure, and a consumer's
    * connection has been translated into the NAT range on the way in. Without
    * both ranges the backend never turns healthy and the console reaches
    * nothing — with every resource created and the deploy green.

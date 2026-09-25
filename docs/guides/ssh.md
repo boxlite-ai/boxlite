@@ -1,5 +1,8 @@
 # Guest SSH control
 
+For component diagrams and implementation details, see
+[Guest SSH architecture](../../src/guest/src/service/ssh/README.md).
+
 SSH starts disabled. Control it through the existing host-only guest gRPC connection
 at the box's `sockets/box.sock`, after `Guest.Init` succeeds. There is no LiteBox,
 CLI, or language SDK SSH control API. SSH does not publish a host port; configure

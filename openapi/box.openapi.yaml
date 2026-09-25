@@ -1917,6 +1917,12 @@ components:
             $ref: "#/components/schemas/VolumeSpec"
         network:
           $ref: "#/components/schemas/NetworkSpec"
+          description: |
+            Optional network policy. Omitting `network` defaults inbound
+            service access to `disabled` (private).
+          default:
+            inbound:
+              mode: disabled
         secrets:
           type: array
           items:
@@ -2111,6 +2117,12 @@ components:
           $ref: "#/components/schemas/OutboundNetworkSpec"
         inbound:
           $ref: "#/components/schemas/InboundNetworkSpec"
+          description: |
+            Optional inbound service access policy. Omission means
+            `mode=disabled` (private), including for legacy flat network
+            requests. Send `mode=enabled` to make the box public.
+          default:
+            mode: disabled
         mode:
           deprecated: true
           type: string

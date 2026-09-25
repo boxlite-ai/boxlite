@@ -64,6 +64,7 @@ recorded_sha() {
 hold_file="$repo_root/.agent-tooling/hold"
 target_sha=""
 target_source=""
+is_offline_repair=0
 if [[ -e "$hold_file" ]]; then
   hold_sha="$(tr -d '\n' < "$hold_file")"
   { [[ "$hold_sha" =~ ^[0-9a-f]{40}$ ]] && [[ "$(wc -c < "$hold_file")" -le 41 ]]; } || {
@@ -73,19 +74,22 @@ if [[ -e "$hold_file" ]]; then
   target_sha="$hold_sha"
   target_source="hold"
 else
-  resolved="$(git ls-remote "https://github.com/$tooling_repo.git" "refs/heads/$tooling_ref" 2>/dev/null | awk 'NR==1{print $1}')" || true
+  resolved="$(git ls-remote "https://github.com/$tooling_repo.git" "refs/heads/$tooling_ref" | awk 'NR==1{print $1}')" || resolved=""
   if [[ "$resolved" =~ ^[0-9a-f]{40}$ ]]; then
     target_sha="$resolved"
     target_source="$tooling_ref"
   else
-    # Offline (or the branch is gone). An installed consumer keeps working on the
-    # last adopted revision; only the very first installation needs the network.
+    # The record is shared across worktrees, but hook paths are worktree-local.
+    # Reuse the recorded cache through the same locked validation and setup path:
+    # an offline worktree may still be configured for an older adopted revision.
     if current="$(recorded_sha)" && [[ -d "$cache_parent/$current" ]]; then
       printf 'agent-tooling: could not resolve %s on %s; keeping %s\n' "$tooling_ref" "$tooling_repo" "$current" >&2
-      exit 0
+      target_sha="$current"
+      is_offline_repair=1
+    else
+      printf 'agent-tooling: could not resolve %s on %s and no revision is installed\n' "$tooling_ref" "$tooling_repo" >&2
+      exit 1
     fi
-    printf 'agent-tooling: could not resolve %s on %s and no revision is installed\n' "$tooling_ref" "$tooling_repo" >&2
-    exit 1
   fi
 fi
 
@@ -148,6 +152,12 @@ fi
 setup="$checkout/plugins/boxlite-agent-tooling/scripts/setup.sh"
 [[ -x "$setup" ]] || { printf 'agent-tooling: fetched checkout has no executable setup script\n' >&2; exit 1; }
 "$setup" "$repo_root"
+
+if [[ "$is_offline_repair" == 1 ]]; then
+  "$checkout/plugins/boxlite-agent-tooling/scripts/verify-installation.sh" "$repo_root"
+  printf 'agent-tooling: repaired installation from cached revision %s (offline)\n' "$target_sha"
+  exit 0
+fi
 
 # Adopt: everything above succeeded, so this revision is now "current". The record
 # moves FIRST, then the metadata — deliberately. A crash between these writes can

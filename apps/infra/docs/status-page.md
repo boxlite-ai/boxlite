@@ -1,16 +1,22 @@
+## TL;DR
+
+The API reports production health to incident.io; the public status page is hosted outside the application stack.
+
 # Public status page (incident.io)
+
+[Infrastructure index](../README.md) · [Observability](clickhouse.md) · [Configuration](configuration.md)
 
 `https://status.boxlite.ai` is an incident.io-hosted status page. Nothing in
 the stack serves it; the API *feeds* it. What depends on it in this repo:
 
-- `apps/api/src/status-sync/` — the sync that keeps it honest (below)
+- [API status sync](../../api/src/status-sync/) — the sync that keeps it honest (below)
 - `apps/api/src/common/middleware/maintenance.middleware.ts` — the 503
   maintenance message points at it
 - `README.md` — Getting Help links it
 
 ## How the sync works
 
-`StatusSyncService` (`apps/api/src/status-sync/services/status-sync.service.ts`)
+[`StatusSyncService`](../../api/src/status-sync/services/status-sync.service.ts)
 runs every 30s on one replica (Redis lock). Each tick it observes:
 
 | Observation                | Signal                                                                 |
@@ -76,21 +82,25 @@ Do these in order; the stage stays dark until the final step.
    impact, publishing on create and resolving with the incident.
 7. **API key**: create one scoped to *create alert events* and *send heartbeat
    pings* only — no incident, catalog, or status-page write scopes.
-8. **Arm the stage**: put `INCIDENT_IO_ALERT_SOURCE_CONFIG_ID` (and optionally
-   `INCIDENT_IO_HEARTBEAT_ID`) in the stage configuration, set the
-   `INCIDENT_IO_TOKEN` secret (`npm run sst -- secret set`, non-echoing stdin
-   procedure in README.md), deploy. Setting the secret is what turns the sync
-   on (`STATUS_SYNC_ENABLED` is derived from it in `stack/api.ts`).
+8. **Arm the production stage**: put `INCIDENT_IO_ALERT_SOURCE_CONFIG_ID` and optionally
+   `INCIDENT_IO_HEARTBEAT_ID` in its `deploy` group. Write `INCIDENT_IO_TOKEN` through secret stdin
+   to the `api` group, update the deployment digest, then preview/apply the API configuration.
+   With an alert source configured, mdeploy derives `STATUS_SYNC_ENABLED` from token availability
+   in [`api-environment.ts`](../mdeploy/src/api-environment.ts).
+
+   ```bash
+   npm run mstage env set -- INCIDENT_IO_TOKEN --stage prod --confirm < /secure/path/incident-token.txt
+   npm run mstage env set -- --stage prod --digest --confirm
+   npm run mstage env digest -- --stage prod
+   ```
 
 ## Go-live checklist
 
 - `status.boxlite.ai` resolves with a valid certificate and renders the page
 - Region sub-pages navigate; `Dashboard`/`API`/`Docs` appear on each
-- Open a test incident by stopping one region's proxy (or post a synthetic
-  `firing` event): the page marks that region's `Box Ingress` affected within
-  ~2 minutes of sustained failure, and clears within ~1 minute of recovery
-- The heartbeat shows healthy in incident.io while the API runs, and alarms
-  within its interval when the API is stopped
+- Post a synthetic `firing` event and then a matching `resolved` event: the page marks the intended region's `Box Ingress` affected and clears it on resolution
+- The heartbeat shows healthy while the API runs; validate a missed-heartbeat alarm
+  using a controlled test reporter or an approved maintenance window
 - The README link works
 
 ## Operational notes
