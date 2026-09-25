@@ -491,6 +491,8 @@ def _seed_api_env(p: _Paths, agent_img: str | None = None) -> None:
     # and point the curated-image allowlist at the local arm64 agent image.
     _set_env_kv(api_env, "PORT", str(PORT_API))
     _set_env_kv(api_env, "APP_URL", f"http://localhost:{PORT_API}")
+    _set_env_kv(api_env, "PROXY_DOMAIN", f"localhost:{PORT_PROXY}")
+    _set_env_kv(api_env, "PROXY_TEMPLATE_URL", f"http://{{{{PORT}}}}-{{{{boxId}}}}.localhost:{PORT_PROXY}")
     # Trace export is infra-owned like PORT: the otel + jaeger boxes are always
     # up, so force-enable it — .envs seeded from older templates ship
     # OTEL_ENABLED=false (or no OTEL block at all) and would leave Jaeger empty.
