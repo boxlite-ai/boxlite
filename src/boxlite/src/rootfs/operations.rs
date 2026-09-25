@@ -156,6 +156,19 @@ pub fn fix_rootfs_permissions(rootfs: &Path) -> BoxliteResult<()> {
 
     // Recursively set xattr for each file, preserving actual mode bits
     fn set_xattr_recursive(path: &Path, depth: usize) -> BoxliteResult<usize> {
+        struct RestorePermissions<'a> {
+            path: &'a Path,
+            original: fs::Permissions,
+        }
+
+        impl Drop for RestorePermissions<'_> {
+            fn drop(&mut self) {
+                if let Err(error) = fs::set_permissions(self.path, self.original.clone()) {
+                    tracing::warn!(path = %self.path.display(), %error, "Failed to restore rootfs permissions");
+                }
+            }
+        }
+
         let metadata = match fs::symlink_metadata(path) {
             Ok(m) => m,
             Err(e) => {
@@ -173,6 +186,28 @@ pub fn fix_rootfs_permissions(rootfs: &Path) -> BoxliteResult<()> {
 
         // Get actual mode bits (preserve setuid/setgid/sticky bits)
         let mode = metadata.permissions().mode() & 0o7777;
+
+        // macOS denies xattr reads on owner-unreadable files such as /etc/shadow.
+        // Keep directories searchable until their children have been processed.
+        let required = if metadata.is_dir() { 0o700 } else { 0o600 };
+        let widened = mode | required;
+        let _restore = if widened != mode {
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(widened);
+            fs::set_permissions(path, permissions).map_err(|error| {
+                BoxliteError::Storage(format!(
+                    "Failed to widen rootfs permissions on {}: {}",
+                    path.display(),
+                    error
+                ))
+            })?;
+            Some(RestorePermissions {
+                path,
+                original: metadata.permissions(),
+            })
+        } else {
+            None
+        };
 
         // Refresh the recorded mode without discarding the recorded ownership.
         // `LayerExtractor` stores the layer's uid/gid here because unprivileged
@@ -201,14 +236,6 @@ pub fn fix_rootfs_permissions(rootfs: &Path) -> BoxliteResult<()> {
         let file_type = recorded.map_or(default_type, |s| s.file_type);
         let xattr_value = OverrideStat::new(uid, gid, mode, file_type).format();
 
-        // Temporarily add write permission if needed to set xattr
-        let needs_write = (mode & 0o200) == 0;
-        if needs_write {
-            let mut temp_perms = metadata.permissions();
-            temp_perms.set_mode(mode | 0o200); // Add owner write
-            let _ = fs::set_permissions(path, temp_perms);
-        }
-
         // Set xattr (ignore errors on special files like device nodes)
         match xattr::set(
             path,
@@ -233,13 +260,6 @@ pub fn fix_rootfs_permissions(rootfs: &Path) -> BoxliteResult<()> {
             }
         }
 
-        // Restore original permissions if we modified them
-        if needs_write {
-            let mut orig_perms = metadata.permissions();
-            orig_perms.set_mode(mode);
-            let _ = fs::set_permissions(path, orig_perms);
-        }
-
         // Recurse into directories
         if metadata.is_dir()
             && let Ok(entries) = fs::read_dir(path)
@@ -262,8 +282,32 @@ pub fn fix_rootfs_permissions(rootfs: &Path) -> BoxliteResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::images::{OverrideFileType, OverrideStat};
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fix_rootfs_permissions_reads_xattr_on_unreadable_file() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("shadow");
+        fs::write(&file, b"secret").unwrap();
+        let stat = OverrideStat::new(42, 43, 0, OverrideFileType::File);
+        xattr::set(
+            &file,
+            "user.containers.override_stat",
+            stat.format().as_bytes(),
+        )
+        .unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0)).unwrap();
+
+        fix_rootfs_permissions(temp.path()).expect("unreadable files still have readable xattrs");
+        assert_eq!(fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0);
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+        let preserved = OverrideStat::read_xattr(&file).unwrap().unwrap();
+        assert_eq!((preserved.uid, preserved.gid), (42, 43));
+    }
 
     /// A malformed `override_stat` xattr must abort `fix_rootfs_permissions`,
     /// not be silently overwritten with a fresh 0:0 record.
