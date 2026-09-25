@@ -42,7 +42,7 @@ pull that asks the registry, when the reference can have moved:
 | Reference | New box | Restart |
 |--|--|--|
 | A tag, e.g. `alpine:3.20` (or none, meaning `latest`) | Asks the registry what the tag points to now; reuses every cached layer | Reuses the box's disk and reads its config from the cached build it was made from |
-| A digest, e.g. `alpine@sha256:…` | Answered from the cache | Reuses the box's disk |
+| A digest, e.g. `alpine@sha256:…` | Answered from the cache; a digest this host has not cached is pulled once | Reuses the box's disk |
 
 A restart finds that build by the digest recorded when its disk was built. A box made by a
 release that recorded none reads the image by reference instead: a tag's cache entry keeps the
