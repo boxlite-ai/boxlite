@@ -20,7 +20,7 @@ machine layout and device emulation belong to `boxlite-vmm`.
 | `memory` | `MemoryRegion`: host memory mapped into the guest |
 | `error` | `Error`: the failed operation, its resource, and the host cause |
 | `hvf` / `hvf::syndrome` | HVF operations and ARM exception decoding (not implemented yet) |
-| `kvm` / `kvm::memory` | x86_64 VM creation, interrupt-controller setup and private memory-slot allocation; vCPU execution and arm64 follow |
+| `kvm` | x86_64 VM creation, memory slots, vCPU execution and pending-I/O completion; boot registers, kicks and arm64 follow |
 | `whp` / `whp::emulator` | WHP operations and x86 instruction decoding for memory-access exits (reserved for M10) |
 
 Three boundaries decide placement when a case is ambiguous: KVM memory-slot
@@ -32,14 +32,15 @@ instruction bytes.
 The backend modules are selected by host OS and architecture, and a host with
 no backend fails the build rather than producing a library that exposes no VM
 operations. The traits are exported from the crate root. Linux x86_64 also
-exports `KvmVm`, with construction and memory-registration methods. It does
-not implement the complete `Vm` trait until vCPU execution is added.
+exports `KvmVm` and thread-bound `KvmVcpu`, with creation, memory registration,
+`run` and `complete_pending_io`. Shared trait implementations await the kick
+handle; `run` can block on an idle guest. Boot registers are not exposed yet.
 
 `make test:unit:vmm` checks memory-slot validation and rollback without KVM.
 On Linux x86_64, `make test:integration:vmm:kvm` requires read/write access to
 `/dev/kvm`. It checks VM/interrupt-controller creation, executes instructions
 from registered RAM, and replaces an unmapped region. Execution currently uses
-the underlying KVM descriptor inside the test; the public vCPU API is next.
+the public facade; register setup still uses the private descriptor in the test.
 Linux x64 CI runs these tests with `make coverage:vmm:kvm`, adding their coverage
 to the unit profiles before upload; missing KVM access is a failure.
 
