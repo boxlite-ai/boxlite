@@ -14,10 +14,29 @@ import { ImageColdPullRateLimitedError, ImageCountLimitReachedError } from '../e
 import { assertHostIsAllowed, imageRegistryAllowlist, isCuratedSelector, parseImageRef } from '../utils/image-ref.util'
 import { ResolvedImage } from './image-resolver.service'
 
-/** Image pulls one organization may start per window. */
-const COLD_PULL_LIMIT = 3
-/** How long that budget takes to clear. A cold pull runs for roughly a third of it. */
-const COLD_PULL_WINDOW_SECONDS = 60
+/** Cold pulls one organization may start per window, unless an operator sets another. */
+const COLD_PULL_LIMIT_ENV = 'BOXLITE_IMAGE_COLD_PULL_LIMIT'
+const DEFAULT_COLD_PULL_LIMIT = 6
+/** How long that budget takes to clear. A cold pull runs for roughly a third of the default. */
+const COLD_PULL_WINDOW_ENV = 'BOXLITE_IMAGE_COLD_PULL_WINDOW_SECONDS'
+const DEFAULT_COLD_PULL_WINDOW_SECONDS = 60
+
+/**
+ * A positive integer from the environment, or `fallback` when it is unset.
+ * Anything else stops the API at boot: a limit an operator mistyped must not
+ * quietly become the default, or no limit at all.
+ */
+function positiveIntegerFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim()
+  if (!raw) {
+    return fallback
+  }
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer, got '${raw}'`)
+  }
+  return value
+}
 
 /**
  * The gate a tenant-supplied image passes before a box is created from it.
@@ -39,6 +58,12 @@ const COLD_PULL_WINDOW_SECONDS = 60
  */
 @Injectable()
 export class ImageAdmissionService {
+  private readonly coldPullLimit = positiveIntegerFromEnv(COLD_PULL_LIMIT_ENV, DEFAULT_COLD_PULL_LIMIT)
+  private readonly coldPullWindowSeconds = positiveIntegerFromEnv(
+    COLD_PULL_WINDOW_ENV,
+    DEFAULT_COLD_PULL_WINDOW_SECONDS,
+  )
+
   constructor(
     @InjectRedis()
     private readonly redis: Redis,
@@ -64,8 +89,8 @@ export class ImageAdmissionService {
    *
    * Only a ref the catalog could not answer is a cold pull. A hit is handed to
    * the runner by digest, a build this deployment already pulled and booted,
-   * and the curated set is nobody's; charging those too capped every
-   * organization at three boxes a minute from its own images. A hit can still
+   * and the curated set is nobody's; charging those too capped how fast any
+   * organization could create boxes from its own images. A hit can still
    * be pulled again by a runner that has not cached it, which the number of
    * runners bounds: once per build per runner.
    *
@@ -107,20 +132,20 @@ export class ImageAdmissionService {
     const key = `image:coldpull:${organization.id}`
     const started = await this.redis.incr(key)
     if (started === 1) {
-      await this.redis.expire(key, COLD_PULL_WINDOW_SECONDS)
+      await this.redis.expire(key, this.coldPullWindowSeconds)
     }
-    if (started > COLD_PULL_LIMIT) {
+    if (started > this.coldPullLimit) {
       // A key that somehow lost its TTL would block the organization forever,
       // so read the remaining time rather than assuming a full window, and
       // restore the expiry when it is missing.
       const ttl = await this.redis.ttl(key)
       if (ttl < 0) {
-        await this.redis.expire(key, COLD_PULL_WINDOW_SECONDS)
+        await this.redis.expire(key, this.coldPullWindowSeconds)
       }
       throw new ImageColdPullRateLimitedError(
-        COLD_PULL_LIMIT,
-        COLD_PULL_WINDOW_SECONDS,
-        ttl > 0 ? ttl : COLD_PULL_WINDOW_SECONDS,
+        this.coldPullLimit,
+        this.coldPullWindowSeconds,
+        ttl > 0 ? ttl : this.coldPullWindowSeconds,
       )
     }
   }

@@ -140,7 +140,7 @@ describe('ImageAdmissionService', () => {
      * the shape this has to produce.
      */
     it('reports how long to wait when the budget is spent', async () => {
-      redis.incr.mockResolvedValue(4)
+      redis.incr.mockResolvedValue(7)
       redis.ttl.mockResolvedValue(42)
 
       const error = await service.spendColdPullBudget(organization, CATALOG_MISS).catch((e) => e)
@@ -156,12 +156,12 @@ describe('ImageAdmissionService', () => {
      * the window makes the limit look like it changes size between requests.
      */
     it('names the window length, not the time left in it', async () => {
-      redis.incr.mockResolvedValue(4)
+      redis.incr.mockResolvedValue(7)
       redis.ttl.mockResolvedValue(42)
 
       const error = await service.spendColdPullBudget(organization, CATALOG_MISS).catch((e) => e)
 
-      expect(error.getResponse().message).toContain('at most 3 of them per 60s window')
+      expect(error.getResponse().message).toContain('at most 6 of them per 60s window')
       expect(error.getResponse().message).toContain('42s left')
     })
 
@@ -171,13 +171,55 @@ describe('ImageAdmissionService', () => {
      * with no guidance at all.
      */
     it('restores the window and still answers when the key has no expiry', async () => {
-      redis.incr.mockResolvedValue(4)
+      redis.incr.mockResolvedValue(7)
       redis.ttl.mockResolvedValue(-1)
 
       const error = await service.spendColdPullBudget(organization, CATALOG_MISS).catch((e) => e)
 
       expect(redis.expire).toHaveBeenCalledWith('image:coldpull:org-1', 60)
       expect(error.retryAfterSeconds).toBe(60)
+    })
+
+    /** Six starts fit in a window by default; the seventh is refused. */
+    it('admits six cold pulls a window by default', async () => {
+      redis.incr.mockResolvedValue(6)
+      await expect(service.spendColdPullBudget(organization, CATALOG_MISS)).resolves.toBeUndefined()
+
+      redis.incr.mockResolvedValue(7)
+      await expect(service.spendColdPullBudget(organization, CATALOG_MISS)).rejects.toThrow(/at most 6/)
+    })
+
+    describe('overridden by the environment', () => {
+      afterEach(() => {
+        delete process.env.BOXLITE_IMAGE_COLD_PULL_LIMIT
+        delete process.env.BOXLITE_IMAGE_COLD_PULL_WINDOW_SECONDS
+      })
+
+      function serviceWith(limit: string, window: string) {
+        process.env.BOXLITE_IMAGE_COLD_PULL_LIMIT = limit
+        process.env.BOXLITE_IMAGE_COLD_PULL_WINDOW_SECONDS = window
+        return new ImageAdmissionService(redis as unknown as Redis, images as unknown as Repository<Image>)
+      }
+
+      it('uses the limit and window an operator set', async () => {
+        const tuned = serviceWith('2', '30')
+
+        await tuned.spendColdPullBudget(organization, CATALOG_MISS)
+        expect(redis.expire).toHaveBeenCalledWith('image:coldpull:org-1', 30)
+
+        redis.incr.mockResolvedValue(3)
+        const error = await tuned.spendColdPullBudget(organization, CATALOG_MISS).catch((e) => e)
+        expect(error.getResponse().message).toContain('at most 2 of them per 30s window')
+      })
+
+      /** A typo must stop the API at boot, not quietly fall back to the default. */
+      it.each([
+        ['0', '60'],
+        ['six', '60'],
+        ['6', '-1'],
+      ])('refuses a limit of %s over %s seconds', (limit, window) => {
+        expect(() => serviceWith(limit, window)).toThrow(/must be a positive integer/)
+      })
     })
   })
 })

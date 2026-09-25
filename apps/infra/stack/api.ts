@@ -180,6 +180,9 @@ export function buildApi(input: ApiInputs) {
         BOXLITE_SYSTEM_IMAGES: envOr('BOXLITE_SYSTEM_IMAGES', ''),
         // Registries a tenant-supplied image may name; empty keeps the API's built-in list.
         BOXLITE_IMAGE_REGISTRY_ALLOWLIST: envOr('BOXLITE_IMAGE_REGISTRY_ALLOWLIST', ''),
+        // The per-organization cold-pull budget; empty keeps the API's default of 6 per 60s.
+        BOXLITE_IMAGE_COLD_PULL_LIMIT: envOr('BOXLITE_IMAGE_COLD_PULL_LIMIT', ''),
+        BOXLITE_IMAGE_COLD_PULL_WINDOW_SECONDS: envOr('BOXLITE_IMAGE_COLD_PULL_WINDOW_SECONDS', ''),
         ...(process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_URL && {
           BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME: envOr(
             'BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME',

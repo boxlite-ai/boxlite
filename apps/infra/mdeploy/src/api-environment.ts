@@ -219,6 +219,9 @@ const systemImagesFrom = (environment: Environment): Record<string, string> => {
     // API on its built-in list, so an operator only sets this to widen or
     // narrow it, with no code change.
     ...passthrough('BOXLITE_IMAGE_REGISTRY_ALLOWLIST'),
+    // The per-organization cold-pull budget. Unset keeps the API's 6 per 60s.
+    ...passthrough('BOXLITE_IMAGE_COLD_PULL_LIMIT'),
+    ...passthrough('BOXLITE_IMAGE_COLD_PULL_WINDOW_SECONDS'),
     ...(registry
       ? {
           BOXLITE_SYSTEM_SOURCE_REGISTRY_URL: registry,

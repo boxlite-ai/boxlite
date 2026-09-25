@@ -589,7 +589,7 @@ describe('BoxService public defaults', () => {
   /**
    * A cold pull is a ref the catalog could not answer. A hit is handed out by
    * digest, a build this deployment already pulled and booted, so charging it
-   * too capped every organization at three boxes a minute from its own images.
+   * too capped how fast any organization could create boxes from its own images.
    * Driven through the real admission service: which creates spend the budget
    * is decided by the seam between it and the resolver, not by either alone.
    */
@@ -701,7 +701,7 @@ describe('BoxService public defaults', () => {
 
     it('inserts no box when the budget refuses the create', async () => {
       const { service, redis } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
-      redis.incr.mockResolvedValue(4)
+      redis.incr.mockResolvedValue(7)
       redis.ttl.mockResolvedValue(30)
 
       await expect(
