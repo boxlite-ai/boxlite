@@ -89,6 +89,7 @@ func (ca *BoxCA) GenerateHostCert(hostname string) (*tls.Certificate, error) {
 	return ca.generateHostCert(hostname, time.Now())
 }
 
+// generateHostCert evaluates issuer and cache validity at one instant.
 func (ca *BoxCA) generateHostCert(hostname string, now time.Time) (*tls.Certificate, error) {
 	if now.Before(ca.cert.NotBefore) || !now.Before(ca.cert.NotAfter) {
 		return nil, fmt.Errorf("MITM CA is invalid at %s (valid from %s until %s)", now, ca.cert.NotBefore, ca.cert.NotAfter)

@@ -26,6 +26,7 @@ pub fn generate() -> BoxliteResult<MitmCa> {
     generate_with_key(key_pair)
 }
 
+/// Issue a long-lived CA certificate using the supplied signing identity.
 fn generate_with_key(key_pair: KeyPair) -> BoxliteResult<MitmCa> {
     let mut params = CertificateParams::default();
     params.distinguished_name = {

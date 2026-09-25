@@ -5,6 +5,7 @@ use x509_cert::{Certificate, der::DecodePem};
 #[path = "../../../guest/src/ca_trust.rs"]
 mod ca_trust;
 
+/// Model a legacy 24-hour CA with a caller-selected expiry.
 fn short_lived_ca(key: &KeyPair, expires: OffsetDateTime) -> String {
     let mut params = CertificateParams::default();
     params.distinguished_name = DistinguishedName::new();
@@ -85,7 +86,10 @@ fn trust_renewal_removes_old_certificate_and_preserves_other_roots() {
     std::fs::write(dir.path().join("cert.pem"), &old).unwrap();
     write_private_key(&dir.path().join("key.pem"), &key.serialize_pem()).unwrap();
     let renewed = load_or_generate(dir.path()).unwrap().cert_pem;
-    let unrelated = generate().unwrap().cert_pem;
+    let unrelated = format!(
+        "{}\n-----BEGIN CERTIFICATE-----\nbroken\n-----END CERTIFICATE-----",
+        generate().unwrap().cert_pem
+    );
     std::fs::write(&bundle, format!("# system roots\n{unrelated}\n{old}")).unwrap();
 
     let installer = ca_trust::CaInstaller::with_bundle(bundle.clone());

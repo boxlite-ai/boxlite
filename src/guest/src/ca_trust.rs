@@ -34,12 +34,12 @@ impl CaInstaller {
                 file.write_all(block.as_bytes())?;
                 continue;
             };
-            let existing = x509_cert::Certificate::from_pem(&block[start..])
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
-                .tbs_certificate;
-            if existing.subject == incoming.subject
-                && existing.subject_public_key_info == incoming.subject_public_key_info
-            {
+            let matches = x509_cert::Certificate::from_pem(&block[start..]).is_ok_and(|cert| {
+                let existing = cert.tbs_certificate;
+                existing.subject == incoming.subject
+                    && existing.subject_public_key_info == incoming.subject_public_key_info
+            });
+            if matches {
                 file.write_all(&block.as_bytes()[..start])?;
             } else {
                 file.write_all(block.as_bytes())?;
