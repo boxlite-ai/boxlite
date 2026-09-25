@@ -117,13 +117,20 @@ def get_runtime():
     # The BoxLite puller does NOT read ~/.docker/config.json — auth must come
     # through the runtime's image_registries config.
     from . import _local_arm64
+    from boxlite import ImageRegistry, Options
+
+    registries = []
+    mirror = os.environ.get("BOXLITE_LOCAL_IMAGE_MIRROR", "").strip()
+    if mirror:
+        registries.append(ImageRegistry(mirror, search=True))
+
     user, secret = _local_arm64.dockerhub_creds()
     if user and secret:
-        from boxlite import ImageRegistry, Options
-        opts = Options(image_registries=[
-            ImageRegistry("docker.io", username=user, password=secret, search=True),
-        ])
-        # Seed the PROCESS-WIDE default runtime with auth, then return that
+        registries.append(ImageRegistry("docker.io", username=user, password=secret, search=True))
+
+    if registries:
+        opts = Options(image_registries=registries)
+        # Seed the PROCESS-WIDE default runtime with registry config, then return that
         # shared singleton — NOT a fresh Boxlite(opts). A fresh runtime per call
         # would re-acquire the home-dir flock and collide with itself when
         # get_runtime() runs more than once in a process.

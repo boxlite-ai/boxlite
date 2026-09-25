@@ -26,6 +26,10 @@ make status    # one-screen health across L1 + L2
 make down      # stop L2 (add ARGS=--all to also stop L1)
 ```
 
+If Docker Hub pulls fail, set `BOXLITE_LOCAL_IMAGE_MIRROR=mirror.gcr.io` for
+`make up`. It applies only to unqualified L1 image names; the pinned MinIO
+images use GHCR.
+
 First run pulls 12 images (~5–7 min); later runs reuse the cache (~30–60 s). Log
 in at <http://localhost:3000> through Dex (`admin@boxlite.dev` / `password`).
 
