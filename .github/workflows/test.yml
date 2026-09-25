@@ -1,7 +1,7 @@
 # Run hosted-runner tests and collect coverage across the runtime and SDKs.
 #
-# Non-VM integration suites use test-only runtime construction because GitHub
-# runners cannot provide the virtualization needed by production startup.
+# Non-VM integration suites use test-only runtime construction. Native x86_64
+# hypervisor tests separately exercise KVM without booting the BoxLite runtime.
 #
 # Test coverage:
 # - Rust: units and non-VM integration, with llvm-cov coverage
@@ -291,6 +291,15 @@ jobs:
         env:
           BOXLITE_DEPS_STUB: "1"
         run: make coverage:lcov NEXTEST_PROFILE=ci
+
+      - name: Enable KVM access for native hypervisor tests
+        if: matrix.platform.target == 'linux-x64-gnu'
+        run: sudo chmod a+rw /dev/kvm
+
+      - name: Run KVM hardware tests with coverage
+        if: matrix.platform.target == 'linux-x64-gnu'
+        timeout-minutes: 5
+        run: make coverage:vmm:kvm
 
       - name: Run OpenAPI reference-server unit tests
         # Keyed on BoxliteError's Display text (src/shared/src/errors.rs, in this

@@ -97,6 +97,9 @@ and bypass change filters. Combined Rust and CLI coverage runs on all three plat
 non-VM integration tests and Linux guest tests. Codecov requires 90% coverage of changed lines
 and reports total coverage.
 
+Linux x64 also runs the native KVM hardware tests and adds their profiles before
+the Rust coverage upload. Missing `/dev/kvm` access fails this qualification.
+
 When none of the coverage suites is selected on a PR or merge group, the
 `Codecov (no coverage changes)` job runs a validated `empty-upload`. Codecov
 checks the changed files before publishing a passing or failing status; the
