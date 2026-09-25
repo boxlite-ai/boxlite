@@ -199,6 +199,21 @@ test('patch coverage requires 90 percent and a report while total stays informat
   assert.equal(config.coverage.status.project.default.informational, true)
 })
 
+test('Linux x64 KVM hardware coverage joins unit profiles before upload', () => {
+  const steps = workflow('test.yml').jobs.rust.steps
+  const hardwareAt = steps.findIndex((step: any) => step.run === 'make coverage:vmm:kvm')
+  const unitAt = steps.findIndex((step: any) => step.run === 'make coverage:lcov NEXTEST_PROFILE=ci')
+  const uploadAt = steps.findIndex((step: any) => step.uses?.startsWith('codecov/codecov-action'))
+  assert.ok(hardwareAt > unitAt && hardwareAt < uploadAt,
+    'ignored KVM tests must contribute coverage after units and before upload')
+  for (const target of ['linux-x64-gnu', 'linux-arm64-gnu', 'darwin-arm64']) {
+    const expression = steps[hardwareAt].if.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+    assert.equal(runInNewContext(expression, { matrix: { platform: { target } } }), target === 'linux-x64-gnu')
+  }
+  assert.equal(steps[hardwareAt]['continue-on-error'], undefined,
+    'missing hardware or failed tests must fail CI')
+})
+
 function cliUnitTests(runner: 'cargo' | 'nextest', exitCode = 0) {
   const directory = mkdtempSync(join(tmpdir(), 'boxlite-cli-unit-'))
   try {

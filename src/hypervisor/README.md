@@ -40,6 +40,8 @@ On Linux x86_64, `make test:integration:vmm:kvm` requires read/write access to
 `/dev/kvm`. It checks VM/interrupt-controller creation, executes instructions
 from registered RAM, and replaces an unmapped region. Execution currently uses
 the underlying KVM descriptor inside the test; the public vCPU API is next.
+Linux x64 CI runs these tests with `make coverage:vmm:kvm`, adding their coverage
+to the unit profiles before upload; missing KVM access is a failure.
 
 M1 proceeds in boot order: create the VM and map RAM, create/run vCPUs, load
 the kernel and boot metadata, attach legacy devices, then reach a test `/init`

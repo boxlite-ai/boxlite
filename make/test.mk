@@ -1,5 +1,5 @@
 PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
-PHONY_TARGETS += test\:integration\:vmm\:kvm
+PHONY_TARGETS += test\:integration\:vmm\:kvm _ensure-kvm
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -269,10 +269,12 @@ test\:unit\:vmm:
 	@cargo test $(RUST_UNIT_VMM_ARGS) -- $(CARGOTEST_FILTER)
 
 # Missing /dev/kvm must fail hardware qualification, not report skipped tests as a pass.
-# Run the ignored hardware tests explicitly and bound a stalled guest with a timeout.
-test\:integration\:vmm\:kvm:
+_ensure-kvm:
 	@test "$$(uname -s -m)" = "Linux x86_64" || { echo "Linux x86_64 is required" >&2; exit 1; }
 	@test -r /dev/kvm -a -w /dev/kvm || { echo "Read/write access to /dev/kvm is required" >&2; exit 1; }
+
+# Run the ignored hardware tests explicitly and bound a stalled guest with a timeout.
+test\:integration\:vmm\:kvm: _ensure-kvm
 	@cargo test -p boxlite-hypervisor --lib --no-run
 	@timeout 60s cargo test -p boxlite-hypervisor --lib kvm::vm::tests:: -- --ignored --test-threads=1
 
