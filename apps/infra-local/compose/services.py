@@ -112,7 +112,7 @@ SPEC_REDIS = ServiceSpec(
 
 SPEC_MINIO = ServiceSpec(
     name="minio",
-    image="minio/minio:latest",
+    image="ghcr.io/teableio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
     cpus=1,
     memory_mib=512,
     ports=[(29000, 9000), (29001, 9001)],
@@ -146,7 +146,7 @@ echo "init: ok - boxlite bucket ready"
 
 SPEC_MINIO_INIT = ServiceSpec(
     name="minio-init",
-    image="minio/mc:latest",
+    image="ghcr.io/teableio/minio-mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3",
     cpus=1,
     memory_mib=128,
     ports=[],
