@@ -322,7 +322,10 @@ mod tests {
         );
         assert_eq!((special.gdt.base, special.gdt.limit), (0x500, 23));
         let fpu = vcpu.fd.get_fpu().unwrap();
-        assert_eq!((fpu.fcw, fpu.mxcsr), (0x37f, 0x1f80));
+        assert_eq!(fpu.fcw, 0x37f);
+        // KVM_GET/SET_FPU omit MXCSR; XSAVE's legacy area stores it at byte 24.
+        // A fresh vCPU retains the architectural SSE reset value.
+        assert_eq!(vcpu.fd.get_xsave().unwrap().region[6], 0x1f80);
     }
 
     #[test]
