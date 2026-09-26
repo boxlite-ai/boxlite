@@ -44,6 +44,9 @@ application can select a realtime signal with `with_kick_signal`. Keep that sign
 and at its default disposition before vCPU creation; do not reuse it while the
 vCPU lives. No process-wide handler is installed. KVM temporarily unmasks the
 signal during entry, and vCPU drop drains pending kicks before restoring its bit.
+Signal validation and reservation run before KVM allocates a vCPU ID, so a caller
+can fix a worker-mask error and retry with the same ID. KVM signal-mask setup is
+applied after the vCPU fd is created.
 Hardware qualification covers kicks queued before entry and kicks sent after
 guest code publishes an atomic marker, plus inert handles after vCPU destruction.
 

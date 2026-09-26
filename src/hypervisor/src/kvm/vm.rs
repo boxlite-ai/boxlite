@@ -1,7 +1,7 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{io, sync::Mutex};
+use std::{io, os::fd::AsRawFd, sync::Mutex};
 
 use kvm_bindings::{KVM_API_VERSION, KVM_PIT_SPEAKER_DUMMY, kvm_pit_config};
 use kvm_ioctls::{Cap, Kvm, VmFd};
@@ -98,11 +98,16 @@ impl KvmVm {
 
     /// Creates a vCPU on the thread that will run it, in KVM's reset state.
     pub fn create_vcpu(&self, id: u32) -> Result<KvmVcpu> {
-        self.fd
-            .create_vcpu(u64::from(id))
-            .map_err(io::Error::from)
-            .and_then(|fd| KvmVcpu::new(fd, id, self.run_size, self.kick_signal))
-            .map_err(|source| Error::CreateVcpu { id, source })
+        let create = || {
+            let kick = super::kick::WorkerSignal::reserve(id, self.kick_signal)?;
+            let fd = self
+                .fd
+                .create_vcpu(u64::from(id))
+                .map_err(io::Error::from)?;
+            kick.configure(fd.as_raw_fd())?;
+            Ok(KvmVcpu::new(fd, id, self.run_size, kick))
+        };
+        create().map_err(|source| Error::CreateVcpu { id, source })
     }
 
     /// Registers caller-owned RAM at a guest physical address.
@@ -253,6 +258,41 @@ mod tests {
             .expect("KvmVm::new must create the in-kernel PIT");
         crate::Vm::set_irq_line(&vm, 4, true).unwrap();
         crate::Vm::set_irq_line(&vm, 4, false).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn failed_signal_reservation_does_not_consume_vcpu_id() {
+        let vm = KvmVm::new().unwrap();
+        let mut blocked = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+        let mut original = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+        // SAFETY: both signal sets are initialized before libc writes to them.
+        unsafe {
+            libc::sigemptyset(&mut blocked);
+            libc::sigaddset(&mut blocked, vm.kick_signal);
+        }
+        // SAFETY: pointers refer to live signal sets; this only changes the test worker.
+        assert_eq!(
+            unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &blocked, &mut original) },
+            0
+        );
+
+        let first = vm.create_vcpu(0);
+
+        // SAFETY: restore the exact mask before asserting or retrying creation.
+        assert_eq!(
+            unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &original, std::ptr::null_mut()) },
+            0
+        );
+        assert!(matches!(
+            first,
+            Err(Error::CreateVcpu { source, .. })
+                if source.kind() == io::ErrorKind::AlreadyExists
+        ));
+        let vcpu = vm
+            .create_vcpu(0)
+            .expect("a failed signal reservation must not consume the KVM vCPU id");
+        drop(vcpu);
     }
 
     #[test]

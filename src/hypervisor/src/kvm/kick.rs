@@ -69,6 +69,7 @@ impl VcpuHandle for KvmVcpuHandle {
 pub(super) struct WorkerSignal {
     handle: KvmVcpuHandle,
     blocked: libc::sigset_t,
+    original: libc::sigset_t,
 }
 
 impl std::fmt::Debug for WorkerSignal {
@@ -80,8 +81,7 @@ impl std::fmt::Debug for WorkerSignal {
 }
 
 impl WorkerSignal {
-    pub(super) fn new(id: u32, signal: i32, fd: RawFd) -> io::Result<Self> {
-        let (owner, original) = Self::reserve(id, signal)?;
+    pub(super) fn configure(&self, fd: RawFd) -> io::Result<()> {
         // KVM's flexible-array ABI puts the eight-byte kernel signal set
         // immediately after len, without u64 alignment or libc's padding.
         #[repr(C)]
@@ -96,7 +96,7 @@ impl WorkerSignal {
         // SAFETY: Linux sigset_t begins with the kernel's 64 signal bits.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                (&original as *const libc::sigset_t).cast(),
+                (&self.original as *const libc::sigset_t).cast(),
                 mask.bits.as_mut_ptr(),
                 8,
             )
@@ -106,10 +106,10 @@ impl WorkerSignal {
         if unsafe { libc::ioctl(fd, 0x4004_ae8b as libc::c_ulong, &mask) } < 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(owner)
+        Ok(())
     }
 
-    fn reserve(id: u32, signal: i32) -> io::Result<(Self, libc::sigset_t)> {
+    pub(super) fn reserve(id: u32, signal: i32) -> io::Result<Self> {
         if !(libc::SIGRTMIN()..=libc::SIGRTMAX()).contains(&signal) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -159,13 +159,11 @@ impl WorkerSignal {
             pending: false,
         }));
         KICK_TARGETS.with(|targets| targets.0.borrow_mut().push(Arc::downgrade(&target)));
-        Ok((
-            Self {
-                handle: KvmVcpuHandle { id, signal, target },
-                blocked,
-            },
+        Ok(Self {
+            handle: KvmVcpuHandle { id, signal, target },
+            blocked,
             original,
-        ))
+        })
     }
 
     pub(super) fn handle(&self) -> KvmVcpuHandle {
@@ -259,7 +257,7 @@ mod tests {
         let worker = thread::spawn(move || {
             let signal = libc::SIGRTMIN() + 1;
             assert!(!blocked(signal));
-            let (owner, _) = WorkerSignal::reserve(7, signal).unwrap();
+            let owner = WorkerSignal::reserve(7, signal).unwrap();
             assert!(blocked(signal));
             assert!(WorkerSignal::reserve(8, signal).is_err());
             handles.send(owner.handle()).unwrap();
@@ -283,7 +281,7 @@ mod tests {
     fn thread_exit_invalidates_a_leaked_worker_handle() {
         let (handles, receive_handle) = mpsc::sync_channel(1);
         thread::spawn(move || {
-            let (owner, _) = WorkerSignal::reserve(9, libc::SIGRTMIN() + 1).unwrap();
+            let owner = WorkerSignal::reserve(9, libc::SIGRTMIN() + 1).unwrap();
             handles.send(owner.handle()).unwrap();
             std::mem::forget(owner);
         })
@@ -299,8 +297,10 @@ mod tests {
         thread::spawn(|| {
             let signal = libc::SIGRTMIN() + 1;
             let file = std::fs::File::open("/dev/null").unwrap();
-            let error = WorkerSignal::new(3, signal, file.as_raw_fd()).unwrap_err();
+            let owner = WorkerSignal::reserve(3, signal).unwrap();
+            let error = owner.configure(file.as_raw_fd()).unwrap_err();
             assert_eq!(error.raw_os_error(), Some(libc::ENOTTY));
+            drop(owner);
             assert!(!blocked(signal));
             for invalid in [0, libc::SIGKILL, libc::SIGRTMAX() + 1] {
                 assert_eq!(

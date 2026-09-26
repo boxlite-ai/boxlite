@@ -1,7 +1,7 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{io, marker::PhantomData, os::fd::AsRawFd, rc::Rc};
+use std::{io, marker::PhantomData, rc::Rc};
 
 use kvm_bindings::{
     KVM_EXIT_HLT, KVM_EXIT_INTR, KVM_EXIT_IO, KVM_EXIT_IO_IN, KVM_EXIT_IO_OUT, KVM_EXIT_MMIO,
@@ -28,16 +28,15 @@ pub struct KvmVcpu {
 }
 
 impl KvmVcpu {
-    pub(super) fn new(fd: VcpuFd, id: u32, run_size: usize, signal: i32) -> io::Result<Self> {
-        let kick = WorkerSignal::new(id, signal, fd.as_raw_fd())?;
-        Ok(Self {
+    pub(super) fn new(fd: VcpuFd, id: u32, run_size: usize, kick: WorkerSignal) -> Self {
+        Self {
             fd,
             id,
             run_size,
             pending_io: PendingIo::default(),
             kick,
             _thread_bound: PhantomData,
-        })
+        }
     }
 
     /// Returns a handle that interrupts this worker, including before entry.
