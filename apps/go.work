@@ -2,6 +2,7 @@ go 1.25.4
 
 use (
 	../sdks/go
+	./image-service
 	./libs/api-client-go
 	./libs/common-go
 	./otel-collector/exporter

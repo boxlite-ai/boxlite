@@ -178,10 +178,15 @@ test('a key the API compares against is held by the API too, or the caller is re
    * The list is written out rather than derived, and it is shorter than the
    * strategy's branch list on purpose. `api-key.strategy.ts` compares four keys;
    * the other two belong to the health-check and billing services, which this
-   * stack does not deploy — `mbuild.config.json` builds `api`, `proxy` and
-   * `otel-collector`, and nothing under `apps/infra` names either key. So they
-   * have no caller group to be named for, and demanding one would fail every
-   * stage over a service that is not there.
+   * stack does not deploy — `mbuild.config.json` builds `api`, `proxy`,
+   * `otel-collector` and `registry-proxy`, and nothing under `apps/infra` names
+   * either key. So they have no caller group to be named for, and demanding one
+   * would fail every stage over a service that is not there.
+   *
+   * The registry proxy is deployed and is absent here on purpose: it holds no
+   * key of its own. It asks the API about a caller by presenting that caller's
+   * runner key, so the strategy branch it reaches is the runner's, which is
+   * seeded by the stack rather than by a group.
    *
    * What that costs is worth stating: a fifth branch, or a caller this stack
    * starts deploying, does not trip this test. It has to be added here, and

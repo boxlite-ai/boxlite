@@ -84,6 +84,8 @@ jobs:
             go:
               - 'sdks/go/**/*.go'
               - 'sdks/go/go.mod'
+              - 'apps/image-service/**/*.go'
+              - 'apps/image-service/go.mod'
             quality:
               - 'make/quality.mk'
               - '.pre-commit-config.yaml'

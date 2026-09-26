@@ -6,9 +6,9 @@ BoxLite. One Python orchestrator (`compose`) drives both layers:
 - **L1 — 12 BoxLite microVM boxes**: postgres, redis, minio (+ a one-shot bucket
   init), registry, dex, jaeger, pgadmin, registry-ui, maildev, otel-collector, caddy —
   via the BoxLite SDK (`orchestrator.py` / `services.py`).
-- **L2 — 4 native macOS processes**: API (NestJS, `:3001`), Runner (Go, `:3003`),
-  Proxy (Go, `:4000`), Dashboard (Vite, `:3000`) — via `subprocess` supervision
-  (`native.py`).
+- **L2 — 5 native macOS processes**: API (NestJS, `:3001`), registry proxy (Go,
+  `:4100`), Runner (Go, `:3003`), Proxy (Go, `:4000`), Dashboard (Vite, `:3000`) —
+  via `subprocess` supervision (`native.py`).
 
 All generated state lives under one gitignored dir, `<repo>/.apps-local/`
 (`data/` volumes, `boxlite/` L1 SDK home, `boxlite-runner/` L3 home, `bin/`
@@ -39,7 +39,7 @@ source of truth — `python -m compose --help`):
 | `make up [COMPONENTS="api runner"]` | ensure L1 boxes + start L2 (self-healing: installs deps, builds missing binaries, seeds) |
 | `make status` | one-screen L1 + L2 health |
 | `make down [ARGS=--all]` | stop L2 processes (`--all` also stops/removes L1 boxes; data kept) |
-| `make restart COMPONENTS="runner dex"` | restart L2 proc(s) (runner/proxy rebuild) **and/or** recreate L1 box(es) |
+| `make restart COMPONENTS="runner dex"` | restart L2 proc(s) (the Go ones — runner, proxy, registry-proxy — rebuild) **and/or** recreate L1 box(es) |
 | `make logs COMPONENT=api` | tail a component log (`all` for everything) |
 | `make reset [ARGS=--hard]` | wipe L2 runtime state (`--hard` also drops + rebuilds the schema) |
 | `make nuke` | tear down **everything** — destroy L1 boxes + wipe data + logs (cold start) |
