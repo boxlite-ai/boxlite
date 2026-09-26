@@ -1836,6 +1836,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
+            rootfs_backend: Default::default(),
             box_home: runtime.layout.boxes_dir().join(id.as_str()),
         };
         let mut state = BoxState::new();
@@ -2086,6 +2087,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
+            rootfs_backend: Default::default(),
             box_home: box_home.clone(),
         };
 
@@ -2166,6 +2168,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
+            rootfs_backend: Default::default(),
             box_home: box_home.clone(),
         };
 
