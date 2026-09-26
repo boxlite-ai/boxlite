@@ -21,6 +21,7 @@ export const ORGANIZATION_ROLE_PERMISSIONS_GROUPS: { name: string; permissions: 
     {
       name: 'Registries',
       permissions: [
+        OrganizationRolePermissionsEnum.READ_REGISTRIES,
         OrganizationRolePermissionsEnum.WRITE_REGISTRIES,
         OrganizationRolePermissionsEnum.DELETE_REGISTRIES,
       ],

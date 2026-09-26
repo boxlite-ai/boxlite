@@ -51,6 +51,17 @@ describe('permission groups', () => {
   })
 
   /**
+   * The same pair, for the registry logins. A key the SDK adds a login with
+   * needs these three, and a role without `read:registries` could add a login
+   * it can never list.
+   */
+  it.each(PERMISSION_GROUPS)('offer the registry scopes in %s', (_source, groups) => {
+    const registries = groups.find((group) => group.name === 'Registries')
+
+    expect(registries?.permissions).toEqual(['read:registries', 'write:registries', 'delete:registries'])
+  })
+
+  /**
    * There is no `write:images` scope: an image enters the catalog by being
    * used, so creating a box is what writes it. Offering a write here would
    * name a route that does not exist.
