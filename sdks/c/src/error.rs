@@ -91,6 +91,8 @@ impl Default for FFIError {
 pub fn error_to_code(err: &BoxliteError) -> BoxliteErrorCode {
     match err {
         BoxliteError::Internal(_) => BoxliteErrorCode::Internal,
+        // Preserve the existing C error code for runtime home-lock contention.
+        BoxliteError::RuntimeInUse(_) => BoxliteErrorCode::Internal,
         BoxliteError::NotFound(_) => BoxliteErrorCode::NotFound,
         BoxliteError::AlreadyExists(_) => BoxliteErrorCode::AlreadyExists,
         BoxliteError::InvalidState(_) => BoxliteErrorCode::InvalidState,
