@@ -170,6 +170,15 @@ def verify_checksums(output):
             raise RuntimeError(f"checksum mismatch: {output / name}")
 
 
+def signal_process_group(process_id, signal_number):
+    try:
+        os.killpg(process_id, signal_number)
+    except ProcessLookupError:
+        # The process group can exit between the timeout and the cleanup signal.
+        return False
+    return True
+
+
 def run_build(output, *, rebuild=False):
     command = ["bash", str(BUILD)]
     if rebuild:
@@ -179,18 +188,12 @@ def run_build(output, *, rebuild=False):
     try:
         process.wait(timeout=BUILD_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        if signal_process_group(process.pid, signal.SIGTERM):
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+        signal_process_group(process.pid, signal.SIGKILL)
         process.wait()
         raise
     if process.returncode:
