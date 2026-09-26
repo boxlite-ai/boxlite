@@ -5,9 +5,11 @@
 
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Repository } from 'typeorm'
+import { IsNull, Repository } from 'typeorm'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Tunnel } from '../entities/tunnel.entity'
+
+const TERMINAL_PORT = 22222
 
 @Injectable()
 export class TunnelService {
@@ -34,6 +36,15 @@ export class TunnelService {
     }
   }
 
+  async listActivePublicPorts(boxId: string): Promise<number[]> {
+    const tunnels = await this.tunnels.find({
+      select: { port: true },
+      where: { boxId, accessMode: 'public', revokedAt: IsNull() },
+      order: { port: 'ASC' },
+    })
+    return tunnels.map((tunnel) => tunnel.port)
+  }
+
   async isPublicAccessAllowed(boxId: string, port: number): Promise<boolean> {
     this.assertPort(port)
     return this.tunnels
@@ -49,7 +60,7 @@ export class TunnelService {
   }
 
   private assertPort(port: number): void {
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || port === TERMINAL_PORT) {
       throw new BadRequestError('Invalid tunnel port')
     }
   }

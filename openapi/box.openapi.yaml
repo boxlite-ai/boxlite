@@ -1038,7 +1038,7 @@ paths:
         - name: port
           in: query
           required: true
-          description: TCP port the service listens on inside the box
+          description: TCP port the service listens on inside the box; terminal port 22222 is reserved
           schema:
             type: integer
             minimum: 1
@@ -1073,6 +1073,28 @@ paths:
       responses:
         "204":
           description: Tunnel revoked
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+  /{prefix}/boxes/{box_id}/network/tunnels:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    get:
+      operationId: listTunnels
+      summary: List active public service ports for a box
+      tags: [Network]
+      responses:
+        "200":
+          description: Active public guest ports in ascending order
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: integer
+                  minimum: 1
+                  maximum: 65535
         "404":
           $ref: "#/components/responses/NotFoundError"
 

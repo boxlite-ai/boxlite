@@ -546,6 +546,11 @@ mode and `token_hash` are reserved for later.
 **Unique:** `(box_id, port)`. A revoked row can be reactivated by an authorized
 tunnel request.
 
+The migration creates no declarations for existing boxes. Existing preview and
+tunnel hostnames become reachable only after the owner prepares that port with
+`POST /api/v1/boxes/{boxId}/network/tunnel?port={port}`. Rows survive box
+stop/start and proxy restart; hard deletion of a box removes its rows.
+
 ### `box_last_activity`
 
 Heartbeat timestamp, one row per box, in its own table. Writing it therefore

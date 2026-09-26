@@ -386,6 +386,7 @@ organization authorization; identity discovery at `GET /api/v1/me` can return
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/metrics`                    | Returns metrics for one box without marking it active.  |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Returns the runner tunnel URI for a guest TCP port.     |
 | `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Revokes access to a guest TCP port.                     |
+| `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnels`            | Lists active public tunnel ports for the box.            |
 
 The exec, signal, resize, files, and metrics handlers are registered as
 catch-all reverse proxies to the box's assigned runner; the methods shown are

@@ -16,6 +16,7 @@ function makeService() {
   const repository = {
     query: jest.fn().mockResolvedValue([{ id: 'tunnel-1' }]),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
+    find: jest.fn().mockResolvedValue([{ port: 3000 }]),
     createQueryBuilder: jest.fn().mockReturnValue(builder),
   }
   return { service: new TunnelService(repository as never), repository, builder }
@@ -39,6 +40,7 @@ describe('TunnelService', () => {
 
     await expect(service.declarePublic('AbCdEf123456', 3000)).rejects.toBeInstanceOf(ConflictException)
     await expect(service.declarePublic('AbCdEf123456', 0)).rejects.toThrow('Invalid tunnel port')
+    await expect(service.declarePublic('AbCdEf123456', 22222)).rejects.toThrow('Invalid tunnel port')
     expect(repository.query).toHaveBeenCalledTimes(1)
   })
 
@@ -59,5 +61,18 @@ describe('TunnelService', () => {
     repository.update.mockResolvedValue({ affected: 0 })
 
     await expect(service.revoke('AbCdEf123456', 3000)).rejects.toBeInstanceOf(NotFoundException)
+  })
+
+  it('lists active public ports in order for the requested box', async () => {
+    const { service, repository } = makeService()
+
+    await expect(service.listActivePublicPorts('AbCdEf123456')).resolves.toEqual([3000])
+    expect(repository.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: { port: true },
+        where: expect.objectContaining({ boxId: 'AbCdEf123456', accessMode: 'public' }),
+        order: { port: 'ASC' },
+      }),
+    )
   })
 })

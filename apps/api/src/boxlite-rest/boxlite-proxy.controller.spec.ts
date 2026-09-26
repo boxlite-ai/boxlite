@@ -32,7 +32,10 @@ function makeHarness() {
     findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
   }
   const autoResume = { ensureReady: jest.fn().mockResolvedValue(undefined) }
-  const tunnelService = { declarePublic: jest.fn().mockResolvedValue(undefined) }
+  const tunnelService = {
+    declarePublic: jest.fn().mockResolvedValue(undefined),
+    listActivePublicPorts: jest.fn().mockResolvedValue([3000]),
+  }
   const tunnelRes = { setHeader: jest.fn() }
   const controller = new (BoxliteProxyController as any)(
     boxService,
@@ -125,6 +128,14 @@ describe('BoxliteProxyController', () => {
       boxService.getNetworkTunnelUrl.mock.invocationCallOrder[0],
     )
     expect(result).toEqual({ uri: 'https://3000-box.proxy.test' })
+  })
+
+  it('lists only the owning box’s declared ports', async () => {
+    const { controller, boxService, tunnelService } = makeHarness()
+
+    await expect(controller.listNetworkTunnels(activeAuth as never, 'public-box')).resolves.toEqual([3000])
+    expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
+    expect(tunnelService.listActivePublicPorts).toHaveBeenCalledWith('box-uuid')
   })
 
   it('does not return a tunnel URI when the declaration cannot be saved', async () => {
