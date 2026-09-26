@@ -3,7 +3,7 @@
 
 //! Host hypervisor backends. The [`Vm`] and [`Vcpu`] traits are the contract
 //! every backend implements. KVM x86_64 currently provides VM creation and
-//! memory registration, vCPU execution and kicks; boot configuration, HVF and
+//! memory registration, entry registers, vCPU execution and kicks; CPUID/MSRs, HVF and
 //! WHP are not implemented yet.
 //!
 //! This crate owns host-specific mechanisms; `boxlite-vmm` owns the guest
@@ -17,6 +17,11 @@ mod exit;
 mod memory;
 mod vcpu;
 mod vm;
+
+#[cfg(target_arch = "x86_64")]
+mod x86;
+#[cfg(target_arch = "x86_64")]
+pub use x86::{X86BootRegisters, X86Segment};
 
 pub use error::{Error, Result};
 pub use exit::VcpuExit;
