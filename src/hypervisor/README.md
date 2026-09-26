@@ -41,7 +41,8 @@ and `Vcpu` traits, including IRQ forwarding and cross-thread kick handles.
 
 `KvmVcpu::set_boot_registers` installs `X86BootRegisters`: general entry registers,
 segments, descriptor tables, control registers, and reset x87/SSE state (`FCW` is
-`0x037f`; `MXCSR` is `0x1f80`). Hardware tests read MXCSR back through XSAVE.
+`0x037f`; `MXCSR` is `0x1f80`). Hardware tests read MXCSR back through
+`KVM_GET_FPU`.
 Values and guest addresses come from the VMM; no Linux memory layout lives in
 KVM.
 Call it before first entry and discard the vCPU after any configuration error,
