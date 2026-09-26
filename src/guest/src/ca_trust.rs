@@ -24,11 +24,11 @@ impl CaInstaller {
     pub fn install(&self, pem: &[u8]) -> std::io::Result<()> {
         let incoming = parse_usable_ca(pem)?;
         let bundle = std::fs::read(&self.bundle_path)?;
-        let mut file = tempfile::NamedTempFile::new_in(
-            self.bundle_path
-                .parent()
-                .ok_or_else(|| io::Error::other("CA bundle has no parent"))?,
-        )?;
+        let parent = self
+            .bundle_path
+            .parent()
+            .ok_or_else(|| io::Error::other("CA bundle has no parent"))?;
+        let mut file = tempfile::NamedTempFile::new_in(parent)?;
         for block in certificate_blocks(&bundle) {
             let begin = b"-----BEGIN CERTIFICATE-----";
             let Some(start) = block.windows(begin.len()).rposition(|part| part == begin) else {
@@ -51,7 +51,9 @@ impl CaInstaller {
         file.write_all(b"\n")?;
         file.as_file()
             .set_permissions(std::fs::metadata(&self.bundle_path)?.permissions())?;
+        file.as_file().sync_all()?;
         file.persist(&self.bundle_path)?;
+        std::fs::File::open(parent)?.sync_all()?;
         Ok(())
     }
 }
