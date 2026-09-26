@@ -4,6 +4,12 @@
 //! KVM operations. The initial implementation targets Linux x86_64.
 
 #[cfg(target_arch = "x86_64")]
+mod kick;
+
+#[cfg(target_arch = "x86_64")]
+pub use kick::KvmVcpuHandle;
+
+#[cfg(target_arch = "x86_64")]
 mod memory;
 
 #[cfg(target_arch = "x86_64")]
