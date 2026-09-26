@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -88,11 +87,11 @@ func (p *Proxy) tunnelTarget(request *http.Request) (string, uint16, error) {
 	} else if ok {
 		boxID = decoded
 	}
-	value, err := strconv.ParseUint(port, 10, 16)
-	if err != nil || value == 0 {
+	value, err := parseTargetPort(port)
+	if err != nil {
 		return "", 0, fmt.Errorf("invalid tunnel port")
 	}
-	return boxID, uint16(value), nil
+	return boxID, value, nil
 }
 
 func decodeTunnelBoxID(value string) (string, bool, error) {
@@ -143,7 +142,13 @@ func dialRunnerTunnel(ctx context.Context, runnerInfo *RunnerInfo, boxID string,
 	if err != nil {
 		return nil, err
 	}
-	if err := conn.SetDeadline(time.Now().Add(runnerTunnelSetupTimeout)); err != nil {
+	// The CONNECT handshake below is raw socket I/O: req.Write and
+	// http.ReadResponse do not observe ctx, only this deadline. A runner that
+	// accepts the connection and then says nothing would otherwise hold the
+	// attempt for the full setup timeout on top of whatever budget the caller
+	// set — which is how a 15s dial-retry window turns into 25s. Clamp to
+	// whichever comes first.
+	if err := conn.SetDeadline(setupDeadline(ctx)); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -177,4 +182,14 @@ func dialRunnerTunnel(ctx context.Context, runnerInfo *RunnerInfo, boxID string,
 		return nil, err
 	}
 	return common_proxy.NewBufferedConn(conn, reader), nil
+}
+
+// setupDeadline is the CONNECT handshake's wall clock: the setup timeout, or
+// the caller's deadline when that is sooner.
+func setupDeadline(ctx context.Context) time.Time {
+	deadline := time.Now().Add(runnerTunnelSetupTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		return ctxDeadline
+	}
+	return deadline
 }

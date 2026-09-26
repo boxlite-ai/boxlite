@@ -4,8 +4,8 @@
  */
 
 import { BoxAutoResumeService } from './box-auto-resume.service'
-import { BoxState } from '../box/enums/box-state.enum'
-import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
+import { BoxState } from '../enums/box-state.enum'
+import { BoxDesiredState } from '../enums/box-desired-state.enum'
 
 const organization = { id: 'org-1', suspended: false } as any
 

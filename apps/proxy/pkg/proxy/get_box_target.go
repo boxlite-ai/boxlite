@@ -132,10 +132,16 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 	}
 
 	if targetPort != TERMINAL_PORT {
-		if _, err := strconv.ParseUint(targetPort, 10, 16); err != nil {
-			wrappedErr := fmt.Errorf("invalid target port: %w", err)
+		// Re-checked here, ahead of resumeBeforeDial, because this is the last
+		// point before a request is allowed to start someone's box: a port the
+		// dial will refuse must never buy a wake.
+		if _, err := parseTargetPort(targetPort); err != nil {
+			wrappedErr := fmt.Errorf("invalid target port '%s': %w", targetPort, err)
 			ctx.Error(common_errors.NewBadRequestError(wrappedErr))
 			return nil, wrappedErr
+		}
+		if err := p.resumeBeforeDial(ctx, boxId); err != nil {
+			return nil, err
 		}
 		target, err := url.Parse("http://" + net.JoinHostPort(boxId, targetPort) + targetPath)
 		if err != nil {
@@ -147,6 +153,10 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 			Headers:   headers,
 			Transport: p.guestPortTransport,
 		}, nil
+	}
+
+	if err := p.resumeBeforeDial(ctx, boxId); err != nil {
+		return nil, err
 	}
 
 	runnerInfo, err := p.getBoxRunnerInfo(ctx, boxId)
@@ -161,6 +171,52 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 	headers["X-BoxLite-Authorization"] = fmt.Sprintf("Bearer %s", runnerInfo.ApiKey)
 	return &common_proxy.RequestTarget{URL: target, Host: target.Host, Headers: headers}, nil
 }
+
+// resumeBeforeDial wakes a stopped box before the request is routed to it.
+//
+// Reached only after the access gate has accepted the caller — the box is
+// public, which is the owner's explicit opt-in since inbound is not enabled by
+// default, or the request carried a valid box key — and only once the target
+// port is known good, so a malformed request never starts a box. The proxy
+// cannot resume anything itself (no organization identity ever reaches it), so
+// it hands the decision to the API.
+func (p *Proxy) resumeBeforeDial(ctx *gin.Context, boxId string) error {
+	err := p.ensureBoxReady(ctx.Request.Context(), boxId)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, errEnsureReadyTimedOut) {
+		// Still starting. Say so in a way a client can act on, rather than
+		// letting it wait out the cold start on a dead socket.
+		ctx.Header("Retry-After", strconv.Itoa(int(ensureReadyHold.Seconds())))
+		wrapped := common_errors.NewCustomError(
+			http.StatusServiceUnavailable,
+			"box is starting, retry shortly",
+			"box_starting",
+		)
+		ctx.Error(wrapped)
+		return wrapped
+	}
+	// Anything else is not a reason to refuse the request: the box may well be
+	// running already, and the dial is the real test.
+	slog.WarnContext(ctx.Request.Context(), "ensure-ready failed", "box", boxId, "error", err)
+	return nil
+}
+
+const (
+	// Long enough for a cold-booted service to bind, short enough that a port
+	// nothing serves still fails while the client is listening.
+	guestDialRetryWindow = 15 * time.Second
+	guestDialRetryBase   = 250 * time.Millisecond
+)
+
+// errGuestDialFailed marks the one upstream failure the client can act on: the
+// retry window closed with nothing listening on the guest port. Box state
+// cannot see this — a box reports STARTED before its container init has
+// replayed entrypoint/cmd — so it is the dial, not the wake, that has to say
+// "still coming up". Wrapped rather than returned bare so ErrorHandler can
+// tell it apart from a runner lookup that failed for its own reasons.
+var errGuestDialFailed = errors.New("guest port not reachable")
 
 func (p *Proxy) dialGuestPort(ctx context.Context, network string, address string) (net.Conn, error) {
 	if network != "tcp" && network != "tcp4" && network != "tcp6" {
@@ -178,7 +234,78 @@ func (p *Proxy) dialGuestPort(ctx context.Context, network string, address strin
 	if err != nil {
 		return nil, fmt.Errorf("resolve runner for box %s: %w", boxID, err)
 	}
-	return dialRunnerTunnel(ctx, runnerInfo, boxID, uint16(port))
+
+	// A box that just resumed cold-boots: it reports running before its
+	// container init has replayed entrypoint/cmd, so the service is not
+	// listening yet and the first dial loses the race. Without memory-snapshot
+	// resume there is no way around that wait, so absorb it here instead of
+	// handing the client a 502 the moment it wakes something up. A box that is
+	// simply not serving this port still fails, just a few seconds later.
+	// The window bounds the whole wait, not just the gaps between attempts: a
+	// dial started just before the deadline would otherwise run out its own
+	// setup timeout on top of it.
+	retryCtx, cancelRetry := context.WithTimeout(ctx, guestDialRetryWindow)
+	defer cancelRetry()
+
+	started := time.Now()
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		conn, err := dialRunnerTunnel(retryCtx, runnerInfo, boxID, uint16(port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		if retryCtx.Err() != nil {
+			// Whether the window ran out or the caller went away decides who
+			// owns the failure, and the two are indistinguishable from the
+			// bare 502 the client ends up with. Say which, with how long was
+			// actually spent: a window that closes early means the request
+			// context died under us, not that the box is slow to boot.
+			slog.WarnContext(ctx, "guest dial window ended",
+				"box", boxID, "port", port,
+				"attempts", attempt+1,
+				"elapsed", time.Since(started),
+				"window", guestDialRetryWindow,
+				"retry_ctx_err", retryCtx.Err(),
+				"caller_ctx_err", ctx.Err(),
+				"last_error", lastErr)
+			break
+		}
+		backoff := guestDialRetryBase << min(attempt, 3)
+		select {
+		case <-retryCtx.Done():
+			return nil, fmt.Errorf("%w on %s:%d: %w", errGuestDialFailed, boxID, port, lastErr)
+		case <-time.After(backoff):
+		}
+	}
+	return nil, fmt.Errorf("%w on %s:%d: %w", errGuestDialFailed, boxID, port, lastErr)
+}
+
+// renderUpstreamError answers a failed proxy attempt with something the client
+// can act on. httputil's default is a bare 502 with an empty body, which is
+// indistinguishable from a box that will never serve — the complaint POL-599
+// is filed on.
+//
+// Writes nothing itself: handing the error to the gin context lets the shared
+// error middleware render it, so this matches resumeBeforeDial's 503 byte for
+// byte instead of inventing a second shape.
+func (p *Proxy) renderUpstreamError(ctx *gin.Context, err error) {
+	if errors.Is(err, errGuestDialFailed) {
+		slog.WarnContext(ctx.Request.Context(), "guest dial failed after the retry window", "error", err)
+		ctx.Header("Retry-After", strconv.Itoa(int(guestDialRetryWindow.Seconds())))
+		ctx.Error(common_errors.NewCustomError(
+			http.StatusServiceUnavailable,
+			"box is starting, retry shortly",
+			"box_starting",
+		))
+		return
+	}
+	slog.WarnContext(ctx.Request.Context(), "upstream request failed", "error", err)
+	ctx.Error(common_errors.NewCustomError(
+		http.StatusBadGateway,
+		"upstream request failed",
+		"upstream_unavailable",
+	))
 }
 
 func requestEscapedPath(requestURL *url.URL, fallbackPath string) string {
@@ -380,9 +507,13 @@ func (p *Proxy) parseHost(host string) (targetPort string, boxIdOrSignedToken st
 
 	targetPort = before
 
-	// Check that port is numeric
-	if _, err := strconv.Atoi(targetPort); err != nil {
-		return "", "", "", fmt.Errorf("invalid port '%s': must be numeric", targetPort)
+	// One definition of a valid port, for every caller of parseHost. It used
+	// to be a bare Atoi here, with the real range check left to whoever
+	// consumed the result — so tunnelTarget rejected port 0 and the preview
+	// path did not, and a URL like `0-box.<domain>` got far enough to wake a
+	// stopped box before the dial refused it.
+	if _, err := parseTargetPort(targetPort); err != nil {
+		return "", "", "", fmt.Errorf("invalid port '%s': %w", targetPort, err)
 	}
 
 	boxIdOrSignedToken = after
@@ -390,6 +521,21 @@ func (p *Proxy) parseHost(host string) (targetPort string, boxIdOrSignedToken st
 	baseHost = strings.Join(parts[1:], ".")
 
 	return targetPort, boxIdOrSignedToken, baseHost, nil
+}
+
+// parseTargetPort is the proxy's only definition of a usable guest port:
+// decimal, and a real TCP port. Zero parses fine as a number and is what
+// `net.JoinHostPort` and the CONNECT path each reject later, far enough down
+// that a stopped box has already been woken for a request that cannot succeed.
+func parseTargetPort(value string) (uint16, error) {
+	port, err := strconv.ParseUint(value, 10, 16)
+	if err != nil {
+		return 0, fmt.Errorf("must be a number in 1-65535")
+	}
+	if port == 0 {
+		return 0, fmt.Errorf("must be a number in 1-65535")
+	}
+	return uint16(port), nil
 }
 
 func decodeDirectPreviewBoxID(value string) (string, bool, error) {

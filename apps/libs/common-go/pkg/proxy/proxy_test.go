@@ -4,6 +4,8 @@
 package proxy
 
 import (
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -39,7 +41,7 @@ func TestRewriteProxyRequestSetsTrustedForwardedHeaders(t *testing.T) {
 				"X-Forwarded-Port":        "443",
 			},
 		}, nil
-	}, nil))
+	}, nil, nil))
 	proxyServer := httptest.NewServer(router)
 	defer proxyServer.Close()
 
@@ -104,4 +106,94 @@ func assertTrustedForwardedRequest(t *testing.T, out *http.Request) {
 	if got := out.Header.Get("X-BoxLite-Authorization"); got != "Bearer runner-secret" {
 		t.Fatalf("X-BoxLite-Authorization = %q", got)
 	}
+}
+
+// httputil answers a failed dial with a bare 502 and an empty body. A service
+// that can say something more useful — "this box is starting, retry" — needs
+// the hook to actually reach ReverseProxy.ErrorHandler, and needs httputil to
+// have written nothing by the time it runs, or the handler's own response is
+// discarded as a second WriteHeader.
+func TestProxyRequestHandlerRoutesUpstreamFailuresToTheHook(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var seen error
+	router := gin.New()
+	router.GET("/*path", NewProxyRequestHandler(
+		func(*gin.Context) (*RequestTarget, error) {
+			return &RequestTarget{URL: deadTarget(t), Host: "box.proxy.test"}, nil
+		},
+		nil,
+		func(ctx *gin.Context, err error) {
+			seen = err
+			ctx.Header("Retry-After", "15")
+			ctx.JSON(http.StatusServiceUnavailable, gin.H{"code": "box_starting"})
+		},
+	))
+
+	response, body := getThrough(t, router)
+	defer response.Body.Close()
+
+	if seen == nil {
+		t.Fatal("the hook was never called; ErrorHandler is not wired")
+	}
+	if response.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 — httputil's 502 won", response.StatusCode)
+	}
+	if got := response.Header.Get("Retry-After"); got != "15" {
+		t.Fatalf("Retry-After = %q, want the hook's value", got)
+	}
+	if !strings.Contains(body, "box_starting") {
+		t.Fatalf("body = %q, want the hook's payload", body)
+	}
+}
+
+// With no hook, the default must not change for existing callers.
+func TestProxyRequestHandlerKeepsHttputilDefaultWithoutAHook(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/*path", NewProxyRequestHandler(func(*gin.Context) (*RequestTarget, error) {
+		return &RequestTarget{URL: deadTarget(t), Host: "box.proxy.test"}, nil
+	}, nil, nil))
+
+	response, _ := getThrough(t, router)
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want httputil's 502 when no hook is supplied", response.StatusCode)
+	}
+}
+
+// deadTarget is a URL nothing listens on: a port reserved and then released,
+// so the dial fails rather than hanging.
+func deadTarget(t *testing.T) *url.URL {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	listener.Close()
+	target, err := url.Parse("http://" + address + "/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return target
+}
+
+// getThrough drives the router over a real connection: gin's writer needs an
+// http.CloseNotifier on this path, which httptest.ResponseRecorder is not.
+func getThrough(t *testing.T, router *gin.Engine) (*http.Response, string) {
+	t.Helper()
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	response, err := server.Client().Get(server.URL + "/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response, string(payload)
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/securecookie"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	"golang.org/x/sync/singleflight"
 
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
@@ -73,6 +74,12 @@ type Proxy struct {
 	boxAuthKeyValidCache       common_cache.ICache[bool]
 	boxLastActivityUpdateCache common_cache.ICache[bool]
 	guestPortTransport         *http.Transport
+
+	// ensureReadyGroup collapses the wake requests a single page load makes
+	// for one box into one call to the API. Deliberately not a cache: it
+	// holds an entry only while the call is in flight, so readiness is never
+	// reported from a box's past.
+	ensureReadyGroup singleflight.Group
 }
 
 func StartProxy(ctx context.Context, config *config.Config) error {
@@ -205,7 +212,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 			return
 		}
 
-		common_proxy.NewProxyRequestHandler(proxy.GetProxyTarget, nil)(ctx)
+		common_proxy.NewProxyRequestHandler(proxy.GetProxyTarget, nil, proxy.renderUpstreamError)(ctx)
 	})
 
 	httpServer := &http.Server{

@@ -5,8 +5,27 @@
  */
 
 import Redis from 'ioredis'
-import { Controller, Get, Param, Logger, NotFoundException, UseGuards, Req } from '@nestjs/common'
+import {
+  Controller,
+  Get,
+  Post,
+  Param,
+  Logger,
+  NotFoundException,
+  ConflictException,
+  UseGuards,
+  Req,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common'
 import { BoxService } from '../services/box.service'
+import { BoxAutoResumeService, RESUMABLE_STATES } from '../services/box-auto-resume.service'
+import { BoxState } from '../enums/box-state.enum'
+import { OrganizationService } from '../../organization/services/organization.service'
+import { OrGuard } from '../../auth/or.guard'
+import { BoxAccessGuard } from '../guards/box-access.guard'
+import { ProxyGuard } from '../guards/proxy.guard'
+import { RegionBoxAccessGuard } from '../guards/region-box-access.guard'
 import { ApiResponse, ApiOperation, ApiParam, ApiTags, ApiOAuth2, ApiBearerAuth } from '@nestjs/swagger'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
@@ -21,7 +40,90 @@ export class PreviewController {
     @InjectRedis() private readonly redis: Redis,
     private readonly boxService: BoxService,
     private readonly organizationUserService: OrganizationUserService,
+    private readonly autoResume: BoxAutoResumeService,
+    private readonly organizationService: OrganizationService,
   ) {}
+
+  // The only writing route on this controller, and deliberately here rather
+  // than on the product API: its caller is the proxy, like every other route
+  // in this file, and a wake RPC has no business in the spec-first v1/boxes
+  // surface that SDKs are generated from. Users already have `start`, and any
+  // SDK call on an auto_resume box wakes it on its own.
+  //
+  // Resuming needs the Organization entity (suspension check, state waiter)
+  // while every proxy auth path is box-scoped by design, so the organization
+  // is resolved here from the box row instead of being handed to the proxy.
+  // Reuses the same BoxAutoResumeService as the SDK-facing routes, so both
+  // paths share one lock, one join-of-an-in-flight-start and one definition
+  // of ready.
+  //
+  // Who is *allowed* to wake a box is settled before this call, by the proxy:
+  // it resumes for a request the access gate already accepted — a public box,
+  // which is the owner's explicit opt-in, or a valid box auth key.
+  @Post(':boxId/ensure-ready')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Resume a stopped box and wait until it is running',
+    operationId: 'ensureBoxReady',
+  })
+  @ApiParam({
+    name: 'boxId',
+    description: 'ID of the box',
+    type: 'string',
+  })
+  @ApiResponse({
+    status: 204,
+    description: 'Box is running',
+  })
+  @ApiResponse({
+    status: 408,
+    description: 'Box did not reach a running state before the resume timeout',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Box is not running and cannot be resumed (auto-resume off, or a state it cannot leave)',
+  })
+  // CombinedAuthGuard first, and not optional: OrGuard's arms only *inspect*
+  // `request.user`, they never populate it. Without a strategy having run,
+  // ProxyGuard sees `undefined`, every arm refuses, and the route answers 403
+  // to the one caller it exists for — the proxy then falls back to dialing a
+  // stopped box, which is the bare 502 this PR is meant to remove.
+  //
+  // The siblings on this controller hide the gap, which is why it survived
+  // review: `:boxId/public` declares no guards at all, and `:boxId/access`
+  // brings its own CombinedAuthGuard. There is no class-level guard here to
+  // inherit, unlike BoxController, whose `last-activity` works for exactly
+  // that reason.
+  @UseGuards(CombinedAuthGuard, OrGuard([BoxAccessGuard, ProxyGuard, RegionBoxAccessGuard]))
+  async ensureBoxReady(@Param('boxId') boxId: string): Promise<void> {
+    const box = await this.boxService.findOne(boxId)
+
+    // Mirror the tunnel-open gate in BoxLiteProxyController, and for the same
+    // two reasons. `auto_resume: false` is one of the two switches an owner
+    // has against a published URL starting their box on someone else's
+    // request, so inbound traffic must not override it — waking a box that
+    // opted out is the one outcome this endpoint's caller cannot undo. And a
+    // state that never reaches STARTED on its own has to fail now rather than
+    // hold the request for the full resume window to learn nothing.
+    //
+    // Ahead of the organization lookup so a rejected box costs one query, not
+    // two.
+    if (box.state !== BoxState.STARTED) {
+      if (!box.autoResume || !RESUMABLE_STATES.includes(box.state)) {
+        throw new ConflictException(`Box ${boxId} is not running (state: ${box.state})`)
+      }
+    }
+
+    const organization = await this.organizationService.findOne(box.organizationId)
+    if (!organization) {
+      // A box outliving its organization is not a caller error and no retry
+      // fixes it; say so rather than reporting a timeout after waiting out
+      // the full resume window.
+      throw new NotFoundException(`Organization for box ${boxId} not found`)
+    }
+
+    await this.autoResume.ensureReady(box.id, organization)
+  }
 
   @Get(':boxId/public')
   @ApiOperation({

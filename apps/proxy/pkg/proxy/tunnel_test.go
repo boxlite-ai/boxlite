@@ -187,3 +187,72 @@ func TestBufferedConnForwardsCloseWrite(t *testing.T) {
 		t.Fatal("CloseWrite was not forwarded")
 	}
 }
+
+// A runner that accepts the TCP connection and then sends nothing must not be
+// able to outlive the caller's budget: the CONNECT handshake is raw socket
+// I/O, so only the connection deadline bounds it. Without clamping that
+// deadline to ctx, one attempt started near the end of a dial-retry window
+// would run its full 10s setup timeout on top of the window.
+func TestDialRunnerTunnelHonorsCallerDeadline(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		// Deliberately silent: accept, never answer the CONNECT.
+		accepted <- conn
+	}()
+
+	callerBudget := 300 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), callerBudget)
+	defer cancel()
+
+	start := time.Now()
+	_, err = dialRunnerTunnel(ctx, &RunnerInfo{ApiUrl: "http://" + listener.Addr().String()}, "box", 3000)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error from a runner that never answers CONNECT")
+	}
+	if elapsed >= runnerTunnelSetupTimeout {
+		t.Fatalf("dial ran for %s, past its own setup timeout — caller deadline was ignored", elapsed)
+	}
+	// Allow scheduling slack, but it must be recognisably the caller's budget
+	// rather than the setup timeout.
+	if elapsed > callerBudget+2*time.Second {
+		t.Fatalf("dial ran for %s, well past the caller's %s budget", elapsed, callerBudget)
+	}
+
+	select {
+	case conn := <-accepted:
+		conn.Close()
+	default:
+	}
+}
+
+func TestSetupDeadlinePrefersTheEarlierBound(t *testing.T) {
+	// Caller is stricter than the setup timeout -> caller wins.
+	tight, cancelTight := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancelTight()
+	tightDeadline, _ := tight.Deadline()
+	if got := setupDeadline(tight); !got.Equal(tightDeadline) {
+		t.Fatalf("setupDeadline = %v, want the caller's deadline %v", got, tightDeadline)
+	}
+
+	// Caller is looser (or absent) -> the setup timeout bounds the handshake.
+	loose, cancelLoose := context.WithTimeout(context.Background(), runnerTunnelSetupTimeout+time.Minute)
+	defer cancelLoose()
+	if got := setupDeadline(loose); !got.Before(time.Now().Add(runnerTunnelSetupTimeout + time.Second)) {
+		t.Fatalf("setupDeadline = %v, want it capped by runnerTunnelSetupTimeout", got)
+	}
+	if got := setupDeadline(context.Background()); !got.After(time.Now()) {
+		t.Fatalf("setupDeadline = %v, want a future deadline when the caller has none", got)
+	}
+}

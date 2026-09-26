@@ -110,7 +110,18 @@ type RequestTarget struct {
 //	@Failure		409			{object}	string	"Box container conflict"
 //	@Failure		500			{object}	string	"Internal server error"
 //	@Router			/workspaces/{workspaceId}/{projectId}/toolbox/{path} [get]
-func NewProxyRequestHandler(getProxyTarget func(*gin.Context) (*RequestTarget, error), modifyResponse func(*http.Response) error) gin.HandlerFunc {
+//
+// onUpstreamError, when set, replaces httputil's default reaction to a failed
+// dial or a broken upstream — a bare 502 with no body, which tells a client
+// nothing and in particular cannot say "retry, this is coming up". It is
+// handed the gin context and must not write the response itself: leaving the
+// write to the error middleware keeps one rendering of every error the service
+// returns. Nil keeps httputil's behaviour.
+func NewProxyRequestHandler(
+	getProxyTarget func(*gin.Context) (*RequestTarget, error),
+	modifyResponse func(*http.Response) error,
+	onUpstreamError func(*gin.Context, error),
+) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		target, err := getProxyTarget(ctx)
 		if err != nil {
@@ -151,6 +162,11 @@ func NewProxyRequestHandler(getProxyTarget func(*gin.Context) (*RequestTarget, e
 		}
 		if reverseProxy.Transport == nil {
 			reverseProxy.Transport = proxyTransport
+		}
+		if onUpstreamError != nil {
+			reverseProxy.ErrorHandler = func(_ http.ResponseWriter, _ *http.Request, err error) {
+				onUpstreamError(ctx, err)
+			}
 		}
 
 		reverseProxy.ServeHTTP(ctx.Writer, ctx.Request)
