@@ -6,6 +6,7 @@ use std::{io, sync::Mutex};
 use kvm_bindings::{KVM_API_VERSION, KVM_PIT_SPEAKER_DUMMY, kvm_pit_config};
 use kvm_ioctls::{Cap, Kvm, VmFd};
 
+use super::KvmVcpu;
 use super::memory::MemorySlots;
 use crate::{Error, MemoryRegion, Result};
 
@@ -17,6 +18,7 @@ use crate::{Error, MemoryRegion, Result};
 pub struct KvmVm {
     fd: VmFd,
     slots: Mutex<MemorySlots>,
+    run_size: usize,
 }
 
 impl KvmVm {
@@ -76,7 +78,19 @@ impl KvmVm {
         Ok(Self {
             fd,
             slots: Mutex::new(MemorySlots::new(kvm.get_nr_memslots(), page_size as usize)),
+            run_size: kvm.get_vcpu_mmap_size().map_err(io::Error::from)?,
         })
+    }
+
+    /// Creates a vCPU on the thread that will run it, in KVM's reset state.
+    pub fn create_vcpu(&self, id: u32) -> Result<KvmVcpu> {
+        self.fd
+            .create_vcpu(u64::from(id))
+            .map(|fd| KvmVcpu::new(fd, id, self.run_size))
+            .map_err(|source| Error::CreateVcpu {
+                id,
+                source: source.into(),
+            })
     }
 
     /// Registers caller-owned RAM at a guest physical address.
@@ -198,19 +212,25 @@ mod tests {
         let vm = KvmVm::new().unwrap();
         // SAFETY: ram is uniquely owned and outlives vm and vcpu.
         unsafe { vm.map_memory(&ram.region()) }.unwrap();
-        let mut vcpu = vm.fd.create_vcpu(0).unwrap();
-        let mut segments = vcpu.get_sregs().unwrap();
+        let mut vcpu = vm.create_vcpu(0).unwrap();
+        assert!(matches!(
+            vm.create_vcpu(0),
+            Err(Error::CreateVcpu { id: 0, .. })
+        ));
+        vcpu.complete_pending_io().unwrap();
+        let mut segments = vcpu.fd.get_sregs().unwrap();
         segments.cs.base = 0;
         segments.cs.selector = 0;
-        vcpu.set_sregs(&segments).unwrap();
-        vcpu.set_regs(&kvm_regs {
-            rip: 0x1000,
-            rflags: 2,
-            ..Default::default()
-        })
-        .unwrap();
+        vcpu.fd.set_sregs(&segments).unwrap();
+        vcpu.fd
+            .set_regs(&kvm_regs {
+                rip: 0x1000,
+                rflags: 2,
+                ..Default::default()
+            })
+            .unwrap();
         match vcpu.run().unwrap() {
-            kvm_ioctls::VcpuExit::IoOut(port, bytes) => {
+            crate::VcpuExit::IoOut { port, bytes } => {
                 assert_eq!(port, 0x3f8);
                 assert_eq!(bytes, b"K");
             }
@@ -218,8 +238,11 @@ mod tests {
         }
         // The I/O exit leaves instruction completion pending until KVM_RUN.
         // Complete it without reaching HLT, which can wait in the kernel.
-        vcpu.set_kvm_immediate_exit(1);
-        assert_eq!(vcpu.run().unwrap_err().errno(), libc::EINTR);
+        vcpu.complete_pending_io().unwrap();
+        assert_eq!(vcpu.fd.get_regs().unwrap().rip, 0x1006);
+        vcpu.complete_pending_io().unwrap();
+        assert_eq!(vcpu.fd.get_regs().unwrap().rip, 0x1006);
+        assert_eq!(vcpu.fd.get_kvm_run().immediate_exit, 0);
         // Stop this user of the backing page before removing its guest mapping.
         drop(vcpu);
         vm.unmap_memory(&ram.region()).unwrap();
