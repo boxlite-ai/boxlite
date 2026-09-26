@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """Exercise the boot-artifact build entry point without starting Docker."""
 
+import hashlib
 import os
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "scripts/build/build-vmm-boot.sh"
+ARTIFACTS = (
+    "vmlinux", "bzImage", "test-initramfs.cpio", "kernel.config", "build-info.txt",
+)
 
 
 class BuildEntrypointTests(unittest.TestCase):
@@ -79,5 +85,71 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertNotIn("Boot artifacts:", result.stdout)
 
 
+def verify_checksums(output):
+    checksums = {}
+    for line in (output / "SHA256SUMS").read_text().splitlines():
+        expected, name = line.split("  ", 1)
+        checksums[name] = expected
+    if set(checksums) != set(ARTIFACTS):
+        raise RuntimeError(f"unexpected artifact manifest: {output / 'SHA256SUMS'}")
+    for name, expected in checksums.items():
+        actual = hashlib.sha256((output / name).read_bytes()).hexdigest()
+        if actual != expected:
+            raise RuntimeError(f"checksum mismatch: {output / name}")
+
+
+def qualify_artifacts():
+    qemu = shutil.which("qemu-system-x86_64")
+    if not qemu:
+        raise RuntimeError("qemu-system-x86_64 is required for artifact qualification")
+    with tempfile.TemporaryDirectory(prefix="boxlite boot qualification ") as directory:
+        output = Path(directory) / "artifacts"
+        subprocess.run(
+            ["bash", str(BUILD), "--output", str(output)],
+            check=True,
+            timeout=1800,
+        )
+        verify_checksums(output)
+        result = subprocess.run(
+            [
+                qemu, "-machine", "pc,accel=tcg,acpi=off", "-cpu", "max",
+                "-m", "512", "-smp", "1", "-nodefaults",
+                "-display", "none", "-serial", "stdio", "-monitor", "none",
+                "-no-reboot", "-kernel", str(output / "bzImage"),
+                "-initrd", str(output / "test-initramfs.cpio"),
+                "-append", "console=ttyS0 rdinit=/init reboot=k panic=-1",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        if result.returncode != 0 or "BOXLITE_M1_OK" not in result.stdout.splitlines():
+            raise RuntimeError(f"guest boot failed:\n{result.stdout}\n{result.stderr}")
+        if "reboot: Restarting system" not in result.stdout:
+            raise RuntimeError(f"guest did not request reboot:\n{result.stdout}")
+        print("PASS: QEMU guest with 1 vCPU reached init and rebooted", flush=True)
+
+
+def check_reproducibility():
+    with tempfile.TemporaryDirectory(prefix="boxlite boot reproducibility ") as directory:
+        builds = [Path(directory) / name for name in ("first", "second")]
+        for output in builds:
+            subprocess.run(
+                ["bash", str(BUILD), "--rebuild", "--output", str(output)],
+                check=True,
+                timeout=1800,
+            )
+            verify_checksums(output)
+        for name in (*ARTIFACTS, "SHA256SUMS"):
+            if (builds[0] / name).read_bytes() != (builds[1] / name).read_bytes():
+                raise RuntimeError(f"independent builds differ: {name}")
+        print("PASS: two uncached kernel/initramfs builds are byte-identical", flush=True)
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if sys.argv[1:] == ["--artifacts"]:
+        qualify_artifacts()
+    elif sys.argv[1:] == ["--reproducible"]:
+        check_reproducibility()
+    else:
+        unittest.main()
