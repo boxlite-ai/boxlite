@@ -122,7 +122,8 @@ const clickHouseFake = (active: boolean): ClickHouse =>
 const bundle = ({
   clickhouse = true,
   registryCredentials = true,
-}: { clickhouse?: boolean; registryCredentials?: boolean } = {}) => {
+  registryProxy = true,
+}: { clickhouse?: boolean; registryCredentials?: boolean; registryProxy?: boolean } = {}) => {
   const seen: Record<string, any> = {}
   const order: string[] = []
   const record = (name: string, value: any) => {
@@ -198,13 +199,18 @@ const bundle = ({
     edge: (input: any) => (request: any) =>
       record('edge', { input, request, url: out('https://box.dev.boxlite.ai'), metricTarget: out('net/proxy/1'), ready: ['edge'] }),
     registryProxy: (input: any) => (request: any) =>
-      record('registryProxy', {
-        input,
-        request,
-        active: true,
-        url: out('https://registry-proxy-123.run.app'),
-        ready: ['registryProxy'],
-      }),
+      record(
+        'registryProxy',
+        registryProxy
+          ? {
+              input,
+              request,
+              active: true,
+              url: out('https://registry-proxy-123.run.app'),
+              ready: ['registryProxy'],
+            }
+          : { input, request, active: false },
+      ),
     registryCredentials: () =>
       record(
         'registryCredentials',
@@ -518,7 +524,10 @@ test('what the deploy reports is what a post-deploy check needs to read', () => 
 
 test('a commit whose images were never published fails before anything is built', () => {
   const { providers } = bundle()
-  const withoutProxy = { ...providers, images: () => ({ api: out('a'), 'otel-collector': out('c') }) } as StackProviders
+  const withoutProxy = {
+    ...providers,
+    images: () => ({ api: out('a'), 'otel-collector': out('c'), 'registry-proxy': out('r') }),
+  } as StackProviders
   assert.throws(
     () => deployStack({ providers: withoutProxy, config, inputs: inputs() }),
     /mbuild published no proxy image for this commit/,
@@ -527,17 +536,46 @@ test('a commit whose images were never published fails before anything is built'
 
 // ── the registry proxy ──────────────────────────────────────────────────────
 
-test('the registry proxy is built after the API, because it asks the API about every caller', () => {
+test('the registry proxy is built before the API, which writes its host into private refs', () => {
   /*
-   * A runner's key is an opaque column rather than a signed token, so the proxy
-   * cannot check one without the control plane answering. Built before the API,
-   * it would come up and refuse every pull with 503 until the API arrived.
+   * The API hands a runner a private image as a ref under the proxy's host, so
+   * it needs that host when it is built. The proxy asks the API about every
+   * caller, but by `api.<domain>`, which the stage's domain fixes before either
+   * exists. The gap that leaves is a first deploy's, before anything has a box
+   * to pull for; on every later one the API is already answering.
    */
   const { providers, order, seen } = bundle()
   deployStack({ providers, config, inputs: inputs() })
 
-  assert.ok(order.indexOf('api') < order.indexOf('registryProxy'), 'the proxy authenticates callers through the API')
-  assert.ok(seen.registryProxy.input.dependsOn.includes('api'), 'and waits for it to be ready, not only to exist')
+  assert.ok(order.indexOf('registryProxy') < order.indexOf('api'), 'the API is handed the proxy host')
+  assert.equal(seen.registryProxy.input.dependsOn.includes('api'), false, 'so it cannot wait for the API')
+  assert.equal(read(seen.api.request.environment.REGISTRY_PROXY_HOST), 'registry-proxy-123.run.app')
+})
+
+test('the API, the proxy and the runners agree on the proxy and its registries', () => {
+  /*
+   * One host and one list, each written to everything that reads it. A runner
+   * with another host has no key for the refs it is handed; an API that accepts
+   * a login for a registry the proxy will not pull from is a private pull that
+   * fails with a 403 nobody expected.
+   */
+  const { providers, seen } = bundle()
+  deployStack({ providers, config, inputs: inputs() })
+
+  assert.equal(read(seen.runners.request.registryProxyHost), 'registry-proxy-123.run.app')
+  assert.equal(seen.api.request.environment.REGISTRY_PROXY_UPSTREAM_HOSTS, 'ghcr.io,docker.io,quay.io,gcr.io')
+  assert.equal(
+    seen.registryProxy.request.environment.REGISTRY_PROXY_UPSTREAM_HOSTS,
+    seen.api.request.environment.REGISTRY_PROXY_UPSTREAM_HOSTS,
+  )
+})
+
+test('a stage with no registry proxy hands its host to nobody', () => {
+  const { providers, seen } = bundle({ registryProxy: false })
+  deployStack({ providers, config, inputs: inputs() })
+
+  assert.equal('REGISTRY_PROXY_HOST' in seen.api.request.environment, false)
+  assert.equal(seen.runners.request.registryProxyHost, null)
 })
 
 test('the registry proxy is handed the API as its control plane', () => {

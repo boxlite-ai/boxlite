@@ -128,6 +128,22 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
     expect(tag).toMatchObject({ imageId: image.id, name: 'v1', versionId: version.id })
   })
 
+  it('files a private image under its upstream name, not the registry proxy', async () => {
+    const proxy = 'registry-proxy-abc.a.run.app'
+    process.env.REGISTRY_PROXY_HOST = proxy
+    try {
+      await report(`${proxy}/${ORG}/ghcr.io/acme/app:v1`)
+    } finally {
+      delete process.env.REGISTRY_PROXY_HOST
+    }
+
+    const [image] = await dataSource.getRepository(Image).find()
+    expect(image).toMatchObject({ organizationId: ORG, name: 'ghcr.io/acme/app' })
+    const [version] = await dataSource.getRepository(ImageVersion).find()
+    // What the tenant asked for, which is also what the catalog answers to.
+    expect(version.sourceSpec).toEqual({ sourceRef: 'ghcr.io/acme/app:v1' })
+  })
+
   /**
    * A report can arrive more than once for the same box — the runner retries,
    * and a replayed job starts the same box again.

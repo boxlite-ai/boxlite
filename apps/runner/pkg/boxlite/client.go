@@ -190,11 +190,11 @@ func warnOnPartialRegistryProxy(logger *slog.Logger, proxy RegistryProxy) {
 // Core matches credentials by host, and this runtime pulls the operator's
 // curated images and references tenants named from the same hosts. A
 // credential here would be spent on any tenant reference to its host, so the
-// runtime holds none and every image pulls anonymously — which is why the
-// curated images must be public. The proxy's entry is the exception that
-// proves it: it carries the runner's own key, not a registry's, which is safe
-// only while no tenant reference names the proxy host — a reference the API's
-// image admission has to refuse.
+// runtime holds none: a public image pulls anonymously — which is why the
+// curated images must be public — and a private one goes to the proxy. The
+// proxy's entry is the exception that proves it: it carries the runner's own
+// key, not a registry's, and only the API writes a ref under the proxy host,
+// so no reference a tenant wrote reaches it.
 // With no proxy configured this is byte-for-byte the anonymous list, so the
 // proxy is safe to ship dark. Kept as a pure function so that is testable
 // without constructing a real runtime.

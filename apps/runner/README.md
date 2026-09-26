@@ -595,9 +595,10 @@ Optional features are toggled by env vars:
   `BOXLITE_SHUTDOWN_GRACE` — exec reaping timers.
 - `REGISTRY_PROXY_HOST`, `REGISTRY_PROXY_USERNAME`, `REGISTRY_PROXY_PASSWORD` —
   pull an image whose registry credentials only the platform holds through the
-  [registry proxy](../image-service/README.md). Used only when all three are set,
-  and a warning names whichever are missing. The password is this runner's own
-  API key. A proxy host also listed in `INSECURE_REGISTRIES` is reached over HTTP.
+  [registry proxy](../image-service/README.md). The password is this runner's own
+  API key, so with a host set it defaults to `BOXLITE_RUNNER_TOKEN`, and the
+  username to `runner`. A proxy host also listed in `INSECURE_REGISTRIES` is
+  reached over HTTP.
 
 Cloud hosts use the [shared runner boot logic](../infra/mdeploy/stack/runner-boot.ts)
 with cloud-specific providers; the retained AWS stack has its own bootstrap path. For local

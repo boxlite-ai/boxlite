@@ -22,7 +22,7 @@
  */
 
 import type { Api, ApiCapability, ApiDependencies, ApiProvider } from './api.ts'
-import { API_PORT } from './api.ts'
+import { API_PORT, publicHostsFor } from './api.ts'
 import type { AlarmProvider, AlarmSubjects } from './alarms.ts'
 import type { Cache, CacheProvider } from './cache.ts'
 import { CACHE_PASSWORD_VARIABLE, cacheEnvironment } from './cache.ts'
@@ -46,8 +46,12 @@ import {
 } from './registry-credentials.ts'
 import {
   REGISTRY_PROXY_CONTROL_PLANE_VARIABLE,
+  REGISTRY_PROXY_HOST_VARIABLE,
   REGISTRY_PROXY_PORT,
   REGISTRY_PROXY_PORT_VARIABLE,
+  REGISTRY_PROXY_UPSTREAM_HOSTS,
+  REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE,
+  registryProxyHostOf,
 } from './registry-proxy.ts'
 import { runnerApiUrl } from './runner-boot.ts'
 import type { RunnerAssignment, RunnerProvider, RunnerSlot, Runners } from './runners.ts'
@@ -347,6 +351,46 @@ export const deployStack = ({
     throw new Error('the fleet is empty; a stage runs at least one runner, which the API seeds its row from')
   }
 
+  /*
+   * The registry proxy, before the API because the API is handed its host: a
+   * private image is given to a runner as a ref under that host, and only the
+   * resolver writes one. The proxy asks the API about every caller — a
+   * runner's key is an opaque column, not a signed token — but it reaches the
+   * API by `api.<domain>`, which the stage's domain fixes before either
+   * exists, so nothing of the API's is needed to build it. Until the API
+   * answers, a caller is told to retry, as during any restart of it.
+   *
+   * Its whole environment is the stack's. The logins it presents upstream are
+   * read from the credential store at pull time rather than delivered here,
+   * and it reads nothing a stage would tune, so there is no store group for it
+   * — one with nothing in it would be a place for a stale copy to sit. It is
+   * told which store and which registries, as the API is, so the two cannot
+   * name different ones.
+   *
+   * Telemetry on, for the reason the edge proxy's note further down gives: the
+   * binary declares both switches without a default, and one left unset ships
+   * nothing while looking healthy.
+   */
+  const registryProxy: RegistryProxy = providers.registryProxy({
+    network,
+    dependsOn: placed,
+    registryCredentials,
+  })({
+    image: imageFor(images, 'registry-proxy'),
+    environment: {
+      OTEL_LOGGING_ENABLED: 'true',
+      OTEL_TRACING_ENABLED: 'true',
+      OTEL_EXPORTER_OTLP_ENDPOINT: collector.otlpUrl,
+      ENVIRONMENT: inputs.stage,
+      [REGISTRY_PROXY_PORT_VARIABLE]: String(REGISTRY_PROXY_PORT),
+      [REGISTRY_PROXY_CONTROL_PLANE_VARIABLE]: runnerApiUrl(`https://${publicHostsFor({ domain: inputs.domain }).api}`),
+      [REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE]: REGISTRY_PROXY_UPSTREAM_HOSTS.join(','),
+      ...registryCredentialEnvironment(registryCredentials),
+    },
+  })
+  /** What the API writes into private refs, and what a runner presents its key to. */
+  const registryProxyHost = registryProxy.active ? registryProxy.url.apply(registryProxyHostOf) : null
+
   const apiEnvironment = {
     ...inputs.apiEnvironment,
     // The first host's token, which is the one row the API seeds itself. Every
@@ -357,6 +401,12 @@ export const deployStack = ({
     ...mailEnvironment(mail),
     ...clickHouseEnvironment(clickhouse, 'reader'),
     ...registryCredentialEnvironment(registryCredentials),
+    ...(registryProxyHost
+      ? {
+          [REGISTRY_PROXY_HOST_VARIABLE]: registryProxyHost,
+          [REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE]: REGISTRY_PROXY_UPSTREAM_HOSTS.join(','),
+        }
+      : {}),
     /*
      * `DB_TLS_ENABLED` is not here. It used to be, as a constant `'true'`
      * written after `databaseEnvironment` and therefore winning over it — which
@@ -451,38 +501,6 @@ export const deployStack = ({
     secrets: inputs.proxySecrets,
   })
 
-  /*
-   * The registry proxy, after the API because it asks the API about every
-   * caller: a runner's key is an opaque column, not a signed token, so there is
-   * no checking one without the control plane answering.
-   *
-   * Its whole environment is the stack's. The logins it presents upstream are
-   * read from the credential store at pull time rather than delivered here,
-   * and it reads nothing a stage would tune, so there is no store group for it
-   * — one with nothing in it would be a place for a stale copy to sit. It is
-   * told which store, as the API is, so the two cannot name different ones.
-   *
-   * Telemetry on, for the reason the proxy's note above gives: the binary
-   * declares both switches without a default, and one left unset ships
-   * nothing while looking healthy.
-   */
-  const registryProxy: RegistryProxy = providers.registryProxy({
-    network,
-    dependsOn: [...placed, ...api.ready],
-    registryCredentials,
-  })({
-    image: imageFor(images, 'registry-proxy'),
-    environment: {
-      OTEL_LOGGING_ENABLED: 'true',
-      OTEL_TRACING_ENABLED: 'true',
-      OTEL_EXPORTER_OTLP_ENDPOINT: collector.otlpUrl,
-      ENVIRONMENT: inputs.stage,
-      [REGISTRY_PROXY_PORT_VARIABLE]: String(REGISTRY_PROXY_PORT),
-      [REGISTRY_PROXY_CONTROL_PLANE_VARIABLE]: api.address.apply(runnerApiUrl),
-      ...registryCredentialEnvironment(registryCredentials),
-    },
-  })
-
   const runnerEnvironment = {
     ...inputs.runnerEnvironment,
     OTEL_EXPORTER_OTLP_ENDPOINT: collector.otlpUrl,
@@ -525,6 +543,7 @@ export const deployStack = ({
     binary: inputs.runnerBinary,
     apiUrl: api.address,
     otlpUrl: collector.otlpUrl,
+    registryProxyHost,
     environment: runnerEnvironment,
     secrets: inputs.runnerSecrets,
   })

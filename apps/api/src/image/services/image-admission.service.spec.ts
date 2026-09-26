@@ -8,6 +8,7 @@ import Redis from 'ioredis'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { IsNull, Repository } from 'typeorm'
 import { Organization } from '../../organization/entities/organization.entity'
+import { RegistryCredentialService } from '../../registry/services/registry-credential.service'
 import { Image } from '../entities/image.entity'
 import { ImageCountLimitReachedError } from '../errors/image-admission.error'
 import { ImageAdmissionService } from './image-admission.service'
@@ -24,7 +25,15 @@ describe('ImageAdmissionService', () => {
 
   let redis: RedisMock
   let images: ImageRepositoryMock
+  let credentials: { routesThroughProxy: jest.Mock }
   let service: ImageAdmissionService
+
+  const build = () =>
+    new ImageAdmissionService(
+      redis as unknown as Redis,
+      images as unknown as Repository<Image>,
+      credentials as unknown as RegistryCredentialService,
+    )
 
   beforeEach(() => {
     process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = 'quay.io,gcr.io'
@@ -37,11 +46,13 @@ describe('ImageAdmissionService', () => {
       exists: jest.fn().mockResolvedValue(false),
       count: jest.fn().mockResolvedValue(0),
     }
-    service = new ImageAdmissionService(redis as unknown as Redis, images as unknown as Repository<Image>)
+    credentials = { routesThroughProxy: jest.fn().mockResolvedValue(false) }
+    service = build()
   })
 
   afterEach(() => {
     delete process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
+    delete process.env.REGISTRY_PROXY_HOST
   })
 
   it('admits an allowed registry', async () => {
@@ -75,6 +86,43 @@ describe('ImageAdmissionService', () => {
     })
     expect(images.exists).not.toHaveBeenCalled()
     expect(redis.incr).not.toHaveBeenCalled()
+    // Nor asked about logins: a login for the curated image's whole host must
+    // not be able to take the curated path over.
+    expect(credentials.routesThroughProxy).not.toHaveBeenCalled()
+  })
+
+  describe('registered logins', () => {
+    const PROXY = '127.0.0.1:4100'
+
+    beforeEach(() => {
+      process.env.REGISTRY_PROXY_HOST = PROXY
+    })
+
+    it('admits a host off the allowlist when a login covers the repository', async () => {
+      credentials.routesThroughProxy.mockResolvedValue(true)
+
+      await expect(service.assert(organization, 'ghcr.io/acme/app:1')).resolves.toBeUndefined()
+      expect(credentials.routesThroughProxy).toHaveBeenCalledWith('org-1', 'ghcr.io', 'acme/app')
+    })
+
+    it('says a login would open a host that takes one, when none covers the repository', async () => {
+      await expect(service.assert(organization, 'ghcr.io/other/app:1')).rejects.toThrow(
+        /only with a registered credential/,
+      )
+    })
+
+    it('refuses a ref written against the proxy itself, before anything is looked up', async () => {
+      credentials.routesThroughProxy.mockResolvedValue(true)
+
+      await expect(service.assert(organization, `${PROXY}/org-2/ghcr.io/acme/app:1`)).rejects.toThrow(BadRequestError)
+      expect(credentials.routesThroughProxy).not.toHaveBeenCalled()
+    })
+
+    it('refuses to start when the allowlist names the proxy', () => {
+      process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = `quay.io,${PROXY}`
+
+      expect(build).toThrow(/lists the registry proxy/)
+    })
   })
 
   describe('catalog limit', () => {
@@ -198,7 +246,7 @@ describe('ImageAdmissionService', () => {
       function serviceWith(limit: string, window: string) {
         process.env.BOXLITE_IMAGE_COLD_PULL_LIMIT = limit
         process.env.BOXLITE_IMAGE_COLD_PULL_WINDOW_SECONDS = window
-        return new ImageAdmissionService(redis as unknown as Redis, images as unknown as Repository<Image>)
+        return build()
       }
 
       it('uses the limit and window an operator set', async () => {

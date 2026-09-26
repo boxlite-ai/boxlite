@@ -52,6 +52,8 @@ const TARBALL_NAME = /^[A-Za-z0-9._-]+\.tar\.gz$/
 const CONTROL_PLANE_URL = /^https?:\/\/[A-Za-z0-9.-]+(:\d{1,5})?\/?$/
 /** The object store a host mounts a volume from, as this module will spell it. */
 const VOLUME_BACKEND = /^[a-z0-9]+$/
+/** A registry proxy's host, a name and perhaps a port, as this module will spell it. */
+const REGISTRY_PROXY_HOST = /^[a-z0-9.-]+(:\d{1,5})?$/
 
 export class RunnerUpgradeError extends Error {
   constructor(message: string) {
@@ -141,6 +143,11 @@ export type UpgradeTarget = {
    * script forever.
    */
   volumeBackend?: string | null
+  /**
+   * The registry proxy's host, or null where the stage runs none. A host that
+   * lacks it pulls a private image with no key for the proxy and is refused.
+   */
+  registryProxyHost?: string | null
   /** Force an older binary over a newer one. A real rollback, asked for. */
   allowDowngrade?: boolean
 }
@@ -250,7 +257,11 @@ const assertUpgradeTarget = (target: UpgradeTarget): void => {
  * Both reach a single-quoted assignment and a `sed` expression that run as root,
  * which is the rule every other interpolated value in this module follows.
  */
-const assertUnitEnvironment = ({ apiUrl, volumeBackend }: Pick<UpgradeTarget, 'apiUrl' | 'volumeBackend'>): void => {
+const assertUnitEnvironment = ({
+  apiUrl,
+  volumeBackend,
+  registryProxyHost,
+}: Pick<UpgradeTarget, 'apiUrl' | 'volumeBackend' | 'registryProxyHost'>): void => {
   if (apiUrl != null && !CONTROL_PLANE_URL.test(apiUrl)) {
     throw new RunnerUpgradeError(
       `the control plane's URL reaches a single-quoted assignment and a sed expression that run as root, ` +
@@ -259,6 +270,11 @@ const assertUnitEnvironment = ({ apiUrl, volumeBackend }: Pick<UpgradeTarget, 'a
   }
   if (volumeBackend != null && !VOLUME_BACKEND.test(volumeBackend)) {
     throw new RunnerUpgradeError(`the volume backend reaches the same two places; got ${JSON.stringify(volumeBackend)}`)
+  }
+  if (registryProxyHost != null && !REGISTRY_PROXY_HOST.test(registryProxyHost)) {
+    throw new RunnerUpgradeError(
+      `the registry proxy's host reaches the same two places; got ${JSON.stringify(registryProxyHost)}`,
+    )
   }
 }
 
@@ -422,6 +438,10 @@ exit 101
  * private zone is rebuilt under the new one, and the host is then unreachable
  * from the control plane and cannot be told.
  *
+ * `REGISTRY_PROXY_HOST` is here for the same reason: a host booted before the
+ * stage ran a registry proxy has no key for it, and nothing else would give it
+ * one.
+ *
  * The work is here, once, because two transports and one desired-state engine
  * all need it and none of them may disagree about what "converged" means. The
  * restart is the cost and it is not hidden: boxes on the host take it, which is
@@ -430,14 +450,16 @@ exit 101
 export const unitEnvironmentBlock = ({
   apiUrl,
   volumeBackend,
-}: Pick<UpgradeTarget, 'volumeBackend'> & { apiUrl: string }): string => {
-  assertUnitEnvironment({ apiUrl, volumeBackend })
+  registryProxyHost,
+}: Pick<UpgradeTarget, 'volumeBackend' | 'registryProxyHost'> & { apiUrl: string }): string => {
+  assertUnitEnvironment({ apiUrl, volumeBackend, registryProxyHost })
   // An array, so the optional key is absent rather than empty: an AWS host's
   // boot script writes no backend, and enforcing one would leave every one of
   // them disagreeing with itself forever.
   const expected = [
     `'BOXLITE_API_URL=${runnerApiUrl(apiUrl)}'`,
     ...(volumeBackend ? [`'VOLUME_STORAGE_BACKEND=${volumeBackend}'`] : []),
+    ...(registryProxyHost ? [`'REGISTRY_PROXY_HOST=${registryProxyHost}'`] : []),
   ].join(' ')
   /*
    * Prefixed names, because this block is concatenated after the binary half,
@@ -539,9 +561,10 @@ converge_unit_environment() {
 export const renderUnitEnvironmentPolicyScripts = ({
   apiUrl,
   volumeBackend,
-}: Pick<UpgradeTarget, 'volumeBackend'> & { apiUrl: string }): UpgradePolicyScripts => {
+  registryProxyHost,
+}: Pick<UpgradeTarget, 'volumeBackend' | 'registryProxyHost'> & { apiUrl: string }): UpgradePolicyScripts => {
   const block = `set -euo pipefail
-${unitEnvironmentBlock({ apiUrl, volumeBackend })}`
+${unitEnvironmentBlock({ apiUrl, volumeBackend, registryProxyHost })}`
   return {
     validate: `${SHEBANG}${block}
 if unit_environment_settled; then exit 100; fi
@@ -583,7 +606,11 @@ export const renderHostConvergence = (target: UpgradeTarget): string => {
 ${guards('return 0')}${swapSequence(target)}}
 `
   const environment = target.apiUrl
-    ? `${unitEnvironmentBlock({ apiUrl: target.apiUrl, volumeBackend: target.volumeBackend })}
+    ? `${unitEnvironmentBlock({
+        apiUrl: target.apiUrl,
+        volumeBackend: target.volumeBackend,
+        registryProxyHost: target.registryProxyHost,
+      })}
 converge_unit_environment
 `
     : ''

@@ -48,6 +48,9 @@ import {
   REGISTRY_PROXY_HEALTH_PATH,
   REGISTRY_PROXY_PORT,
   REGISTRY_PROXY_PORT_VARIABLE,
+  REGISTRY_PROXY_HOST_VARIABLE,
+  REGISTRY_PROXY_UPSTREAM_HOSTS,
+  REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE,
 } from '../stack/registry-proxy.ts'
 import {
   REGISTRY_SECRET_CREATE_PERMISSIONS,
@@ -1779,4 +1782,30 @@ test('the registry proxy can read registry passwords and write none', () => {
   assert.equal(grants.length, 1, `expected the one read grant, found ${grants.length}`)
   assert.match(grants[0], /role: registryCredentials\.binding\.readRole,/)
   assert.match(grants[0], /condition: registryCredentials\.binding\.condition,/, 'the read is not bounded')
+})
+
+test('the proxy, the API and the runner read the same registries and the same host', () => {
+  /*
+   * Said four times: here, in the proxy's config, in the API's fallback, and
+   * in the runner's config. The stack writes both variables, so the defaults
+   * matter where it writes nothing — a local stack — and a mismatch there is a
+   * login the API accepts for a registry the proxy then refuses.
+   */
+  const service = fileURLToPath(new URL('../../../image-service/', import.meta.url))
+  const api = fileURLToPath(new URL('../../../api/src/', import.meta.url))
+  const runner = fileURLToPath(new URL('../../../runner/', import.meta.url))
+  const hosts = REGISTRY_PROXY_UPSTREAM_HOSTS.join(',')
+
+  assert.match(
+    readFileSync(`${service}cmd/registry-proxy/config/config.go`, 'utf8'),
+    new RegExp(`envconfig:"${REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE}" default:"${hosts}"`),
+  )
+  const apiProxy = readFileSync(`${api}registry/utils/registry-proxy.util.ts`, 'utf8')
+  assert.match(apiProxy, new RegExp(`'${REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE}'`))
+  assert.match(apiProxy, new RegExp(`\\[${REGISTRY_PROXY_UPSTREAM_HOSTS.map((host) => `'${host}'`).join(', ')}\\]`))
+  assert.match(apiProxy, new RegExp(`'${REGISTRY_PROXY_HOST_VARIABLE}'`))
+  assert.match(
+    readFileSync(`${runner}cmd/runner/config/config.go`, 'utf8'),
+    new RegExp(`envconfig:"${REGISTRY_PROXY_HOST_VARIABLE}"`),
+  )
 })

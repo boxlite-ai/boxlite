@@ -17,6 +17,7 @@ import { Image } from '../../image/entities/image.entity'
 import { ImageVersion } from '../../image/entities/image-version.entity'
 import { ImageAdmissionService } from '../../image/services/image-admission.service'
 import { ImageResolverService } from '../../image/services/image-resolver.service'
+import { RegistryCredentialService } from '../../registry/services/registry-credential.service'
 import { CreateBoxDto as RestCreateBoxDto } from '../../boxlite-rest/dto/create-box.dto'
 import { createBoxToCreateBox } from '../../boxlite-rest/mappers/box-to-box.mapper'
 
@@ -487,7 +488,11 @@ describe('BoxService public defaults', () => {
       },
     } as unknown as Repository<ImageVersion>
     const { service, boxRepository } = makeCreateService({
-      imageResolverService: new ImageResolverService(repository),
+      imageResolverService: new ImageResolverService(repository, {
+        routesThroughProxy: () => {
+          throw new Error('a curated selector must not ask about registered logins')
+        },
+      } as unknown as RegistryCredentialService),
     })
 
     await service.create({ name: 'curated-box', image: 'python' } as any, { id: 'org-1' } as any)
@@ -607,6 +612,7 @@ describe('BoxService public defaults', () => {
         imageAdmissionService: new ImageAdmissionService(
           redis as unknown as Redis,
           images as unknown as Repository<Image>,
+          { routesThroughProxy: jest.fn().mockResolvedValue(false) } as unknown as RegistryCredentialService,
         ),
         imageResolverService: { resolve: jest.fn().mockResolvedValue(resolved) },
         ...overrides,

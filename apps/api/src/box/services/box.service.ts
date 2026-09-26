@@ -243,7 +243,9 @@ export class BoxService {
       // anything else is looked up in this organization's catalog — pinned to
       // the digest it first resolved to if the catalog knows it, passed through
       // as typed if it does not, which is how an image gets pulled the first
-      // time.
+      // time. A repository the organization registered a login for is handed
+      // over either way as a registry proxy ref, so that is what `box.image`
+      // records for a private image.
       const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
       const image = resolvedImage.ref
       const needsFreshBox = requiresFreshBox(createBoxDto, organization, resolvedImage)

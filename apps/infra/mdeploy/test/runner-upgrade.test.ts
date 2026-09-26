@@ -610,3 +610,21 @@ test('an AWS host is sent both halves, and the address is what re-sends them', (
   // writes no such key, so enforcing one would leave every host disagreeing.
   assert.doesNotMatch(upgrades, /volumeBackend/)
 })
+
+test('a registry proxy host that is not a host is refused before it reaches a root shell', () => {
+  for (const registryProxyHost of ["x'; rm -rf / #", 'https://registry-proxy.example', 'Registry-Proxy.example']) {
+    assert.throws(
+      () => renderUnitEnvironmentPolicyScripts({ apiUrl: 'https://api.boxlite.ai', volumeBackend: 'gcs', registryProxyHost }),
+      /the registry proxy's host reaches/,
+      `accepted ${registryProxyHost}`,
+    )
+  }
+  assert.match(
+    renderUnitEnvironmentPolicyScripts({
+      apiUrl: 'https://api.boxlite.ai',
+      volumeBackend: 'gcs',
+      registryProxyHost: '127.0.0.1:4100',
+    }).validate,
+    /'REGISTRY_PROXY_HOST=127\.0\.0\.1:4100'/,
+  )
+})

@@ -58,3 +58,22 @@ export const REGISTRY_PROXY_CONTROL_PLANE_VARIABLE = 'BOXLITE_API_URL'
 
 /** Where the platform asks whether the process is up. */
 export const REGISTRY_PROXY_HEALTH_PATH = '/health'
+
+/**
+ * The registries a login may be registered for, which are also the ones the
+ * proxy pulls from. Said once and written to both the API and the proxy: a
+ * host the API accepted a login for and the proxy then refuses is a private
+ * pull that fails with a 403 nobody expected.
+ */
+export const REGISTRY_PROXY_UPSTREAM_HOSTS = ['ghcr.io', 'docker.io', 'quay.io', 'gcr.io']
+export const REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE = 'REGISTRY_PROXY_UPSTREAM_HOSTS'
+
+/**
+ * The variable the API and the runners read the proxy's host from: the API to
+ * write it into the refs it hands out, a runner to know which registry its own
+ * key is for.
+ */
+export const REGISTRY_PROXY_HOST_VARIABLE = 'REGISTRY_PROXY_HOST'
+
+/** The host a pull names, from the origin the platform serves the proxy at. */
+export const registryProxyHostOf = (url: string): string => new URL(url).host

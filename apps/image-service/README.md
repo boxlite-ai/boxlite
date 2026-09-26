@@ -179,7 +179,11 @@ defaults, and each is there because the default loses a pull:
 | HTTP/2 port (`h2c`) | Cloud Run caps an HTTP/1 response at 32 MiB unless it is chunked. A blob relayed with the upstream's own `Content-Length` is not, so over HTTP/1 every layer past that size would fail in production and pass in every test. The binary serves HTTP/1 and HTTP/2 on one port. |
 | Request timeout of an hour | A blob is one response and a large layer takes minutes. Cloud Run's default of five minutes cuts it off. |
 
-A runner reaches it at its own `run.app` address. Runners are VMs on a subnet
+A runner reaches it at its own `run.app` address, which the stack writes to both
+the API, as the host of the refs it hands out for private images, and every
+runner, as `REGISTRY_PROXY_HOST`. So the proxy is built before the API, and
+reaches the API by `api.<domain>`, a name the domain fixes before either
+exists. Runners are VMs on a subnet
 with Google's private access, which is what lets them reach an internal-ingress
 service without a load balancer — the same path they take to the telemetry
 collector.
