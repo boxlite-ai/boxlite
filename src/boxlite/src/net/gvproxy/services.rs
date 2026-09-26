@@ -344,7 +344,7 @@ impl NetworkBackend for GvproxyBackend {
             rate_limit: cfg.rate_limit,
         };
 
-        // Mint the ephemeral MITM CA when secrets are configured. The cert+key
+        // Load or renew the per-box MITM CA when secrets are configured. The cert+key
         // flow through the spec → GvproxyConfig → Go. On failure, drop the
         // secrets rather than run MITM injection without a CA.
         if !cfg.secrets.is_empty() {
@@ -763,7 +763,7 @@ mod tests {
 
     #[test]
     fn spec_with_secrets_mints_a_ca_from_ca_dir() {
-        // With secrets configured, spec() mints an ephemeral MITM CA into ca_dir
+        // With secrets configured, spec() persists a per-box MITM CA into ca_dir
         // and threads the PEMs (and the secrets) onto the wire spec.
         let ca_dir = tempfile::tempdir().unwrap();
         let config = NetworkBackendConfig {
