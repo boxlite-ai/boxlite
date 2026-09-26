@@ -54,7 +54,9 @@ export class RegistryCredential {
   @Column({ type: 'text' })
   secretVersion: string
 
-  @Column({ type: 'uuid', nullable: true })
+  // The user's id, which is their identity provider's subject — `auth0|…`,
+  // or whatever Dex issues locally — not a uuid, as on every other table.
+  @Column({ type: 'varchar', nullable: true })
   createdBy: string | null
 
   @CreateDateColumn({ type: 'timestamp with time zone' })

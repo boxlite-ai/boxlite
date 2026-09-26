@@ -47,6 +47,7 @@ export const CreateOrganizationRolePermissionsEnum = {
     READ_AUDIT_LOGS: 'read:audit_logs',
     READ_IMAGES: 'read:images',
     DELETE_IMAGES: 'delete:images',
+    READ_REGISTRIES: 'read:registries',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 

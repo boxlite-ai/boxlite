@@ -15,6 +15,7 @@ api/object-storage-api.ts
 api/organizations-api.ts
 api/preview-api.ts
 api/regions-api.ts
+api/registries-api.ts
 api/runners-api.ts
 api/usage-api.ts
 api/users-api.ts
@@ -74,6 +75,7 @@ docs/CreateOrganizationInvitation.md
 docs/CreateOrganizationRole.md
 docs/CreateRegion.md
 docs/CreateRegionResponse.md
+docs/CreateRegistryCredential.md
 docs/CreateRunner.md
 docs/CreateRunnerResponse.md
 docs/CreateUser.md
@@ -121,6 +123,8 @@ docs/RegenerateApiKeyResponse.md
 docs/Region.md
 docs/RegionType.md
 docs/RegionsApi.md
+docs/RegistriesApi.md
+docs/RegistryCredential.md
 docs/RegistryCredentialKind.md
 docs/Runner.md
 docs/RunnerFull.md
@@ -205,6 +209,7 @@ models/create-organization-role.ts
 models/create-organization.ts
 models/create-region-response.ts
 models/create-region.ts
+models/create-registry-credential.ts
 models/create-runner-response.ts
 models/create-runner.ts
 models/create-user.ts
@@ -247,6 +252,7 @@ models/regenerate-api-key-response.ts
 models/region-type.ts
 models/region.ts
 models/registry-credential-kind.ts
+models/registry-credential.ts
 models/runner-full.ts
 models/runner-health-metrics.ts
 models/runner-healthcheck.ts

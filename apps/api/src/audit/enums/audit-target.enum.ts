@@ -16,4 +16,5 @@ export enum AuditTarget {
   VOLUME = 'volume',
   REGION = 'region',
   IMAGE = 'image',
+  REGISTRY_CREDENTIAL = 'registry_credential',
 }

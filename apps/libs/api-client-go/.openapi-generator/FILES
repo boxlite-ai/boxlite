@@ -13,6 +13,7 @@ api_object_storage.go
 api_organizations.go
 api_preview.go
 api_regions.go
+api_registries.go
 api_runners.go
 api_usage.go
 api_users.go
@@ -67,6 +68,7 @@ model_create_organization_invitation.go
 model_create_organization_role.go
 model_create_region.go
 model_create_region_response.go
+model_create_registry_credential.go
 model_create_runner.go
 model_create_runner_response.go
 model_create_user.go
@@ -107,6 +109,7 @@ model_rate_limit_entry.go
 model_regenerate_api_key_response.go
 model_region.go
 model_region_type.go
+model_registry_credential.go
 model_registry_credential_kind.go
 model_runner.go
 model_runner_full.go

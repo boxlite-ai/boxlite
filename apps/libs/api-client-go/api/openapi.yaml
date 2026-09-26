@@ -3339,6 +3339,112 @@ paths:
       summary: Get image details
       tags:
       - images
+  /registries:
+    get:
+      operationId: listRegistryCredentials
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/RegistryCredential"
+                type: array
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List registry credentials
+      tags:
+      - registries
+    post:
+      description: "A login for a private registry. The password is stored where this\
+        \ API cannot read it back, and is never returned."
+      operationId: createRegistryCredential
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRegistryCredential"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistryCredential"
+          description: ""
+        "409":
+          description: A credential for this registry and prefix already exists
+        "501":
+          description: Private registries are not enabled in this deployment
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Add a registry credential
+      tags:
+      - registries
+  /registries/{id}:
+    delete:
+      operationId: deleteRegistryCredential
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: "The credential is gone, and its password is destroyed"
+        "404":
+          description: No such credential in this organization
+        "409":
+          description: Boxes that have not been destroyed still pull through it; their
+            ids are listed
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Remove a registry credential
+      tags:
+      - registries
   /runners/me/registry-credentials:
     get:
       operationId: getRegistryCredentialForAuthenticatedRunner
@@ -4778,6 +4884,7 @@ components:
             - read:audit_logs
             - read:images
             - delete:images
+            - read:registries
             type: string
           type: array
         expiresAt:
@@ -4835,6 +4942,7 @@ components:
             - read:audit_logs
             - read:images
             - delete:images
+            - read:registries
             type: string
           type: array
         expiresAt:
@@ -4897,6 +5005,7 @@ components:
             - read:audit_logs
             - read:images
             - delete:images
+            - read:registries
             type: string
           type: array
         lastUsedAt:
@@ -4966,6 +5075,7 @@ components:
             - read:audit_logs
             - read:images
             - delete:images
+            - read:registries
             type: string
           type: array
         isGlobal:
@@ -5370,6 +5480,7 @@ components:
             - read:audit_logs
             - read:images
             - delete:images
+            - read:registries
             type: string
           type: array
       required:
@@ -5414,6 +5525,7 @@ components:
             - read:audit_logs
             - read:images
             - delete:images
+            - read:registries
             type: string
           type: array
       required:
@@ -7388,6 +7500,79 @@ components:
       enum:
       - basic
       type: string
+    RegistryCredential:
+      example:
+        id: 123e4567-e89b-12d3-a456-426614174000
+        kind: basic
+        registryHost: ghcr.io
+        repositoryPrefix: acme/
+        username: acme-bot
+        createdBy: createdBy
+        createdAt: 2026-01-01T00:00:00.000Z
+      properties:
+        id:
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        kind:
+          allOf:
+          - $ref: "#/components/schemas/RegistryCredentialKind"
+          example: basic
+        registryHost:
+          example: ghcr.io
+          type: string
+        repositoryPrefix:
+          description: Empty for the whole registry
+          example: acme/
+          type: string
+        username:
+          example: acme-bot
+          type: string
+        createdBy:
+          description: The user who added it
+          nullable: true
+          type: string
+        createdAt:
+          example: 2026-01-01T00:00:00.000Z
+          type: string
+      required:
+      - createdAt
+      - createdBy
+      - id
+      - kind
+      - registryHost
+      - repositoryPrefix
+      - username
+      type: object
+    CreateRegistryCredential:
+      example:
+        registryHost: ghcr.io
+        repositoryPrefix: acme/
+        username: acme-bot
+        password: password
+      properties:
+        registryHost:
+          description: Registry the login is for
+          example: ghcr.io
+          type: string
+        repositoryPrefix:
+          default: ""
+          description: "Repositories it covers, as whole path segments ending in \"\
+            /\"; empty for the whole registry"
+          example: acme/
+          type: string
+        username:
+          description: Username the registry expects
+          example: acme-bot
+          type: string
+        password:
+          description: Password or access token. Never returned.
+          type: string
+          writeOnly: true
+      required:
+      - password
+      - registryHost
+      - username
+      type: object
     RunnerRegistryCredential:
       example:
         kind: basic

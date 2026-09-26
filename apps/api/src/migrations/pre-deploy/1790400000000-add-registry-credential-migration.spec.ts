@@ -108,6 +108,17 @@ describeIfDatabase('AddRegistryCredential1790400000000 (integration, real Postgr
     expect(count).toBe(3)
   })
 
+  it('records who added a login by their identity provider subject, which is not a uuid', async () => {
+    await queryRunner.query(
+      `INSERT INTO "registry_credential" ("organizationId", "kind", "registryHost", "username", "secretVersion", "createdBy")
+       VALUES ($1, 'basic', 'ghcr.io', 'robot', 'registry-credential-x', 'auth0|6512bd43d9caa6e02c990b0a')`,
+      [ORG_ID],
+    )
+
+    const [{ createdBy }] = await queryRunner.query(`SELECT "createdBy" FROM "registry_credential"`)
+    expect(createdBy).toBe('auth0|6512bd43d9caa6e02c990b0a')
+  })
+
   it('removes the table and its type on rollback', async () => {
     await migration.down(queryRunner)
     try {

@@ -196,6 +196,17 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
+<summary><b>Registry credentials</b> · 3 routes</summary>
+
+| Method   | Path                   | What it does                                                                          |
+| -------- | ---------------------- | ------------------------------------------------------------------------------------- |
+| `GET`    | `/api/registries`      | Lists the organization's private registry logins, without passwords.                  |
+| `POST`   | `/api/registries`      | Adds a login; the password is stored where the API cannot read it and never returned. |
+| `DELETE` | `/api/registries/{id}` | Removes a login, unless a box still pulls through it (409 lists the boxes).           |
+
+</details>
+
+<details>
 <summary><b>Runners and jobs</b> · 15 routes</summary>
 
 | Method   | Path                                   | What it does                                                   |

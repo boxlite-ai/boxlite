@@ -562,7 +562,7 @@ read, and the row keeps only the name of the version that holds it.
 | `repositoryPrefix` | `character varying(255)` | default `''`, the whole host |
 | `username` | `character varying(255)` | |
 | `secretVersion` | `text` | the Secret Manager version holding the password |
-| `createdBy` | `uuid` | nullable |
+| `createdBy` | `character varying` | nullable — the identity provider's subject, not a uuid |
 | `createdAt` / `updatedAt` | `timestamptz` | |
 
 `registry_credential_org_host_prefix_unique` allows one credential per host and
