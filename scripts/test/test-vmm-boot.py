@@ -192,6 +192,7 @@ def run_build(output, *, rebuild=False):
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
+                # Continue so the following SIGKILL ends the process group.
                 pass
         signal_process_group(process.pid, signal.SIGKILL)
         process.wait()
