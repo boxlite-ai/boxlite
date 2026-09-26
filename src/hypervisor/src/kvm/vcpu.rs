@@ -16,11 +16,11 @@ use crate::{Error, Result, VcpuExit};
 /// A Linux x86_64 vCPU bound to its creating thread.
 ///
 /// Creation leaves KVM's reset register state intact and reserves the kick
-/// signal on this worker until drop. Boot configuration follows in M1.
+/// signal on this worker until drop. The caller supplies entry registers.
 #[derive(Debug)]
 pub struct KvmVcpu {
     pub(super) fd: VcpuFd,
-    id: u32,
+    pub(super) id: u32,
     run_size: usize,
     pending_io: PendingIo,
     kick: WorkerSignal,
