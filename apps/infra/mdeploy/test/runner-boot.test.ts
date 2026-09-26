@@ -208,9 +208,16 @@ test('the policy compares against the exact line the boot script wrote', () => {
    * is the point: the test would not survive the two deriving it separately.
    */
   const apiUrl = 'https://api.boxlite.ai/'
+  // Carried verbatim where the address is not, so the two sides have one more
+  // way to disagree: a normalization added to either alone breaks the pairing.
+  const otlpUrl = 'http://collector:4318'
   const volumeBackend = 'gcs'
-  const script = render({ apiUrl, platform: platform({ unitEnvironment: { VOLUME_STORAGE_BACKEND: volumeBackend } }) })
-  const { validate } = renderUnitEnvironmentPolicyScripts({ apiUrl, volumeBackend })
+  const script = render({
+    apiUrl,
+    otlpUrl,
+    platform: platform({ unitEnvironment: { VOLUME_STORAGE_BACKEND: volumeBackend } }),
+  })
+  const { validate } = renderUnitEnvironmentPolicyScripts({ apiUrl, otlpUrl, volumeBackend })
 
   // The array the policy compares against, and only it: the block around it
   // carries a `printf '%s\\n'` that a looser read would pick up as a pinned line.
@@ -218,7 +225,11 @@ test('the policy compares against the exact line the boot script wrote', () => {
   const pinned = [...declared.matchAll(/'([^']+)'/g)].map((match) => match[1])
   assert.deepEqual(
     pinned,
-    [`BOXLITE_API_URL=${runnerApiUrl(apiUrl)}`, `VOLUME_STORAGE_BACKEND=${volumeBackend}`],
+    [
+      `BOXLITE_API_URL=${runnerApiUrl(apiUrl)}`,
+      `OTEL_EXPORTER_OTLP_ENDPOINT=${otlpUrl}`,
+      `VOLUME_STORAGE_BACKEND=${volumeBackend}`,
+    ],
     'the policy pins lines the boot script does not write',
   )
 

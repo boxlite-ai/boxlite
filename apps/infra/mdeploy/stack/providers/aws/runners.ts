@@ -320,9 +320,11 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
        * writes no `VOLUME_STORAGE_BACKEND`, so enforcing one would leave every
        * one of them disagreeing with itself forever.
        *
-       * `apiUrl` is an Output, so the payload is one too.
+       * Both addresses are Outputs, so the payload is one too — and resolved
+       * rather than cast, because an unresolved one renders as Pulumi's
+       * `[toString]` refusal text and the fleet is converged onto that.
        */
-      const payload = $util.output(request.apiUrl).apply((apiUrl: string) =>
+      const payload = $resolve([request.apiUrl, request.otlpUrl]).apply(([apiUrl, otlpUrl]) =>
         encodeUpgradePayload({
           identity: request.binary.identity,
           binary: request.binary,
@@ -330,7 +332,8 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
           // Only a build-mode binary needs it, and only because it is read from
           // S3 with the host's own role rather than fetched publicly.
           region,
-          apiUrl,
+          apiUrl: apiUrl as string,
+          otlpUrl: otlpUrl as string,
         }),
       )
       previousUpgrade = new command.local.Command(
@@ -363,15 +366,16 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
            * would restart a converged fleet for nothing.
            */
           /*
-           * The address is in here as well as in the payload: it is the input
-           * that changes when a stage moves its domain, which is exactly the
-           * case the unit-environment half exists for. Without it that half
-           * would be rendered and never sent.
+           * Both addresses are in here as well as in the payload: they are the
+           * inputs that change when a stage moves its domain or gains a
+           * collector, which is exactly what the unit-environment half exists
+           * for. Without them that half would be rendered and never sent.
            */
           triggers: [
             upgradeTrigger({ identity: request.binary.identity, binary: request.binary }),
             instance.id,
             request.apiUrl,
+            request.otlpUrl,
           ],
         },
         { dependsOn: [instance, ...(previousUpgrade ? [previousUpgrade] : [])] },

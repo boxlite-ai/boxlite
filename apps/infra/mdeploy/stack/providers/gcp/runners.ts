@@ -463,11 +463,18 @@ udevadm trigger --name-match=kvm || true`,
      * new binary" are two moments now. The report API is what closes that gap —
      * see `apps/infra/mdeploy/README.md`.
      */
-    // `apiUrl` is an Output, so the rendered pair is one too — and each field
-    // has to be unwrapped on its own before it can be handed to a script slot.
-    const unitEnvPolicy = $util
-      .output(request.apiUrl)
-      .apply((url: string) => renderUnitEnvironmentPolicyScripts({ apiUrl: url, volumeBackend: VOLUME_BACKEND }))
+    // Both addresses are Outputs, so the rendered pair is one too — and each
+    // field has to be unwrapped on its own before it can be handed to a script
+    // slot. Resolved together and not cast, for the reason the boot script above
+    // records: an unresolved Output renders as Pulumi's `[toString]` refusal
+    // text, and this one would converge the whole fleet onto it.
+    const unitEnvPolicy = $resolve([request.apiUrl, request.otlpUrl]).apply(([apiUrl, otlpUrl]) =>
+      renderUnitEnvironmentPolicyScripts({
+        apiUrl: apiUrl as string,
+        otlpUrl: otlpUrl as string,
+        volumeBackend: VOLUME_BACKEND,
+      }),
+    )
     const unitEnvScripts = {
       validate: unitEnvPolicy.apply((rendered: { validate: string }) => rendered.validate),
       enforce: unitEnvPolicy.apply((rendered: { enforce: string }) => rendered.enforce),

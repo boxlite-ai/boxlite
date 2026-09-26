@@ -587,6 +587,63 @@ test('a host already serving the target still has its environment converged', ()
   assert.ok(payload.indexOf('converge_unit_environment\n') > payload.indexOf('already serving $TARGET'))
 })
 
+/*
+ * The key that froze empty, which is the same defect one step further on.
+ *
+ * `OTEL_EXPORTER_OTLP_ENDPOINT` is written beside `BOXLITE_API_URL` by the same
+ * boot script, from the collector's own URL — and a stage that had no collector
+ * when a host was created left it blank. `apps/runner/cmd/runner/main.go` guards
+ * both the logger and the tracer on a non-empty endpoint, so such a host ships
+ * no telemetry at all and, the boot script never running again, cannot be told.
+ */
+test('a payload converges the collector endpoint as well as the address', () => {
+  const payload = renderHostConvergence(
+    target({ apiUrl: 'https://api.dev.boxlite.ai', otlpUrl: 'http://collector:4318', volumeBackend: 'gcs' }),
+  )
+  assert.ok(
+    payload.includes(
+      `UNIT_ENV_EXPECTED=('BOXLITE_API_URL=${runnerApiUrl('https://api.dev.boxlite.ai')}' ` +
+        `'OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318' 'VOLUME_STORAGE_BACKEND=gcs')`,
+    ),
+    'the payload must pin the endpoint verbatim, as the boot script writes it',
+  )
+})
+
+test('an empty collector endpoint is refused rather than converged onto', () => {
+  /*
+   * Converging onto `` is the defect itself: every host would be rewritten to
+   * the one value that silences its exporter, and restarted to do it. Refused
+   * where the other two are, and for the extra reason that the shapes below
+   * reach a single-quoted assignment in a script that runs as root.
+   */
+  for (const otlpUrl of ['', "http://collector:4318'; rm -rf / #", 'http://collector:4318|/etc/passwd']) {
+    assert.throws(
+      () => renderUnitEnvironmentPolicyScripts({ apiUrl: 'https://api.boxlite.ai', otlpUrl, volumeBackend: 'gcs' }),
+      RunnerUpgradeError,
+      `accepted ${JSON.stringify(otlpUrl)}`,
+    )
+  }
+})
+
+test('a caller with no collector endpoint leaves that key alone', () => {
+  // Absent is not empty. `runner:update` reads no stage environment, so it has
+  // no endpoint to enforce — and pinning one it never supplied is how a host
+  // gets converged onto nothing.
+  const payload = renderHostConvergence(target({ apiUrl: 'https://api.dev.boxlite.ai' }))
+  assert.match(payload, /converge_unit_environment/, 'the address alone is still converged')
+  assert.doesNotMatch(payload, /OTEL_EXPORTER_OTLP_ENDPOINT/)
+})
+
+test('the GCP policy resolves the endpoint rather than casting it', () => {
+  // `request.otlpUrl` is an Output. Cast instead of resolved it renders as
+  // Pulumi's `[toString]` refusal text, and the fleet is then converged onto
+  // that — the trap `renderRunnerBoot` already records for the boot script.
+  const gcp = readFileSync(fileURLToPath(new URL('../stack/providers/gcp/runners.ts', import.meta.url)), 'utf8')
+  const policy = gcp.slice(gcp.indexOf('const unitEnvPolicy'), gcp.indexOf('const scripts'))
+  assert.match(policy, /\$resolve\(\[request\.apiUrl, request\.otlpUrl\]\)/, 'both addresses must be resolved together')
+  assert.match(policy, /otlpUrl: otlpUrl as string/, 'and the resolved one is what reaches the renderer')
+})
+
 test('a caller with no control-plane address converges only the binary', () => {
   // `runner:update` rolls a release by hand and never reads the stage's
   // environment, so it has no address to enforce — and inventing one would
@@ -603,8 +660,10 @@ test('an AWS host is sent both halves, and the address is what re-sends them', (
   // that carries the fix is never re-run.
   const aws = readFileSync(fileURLToPath(new URL('../stack/providers/aws/runners.ts', import.meta.url)), 'utf8')
   const upgrades = aws.slice(aws.indexOf('let previousUpgrade'))
-  assert.match(upgrades, /encodeUpgradePayload\(\{[^}]*apiUrl,/, 'the AWS payload must carry the control plane address')
+  assert.match(upgrades, /encodeUpgradePayload\(\{[^}]*apiUrl: apiUrl as string,/, 'the AWS payload must carry the control plane address')
+  assert.match(upgrades, /encodeUpgradePayload\(\{[^}]*otlpUrl: otlpUrl as string,/, 'and the collector endpoint beside it')
   assert.match(upgrades, /triggers: \[[^\]]*request\.apiUrl,?[^\]]*\]/, 'and the address must re-send it')
+  assert.match(upgrades, /triggers: \[[^\]]*request\.otlpUrl,?[^\]]*\]/, 'as must the endpoint')
 
   // No backend here: these hosts mount with mount-s3 and their boot script
   // writes no such key, so enforcing one would leave every host disagreeing.

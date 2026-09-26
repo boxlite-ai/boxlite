@@ -329,7 +329,11 @@ const converge = ({ contents, work }: { contents: string; work: string }) => {
     chmodSync(systemctl, 0o755)
   }
   const restarts = join(work, 'restarts')
-  const { enforce } = renderUnitEnvironmentPolicyScripts({ apiUrl: 'https://api.dev.boxlite.ai', volumeBackend: 'gcs' })
+  const { enforce } = renderUnitEnvironmentPolicyScripts({
+    apiUrl: 'https://api.dev.boxlite.ai',
+    otlpUrl: 'http://collector:4318',
+    volumeBackend: 'gcs',
+  })
   const result = spawnSync('bash', ['-c', enforce], {
     encoding: 'utf8',
     env: {
@@ -351,12 +355,22 @@ const converge = ({ contents, work }: { contents: string; work: string }) => {
 
 test('a host pointed at a name this stage no longer serves is rewritten once', () => {
   const work = mkdtempSync(join(tmpdir(), 'runner-unit-env-'))
-  const stale = 'BOXLITE_API_URL=https://dev.boxlite.ai/api\nBOXLITE_RUNNER_TOKEN=secret-token\n'
+  // What the prod hosts actually hold: an address from before the domain moved,
+  // and the collector endpoint frozen empty by a first boot that had no collector.
+  const stale =
+    'BOXLITE_API_URL=https://dev.boxlite.ai/api\nOTEL_EXPORTER_OTLP_ENDPOINT=\nBOXLITE_RUNNER_TOKEN=secret-token\n'
 
   const first = converge({ contents: stale, work })
   assert.equal(first.code, 100, `enforce did not converge: ${first.out}`)
   assert.match(first.file, /^BOXLITE_API_URL=https:\/\/api\.dev\.boxlite\.ai\/api$/m, 'the address was not rewritten')
   assert.match(first.file, /^VOLUME_STORAGE_BACKEND=gcs$/m, 'the key the file lacked was not appended')
+  // The key that was present but empty: `^key=` has to match it too, or the
+  // host keeps the value that silences its exporter.
+  assert.match(
+    first.file,
+    /^OTEL_EXPORTER_OTLP_ENDPOINT=http:\/\/collector:4318$/m,
+    'the endpoint that froze empty was not filled in',
+  )
   assert.match(first.file, /^BOXLITE_RUNNER_TOKEN=secret-token$/m, 'the rewrite dropped the host’s own token')
   /*
    * Nothing beside it, and nothing loosened.
