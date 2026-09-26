@@ -101,6 +101,9 @@ func (p *Proxy) tunnelTarget(request *http.Request) (string, uint16, error) {
 	if err != nil || value == 0 {
 		return "", 0, fmt.Errorf("invalid tunnel port")
 	}
+	if strconv.FormatUint(value, 10) == TERMINAL_PORT {
+		return "", 0, fmt.Errorf("terminal port is reserved")
+	}
 	return boxID, uint16(value), nil
 }
 

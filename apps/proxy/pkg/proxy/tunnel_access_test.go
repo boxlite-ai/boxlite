@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,6 +44,7 @@ func newTunnelProxy(t *testing.T, accessStatus int) (*Proxy, func()) {
 	proxy := &Proxy{
 		apiclient:                  apiclient.NewAPIClient(clientConfig),
 		boxPublicCache:             publicCache,
+		boxAuthKeyValidCache:       common_cache.NewMapCache[bool](ctx),
 		boxRunnerCache:             runnerCache,
 		boxLastActivityUpdateCache: activityCache,
 	}
@@ -105,6 +107,28 @@ func TestDeclaredTunnelAllowsHTTP(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedPrivatePreviewKeepsWorking(t *testing.T) {
+	proxy, closeAPI := newTunnelProxy(t, http.StatusNotFound)
+	defer closeAPI()
+	ctx := context.Background()
+	if err := proxy.boxPublicCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := proxy.boxAuthKeyValidCache.Set(ctx, "AbCdEf123456:owner-key", true, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://3000-d-416243644566313233343536.proxy.test/", nil)
+	request.Header.Set(BOX_AUTH_KEY_HEADER, "owner-key")
+	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ginCtx.Request = request
+
+	target, err := proxy.GetProxyTarget(ginCtx)
+	stopActivityPoll(ginCtx)
+	if err != nil || target == nil {
+		t.Fatalf("authenticated private preview rejected: target=%v err=%v", target, err)
+	}
+}
+
 func TestTunnelAccessAPIErrorFailsClosed(t *testing.T) {
 	proxy, closeAPI := newTunnelProxy(t, http.StatusServiceUnavailable)
 	defer closeAPI()
@@ -115,5 +139,27 @@ func TestTunnelAccessAPIErrorFailsClosed(t *testing.T) {
 	proxy.handleTunnelConnect(response, request)
 	if response.Code != http.StatusBadGateway {
 		t.Fatalf("access API failure status = %d, want 502", response.Code)
+	}
+}
+
+func TestTunnelRevocationBlocksNextAccessCheck(t *testing.T) {
+	var status atomic.Int32
+	status.Store(http.StatusOK)
+	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(int(status.Load()))
+	}))
+	defer api.Close()
+	config := apiclient.NewConfiguration()
+	config.Servers[0].URL = api.URL + "/api"
+	proxy := &Proxy{apiclient: apiclient.NewAPIClient(config)}
+
+	allowed, err := proxy.hasPublicTunnelAccess(context.Background(), "AbCdEf123456", 3000)
+	if err != nil || !allowed {
+		t.Fatalf("declared port rejected: allowed=%v err=%v", allowed, err)
+	}
+	status.Store(http.StatusNotFound)
+	allowed, err = proxy.hasPublicTunnelAccess(context.Background(), "AbCdEf123456", 3000)
+	if err != nil || allowed {
+		t.Fatalf("revoked port remained authorized: allowed=%v err=%v", allowed, err)
 	}
 }

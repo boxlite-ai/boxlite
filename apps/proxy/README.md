@@ -98,6 +98,12 @@ The upstream URL `http://<box ID>:<port>` is only a routing key. `dialGuestPort`
 pooling reuses tunnels per box and port. Raw `CONNECT` requests skip this router and go to
 `handleTunnelConnect` in [`tunnel.go`](pkg/proxy/tunnel.go).
 
+The proxy checks each new direct HTTP/WebSocket request and CONNECT against the
+API without caching an allowed declaration. Revocation blocks the next request
+after its database commit, across proxy instances and restarts. Connections
+already established continue until they close. The terminal port is unavailable
+to raw CONNECT tunnels.
+
 ## Authentication
 
 A request to a private box, or to port 22222, takes the first credential that works

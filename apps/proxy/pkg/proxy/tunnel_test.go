@@ -97,6 +97,17 @@ func TestTunnelTargetUsesPreviewAuthority(t *testing.T) {
 	}
 }
 
+func TestTunnelTargetRejectsTerminalPort(t *testing.T) {
+	for _, port := range []string{"22222", "022222"} {
+		request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
+		request.Host = port + "-d-416243644566313233343536.proxy.test:443"
+
+		if _, _, err := (&Proxy{}).tunnelTarget(request); err == nil {
+			t.Fatalf("terminal port %s accepted as a public CONNECT tunnel", port)
+		}
+	}
+}
+
 func TestTunnelConnectRejectsPrivateBoxBeforeRunnerDial(t *testing.T) {
 	ctx := context.Background()
 	publicCache := common_cache.NewMapCache[bool](ctx)

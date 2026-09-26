@@ -140,7 +140,7 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 			ctx.Error(common_errors.NewBadRequestError(wrappedErr))
 			return nil, wrappedErr
 		}
-		if isDirectHost {
+		if isDirectHost && *isPublic {
 			allowed, err := p.hasPublicTunnelAccess(ctx.Request.Context(), boxId, uint16(port))
 			if err != nil {
 				wrappedErr := fmt.Errorf("check tunnel access: %w", err)
