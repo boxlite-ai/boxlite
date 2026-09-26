@@ -6,8 +6,11 @@
 
 import { EventEmitter } from 'node:events'
 import { ForbiddenException, RequestTimeoutException } from '@nestjs/common'
+import { Reflector } from '@nestjs/core'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
+import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
+import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -49,6 +52,18 @@ function makeHarness() {
 describe('BoxliteProxyController', () => {
   beforeEach(() => jest.clearAllMocks())
   afterEach(() => jest.useRealTimers())
+
+  it('requires box write permission to declare or revoke a public port', () => {
+    const reflector = new Reflector()
+    for (const handler of [
+      BoxliteProxyController.prototype.proxyNetworkTunnel,
+      BoxliteProxyController.prototype.revokeNetworkTunnel,
+    ]) {
+      expect(reflector.get(RequiredOrganizationResourcePermissions, handler)).toEqual([
+        OrganizationResourcePermission.WRITE_BOXES,
+      ])
+    }
+  })
 
   it('rewrites public box ids to internal box ids before proxying exec', async () => {
     const proxyHandler = jest.fn()

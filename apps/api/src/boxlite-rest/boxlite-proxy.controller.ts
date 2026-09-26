@@ -31,6 +31,8 @@ import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middl
 import { Request, Response, NextFunction } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
+import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
+import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
@@ -220,6 +222,7 @@ export class BoxliteProxyController {
   }
 
   @Post(':boxId/network/tunnel')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.OK)
   async proxyNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
@@ -272,6 +275,7 @@ export class BoxliteProxyController {
   }
 
   @Delete(':boxId/network/tunnel')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.NO_CONTENT)
   async revokeNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
