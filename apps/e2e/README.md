@@ -100,6 +100,10 @@ export BOXLITE_E2E_IMAGE=ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0
 # Skip local-only checks (journalctl, runner log):
 export BOXLITE_E2E_SKIP_PATH_VERIFY=1
 
+# Or keep path verification on a runner started by hand (a local stack on
+# macOS has no systemd journal): read its log file instead of journalctl.
+export BOXLITE_E2E_RUNNER_LOG=/path/to/runner.log
+
 # Image the catalog case boots, which must be on a host the API's allowlist
 # admits. Defaults to a small public one on quay.io, so a run needs no override:
 export BOXLITE_E2E_CATALOG_IMAGE=quay.io/libpod/alpine:latest

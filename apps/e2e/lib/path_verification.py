@@ -17,9 +17,11 @@ The standard recipe in `test_path_verification.py`:
 
 Backed by:
   - /var/log/boxlite-api.log  (API access log; written by Pino logger
-    in boxlite-api.service)
+    in boxlite-api.service), or the file named by BOXLITE_E2E_API_LOG
   - journalctl -u boxlite-runner  (runner stdout/stderr; one line per job
-    via zerolog)
+    via zerolog), or, when BOXLITE_E2E_RUNNER_LOG names a file, that file —
+    the shape of a runner started by hand, such as a local stack on macOS,
+    where there is no systemd journal to ask
 
 These are filesystem-level and do not need root, just read access on the
 log file. journalctl needs the user in the `systemd-journal` group or
@@ -34,34 +36,50 @@ from pathlib import Path
 
 API_LOG = Path(os.environ.get("BOXLITE_E2E_API_LOG", "/var/log/boxlite-api.log"))
 RUNNER_UNIT = os.environ.get("BOXLITE_E2E_RUNNER_UNIT", "boxlite-runner")
+RUNNER_LOG = os.environ.get("BOXLITE_E2E_RUNNER_LOG")
 
 
-def api_log_seek() -> int:
-    """Return the current size of the API log. Use this as a 'since' offset
-    before the test, then `api_hits_for_box(offset, box_id)` after."""
+def _log_size(log: Path) -> int:
     try:
-        return API_LOG.stat().st_size
+        return log.stat().st_size
     except FileNotFoundError:
         return 0
 
 
-def api_hits_for_box(since_offset: int, box_id: str) -> int:
-    """Count API log lines after `since_offset` that mention `box_id`."""
-    if not API_LOG.exists():
+def _hits_since(log: Path, since_offset: int, box_id: str) -> int:
+    if not log.exists():
         return 0
-    with API_LOG.open("rb") as f:
+    with log.open("rb") as f:
         f.seek(since_offset)
         tail = f.read().decode("utf-8", errors="replace")
     return tail.count(box_id)
 
 
-def runner_journal_seek() -> str:
-    """Return an ISO timestamp to use as `--since` for journalctl."""
+def api_log_seek() -> int:
+    """Return the current size of the API log. Use this as a 'since' offset
+    before the test, then `api_hits_for_box(offset, box_id)` after."""
+    return _log_size(API_LOG)
+
+
+def api_hits_for_box(since_offset: int, box_id: str) -> int:
+    """Count API log lines after `since_offset` that mention `box_id`."""
+    return _hits_since(API_LOG, since_offset, box_id)
+
+
+def runner_journal_seek() -> str | int:
+    """Return the 'since' marker for `runner_hits_for_box`: the runner log's
+    size when BOXLITE_E2E_RUNNER_LOG is set, else an ISO timestamp for
+    `journalctl --since`."""
+    if RUNNER_LOG:
+        return _log_size(Path(RUNNER_LOG))
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def runner_hits_for_box(since_timestamp: str, box_id: str) -> int:
-    """Count runner journal lines since `since_timestamp` that mention `box_id`."""
+def runner_hits_for_box(since: str | int, box_id: str) -> int:
+    """Count runner log lines since `since` that mention `box_id`."""
+    if RUNNER_LOG:
+        return _hits_since(Path(RUNNER_LOG), int(since), box_id)
+    since_timestamp = str(since)
     try:
         proc = subprocess.run(
             ["journalctl", "-u", RUNNER_UNIT, "--since", since_timestamp,
