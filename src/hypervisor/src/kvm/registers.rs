@@ -45,7 +45,6 @@ impl KvmVcpu {
         self.fd
             .set_fpu(&kvm_fpu {
                 fcw: 0x37f,
-                mxcsr: 0x1f80,
                 ..Default::default()
             })
             .map_err(|e| failure("set fpu", e))?;
