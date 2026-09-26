@@ -133,6 +133,7 @@ class SimpleBox:
             **kwargs,
         )
         self._name = name
+        self._auto_remove = auto_remove
         self._reuse_existing = reuse_existing
         self._box = None
         self._started = False
@@ -185,8 +186,41 @@ class SimpleBox:
         return await self.__aenter__()
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit - delegates to Box.__aexit__ (returns awaitable)."""
-        return await self._box.__aexit__(exc_type, exc_val, exc_tb)
+        """Async context manager exit - stops the box, then deletes it if
+        auto_remove was requested.
+
+        `Box.__aexit__` only stops the VM. Deletion used to be implied by
+        passing `auto_remove=True` into `BoxOptions`, but that field is
+        deprecated and REST runtimes silently ignore it (local runtimes
+        still self-delete on stop, which is why this only leaks remotely).
+        The explicit `remove()` call below is what actually deletes the box
+        over REST. Only a box this instance created is removed - one
+        reused via `reuse_existing=True` may still be open in an outer
+        session, so exiting an inner session must not delete it out from
+        under that session.
+        """
+        result = await self._box.__aexit__(exc_type, exc_val, exc_tb)
+        if self._auto_remove and self._created:
+            await self._remove_after_stop()
+        return result
+
+    async def _remove_after_stop(self) -> None:
+        """Delete `self._box`, retrying once if the stop() above is still
+        finalizing server-side (`Box state change in progress`)."""
+        for attempt, delay in enumerate((0, 1)):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                await self._runtime.remove(self._box.id, force=True)
+                return
+            except Exception:
+                if attempt == 1:
+                    # Local runtimes already deleted it as part of stop()
+                    # above, so "not found" here is the expected,
+                    # already-clean case.
+                    logger.debug(
+                        "auto_remove cleanup for box %s", self._box.id, exc_info=True
+                    )
 
     @property
     def id(self) -> str:
