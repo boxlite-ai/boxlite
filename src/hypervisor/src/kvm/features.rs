@@ -4,8 +4,8 @@
 use std::io;
 
 use kvm_bindings::{
-    CpuId, KVM_CPUID_FLAG_SIGNIFCANT_INDEX, KVM_MAX_CPUID_ENTRIES, Msrs, kvm_cpuid_entry2,
-    kvm_msr_entry,
+    CpuId, KVM_CPUID_FLAG_SIGNIFCANT_INDEX, KVM_CPUID_FLAG_STATE_READ_NEXT,
+    KVM_CPUID_FLAG_STATEFUL_FUNC, KVM_MAX_CPUID_ENTRIES, Msrs, kvm_cpuid_entry2, kvm_msr_entry,
 };
 use kvm_ioctls::Kvm;
 
@@ -13,15 +13,26 @@ use super::KvmVcpu;
 use crate::{Error, Result, X86CpuidEntry, X86Msr};
 
 pub(super) fn supported_cpuid(kvm: &Kvm) -> io::Result<Vec<X86CpuidEntry>> {
-    kvm.get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)
-        .map_err(io::Error::from)?
-        .as_slice()
+    let cpuid = kvm
+        .get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)
+        .map_err(io::Error::from)?;
+    convert_supported_cpuid(cpuid.as_slice())
+}
+
+fn convert_supported_cpuid(entries: &[kvm_cpuid_entry2]) -> io::Result<Vec<X86CpuidEntry>> {
+    entries
         .iter()
+        .filter(|entry| {
+            entry.flags & (KVM_CPUID_FLAG_STATEFUL_FUNC | KVM_CPUID_FLAG_STATE_READ_NEXT) == 0
+        })
         .map(|entry| {
             if entry.flags & !KVM_CPUID_FLAG_SIGNIFCANT_INDEX != 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::Unsupported,
-                    format!("stateful CPUID leaf {:#x} is unsupported", entry.function),
+                    format!(
+                        "CPUID leaf {:#x} has unsupported flags {:#x}",
+                        entry.function, entry.flags
+                    ),
                 ));
             }
             Ok(X86CpuidEntry {
@@ -118,6 +129,65 @@ fn msr_buffer(entries: &[X86Msr]) -> io::Result<Msrs> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kvm_bindings::{KVM_CPUID_FLAG_STATE_READ_NEXT, KVM_CPUID_FLAG_STATEFUL_FUNC};
+
+    #[test]
+    fn supported_cpuid_omits_unrepresentable_stateful_entries() {
+        let entries = [
+            kvm_cpuid_entry2 {
+                function: 2,
+                flags: KVM_CPUID_FLAG_STATEFUL_FUNC | KVM_CPUID_FLAG_STATE_READ_NEXT,
+                eax: 2,
+                ..Default::default()
+            },
+            kvm_cpuid_entry2 {
+                function: 2,
+                flags: KVM_CPUID_FLAG_STATEFUL_FUNC,
+                eax: 1,
+                ..Default::default()
+            },
+            kvm_cpuid_entry2 {
+                function: 3,
+                flags: KVM_CPUID_FLAG_STATE_READ_NEXT,
+                ..Default::default()
+            },
+            kvm_cpuid_entry2 {
+                function: 0xb,
+                index: 1,
+                flags: KVM_CPUID_FLAG_SIGNIFCANT_INDEX,
+                eax: 2,
+                ebx: 4,
+                ecx: 0x201,
+                edx: 3,
+                ..Default::default()
+            },
+        ];
+
+        let cpuid = convert_supported_cpuid(&entries).unwrap();
+
+        assert_eq!(
+            cpuid,
+            [X86CpuidEntry {
+                leaf: 0xb,
+                subleaf: 1,
+                subleaf_required: true,
+                eax: 2,
+                ebx: 4,
+                ecx: 0x201,
+                edx: 3,
+            }]
+        );
+
+        let unknown_flags = [kvm_cpuid_entry2 {
+            function: 0xd,
+            flags: 1 << 3,
+            ..Default::default()
+        }];
+        assert_eq!(
+            convert_supported_cpuid(&unknown_flags).unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
+    }
 
     #[test]
     fn feature_buffers_preserve_subleaf_semantics_and_register_values() {

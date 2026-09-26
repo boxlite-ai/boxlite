@@ -53,7 +53,8 @@ retain reset state until INIT/SIPI.
 `KvmVm::supported_cpuid` exposes host-supported CPU features. A VMM can remove
 features or adjust topology, then pass the result to `KvmVcpu::set_cpu_features`
 before entry. `X86CpuidEntry` preserves subleaf matching without leaking the
-KVM ABI; legacy stateful CPUID is rejected.
+KVM ABI. Legacy stateful CPUID entries are omitted because this type cannot
+preserve their read sequence; other unsupported KVM flags are rejected.
 MSRs are explicit index/value writes. A short KVM write is an error identifying
 the first rejected MSR, never a successful partially configured CPU. Host feature
 discovery is a ceiling, not permission to add unsupported instructions.
