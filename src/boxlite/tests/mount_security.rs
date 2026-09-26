@@ -84,6 +84,7 @@ async fn mount_security_integration() {
                     managed_volume: None,
                     host_path: tmp.path().to_str().unwrap().into(),
                     guest_path: "/workspace/data".into(),
+                    sub_path: String::new(),
                     read_only: false,
                 }],
                 rootfs: RootfsSpec::Image("alpine:latest".into()),

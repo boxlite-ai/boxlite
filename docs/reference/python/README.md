@@ -197,12 +197,15 @@ name, the server resolves either — or `host_path`, never both:
 volumes=[
     {"managed_volume": "my-data", "guest_path": "/data"},
     {"managed_volume": "vol_01K2EXAMPLE", "guest_path": "/cache"},
+    {"managed_volume": "run42", "guest_path": "/work", "sub_path": "agents/extract"},
     {"host_path": "/host/config", "guest_path": "/etc/app/config"},
 ]
 ```
 
 Managed volumes require a REST runtime; host binds are local-runtime only.
-`read_only` is rejected on a managed mount - only host binds may be read-only.
+`read_only` applies to both: a managed mount is bound read-only on the server, a host bind is shared read-only.
+`sub_path` applies to a managed volume only — it mounts one prefix of the volume rather than all of it, and must
+be relative with no `..` or `//`. A host bind names its sub-directory directly.
 
 #### Port forwarding format
 

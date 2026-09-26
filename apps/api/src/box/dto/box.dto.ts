@@ -31,6 +31,13 @@ export class BoxVolume {
     example: 'users/alice',
   })
   subpath?: string
+
+  @ApiPropertyOptional({
+    description:
+      'Mount the volume read-only. When true the box can read but not modify the files under the mount (or its subpath). Omitted means read-write.',
+    example: false,
+  })
+  readOnly?: boolean
 }
 
 @ApiSchema({ name: 'BoxSecret' })

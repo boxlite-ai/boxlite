@@ -975,6 +975,23 @@ void boxlite_options_add_managed_volume(CBoxliteOptions *opts,
                                         const char *guest_path,
                                         int read_only);
 
+// Mount one prefix of a managed volume, addressed by the volume's id **or**
+// by its name.
+//
+// `sub_path` is relative to the volume root and must not contain `..`; the
+// server resolves it and binds just that directory. A NULL or empty
+// `sub_path` mounts the whole volume, which is what
+// [`boxlite_options_add_managed_volume`] does.
+//
+// A NULL `opts`, `managed_volume`, or `guest_path` is ignored, matching
+// [`boxlite_options_add_bind_mount`]. A `sub_path` that is not valid UTF-8
+// drops the mount as well, rather than widening it to the whole volume.
+void boxlite_options_add_managed_volume_subpath(CBoxliteOptions *opts,
+                                                const char *managed_volume,
+                                                const char *guest_path,
+                                                const char *sub_path,
+                                                int read_only);
+
 // Forward `host_port` on the host to `guest_port` inside the box.
 //
 // - `host_port`: 0 = let the OS select an available host port.

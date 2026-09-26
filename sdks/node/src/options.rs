@@ -273,6 +273,10 @@ pub struct JsVolumeSpec {
     /// Path inside container
     pub guest_path: String,
 
+    /// Prefix inside a managed volume to mount instead of the whole volume.
+    /// Managed volumes only; omitted mounts everything.
+    pub sub_path: Option<String>,
+
     /// Mount as read-only (default: false)
     pub read_only: Option<bool>,
 }
@@ -300,6 +304,8 @@ impl TryFrom<JsVolumeSpec> for VolumeSpec {
 
         Ok(VolumeSpec {
             read_only: v.read_only.unwrap_or(false),
+            // An omitted field and an explicit "" both mean the whole volume.
+            sub_path: v.sub_path.unwrap_or_default(),
             ..spec
         })
     }
@@ -813,6 +819,7 @@ mod tests {
                 managed_volume: Some(reference.into()),
                 host_path: None,
                 guest_path: "/data".into(),
+                sub_path: None,
                 read_only: None,
             })
             .unwrap();
@@ -824,12 +831,42 @@ mod tests {
         }
     }
 
+    /// `subPath` rides along with a managed volume; omitted means the whole
+    /// volume, not a prefix named "".
+    #[test]
+    fn js_sub_path_reaches_the_volume_spec() {
+        let volume = VolumeSpec::try_from(JsVolumeSpec {
+            managed_volume: Some("run42".into()),
+            host_path: None,
+            guest_path: "/work".into(),
+            sub_path: Some("agents/extract".into()),
+            read_only: Some(true),
+        })
+        .unwrap();
+
+        assert_eq!(volume.managed_volume.as_deref(), Some("run42"));
+        assert_eq!(volume.guest_path, "/work");
+        assert_eq!(volume.sub_path, "agents/extract");
+        assert!(volume.read_only);
+
+        let whole = VolumeSpec::try_from(JsVolumeSpec {
+            managed_volume: Some("run42".into()),
+            host_path: None,
+            guest_path: "/work".into(),
+            sub_path: None,
+            read_only: None,
+        })
+        .unwrap();
+        assert_eq!(whole.sub_path, "");
+    }
+
     #[test]
     fn js_volume_requires_exactly_one_origin() {
         let err = VolumeSpec::try_from(JsVolumeSpec {
             managed_volume: Some("my-data".into()),
             host_path: Some("/tmp/data".into()),
             guest_path: "/data".into(),
+            sub_path: None,
             read_only: None,
         })
         .unwrap_err();
@@ -840,6 +877,7 @@ mod tests {
             managed_volume: None,
             host_path: None,
             guest_path: "/data".into(),
+            sub_path: None,
             read_only: None,
         })
         .unwrap_err();

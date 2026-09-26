@@ -1027,12 +1027,14 @@ mod tests {
                 managed_volume: None,
                 host_path: vol_ro.to_string_lossy().to_string(),
                 guest_path: "/mnt/input".to_string(),
+                sub_path: String::new(),
                 read_only: true,
             },
             VolumeSpec {
                 managed_volume: None,
                 host_path: vol_rw.to_string_lossy().to_string(),
                 guest_path: "/mnt/output".to_string(),
+                sub_path: String::new(),
                 read_only: false,
             },
         ];
@@ -1061,6 +1063,7 @@ mod tests {
             managed_volume: None,
             host_path: "/does/not/exist".to_string(),
             guest_path: "/mnt/data".to_string(),
+            sub_path: String::new(),
             read_only: true,
         }];
 
@@ -1086,6 +1089,7 @@ mod tests {
             managed_volume: None,
             host_path: file.to_string_lossy().to_string(),
             guest_path: "/etc/app.conf".to_string(),
+            sub_path: String::new(),
             read_only: true,
         }];
 
@@ -1225,6 +1229,7 @@ mod tests {
                 managed_volume: None,
                 host_path: vol_dir.to_string_lossy().to_string(),
                 guest_path: "/mnt/data".to_string(),
+                sub_path: String::new(),
                 read_only: false,
             }])
             .build()

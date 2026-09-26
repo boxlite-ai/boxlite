@@ -186,6 +186,7 @@ mod tests {
                 managed_volume: None,
                 host_path: "/data".to_string(),
                 guest_path: "/mnt/data".to_string(),
+                sub_path: String::new(),
                 read_only: true,
             })
             .build_with(sandbox)

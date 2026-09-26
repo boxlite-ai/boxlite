@@ -431,12 +431,14 @@ mod tests {
                 managed_volume: None,
                 host_path: "/data".to_string(),
                 guest_path: "/mnt/data".to_string(),
+                sub_path: String::new(),
                 read_only: true,
             })
             .with_volume(VolumeSpec {
                 managed_volume: None,
                 host_path: "/output".to_string(),
                 guest_path: "/mnt/output".to_string(),
+                sub_path: String::new(),
                 read_only: false,
             })
             .build()

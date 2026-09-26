@@ -879,11 +879,33 @@ means the same thing on every machine:
 | `BOX_PATH:ro` / `BOX_PATH:rw` | `/data:ro` | Anonymous volume with explicit mode |
 | `VOLUME:BOX_PATH` | `my-data:/data` | Managed volume by name |
 | `VOLUME:BOX_PATH` | `vol_01K2EXAMPLE:/data` | Managed volume by server-assigned id |
+| `VOLUME:BOX_PATH:subpath=PREFIX` | `run42:/work:subpath=agents/extract` | Only that prefix of the managed volume is visible at `BOX_PATH`; combine with `ro` as `ro,subpath=…` |
 | `HOST_PATH:BOX_PATH` | `/host/data:/data` | Bind mount (host directory must exist) |
 | `HOST_PATH:BOX_PATH:OPTIONS` | `./data:/data:ro` | Bind mount with options |
 | `C:\HOST\PATH:/BOX_PATH[:OPTIONS]` | `C:\data:/app/data:ro` | Windows drive paths are handled — the drive-letter colon is not treated as a separator |
 
-**Options:** `ro` (read-only) or `rw` (read-write, default). Other options are ignored. Relative host paths are canonicalized at parse time; missing host paths fail with `volume host path ...`.
+**Options:** a comma-separated list.
+
+| Option | Meaning |
+|---|---|
+| `ro` / `rw` | Read-only, or read-write (the default) |
+| `subpath=PREFIX` | Mount only that prefix of a managed volume |
+
+`PREFIX` must not start with `/`, contain `..` anywhere, or contain `//`. Those
+are the server's three rules, applied here in the server's words, so a bad
+prefix fails before the request is sent. An empty `subpath=` is refused as well:
+omit the option to mount the whole volume.
+
+Anything else is an error, including an empty option — a trailing `:` with
+nothing after it is a mistake, not read-write. Nothing is silently ignored, so a
+mistyped `subpath` cannot quietly mount the whole volume.
+
+A `PREFIX` cannot contain `,` or `:`, which separate options and fields: such a
+spec is refused rather than mis-mounted. Use the SDKs, which take the prefix as
+its own argument, for a volume whose keys contain either character.
+
+Relative host paths are canonicalized at parse time; missing host paths fail with
+`volume host path ...`.
 
 **Runtime support.** Managed volumes require a REST runtime — the local runtime
 has no volume backend and rejects them at create. Host binds are the mirror

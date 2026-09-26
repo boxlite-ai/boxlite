@@ -248,6 +248,11 @@ pub(crate) struct CreateBoxAdvancedOptions {
 pub(crate) struct CreateBoxVolumeSpec {
     pub managed_volume: String,
     pub guest_path: String,
+    /// Omitted rather than sent empty: a server that predates the field rejects
+    /// unknown keys, and on the ones that have it an absent `sub_path` and an
+    /// empty one mean the same thing — the whole volume.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_path: Option<String>,
     pub read_only: bool,
 }
 
@@ -261,6 +266,7 @@ impl From<&crate::runtime::options::VolumeSpec> for CreateBoxVolumeSpec {
             // check lives at create instead of here.
             managed_volume: volume.managed_volume.clone().unwrap_or_default(),
             guest_path: volume.guest_path.clone(),
+            sub_path: (!volume.sub_path.is_empty()).then(|| volume.sub_path.clone()),
             read_only: volume.read_only,
         }
     }
@@ -950,6 +956,55 @@ mod tests {
                 json["volumes"][0]
             );
         }
+    }
+
+    /// A prefix reaches the wire as `sub_path`; without one the key is absent,
+    /// so a server that predates the field still sees a request it understands.
+    #[test]
+    fn sub_path_reaches_wire_only_when_set() {
+        use crate::runtime::options::{BoxOptions, VolumeSpec};
+
+        let with_prefix = BoxOptions {
+            volumes: vec![VolumeSpec {
+                sub_path: "agents/extract".to_string(),
+                ..VolumeSpec::managed_volume("run42", "/work")
+            }],
+            ..Default::default()
+        };
+        let json =
+            serde_json::to_value(CreateBoxRequest::from_options(&with_prefix, None)).unwrap();
+        assert_eq!(json["volumes"][0]["sub_path"], "agents/extract");
+
+        let whole_volume = BoxOptions {
+            volumes: vec![VolumeSpec::managed_volume("run42", "/work")],
+            ..Default::default()
+        };
+        let json =
+            serde_json::to_value(CreateBoxRequest::from_options(&whole_volume, None)).unwrap();
+        assert!(
+            json["volumes"][0].get("sub_path").is_none(),
+            "an unset prefix must not reach the wire: {}",
+            json["volumes"][0]
+        );
+    }
+
+    /// `read_only` is carried verbatim; the server enforces it on the runner.
+    #[test]
+    fn read_only_managed_mount_reaches_wire() {
+        use crate::runtime::options::{BoxOptions, VolumeSpec};
+
+        let opts = BoxOptions {
+            volumes: vec![VolumeSpec {
+                read_only: true,
+                ..VolumeSpec::managed_volume("my-data", "/data")
+            }],
+            ..Default::default()
+        };
+
+        let req = CreateBoxRequest::from_options(&opts, None);
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["volumes"][0]["managed_volume"], "my-data");
+        assert_eq!(json["volumes"][0]["read_only"], true);
     }
 
     #[test]

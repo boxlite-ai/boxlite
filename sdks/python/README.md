@@ -241,6 +241,7 @@ Configuration options for creating a box.
 - `env: List[Tuple[str, str]]` - Environment variables as (key, value) pairs
 - `volumes: List[Tuple | Dict]` - Volume mounts; a tuple is a host bind, a dict takes `managed_volume` (id or name) or `host_path`
   - `read_only` is a bool and defaults to `False`
+  - `sub_path` mounts one prefix of a managed volume instead of the whole volume; relative, no `..`
 - `network: NetworkSpec | None` - Structured network configuration
 - `ports: List[Tuple | Dict]` - Local TCP forwarding; omit `host_port` in a dict for automatic allocation
   - Protocol: `"tcp"`; UDP is rejected

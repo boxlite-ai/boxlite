@@ -64,6 +64,12 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
     // up by id *or* by name (see VolumeService.validateVolumes).
     volumeId: volume.managed_volume,
     mountPath: volume.guest_path,
+    // Wire snake_case to the internal spelling, like guest_path -> mountPath.
+    // Undefined when omitted, which the runner reads as the whole volume.
+    subpath: volume.sub_path,
+    // Left undefined when omitted so a legacy row and an explicit false
+    // stay distinguishable in the persisted jsonb.
+    readOnly: volume.read_only,
   }))
   createDto.secrets = dto.secrets?.map((secret) => ({
     name: secret.name,

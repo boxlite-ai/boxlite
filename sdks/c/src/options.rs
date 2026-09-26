@@ -108,6 +108,28 @@ pub unsafe extern "C" fn boxlite_options_add_managed_volume(
     options_add_managed_volume(opts, managed_volume, guest_path, read_only)
 }
 
+/// Mount one prefix of a managed volume, addressed by the volume's id **or**
+/// by its name.
+///
+/// `sub_path` is relative to the volume root and must not contain `..`; the
+/// server resolves it and binds just that directory. A NULL or empty
+/// `sub_path` mounts the whole volume, which is what
+/// [`boxlite_options_add_managed_volume`] does.
+///
+/// A NULL `opts`, `managed_volume`, or `guest_path` is ignored, matching
+/// [`boxlite_options_add_bind_mount`]. A `sub_path` that is not valid UTF-8
+/// drops the mount as well, rather than widening it to the whole volume.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_add_managed_volume_subpath(
+    opts: *mut CBoxliteOptions,
+    managed_volume: *const c_char,
+    guest_path: *const c_char,
+    sub_path: *const c_char,
+    read_only: c_int,
+) {
+    options_add_managed_volume_subpath(opts, managed_volume, guest_path, sub_path, read_only)
+}
+
 /// Transport protocol for a port forwarding rule.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -441,12 +463,46 @@ pub unsafe fn options_add_managed_volume(
     read_only: c_int,
 ) {
     unsafe {
+        options_add_managed_volume_subpath(
+            handle,
+            managed_volume,
+            guest_path,
+            std::ptr::null(),
+            read_only,
+        )
+    }
+}
+
+/// Mount one prefix of a managed volume. A NULL `sub_path` mounts the whole
+/// volume, so this is the single implementation behind both entry points.
+pub unsafe fn options_add_managed_volume_subpath(
+    handle: *mut OptionsHandle,
+    managed_volume: *const c_char,
+    guest_path: *const c_char,
+    sub_path: *const c_char,
+    read_only: c_int,
+) {
+    unsafe {
         if handle.is_null() || managed_volume.is_null() || guest_path.is_null() {
             return;
         }
-        if let (Ok(v), Ok(g)) = (c_str_to_string(managed_volume), c_str_to_string(guest_path)) {
+        // A NULL `sub_path` is the whole volume. Undecodable bytes are not:
+        // widening them to the whole volume would hand the caller more of the
+        // volume than they asked for, so the mount is skipped the way it is
+        // for an undecodable volume or guest path.
+        let sub_path = if sub_path.is_null() {
+            Ok(String::new())
+        } else {
+            c_str_to_string(sub_path)
+        };
+        if let (Ok(v), Ok(g), Ok(sub_path)) = (
+            c_str_to_string(managed_volume),
+            c_str_to_string(guest_path),
+            sub_path,
+        ) {
             (*handle).options.volumes.push(VolumeSpec {
                 read_only: read_only != 0,
+                sub_path,
                 ..VolumeSpec::managed_volume(v, g)
             });
         }

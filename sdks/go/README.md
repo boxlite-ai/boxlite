@@ -126,6 +126,7 @@ for _, image := range cached {
 - `WithPort(boxlite.PortSpec{Guest: 3000})` publishes TCP locally on an OS-selected host port; after checking `BoxInfo.Network != nil`, read the concrete binding from `Network.PublishedPorts`.
 - A nil `PublishedPorts` slice means the current handle does not know the bindings; a non-nil empty slice means there are no active publications. `Box.Info`, `Runtime.GetInfo`, and `Runtime.ListInfo` use callback-backed runtime operations and honor context cancellation.
 - `WithSecret(boxlite.Secret{...})` configures host-side HTTPS secret substitution; `Placeholder` defaults to `<BOXLITE_SECRET:{Name}>`.
+- `WithManagedVolumeMount(boxlite.ManagedVolumeMount{Volume, GuestPath, SubPath, ReadOnly})` mounts a managed volume and is the one to reach for: it carries every option, including `SubPath`, which mounts one prefix of the volume instead of all of it. `WithManagedVolume(volume, guestPath)` and `WithManagedVolumeReadOnly` remain as shorthands for the two cases that need no prefix.
 - Container capabilities live under advanced options:
 
   ```go

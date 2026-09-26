@@ -712,6 +712,10 @@ pub struct VolumeSpec {
     /// Path inside guest
     pub guest_path: String,
 
+    /// Prefix inside a managed volume to mount instead of the whole volume.
+    /// Empty mounts everything; a host bind names its sub-directory directly.
+    pub sub_path: String,
+
     /// Mount as read-only
     pub read_only: bool,
 }

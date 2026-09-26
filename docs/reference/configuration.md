@@ -265,7 +265,9 @@ env=[
 ### `volumes: List[Tuple | Dict]`
 
 Volume mounts. A tuple is always a host bind; a dict takes either
-`managed_volume` (a volume's id or name) or `host_path`, never both.
+`managed_volume` (a volume's id or name) or `host_path`, never both. A dict may
+also carry `sub_path` to mount one prefix of a managed volume instead of the
+whole volume.
 
 **Format:** `(host_path, guest_path[, read_only])` - `read_only` is a bool, default `False`.
 

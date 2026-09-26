@@ -213,14 +213,78 @@ func TestWithManagedVolumeKeepsOriginsApart(t *testing.T) {
 			t.Errorf("managed volume: got managedVolume=%q hostPath=%q",
 				cfg.volumes[0].managedVolume, cfg.volumes[0].hostPath)
 		}
-		// There is no read-only counterpart: the server rejects read_only on a
-		// managed mount, so a managed volume is always read-write here.
+		// WithManagedVolume is the read-write form; WithManagedVolumeReadOnly
+		// is the only way to set readOnly on a managed mount.
 		if cfg.volumes[0].readOnly {
 			t.Error("WithManagedVolume should be read-write")
 		}
 		if cfg.volumes[1].hostPath != "/tmp/data" || cfg.volumes[1].managedVolume != "" {
 			t.Errorf("host bind: got managedVolume=%q hostPath=%q",
 				cfg.volumes[1].managedVolume, cfg.volumes[1].hostPath)
+		}
+	}
+}
+
+// WithManagedVolumeReadOnly is WithManagedVolume plus readOnly: same origin
+// (managedVolume, never hostPath), so the REST runtime sends it as a managed
+// mount with read_only set and the server binds it read-only.
+func TestWithManagedVolumeReadOnlySetsReadOnlyOnAManagedOrigin(t *testing.T) {
+	cfg := &boxConfig{}
+	WithManagedVolumeReadOnly("my-data", "/data")(cfg)
+
+	if len(cfg.volumes) != 1 {
+		t.Fatalf("volumes: got %d", len(cfg.volumes))
+	}
+	got := cfg.volumes[0]
+	if got.managedVolume != "my-data" || got.hostPath != "" || got.guestPath != "/data" || !got.readOnly {
+		t.Errorf("got managedVolume=%q hostPath=%q guestPath=%q readOnly=%v",
+			got.managedVolume, got.hostPath, got.guestPath, got.readOnly)
+	}
+}
+
+// WithManagedVolumeMount is the one entry point that carries every managed
+// mount option, so a sub-path and read-only travel together on one origin.
+func TestWithManagedVolumeMountCarriesSubPathAndMode(t *testing.T) {
+	cfg := &boxConfig{}
+	WithManagedVolumeMount(ManagedVolumeMount{
+		Volume:    "run42",
+		GuestPath: "/work",
+		SubPath:   "agents/extract",
+		ReadOnly:  true,
+	})(cfg)
+	WithManagedVolumeMount(ManagedVolumeMount{Volume: "run42", GuestPath: "/all"})(cfg)
+
+	if len(cfg.volumes) != 2 {
+		t.Fatalf("volumes: got %d", len(cfg.volumes))
+	}
+	prefix := cfg.volumes[0]
+	if prefix.managedVolume != "run42" || prefix.hostPath != "" ||
+		prefix.guestPath != "/work" || prefix.subPath != "agents/extract" || !prefix.readOnly {
+		t.Errorf("prefix mount: got managedVolume=%q hostPath=%q guestPath=%q subPath=%q readOnly=%v",
+			prefix.managedVolume, prefix.hostPath, prefix.guestPath, prefix.subPath, prefix.readOnly)
+	}
+	// An omitted SubPath mounts the whole volume, not a prefix named "".
+	whole := cfg.volumes[1]
+	if whole.subPath != "" || whole.readOnly {
+		t.Errorf("whole-volume mount: got subPath=%q readOnly=%v", whole.subPath, whole.readOnly)
+	}
+}
+
+// A SubPath sends buildCOptions down a different C entry point than a plain
+// managed volume. The config-level test above stops at volumeEntry, so only
+// this reaches the branch; the options handle is opaque to Go, so a mistake in
+// it (wrong pointer, double free) surfaces here as a crash rather than a wrong
+// value. Both spellings are built so neither branch is left unexercised.
+func TestBuildCOptionsAcceptsAManagedVolumeMountWithAndWithoutASubPath(t *testing.T) {
+	for _, mount := range []ManagedVolumeMount{
+		{Volume: "run42", GuestPath: "/work", SubPath: "agents/extract", ReadOnly: true},
+		{Volume: "run42", GuestPath: "/all"},
+	} {
+		cfg := &boxConfig{}
+		WithManagedVolumeMount(mount)(cfg)
+
+		if err := buildAndFreeCOptions("alpine:latest", cfg); err != nil {
+			t.Fatalf("SubPath=%q: buildCOptions must apply cleanly; got error: %v", mount.SubPath, err)
 		}
 	}
 }

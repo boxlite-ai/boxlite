@@ -372,6 +372,122 @@ fn assert_null_cb_rejected(code: BoxliteErrorCode, error: &mut FFIError) {
     unsafe { boxlite_error_free(error as *mut _) };
 }
 
+/// Build an options handle with one managed-volume mount and hand back the
+/// spec the FFI actually recorded. The C tests can only prove a NULL handle is
+/// survived; only this can prove the arguments reach `VolumeSpec`.
+unsafe fn managed_volume_spec_after(
+    add: impl FnOnce(*mut CBoxliteOptions),
+) -> Option<boxlite::runtime::options::VolumeSpec> {
+    let image = CString::new("alpine:latest").expect("image cstring");
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+    let code =
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
+    assert_eq!(code, BoxliteErrorCode::Ok);
+
+    add(opts);
+
+    // `Ok` from `boxlite_options_new` means the out-param was set, but that is an
+    // FFI contract the compiler cannot see; `as_ref` makes the null case an
+    // explicit failure instead of a dereference of a pointer it cannot vouch for.
+    let spec = unsafe { opts.as_ref() }
+        .expect("boxlite_options_new returned Ok without setting the options handle")
+        .options
+        .volumes
+        .first()
+        .cloned();
+    unsafe { boxlite_options_free(opts) };
+    spec
+}
+
+/// `sub_path` has to survive the C boundary, because nothing downstream can
+/// reconstruct it: the server binds whatever prefix the options carry.
+#[test]
+fn add_managed_volume_subpath_carries_the_prefix() {
+    let volume = CString::new("run42").expect("volume cstring");
+    let guest = CString::new("/work").expect("guest cstring");
+    let sub_path = CString::new("agents/extract").expect("sub path cstring");
+
+    let spec = unsafe {
+        managed_volume_spec_after(|opts| {
+            boxlite_options_add_managed_volume_subpath(
+                opts,
+                volume.as_ptr(),
+                guest.as_ptr(),
+                sub_path.as_ptr(),
+                1,
+            )
+        })
+    }
+    .expect("the mount should have been recorded");
+
+    assert_eq!(spec.managed_volume.as_deref(), Some("run42"));
+    assert_eq!(spec.host_path, "");
+    assert_eq!(spec.guest_path, "/work");
+    assert_eq!(spec.sub_path, "agents/extract");
+    assert!(spec.read_only);
+}
+
+/// A NULL `sub_path` is the whole volume — the older entry point delegates here
+/// with exactly that, so both spellings must agree.
+#[test]
+fn add_managed_volume_subpath_treats_null_as_the_whole_volume() {
+    let volume = CString::new("run42").expect("volume cstring");
+    let guest = CString::new("/work").expect("guest cstring");
+
+    for spec in [
+        unsafe {
+            managed_volume_spec_after(|opts| {
+                boxlite_options_add_managed_volume_subpath(
+                    opts,
+                    volume.as_ptr(),
+                    guest.as_ptr(),
+                    ptr::null(),
+                    0,
+                )
+            })
+        },
+        unsafe {
+            managed_volume_spec_after(|opts| {
+                boxlite_options_add_managed_volume(opts, volume.as_ptr(), guest.as_ptr(), 0)
+            })
+        },
+    ] {
+        let spec = spec.expect("the mount should have been recorded");
+        assert_eq!(spec.managed_volume.as_deref(), Some("run42"));
+        assert_eq!(spec.guest_path, "/work");
+        assert_eq!(spec.sub_path, "");
+        assert!(!spec.read_only);
+    }
+}
+
+/// Undecodable bytes must drop the mount rather than widen it: an empty
+/// `sub_path` means the whole volume, which is more than the caller asked for.
+#[test]
+fn add_managed_volume_subpath_skips_an_undecodable_prefix() {
+    let volume = CString::new("run42").expect("volume cstring");
+    let guest = CString::new("/work").expect("guest cstring");
+    // 0xFF never appears in valid UTF-8.
+    let invalid = CString::new(vec![b'a', 0xFF, b'b']).expect("invalid utf-8 cstring");
+
+    let spec = unsafe {
+        managed_volume_spec_after(|opts| {
+            boxlite_options_add_managed_volume_subpath(
+                opts,
+                volume.as_ptr(),
+                guest.as_ptr(),
+                invalid.as_ptr(),
+                0,
+            )
+        })
+    };
+
+    assert!(
+        spec.is_none(),
+        "an undecodable sub_path must not become a whole-volume mount: {spec:?}"
+    );
+}
+
 #[test]
 fn create_box_rejects_null_callback() {
     let (runtime, home_dir) = unsafe { new_test_runtime_handle("null-cb-create") };

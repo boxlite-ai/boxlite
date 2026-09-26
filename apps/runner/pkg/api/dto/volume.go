@@ -8,4 +8,8 @@ type VolumeDTO struct {
 	VolumeId  string  `json:"volumeId"`
 	MountPath string  `json:"mountPath"`
 	Subpath   *string `json:"subpath,omitempty"`
+	// ReadOnly binds the volume (or its Subpath) into the box read-only.
+	// Omitted on the wire means read-write, so an older API that never sends
+	// it keeps today's behaviour.
+	ReadOnly bool `json:"readOnly,omitempty"`
 }

@@ -782,6 +782,7 @@ pub(crate) struct PyVolumeSpec {
     managed_volume: Option<String>,
     host_path: String,
     guest_path: String,
+    sub_path: String,
     read_only: bool,
 }
 
@@ -794,6 +795,8 @@ impl From<PyVolumeSpec> for VolumeSpec {
 
         VolumeSpec {
             read_only: v.read_only,
+            // An omitted key and an explicit "" both mean the whole volume.
+            sub_path: v.sub_path,
             ..spec
         }
     }
@@ -836,6 +839,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
                 managed_volume: None,
                 host_path,
                 guest_path,
+                sub_path: String::new(),
                 read_only,
             });
         }
@@ -844,7 +848,13 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
             // Unknown keys are an error, not noise. `ro` and `guest` used to be
             // accepted aliases; ignoring them now would silently hand back a
             // read-write mount to a caller who asked for read-only.
-            const KEYS: [&str; 4] = ["managed_volume", "host_path", "guest_path", "read_only"];
+            const KEYS: [&str; 5] = [
+                "managed_volume",
+                "host_path",
+                "guest_path",
+                "sub_path",
+                "read_only",
+            ];
             for key in d.keys() {
                 let key: String = key.extract()?;
                 if !KEYS.contains(&key.as_str()) {
@@ -884,6 +894,11 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
                 _ => return Err(PyRuntimeError::new_err("volume dict missing guest_path")),
             };
 
+            let sub_path: String = match d.get_item("sub_path") {
+                Ok(Some(v)) => v.extract()?,
+                _ => String::new(),
+            };
+
             let read_only: bool = match d.get_item("read_only") {
                 Ok(Some(v)) => v.extract()?,
                 _ => false,
@@ -893,6 +908,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
                 managed_volume,
                 host_path,
                 guest_path,
+                sub_path,
                 read_only,
             });
         }
@@ -1322,6 +1338,38 @@ mod tests {
                 assert_eq!(spec.guest_path, "/data");
                 assert!(spec.read_only);
             }
+        });
+    }
+
+    /// `sub_path` selects one prefix of a managed volume. It reaches the spec
+    /// verbatim; the server resolves the prefix and binds just that directory.
+    #[test]
+    fn py_sub_path_reaches_the_volume_spec() {
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("managed_volume", "run42").unwrap();
+            dict.set_item("guest_path", "/work").unwrap();
+            dict.set_item("sub_path", "agents/extract").unwrap();
+            dict.set_item("read_only", true).unwrap();
+
+            let spec = VolumeSpec::from(dict.extract::<PyVolumeSpec>().unwrap());
+            assert_eq!(spec.managed_volume.as_deref(), Some("run42"));
+            assert_eq!(spec.guest_path, "/work");
+            assert_eq!(spec.sub_path, "agents/extract");
+            assert!(spec.read_only);
+        });
+    }
+
+    /// Omitting the key mounts the whole volume rather than a prefix named "".
+    #[test]
+    fn py_sub_path_defaults_to_the_whole_volume() {
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("managed_volume", "run42").unwrap();
+            dict.set_item("guest_path", "/work").unwrap();
+
+            let spec = VolumeSpec::from(dict.extract::<PyVolumeSpec>().unwrap());
+            assert_eq!(spec.sub_path, "");
         });
     }
 

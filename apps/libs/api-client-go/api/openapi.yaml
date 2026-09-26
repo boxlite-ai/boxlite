@@ -5690,6 +5690,7 @@ components:
         volumeId: volume123
         mountPath: /data
         subpath: users/alice
+        readOnly: false
       properties:
         volumeId:
           description: The ID of the volume
@@ -5705,6 +5706,11 @@ components:
             \ is mounted."
           example: users/alice
           type: string
+        readOnly:
+          description: Mount the volume read-only. When true the box can read but
+            not modify the files under the mount (or its subpath). Omitted means read-write.
+          example: false
+          type: boolean
       required:
       - mountPath
       - volumeId
@@ -5739,9 +5745,11 @@ components:
         - volumeId: volume123
           mountPath: /data
           subpath: users/alice
+          readOnly: false
         - volumeId: volume123
           mountPath: /data
           subpath: users/alice
+          readOnly: false
         createdAt: 2024-10-01T12:00:00Z
         updatedAt: 2024-10-01T12:00:00Z
         lastActivityAt: 2024-10-01T12:00:00Z
@@ -5944,9 +5952,11 @@ components:
           - volumeId: volume123
             mountPath: /data
             subpath: users/alice
+            readOnly: false
           - volumeId: volume123
             mountPath: /data
             subpath: users/alice
+            readOnly: false
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
           lastActivityAt: 2024-10-01T12:00:00Z
@@ -5983,9 +5993,11 @@ components:
           - volumeId: volume123
             mountPath: /data
             subpath: users/alice
+            readOnly: false
           - volumeId: volume123
             mountPath: /data
             subpath: users/alice
+            readOnly: false
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
           lastActivityAt: 2024-10-01T12:00:00Z

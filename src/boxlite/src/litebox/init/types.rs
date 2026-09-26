@@ -377,6 +377,7 @@ mod tests {
             managed_volume: None,
             host_path: tmp.path().to_str().unwrap().to_string(),
             guest_path: "/data".to_string(),
+            sub_path: String::new(),
             read_only: false,
         }];
 
@@ -436,6 +437,7 @@ mod tests {
             managed_volume: None,
             host_path: file_path.to_str().unwrap().to_string(),
             guest_path: "/etc/app.conf".to_string(),
+            sub_path: String::new(),
             read_only: true,
         }];
 

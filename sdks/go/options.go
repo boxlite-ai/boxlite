@@ -252,7 +252,10 @@ type volumeEntry struct {
 	managedVolume string
 	hostPath      string
 	guestPath     string
-	readOnly      bool
+	// subPath selects one prefix of a managed volume; empty mounts the whole
+	// volume. Meaningless for a host bind, which can name the directory itself.
+	subPath  string
+	readOnly bool
 }
 
 // WithName sets a human-readable name for the box.
@@ -327,9 +330,46 @@ func WithManagedVolume(managedVolume, guestPath string) BoxOption {
 	}
 }
 
-// Read-only managed volumes have no WithManagedVolumeReadOnly counterpart:
-// the server rejects read_only on a managed mount, so the option could only
-// ever produce an error. Host binds keep WithBindMountReadOnly.
+// ManagedVolumeMount is one managed-volume mount with every option spelled
+// out. Use it with [WithManagedVolumeMount] when the mount needs more than a
+// volume and a guest path — a sub-path, read-only, or both — instead of
+// growing one function per combination.
+type ManagedVolumeMount struct {
+	// Volume is the volume's server-assigned id or its name; the server
+	// resolves either.
+	Volume string
+	// GuestPath is the mount point inside the box.
+	GuestPath string
+	// SubPath mounts only that prefix of the volume. Relative to the volume
+	// root and without ".."; empty mounts the whole volume.
+	SubPath string
+	// ReadOnly binds the mount read-only: the box can read but not modify the
+	// files under GuestPath.
+	ReadOnly bool
+}
+
+// WithManagedVolumeMount mounts a managed volume described by a
+// [ManagedVolumeMount].
+func WithManagedVolumeMount(mount ManagedVolumeMount) BoxOption {
+	return func(c *boxConfig) {
+		c.volumes = append(c.volumes, volumeEntry{
+			managedVolume: mount.Volume,
+			guestPath:     mount.GuestPath,
+			subPath:       mount.SubPath,
+			readOnly:      mount.ReadOnly,
+		})
+	}
+}
+
+// WithManagedVolumeReadOnly mounts a managed volume into the box read-only.
+//
+// The server binds the volume read-only on the runner, so the box can read
+// but not modify the files under guestPath.
+func WithManagedVolumeReadOnly(managedVolume, guestPath string) BoxOption {
+	return func(c *boxConfig) {
+		c.volumes = append(c.volumes, volumeEntry{managedVolume: managedVolume, guestPath: guestPath, readOnly: true})
+	}
+}
 
 // WithPort publishes a guest port on a host port.
 //
@@ -524,7 +564,13 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		}
 		if volume.managedVolume != "" {
 			cVolume := toCString(volume.managedVolume)
-			C.boxlite_options_add_managed_volume(cOpts, cVolume, cGuest, readOnly)
+			if volume.subPath != "" {
+				cSubPath := toCString(volume.subPath)
+				C.boxlite_options_add_managed_volume_subpath(cOpts, cVolume, cGuest, cSubPath, readOnly)
+				C.free(unsafe.Pointer(cSubPath))
+			} else {
+				C.boxlite_options_add_managed_volume(cOpts, cVolume, cGuest, readOnly)
+			}
 			C.free(unsafe.Pointer(cVolume))
 		} else {
 			cHost := toCString(volume.hostPath)

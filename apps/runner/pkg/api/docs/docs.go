@@ -993,6 +993,10 @@ const docTemplate = `{
                 "mountPath": {
                     "type": "string"
                 },
+                "readOnly": {
+                    "description": "ReadOnly binds the volume (or its Subpath) into the box read-only.\nOmitted on the wire means read-write, so an older API that never sends\nit keeps today's behaviour.",
+                    "type": "boolean"
+                },
                 "subpath": {
                     "type": "string"
                 },

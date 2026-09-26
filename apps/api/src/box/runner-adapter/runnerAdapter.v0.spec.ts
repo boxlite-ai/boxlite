@@ -41,6 +41,37 @@ describe('RunnerAdapterV0 createBox', () => {
     )
   })
 
+  // v0 only carries volumes on the recover body (create never did); the
+  // mount's mode has to survive that projection like every other field.
+  it('passes a read-only volume mount through to the runner recover body', async () => {
+    const adapter = new RunnerAdapterV0()
+    const recover = jest.fn().mockResolvedValue(undefined)
+    ;(adapter as any).boxApiClient = { recover }
+
+    const box = {
+      id: 'box-1',
+      image: 'base',
+      osUser: 'boxlite',
+      cpu: 1,
+      gpu: 0,
+      mem: 1,
+      disk: 3,
+      env: {},
+      volumes: [{ volumeId: 'vol-1', mountPath: '/data', subpath: 'sets/a', readOnly: true }],
+      secrets: [],
+      errorReason: 'crashed',
+    } as any
+
+    await adapter.recoverBox(box)
+
+    expect(recover).toHaveBeenCalledWith(
+      'box-1',
+      expect.objectContaining({
+        volumes: [{ volumeId: 'vol-1', mountPath: '/data', subpath: 'sets/a', readOnly: true }],
+      }),
+    )
+  })
+
   it('passes secrets through to the runner recover body', async () => {
     const adapter = new RunnerAdapterV0()
     const recover = jest.fn().mockResolvedValue(undefined)

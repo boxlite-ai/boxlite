@@ -420,6 +420,10 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
                 "managed_volume": v["managed_volume"],
                 "guest_path": v["guest_path"],
                 "read_only": v.get("read_only", False),
+                # Only when the caller asked for a prefix: an absent sub_path
+                # is the whole volume, and dropping a present one would mount
+                # more of the volume than the request allows.
+                **({"sub_path": v["sub_path"]} if v.get("sub_path") else {}),
             }
             for v in req.volumes
         ]

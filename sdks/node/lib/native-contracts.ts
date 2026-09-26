@@ -88,10 +88,12 @@ export interface JsManagedVolumeSpec {
   managedVolume: string;
   guestPath: string;
   /**
-   * Read-only managed mounts are not implemented yet; `true` is rejected
-   * rather than silently downgraded to read-write.
+   * Mount only this prefix of the volume instead of the whole volume.
+   * Relative to the volume root, no `..`. Omitted mounts everything.
    */
-  readOnly?: false;
+  subPath?: string;
+  /** Mount read-only; the server binds the volume read-only on the runner. Default: false. */
+  readOnly?: boolean;
 }
 
 export interface JsHostPathVolumeSpec {

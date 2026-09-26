@@ -2015,13 +2015,19 @@ components:
         guest_path:
           type: string
           description: Mount point inside the container
+        sub_path:
+          type: string
+          description: |
+            Mount only this prefix of the volume at `guest_path`, instead of
+            the whole volume. Relative to the volume root; must not start
+            with `/`, contain `..`, or contain `//`. Omitted mounts
+            everything.
         read_only:
           type: boolean
           default: false
-          enum: [false]
           description: |
-            Read-only managed mounts are not implemented yet; `true` is
-            rejected rather than silently downgraded to read-write.
+            Mount the volume read-only: the box can read but not modify the
+            files under the mount. Omitted means read-write.
 
     VolumeState:
       type: string

@@ -169,14 +169,22 @@ export class VolumeSpecDto {
   @IsString()
   guest_path: string
 
+  @ValidateIf((_, value) => value !== undefined)
+  @IsString()
+  sub_path?: string
+
   /**
-   * Read-only managed mounts are not implemented yet. Rejected rather than
-   * silently downgraded to read-write, which would hand the caller a writable
-   * mount they believe is protected.
+   * Mount the volume read-only. The runner binds the volume's FUSE mount into
+   * the box as a read-only bind, so files under the mount can be read but not
+   * modified. Omitted means read-write.
+   *
+   * ValidateIf (not IsOptional) so an explicit `null` is still a validation
+   * error: a null that quietly became read-write would hand the caller a
+   * writable mount they believe is protected.
    */
   @ValidateIf((_, value) => value !== undefined)
-  @IsIn([false])
-  read_only?: false
+  @IsBoolean()
+  read_only?: boolean
 }
 
 export class SecretSpecDto {

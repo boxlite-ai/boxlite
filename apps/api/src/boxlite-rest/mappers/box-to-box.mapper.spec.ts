@@ -38,7 +38,43 @@ describe('BoxLite lifecycle policy mapper', () => {
       volumes: [{ managed_volume: 'volume-123', guest_path: '/data', read_only: false }],
     })
 
-    expect(mapped.volumes).toEqual([{ volumeId: 'volume-123', mountPath: '/data' }])
+    expect(mapped.volumes).toEqual([{ volumeId: 'volume-123', mountPath: '/data', readOnly: false }])
+  })
+
+  it('carries read_only through as readOnly', () => {
+    const mapped = createBoxToCreateBox({
+      volumes: [{ managed_volume: 'volume-123', guest_path: '/data', read_only: true }],
+    })
+
+    expect(mapped.volumes).toEqual([{ volumeId: 'volume-123', mountPath: '/data', readOnly: true }])
+  })
+
+  it('carries sub_path through as subpath', () => {
+    const mapped = createBoxToCreateBox({
+      volumes: [{ managed_volume: 'run42', guest_path: '/work', sub_path: 'agents/extract' }],
+    })
+
+    expect(mapped.volumes).toEqual([
+      { volumeId: 'run42', mountPath: '/work', subpath: 'agents/extract', readOnly: undefined },
+    ])
+  })
+
+  // An absent prefix is the whole volume; it must not reach the runner as an
+  // empty string, which would be a prefix the volume does not have.
+  it('leaves subpath undefined when sub_path is omitted', () => {
+    const mapped = createBoxToCreateBox({
+      volumes: [{ managed_volume: 'run42', guest_path: '/work' }],
+    })
+
+    expect(mapped.volumes?.[0].subpath).toBeUndefined()
+  })
+
+  it('leaves readOnly undefined when read_only is omitted', () => {
+    const mapped = createBoxToCreateBox({
+      volumes: [{ managed_volume: 'volume-123', guest_path: '/data' }],
+    })
+
+    expect(mapped.volumes?.[0].readOnly).toBeUndefined()
   })
 
   // A name is as valid as an id here; VolumeService.validateVolumes resolves
@@ -48,7 +84,7 @@ describe('BoxLite lifecycle policy mapper', () => {
       volumes: [{ managed_volume: 'customer-data', guest_path: '/data', read_only: false }],
     })
 
-    expect(mapped.volumes).toEqual([{ volumeId: 'customer-data', mountPath: '/data' }])
+    expect(mapped.volumes).toEqual([{ volumeId: 'customer-data', mountPath: '/data', readOnly: false }])
   })
 
   it('maps REST secret specs to secret placeholder rules', () => {

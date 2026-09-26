@@ -185,20 +185,6 @@ impl BoxOptions {
             ));
         }
 
-        // The server rejects `read_only: true` on a managed mount. Refusing here
-        // says so plainly instead of surfacing a field-level 400, and — more to the
-        // point — never lets a caller believe a writable mount is protected.
-        if let Some(volume) = self
-            .volumes
-            .iter()
-            .find(|volume| volume.read_only)
-            .and_then(|volume| volume.managed_volume.as_deref())
-        {
-            return Err(BoxliteError::Unsupported(format!(
-                "read-only managed volumes are not supported yet; mount {volume:?} read-write"
-            )));
-        }
-
         Ok(())
     }
 }
@@ -655,11 +641,11 @@ mod tests {
         );
     }
 
-    /// The server rejects `read_only: true` on a managed mount. Refusing it
-    /// here keeps a caller from believing a writable mount is protected — the
-    /// failure mode that matters is the silent downgrade, not the 400.
+    /// A read-only managed mount is an ordinary request: nothing client-side
+    /// refuses it, the server binds the volume read-only on the runner.
+    /// Reaching the transport error is the proof it cleared validation.
     #[tokio::test]
-    async fn create_rejects_read_only_managed_volume() {
+    async fn create_accepts_read_only_managed_volume() {
         use crate::runtime::options::VolumeSpec;
 
         let options = BoxliteRestOptions::new("http://localhost:1");
@@ -675,10 +661,12 @@ mod tests {
         let error = RuntimeBackend::create(&runtime, box_options, None)
             .await
             .err()
-            .expect("read-only managed volumes must be rejected before network I/O");
+            .expect("no server is listening on localhost:1");
 
-        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
-        assert!(error.to_string().contains("read-only"), "{error}");
+        assert!(
+            !matches!(error, BoxliteError::Unsupported(_)),
+            "a read-only managed mount must not be refused client-side: {error:?}"
+        );
     }
 
     /// The guard is about host paths, not about mounts: a managed volume gets

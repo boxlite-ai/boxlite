@@ -339,7 +339,7 @@ silently restarting it, because restarting would run the command a second time.
 | `--user NAME[:GROUP]` | `-u` | Run as a name/uid and optional group/gid |
 | `--entrypoint EXEC` | | Override the image entrypoint |
 | `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
-| `--volume VOLUME` | `-v` | Mount a volume: `name:/box` for a managed volume, `./path:/box` for a host bind, `/box` for anonymous |
+| `--volume VOLUME` | `-v` | Mount a volume: `name:/box` for a managed volume (`name:/box:subpath=PREFIX` for one prefix of it), `./path:/box` for a host bind, `/box` for anonymous |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--disk-size GB` | | Sparse rootfs disk size; smaller values than the base image are ignored |
@@ -401,7 +401,7 @@ default, and `exec` still starts it on demand.
 | `--workdir PATH` | `-w` | Working directory |
 | `--entrypoint EXEC` | | Override the image entrypoint |
 | `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
-| `--volume VOLUME` | `-v` | Mount a volume: `name:/box` for a managed volume, `./path:/box` for a host bind, `/box` for anonymous |
+| `--volume VOLUME` | `-v` | Mount a volume: `name:/box` for a managed volume (`name:/box:subpath=PREFIX` for one prefix of it), `./path:/box` for a host bind, `/box` for anonymous |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--disk-size GB` | | Sparse rootfs disk size; smaller values than the base image are ignored |

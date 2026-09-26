@@ -60,6 +60,10 @@ export function validateMountPaths(volumes: BoxVolume[]): void {
  * @throws Error with descriptive message if any subpath is invalid
  */
 export function validateSubpaths(volumes: BoxVolume[]): void {
+  // The CLI mirrors these three rules, and each reason below verbatim, in
+  // src/cli/src/volumespec.rs (validate_sub_path) so a bad prefix fails before a
+  // request is built. Change one and the other has to follow, or the CLI starts
+  // accepting prefixes this rejects.
   const errors: string[] = []
 
   for (const volume of volumes) {
