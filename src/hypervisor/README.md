@@ -36,9 +36,10 @@ exports `KvmVm` and thread-bound `KvmVcpu`, with creation, memory registration,
 `run` and `complete_pending_io`. Shared trait implementations await the kick
 integration; `run` blocks on an idle guest until interrupted. Boot registers are not exposed yet.
 
-`KvmVcpu::handle()` can kick a worker before or during guest entry; stale handles
-do nothing. `KvmVm::new()` reserves `SIGRTMIN + 1` on each worker, or the application
-can select a realtime signal with `with_kick_signal`. Keep that signal unblocked
+`KvmVcpu::handle()` can kick a worker before or during guest entry. Cloned handles
+become inert when the vCPU is dropped or its worker exits, even if safe code
+forgets the vCPU. `KvmVm::new()` reserves `SIGRTMIN + 1` on each worker, or the
+application can select a realtime signal with `with_kick_signal`. Keep that signal unblocked
 and at its default disposition before vCPU creation; do not reuse it while the
 vCPU lives. No process-wide handler is installed. KVM temporarily unmasks the
 signal during entry, and vCPU drop drains pending kicks before restoring its bit.

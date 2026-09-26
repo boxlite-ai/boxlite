@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
+    cell::RefCell,
     io,
     os::fd::RawFd,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
 };
 
 use crate::{Error, Result, VcpuHandle};
@@ -15,7 +16,24 @@ struct Target {
     pending: bool,
 }
 
-/// A cross-thread kick handle that becomes inert when its vCPU is dropped.
+thread_local! {
+    static KICK_TARGETS: ThreadExitGuard = const { ThreadExitGuard(RefCell::new(Vec::new())) };
+}
+
+struct ThreadExitGuard(RefCell<Vec<Weak<Mutex<Target>>>>);
+
+impl Drop for ThreadExitGuard {
+    fn drop(&mut self) {
+        for target in self.0.get_mut().iter().filter_map(Weak::upgrade) {
+            target
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .thread = None;
+        }
+    }
+}
+
+/// A cross-thread kick handle that becomes inert when its vCPU is dropped or its worker exits.
 #[derive(Clone, Debug)]
 pub struct KvmVcpuHandle {
     id: u32,
@@ -134,17 +152,16 @@ impl WorkerSignal {
                 "KVM kick signal is already blocked on this worker",
             ));
         }
+        let target = Arc::new(Mutex::new(Target {
+            // SAFETY: WorkerSignal::drop or the thread-exit guard clears this
+            // ID before the worker's lifetime ends.
+            thread: Some(unsafe { libc::pthread_self() }),
+            pending: false,
+        }));
+        KICK_TARGETS.with(|targets| targets.0.borrow_mut().push(Arc::downgrade(&target)));
         Ok((
             Self {
-                handle: KvmVcpuHandle {
-                    id,
-                    signal,
-                    target: Arc::new(Mutex::new(Target {
-                        // SAFETY: the worker remains alive through its vCPU's drop.
-                        thread: Some(unsafe { libc::pthread_self() }),
-                        pending: false,
-                    })),
-                },
+                handle: KvmVcpuHandle { id, signal, target },
                 blocked,
             },
             original,
@@ -259,6 +276,21 @@ mod tests {
         handle.kick().unwrap();
         resume.send(()).unwrap();
         worker.join().unwrap();
+        handle.kick().unwrap();
+    }
+
+    #[test]
+    fn thread_exit_invalidates_a_leaked_worker_handle() {
+        let (handles, receive_handle) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            let (owner, _) = WorkerSignal::reserve(9, libc::SIGRTMIN() + 1).unwrap();
+            handles.send(owner.handle()).unwrap();
+            std::mem::forget(owner);
+        })
+        .join()
+        .unwrap();
+        let handle = receive_handle.recv().unwrap();
+        assert!(handle.target.lock().unwrap().thread.is_none());
         handle.kick().unwrap();
     }
 
