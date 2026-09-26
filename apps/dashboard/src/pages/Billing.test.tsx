@@ -24,6 +24,9 @@ vi.mock('@/components/billing/BalanceLowBanner', () => ({
 vi.mock('@/components/billing/PlanSection', () => ({
   PlanSection: () => <div data-testid="plan-section">Plan section</div>,
 }))
+vi.mock('@/components/billing/ReferralCodeSection', () => ({
+  ReferralCodeSection: () => <div data-testid="referral-code-section">Invitation code</div>,
+}))
 vi.mock('@/components/billing/UsageSection', () => ({ UsageSection: () => <div>Usage section</div> }))
 vi.mock('@/components/billing/WalletSection', () => ({
   WalletSection: () => <div data-testid="wallet-section">Wallet section</div>,
@@ -72,6 +75,9 @@ describe('Billing layout', () => {
     expect(headingContainer).not.toBeNull()
     expect(closestMaxWidthContainer(tabs)).toBe(headingContainer)
     expect(closestMaxWidthContainer(activePanel)).toBe(headingContainer)
+    expect(closestMaxWidthContainer(document.querySelector('[data-testid="referral-code-section"]'))).toBe(
+      headingContainer,
+    )
   })
 
   it('keeps critical balance warnings between the title and tabs in the wide-page container', () => {

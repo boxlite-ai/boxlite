@@ -325,11 +325,10 @@ export function buildApi(input: ApiInputs) {
         ...(process.env.SVIX_SERVER_URL && { SVIX_SERVER_URL: process.env.SVIX_SERVER_URL }),
 
         // Where the dashboard's billing client calls, surfaced to it through
-        // GET /api/config. No default: this stack deploys no billing service,
-        // so without an explicit override the dashboard's billing surface —
-        // the page itself (apps/dashboard/src/pages/Billing.tsx) and every
-        // billing query hook, including the shell's wallet prefetch — stays
-        // gated off and shows its placeholder instead.
+        // GET /api/config. No default: this stack deploys no billing service.
+        // Without an explicit override, billing sections and queries, including
+        // the shell's wallet prefetch, stay gated off. The Billing page still
+        // shows its placeholder and the invitation code from the core API.
         ...(process.env.BILLING_API_URL && {
           BILLING_API_URL: process.env.BILLING_API_URL,
 

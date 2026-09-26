@@ -690,19 +690,24 @@ test('a billing URL is advertised only where a billing service answers', () => {
   assert.doesNotMatch(liveConfig, /BILLING_API_URL: envOr\(/)
 
   // Wallet, plan and usage are sections of one /dashboard/billing page, so the gate moved from
-  // the route table into that page: it must refuse to render any section — none of which can
-  // load without the billing origin — before it reads one, and return the placeholder instead.
+  // the route table into that page. Without a billing origin, only the placeholder and
+  // the invitation code (which uses the core API) can render.
   const billing = liveText(
     'script',
     readFileSync(new URL('../../dashboard/src/pages/Billing.tsx', import.meta.url), 'utf8'),
   )
   const gate = billing.indexOf('if (!config.billingApiUrl)')
   assert.notEqual(gate, -1, 'Billing page must gate on config.billingApiUrl')
-  assert.match(billing.slice(gate), /return <BillingComingSoon \/>/)
+  const tabs = billing.indexOf('<Tabs value=')
+  assert.ok(tabs > gate, 'Billing tabs must follow the billing gate')
+  const placeholder = billing.slice(gate, tabs)
+  assert.match(placeholder, /<BillingComingSoon[\s/>]/)
+  assert.match(placeholder, /<ReferralCodeSection[\s/>]/)
   // Opening tag, not the whole self-closing element: what has to hold is that the section renders
   // past the gate, and that is just as true once a section takes a prop. Pinning `<X />` made this
   // fail on #1256 giving UsageSection an onGoToWallet prop, which changed nothing about the gate.
   for (const section of ['BillingAlerts', 'PlanSection', 'UsageSection', 'WalletSection']) {
+    assert.doesNotMatch(placeholder, new RegExp(`<${section}[\\s/>]`))
     // `<Name` followed by a delimiter, so the tag is matched whether or not it takes props but a
     // different component sharing the prefix cannot stand in for it.
     const rendered = billing.search(new RegExp(`<${section}[\\s/>]`))

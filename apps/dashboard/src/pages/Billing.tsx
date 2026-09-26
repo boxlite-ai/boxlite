@@ -8,6 +8,7 @@ import { BILLING_PAGE_CONTAINER } from '@/components/billing/billingLayout'
 import { BalanceLowBanner } from '@/components/billing/BalanceLowBanner'
 import { BillingAlerts } from '@/components/billing/BillingAlerts'
 import { PlanSection } from '@/components/billing/PlanSection'
+import { ReferralCodeSection } from '@/components/billing/ReferralCodeSection'
 import { UsageSection } from '@/components/billing/UsageSection'
 import { WalletSection } from '@/components/billing/WalletSection'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -36,10 +37,10 @@ function SegBars() {
   )
 }
 
-/** Stands in until a billing service is deployed — nothing below it can load without one. */
+/** Stands in for billing sections until a billing service is deployed. */
 function BillingComingSoon() {
   return (
-    <div className="flex min-h-[calc(100svh-60px)] items-center justify-center px-6 py-14 lg:px-[40px]">
+    <div className="flex flex-1 items-center justify-center px-6 py-8 lg:px-[40px]">
       <div className="w-full max-w-[560px] text-center" style={{ animation: 'stat-in 0.5s ease both' }}>
         <h1 className="mb-3 text-[26px] font-semibold leading-tight tracking-[-0.5px]">Billing is on the way</h1>
         <p className="mx-auto mb-2 max-w-[440px] text-[13px] leading-relaxed text-muted-foreground">
@@ -87,7 +88,14 @@ function Billing() {
   const [tab, setTab] = useState('overview')
 
   if (!config.billingApiUrl) {
-    return <BillingComingSoon />
+    return (
+      <div className="flex min-h-[var(--app-content-height,calc(100svh_-_60px))] flex-col">
+        <div className={BILLING_PAGE_CONTAINER}>
+          <ReferralCodeSection />
+        </div>
+        <BillingComingSoon />
+      </div>
+    )
   }
 
   return (
@@ -110,6 +118,7 @@ function Billing() {
               <BillingAlerts />
             </div>
             <PlanSection />
+            <ReferralCodeSection />
           </div>
         </TabsContent>
         <TabsContent value="usage">
