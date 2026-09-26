@@ -49,9 +49,10 @@ Call it before first entry and discard the vCPU after any configuration error,
 because multiple host writes cannot be rolled back atomically. Secondary vCPUs
 retain reset state until INIT/SIPI.
 
-The VMM derives guest CPU features from `KvmVm::supported_cpuid`, adjusts topology,
-and calls `KvmVcpu::set_cpu_features` before entry. `X86CpuidEntry` preserves
-subleaf matching without leaking the KVM ABI; legacy stateful CPUID is rejected.
+`KvmVm::supported_cpuid` exposes host-supported CPU features. A VMM can remove
+features or adjust topology, then pass the result to `KvmVcpu::set_cpu_features`
+before entry. `X86CpuidEntry` preserves subleaf matching without leaking the
+KVM ABI; legacy stateful CPUID is rejected.
 MSRs are explicit index/value writes. A short KVM write is an error identifying
 the first rejected MSR, never a successful partially configured CPU. Host feature
 discovery is a ceiling, not permission to add unsupported instructions.
