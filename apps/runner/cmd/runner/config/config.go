@@ -105,6 +105,8 @@ func GetConfig() (*Config, error) {
 		config.ApiToken = apiToken
 	}
 
+	defaultRegistryProxyLogin(config)
+
 	if config.ApiPort == 0 {
 		config.ApiPort = DEFAULT_API_PORT
 	}
@@ -118,6 +120,25 @@ func GetConfig() (*Config, error) {
 	}
 
 	return config, nil
+}
+
+// defaultRegistryProxyLogin fills in the runner's login to the registry proxy.
+//
+// The proxy checks the password against the control plane as a runner key, so
+// the one that works is this runner's own. Taking it from ApiToken rather than
+// asking a deployment to write it twice means a rotated runner token cannot
+// leave the proxy login behind. The username is not checked; "runner" is what
+// the local stack has always sent.
+func defaultRegistryProxyLogin(config *Config) {
+	if config.RegistryProxyHost == "" {
+		return
+	}
+	if config.RegistryProxyPassword == "" {
+		config.RegistryProxyPassword = config.ApiToken
+	}
+	if config.RegistryProxyUsername == "" {
+		config.RegistryProxyUsername = "runner"
+	}
 }
 
 func (c *Config) GetOtelHeaders() map[string]string {

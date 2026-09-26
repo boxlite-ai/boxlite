@@ -5,6 +5,7 @@
 
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { supportedImages } from '../../box/constants/curated-images.constant'
+import { registryProxyHost } from '../../registry/utils/registry-proxy.util'
 
 /** Env var carrying the registry hosts a box image may be pulled from. */
 const ALLOWLIST_ENV = 'BOXLITE_IMAGE_REGISTRY_ALLOWLIST'
@@ -14,11 +15,12 @@ const ALLOWLIST_ENV = 'BOXLITE_IMAGE_REGISTRY_ALLOWLIST'
  * fallback, the same shape as the curated image set, so an operator can widen
  * or narrow it with no code change.
  *
- * `ghcr.io` is left out on purpose. A runner holds no registry credential and
- * pulls every image anonymously, but one built before that change may still
- * hold an operator token for ghcr.io and apply it by host, so ghcr.io is added
- * through the env once every runner serves a build that holds none. No deployed
- * runner ever held Docker Hub credentials, so `docker.io` needs no wait.
+ * `ghcr.io` is left out on purpose. A runner holds no registry credential: it
+ * pulls a listed host anonymously, and a private image through the registry
+ * proxy under its own key. One built before that change may still hold an
+ * operator token for ghcr.io and apply it by host, so ghcr.io is added through
+ * the env once every runner serves a build that holds none. No deployed runner
+ * ever held Docker Hub credentials, so `docker.io` needs no wait.
  */
 const FALLBACK_ALLOWLIST = ['docker.io', 'quay.io', 'gcr.io', 'public.ecr.aws']
 
@@ -153,10 +155,59 @@ export function catalogNameOf(ref: string | undefined | null): string | undefine
     return undefined
   }
   try {
-    const { host, repository } = parseImageRef(ref)
+    const { host, repository } = parseImageRef(upstreamRefOf(ref))
     return `${host}/${repository}`
   } catch {
     return undefined
+  }
+}
+
+/**
+ * The ref a runner pulls a private image by: the registry proxy's host, then
+ * the organization whose login the proxy presents, then the upstream host and
+ * repository, e.g. `<proxy>/<org>/ghcr.io/acme/app:1.2`.
+ *
+ * Built from the parsed parts rather than the caller's string, so the three
+ * ways to name one Docker Hub image — `alpine:3.20`, `docker.io/alpine:3.20`,
+ * `library/alpine:3.20` — come out as one path.
+ */
+export function proxyRefOf(proxyHost: string, organizationId: string, parsed: ParsedImageRef): string {
+  const reference = parsed.digest ? `@${parsed.digest}` : parsed.tag ? `:${parsed.tag}` : ''
+  return `${proxyHost}/${organizationId}/${parsed.host}/${parsed.repository}${reference}`
+}
+
+/**
+ * The upstream ref a proxy ref stands for, or the ref itself when it is not
+ * one. A box records the proxy ref, because that is what its runner pulls; what
+ * a tenant reads back, and what the catalog files the image under, is the
+ * upstream name they asked for.
+ */
+export function upstreamRefOf(ref: string): string {
+  const proxyHost = registryProxyHost()
+  if (!proxyHost || !ref.startsWith(`${proxyHost}/`)) {
+    return ref
+  }
+  // `<proxy>/<org>/<upstream…>`: drop the first two segments.
+  const upstream = ref
+    .slice(proxyHost.length + 1)
+    .split('/')
+    .slice(1)
+    .join('/')
+  return upstream || ref
+}
+
+/**
+ * Refuse a ref a tenant wrote against the registry proxy itself.
+ *
+ * Only the resolver produces those. One written by hand could name another
+ * organization in its path and borrow that organization's login, and it is also
+ * what keeps a runner's proxy key from being sent anywhere a tenant chose.
+ */
+export function assertNotThroughRegistryProxy(host: string): void {
+  if (host === registryProxyHost()) {
+    throw new BadRequestError(
+      `Image registry '${host}' is the registry proxy; name the upstream image instead, and a registered credential routes it`,
+    )
   }
 }
 
@@ -177,8 +228,11 @@ function isInternalAddress(host: string): boolean {
 }
 
 /**
- * The allowlist is the gate, and it is the only one: a host on it is reachable,
- * a host off it is not, whatever the host looks like.
+ * The allowlist is the gate for a pull a runner makes directly: a host on it is
+ * reachable, a host off it is not, whatever the host looks like. The one other
+ * way in is a registered login, and that pull goes through the registry proxy
+ * instead, for the four hosts a login is accepted for — see
+ * `ImageAdmissionService`.
  *
  * Internal addresses are therefore not a second check — an earlier version
  * refused them separately, which changed nothing, because a host off the list

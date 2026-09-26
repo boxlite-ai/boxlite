@@ -8,9 +8,19 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
 import { assertSupportedImage } from '../../box/constants/curated-images.constant'
 import { Organization } from '../../organization/entities/organization.entity'
+import { RegistryCredentialService } from '../../registry/services/registry-credential.service'
+import { registryProxyHost } from '../../registry/utils/registry-proxy.util'
 import { ImageVersion } from '../entities/image-version.entity'
 import { ImageVersionState } from '../enums/image-version-state.enum'
-import { IMPLICIT_TAG, isCuratedSelector, isDigestPinned, parseImageRef } from '../utils/image-ref.util'
+import {
+  assertHostIsAllowed,
+  IMPLICIT_TAG,
+  imageRegistryAllowlist,
+  isCuratedSelector,
+  isDigestPinned,
+  parseImageRef,
+  proxyRefOf,
+} from '../utils/image-ref.util'
 
 /** What a box should boot from, and where that answer came from. */
 export type ResolvedImage = {
@@ -31,10 +41,16 @@ export type ResolvedImage = {
  *
  * Four cases, and the first one is the whole point of the ordering: a curated
  * selector is answered from the curated set without touching the database, so
- * the path every existing caller takes stays exactly as expensive as it was.
- * The other three look the organization's catalog up, and a miss is not an
- * error — it means this image has not been pulled yet, and the unpinned ref is
- * passed through so the runner can pull it and report what it got.
+ * the path every existing caller takes stays exactly as expensive as it was —
+ * and no registered login can take a curated image off it, not even one for
+ * its whole host. The other three look the organization's catalog up, and a
+ * miss is not an error — it means this image has not been pulled yet, and the
+ * unpinned ref is passed through so the runner can pull it and report what it
+ * got.
+ *
+ * Whichever of those answers, a repository the organization registered a
+ * login for is then handed to the runner as a registry proxy ref, which is
+ * the only way that login is ever presented.
  *
  * A hit must come back digest-pinned. That is the assertion at the bottom, and
  * it is load-bearing rather than defensive: the catalog promises that a ref
@@ -47,6 +63,7 @@ export class ImageResolverService {
   constructor(
     @InjectRepository(ImageVersion)
     private readonly versionRepository: Repository<ImageVersion>,
+    private readonly registryCredentials: RegistryCredentialService,
   ) {}
 
   async resolve(organization: Organization, image: string | undefined): Promise<ResolvedImage> {
@@ -63,7 +80,16 @@ export class ImageResolverService {
       : await this.resolveByTag(organization, name, ref, tag ?? IMPLICIT_TAG)
 
     assertPinnedOnCatalogHit(resolved)
-    return resolved
+    if (!(await this.registryCredentials.routesThroughProxy(organization.id, host, repository))) {
+      // Admission asked the same question a moment ago, and a login removed
+      // since would make that answer stale: its host admitted for the proxy,
+      // then handed to the runner direct. So a direct ref is held to the
+      // allowlist here too, where the decision is final.
+      assertHostIsAllowed(host, imageRegistryAllowlist())
+      return resolved
+    }
+    // routesThroughProxy is false without a proxy host, so it is set here.
+    return { ...resolved, ref: proxyRefOf(registryProxyHost() as string, organization.id, parseImageRef(resolved.ref)) }
   }
 
   /**

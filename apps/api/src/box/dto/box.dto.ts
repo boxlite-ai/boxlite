@@ -13,6 +13,7 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxProgressPhase } from '../enums/box-progress-phase.enum'
 import { reportedBoxState } from '../utils/box-state.util'
+import { upstreamRefOf } from '../../image/utils/image-ref.util'
 
 @ApiSchema({ name: 'BoxProgress' })
 export class BoxProgressDto {
@@ -371,7 +372,10 @@ export class BoxDto {
       organizationId: box.organizationId,
       name: box.name,
       target: box.region,
-      image: box.image,
+      // The upstream ref the tenant asked for, not the registry proxy ref its
+      // runner pulls: a caller that creates a box from what it read back has
+      // to be handed something admission accepts.
+      image: box.image && upstreamRefOf(box.image),
       user: box.osUser,
       env: box.env,
       cpu: box.cpu,

@@ -4,8 +4,10 @@
  */
 
 import { InternalServerErrorException } from '@nestjs/common'
+import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Repository } from 'typeorm'
 import { Organization } from '../../organization/entities/organization.entity'
+import { RegistryCredentialService } from '../../registry/services/registry-credential.service'
 import { ImageVersion } from '../entities/image-version.entity'
 import { assertPinnedOnCatalogHit, ImageResolverService } from './image-resolver.service'
 
@@ -13,6 +15,8 @@ const DIGEST = `sha256:${'a'.repeat(64)}`
 
 describe('ImageResolverService', () => {
   const organization = { id: 'org-1' } as Organization
+  /** An organization with no registered logins, which every pull before them was. */
+  const noLogins = { routesThroughProxy: jest.fn(async () => false) } as unknown as RegistryCredentialService
 
   /**
    * Records the where-clauses and the values bound to them, so a test can assert
@@ -52,7 +56,10 @@ describe('ImageResolverService', () => {
       ['ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0', 'boxlite-agent-node'],
     ])('resolves %s from the curated set', async (selector, expected) => {
       const { repository } = makeRepository(undefined)
-      const resolved = await new ImageResolverService(repository).resolve(organization, selector as string | undefined)
+      const resolved = await new ImageResolverService(repository, noLogins).resolve(
+        organization,
+        selector as string | undefined,
+      )
 
       expect(resolved.ref).toContain(expected)
       expect(resolved.isOrgOwned).toBe(false)
@@ -66,7 +73,7 @@ describe('ImageResolverService', () => {
      */
     it('reaches no database at all', async () => {
       const { repository, createQueryBuilder } = makeRepository(undefined)
-      await new ImageResolverService(repository).resolve(organization, 'python')
+      await new ImageResolverService(repository, noLogins).resolve(organization, 'python')
       expect(createQueryBuilder).not.toHaveBeenCalled()
     })
   })
@@ -75,7 +82,7 @@ describe('ImageResolverService', () => {
     it('pins a tag to the digest it first resolved to', async () => {
       const { repository } = makeRepository({ digest: DIGEST, imageId: 'img-1' })
 
-      const resolved = await new ImageResolverService(repository).resolve(organization, 'quay.io/acme/app:v1')
+      const resolved = await new ImageResolverService(repository, noLogins).resolve(organization, 'quay.io/acme/app:v1')
 
       expect(resolved).toEqual({ ref: `quay.io/acme/app@${DIGEST}`, isOrgOwned: true, imageId: 'img-1' })
     })
@@ -89,7 +96,7 @@ describe('ImageResolverService', () => {
     it('looks a bare repository up under the tag the registry serves it as', async () => {
       const { repository, conditions, parameters } = makeRepository({ digest: DIGEST, imageId: 'img-1' })
 
-      const resolved = await new ImageResolverService(repository).resolve(organization, 'quay.io/acme/app')
+      const resolved = await new ImageResolverService(repository, noLogins).resolve(organization, 'quay.io/acme/app')
 
       expect(conditions).toContain('tag.name = :tag')
       expect(parameters.tag).toBe('latest')
@@ -99,7 +106,10 @@ describe('ImageResolverService', () => {
     it('reports the row for a ref the caller already pinned', async () => {
       const { repository } = makeRepository({ imageId: 'img-1' })
 
-      const resolved = await new ImageResolverService(repository).resolve(organization, `quay.io/acme/app@${DIGEST}`)
+      const resolved = await new ImageResolverService(repository, noLogins).resolve(
+        organization,
+        `quay.io/acme/app@${DIGEST}`,
+      )
 
       expect(resolved).toEqual({ ref: `quay.io/acme/app@${DIGEST}`, isOrgOwned: true, imageId: 'img-1' })
     })
@@ -111,7 +121,7 @@ describe('ImageResolverService', () => {
      */
     it('excludes soft-deleted images from every lookup', async () => {
       const { repository, conditions } = makeRepository(undefined)
-      const service = new ImageResolverService(repository)
+      const service = new ImageResolverService(repository, noLogins)
 
       await service.resolve(organization, 'quay.io/acme/app:v1')
       await service.resolve(organization, `quay.io/acme/app@${DIGEST}`)
@@ -124,7 +134,7 @@ describe('ImageResolverService', () => {
     it('passes a tag through unchanged rather than inventing a digest', async () => {
       const { repository } = makeRepository(undefined)
 
-      const resolved = await new ImageResolverService(repository).resolve(organization, 'quay.io/acme/app:v1')
+      const resolved = await new ImageResolverService(repository, noLogins).resolve(organization, 'quay.io/acme/app:v1')
 
       expect(resolved).toEqual({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
     })
@@ -132,7 +142,7 @@ describe('ImageResolverService', () => {
     it('leaves a bare repository exactly as typed', async () => {
       const { repository } = makeRepository(undefined)
 
-      const resolved = await new ImageResolverService(repository).resolve(organization, 'quay.io/acme/app')
+      const resolved = await new ImageResolverService(repository, noLogins).resolve(organization, 'quay.io/acme/app')
 
       // `latest` is what the catalog was searched for, not something to write
       // into the ref: a runner resolves a bare repository the same way.
@@ -143,7 +153,10 @@ describe('ImageResolverService', () => {
     it('keeps an already-pinned ref when the catalog does not know it', async () => {
       const { repository } = makeRepository(undefined)
 
-      const resolved = await new ImageResolverService(repository).resolve(organization, `quay.io/acme/app@${DIGEST}`)
+      const resolved = await new ImageResolverService(repository, noLogins).resolve(
+        organization,
+        `quay.io/acme/app@${DIGEST}`,
+      )
 
       expect(resolved).toEqual({ ref: `quay.io/acme/app@${DIGEST}`, isOrgOwned: true })
     })
@@ -167,6 +180,89 @@ describe('ImageResolverService', () => {
         assertPinnedOnCatalogHit({ ref: `quay.io/acme/app@${DIGEST}`, isOrgOwned: true, imageId: 'img-1' }),
       ).not.toThrow()
       expect(() => assertPinnedOnCatalogHit({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })).not.toThrow()
+    })
+  })
+  describe('private registries', () => {
+    const PROXY = 'registry-proxy-abc.a.run.app'
+    // acme registered a login for ghcr.io/acme/ and one for the whole of
+    // Docker Hub's library/.
+    const logins = {
+      routesThroughProxy: jest.fn(
+        async (_org: string, host: string, repository: string) =>
+          (host === 'ghcr.io' && repository.startsWith('acme/')) ||
+          (host === 'docker.io' && repository.startsWith('library/')),
+      ),
+    }
+    const resolverWith = (row: Record<string, string> | undefined) =>
+      new ImageResolverService(makeRepository(row).repository, logins as unknown as RegistryCredentialService)
+
+    beforeEach(() => {
+      process.env.REGISTRY_PROXY_HOST = PROXY
+      logins.routesThroughProxy.mockClear()
+    })
+
+    afterEach(() => {
+      delete process.env.REGISTRY_PROXY_HOST
+      delete process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
+    })
+
+    it('hands a repository a login covers to the runner through the proxy', async () => {
+      const resolved = await resolverWith(undefined).resolve(organization, 'ghcr.io/acme/app:1')
+
+      expect(resolved.ref).toBe(`${PROXY}/org-1/ghcr.io/acme/app:1`)
+      expect(logins.routesThroughProxy).toHaveBeenCalledWith('org-1', 'ghcr.io', 'acme/app')
+    })
+
+    it('leaves a repository no login covers on the direct path, where the allowlist admits it', async () => {
+      process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = 'ghcr.io,docker.io'
+
+      const resolved = await resolverWith(undefined).resolve(organization, 'ghcr.io/other/app:1')
+
+      expect(resolved.ref).toBe('ghcr.io/other/app:1')
+    })
+
+    it('refuses a direct ref the allowlist does not admit, even after admission let it through', async () => {
+      // Admission found a login; it was removed before this ran. Handing the
+      // runner a direct ref now would skip the gate admission relied on.
+      process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = 'docker.io'
+
+      await expect(resolverWith(undefined).resolve(organization, 'ghcr.io/other/app:1')).rejects.toThrow(
+        BadRequestError,
+      )
+    })
+
+    it('keeps a catalog hit pinned when it goes through the proxy', async () => {
+      const resolved = await resolverWith({ digest: DIGEST, imageId: 'image-1' }).resolve(
+        organization,
+        'ghcr.io/acme/app:1',
+      )
+
+      expect(resolved).toEqual({
+        ref: `${PROXY}/org-1/ghcr.io/acme/app@${DIGEST}`,
+        isOrgOwned: true,
+        imageId: 'image-1',
+      })
+    })
+
+    it('sends the three spellings of one Docker Hub image down one proxy path', async () => {
+      const refs = await Promise.all(
+        ['alpine:3.20', 'docker.io/alpine:3.20', 'library/alpine:3.20'].map(
+          async (ref) => (await resolverWith(undefined).resolve(organization, ref)).ref,
+        ),
+      )
+
+      expect(new Set(refs)).toEqual(new Set([`${PROXY}/org-1/docker.io/library/alpine:3.20`]))
+    })
+
+    it('answers a curated selector first, without asking about logins', async () => {
+      // Even with a login for the curated image's host, the curated set wins
+      // and nothing is looked up.
+      logins.routesThroughProxy.mockImplementation(async () => true)
+      const resolved = await resolverWith(undefined).resolve(organization, 'python')
+
+      expect(resolved.ref).toContain('boxlite-agent-python')
+      expect(resolved.ref).not.toContain(PROXY)
+      expect(logins.routesThroughProxy).not.toHaveBeenCalled()
     })
   })
 })

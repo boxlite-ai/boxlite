@@ -11,7 +11,7 @@ import { ImageTag } from '../entities/image-tag.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { ImageSourceKind } from '../enums/image-source-kind.enum'
 import { CuratedImagePinService } from './curated-image-pin.service'
-import { IMPLICIT_TAG, isSha256Digest, parseImageRef } from '../utils/image-ref.util'
+import { IMPLICIT_TAG, isSha256Digest, parseImageRef, upstreamRefOf } from '../utils/image-ref.util'
 
 /** What a runner reported about the image a box actually booted from. */
 export type ReportedImage = {
@@ -93,7 +93,10 @@ export class ImageRegistrarService {
       }
       return
     }
-    const imageRef = image.ref
+    // Filed under the upstream name. A private image boots from a registry
+    // proxy ref, and a catalog keyed by that would list the proxy as the
+    // registry and miss every lookup made by the name the tenant uses.
+    const imageRef = upstreamRefOf(image.ref)
 
     const { host, repository, tag, digest } = parseImageRef(imageRef)
     const name = `${host}/${repository}`

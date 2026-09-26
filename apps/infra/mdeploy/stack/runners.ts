@@ -113,6 +113,13 @@ export type RunnerRequest = {
   /** Where a host registers itself, and where it ships telemetry. */
   apiUrl: $util.Input<string>
   otlpUrl: $util.Input<string>
+  /**
+   * The registry proxy's host, where a runner presents its own key to pull a
+   * private image. Null on a cloud that runs no proxy. A field of its own
+   * rather than one of `environment`, because a host already running has to
+   * be converged onto it, and that path reads fields, not the boot script.
+   */
+  registryProxyHost: $util.Input<string> | null
   /** Values every host reads. */
   environment: Record<string, $util.Input<string>>
   /** Names it reads by reference: its own registration key, and the admin key. */

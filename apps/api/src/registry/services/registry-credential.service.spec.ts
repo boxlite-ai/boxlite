@@ -76,3 +76,55 @@ describe('RegistryCredentialService.runnerServes', () => {
     })
   })
 })
+
+describe('RegistryCredentialService.routesThroughProxy', () => {
+  const PROXY = 'registry-proxy-abc.a.run.app'
+
+  function serviceWith(rows: Partial<RegistryCredential>[]) {
+    const find = jest.fn(async () => rows as RegistryCredential[])
+    const service = new RegistryCredentialService(
+      { find } as unknown as Repository<RegistryCredential>,
+      {} as Repository<Box>,
+    )
+    return { service, find }
+  }
+
+  beforeEach(() => {
+    process.env.REGISTRY_PROXY_HOST = PROXY
+  })
+
+  afterEach(() => {
+    delete process.env.REGISTRY_PROXY_HOST
+    delete process.env.REGISTRY_PROXY_UPSTREAM_HOSTS
+  })
+
+  it('routes a repository a login covers', async () => {
+    const { service } = serviceWith([{ repositoryPrefix: 'acme/' }])
+
+    await expect(service.routesThroughProxy(ORG_ID, 'ghcr.io', 'acme/app')).resolves.toBe(true)
+  })
+
+  it('never routes a host no login may be registered for, and does not even ask', async () => {
+    // A row the endpoints would never have written, for the metadata endpoint.
+    const { service, find } = serviceWith([{ repositoryPrefix: '' }])
+
+    await expect(service.routesThroughProxy(ORG_ID, '169.254.169.254', 'latest/meta-data')).resolves.toBe(false)
+    expect(find).not.toHaveBeenCalled()
+  })
+
+  it('routes nothing where the deployment runs no proxy', async () => {
+    delete process.env.REGISTRY_PROXY_HOST
+    const { service, find } = serviceWith([{ repositoryPrefix: '' }])
+
+    await expect(service.routesThroughProxy(ORG_ID, 'ghcr.io', 'acme/app')).resolves.toBe(false)
+    expect(find).not.toHaveBeenCalled()
+  })
+
+  it('takes the hosts from the variable the proxy reads too', async () => {
+    process.env.REGISTRY_PROXY_UPSTREAM_HOSTS = 'quay.io'
+    const { service } = serviceWith([{ repositoryPrefix: '' }])
+
+    await expect(service.routesThroughProxy(ORG_ID, 'ghcr.io', 'acme/app')).resolves.toBe(false)
+    await expect(service.routesThroughProxy(ORG_ID, 'quay.io', 'acme/app')).resolves.toBe(true)
+  })
+})

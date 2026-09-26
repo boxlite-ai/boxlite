@@ -8,10 +8,19 @@ import { Injectable } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import Redis from 'ioredis'
 import { IsNull, Repository } from 'typeorm'
+import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Organization } from '../../organization/entities/organization.entity'
+import { RegistryCredentialService } from '../../registry/services/registry-credential.service'
+import { credentialedRegistryHosts, registryProxyHost } from '../../registry/utils/registry-proxy.util'
 import { Image } from '../entities/image.entity'
 import { ImageColdPullRateLimitedError, ImageCountLimitReachedError } from '../errors/image-admission.error'
-import { assertHostIsAllowed, imageRegistryAllowlist, isCuratedSelector, parseImageRef } from '../utils/image-ref.util'
+import {
+  assertHostIsAllowed,
+  assertNotThroughRegistryProxy,
+  imageRegistryAllowlist,
+  isCuratedSelector,
+  parseImageRef,
+} from '../utils/image-ref.util'
 import { ResolvedImage } from './image-resolver.service'
 
 /** Cold pulls one organization may start per window, unless an operator sets another. */
@@ -52,6 +61,13 @@ function positiveIntegerFromEnv(name: string, fallback: number): number {
  * rather than bytes, and never refuses one the organization already holds:
  * booting a cached image again adds nothing to any runner's disk.
  *
+ * A registered login is a second way in, beside the allowlist. A host off the
+ * list is admitted when the organization registered a login that covers the
+ * repository, because then the pull goes through the registry proxy with that
+ * login rather than out from a runner. Only the hosts a login may be registered
+ * for take that path, so a login cannot open the metadata endpoint or any other
+ * address the allowlist keeps out.
+ *
  * Curated selectors skip all of it and touch neither Redis nor the database:
  * they are operator-chosen refs that were already allowed, and making the
  * common path pay for the new one would show up as latency on every create.
@@ -69,7 +85,16 @@ export class ImageAdmissionService {
     private readonly redis: Redis,
     @InjectRepository(Image)
     private readonly imageRepository: Repository<Image>,
-  ) {}
+    private readonly registryCredentials: RegistryCredentialService,
+  ) {
+    // At boot, because the allowlist is how a runner is told a host is public:
+    // listing the proxy there would admit a hand-written proxy ref, and the
+    // runner holds a key for that host.
+    const proxyHost = registryProxyHost()
+    if (proxyHost && imageRegistryAllowlist().includes(proxyHost)) {
+      throw new Error(`BOXLITE_IMAGE_REGISTRY_ALLOWLIST lists the registry proxy '${proxyHost}'; remove it`)
+    }
+  }
 
   async assert(organization: Organization, image: string | undefined): Promise<void> {
     if (isCuratedSelector(image)) {
@@ -77,9 +102,23 @@ export class ImageAdmissionService {
     }
 
     const ref = image as string
-    const allowlist = imageRegistryAllowlist()
     const { host, repository } = parseImageRef(ref)
-    assertHostIsAllowed(host, allowlist)
+    assertNotThroughRegistryProxy(host)
+
+    const allowlist = imageRegistryAllowlist()
+    if (
+      !allowlist.includes(host) &&
+      !(await this.registryCredentials.routesThroughProxy(organization.id, host, repository))
+    ) {
+      // A host a login could open is told so; any other host gets the
+      // allowlist's own refusal.
+      if (registryProxyHost() && credentialedRegistryHosts().includes(host)) {
+        throw new BadRequestError(
+          `Image registry '${host}' is reachable only with a registered credential for this repository`,
+        )
+      }
+      assertHostIsAllowed(host, allowlist)
+    }
 
     await this.assertWithinCatalogLimit(organization, `${host}/${repository}`)
   }

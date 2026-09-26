@@ -9,6 +9,7 @@ import { Not, Repository } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { RegistryCredential } from '../entities/registry-credential.entity'
+import { credentialedRegistryHosts, registryProxyHost } from '../utils/registry-proxy.util'
 
 @Injectable()
 export class RegistryCredentialService {
@@ -64,5 +65,21 @@ export class RegistryCredentialService {
       }
     }
     return longest
+  }
+
+  /**
+   * Whether a pull of this repository goes through the registry proxy with the
+   * organization's login: the deployment runs a proxy, the host is one a login
+   * may be registered for, and one is registered for a prefix of it.
+   *
+   * The host list is checked before the database, so a host no login can
+   * exist for — the metadata endpoint, a private address — costs no query and
+   * never reaches the proxy, whatever rows someone managed to write.
+   */
+  async routesThroughProxy(organizationId: string, registryHost: string, repository: string): Promise<boolean> {
+    if (!registryProxyHost() || !credentialedRegistryHosts().includes(registryHost)) {
+      return false
+    }
+    return (await this.findForRepository(organizationId, registryHost, repository)) !== null
   }
 }
