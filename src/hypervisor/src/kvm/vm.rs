@@ -278,10 +278,13 @@ mod tests {
     fn kick_interrupts_a_guest_that_has_entered_kvm() {
         let (ready, receive_ready) = mpsc::sync_channel(1);
         let (release, receive_release) = mpsc::sync_channel(1);
+        let (completed, receive_completed) = mpsc::sync_channel(1);
         let worker = thread::spawn(move || {
             let ram = Ram::new();
-            // Real mode: mov byte ptr [0x1800],1; jmp to self.
-            let program = [0xc6, 0x06, 0x00, 0x18, 0x01, 0xeb, 0xfe];
+            // Real mode: mark entry, wait for the host's stop byte, then HLT.
+            let program = [
+                0xc6, 0x06, 0x00, 0x18, 0x01, 0x80, 0x3e, 0x01, 0x18, 0x01, 0x75, 0xf9, 0xf4,
+            ];
             // SAFETY: the guest cannot access the mapping before registration.
             unsafe {
                 std::ptr::copy_nonoverlapping(program.as_ptr(), ram.0.as_ptr(), program.len())
@@ -310,12 +313,15 @@ mod tests {
             // Keep RAM alive even if KVM returns an unexpected error before the
             // marker. The parent releases it after its last atomic load.
             let _ = receive_release.recv();
-            outcome
+            completed.send(outcome).unwrap();
         });
         let (handle, marker_address) = receive_ready.recv_timeout(Duration::from_secs(5)).unwrap();
         // SAFETY: the worker holds RAM until release. x86 byte stores are atomic;
         // there are no overlapping non-atomic host accesses to this marker.
         let marker = unsafe { AtomicU8::from_ptr(marker_address as *mut u8) };
+        // SAFETY: the worker holds RAM until release; this byte is separate from
+        // the marker and host/guest access it with byte-wide operations.
+        let stop = unsafe { AtomicU8::from_ptr((marker_address + 1) as *mut u8) };
         let deadline = Instant::now() + Duration::from_secs(5);
         let entered = loop {
             if marker.load(Ordering::Relaxed) == 1 {
@@ -327,8 +333,12 @@ mod tests {
             thread::yield_now();
         };
         let kicked = handle.kick();
+        stop.store(1, Ordering::Relaxed);
         release.send(()).unwrap();
-        let outcome = worker.join().unwrap();
+        let outcome = receive_completed
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the guest did not stop after the kick attempt");
+        worker.join().unwrap();
         assert!(entered, "the guest never reached its spin loop");
         kicked.unwrap();
         assert!(
