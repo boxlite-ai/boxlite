@@ -91,6 +91,22 @@ impl KvmVcpu {
     }
 }
 
+impl crate::Vcpu for KvmVcpu {
+    type Handle = KvmVcpuHandle;
+
+    fn run(&mut self) -> Result<VcpuExit<'_>> {
+        Self::run(self)
+    }
+
+    fn complete_pending_io(&mut self) -> Result<()> {
+        Self::complete_pending_io(self)
+    }
+
+    fn handle(&self) -> Self::Handle {
+        Self::handle(self)
+    }
+}
+
 #[derive(Debug, Default)]
 struct PendingIo(bool);
 
