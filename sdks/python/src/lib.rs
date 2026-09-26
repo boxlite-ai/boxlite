@@ -2,6 +2,7 @@
 
 mod advanced_options;
 mod box_handle;
+mod copy_stream;
 mod exec;
 mod images;
 mod info;
@@ -11,6 +12,8 @@ mod options;
 mod runtime;
 mod snapshot_options;
 mod snapshots;
+#[cfg(test)]
+mod test_support;
 mod util;
 mod volumes;
 
@@ -57,6 +60,8 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyExecStdin>()?;
     m.add_class::<PyExecStdout>()?;
     m.add_class::<PyExecStderr>()?;
+    m.add_class::<crate::copy_stream::PyCopyInStream>()?;
+    m.add_class::<crate::copy_stream::PyCopyOutStream>()?;
     m.add_class::<PyImageHandle>()?;
     m.add_class::<PyImageInfo>()?;
     m.add_class::<PyImagePullResult>()?;
@@ -90,4 +95,11 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySecret>()?;
 
     Ok(())
+}
+
+/// The extension module as `import boxlite` sees it, for tests that run
+/// Python code against the binding inside the test binary.
+#[cfg(test)]
+pub(crate) fn test_module(py: Python<'_>) -> Bound<'_, PyModule> {
+    pyo3::wrap_pymodule!(boxlite_python)(py).into_bound(py)
 }

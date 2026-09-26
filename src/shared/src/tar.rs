@@ -23,24 +23,6 @@ pub struct PackContext {
     pub include_parent: bool,
 }
 
-/// Pack `src` (file or directory) into a tar archive at `tar_path`.
-///
-/// Runs blocking I/O on a dedicated thread via `spawn_blocking`.
-pub async fn pack(src: PathBuf, tar_path: PathBuf, opts: PackContext) -> BoxliteResult<()> {
-    tokio::task::spawn_blocking(move || {
-        let tar_file = std::fs::File::create(&tar_path).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "failed to create tar {}: {}",
-                tar_path.display(),
-                e
-            ))
-        })?;
-        pack_blocking(&src, tar_file, &opts)
-    })
-    .await
-    .map_err(|e| BoxliteError::Storage(format!("pack task join error: {}", e)))?
-}
-
 /// Pack `src` into `writer` (generic over `std::io::Write`).
 fn pack_blocking<W: Write>(src: &Path, writer: W, opts: &PackContext) -> BoxliteResult<()> {
     let mut builder = tar::Builder::new(writer);
@@ -156,12 +138,24 @@ impl Drop for PipeWriter {
     }
 }
 
+/// The concrete stream [`pack_stream`] produces.
+///
+/// Deliberately *not* erased to [`BoxByteStream`]. Handing a `dyn` stream to
+/// the generic gRPC upload defeats rustc's auto-trait leak check inside an
+/// `#[async_trait]` method — the whole transfer then fails to compile with
+/// "`Send` is not general enough". Callers that genuinely need erasure box it
+/// themselves; the ones that just forward it keep the concrete type.
+pub type PackedByteStream = ReceiverStream<io::Result<Vec<u8>>>;
+
 /// Stream `src` into a tar byte stream.
 ///
 /// Returns the source shape (`source_is_dir = src.is_dir()`) alongside the
 /// stream. The pack runs on a `spawn_blocking` thread; a pack failure surfaces
 /// as a terminal `Err` item on the stream.
-pub async fn pack_stream(src: PathBuf, opts: PackContext) -> BoxliteResult<(bool, BoxByteStream)> {
+pub async fn pack_stream(
+    src: PathBuf,
+    opts: PackContext,
+) -> BoxliteResult<(bool, PackedByteStream)> {
     let source_is_dir = src.is_dir();
     if !src.exists() {
         return Err(BoxliteError::NotFound(format!(
@@ -183,7 +177,7 @@ pub async fn pack_stream(src: PathBuf, opts: PackContext) -> BoxliteResult<(bool
             let _ = task_tx.blocking_send(Err(io::Error::other(e)));
         }
     });
-    Ok((source_is_dir, Box::pin(ReceiverStream::new(rx))))
+    Ok((source_is_dir, ReceiverStream::new(rx)))
 }
 
 /// Body of the pack task: runs [`pack_blocking`] under `catch_unwind` so a
@@ -263,7 +257,7 @@ fn unpack_blocking(tar_path: &Path, dest: &Path, opts: &UnpackContext) -> Boxlit
     let tar_file = std::fs::File::open(tar_path).map_err(|e| {
         BoxliteError::Storage(format!("failed to open tar {}: {}", tar_path.display(), e))
     })?;
-    extract_from_reader(tar_file, dest, opts, mode, None)
+    extract_from_reader(tar_file, dest, opts, mode, None, &|_| Ok(()))
 }
 
 /// Extract a tar archive read from `reader` to `dest` using the given `mode`.
@@ -273,7 +267,10 @@ fn extract_from_reader<R: Read>(
     opts: &UnpackContext,
     mode: ExtractionMode,
     mut report: Option<&mut UnpackReport>,
+    validate: &dyn Fn(&Path) -> BoxliteResult<()>,
 ) -> BoxliteResult<()> {
+    // The destination itself can require mkdir or be a renamed single file.
+    validate(dest)?;
     let mut seen = HashSet::new();
     let mut record = |path: &Path, existing_root: Option<&Path>| {
         if let Some(report) = report.as_deref_mut() {
@@ -350,11 +347,10 @@ fn extract_from_reader<R: Read>(
             }
             let mut archive = tar::Archive::new(reader);
             // The same pass tar::Archive::unpack would run, with one
-            // addition: every extracted name is recorded (sanitized, with
-            // implied directories) so callers can hand the created paths to
-            // the box user and refuse entries the mounts shadow — without
-            // consuming the one-shot stream twice. Directory entries are
-            // delayed and sorted the way tar-rs does it (permissions).
+            // addition: names are checked before any entry writes and recorded
+            // for the ownership hand-off. Directory entries are delayed and
+            // sorted the way tar-rs does it (permissions), but validated now
+            // so a forbidden directory stops the stream before its children.
             let mut directories = Vec::new();
             for entry in archive
                 .entries()
@@ -364,6 +360,11 @@ fn extract_from_reader<R: Read>(
                     BoxliteError::Storage(format!("failed to read tar entry: {}", e))
                 })?;
                 if let Ok(path) = file.path() {
+                    if let Some(relative) = sanitize_entry_path(path.as_ref()) {
+                        for relative in implied_dirs_then_self(&relative) {
+                            validate(&dest.join(relative))?;
+                        }
+                    }
                     record(path.as_ref(), Some(dest));
                 }
                 if file.header().entry_type() == tar::EntryType::Directory {
@@ -557,13 +558,32 @@ impl Read for PipeReader {
 ///
 /// Returns the extracted paths relative to `dest` (sanitized, implied
 /// directories included) and which of those directories already existed, so
-/// the caller can hand only newly created paths to the box user and refuse
-/// entries the mounts shadow.
+/// the caller can hand only newly created paths to the box user. Failure may
+/// leave partially written files and directories; extraction does not roll back.
 pub async fn unpack_stream(
-    mut stream: BoxByteStream,
+    stream: BoxByteStream,
     dest: PathBuf,
     opts: UnpackContext,
 ) -> BoxliteResult<UnpackReport> {
+    unpack_stream_checked(stream, dest, opts, |_| Ok(())).await
+}
+
+/// Unpack a stream, checking each destination before writing to it.
+///
+/// `validate` runs on the blocking extraction thread. It receives destination
+/// paths, including implied directories, rather than raw archive names. For
+/// single-file extraction it receives `dest`, regardless of the archived name.
+/// Rejection stops extraction without undoing earlier writes. The caller owns
+/// the validation policy; this layer has no knowledge of containers or mounts.
+pub async fn unpack_stream_checked<F>(
+    mut stream: BoxByteStream,
+    dest: PathBuf,
+    opts: UnpackContext,
+    validate: F,
+) -> BoxliteResult<UnpackReport>
+where
+    F: Fn(&Path) -> BoxliteResult<()> + Send + Sync + 'static,
+{
     let (tx, rx) = mpsc::channel::<io::Result<Vec<u8>>>(COPY_CHUNKS_IN_FLIGHT);
     let forward = tokio::spawn(async move {
         while let Some(item) = stream.next().await {
@@ -580,7 +600,14 @@ pub async fn unpack_stream(
             ExtractionMode::FileToFile
         };
         let mut report = UnpackReport::default();
-        extract_from_reader(&mut reader, &dest, &opts, mode, Some(&mut report))?;
+        extract_from_reader(
+            &mut reader,
+            &dest,
+            &opts,
+            mode,
+            Some(&mut report),
+            &validate,
+        )?;
         // Extraction can finish before the byte stream ends: FileToFile stops
         // after one entry, and tar-rs stops at the archive end marker. Drain
         // the raw stream so a terminal producer error cannot become success.
@@ -592,6 +619,7 @@ pub async fn unpack_stream(
     // Abort the forwarder before mapping the join result, so a panicked
     // unpack task can't leak a forwarder that keeps draining the stream.
     forward.abort();
+    let _ = forward.await;
     result.map_err(|e| BoxliteError::Storage(format!("unpack task join error: {}", e)))?
 }
 
@@ -645,6 +673,20 @@ mod tests {
     use tempfile::TempDir;
 
     // ── Helpers ───────────────────────────────────────────────────
+
+    /// Pack `src` into a tar archive *file*, for the file-based [`unpack`]
+    /// cases below.
+    ///
+    /// Test-only: production packs straight into a stream ([`pack_stream`]),
+    /// so nothing outside these tests needs an archive on disk.
+    async fn pack(src: PathBuf, tar_path: PathBuf, opts: PackContext) -> BoxliteResult<()> {
+        tokio::task::spawn_blocking(move || {
+            let tar_file = std::fs::File::create(&tar_path).expect("create the test archive");
+            pack_blocking(&src, tar_file, &opts)
+        })
+        .await
+        .map_err(|e| BoxliteError::Storage(format!("pack task join error: {}", e)))?
+    }
 
     fn uc(overwrite: bool, mkdir_parents: bool, force_directory: bool) -> UnpackContext {
         UnpackContext {
@@ -1582,6 +1624,206 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "spaces\n");
     }
 
+    // ── checked streaming extraction ────────────────────────────
+
+    fn checked_archive(entries: &[(&str, Option<&[u8]>)]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        for (path, content) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(if content.is_some() {
+                tar::EntryType::Regular
+            } else {
+                tar::EntryType::Directory
+            });
+            header.set_mode(if content.is_some() { 0o600 } else { 0o700 });
+            header.set_size(content.map_or(0, |bytes| bytes.len()) as u64);
+            // Raw names exercise the extractor's normalization, including
+            // names Builder::append_data would reject before the test ran.
+            assert!(path.len() < 100);
+            header.as_mut_bytes()[..path.len()].copy_from_slice(path.as_bytes());
+            header.set_cksum();
+            builder.append(&header, content.unwrap_or(&[])).unwrap();
+        }
+        builder.into_inner().unwrap()
+    }
+
+    fn archive_stream(entries: &[(&str, Option<&[u8]>)]) -> BoxByteStream {
+        Box::pin(futures::stream::iter([Ok(checked_archive(entries))]))
+    }
+
+    #[tokio::test]
+    async fn stream_checked_rejects_destination_before_mkdir_or_overwrite() {
+        let temp = TempDir::new().unwrap();
+        let dest = temp.path().join("missing/renamed");
+        let err = unpack_stream_checked(
+            archive_stream(&[("original", Some(b"new"))]),
+            dest.clone(),
+            uc(true, true, false),
+            |_| Err(BoxliteError::Unsupported("rejected target".into())),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, BoxliteError::Unsupported(_)));
+        assert!(!dest.parent().unwrap().exists());
+
+        std::fs::write(temp.path().join("existing"), b"old").unwrap();
+        let result = unpack_stream_checked(
+            archive_stream(&[("original", Some(b"new"))]),
+            temp.path().join("existing"),
+            uc(true, true, false),
+            |_| Err(BoxliteError::Unsupported("rejected target".into())),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(temp.path().join("existing")).unwrap(), b"old");
+    }
+
+    #[tokio::test]
+    async fn stream_checked_single_file_validates_renamed_destination() {
+        let temp = TempDir::new().unwrap();
+        let dest = temp.path().join("renamed");
+        let expected = dest.clone();
+        let report = unpack_stream_checked(
+            archive_stream(&[("blocked/original", Some(b"copied"))]),
+            dest.clone(),
+            uc(true, true, false),
+            move |target| {
+                assert_eq!(target, expected);
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(dest).unwrap(), b"copied");
+        assert!(report
+            .entry_paths
+            .contains(&PathBuf::from("blocked/original")));
+    }
+
+    #[tokio::test]
+    async fn stream_checked_rejects_explicit_and_implied_directories_before_writes() {
+        for explicit in [false, true] {
+            let temp = TempDir::new().unwrap();
+            let mut entries: Vec<(&str, Option<&[u8]>)> = vec![("before", Some(b"kept"))];
+            if explicit {
+                entries.push(("blocked", None));
+            }
+            entries.extend([
+                ("blocked/child", Some(b"forbidden" as &[u8])),
+                ("after", Some(b"later")),
+            ]);
+            let result = unpack_stream_checked(
+                archive_stream(&entries),
+                temp.path().to_path_buf(),
+                uc(true, true, true),
+                |target| {
+                    if target.file_name() == Some(std::ffi::OsStr::new("blocked")) {
+                        return Err(BoxliteError::Unsupported("blocked directory".into()));
+                    }
+                    Ok(())
+                },
+            )
+            .await;
+            assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
+            assert_eq!(std::fs::read(temp.path().join("before")).unwrap(), b"kept");
+            assert!(!temp.path().join("blocked").exists());
+            assert!(!temp.path().join("after").exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_checked_normalizes_names_like_extraction() {
+        let temp = TempDir::new().unwrap();
+        let dest = temp.path().join("dest");
+        let root = dest.clone();
+        let report = unpack_stream_checked(
+            archive_stream(&[
+                ("/./nested/file", Some(b"safe")),
+                ("../outside", Some(b"skip")),
+            ]),
+            dest.clone(),
+            uc(true, true, true),
+            move |target| {
+                assert!(
+                    target == root
+                        || target == root.join("nested")
+                        || target == root.join("nested/file")
+                );
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(dest.join("nested/file")).unwrap(), b"safe");
+        assert!(!temp.path().join("outside").exists());
+        assert_eq!(
+            report.entry_paths,
+            vec![PathBuf::from("nested"), PathBuf::from("nested/file")]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stream_checked_keeps_preexisting_dirs_and_applies_directory_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = TempDir::new().unwrap();
+        let dest = temp.path().join("dest");
+        std::fs::create_dir_all(dest.join("existing")).unwrap();
+        let report = unpack_stream_checked(
+            archive_stream(&[("existing", None), ("existing/file", Some(b"copied"))]),
+            dest.clone(),
+            uc(true, true, true),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read(dest.join("existing/file")).unwrap(),
+            b"copied"
+        );
+        assert_eq!(
+            std::fs::metadata(dest.join("existing"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(report.preexisting_dirs, vec![PathBuf::from("existing")]);
+    }
+
+    #[tokio::test]
+    async fn stream_checked_rejection_releases_unfinished_input() {
+        use tokio::time::{timeout, Duration};
+        let temp = TempDir::new().unwrap();
+        let (tx, rx) = mpsc::channel(1);
+        tx.send(Ok(checked_archive(&[("blocked", Some(b"never written"))])))
+            .await
+            .unwrap();
+        // Keep the sender open: draining after refusal would wait forever.
+        let result = timeout(
+            Duration::from_secs(5),
+            unpack_stream_checked(
+                Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)),
+                temp.path().to_path_buf(),
+                uc(true, true, true),
+                |target| {
+                    if target.file_name() == Some(std::ffi::OsStr::new("blocked")) {
+                        return Err(BoxliteError::Unsupported("blocked".into()));
+                    }
+                    Ok(())
+                },
+            ),
+        )
+        .await
+        .expect("refusal must not drain the remaining input");
+        assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
+        timeout(Duration::from_secs(5), tx.closed())
+            .await
+            .expect("forwarder must release input");
+        assert!(!temp.path().join("blocked").exists());
+    }
+
     // ── streaming pack/unpack round-trips ────────────────────────
 
     // ── streaming failure-path machinery ──────────────────────────────
@@ -1707,7 +1949,7 @@ mod tests {
         assert!(!source_is_dir);
 
         let dest = tmp.path().join("dest.txt");
-        let report = unpack_stream(stream, dest.clone(), uc(true, true, false))
+        let report = unpack_stream(Box::pin(stream), dest.clone(), uc(true, true, false))
             .await
             .unwrap();
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "streaming hello");
@@ -1738,7 +1980,7 @@ mod tests {
         assert!(source_is_dir);
 
         let dest = tmp.path().join("out");
-        let report = unpack_stream(stream, dest.clone(), uc(true, true, true))
+        let report = unpack_stream(Box::pin(stream), dest.clone(), uc(true, true, true))
             .await
             .unwrap();
         assert_eq!(

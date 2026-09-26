@@ -390,6 +390,12 @@ impl Container {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_test_mounts(mut self, mounts: Vec<PathBuf>) -> Self {
+        self.mount_destinations = mounts;
+        self
+    }
+
     /// Build the exec-session handle for the container's init process — the
     /// session the host attaches to as the box's *main command*.
     ///

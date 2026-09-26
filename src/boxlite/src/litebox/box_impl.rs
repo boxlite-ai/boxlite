@@ -25,7 +25,7 @@ use crate::event_listener::EventListener;
 #[cfg(target_os = "linux")]
 use crate::fs::BindMountHandle;
 use crate::litebox::BoxTunnel;
-use crate::litebox::copy::{CopyOptions, CopySourceKind};
+use crate::litebox::copy::{self, CopyOptions, CopySourceKind};
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::net::NetworkBackend;
@@ -868,20 +868,11 @@ impl BoxImpl {
             ));
         }
 
-        // `TempPath` owns the deletion. Refusing an unreachable destination is
-        // a routine outcome now, and every refusal returns through the `?` on
-        // `upload_tar` — which used to leave the staged tar in the temp dir for
-        // good.
-        let temp_tar = tempfile::Builder::new()
-            .prefix(&format!("cp-in-{}-", self.config.id.as_str()))
-            .suffix(".tar")
-            .tempfile_in(self.runtime.layout.temp_dir())
-            .map_err(|e| BoxliteError::Storage(format!("failed to stage copy archive: {e}")))?
-            .into_temp_path();
-
-        boxlite_shared::tar::pack(
+        // Packed straight into the upload: the archive never lands on disk and
+        // never sits in host memory whole. `pack_stream` reports the source
+        // shape it saw, which spares the guest the peek-and-stage arm.
+        let (source_is_dir, tar) = boxlite_shared::tar::pack_stream(
             host_src.to_path_buf(),
-            temp_tar.to_path_buf(),
             boxlite_shared::tar::PackContext {
                 follow_symlinks: opts.follow_symlinks,
                 include_parent: opts.include_parent,
@@ -891,12 +882,17 @@ impl BoxImpl {
 
         let mut files_iface = live.guest_session.files().await?;
         files_iface
-            .upload_tar(
-                &temp_tar,
+            .upload_stream(
+                tar,
                 container_dst,
                 Some(self.container_id()),
                 true,
                 opts.overwrite,
+                if source_is_dir {
+                    CopySourceKind::Dir
+                } else {
+                    CopySourceKind::File
+                },
             )
             .await?;
 
@@ -941,37 +937,48 @@ impl BoxImpl {
             return Err(BoxliteError::Config("source path cannot be empty".into()));
         }
 
-        // Same as `copy_into`: a refused source and a failed extraction both
-        // return through a `?`, so the deletion belongs to the value, not to
-        // the one path that reaches the end.
-        let temp_tar = tempfile::Builder::new()
-            .prefix(&format!("cp-out-{}-", self.config.id.as_str()))
-            .suffix(".tar")
-            .tempfile_in(self.runtime.layout.temp_dir())
-            .map_err(|e| BoxliteError::Storage(format!("failed to stage copy archive: {e}")))?
-            .into_temp_path();
-
         let mut files_iface = live.guest_session.files().await?;
-        files_iface
-            .download_tar(
+        let (tar, source) = files_iface
+            .download_stream(
                 container_src,
                 Some(self.container_id()),
                 opts.include_parent,
                 opts.follow_symlinks,
-                &temp_tar,
             )
             .await?;
 
-        boxlite_shared::tar::unpack(
-            temp_tar.to_path_buf(),
-            host_dst.to_path_buf(),
-            boxlite_shared::tar::UnpackContext {
-                overwrite: opts.overwrite,
-                mkdir_parents: true,
-                force_directory: false,
-            },
-        )
-        .await?;
+        let unpack_opts = boxlite_shared::tar::UnpackContext {
+            overwrite: opts.overwrite,
+            mkdir_parents: true,
+            // The guest reports the *source* shape; the destination's own
+            // signals — an existing directory, or a trailing slash naming one —
+            // must still win for a single file, matching Unix cp semantics.
+            force_directory: source.is_dir()
+                || host_dst.is_dir()
+                || host_dst.as_os_str().to_string_lossy().ends_with('/'),
+        };
+
+        match source {
+            // A guest that predates the shape hint leaves nothing honest to
+            // put in `force_directory`, so stage the archive and let the peek
+            // decide instead of extracting a tree as a single file.
+            CopySourceKind::Unknown => {
+                copy::unpack_stream_spooled(
+                    tar,
+                    host_dst.to_path_buf(),
+                    unpack_opts,
+                    copy::SpoolPolicy {
+                        dir: self.runtime.layout.temp_dir(),
+                        cap_bytes: boxlite_shared::constants::files::FALLBACK_CAP_BYTES,
+                    },
+                )
+                .await?;
+            }
+            CopySourceKind::File | CopySourceKind::Dir => {
+                boxlite_shared::tar::unpack_stream(tar, host_dst.to_path_buf(), unpack_opts)
+                    .await?;
+            }
+        }
 
         for listener in &self.event_listeners {
             listener.on_file_copied_out(
@@ -1514,10 +1521,6 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self.config.name.as_deref()
     }
 
-    fn as_any_arc(self: std::sync::Arc<Self>) -> std::sync::Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
-
     async fn info(&self) -> BoxliteResult<BoxInfo> {
         Ok(BoxImpl::info(self))
     }
@@ -1558,6 +1561,33 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         opts: CopyOptions,
     ) -> BoxliteResult<()> {
         self.copy_out(container_src, host_dst, opts).await
+    }
+
+    fn copy_in_stream(
+        self: std::sync::Arc<Self>,
+        stream: boxlite_shared::BoxByteStream,
+        container_dst: String,
+        source: CopySourceKind,
+        opts: CopyOptions,
+    ) -> futures::future::BoxFuture<'static, BoxliteResult<()>> {
+        Box::pin(BoxImpl::copy_in_stream(
+            self,
+            stream,
+            container_dst,
+            source,
+            opts,
+        ))
+    }
+
+    fn copy_out_stream(
+        self: std::sync::Arc<Self>,
+        container_src: String,
+        opts: CopyOptions,
+    ) -> futures::future::BoxFuture<
+        'static,
+        BoxliteResult<(boxlite_shared::BoxByteStream, CopySourceKind)>,
+    > {
+        Box::pin(BoxImpl::copy_out_stream(self, container_src, opts))
     }
 
     async fn clone_box(
@@ -1610,7 +1640,9 @@ mod tests {
     use super::*;
     use crate::disk::DiskFormat;
     use crate::litebox::config::ContainerRuntimeConfig;
+    use crate::litebox::local_snapshot::LocalSnapshotBackend;
     use crate::net::{NetworkBackendConfig, NetworkBackendFactory};
+    use crate::portal::interfaces::files::fake::FakeFiles;
     use crate::runtime::id::BoxIDMint;
     use crate::runtime::options::{BoxOptions, BoxliteOptions, PortProtocol, PortSpec, RootfsSpec};
     use crate::runtime::rt_impl::RuntimeImpl;
@@ -1621,9 +1653,11 @@ mod tests {
     use boxlite_shared::{
         BoxTransport, Container as ContainerService, ContainerInitRequest, ContainerInitResponse,
         ContainerInitSuccess, ContainerServer, ContainerStartRequest, ContainerStartResponse,
-        ContainerStartSuccess, container_init_response, container_start_response,
+        ContainerStartSuccess, FilesServer, container_init_response, container_start_response,
     };
     use chrono::Utc;
+    use futures::StreamExt;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicUsize};
     use tempfile::TempDir;
     use tokio::sync::{Notify, Semaphore};
@@ -1766,7 +1800,10 @@ mod tests {
         }
     }
 
-    async fn start_stub_guest(gate: Arc<StartGate>) -> (GuestSession, JoinHandle<()>) {
+    async fn start_stub_guest(
+        gate: Arc<StartGate>,
+        files: FakeFiles,
+    ) -> (GuestSession, JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind stub guest");
@@ -1777,6 +1814,7 @@ mod tests {
         let server = tokio::spawn(async move {
             Server::builder()
                 .add_service(ContainerServer::new(StartStubGuest { gate }))
+                .add_service(FilesServer::new(files))
                 .serve_with_incoming(incoming)
                 .await
                 .expect("serve stub guest");
@@ -1812,14 +1850,41 @@ mod tests {
         }
     }
 
+    impl StartFixture {
+        /// The handle a runtime hands out for this box, minus the watcher
+        /// `litebox_from_impl` arms: nothing here runs a main command.
+        fn litebox(&self) -> crate::litebox::LiteBox {
+            let box_impl = Arc::clone(&self.box_impl);
+            crate::litebox::LiteBox::new(
+                Arc::clone(&box_impl) as Arc<dyn crate::runtime::backend::BoxBackend>,
+                Arc::clone(&box_impl) as Arc<dyn crate::runtime::backend::BoxNetworkBackend>,
+                Arc::new(LocalSnapshotBackend::new(box_impl)),
+            )
+        }
+    }
+
     async fn running_box_for_start_test(gate: Arc<StartGate>) -> StartFixture {
+        running_box(gate, FakeFiles::default()).await
+    }
+
+    /// A Running box whose guest answers `Files` RPCs with `files`, and whose
+    /// `Container.Start` is already recorded as done — the shape
+    /// `init_live_state` leaves an adopted running box in — so the copy paths
+    /// reach the guest with no VM behind it.
+    async fn running_box_for_copy_test(files: FakeFiles) -> StartFixture {
+        let fixture = running_box(Arc::new(StartGate::default()), files).await;
+        let _ = fixture.box_impl.container_start.set(());
+        fixture
+    }
+
+    async fn running_box(gate: Arc<StartGate>, files: FakeFiles) -> StartFixture {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
         })
         .expect("create runtime");
-        let (guest_session, server) = start_stub_guest(gate).await;
+        let (guest_session, server) = start_stub_guest(gate, files).await;
 
         let id = BoxIDMint::mint();
         let config = BoxConfig {
@@ -1881,6 +1946,283 @@ mod tests {
             _temp_dir: temp_dir,
             server,
         }
+    }
+
+    // ── File copies against the fake guest ─────────────────────────
+    //
+    // The copy paths only ever ran with a booted VM behind them. `FakeFiles`
+    // answers the guest's `Files` RPCs over loopback instead, so everything
+    // asserted below — the tar the guest received, the request it was asked to
+    // serve, what landed on the host — crossed a real gRPC connection.
+
+    /// `tree/{a.txt,b.txt}` under `root`.
+    fn host_tree(root: &Path) -> PathBuf {
+        let tree = root.join("tree");
+        std::fs::create_dir_all(&tree).expect("create host tree");
+        std::fs::write(tree.join("a.txt"), "alpha").expect("write a.txt");
+        std::fs::write(tree.join("b.txt"), "beta").expect("write b.txt");
+        tree
+    }
+
+    /// A real archive from the packer production uses, so the bytes the fake
+    /// guest serves are the ones a copy actually moves.
+    async fn packed(src: &Path, include_parent: bool) -> Vec<u8> {
+        let (_, stream) = boxlite_shared::tar::pack_stream(
+            src.to_path_buf(),
+            boxlite_shared::tar::PackContext {
+                follow_symlinks: false,
+                include_parent,
+            },
+        )
+        .await
+        .expect("pack");
+        let mut bytes = Vec::new();
+        let mut stream = std::pin::pin!(stream);
+        while let Some(chunk) = stream.next().await {
+            bytes.extend_from_slice(&chunk.expect("chunk"));
+        }
+        bytes
+    }
+
+    fn entry_names(archive: &[u8]) -> Vec<String> {
+        let mut archive = tar::Archive::new(archive);
+        archive
+            .entries()
+            .expect("tar entries")
+            .map(|entry| {
+                let entry = entry.expect("tar entry");
+                entry
+                    .path()
+                    .expect("entry path")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
+    }
+
+    /// `bytes` in two chunks, so the receiver has to reassemble.
+    fn two_chunks(
+        bytes: &[u8],
+    ) -> tokio_stream::Iter<std::vec::IntoIter<std::io::Result<Vec<u8>>>> {
+        let (head, tail) = bytes.split_at(bytes.len() / 2);
+        tokio_stream::iter(vec![Ok(head.to_vec()), Ok(tail.to_vec())])
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn copy_into_packs_the_host_tree_and_uploads_it_with_the_directory_hint() {
+        let files = FakeFiles::default();
+        let fixture = running_box_for_copy_test(files.clone()).await;
+        let host = TempDir::new_in("/tmp").expect("host temp dir");
+        let tree = host_tree(host.path());
+
+        fixture
+            .box_impl
+            .copy_into(&tree, "/app", CopyOptions::default())
+            .await
+            .expect("copy_into");
+
+        let uploads = files.uploads.lock().expect("uploads");
+        assert_eq!(uploads.len(), 1);
+        let upload = &uploads[0];
+        assert_eq!(upload.dest_path, "/app");
+        assert_eq!(upload.container_id, fixture.box_impl.container_id());
+        assert!(upload.mkdir_parents && upload.overwrite);
+        assert_eq!(upload.source_is_dir, Some(true));
+        let names = entry_names(&upload.archive);
+        assert!(
+            names.iter().any(|name| name == "tree/a.txt")
+                && names.iter().any(|name| name == "tree/b.txt"),
+            "include_parent keeps the tree root: {names:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn copy_into_of_a_single_file_reports_the_file_hint_and_honours_no_overwrite() {
+        let files = FakeFiles::default();
+        let fixture = running_box_for_copy_test(files.clone()).await;
+        let host = TempDir::new_in("/tmp").expect("host temp dir");
+        let file = host.path().join("payload.bin");
+        std::fs::write(&file, b"payload").expect("write payload");
+
+        fixture
+            .box_impl
+            .copy_into(
+                &file,
+                "/app/payload.bin",
+                CopyOptions::default().no_overwrite(),
+            )
+            .await
+            .expect("copy_into");
+
+        let uploads = files.uploads.lock().expect("uploads");
+        let upload = &uploads[0];
+        assert_eq!(upload.source_is_dir, Some(false));
+        assert!(!upload.overwrite);
+        assert_eq!(entry_names(&upload.archive), vec!["payload.bin"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn copy_out_with_a_directory_hint_lands_the_tree_through_the_streaming_arm() {
+        let host = TempDir::new_in("/tmp").expect("host temp dir");
+        let tree = host_tree(host.path());
+        let files = FakeFiles {
+            archive: packed(&tree, true).await,
+            source_is_dir: Some(true),
+            ..Default::default()
+        };
+        let fixture = running_box_for_copy_test(files.clone()).await;
+        let dst = host.path().join("out");
+
+        fixture
+            .box_impl
+            .copy_out("/data/tree", &dst, CopyOptions::default())
+            .await
+            .expect("copy_out");
+
+        assert_eq!(
+            std::fs::read_to_string(dst.join("tree/a.txt")).expect("a.txt landed"),
+            "alpha"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dst.join("tree/b.txt")).expect("b.txt landed"),
+            "beta"
+        );
+        let downloads = files.downloads.lock().expect("downloads");
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].src_path, "/data/tree");
+        assert_eq!(downloads[0].container_id, fixture.box_impl.container_id());
+        assert!(downloads[0].include_parent && !downloads[0].follow_symlinks);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn copy_out_with_a_file_hint_lands_the_destination_as_a_file() {
+        let host = TempDir::new_in("/tmp").expect("host temp dir");
+        let file = host.path().join("payload.bin");
+        std::fs::write(&file, b"payload").expect("write payload");
+        let files = FakeFiles {
+            archive: packed(&file, false).await,
+            source_is_dir: Some(false),
+            ..Default::default()
+        };
+        let fixture = running_box_for_copy_test(files).await;
+        // The parent does not exist yet: `mkdir_parents` has to conjure it.
+        let dst = host.path().join("landed").join("copy.bin");
+
+        fixture
+            .box_impl
+            .copy_out("/data/payload.bin", &dst, CopyOptions::default())
+            .await
+            .expect("copy_out");
+
+        assert!(
+            dst.is_file(),
+            "a file hint lands the destination itself as the file"
+        );
+        assert_eq!(std::fs::read(&dst).expect("read landed file"), b"payload");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn copy_out_without_a_hint_spools_the_archive_and_still_lands_a_tree() {
+        let host = TempDir::new_in("/tmp").expect("host temp dir");
+        let tree = host_tree(host.path());
+        // A pre-hint guest: the archive's own shape is the only signal left.
+        let files = FakeFiles {
+            archive: packed(&tree, false).await,
+            source_is_dir: None,
+            ..Default::default()
+        };
+        let fixture = running_box_for_copy_test(files).await;
+        let dst = host.path().join("out");
+
+        fixture
+            .box_impl
+            .copy_out("/data/tree", &dst, CopyOptions::default())
+            .await
+            .expect("copy_out");
+
+        assert_eq!(
+            std::fs::read_to_string(dst.join("a.txt")).expect("a.txt landed"),
+            "alpha"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dst.join("b.txt")).expect("b.txt landed"),
+            "beta"
+        );
+        let spool_dir = fixture.box_impl.runtime.layout.temp_dir();
+        let left_behind: Vec<_> = std::fs::read_dir(&spool_dir)
+            .expect("runtime temp dir exists")
+            .map(|entry| entry.expect("dir entry").path())
+            .collect();
+        assert!(
+            left_behind.is_empty(),
+            "spool not cleaned up: {left_behind:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn litebox_copy_in_stream_reaches_the_guest_through_the_local_backend() {
+        let files = FakeFiles::default();
+        let fixture = running_box_for_copy_test(files.clone()).await;
+        let litebox = fixture.litebox();
+        let host = TempDir::new_in("/tmp").expect("host temp dir");
+        let archive = packed(&host_tree(host.path()), true).await;
+
+        litebox
+            .copy_in_stream(
+                two_chunks(&archive),
+                "/app",
+                CopySourceKind::Dir,
+                CopyOptions::default(),
+            )
+            .await
+            .expect("copy_in_stream");
+        litebox
+            .copy_in_stream(
+                two_chunks(&archive),
+                "/app2",
+                CopySourceKind::Unknown,
+                CopyOptions::default(),
+            )
+            .await
+            .expect("copy_in_stream without a hint");
+
+        let uploads = files.uploads.lock().expect("uploads");
+        assert_eq!(uploads.len(), 2);
+        assert_eq!(uploads[0].dest_path, "/app");
+        assert_eq!(uploads[0].archive, archive);
+        assert_eq!(uploads[0].source_is_dir, Some(true));
+        assert_eq!(
+            uploads[1].source_is_dir, None,
+            "an unknown shape is omitted, not guessed"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn litebox_copy_out_stream_hands_back_the_guests_bytes_and_shape() {
+        let host = TempDir::new_in("/tmp").expect("host temp dir");
+        let archive = packed(&host_tree(host.path()), true).await;
+        let files = FakeFiles {
+            archive: archive.clone(),
+            source_is_dir: Some(true),
+            ..Default::default()
+        };
+        let fixture = running_box_for_copy_test(files.clone()).await;
+
+        let (mut stream, kind) = fixture
+            .litebox()
+            .copy_out_stream("/data/tree", CopyOptions::default())
+            .await
+            .expect("copy_out_stream");
+
+        assert_eq!(kind, CopySourceKind::Dir);
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            bytes.extend_from_slice(&chunk.expect("chunk"));
+        }
+        assert_eq!(bytes, archive);
+        let downloads = files.downloads.lock().expect("downloads");
+        assert_eq!(downloads[0].src_path, "/data/tree");
+        assert!(downloads[0].include_parent);
     }
 
     async fn wait_for_background_starts(box_impl: &BoxImpl, expected: usize) {

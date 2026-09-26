@@ -3122,6 +3122,40 @@ mod tests {
     /// a box by either, so both spellings belong in these tests.
     const STUB_BOX_NAME: &str = "swept-box";
 
+    /// The bytes the stub serves for a download; the handler must relay them
+    /// untouched, so any recognisable sequence will do.
+    const STUB_ARCHIVE: &[u8] = b"archive bytes the file route must relay intact";
+
+    /// What the stub's `/files` route saw, and how it answers reads.
+    #[derive(Default)]
+    struct StubFiles {
+        /// `(raw query string, body length)` of every PUT, in order.
+        uploads: std::sync::Mutex<Vec<(String, usize)>>,
+        download: std::sync::Mutex<StubDownload>,
+    }
+
+    /// How the stub answers a GET on `/files`.
+    #[derive(Clone, Copy)]
+    enum StubDownload {
+        /// `STUB_ARCHIVE` as `application/x-tar`; the shape header only when `Some`.
+        Archive { source_is_dir: Option<bool> },
+        /// The 404 envelope the runner and `serve` both emit for a missing source.
+        Missing,
+        /// Megabytes of body, then an error. The volume is the point: on
+        /// loopback a small response is written and torn down before the
+        /// client reads a byte, so the failure lands on the request instead
+        /// of on the stream, which is not what the relay has to handle.
+        Severed,
+    }
+
+    impl Default for StubDownload {
+        fn default() -> Self {
+            Self::Archive {
+                source_is_dir: Some(true),
+            }
+        }
+    }
+
     /// A running stub upstream, plus counters for the writes it is asked to make.
     struct StubUpstream {
         url: String,
@@ -3129,6 +3163,7 @@ mod tests {
         stops: Arc<std::sync::atomic::AtomicUsize>,
         deletes: Arc<std::sync::atomic::AtomicUsize>,
         execs: Arc<std::sync::atomic::AtomicUsize>,
+        files: Arc<StubFiles>,
     }
 
     impl StubUpstream {
@@ -3178,6 +3213,7 @@ mod tests {
         let deletes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let stops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let execs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let files = Arc::new(StubFiles::default());
         let app = axum::Router::new()
             .route(
                 "/v1/boxes/{id}/exec",
@@ -3231,6 +3267,76 @@ mod tests {
                 }),
             )
             .route(
+                "/v1/boxes/{id}/files",
+                axum::routing::put({
+                    let files = Arc::clone(&files);
+                    move |axum::extract::Path(id): axum::extract::Path<String>,
+                          axum::extract::RawQuery(query): axum::extract::RawQuery,
+                          body: axum::body::Bytes| {
+                        let files = Arc::clone(&files);
+                        async move {
+                            if id != STUB_BOX_ID && id != STUB_BOX_NAME {
+                                return StatusCode::NOT_FOUND.into_response();
+                            }
+                            files
+                                .uploads
+                                .lock()
+                                .unwrap()
+                                .push((query.unwrap_or_default(), body.len()));
+                            StatusCode::NO_CONTENT.into_response()
+                        }
+                    }
+                })
+                .get({
+                    let files = Arc::clone(&files);
+                    move |axum::extract::Path(id): axum::extract::Path<String>| {
+                        let files = Arc::clone(&files);
+                        async move {
+                            if id != STUB_BOX_ID && id != STUB_BOX_NAME {
+                                return StatusCode::NOT_FOUND.into_response();
+                            }
+                            let download = *files.download.lock().unwrap();
+                            match download {
+                                StubDownload::Archive { source_is_dir } => {
+                                    let mut response = axum::response::Response::builder()
+                                        .status(StatusCode::OK)
+                                        .header("Content-Type", "application/x-tar");
+                                    if let Some(is_dir) = source_is_dir {
+                                        response = response
+                                            .header("X-Boxlite-Source-Is-Dir", is_dir.to_string());
+                                    }
+                                    response.body(axum::body::Body::from(STUB_ARCHIVE)).unwrap()
+                                }
+                                StubDownload::Missing => (
+                                    StatusCode::NOT_FOUND,
+                                    Json(serde_json::json!({"error": {
+                                        "type": "NotFoundError",
+                                        "code": "not_found",
+                                        "message": "source path does not exist",
+                                    }})),
+                                )
+                                    .into_response(),
+                                StubDownload::Severed => {
+                                    let bulk = (0..32).map(|_| {
+                                        Ok(axum::body::Bytes::from_static(&[b'a'; 64 * 1024]))
+                                    });
+                                    let cut =
+                                        std::iter::once(Err(std::io::Error::other("upstream cut")));
+                                    axum::response::Response::builder()
+                                        .status(StatusCode::OK)
+                                        .header("Content-Type", "application/x-tar")
+                                        .header("X-Boxlite-Source-Is-Dir", "false")
+                                        .body(axum::body::Body::from_stream(futures::stream::iter(
+                                            bulk.chain(cut),
+                                        )))
+                                        .unwrap()
+                                }
+                            }
+                        }
+                    }
+                }),
+            )
+            .route(
                 "/v1/boxes/{id}",
                 axum::routing::get(
                     // Answers to either spelling with the same box, reporting its
@@ -3272,6 +3378,7 @@ mod tests {
             stops,
             deletes,
             execs,
+            files,
         }
     }
 
@@ -4305,5 +4412,161 @@ mod tests {
             !surviving.contains_key("exec-1"),
             "an orphaned exec past the lifetime cap must still be killed and evicted"
         );
+    }
+
+    // ── The files route past the resolver ─────────────────────────
+    //
+    // The AutoResume tests stop at `get_or_resume_box`. These run the handler
+    // bodies: the stub upstream answers `/files`, so every byte and header
+    // asserted on travelled client → serve → RestBox → upstream and back.
+
+    fn state_for(upstream: &StubUpstream) -> Arc<AppState> {
+        Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
+                .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        })
+    }
+
+    fn header<'a>(response: &'a reqwest::Response, name: &str) -> Option<&'a str> {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn uploading_files_streams_the_body_upstream_with_the_clients_shape_hint() {
+        let upstream = stub_upstream("running", true).await;
+        let (base, server) = serve_router(state_for(&upstream)).await;
+        let client = reqwest::Client::new();
+
+        let hinted = client
+            .put(format!(
+                "{base}/v1/boxes/{STUB_BOX_ID}/files?path=/app&source_is_dir=true"
+            ))
+            .body(vec![7u8; 3000])
+            .send()
+            .await
+            .expect("request must reach the server");
+        assert_eq!(hinted.status().as_u16(), 204);
+        let hintless = client
+            .put(format!("{base}/v1/boxes/{STUB_BOX_ID}/files?path=/app"))
+            .body(vec![7u8; 10])
+            .send()
+            .await
+            .expect("request must reach the server");
+        assert_eq!(hintless.status().as_u16(), 204);
+
+        let uploads = upstream.files.uploads.lock().unwrap().clone();
+        assert_eq!(
+            uploads,
+            vec![
+                ("path=%2Fapp&source_is_dir=true".to_string(), 3000),
+                ("path=%2Fapp".to_string(), 10),
+            ],
+            "the hint is forwarded when the client gave one and omitted, not guessed, when not"
+        );
+
+        server.abort();
+        upstream.task.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn downloading_files_relays_the_archive_and_the_upstreams_shape_header() {
+        let upstream = stub_upstream("running", true).await;
+        let (base, server) = serve_router(state_for(&upstream)).await;
+
+        let response = reqwest::Client::new()
+            .get(format!("{base}/v1/boxes/{STUB_BOX_ID}/files?path=/data"))
+            .send()
+            .await
+            .expect("request must reach the server");
+
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(header(&response, "content-type"), Some("application/x-tar"));
+        assert_eq!(header(&response, "x-boxlite-source-is-dir"), Some("true"));
+        assert_eq!(response.bytes().await.expect("body"), STUB_ARCHIVE);
+
+        server.abort();
+        upstream.task.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_download_from_an_upstream_that_omits_the_shape_header_omits_it_too() {
+        let upstream = stub_upstream("running", true).await;
+        *upstream.files.download.lock().unwrap() = StubDownload::Archive {
+            source_is_dir: None,
+        };
+        let (base, server) = serve_router(state_for(&upstream)).await;
+
+        let response = reqwest::Client::new()
+            .get(format!("{base}/v1/boxes/{STUB_BOX_ID}/files?path=/data"))
+            .send()
+            .await
+            .expect("request must reach the server");
+
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(
+            header(&response, "x-boxlite-source-is-dir"),
+            None,
+            "a shape the upstream could not tell is omitted, never fabricated"
+        );
+        assert_eq!(response.bytes().await.expect("body"), STUB_ARCHIVE);
+
+        server.abort();
+        upstream.task.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_missing_source_upstream_is_answered_with_its_status_not_a_truncated_200() {
+        let upstream = stub_upstream("running", true).await;
+        *upstream.files.download.lock().unwrap() = StubDownload::Missing;
+        let (base, server) = serve_router(state_for(&upstream)).await;
+
+        let response = reqwest::Client::new()
+            .get(format!("{base}/v1/boxes/{STUB_BOX_ID}/files?path=/missing"))
+            .send()
+            .await
+            .expect("request must reach the server");
+
+        assert_eq!(response.status().as_u16(), 404);
+        let body = response.text().await.expect("an error body");
+        assert!(
+            body.contains("not_found"),
+            "the upstream's class must survive: {body}"
+        );
+
+        server.abort();
+        upstream.task.abort();
+    }
+
+    /// A tar cut on a block boundary extracts without error, so a body that
+    /// ends cleanly after the cut would pass for a whole archive. The relay
+    /// has to sever the response instead.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_download_cut_mid_stream_is_severed_rather_than_ended_cleanly() {
+        let upstream = stub_upstream("running", true).await;
+        *upstream.files.download.lock().unwrap() = StubDownload::Severed;
+        let (base, server) = serve_router(state_for(&upstream)).await;
+
+        let response = reqwest::Client::new()
+            .get(format!("{base}/v1/boxes/{STUB_BOX_ID}/files?path=/data"))
+            .send()
+            .await
+            .expect("the headers are committed before the cut");
+
+        assert_eq!(response.status().as_u16(), 200);
+        assert!(
+            response.bytes().await.is_err(),
+            "a clean end would have handed the client the partial archive as whole"
+        );
+
+        server.abort();
+        upstream.task.abort();
     }
 }
