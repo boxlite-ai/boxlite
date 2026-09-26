@@ -104,7 +104,7 @@ pub(crate) struct SshManager {
 #[derive(Default)]
 struct SshState {
     config: Option<SshConfig>,
-    tasks: Option<Arc<TaskGroup>>,
+    service_tasks: Option<Arc<TaskGroup>>,
     listener: Option<JoinHandle<()>>,
     status: boxlite_shared::SshStatus,
 }
@@ -149,7 +149,7 @@ impl SshManager {
         let host_public_key = russh::keys::PublicKey::new(public.key_data().clone(), "")
             .to_openssh()
             .map_err(|_| tonic::Status::internal("failed to encode SSH host public key"))?;
-        let tasks = Arc::new(TaskGroup::default());
+        let service_tasks = Arc::new(TaskGroup::default());
         state.status = boxlite_shared::SshStatus {
             enabled: true,
             listen_address: address.to_string(),
@@ -158,8 +158,8 @@ impl SshManager {
             host_key_fingerprint: public.fingerprint(russh::keys::HashAlg::Sha256).to_string(),
         };
         state.config = Some(config);
-        state.listener = Some(tasks.spawn(accept_loop(listener, guest)));
-        state.tasks = Some(tasks);
+        state.listener = Some(service_tasks.spawn(accept_loop(listener, guest)));
+        state.service_tasks = Some(service_tasks);
         info!(%address, generation = state.status.generation, "embedded SSH listener ready");
         Ok(state.status.clone())
     }
@@ -168,9 +168,9 @@ impl SshManager {
         let state = self.state.lock().await;
         let mut status = state.status.clone();
         if state
-            .tasks
+            .service_tasks
             .as_ref()
-            .is_some_and(|tasks| tasks.is_cancelled())
+            .is_some_and(|service_tasks| service_tasks.is_cancelled())
             || state.listener.as_ref().is_none_or(JoinHandle::is_finished)
         {
             status.enabled = false;
@@ -192,12 +192,12 @@ impl SshManager {
             generation: state.status.generation,
             ..Default::default()
         };
-        if let Some(tasks) = &state.tasks {
-            tasks.cancel();
+        if let Some(service_tasks) = &state.service_tasks {
+            service_tasks.cancel();
         }
         let draining = async {
-            if let Some(tasks) = &state.tasks {
-                tasks.wait().await;
+            if let Some(service_tasks) = &state.service_tasks {
+                service_tasks.wait().await;
             }
             if let Some(listener) = state.listener.as_mut() {
                 listener.await
@@ -211,7 +211,7 @@ impl SshManager {
                 tonic::Status::deadline_exceeded("timed out waiting for SSH sessions to stop")
             })?;
         state.listener = None;
-        state.tasks = None;
+        state.service_tasks = None;
         state.config = None;
         listener_result
             .map_err(|_| tonic::Status::internal("SSH listener task failed while stopping").into())
@@ -223,7 +223,7 @@ impl SshManager {
     ) -> tokio_util::task::task_tracker::TaskTrackerToken {
         let mut state = self.state.lock().await;
         state
-            .tasks
+            .service_tasks
             .get_or_insert_with(|| Arc::new(TaskGroup::default()))
             .token()
     }
@@ -233,10 +233,10 @@ impl SshManager {
         if !state.status.enabled {
             return;
         }
-        let (Some(config), Some(tasks)) = (&state.config, &state.tasks) else {
+        let (Some(config), Some(service_tasks)) = (&state.config, &state.service_tasks) else {
             return;
         };
-        if tasks.is_cancelled() {
+        if service_tasks.is_cancelled() {
             return;
         }
         let Some(guest) = self.guest.get().and_then(Weak::upgrade) else {
@@ -248,7 +248,7 @@ impl SshManager {
         };
         let config_server = config.server.clone();
         let authorizer = config.authorizer.clone();
-        let connection_tasks = tasks.child();
+        let connection_tasks = service_tasks.child();
         connection_tasks
             .clone()
             .spawn_tracked(move |cancel| async move {
@@ -409,3 +409,6 @@ fn socket_with_shutdown_handle(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod forwarding_fixture;

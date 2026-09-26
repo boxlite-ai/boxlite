@@ -46,7 +46,7 @@ pub(crate) struct SshConnection {
     forwarding: ForwardingManager,
     reverse_streamlocal: ReverseStreamlocalManager,
     authenticated: Option<oneshot::Sender<()>>,
-    tasks: Arc<super::TaskGroup>,
+    connection_tasks: Arc<super::TaskGroup>,
     _lifetime: tokio_util::task::task_tracker::TaskTrackerToken,
 }
 
@@ -55,9 +55,9 @@ impl SshConnection {
         guest: Arc<GuestServer>,
         authorizer: Arc<SshAuthorizer>,
         authenticated: oneshot::Sender<()>,
-        tasks: Arc<super::TaskGroup>,
+        connection_tasks: Arc<super::TaskGroup>,
     ) -> Self {
-        let lifetime = tasks.token();
+        let lifetime = connection_tasks.token();
         Self {
             guest,
             authorizer,
@@ -65,16 +65,16 @@ impl SshConnection {
             pending_state: HashMap::new(),
             bridges: HashMap::new(),
             permissions: SessionPermissions::default(),
-            forwarding: ForwardingManager::new(tasks.clone()),
-            reverse_streamlocal: ReverseStreamlocalManager::new(tasks.clone()),
+            forwarding: ForwardingManager::new(connection_tasks.clone()),
+            reverse_streamlocal: ReverseStreamlocalManager::new(connection_tasks.clone()),
             authenticated: Some(authenticated),
-            tasks,
+            connection_tasks,
             _lifetime: lifetime,
         }
     }
 
     fn commit_authentication(&mut self, identity: Option<AuthorizedIdentity>) -> Auth {
-        let Some(identity) = identity.filter(|_| !self.tasks.is_cancelled()) else {
+        let Some(identity) = identity.filter(|_| !self.connection_tasks.is_cancelled()) else {
             self.permissions = SessionPermissions::default();
             return Auth::reject();
         };
@@ -95,14 +95,14 @@ impl SshConnection {
         command: Command,
         session_handle: SessionHandle,
     ) -> Result<(), String> {
-        if self.tasks.is_cancelled() {
+        if self.connection_tasks.is_cancelled() {
             return Err("SSH service is stopping".into());
         }
         let mut state = self.pending_state.remove(&channel_id).unwrap_or_default();
         let tty = state.tty.take();
         let env = state.into_execution_env();
         let bridge = ChannelBridge::start(
-            self.tasks.clone(),
+            self.connection_tasks.clone(),
             self.guest.clone(),
             command,
             tty,
@@ -141,7 +141,7 @@ impl russh::server::Handler for SshConnection {
     ) -> Result<Auth, Self::Error> {
         // Uniform probes hide account existence. Raw keys and certificates
         // are authorized only after russh verifies proof of possession.
-        Ok(if self.tasks.is_cancelled() {
+        Ok(if self.connection_tasks.is_cancelled() {
             Auth::reject()
         } else {
             Auth::Accept
@@ -172,7 +172,9 @@ impl russh::server::Handler for SshConnection {
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if self.tasks.is_cancelled() || self.open_channel_count() >= MAX_CHANNELS_PER_CONNECTION {
+        if self.connection_tasks.is_cancelled()
+            || self.open_channel_count() >= MAX_CHANNELS_PER_CONNECTION
+        {
             warn!(
                 open_channels = self.open_channel_count(),
                 limit = MAX_CHANNELS_PER_CONNECTION,
@@ -216,7 +218,7 @@ impl russh::server::Handler for SshConnection {
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if self.tasks.is_cancelled() || !self.permissions.port_forwarding {
+        if self.connection_tasks.is_cancelled() || !self.permissions.port_forwarding {
             reply
                 .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
                 .await;
@@ -251,7 +253,7 @@ impl russh::server::Handler for SshConnection {
         reply: ChannelOpenHandle,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if self.tasks.is_cancelled() {
+        if self.connection_tasks.is_cancelled() {
             reply
                 .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
                 .await;
@@ -269,7 +271,7 @@ impl russh::server::Handler for SshConnection {
         let channel_id = channel.id();
         let session_handle = session.handle();
         match ChannelBridge::start(
-            self.tasks.clone(),
+            self.connection_tasks.clone(),
             self.guest.clone(),
             Command::Streamlocal(socket_path.to_string()),
             None,
@@ -506,7 +508,7 @@ impl russh::server::Handler for SshConnection {
         port: &mut u32,
         session: &mut Session,
     ) -> Result<bool, Self::Error> {
-        if self.tasks.is_cancelled() || !self.permissions.port_forwarding {
+        if self.connection_tasks.is_cancelled() || !self.permissions.port_forwarding {
             return Ok(false);
         }
         Ok(self
@@ -532,7 +534,7 @@ impl russh::server::Handler for SshConnection {
         socket_path: &str,
         session: &mut Session,
     ) -> Result<bool, Self::Error> {
-        if self.tasks.is_cancelled()
+        if self.connection_tasks.is_cancelled()
             || !reverse_streamlocal_allowed(self.permissions.port_forwarding, socket_path)
         {
             return Ok(false);
@@ -621,7 +623,7 @@ impl russh::server::Handler for SshConnection {
 
 impl Drop for SshConnection {
     fn drop(&mut self) {
-        self.tasks.cancel();
+        self.connection_tasks.cancel();
         for (_, mut bridge) in self.bridges.drain() {
             bridge.terminate_running();
         }
@@ -878,7 +880,7 @@ mod tests {
             tx,
             Arc::new(super::super::TaskGroup::default()),
         );
-        cancelled.tasks.cancel();
+        cancelled.connection_tasks.cancel();
         for login in ["root", "nobody"] {
             assert_eq!(
                 cancelled
