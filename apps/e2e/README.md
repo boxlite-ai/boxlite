@@ -134,6 +134,53 @@ services are needed — the remote stack provides everything.
 
 ## Running against local stack
 
+### Official endpoint deployment scenario
+
+This opt-in scenario requires the official endpoint API and proxy from
+[PR #1597](https://github.com/boxlite-ai/boxlite/pull/1597) in the checkout and
+deployment. Its two tests create real boxes through REST, start HTTP/WebSocket
+services inside the guests, and access the issued `app-<name>` URLs. They verify
+anonymous access to public boxes, private-box authentication, port and box
+rebinding, revocation, and reactivation. Cleanup revokes bindings and removes
+the boxes; name reservations intentionally remain. Cleanup failures fail the run.
+
+On a **dedicated Linux KVM host** with systemd and sudo:
+
+```bash
+make test:e2e:proxy:local
+```
+
+This rebuilds the runner and proxy, restarts the API with migrations, builds the
+Python SDK from the checkout, and runs the scenario. It uses the existing local
+bootstrap, but does not use the legacy snapshot fixture setup. It owns and stops
+the `boxlite-api`, `boxlite-runner`, and `boxlite-proxy` units, retaining local
+database/build caches. Missing KVM, missing endpoint support, unhealthy services,
+or failed requests produce a failing result, not a skip. The tests retain the
+runner-journal check that every created box reached the runner.
+
+Local mode uses HTTP and dials loopback while preserving the issued Host. It
+does **not** qualify public DNS or a production TLS certificate. Against an
+already deployed dev/staging stack, configure the existing remote API variables
+above and run `make test:e2e:proxy`; leave `BOXLITE_E2E_PROXY_CONNECT_HOST` unset
+to use normal DNS. HTTPS URLs use certificate validation and the issued SNI.
+Use `BOXLITE_E2E_SKIP_PATH_VERIFY=1` only when the runner journal is remote.
+
+CI reuses `E2E local`'s KVM instance, serialization and maintainer approval gate:
+
+- Manual dispatch: select `suite=hosted-proxy` on a ref containing both this
+  harness and the endpoint feature.
+- PR: add `e2e-hosted-proxy`, then apply `e2e-local` to approve that exact head.
+  Fork pushes need `e2e-local` removed and re-applied. The workflow changes must
+  first be on the default branch because `pull_request_target` uses that version.
+
+The artifact `e2e-official-endpoints-<run>-<attempt>` contains JUnit results and
+the source SHA. A submitted harness or successful collection is not a VM test
+pass; inspect that run's test result. The scenario file is explicitly named
+`cases/official_endpoints.py` so ordinary suites against older deployments do
+not silently acquire this feature requirement.
+
+### General REST suite
+
 ```bash
 # Everything (after bootstrap + fixture_setup):
 apps/e2e/run.sh

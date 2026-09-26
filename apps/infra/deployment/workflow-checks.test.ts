@@ -500,3 +500,40 @@ test('the wheel smoke check rejects a package with a missing native extension', 
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+
+test('hosted proxy E2E reaches the KVM workflow without dropping fork approval', () => {
+  const definition = workflow('e2e-local.yml')
+  for (const path of ['apps/proxy/pkg/proxy/endpoint.go', 'apps/api/src/box/controllers/box-endpoint.controller.ts', 'apps/e2e/cases/official_endpoints.py']) {
+    assert.equal(acceptsFiles('e2e-local.yml', 'pull_request_target', [path]), true, path)
+  }
+  const gate = definition.jobs['should-run'].steps[0].run
+  for (const [labels, action, addedLabel, allowed] of [
+    [['e2e-hosted-proxy'], 'labeled', 'e2e-hosted-proxy', false],
+    [['e2e-hosted-proxy', 'e2e-local'], 'labeled', 'e2e-hosted-proxy', false],
+    [['e2e-hosted-proxy', 'e2e-local'], 'synchronize', '', false],
+    [['e2e-hosted-proxy', 'e2e-local'], 'labeled', 'e2e-local', true],
+  ] as const) {
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-proxy-gate-'))
+    try {
+      const output = join(dir, 'output')
+      const result = spawnSync('bash', ['-eo', 'pipefail', '-c', gate], {
+        env: { ...process.env, GITHUB_OUTPUT: output, GITHUB_REPOSITORY: 'boxlite-ai/boxlite',
+          EVENT_NAME: 'pull_request_target', EVENT_ACTION: action, ADDED_LABEL: addedLabel,
+          HEAD_REPO: 'contributor/boxlite', LABELS: JSON.stringify(labels) },
+        encoding: 'utf8', timeout: 10000,
+      })
+      assert.equal(result.status, 0, result.stderr)
+      assert.equal(readFileSync(output, 'utf8').trim(), `run=${allowed}`)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  }
+  const job = definition.jobs['e2e-tests']
+  assert.deepEqual(definition.permissions, { contents: 'read' })
+  const checkout = job.steps.find((step: any) => step.uses?.startsWith('actions/checkout'))
+  assert.equal(checkout.with.ref, '${{ github.event.pull_request.head.sha || github.sha }}')
+  assert.equal(checkout.with['persist-credentials'], false)
+  const deploy = job.steps.find((step: any) => step.name === 'Deploy and test official box endpoints')
+  assert.equal(deploy.if, "env.HOSTED_PROXY == 'true'")
+  assert.match(deploy.run, /make test:e2e:proxy:local/)
+  assert.ok(job.steps.some((step: any) => step.if?.includes('always()') && step.run?.includes('systemctl stop boxlite-proxy')))
+})
