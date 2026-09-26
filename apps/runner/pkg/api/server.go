@@ -149,6 +149,10 @@ func (a *ApiServer) Start(ctx context.Context) error {
 	boxliteApi := protected.Group("/v1/boxes")
 	{
 		boxliteApi.POST("/:boxId/exec", controllers.BoxliteExec)
+		// Box-level attach: the main command session, which `run` follows
+		// because its COMMAND is the container init and so has no execution
+		// id of its own to name in the path.
+		boxliteApi.GET("/:boxId/attach", controllers.BoxliteBoxAttach)
 		boxliteApi.GET("/:boxId/executions/:execId", controllers.BoxliteGetExecution)
 		boxliteApi.DELETE("/:boxId/executions/:execId", controllers.BoxliteExecKill)
 		boxliteApi.GET("/:boxId/executions/:execId/attach", controllers.BoxliteExecAttach)

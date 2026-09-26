@@ -75,6 +75,7 @@ If you want the formal API schema, see
 │    artifact.go   PullArtifact, BuildArtifact, RemoveArtifact, ...        │
 │    boxlite_exec.go         POST /exec, GET /executions/:id, ...          │
 │    boxlite_exec_attach.go  GET /attach (WebSocket)                       │
+│    boxlite_box_attach.go   GET /attach on the main session               │
 │    boxlite_files.go        PUT/GET /files                                │
 │    boxlite_metrics.go      GET /metrics                                  │
 │    proxy.go                terminal preview (xterm.js + WS)              │
@@ -213,6 +214,7 @@ process inside a VM. The endpoints below split create / status / kill
 | Method | Path | Controller | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `exec` | `BoxliteExec` | Create execution; returns `{execution_id}` |
+| `GET` | `attach` | `BoxliteBoxAttach` | WebSocket upgrade on the box's **main** session (the container init, which `run IMAGE COMMAND` supplies); opens it lazily and returns its id in `X-Boxlite-Execution-Id` |
 | `GET` | `executions/:id/attach` | `BoxliteExecAttach` | WebSocket upgrade; bidirectional stdio + control |
 | `GET` | `executions/:id` | `BoxliteGetExecution` | Status (`running` / `completed`, `exit_code` when done) |
 | `POST` | `executions/:id/signal` | `BoxliteExecSignal` | Send a cooperative signal (whitelist) |
@@ -252,7 +254,9 @@ pkg/api/controllers/boxlite_exec_attach.go
 pkg/boxlite/exec_manager.go
 ├─ ExecManager (struct)                       map[id]*ManagedExec + cleanupLoop
 │  ├─ Start(ctx, bx, ...)                     io.Pipe pair, bx.StartExecution
-│  │  └─ go func() { handle.Wait(); ... }     records ExitCode/Err, closes Done
+│  │  └─ adopt(e, handle, stdin)              records ExitCode/Err, closes Done
+│  ├─ AttachMain(ctx, bx, boxID)              get-or-open the container init's session
+│  │  └─ findMain(boxID) ?: bx.AttachMainSession
 │  ├─ Get / WriteStdin / Signal / ResizeTTY / Kill
 │  └─ cleanupLoop(30s)
 │     └─ runCleanupOnce(now)                  snapshot map under RLock
@@ -331,6 +335,10 @@ transition and which entry point triggers each.
 
 `GET /v1/boxes/{box_id}/executions/{exec_id}/attach` upgrades to a
 WebSocket carrying stdin, stdout, stderr, and control on one connection.
+`GET /v1/boxes/{box_id}/attach` speaks the same protocol for the box's main
+session — the container's init — and additionally returns that session's
+execution id in the `X-Boxlite-Execution-Id` response header, because the
+client cannot know it up front and needs it for every other route.
 
 ```
 Client → Server                       Server → Client
@@ -384,6 +392,12 @@ configurable via environment variables.
 | `!Connected` and idle > grace | SIGHUP | 5 min | `BOXLITE_RECONNECT_GRACE` |
 | After SIGHUP, idle > shutdown grace | SIGTERM | 30 s | `BOXLITE_SHUTDOWN_GRACE` |
 | After SIGTERM, idle > shutdown grace | SIGKILL + evict | 30 s | `BOXLITE_SHUTDOWN_GRACE` |
+
+The box's **main session** is exempt from every row above except
+done-eviction. It is the container's init, so signalling or killing it
+powers the VM off — a client walking away from `docker attach` does not
+stop a container, and the lifetime cap bounds exec sessions, not the
+workload they run beside.
 
 Reattaching inside the reconnect grace resets `SignaledHUP` and
 `SignaledTERM` so a subsequent disconnect starts a fresh clock.
@@ -562,6 +576,7 @@ the Swagger UI (development only).
 | `POST` | `/artifacts/inspect` | Remote digest + size |
 | `GET` | `/artifacts/logs` | Stream build log (`follow=true` polls until image exists) |
 | `POST` | `/v1/boxes/:boxId/exec` | Create execution |
+| `GET` | `/v1/boxes/:boxId/attach` | WebSocket stdio + control on the box's main session |
 | `GET` | `/v1/boxes/:boxId/executions/:execId` | Execution status |
 | `DELETE` | `/v1/boxes/:boxId/executions/:execId` | Kill + evict |
 | `GET` | `/v1/boxes/:boxId/executions/:execId/attach` | WebSocket stdio + control |
@@ -637,6 +652,7 @@ scripts/build/fix-go-symbols.sh target/debug/libboxlite.a
   - [`pkg/api/controllers/artifact.go`](pkg/api/controllers/artifact.go) — pull/build/inspect
   - [`pkg/api/controllers/boxlite_exec.go`](pkg/api/controllers/boxlite_exec.go) — exec create / signal / resize / status / legacy I/O
   - [`pkg/api/controllers/boxlite_exec_attach.go`](pkg/api/controllers/boxlite_exec_attach.go) — `/attach` WebSocket
+  - [`pkg/api/controllers/boxlite_box_attach.go`](pkg/api/controllers/boxlite_box_attach.go) — box-level `/attach` (main session)
   - [`pkg/api/controllers/boxlite_files.go`](pkg/api/controllers/boxlite_files.go), [`boxlite_metrics.go`](pkg/api/controllers/boxlite_metrics.go), [`proxy.go`](pkg/api/controllers/proxy.go), [`info.go`](pkg/api/controllers/info.go)
 
 - **Services / state**:

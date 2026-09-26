@@ -104,6 +104,30 @@ pub unsafe extern "C" fn boxlite_box_exec(
     box_exec(handle, cmd, out_execution, out_error)
 }
 
+/// Attach to the box's main command session — the container's init.
+///
+/// `run IMAGE COMMAND` runs COMMAND *as* init (docker semantics), so following
+/// it is an attach rather than an exec: there is no command to pass, only a
+/// session to join. The handle that comes back is an ordinary
+/// `CExecutionHandle` — the same stdout/stderr/exit callbacks, stdin, wait,
+/// signal, kill and resize all apply.
+///
+/// Attaching boots the box and creates its container but does NOT run init;
+/// `boxlite_start_box` does. Callers therefore go create -> attach -> start, so
+/// a command that finishes instantly cannot outrun the stream and take its
+/// output and exit code with it.
+///
+/// Only the main session is attachable; a running exec keeps the handle it was
+/// created with.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_attach_main(
+    handle: *mut CBoxHandle,
+    out_execution: *mut *mut CExecutionHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    box_attach_main(handle, out_execution, out_error)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_execution_on_stdout(
     execution: *mut CExecutionHandle,
@@ -248,26 +272,8 @@ unsafe fn box_exec(
         let result = handle_ref.tokio_rt.block_on(lite.exec(command));
 
         match result {
-            Ok(mut execution) => {
-                let stdin = execution.stdin();
-                let stdout = execution.stdout();
-                let stderr = execution.stderr();
-
-                let exec_handle = ExecutionHandle {
-                    execution: Arc::new(Mutex::new(Some(execution))),
-                    stdin,
-                    pending_stdout: stdout,
-                    pending_stderr: stderr,
-                    pumps: Mutex::new(Vec::new()),
-                    exit_pump_handle: Mutex::new(None),
-                    stream_done_rx: Mutex::new(Vec::new()),
-                    exit_dispatch: Mutex::new(None),
-                    queue: handle_ref.queue.clone(),
-                    tokio_rt: handle_ref.tokio_rt.clone(),
-                    process_completed: Arc::new(AtomicBool::new(false)),
-                    exit_dispatched: Arc::new(AtomicBool::new(false)),
-                };
-                *out_execution = Box::into_raw(Box::new(exec_handle));
+            Ok(execution) => {
+                *out_execution = Box::into_raw(Box::new(wrap_execution(handle_ref, execution)));
                 BoxliteErrorCode::Ok
             }
             Err(e) => {
@@ -276,6 +282,73 @@ unsafe fn box_exec(
                 code
             }
         }
+    }
+}
+
+unsafe fn box_attach_main(
+    handle: *mut BoxHandle,
+    out_execution: *mut *mut ExecutionHandle,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if out_execution.is_null() {
+            write_error(out_error, null_pointer_error("out_execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        *out_execution = ptr::null_mut();
+
+        let handle_ref = &*handle;
+
+        // Synchronous, like box_exec: attach only subscribes to the session's
+        // streams. It does boot a cold box first, which is unbounded (the image
+        // may still need pulling), so this blocks the calling thread for as long
+        // as that takes.
+        let lite = handle_ref.handle.clone();
+        let result = handle_ref
+            .tokio_rt
+            .block_on(lite.attach(boxlite::AttachOptions::main()));
+
+        match result {
+            Ok(execution) => {
+                *out_execution = Box::into_raw(Box::new(wrap_execution(handle_ref, execution)));
+                BoxliteErrorCode::Ok
+            }
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
+/// Wrap a freshly created `Execution` in the FFI handle.
+///
+/// Shared by exec and attach: both hand back the same `Execution`, so both get
+/// the same pumps, callbacks and teardown. Only how the session was obtained
+/// differs, and that is over by the time this runs.
+fn wrap_execution(handle_ref: &BoxHandle, mut execution: Execution) -> ExecutionHandle {
+    let stdin = execution.stdin();
+    let stdout = execution.stdout();
+    let stderr = execution.stderr();
+
+    ExecutionHandle {
+        execution: Arc::new(Mutex::new(Some(execution))),
+        stdin,
+        pending_stdout: stdout,
+        pending_stderr: stderr,
+        pumps: Mutex::new(Vec::new()),
+        exit_pump_handle: Mutex::new(None),
+        stream_done_rx: Mutex::new(Vec::new()),
+        exit_dispatch: Mutex::new(None),
+        queue: handle_ref.queue.clone(),
+        tokio_rt: handle_ref.tokio_rt.clone(),
+        process_completed: Arc::new(AtomicBool::new(false)),
+        exit_dispatched: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -897,6 +970,25 @@ mod tests {
             boxlite_box_exec(
                 ptr::null_mut(),
                 &cmd as *const _,
+                &mut execution as *mut _,
+                &mut error as *mut _,
+            )
+        };
+
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(execution.is_null());
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    #[test]
+    fn box_attach_main_rejects_null_handle() {
+        let mut execution: *mut ExecutionHandle = ptr::null_mut();
+        let mut error = FFIError::default();
+
+        let code = unsafe {
+            boxlite_box_attach_main(
+                ptr::null_mut(),
                 &mut execution as *mut _,
                 &mut error as *mut _,
             )

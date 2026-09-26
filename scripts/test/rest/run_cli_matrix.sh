@@ -139,13 +139,13 @@ write_summary() {
     echo "- auth status/whoami"
     echo "- list/ls"
     echo "- create/start/exec/stop/rm"
+    echo "- run --rm"
     if [ "$SCOPE" = "full" ]; then
       echo "- list aliases: list/ls/ps"
       echo "- inspect"
       echo "- restart"
       echo "- cp upload/download"
       echo "- stats"
-      echo "- run --rm"
     fi
     if [ -s "$SKIP_FILE" ]; then
       echo
@@ -204,6 +204,17 @@ EXEC_OUT="$TMP_DIR/exec.out"
 run_capture "exec stdout over REST attach" "$EXEC_OUT" "${BASE_CMD[@]}" exec "$BOX_NAME" -- sh -lc "echo hi-from-cli-$AUTH"
 assert_contains "$EXEC_OUT" "hi-from-cli-$AUTH"
 
+# Smoke scope, not full: `run` attaches to the box's MAIN session
+# (/boxes/{id}/attach), while `exec` above attaches to an execution
+# (/boxes/{id}/executions/{id}/attach). They are different server routes, so
+# the exec case cannot stand in for this one — and while it was the only
+# attach the default scope ran, the box-level route could go missing from the
+# control plane without this matrix noticing (issue #1609).
+RUN_OUT="$TMP_DIR/run.out"
+run_capture "run stdout over REST main-session attach" "$RUN_OUT" "${BASE_CMD[@]}" run --rm --name "$RUN_BOX_NAME" "$SMOKE_IMAGE" sh -lc "echo hi-from-run-$AUTH"
+assert_contains "$RUN_OUT" "hi-from-run-$AUTH"
+CREATED_RUN_BOX=1
+
 if [ "$SCOPE" = "full" ]; then
   run_cmd "inspect box" "${BASE_CMD[@]}" inspect "$BOX_NAME" --format json
   run_cmd "stats box" "${BASE_CMD[@]}" stats "$BOX_NAME" --format json
@@ -219,11 +230,6 @@ if [ "$SCOPE" = "full" ]; then
   RESTART_OUT="$TMP_DIR/restart-exec.out"
   run_capture "exec after restart" "$RESTART_OUT" "${BASE_CMD[@]}" exec "$BOX_NAME" -- sh -lc "echo hi-after-restart-$AUTH"
   assert_contains "$RESTART_OUT" "hi-after-restart-$AUTH"
-
-  RUN_OUT="$TMP_DIR/run.out"
-  run_capture "run one-shot box" "$RUN_OUT" "${BASE_CMD[@]}" run --rm --name "$RUN_BOX_NAME" "$SMOKE_IMAGE" sh -lc "echo hi-from-run-$AUTH"
-  assert_contains "$RUN_OUT" "hi-from-run-$AUTH"
-  CREATED_RUN_BOX=1
 fi
 
 run_cmd "stop box" "${BASE_CMD[@]}" stop "$BOX_NAME"

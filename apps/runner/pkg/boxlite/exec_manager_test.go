@@ -727,3 +727,126 @@ func TestSdkExecSignalReturnsUnsupported(t *testing.T) {
 		t.Fatalf("expected ErrSignalUnsupported, got %v", err)
 	}
 }
+
+// TestAttachMainReusesTheOpenSession: the second client to attach to a box
+// must join the session the first one opened, not ask the guest for a second
+// stream on it — the guest refuses that, and the loser would be left holding
+// an Execution that never speaks. Reuse is what turns the second attach into
+// the 409 the contract promises.
+//
+// The nil *boxlite.Box is the assertion: reaching the SDK at all would panic,
+// so a clean return proves the lookup short-circuited before it.
+func TestAttachMainReusesTheOpenSession(t *testing.T) {
+	m := newQuietManager(t)
+
+	open := registerStub(t, m, "main-1", &stubExecHandle{})
+	open.BoxID = "box-1"
+	open.Main = true
+
+	got, err := m.AttachMain(context.Background(), nil, "box-1")
+	if err != nil {
+		t.Fatalf("AttachMain on an already-open session: %v", err)
+	}
+	if got != open {
+		t.Fatalf("expected the open main session %p, got %p", open, got)
+	}
+}
+
+// TestReaperLeavesTheMainSessionAlone: a main session is the box's init, so
+// signalling or killing it powers the VM off and destroys the box. Walking
+// away from `docker attach` does not stop a container, and neither may this —
+// nor may the lifetime cap, which exists to bound exec sessions, not the
+// workload they run beside.
+func TestReaperLeavesTheMainSessionAlone(t *testing.T) {
+	m := newQuietManager(t)
+
+	stub := &stubExecHandle{}
+	main := registerStub(t, m, "main-reap", stub)
+	main.BoxID = "box-1"
+	main.Main = true
+
+	m.SetReapingForTest(50*time.Millisecond, 20*time.Millisecond, 24*time.Hour)
+
+	t0 := time.Now()
+	main.attachMu.Lock()
+	main.Connected = false
+	main.LastDisconnectAt = t0
+	main.attachMu.Unlock()
+
+	// Far past every grace, and past the lifetime cap as well.
+	main.created = t0.Add(-25 * time.Hour)
+	m.runCleanupOnce(t0.Add(time.Hour))
+
+	signals, killed := stub.snapshot()
+	if len(signals) != 0 || killed != 0 {
+		t.Fatalf("the reaper must not touch a main session: signals=%v killed=%d", signals, killed)
+	}
+	if _, stillTracked := m.Get("main-reap"); !stillTracked {
+		t.Fatal("the main session was evicted while its init was still running")
+	}
+}
+
+// TestReaperEvictsAnExitedMainSession: the exemption above covers signalling
+// and killing, not retention. An init that has exited really is finished, and
+// dropping a dead entry kills nothing.
+func TestReaperEvictsAnExitedMainSession(t *testing.T) {
+	m := newQuietManager(t)
+
+	stub := &stubExecHandle{}
+	main := registerStub(t, m, "main-done", stub)
+	main.BoxID = "box-1"
+	main.Main = true
+	close(main.Done)
+
+	now := time.Now()
+	m.runCleanupOnce(now)
+	m.runCleanupOnce(now.Add(6 * time.Minute))
+
+	if _, stillTracked := m.Get("main-done"); stillTracked {
+		t.Fatal("an exited main session should be evicted after the retention window")
+	}
+	if _, killed := stub.snapshot(); killed != 0 {
+		t.Fatalf("eviction must not kill an already-exited session, got killed=%d", killed)
+	}
+}
+
+// TestAttachMainSkipsAnExitedSession: a main session is found by box id, and a
+// box id survives a restart — so a finished session from the previous run
+// still matches. Handing it back would attach the client to the old run's dead
+// stream, its stale backlog and its stale exit code, and never open one on the
+// init that is actually running now. An exec cannot collide this way; it is
+// looked up by an id that is fresh every time.
+func TestAttachMainSkipsAnExitedSession(t *testing.T) {
+	m := newQuietManager(t)
+
+	finished := registerStub(t, m, "main-prev-run", &stubExecHandle{})
+	finished.BoxID = "box-1"
+	finished.Main = true
+	close(finished.Done)
+
+	if found := m.findMain("box-1"); found != nil {
+		t.Fatalf("expected no attachable main session, got the exited %q", found.ID)
+	}
+}
+
+// TestAttachMainIgnoresOtherBoxesAndExecs: the scan that finds the open
+// session keys on both the box and the session kind. An exec the tenant
+// started is not a main session, and another box's main session is not this
+// box's.
+func TestAttachMainIgnoresOtherBoxesAndExecs(t *testing.T) {
+	m := newQuietManager(t)
+
+	tenantExec := registerStub(t, m, "exec-1", &stubExecHandle{})
+	tenantExec.BoxID = "box-1"
+
+	otherMain := registerStub(t, m, "main-2", &stubExecHandle{})
+	otherMain.BoxID = "box-2"
+	otherMain.Main = true
+
+	if found := m.findMain("box-1"); found != nil {
+		t.Fatalf("box-1 has no main session open, but findMain returned %q", found.ID)
+	}
+	if found := m.findMain("box-2"); found != otherMain {
+		t.Fatalf("expected box-2's main session, got %v", found)
+	}
+}
