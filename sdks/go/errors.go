@@ -39,6 +39,9 @@ const (
 	// disconnect; reattach is no longer possible — start a new exec.
 	// Server-side HTTP 410.
 	ErrSessionReaped ErrorCode = 21
+	// Default runtime has already been initialized.
+	// Server-side HTTP 409.
+	ErrAlreadyInitialized ErrorCode = 22
 )
 
 // Error is a typed error from the BoxLite runtime.
