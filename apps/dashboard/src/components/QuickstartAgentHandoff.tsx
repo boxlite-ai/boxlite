@@ -10,7 +10,6 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { createApiKeyWithFallbackName } from '@/lib/quickstart-api-key'
 import { copyToClipboard } from '@/lib/copy-text'
 import {
-  HANDOFF_LIFETIME_DAYS,
   HANDOFF_LIFETIME_MS,
   handoffIdentity,
   handoffStore,
@@ -330,19 +329,14 @@ export function QuickstartAgentHandoff({
   return (
     <div className="px-8 pb-6 pt-6">
       <div className="mb-2 flex items-center justify-between gap-4">
+        {/* An instruction, not a spec sheet. This line used to read
+            "Prompt · key quickstart-77ff · boxes only · 7d · this tab only":
+            a section label followed by four telegraphic notes about a
+            credential the reader never asked for, at the moment they are
+            trying to copy something. The key itself is visible in the prompt
+            below; its scope and lifetime belong on the API Keys page. */}
         <div className="min-w-0 truncate font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
-          <span className="text-brand">▸</span> Prompt
-          {handoff && (
-            <>
-              <span className="mx-[7px] text-border">·</span>
-              key <span className="text-foreground">{handoff.keyName}</span>
-              <span className="mx-[7px] text-border">·</span>
-              boxes only
-              <span className="mx-[7px] text-border">·</span>
-              {HANDOFF_LIFETIME_DAYS}d<span className="mx-[7px] text-border">·</span>
-              this tab only
-            </>
-          )}
+          <span className="text-brand">▸</span> Copy this prompt to your agent
         </div>
       </div>
 

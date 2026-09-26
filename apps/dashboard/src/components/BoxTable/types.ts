@@ -39,6 +39,9 @@ export interface BoxTableProps {
   filters: BoxFilters
   onFiltersChange: (filters: BoxFilters) => void
   handleRecover: (id: string) => void
+  /** Opens the quickstart guide from the empty state. Omitted where there is
+   *  no guide to open, in which case the empty state just explains itself. */
+  onOpenQuickstart?: () => void
 }
 
 export interface BoxTableActionsProps {

@@ -70,12 +70,8 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
       isLoading: false,
     }
   },
-  useOwnerWalletTransactionsQuery: (page = 1, perPage?: number, enabled = true) => {
-    if (!enabled) {
-      return { data: undefined, isLoading: false }
-    }
-
-    mocks.walletTransactionsQuery(page, perPage, enabled)
+  useOwnerWalletTransactionsQuery: (page = 1, perPage?: number) => {
+    mocks.walletTransactionsQuery(page, perPage)
     return {
       data: {
         items: [
@@ -186,7 +182,7 @@ describe('WalletSection top-up checkout', () => {
     expect(checkoutWindow.location.href).toBe('https://checkout.stripe.com/pay/cs_top_up')
   })
 
-  it('leads with the money history and folds the credit ledger away', async () => {
+  it('keeps the two money histories on separate tabs, each sized in its label', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
 
@@ -196,22 +192,29 @@ describe('WalletSection top-up checkout', () => {
     })
     await flush()
 
-    // The charge is on the page; the grant that shares its date is not, because
-    // showing both at equal weight is what made a grant read as an amount billed.
+    // Billing history leads: it is the money actually taken. The grant sharing
+    // a date with a charge is not on screen, because showing both at equal
+    // weight is what made a grant read as an amount billed.
     expect(document.body.textContent).toContain('BOX-2026-0002')
     expect(document.body.textContent).toContain('2026-09-04')
     expect(document.body.textContent).not.toContain('2026-07-18')
 
-    const fold = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
-      button.textContent?.includes('Credit activity'),
-    )
-    expect(fold?.getAttribute('aria-expanded')).toBe('false')
+    // Both tabs carry their size, so the ledger is sized up without opening it.
+    const tabs = [...document.querySelectorAll<HTMLElement>('[role="tab"]')]
+    const creditTab = tabs.find((tab) => tab.textContent?.includes('Credit activity'))
+    expect(tabs.find((tab) => tab.textContent?.includes('Billing history'))?.textContent).toContain('50')
+    expect(creditTab?.textContent).toContain('50')
 
-    await act(async () => fold?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await act(async () => {
+      creditTab?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+      creditTab?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
     await flush()
 
-    expect(fold?.getAttribute('aria-expanded')).toBe('true')
+    // Switching shows the ledger and takes the invoices away: one table at a
+    // time is what keeps a grant from ever sitting beside a charge.
     expect(document.body.textContent).toContain('2026-07-18')
+    expect(document.body.textContent).not.toContain('BOX-2026-0002')
   })
 
   it('loads older invoices when the billing history exceeds the first page', async () => {
@@ -249,19 +252,26 @@ describe('WalletSection top-up checkout', () => {
     })
     await flush()
 
-    expect(mocks.walletTransactionsQuery).not.toHaveBeenCalled()
+    // Both counts are fetched up front — the number on the tab is what tells a
+    // reader the ledger holds anything. Its rows wait until the tab is chosen.
+    expect(mocks.walletTransactionsQuery).toHaveBeenCalledWith(1, DEFAULT_PAGE_SIZE)
+    expect(document.body.textContent).not.toContain('2026-07-18')
 
-    const fold = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
-      button.textContent?.includes('Credit activity'),
+    const creditTab = [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find((tab) =>
+      tab.textContent?.includes('Credit activity'),
     )
-    await act(async () => fold?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await act(async () => {
+      creditTab?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+      creditTab?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
     await flush()
 
-    expect(mocks.walletTransactionsQuery).toHaveBeenCalledWith(1, DEFAULT_PAGE_SIZE, true)
     expect(document.body.textContent).toContain('2026-07-18')
 
-    const creditActivity = document.querySelector('#credit-activity')
-    const nextPage = [...(creditActivity?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find(
+    // Scoped to the open panel: both histories have a pager, and only the
+    // visible one should be driven here.
+    const creditPanel = document.querySelector('[role="tabpanel"][data-state="active"]')
+    const nextPage = [...(creditPanel?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find(
       (button) => button.textContent?.trim() === 'Next →',
     )
     expect(nextPage).toBeDefined()
@@ -269,7 +279,7 @@ describe('WalletSection top-up checkout', () => {
     await act(async () => nextPage?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     await flush()
 
-    expect(mocks.walletTransactionsQuery).toHaveBeenLastCalledWith(2, DEFAULT_PAGE_SIZE, true)
+    expect(mocks.walletTransactionsQuery).toHaveBeenLastCalledWith(2, DEFAULT_PAGE_SIZE)
     expect(document.body.textContent).toContain('2026-07-15')
   })
 
