@@ -72,7 +72,25 @@ pub(crate) async fn import_box(
 /// Read the persisted configuration, falling back to the v1/v2 image field.
 ///
 /// An archive is untrusted input, so its options are validated here rather
-/// than after disks have been installed and box metadata persisted.
+/// than after disks have been installed and box metadata persisted. They are
+/// validated as *persisted* options: export writes the box's resolved config,
+/// so a managed or anonymous mount arrives carrying both its reference and
+/// the payload path of the machine it came from. The request rule would
+/// refuse that as two origins; `sanitize_import` accepts it, and a trusted
+/// import hands the mounts through untouched for `provision_box` to
+/// re-resolve against this runtime's store. The path in the archive is never
+/// trusted, only the reference. A custom kernel is the exception: the archive
+/// carries only its source path, so `sanitize_import` checks that source the
+/// way create does, and a kernel this host cannot stage is refused before
+/// anything is provisioned.
+///
+/// Order matters on the untrusted path, so the two rules run in sequence
+/// rather than sharing one call: the upload policy answers first, then
+/// whatever survived it is validated. Validating first would let the kernel
+/// source check — which stats a path on this host — answer for an archive
+/// that was never entitled to name a kernel at all, turning an upload into a
+/// probe for which paths exist on the server; and it would report a
+/// malformed mount's shape where the answer is that an upload may not mount.
 fn options_from_manifest(
     manifest: &ArchiveManifest,
     policy: ArchiveImportPolicy,
@@ -94,11 +112,11 @@ fn options_from_manifest(
             );
         }
     }
-    options.sanitize().map_err(|error| {
-        BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
-    })?;
 
     if policy == ArchiveImportPolicy::Trusted {
+        options.sanitize_import().map_err(|error| {
+            BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
+        })?;
         return Ok(options);
     }
 
@@ -121,15 +139,21 @@ fn options_from_manifest(
     if !options.volumes.is_empty() {
         return Err(rejected_upload("volume mounts"));
     }
+    // What the policy let through is validated like any other archive's
+    // options, and that has to happen while the archive's own security block
+    // is still there: #1072 refuses `network_enabled=false` beside an enabled
+    // network, and an upload must not get that shape past the gate by relying
+    // on the server to overwrite the field a moment later.
+    options.sanitize_import().map_err(|error| {
+        BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
+    })?;
+
     options.advanced.security = SecurityOptions::default();
     // That reset also restores the default's hardcoded 1 GiB RLIMIT_FSIZE —
     // the ceiling #1152 is about — because it replaces the whole struct rather
     // than just the isolation fields it means to. The box still boots on a
     // disk sized from its own `disk_size_gb`, so re-derive the limit.
-    // `sanitize` assigns it outright, so running it twice is idempotent.
-    options.sanitize().map_err(|error| {
-        BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
-    })?;
+    options.rederive_fsize_limit()?;
 
     Ok(options)
 }
@@ -359,8 +383,11 @@ mod tests {
 
     #[test]
     fn untrusted_import_rejects_custom_kernel() {
-        // A real file, so `sanitize()` passes and the upload policy — not path
-        // validation — is what rejects the archive.
+        // A real file: the policy's answer must be the same whether the path
+        // exists or not, and this pins the existing-path half. The sibling
+        // `untrusted_import_refuses_a_custom_kernel_without_probing_its_source`
+        // pins the missing-path half, where the source check must not answer
+        // first.
         let kernel = tempfile::NamedTempFile::new().unwrap();
         let mut options = BoxOptions::default();
         options.advanced.kernel = Some(crate::experimental::custom_kernel::KernelOptions::new(
@@ -398,12 +425,12 @@ mod tests {
     #[test]
     fn untrusted_import_rejects_managed_volumes() {
         let mut options = BoxOptions::default();
-        options
-            .volumes
-            .push(crate::runtime::options::VolumeSpec::managed_volume(
-                "someone-elses-data",
-                "/data",
-            ));
+        options.volumes.push(crate::runtime::options::VolumeSpec {
+            managed_volume: Some("someone-elses-data".to_string()),
+            host_path: "/".to_string(),
+            guest_path: "/data".to_string(),
+            ..Default::default()
+        });
 
         let error =
             options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
@@ -411,6 +438,119 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
         assert!(error.to_string().contains("volume mounts"));
+    }
+
+    /// An exported box carries its mounts as they were persisted: a reference
+    /// plus the payload path on the machine it came from. Translating the
+    /// manifest neither rejects that shape as "two origins" nor trusts the
+    /// path; it hands the mounts through verbatim for the runtime to
+    /// re-resolve against the local store before the box is provisioned.
+    #[test]
+    fn trusted_import_keeps_persisted_mounts_for_the_runtime_to_resolve() {
+        use crate::runtime::options::VolumeSpec;
+
+        let volumes = vec![
+            VolumeSpec {
+                host_path: "/elsewhere/volumes/OLDNAMED/_data".into(),
+                ..VolumeSpec::managed_volume("shared", "/data")
+            },
+            VolumeSpec {
+                managed_volume: Some("OLDANON".into()),
+                host_path: "/elsewhere/volumes/OLDANON/_data".into(),
+                ..VolumeSpec::anonymous_volume("/scratch")
+            },
+        ];
+        let options = BoxOptions {
+            volumes: volumes.clone(),
+            ..Default::default()
+        };
+
+        let resolved = options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::Trusted)
+            .expect("a persisted mount is a valid archive mount");
+
+        assert_eq!(2, resolved.volumes.len());
+        for (imported, exported) in resolved.volumes.iter().zip(&volumes) {
+            assert_eq!(exported.managed_volume, imported.managed_volume);
+            assert_eq!(exported.host_path, imported.host_path);
+            assert_eq!(exported.guest_path, imported.guest_path);
+            assert_eq!(exported.anonymous, imported.anonymous);
+        }
+    }
+
+    /// An archive carries a custom kernel only as the path it was ingested
+    /// from: export bundles neither the source file nor the box's staged copy,
+    /// so an imported box has to stage the kernel again at its first boot.
+    /// A trusted import therefore checks the source the way create does and
+    /// refuses an archive whose kernel this host cannot stage, instead of
+    /// provisioning a box that fails on its first `start`.
+    #[test]
+    fn trusted_import_refuses_a_custom_kernel_whose_source_is_missing() {
+        let mut options = BoxOptions::default();
+        options.advanced.kernel = Some(crate::experimental::custom_kernel::KernelOptions::new(
+            "/nonexistent/boxlite-test/vmlinuz",
+        ));
+
+        let error = options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::Trusted)
+            .expect_err("a kernel this host cannot stage must be refused at import");
+
+        assert!(
+            matches!(error, BoxliteError::InvalidArgument(_)),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains("regular file"), "{error}");
+    }
+
+    /// The policy gate must answer before any check that touches this host.
+    /// An untrusted archive naming a custom kernel is refused because custom
+    /// kernels are not the uploader's to choose, and the answer has to be the
+    /// same whether or not the named path exists here: the source check that
+    /// `sanitize_import` runs (`KernelOptions::sanitize`) stats the path, so
+    /// letting it answer first would tell an uploader which paths exist on
+    /// the server, one archive per guess.
+    #[test]
+    fn untrusted_import_refuses_a_custom_kernel_without_probing_its_source() {
+        let mut options = BoxOptions::default();
+        options.advanced.kernel = Some(crate::experimental::custom_kernel::KernelOptions::new(
+            "/nonexistent/boxlite-test/vmlinuz",
+        ));
+
+        let error =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .expect_err("untrusted archives must not select a kernel");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        let message = error.to_string();
+        assert!(
+            message.contains("custom kernels"),
+            "the policy, not the source check, must answer: {message}"
+        );
+        assert!(
+            !message.contains("vmlinuz"),
+            "the refusal must not echo the probed path: {message}"
+        );
+    }
+
+    /// The same order for mounts: an untrusted archive with a mount is refused
+    /// by the policy whatever shape the mount has. A reference with no path is
+    /// a malformed persisted mount that `validate_in_persisted` would call out
+    /// as `needs a host_path`, but the uploader is not entitled to a mount at
+    /// all, and that is the answer that holds for every archive. The resolved
+    /// shape, reference plus path, is `untrusted_import_rejects_managed_volumes`.
+    #[test]
+    fn untrusted_import_refuses_an_unresolved_mount_by_policy_not_by_shape() {
+        use crate::runtime::options::VolumeSpec;
+
+        let options = BoxOptions {
+            volumes: vec![VolumeSpec::managed_volume("someone-elses-data", "/data")],
+            ..Default::default()
+        };
+
+        let error =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .expect_err("untrusted archives must not select managed volumes");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("volume mounts"), "{error}");
     }
 
     #[test]
@@ -428,6 +568,43 @@ mod tests {
         assert!(error.to_string().contains("host rootfs paths"));
     }
 
+    /// The server replaces an upload's security block wholesale, but only
+    /// after the archive's own options have been judged. #1072 refuses
+    /// `advanced.security.network_enabled=false` beside an enabled network,
+    /// because that flag drops the host sandbox's network grants without
+    /// taking the guest offline — the config reads as network-free while the
+    /// box stays online. Resetting the block before validation would answer
+    /// that archive with success, since the default the reset writes has the
+    /// flag back on; this is the pre-existing refusal, and reordering the
+    /// upload policy must not drop it.
+    #[test]
+    fn untrusted_import_refuses_an_archive_whose_security_contradicts_its_network() {
+        let mut options = BoxOptions::default();
+        options.advanced.security.network_enabled = false;
+        assert!(
+            matches!(
+                options.network,
+                crate::runtime::options::NetworkSpec::Enabled { .. }
+            ),
+            "the default network is what makes the pair contradictory"
+        );
+
+        let error =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .expect_err("an archive that disables the host grants but keeps the network");
+
+        assert!(
+            matches!(error, BoxliteError::InvalidArgument(_)),
+            "{error:?}"
+        );
+        assert!(
+            error.to_string().contains("network_enabled=false"),
+            "{error}"
+        );
+    }
+
+    /// The same block is replaced for an archive the validation accepts, so
+    /// an upload cannot choose its own sandbox settings.
     #[test]
     fn untrusted_import_replaces_archive_security_with_server_default() {
         let mut options = BoxOptions::default();
@@ -490,8 +667,9 @@ mod tests {
         assert_eq!(resolved.advanced.security, expected);
     }
 
-    #[test]
-    fn imported_capability_policy_is_validated_before_install() {
+    /// A capability name in the wrong spelling: `sanitize_common` refuses it
+    /// through `ContainerCapabilities::validate`, on every import path.
+    fn malformed_capability_policy() -> crate::runtime::advanced_options::AdvancedBoxOptions {
         let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
         advanced
             .set_capabilities(Some(
@@ -501,6 +679,12 @@ mod tests {
                 },
             ))
             .unwrap();
+        advanced
+    }
+
+    #[test]
+    fn imported_capability_policy_is_validated_before_install() {
+        let advanced = malformed_capability_policy();
         let manifest = ArchiveManifest {
             version: 3,
             box_name: Some("untrusted".into()),
@@ -518,6 +702,31 @@ mod tests {
             .expect_err("malformed archived capability policy must be rejected");
         assert!(matches!(error, BoxliteError::InvalidArgument(_)));
         assert!(error.to_string().contains("NET-ADMIN"));
+    }
+
+    /// The policy gate decides what an upload may ask for; it does not judge
+    /// whether what it asks for is well-formed. The same archive that the
+    /// trusted path above refuses for its malformed capability policy must be
+    /// refused on the untrusted path too, by the same validation, after the
+    /// policy has had its say. Skipping it would let an upload persist options
+    /// that create would never have accepted, and fail them at first boot.
+    #[test]
+    fn untrusted_import_still_validates_what_the_policy_lets_through() {
+        let advanced = malformed_capability_policy();
+        let options = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let error =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .expect_err("an upload's surviving options are validated like any archive's");
+
+        assert!(
+            matches!(error, BoxliteError::InvalidArgument(_)),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains("NET-ADMIN"), "{error}");
     }
 
     #[test]

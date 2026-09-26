@@ -170,17 +170,25 @@ impl BoxOptions {
         // leak, not a diagnostic.
 
         for volume in &self.volumes {
-            volume.validate()?;
+            volume.validate_in_request()?;
         }
 
         if self
             .volumes
             .iter()
-            .any(|volume| volume.managed_volume.is_none())
+            .any(|volume| !volume.anonymous && volume.managed_volume.is_none())
         {
             return Err(BoxliteError::Unsupported(
                 "host bind mounts are only supported by the local runtime; mount a managed volume \
                  by id or name instead"
+                    .to_string(),
+            ));
+        }
+
+        if self.volumes.iter().any(|volume| volume.anonymous) {
+            return Err(BoxliteError::Unsupported(
+                "anonymous mounts are not supported by the rest runtime; create a named volume \
+                and mount it instead"
                     .to_string(),
             ));
         }
@@ -679,6 +687,35 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
         assert!(error.to_string().contains("read-only"), "{error}");
+    }
+
+    /// A REST runtime has no anonymous volumes: the server mints ids and the
+    /// wire carries a reference, never "make me one". Refuse before network
+    /// I/O, and say what to do instead rather than blaming a host bind the
+    /// caller never wrote.
+    #[tokio::test]
+    async fn create_rejects_anonymous_volume_before_network_io() {
+        use crate::runtime::options::VolumeSpec;
+
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let box_options = BoxOptions {
+            volumes: vec![VolumeSpec::anonymous_volume("/data")],
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("anonymous volumes must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        let message = error.to_string();
+        assert!(message.contains("anonymous"), "{message}");
+        assert!(
+            !message.contains("host bind"),
+            "the error must not blame a host bind: {message}"
+        );
     }
 
     /// The guard is about host paths, not about mounts: a managed volume gets
