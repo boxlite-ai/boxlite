@@ -99,12 +99,74 @@ pub fn copy_shim_to_box(shim_path: &Path, box_dir: &Path) -> BoxliteResult<PathB
         );
     }
 
+    ensure_shim_permissions(shim_path, &dest_shim, copied)?;
+
     // Copy libkrunfw so dlopen can find it via the shim's rpath.
     if let Some(shim_dir) = shim_path.parent() {
         copy_libkrunfw(shim_dir, &bin_dir)?;
     }
 
     Ok(dest_shim)
+}
+
+/// Synchronize or validate the box-local shim permissions after copying.
+fn ensure_shim_permissions(
+    source_path: &Path,
+    shim_path: &Path,
+    copied: bool,
+) -> BoxliteResult<()> {
+    let source_permissions = read_shim_permissions(source_path, "source")?;
+    let destination_permissions = read_shim_permissions(shim_path, "destination")?;
+    let permissions_are_equal = permissions_match(&source_permissions, &destination_permissions);
+
+    if !permissions_are_equal {
+        if copied {
+            return Err(BoxliteError::Storage(format!(
+                "Copied shim permissions do not match: source {}, destination {}",
+                source_path.display(),
+                shim_path.display()
+            )));
+        }
+
+        std::fs::set_permissions(shim_path, source_permissions).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to copy permissions from shim {} to {}: {}",
+                source_path.display(),
+                shim_path.display(),
+                e
+            ))
+        })?;
+
+        tracing::debug!(
+            src = %source_path.display(),
+            dst = %shim_path.display(),
+            "Synchronized shim permissions"
+        );
+    }
+
+    Ok(())
+}
+
+fn read_shim_permissions(path: &Path, description: &str) -> BoxliteResult<std::fs::Permissions> {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.permissions())
+        .map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to read {description} shim permissions from {}: {e}",
+                path.display()
+            ))
+        })
+}
+
+#[cfg(unix)]
+fn permissions_match(source: &std::fs::Permissions, destination: &std::fs::Permissions) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    source.mode() == destination.mode()
+}
+
+#[cfg(not(unix))]
+fn permissions_match(source: &std::fs::Permissions, destination: &std::fs::Permissions) -> bool {
+    source.readonly() == destination.readonly()
 }
 
 /// Copy libkrunfw from the shim's directory to `dest_dir`.
@@ -156,4 +218,71 @@ fn copy_libkrunfw(src_dir: &Path, dest_dir: &Path) -> BoxliteResult<()> {
     }
 
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::tempdir;
+
+    fn write_shim(path: &Path, mode: u32) {
+        fs::write(path, "shim").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    fn assert_same_permissions(source: &Path, destination: &Path) {
+        assert_eq!(
+            fs::metadata(source).unwrap().permissions().mode(),
+            fs::metadata(destination).unwrap().permissions().mode()
+        );
+    }
+
+    #[test]
+    fn copy_shim_preserves_permissions_when_destination_is_up_to_date() {
+        let dir = tempdir().unwrap();
+        let source_dir = dir.path().join("source");
+        let box_dir = dir.path().join("box");
+        fs::create_dir_all(&source_dir).unwrap();
+
+        let source = source_dir.join("boxlite-shim");
+        write_shim(&source, 0o755);
+
+        let destination = box_dir.join("bin/boxlite-shim");
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        write_shim(&destination, 0o644);
+
+        let copied = copy_shim_to_box(&source, &box_dir).unwrap();
+
+        assert_eq!(copied, destination);
+        assert_same_permissions(&source, &destination);
+    }
+
+    #[test]
+    fn copy_shim_preserves_permissions_when_destination_is_missing() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("boxlite-shim");
+        let box_dir = dir.path().join("box");
+        write_shim(&source, 0o755);
+
+        let destination = copy_shim_to_box(&source, &box_dir).unwrap();
+
+        assert_same_permissions(&source, &destination);
+    }
+
+    #[test]
+    fn rejects_copied_shim_with_mismatched_permissions() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("source-shim");
+        let destination = dir.path().join("destination-shim");
+        write_shim(&source, 0o755);
+        write_shim(&destination, 0o644);
+
+        let error = ensure_shim_permissions(&source, &destination, true).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains(&source.display().to_string()));
+        assert!(message.contains(&destination.display().to_string()));
+    }
 }
