@@ -20,7 +20,16 @@ import {
   UseGuards,
 } from '@nestjs/common'
 import { AuthGuard } from '@nestjs/passport'
-import { ApiOAuth2, ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiBearerAuth } from '@nestjs/swagger'
+import {
+  ApiOAuth2,
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiParam,
+  ApiBody,
+  ApiBearerAuth,
+  ApiQuery,
+} from '@nestjs/swagger'
 import { RequiredOrganizationMemberRole } from '../decorators/required-organization-member-role.decorator'
 import { CreateOrganizationDto } from '../dto/create-organization.dto'
 import { OrganizationDto } from '../dto/organization.dto'
@@ -53,6 +62,7 @@ import { OrGuard } from '../../auth/or.guard'
 import { OtelCollectorGuard } from '../../auth/otel-collector.guard'
 import { OtelConfigDto } from '../dto/otel-config.dto'
 import { OrganizationReferralCodeDto } from '../dto/organization-referral-code.dto'
+import { RegistrationAuthGuard } from '../../auth/registration-auth.guard'
 
 @ApiTags('organizations')
 @Controller('organizations')
@@ -205,7 +215,12 @@ export class OrganizationController {
       throw new ForbiddenException('Please verify your email address')
     }
 
-    const organization = await this.organizationService.create(createOrganizationDto, authContext.userId, false, true)
+    const organization = await this.organizationService.create(
+      { name: createOrganizationDto.name, defaultRegionId: createOrganizationDto.defaultRegionId },
+      authContext.userId,
+      false,
+      true,
+    )
     return OrganizationDto.fromOrganization(organization)
   }
 
@@ -291,12 +306,21 @@ export class OrganizationController {
     summary: 'List organizations',
     operationId: 'listOrganizations',
   })
+  @ApiQuery({
+    name: 'referredCode',
+    required: false,
+    type: String,
+    description:
+      'Invitation code used only when creating a new local account and its default organization. Ignored for existing accounts; never filters the list. Trimmed and uppercased; blank means no code.',
+  })
+  @ApiResponse({ status: 400, description: 'invalid_referral_code: expected a single 10-character invitation code' })
+  @ApiResponse({ status: 422, description: 'invitation_unavailable: inviter does not exist or is suspended' })
   @ApiResponse({
     status: 200,
     description: 'List of organizations',
     type: [OrganizationDto],
   })
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(RegistrationAuthGuard)
   async findAll(@AuthContext() authContext: IAuthContext): Promise<OrganizationDto[]> {
     const organizations = await this.organizationService.findByUserWithDefaultFlag(authContext.userId)
     return organizations.map(({ organization, isDefaultForAuthenticatedUser }) =>

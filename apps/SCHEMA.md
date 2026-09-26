@@ -160,6 +160,8 @@ state inline.
 | ------ | ---- | ----- |
 | `id` | `uuid` | primary key |
 | `referralCode` | `character varying(10)` | nullable; unique organization invitation code |
+| `referredCode` | `character varying(10)` | nullable; invitation code snapshot used at registration; not unique |
+| `inviterOrganizationId` | `uuid` | nullable; inviting organization ID; no foreign key, so attribution survives inviter deletion |
 | `name` | `character varying` | |
 | `createdBy` | `character varying` | |
 | `telemetryEnabled` | `boolean` | default `true` |

@@ -79,6 +79,36 @@ function fixParameterDocumentation(source) {
     .join('\n')
 }
 
+// Keep Axios options in the position used by existing callers.
+function preserveListOrganizationsArguments(source) {
+  const signature = 'listOrganizations(referredCode?: string, options?: RawAxiosRequestConfig)'
+  const creator = 'listOrganizations: async (referredCode?: string, options: RawAxiosRequestConfig = {})'
+  const call = '.listOrganizations(referredCode, options)'
+  if (source.split(signature).length !== 4 || source.split(creator).length !== 2 || source.split(call).length !== 4) {
+    throw new Error('Unexpected generated listOrganizations signature')
+  }
+  return source
+    .replace(creator, 'listOrganizations: async (options: RawAxiosRequestConfig = {}, referredCode?: string)')
+    .replaceAll(signature, 'listOrganizations(options?: RawAxiosRequestConfig, referredCode?: string)')
+    .replaceAll(call, '.listOrganizations(options, referredCode)')
+    .replace(
+      /^([ \t]*\* @param \{string\} \[referredCode\][^\n]*\n)([ \t]*\* @param \{\*\} \[options\][^\n]*\n)/gm,
+      '$2$1',
+    )
+}
+
+function fixListOrganizationsDocumentation(source) {
+  return source.replace(/# \*\*listOrganizations\*\*[\s\S]*?(?=\n# \*\*|$)/, (section) =>
+    section
+      .replace('listOrganizations()', 'listOrganizations(options?, referredCode?)')
+      .replace('    referredCode\n', '    undefined, // Axios request options\n    referredCode\n')
+      .replace(
+        '| **referredCode** |',
+        '| **options** | **RawAxiosRequestConfig** | Axios request options. | (optional)|\n| **referredCode** |',
+      ),
+  )
+}
+
 // The generated User-Agent value is a TS template literal, so the
 // `${packageJson.version}` below must reach the file verbatim.
 const userAgent = '`' + clientName + '/${packageJson.version}`'
@@ -112,7 +142,9 @@ if (existsSync(apiDir)) {
   for (const fileName of readdirSync(apiDir).filter((fileName) => fileName.endsWith('.ts'))) {
     const apiPath = `${apiDir}/${fileName}`
     const generatedApi = readFileSync(apiPath, 'utf8')
-    const prunedApi = pruneUnusedImports(pruneUnusedImports(generatedApi, '../common'), '../base')
+    const compatibleApi =
+      fileName === 'organizations-api.ts' ? preserveListOrganizationsArguments(generatedApi) : generatedApi
+    const prunedApi = pruneUnusedImports(pruneUnusedImports(compatibleApi, '../common'), '../base')
 
     if (prunedApi !== generatedApi) writeFileSync(apiPath, prunedApi)
   }
@@ -123,7 +155,9 @@ if (existsSync(docsDir)) {
   for (const fileName of readdirSync(docsDir).filter((fileName) => fileName.endsWith('.md'))) {
     const docsPath = `${docsDir}/${fileName}`
     const generatedDocs = readFileSync(docsPath, 'utf8')
-    const fixedDocs = fixParameterDocumentation(generatedDocs)
+    const fixedDocs = fixParameterDocumentation(
+      fileName === 'OrganizationsApi.md' ? fixListOrganizationsDocumentation(generatedDocs) : generatedDocs,
+    )
 
     if (fixedDocs !== generatedDocs) writeFileSync(docsPath, fixedDocs)
   }

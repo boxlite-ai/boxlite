@@ -6,7 +6,7 @@
 
 import { HttpException, HttpStatus } from '@nestjs/common'
 
-type OrganizationReferralCodeError = 'invitation_unavailable' | 'referral_code_unavailable'
+type OrganizationReferralCodeError = 'invitation_unavailable' | 'referral_code_unavailable' | 'invalid_referral_code'
 
 export class OrganizationReferralCodeException extends HttpException {
   constructor(status: HttpStatus, code: OrganizationReferralCodeError) {

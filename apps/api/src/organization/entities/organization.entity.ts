@@ -18,6 +18,12 @@ export class Organization {
   @Column({ type: 'varchar', length: 10, nullable: true })
   referralCode: string | null
 
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  referredCode: string | null
+
+  @Column({ type: 'uuid', nullable: true })
+  inviterOrganizationId: string | null
+
   @Column()
   name: string
 

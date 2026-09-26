@@ -26,7 +26,7 @@ export class UserService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async create(createUserDto: CreateUserDto): Promise<User> {
+  async create(createUserDto: CreateUserDto, referredCode?: string): Promise<User> {
     const defaultOrganizationDefaultRegionId =
       createUserDto.defaultOrganizationDefaultRegionId ?? createUserDto.personalOrganizationDefaultRegionId
     let user = new User()
@@ -49,7 +49,7 @@ export class UserService {
       user = await em.save(user)
       await this.eventEmitter.emitAsync(
         UserEvents.CREATED,
-        new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId),
+        new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId, referredCode),
       )
     })
 

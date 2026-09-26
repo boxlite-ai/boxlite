@@ -492,6 +492,8 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
 
     organization.name = createOrganizationDto.name
     organization.createdBy = createdBy
+    organization.referredCode = createOrganizationDto.referredCode ?? null
+    organization.inviterOrganizationId = createOrganizationDto.inviterOrganizationId ?? null
 
     if (!creatorEmailVerified && !this.configService.get('skipUserEmailVerification')) {
       organization.suspended = true
@@ -663,11 +665,20 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   })
   @TrackJobExecution()
   async handleUserCreatedEvent(payload: UserCreatedEvent): Promise<Organization> {
+    let inviter: Organization | null = null
+    if (payload.referredCode) {
+      inviter = await payload.entityManager.findOneBy(Organization, { referralCode: payload.referredCode })
+      if (!inviter || this.isOrganizationSuspended(inviter)) {
+        throw new OrganizationReferralCodeException(HttpStatus.UNPROCESSABLE_ENTITY, 'invitation_unavailable')
+      }
+    }
     return this.createWithEntityManager(
       payload.entityManager,
       {
         name: OrganizationService.DEFAULT_ORGANIZATION_NAME,
         defaultRegionId: payload.defaultOrganizationDefaultRegionId,
+        referredCode: payload.referredCode,
+        inviterOrganizationId: inviter?.id,
       },
       payload.user.id,
       payload.user.role === SystemRole.ADMIN ? true : payload.user.emailVerified,

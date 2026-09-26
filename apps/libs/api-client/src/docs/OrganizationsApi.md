@@ -1207,7 +1207,7 @@ const { status, data } = await apiInstance.listOrganizationRoles(
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **listOrganizations**
-> Array<Organization> listOrganizations()
+> Array<Organization> listOrganizations(options?, referredCode?)
 
 
 ### Example
@@ -1221,11 +1221,20 @@ import {
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
-const { status, data } = await apiInstance.listOrganizations();
+let referredCode: string; //Invitation code used only when creating a new local account and its default organization. Ignored for existing accounts; never filters the list. Trimmed and uppercased; blank means no code. (optional) (default to undefined)
+
+const { status, data } = await apiInstance.listOrganizations(
+    undefined, // Axios request options
+    referredCode
+);
 ```
 
 ### Parameters
-This endpoint does not have any parameters.
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **options** | **RawAxiosRequestConfig** | Axios request options. | (optional)|
+| **referredCode** | [**string**] | Invitation code used only when creating a new local account and its default organization. Ignored for existing accounts; never filters the list. Trimmed and uppercased; blank means no code. | (optional) defaults to undefined|
 
 
 ### Return type
@@ -1246,6 +1255,8 @@ This endpoint does not have any parameters.
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | List of organizations |  -  |
+|**400** | invalid_referral_code: expected a single 10-character invitation code |  -  |
+|**422** | invitation_unavailable: inviter does not exist or is suspended |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
