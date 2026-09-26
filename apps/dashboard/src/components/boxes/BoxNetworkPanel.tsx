@@ -108,23 +108,13 @@ export function BoxNetworkPanel({
     <>
       <SectionHeader title="network" right={<InlineAction onClick={onGetUrl}>get url</InlineAction>} />
 
-      {/* `access` answers the only question this row is asked — can a stranger
-          open this box? — rather than naming the mechanism.
-
-          The URLs it governs carry no credential (`getPortPreviewUrl` returns
-          `url` and `token` separately), so a non-member is bounced through
-          OIDC and then refused by the org-membership check in
-          preview.controller.ts:142. Access is credential-based, not
-          network-based: there is no inbound IP allowlist (openapi/box.openapi
-          .yaml — "no layer enforces an inbound allowlist today").
-
-          Sheet convention: grey key, foreground value; hue carries the risk
-          signal (amber when exposed). */}
+      {/* Sheet convention: grey key, foreground value; hue carries the risk
+          signal (amber when public). */}
       <div className="mb-[6px] flex items-baseline gap-2">
         <span className="whitespace-nowrap text-muted-foreground">access</span>
         <span className="-translate-y-1 min-w-[8px] flex-1 border-b border-dotted border-border" />
         <span className="whitespace-nowrap" style={isPublic ? { color: STATUS.idle } : undefined}>
-          {isPublic ? 'anyone' : 'your organization'}
+          {isPublic ? 'public' : 'your organization'}
         </span>
         {canManage ? (
           <Switch
@@ -140,16 +130,10 @@ export function BoxNetworkPanel({
       <AlertDialog open={confirmingPublic} onOpenChange={setConfirmingPublic}>
         <AlertDialogContent className="font-mono">
           <AlertDialogHeader>
-            <AlertDialogTitle>Open this box&apos;s preview URLs to anyone?</AlertDialogTitle>
-            {/* Scoped deliberately. The flag only makes the proxy skip
-                authentication for preview traffic (get_box_target.go:87) and
-                raw tunnel CONNECTs (tunnel.go:43). The web terminal stays
-                authenticated even when public — the same line exempts
-                TERMINAL_PORT — and the management API is untouched. An earlier
-                "Make this box public?" read as handing over the whole box. */}
+            <AlertDialogTitle>Enable public access?</AlertDialogTitle>
             <AlertDialogDescription>
-              Anyone who knows a preview URL will reach <strong>any port your box is serving</strong> without signing
-              in. The URL is not a secret — it ends up in browser history, proxy logs and Referer headers.
+              Public access may allow preview URLs to open without signing in. A URL is not a secret — it ends up in
+              browser history, proxy logs and Referer headers.
               <br />
               <br />
               The web terminal and the box&apos;s files, commands and settings are not affected; those still require

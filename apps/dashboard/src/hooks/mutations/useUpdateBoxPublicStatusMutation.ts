@@ -14,7 +14,7 @@ interface UpdateBoxPublicStatusVariables {
 }
 
 /**
- * Flips whether a box's preview URLs are reachable without a credential.
+ * Updates the box's public access setting.
  *
  * Invalidating the box detail query is the point: `public` lives on the box
  * record, so the detail sheet has to re-read it before it can show the new
