@@ -14,7 +14,7 @@ The model is implementation-grounded:
 - Column types, constraints, and index definitions come from the migrations in
   [`api/src/migrations`](./api/src/migrations/): the baseline
   `1741087887225-migration.ts` creates 17 tables, and the
-  [`pre-deploy`](./api/src/migrations/pre-deploy/) set adds 7 more.
+  [`pre-deploy`](./api/src/migrations/pre-deploy/) set adds 8 more.
 - Satellite stores come from [`dex/config.yaml`](./dex/config.yaml),
   [`otel-collector/config.yaml`](./otel-collector/config.yaml), and the
   ClickHouse queries in
@@ -27,7 +27,7 @@ control plane only through `runner` telemetry columns and `job` results.
 
 ## Overview
 
-The 24 tables sort into three planes. **Tenancy** is who a caller is and what
+The 25 tables sort into three planes. **Tenancy** is who a caller is and what
 they may do; **fleet** is the microVMs and the machines that run them;
 **metering** is what gets billed.
 
@@ -58,6 +58,7 @@ flowchart LR
         t_image["image"]
         t_imgver["image_version"]
         t_imgtag["image_tag"]
+        t_regcred["registry_credential"]
     end
 
     subgraph metering["Metering"]
@@ -88,6 +89,7 @@ flowchart LR
     t_box -.->|"runnerId"| t_runner
     t_box -.->|"volumes[].volumeId"| t_volume
     t_volume -.->|"organizationId"| t_org
+    t_regcred -.->|"organizationId"| t_org
     t_job -.->|"resourceId"| t_box
     t_job -.->|"runnerId"| t_runner
     t_period -.->|"boxId"| t_box
@@ -544,6 +546,30 @@ the name back as a fresh entry.
 disappear underneath it. Postgres does not index a foreign key on its own, and
 this one is walked whenever a version is deleted, so `image_tag_version_index`
 covers it.
+
+### `registry_credential`
+
+A login an organization registered for a private registry. The password is in
+no column: it is written to Secret Manager, which the API can write but not
+read, and the row keeps only the name of the version that holds it.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `organizationId` | `uuid` | not null |
+| `kind` | `enum` | `basic` |
+| `registryHost` | `character varying(255)` | e.g. `ghcr.io` |
+| `repositoryPrefix` | `character varying(255)` | default `''`, the whole host |
+| `username` | `character varying(255)` | |
+| `secretVersion` | `text` | the Secret Manager version holding the password |
+| `createdBy` | `uuid` | nullable |
+| `createdAt` / `updatedAt` | `timestamptz` | |
+
+`registry_credential_org_host_prefix_unique` allows one credential per host and
+prefix in an organization; its leading columns also serve the lookup by
+organization and host. `registry_credential_prefix_shape` holds a prefix to
+whole path segments, `''` or ending in `/`, so `acme/` cannot match
+`acme-other/app`.
 
 ### `job`
 

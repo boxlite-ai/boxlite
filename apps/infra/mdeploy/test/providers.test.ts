@@ -82,6 +82,7 @@ test('both clouds answer every module the stack asks about', () => {
     'mail',
     'mintRunnerToken',
     'network',
+    'registryCredentials',
     'registryProxy',
     'runners',
     'storage',

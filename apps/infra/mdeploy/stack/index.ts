@@ -40,6 +40,11 @@ import { mailEnvironment } from './mail.ts'
 import type { Network, NetworkProvider } from './network.ts'
 import type { RegistryProxy, RegistryProxyProvider } from './registry-proxy.ts'
 import {
+  registryCredentialEnvironment,
+  type RegistryCredentialStore,
+  type RegistryCredentialStoreProvider,
+} from './registry-credentials.ts'
+import {
   REGISTRY_PROXY_CONTROL_PLANE_VARIABLE,
   REGISTRY_PROXY_PORT,
   REGISTRY_PROXY_PORT_VARIABLE,
@@ -143,6 +148,8 @@ export type StackProviders = {
    * network directly. The other cloud answers with the inactive handle.
    */
   registryProxy: (input: { network: Network; dependsOn: any[] }) => RegistryProxyProvider
+  /** Where registry passwords live: on the proxy's cloud, and inactive on the other. */
+  registryCredentials: RegistryCredentialStoreProvider
   /**
    * One host's registration token, minted so it survives the next deploy.
    *
@@ -237,6 +244,7 @@ export const deployStack = ({
   const database: Database = providers.database({ network })(config.database)
   const cache: Cache = providers.cache({ network })(config.cache)
   const clickhouse: ClickHouse = providers.clickhouse({ network })(config.clickhouse)
+  const registryCredentials: RegistryCredentialStore = providers.registryCredentials()
 
   /*
    * The network's own rules, which reach every workload through the cluster.
@@ -344,6 +352,7 @@ export const deployStack = ({
     ...cacheEnvironment(cache),
     ...mailEnvironment(mail),
     ...clickHouseEnvironment(clickhouse, 'reader'),
+    ...registryCredentialEnvironment(registryCredentials),
     /*
      * `DB_TLS_ENABLED` is not here. It used to be, as a constant `'true'`
      * written after `databaseEnvironment` and therefore winning over it — which
@@ -395,7 +404,7 @@ export const deployStack = ({
     domain: inputs.domain,
     environment: apiEnvironment,
     secrets: inputs.apiSecrets,
-    capabilities: capabilitiesFor({ storage, clickhouse }),
+    capabilities: capabilitiesFor({ storage, clickhouse, registryCredentials }),
   })
 
   const proxyEnvironment = {
@@ -534,19 +543,26 @@ export const deployStack = ({
  *
  * List its own bucket, which is the boot probe; create, tag and delete the
  * volume buckets it owns, which is bounded by the storage module's prefix; vend
- * a scoped credential for one of them; and read telemetry back, which exists
- * only where a stage keeps any. Nothing here names an ARN or a role — the
- * provider bundle expands each sentence into its cloud's own grants.
+ * a scoped credential for one of them; read telemetry back, which exists only
+ * where a stage keeps any; and write registry passwords it cannot read back,
+ * which exists only where the registry proxy does. Nothing here names an ARN or
+ * a role — the provider bundle expands each sentence into its cloud's own
+ * grants.
  */
 export const capabilitiesFor = ({
   storage,
   clickhouse,
+  registryCredentials,
 }: {
   storage: Storage
   clickhouse: ClickHouse
+  registryCredentials: RegistryCredentialStore
 }): ApiCapability[] => [
   { kind: 'list-own-bucket', storage },
   { kind: 'manage-volume-buckets', storage },
   { kind: 'vend-volume-credentials', storage },
   ...(clickhouse.active ? ([{ kind: 'read-telemetry', clickhouse }] as ApiCapability[]) : []),
+  ...(registryCredentials.active
+    ? ([{ kind: 'write-registry-credentials', store: registryCredentials }] as ApiCapability[])
+    : []),
 ]

@@ -103,6 +103,7 @@ export const awsStackProviders = ({
      * and reports no proxy, which is the truth.
      */
     registryProxy: () => () => ({ active: false }),
+    registryCredentials: () => ({ active: false }),
     // 64 alphanumeric characters: the value travels through a systemd
     // EnvironmentFile and a JSON payload, and punctuation would drag quoting
     // rules into both.

@@ -49,6 +49,12 @@ import {
   REGISTRY_PROXY_PORT,
   REGISTRY_PROXY_PORT_VARIABLE,
 } from '../stack/registry-proxy.ts'
+import {
+  REGISTRY_SECRET_CREATE_PERMISSIONS,
+  REGISTRY_SECRET_PREFIX,
+  REGISTRY_SECRET_WRITE_PERMISSIONS,
+} from '../stack/providers/gcp/registry-credentials.ts'
+import { REGISTRY_SECRET_STORE_VARIABLE } from '../stack/registry-credentials.ts'
 
 /*
  * The committed example, not this machine's stage file.
@@ -1709,4 +1715,52 @@ test('the registry proxy’s contract matches the binary it deploys', () => {
     new RegExp(`HealthPath = "${REGISTRY_PROXY_HEALTH_PATH}"`),
     `the binary serves no health route at ${REGISTRY_PROXY_HEALTH_PATH}`,
   )
+})
+
+test('the API can write registry passwords and cannot read one back', () => {
+  /*
+   * The API's half of the read/write split, as the permissions it is given.
+   * `versions.access` is the read. `setIamPolicy` would let it grant itself
+   * that read. `secrets.delete` would skip the seven days a destroyed version
+   * waits before the password is gone. None of the three may appear, and
+   * nothing beyond the three it calls may either.
+   */
+  const granted = [...REGISTRY_SECRET_CREATE_PERMISSIONS, ...REGISTRY_SECRET_WRITE_PERMISSIONS].sort()
+  assert.deepEqual(granted, [
+    'secretmanager.secrets.create',
+    'secretmanager.versions.add',
+    'secretmanager.versions.destroy',
+  ])
+
+  // Read out of each grant's own block, for the reason the runner test gives.
+  const grants = projectIamBlocks(withoutComments(sourceOf('api')))
+  const grantNamed = (suffix: string): string => {
+    const found = grants.filter((block) => block.includes(`ApiCapability\${index}${suffix}\``))
+    assert.equal(found.length, 1, `expected one ${suffix} grant, found ${found.length}`)
+    return found[0]
+  }
+  assert.match(grantNamed('Write'), /role: writeRole,[\s\S]*condition,/, 'the version writes are not bounded')
+  assert.doesNotMatch(grantNamed('Create'), /condition/, 'a create is authorized before the name exists')
+
+  assert.match(
+    sourceOf('registry-credentials'),
+    /resource\.name\.startsWith\("projects\/\$\{projectNumber\}\/secrets\/\$\{REGISTRY_SECRET_PREFIX\}"\)/,
+    'the condition no longer bounds the grant to the credentials\' secrets',
+  )
+})
+
+test('the API names its secrets and its store the way the stack grants them', () => {
+  /*
+   * The prefix and the store's variable are said twice, once here and once in
+   * the API. A prefix changed on one side leaves every write refused; a
+   * variable renamed on one side leaves private registries off with the grant
+   * still in place.
+   */
+  const api = fileURLToPath(new URL('../../../api/src/', import.meta.url))
+  const store = readFileSync(`${api}registry/stores/secret.store.ts`, 'utf8')
+  const configuration = readFileSync(`${api}config/configuration.ts`, 'utf8')
+
+  assert.match(store, new RegExp(`REGISTRY_SECRET_PREFIX = '${REGISTRY_SECRET_PREFIX}'`))
+  assert.match(configuration, new RegExp(`process\\.env\\.${REGISTRY_SECRET_STORE_VARIABLE}\\b`))
+  assert.match(store, /backend === 'gcp'/, 'the API no longer answers to the value the stack writes')
 })

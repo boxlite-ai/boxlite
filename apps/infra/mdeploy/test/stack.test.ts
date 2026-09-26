@@ -119,7 +119,10 @@ const clickHouseFake = (active: boolean): ClickHouse =>
  * runner, `collector.otlpUrl` reaches three workloads — and a fake that
  * returned nothing would pass a wiring check it never exercised.
  */
-const bundle = ({ clickhouse = true }: { clickhouse?: boolean } = {}) => {
+const bundle = ({
+  clickhouse = true,
+  registryCredentials = true,
+}: { clickhouse?: boolean; registryCredentials?: boolean } = {}) => {
   const seen: Record<string, any> = {}
   const order: string[] = []
   const record = (name: string, value: any) => {
@@ -202,6 +205,21 @@ const bundle = ({ clickhouse = true }: { clickhouse?: boolean } = {}) => {
         url: out('https://registry-proxy-123.run.app'),
         ready: ['registryProxy'],
       }),
+    registryCredentials: () =>
+      record(
+        'registryCredentials',
+        registryCredentials
+          ? {
+              active: true,
+              binding: {
+                cloud: 'gcp',
+                createRole: out('projects/p/roles/creator'),
+                writeRole: out('projects/p/roles/writer'),
+                condition: { title: 't', description: 'd', expression: 'resource.name.startsWith("x")' },
+              },
+            }
+          : { active: false },
+      ),
     // Named by what it mints, so a test can tell one host's token from another's
     // — which is the whole property `RunnerAssignment` exists to hold.
     mintRunnerToken: (name: string) => `minted:${name}`,
@@ -460,8 +478,31 @@ test('the API is granted exactly the capabilities its storage supports', () => {
   deployStack({ providers, config, inputs: inputs() })
   assert.deepEqual(
     seen.api.request.capabilities.map((capability: any) => capability.kind).sort(),
-    ['list-own-bucket', 'manage-volume-buckets', 'read-telemetry', 'vend-volume-credentials'],
+    [
+      'list-own-bucket',
+      'manage-volume-buckets',
+      'read-telemetry',
+      'vend-volume-credentials',
+      'write-registry-credentials',
+    ],
   )
+})
+
+test('the API writes registry passwords only where a store keeps them, and is told which store', () => {
+  const kept = bundle()
+  deployStack({ providers: kept.providers, config, inputs: inputs() })
+  assert.ok(kept.order.indexOf('registryCredentials') < kept.order.indexOf('api'), 'the grant names the store')
+  assert.equal(kept.seen.api.request.environment.REGISTRY_SECRET_STORE, 'gcp')
+
+  /*
+   * No store, no grant and no variable. The API then leaves private registries
+   * off rather than accepting a password it has nowhere to put.
+   */
+  const none = bundle({ registryCredentials: false })
+  deployStack({ providers: none.providers, config, inputs: inputs() })
+  const kinds = none.seen.api.request.capabilities.map((capability: any) => capability.kind)
+  assert.equal(kinds.includes('write-registry-credentials'), false)
+  assert.equal('REGISTRY_SECRET_STORE' in none.seen.api.request.environment, false)
 })
 
 test('what the deploy reports is what a post-deploy check needs to read', () => {

@@ -31,6 +31,7 @@ import { gcpDatabaseProvider } from './database.ts'
 import { gcpEdgeProvider } from './edge.ts'
 import { gcpMailProvider } from './mail.ts'
 import { CLOUDRUN_EGRESS_CIDR, gcpNetworkProvider } from './network.ts'
+import { gcpRegistryCredentialStoreProvider } from './registry-credentials.ts'
 import { gcpRegistryProxyProvider } from './registry-proxy.ts'
 import { gcpRunnerProvider } from './runners.ts'
 import { gcpStorageProvider } from './storage.ts'
@@ -212,6 +213,7 @@ export const gcpStackProviders = ({
         placement: placement(network, 'registry-proxy'),
         dependsOn,
       }),
+    registryCredentials: gcpRegistryCredentialStoreProvider({ project, appShort }),
     // 64 alphanumeric characters: the value travels through a systemd
     // EnvironmentFile and a JSON payload, and punctuation would drag quoting
     // rules into both.

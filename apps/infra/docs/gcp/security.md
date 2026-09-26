@@ -30,8 +30,9 @@ Follow the shared [secret-handling and resource-protection rules](../security.md
 - The collector's and registry proxy's internal ingress restrictions remain meaningful even where their invoker IAM bindings permit `allUsers`. The registry proxy checks each runner key against the control plane itself.
 - Database/cache use private connectivity. API and collector have different ClickHouse reader/writer credentials.
 - Volume access uses scoped temporary credentials and bucket-prefix permissions; stage naming alone does not isolate every volume bucket.
+- Registry passwords sit in Secret Manager under `registry-credential-*`. The API holds two custom roles: create a secret, and add or destroy versions under that prefix. It cannot read a password back. Stages sharing a project share the prefix.
 
 
 Runner updates converge through [OS Config](runners.md); host protection does not establish rollout health.
 
-Sources: [bootstrap roles](../../bootstrap/gcp.ts), [runtime identities and firewall rules](../../mdeploy/stack/providers/gcp/network.ts).
+Sources: [bootstrap roles](../../bootstrap/gcp.ts), [runtime identities and firewall rules](../../mdeploy/stack/providers/gcp/network.ts), [registry credential roles](../../mdeploy/stack/providers/gcp/registry-credentials.ts).

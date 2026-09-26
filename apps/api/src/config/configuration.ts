@@ -450,6 +450,12 @@ const configuration = {
     location: process.env.GCS_LOCATION?.trim(),
     projectId: process.env.GCS_PROJECT_ID?.trim(),
   },
+  registrySecrets: {
+    // Where a private registry's password is written: `gcp` or `file`. Unset
+    // leaves private registries off. `file` is for a local stack only.
+    store: process.env.REGISTRY_SECRET_STORE?.trim(),
+    directory: process.env.REGISTRY_SECRET_DIR?.trim(),
+  },
   notificationGatewayDisabled: process.env.NOTIFICATION_GATEWAY_DISABLED === 'true',
   skipConnections: process.env.SKIP_CONNECTIONS === 'true',
   maintananceMode: process.env.MAINTENANCE_MODE === 'true',
