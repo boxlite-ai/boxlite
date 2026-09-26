@@ -1,7 +1,7 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{io, marker::PhantomData, rc::Rc};
+use std::{io, marker::PhantomData, os::fd::AsRawFd, rc::Rc};
 
 use kvm_bindings::{
     KVM_EXIT_HLT, KVM_EXIT_INTR, KVM_EXIT_IO, KVM_EXIT_IO_IN, KVM_EXIT_IO_OUT, KVM_EXIT_MMIO,
@@ -10,38 +10,51 @@ use kvm_bindings::{
 };
 use kvm_ioctls::VcpuFd;
 
+use super::{KvmVcpuHandle, kick::WorkerSignal};
 use crate::{Error, Result, VcpuExit};
 
 /// A Linux x86_64 vCPU bound to its creating thread.
 ///
-/// Creation leaves KVM's reset register state intact. Boot configuration and
-/// the cross-thread kick handle follow in subsequent M1 slices.
+/// Creation leaves KVM's reset register state intact and reserves the kick
+/// signal on this worker until drop. Boot configuration follows in M1.
 #[derive(Debug)]
 pub struct KvmVcpu {
     pub(super) fd: VcpuFd,
     id: u32,
     run_size: usize,
     pending_io: PendingIo,
+    kick: WorkerSignal,
     _thread_bound: PhantomData<Rc<()>>,
 }
 
 impl KvmVcpu {
-    pub(super) fn new(fd: VcpuFd, id: u32, run_size: usize) -> Self {
-        Self {
+    pub(super) fn new(fd: VcpuFd, id: u32, run_size: usize, signal: i32) -> io::Result<Self> {
+        let kick = WorkerSignal::new(id, signal, fd.as_raw_fd())?;
+        Ok(Self {
             fd,
             id,
             run_size,
             pending_io: PendingIo::default(),
+            kick,
             _thread_bound: PhantomData,
-        }
+        })
+    }
+
+    /// Returns a handle that interrupts this worker, including before entry.
+    pub fn handle(&self) -> KvmVcpuHandle {
+        self.kick.handle()
     }
 
     /// Runs until the next exit; handle borrowed device bytes before re-entry.
-    /// This slice has no kick handle, so an idle guest can block this call.
+    /// An idle guest blocks until an interrupt or a cross-thread kick arrives.
     pub fn run(&mut self) -> Result<VcpuExit<'_>> {
         match self.fd.run().map(|_| ()) {
             Ok(()) => {}
             Err(error) if error.errno() == libc::EINTR => {
+                self.kick.drain().map_err(|source| Error::RunVcpu {
+                    id: self.id,
+                    source,
+                })?;
                 self.pending_io.0 = false;
                 return Ok(VcpuExit::Interrupted);
             }
