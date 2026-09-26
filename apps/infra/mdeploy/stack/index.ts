@@ -147,7 +147,11 @@ export type StackProviders = {
    * service rather than a cluster task, so it takes its placement from the
    * network directly. The other cloud answers with the inactive handle.
    */
-  registryProxy: (input: { network: Network; dependsOn: any[] }) => RegistryProxyProvider
+  registryProxy: (input: {
+    network: Network
+    dependsOn: any[]
+    registryCredentials: RegistryCredentialStore
+  }) => RegistryProxyProvider
   /** Where registry passwords live: on the proxy's cloud, and inactive on the other. */
   registryCredentials: RegistryCredentialStoreProvider
   /**
@@ -452,9 +456,11 @@ export const deployStack = ({
    * caller: a runner's key is an opaque column, not a signed token, so there is
    * no checking one without the control plane answering.
    *
-   * Its whole environment is the stack's. It holds no credentials in this
-   * release and reads nothing a stage would tune, so there is no store group
-   * for it — one with nothing in it would be a place for a stale copy to sit.
+   * Its whole environment is the stack's. The logins it presents upstream are
+   * read from the credential store at pull time rather than delivered here,
+   * and it reads nothing a stage would tune, so there is no store group for it
+   * — one with nothing in it would be a place for a stale copy to sit. It is
+   * told which store, as the API is, so the two cannot name different ones.
    *
    * Telemetry on, for the reason the proxy's note above gives: the binary
    * declares both switches without a default, and one left unset ships
@@ -463,6 +469,7 @@ export const deployStack = ({
   const registryProxy: RegistryProxy = providers.registryProxy({
     network,
     dependsOn: [...placed, ...api.ready],
+    registryCredentials,
   })({
     image: imageFor(images, 'registry-proxy'),
     environment: {
@@ -472,6 +479,7 @@ export const deployStack = ({
       ENVIRONMENT: inputs.stage,
       [REGISTRY_PROXY_PORT_VARIABLE]: String(REGISTRY_PROXY_PORT),
       [REGISTRY_PROXY_CONTROL_PLANE_VARIABLE]: api.address.apply(runnerApiUrl),
+      ...registryCredentialEnvironment(registryCredentials),
     },
   })
 

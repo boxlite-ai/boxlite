@@ -575,6 +575,22 @@ test('the registry proxy exports its telemetry to the collector', () => {
   assert.equal(read(environment.ENVIRONMENT), 'dev')
 })
 
+test('the registry proxy reads logins from the store the API writes them to', () => {
+  /*
+   * One decision reaching both: an API writing to one store and a proxy
+   * reading another is a stage where every private pull is anonymous and
+   * nothing reports why.
+   */
+  const { providers, seen } = bundle()
+  deployStack({ providers, config, inputs: inputs() })
+  assert.equal(seen.registryProxy.request.environment.REGISTRY_SECRET_STORE, 'gcp')
+  assert.equal(
+    seen.registryProxy.request.environment.REGISTRY_SECRET_STORE,
+    seen.api.request.environment.REGISTRY_SECRET_STORE,
+  )
+  assert.equal(seen.registryProxy.input.registryCredentials, seen.registryCredentials, 'and is handed the grant')
+})
+
 test('the registry proxy runs the image published for this commit', () => {
   const { providers, seen } = bundle()
   deployStack({ providers, config, inputs: inputs() })

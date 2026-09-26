@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,6 +27,17 @@ type stubControlPlane struct {
 	asked atomic.Int64
 	// stopped makes the control plane unreachable without changing its answers.
 	stopped atomic.Bool
+	// logins is what a registry credential lookup finds, keyed
+	// "<org> <host> <repository>" to a secret version; anything else is a 404.
+	// hosting says which organizations a runner key has a box of, keyed
+	// "<key> <org>"; a lookup for any other is a 403, as the API answers it. An
+	// organization id that is not a UUID is a 400, which is also the API's.
+	// lookups counts the lookups, and lookupKey is the runner key the last one
+	// was made with.
+	logins    sync.Map
+	hosting   sync.Map
+	lookups   atomic.Int64
+	lookupKey atomic.Value
 }
 
 func newStubControlPlane(t *testing.T, keyToRunner map[string]string) *stubControlPlane {
@@ -33,6 +45,28 @@ func newStubControlPlane(t *testing.T, keyToRunner map[string]string) *stubContr
 	plane := &stubControlPlane{}
 	plane.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		plane.asked.Add(1)
+		if r.URL.Path == "/runners/me/registry-credentials" {
+			plane.lookups.Add(1)
+			key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			plane.lookupKey.Store(key)
+			query := r.URL.Query()
+			if !organizationID.MatchString(query.Get("organizationId")) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if _, hosts := plane.hosting.Load(key + " " + query.Get("organizationId")); !hosts {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			version, found := plane.logins.Load(query.Get("organizationId") + " " + query.Get("host") + " " + query.Get("repository"))
+			if !found {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"kind":"basic","username":"acme-bot","secretVersion":"`+version.(string)+`"}`)
+			return
+		}
 		if r.URL.Path != "/runners/me" {
 			w.WriteHeader(http.StatusNotFound)
 			return

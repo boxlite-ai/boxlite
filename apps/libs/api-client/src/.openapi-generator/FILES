@@ -121,10 +121,12 @@ docs/RegenerateApiKeyResponse.md
 docs/Region.md
 docs/RegionType.md
 docs/RegionsApi.md
+docs/RegistryCredentialKind.md
 docs/Runner.md
 docs/RunnerFull.md
 docs/RunnerHealthMetrics.md
 docs/RunnerHealthcheck.md
+docs/RunnerRegistryCredential.md
 docs/RunnerServiceHealth.md
 docs/RunnerState.md
 docs/RunnersApi.md
@@ -244,9 +246,11 @@ models/rate-limit-entry.ts
 models/regenerate-api-key-response.ts
 models/region-type.ts
 models/region.ts
+models/registry-credential-kind.ts
 models/runner-full.ts
 models/runner-health-metrics.ts
 models/runner-healthcheck.ts
+models/runner-registry-credential.ts
 models/runner-service-health.ts
 models/runner-state.ts
 models/runner.ts

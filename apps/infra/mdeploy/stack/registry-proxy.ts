@@ -8,9 +8,10 @@
  * hold: once registry credentials exist, this is the one process that reads
  * them, and keeping them out of the control plane is the point.
  *
- * It holds none yet. The release that introduces it pulls only what an
- * upstream serves anonymously, which is why there is no `secrets` channel
- * here — a channel with nothing in it would be a grant waiting for a reason.
+ * It reads them from the credential store when a pull needs one, not from its
+ * environment, which is why there is no `secrets` channel here: an
+ * organization adds and removes a login at run time, and a channel is fixed at
+ * deploy.
  *
  * Deployed on one cloud. The handle says so rather than the bundle throwing: a
  * stage on the other cloud deploys everything else and reports no proxy, which

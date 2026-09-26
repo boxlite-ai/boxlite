@@ -1,11 +1,12 @@
 /*
- * Where private registry passwords live, and what the API may do with them.
+ * Where private registry passwords live, and who may do what with them.
  *
  * The API writes a password when a credential is added and destroys it when
- * the credential is removed, and it may not read one back: an API that could
- * read would put every tenant's registry login one control-plane compromise
- * away. So the store hands out grants per workload rather than one role, and
- * these are the API's. Nothing here grants a read.
+ * the credential is removed. The registry proxy reads it. Neither may do the
+ * other's half: an API that could read would put every tenant's registry login
+ * one control-plane compromise away, and a proxy that could write could swap
+ * one unnoticed. So the store hands out a write grant and a read grant rather
+ * than one role, and each workload is given only its own.
  *
  * Kept on the cloud the proxy is on. Without the proxy nothing could use a
  * credential, so the other cloud reports no store and its API leaves private
@@ -25,6 +26,8 @@ export type RegistryCredentialStore =
         createRole: $util.Output<string>
         /** Adding and destroying versions, bounded by `condition`. */
         writeRole: $util.Output<string>
+        /** Reading a version, the registry proxy's alone, bounded the same way. */
+        readRole: string
         /** The credentials' secrets and nothing else in the project. */
         condition: { title: string; description: string; expression: $util.Input<string> }
       }

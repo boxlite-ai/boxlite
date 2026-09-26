@@ -15,6 +15,7 @@ import (
 	"github.com/boxlite-ai/image-service/cmd/registry-proxy/config"
 	"github.com/boxlite-ai/image-service/internal"
 	"github.com/boxlite-ai/image-service/internal/oci"
+	"github.com/boxlite-ai/image-service/internal/secrets"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
@@ -36,6 +37,13 @@ const readHeaderTimeout = 10 * time.Second
 // Start runs the registry proxy until ctx is cancelled, then drains in-flight
 // pulls within the configured shutdown timeout.
 func Start(ctx context.Context, cfg *config.Config, api *apiclient.APIClient) error {
+	// Before the listener, so a store that cannot be opened is a failure to
+	// start rather than a failure on the first private pull.
+	reader, err := secrets.NewReader(ctx, cfg.SecretStore, cfg.SecretDir)
+	if err != nil {
+		return fmt.Errorf("open the secret store: %w", err)
+	}
+
 	address := fmt.Sprintf(":%d", cfg.Port)
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
@@ -43,7 +51,7 @@ func Start(ctx context.Context, cfg *config.Config, api *apiclient.APIClient) er
 	}
 	slog.Info("Registry proxy is running", "port", cfg.Port, "version", internal.Version)
 
-	return serve(ctx, listener, NewRouter(cfg, api), time.Duration(cfg.ShutdownTimeoutSec)*time.Second)
+	return serve(ctx, listener, NewRouter(cfg, api, reader), time.Duration(cfg.ShutdownTimeoutSec)*time.Second)
 }
 
 // serve answers on listener until ctx is cancelled, then stops accepting and
@@ -89,8 +97,9 @@ func acceptedProtocols() *http.Protocols {
 }
 
 // NewRouter builds the registry proxy's HTTP surface. It is separate from Start
-// so the surface can be exercised without binding a port.
-func NewRouter(cfg *config.Config, api *apiclient.APIClient) *gin.Engine {
+// so the surface can be exercised without binding a port. A nil reader leaves
+// every pull anonymous.
+func NewRouter(cfg *config.Config, api *apiclient.APIClient, reader secrets.Reader) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 
 	router := gin.New()
@@ -113,6 +122,9 @@ func NewRouter(cfg *config.Config, api *apiclient.APIClient) *gin.Engine {
 		allowlist: newUpstreamAllowlist(cfg.UpstreamHosts),
 		limits:    newPullLimiter(cfg.PullsPerSecond, cfg.PullBurst, cfg.TrackedMeters),
 		tokens:    newTokenBroker(upstream),
+		// The same lifetime as a verified runner: both are answers the control
+		// plane gave, and both are how long a change there takes to reach here.
+		credentials: newCredentialFinder(api, reader, cfg.CredentialTTL),
 	}
 	// GET and HEAD share one handler: the distribution protocol answers both on
 	// the manifest endpoint, and a HEAD is a GET whose body nobody reads.

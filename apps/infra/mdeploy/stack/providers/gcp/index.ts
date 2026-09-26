@@ -203,12 +203,13 @@ export const gcpStackProviders = ({
         zoneId,
         dependsOn,
       }),
-    registryProxy: ({ network, dependsOn }) =>
+    registryProxy: ({ network, dependsOn, registryCredentials }) =>
       gcpRegistryProxyProvider({
         project,
         region,
-        // Its own role, so it runs as its own account: whatever the proxy is
-        // later granted — registry credentials among it — is granted to it
+        registryCredentials,
+        // Its own role, so it runs as its own account: what the proxy is
+        // granted — reading registry credentials among it — is granted to it
         // alone, not to the control plane beside it.
         placement: placement(network, 'registry-proxy'),
         dependsOn,

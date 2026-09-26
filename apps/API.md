@@ -196,24 +196,25 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Runners and jobs</b> · 14 routes</summary>
+<summary><b>Runners and jobs</b> · 15 routes</summary>
 
-| Method   | Path                           | What it does                                                   |
-| -------- | ------------------------------ | -------------------------------------------------------------- |
-| `GET`    | `/api/runners`                 | Lists runners.                                                 |
-| `POST`   | `/api/runners`                 | Registers a runner.                                            |
-| `GET`    | `/api/runners/me`              | Returns the authenticated runner's identity and configuration. |
-| `GET`    | `/api/runners/by-box/{boxId}`  | Resolves the runner assigned to a box.                         |
-| `GET`    | `/api/runners/{id}`            | Gets a runner by ID.                                           |
-| `GET`    | `/api/runners/{id}/full`       | Gets a runner with its full related data.                      |
-| `DELETE` | `/api/runners/{id}`            | Deletes a runner.                                              |
-| `PATCH`  | `/api/runners/{id}/scheduling` | Enables or disables scheduling onto a runner.                  |
-| `PATCH`  | `/api/runners/{id}/draining`   | Enables or disables runner draining.                           |
-| `POST`   | `/api/runners/healthcheck`     | Records or checks runner health.                               |
-| `GET`    | `/api/jobs`                    | Lists jobs assigned to the authenticated runner.               |
-| `GET`    | `/api/jobs/poll`               | Long-polls for work assigned to the runner.                    |
-| `GET`    | `/api/jobs/{jobId}`            | Gets a job by ID.                                              |
-| `POST`   | `/api/jobs/{jobId}/status`     | Reports job progress, success, or failure.                     |
+| Method   | Path                                   | What it does                                                   |
+| -------- | -------------------------------------- | -------------------------------------------------------------- |
+| `GET`    | `/api/runners`                         | Lists runners.                                                 |
+| `POST`   | `/api/runners`                         | Registers a runner.                                            |
+| `GET`    | `/api/runners/me`                      | Returns the authenticated runner's identity and configuration. |
+| `GET`    | `/api/runners/me/registry-credentials` | Finds the registry login a pull uses, without its password.    |
+| `GET`    | `/api/runners/by-box/{boxId}`          | Resolves the runner assigned to a box.                         |
+| `GET`    | `/api/runners/{id}`                    | Gets a runner by ID.                                           |
+| `GET`    | `/api/runners/{id}/full`               | Gets a runner with its full related data.                      |
+| `DELETE` | `/api/runners/{id}`                    | Deletes a runner.                                              |
+| `PATCH`  | `/api/runners/{id}/scheduling`         | Enables or disables scheduling onto a runner.                  |
+| `PATCH`  | `/api/runners/{id}/draining`           | Enables or disables runner draining.                           |
+| `POST`   | `/api/runners/healthcheck`             | Records or checks runner health.                               |
+| `GET`    | `/api/jobs`                            | Lists jobs assigned to the authenticated runner.               |
+| `GET`    | `/api/jobs/poll`                       | Long-polls for work assigned to the runner.                    |
+| `GET`    | `/api/jobs/{jobId}`                    | Gets a job by ID.                                              |
+| `POST`   | `/api/jobs/{jobId}/status`             | Reports job progress, success, or failure.                     |
 
 </details>
 

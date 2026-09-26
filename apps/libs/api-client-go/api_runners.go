@@ -60,6 +60,18 @@ type RunnersAPI interface {
 	GetInfoForAuthenticatedRunnerExecute(r RunnersAPIGetInfoForAuthenticatedRunnerRequest) (*RunnerFull, *http.Response, error)
 
 	/*
+	GetRegistryCredentialForAuthenticatedRunner Find the registry credential a pull uses
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest
+	*/
+	GetRegistryCredentialForAuthenticatedRunner(ctx context.Context) RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest
+
+	// GetRegistryCredentialForAuthenticatedRunnerExecute executes the request
+	//  @return RunnerRegistryCredential
+	GetRegistryCredentialForAuthenticatedRunnerExecute(r RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest) (*RunnerRegistryCredential, *http.Response, error)
+
+	/*
 	GetRunnerByBoxId Get runner by box ID
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -414,6 +426,136 @@ func (a *RunnersAPIService) GetInfoForAuthenticatedRunnerExecute(r RunnersAPIGet
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
 
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
+type RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest struct {
+	ctx context.Context
+	ApiService RunnersAPI
+	organizationId *string
+	host *string
+	repository *string
+}
+
+// Organization the pull is for
+func (r RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest) OrganizationId(organizationId string) RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest {
+	r.organizationId = &organizationId
+	return r
+}
+
+// Registry host as the tenant wrote it
+func (r RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest) Host(host string) RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest {
+	r.host = &host
+	return r
+}
+
+// Repository on that host
+func (r RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest) Repository(repository string) RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest {
+	r.repository = &repository
+	return r
+}
+
+func (r RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest) Execute() (*RunnerRegistryCredential, *http.Response, error) {
+	return r.ApiService.GetRegistryCredentialForAuthenticatedRunnerExecute(r)
+}
+
+/*
+GetRegistryCredentialForAuthenticatedRunner Find the registry credential a pull uses
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @return RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest
+*/
+func (a *RunnersAPIService) GetRegistryCredentialForAuthenticatedRunner(ctx context.Context) RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest {
+	return RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest{
+		ApiService: a,
+		ctx: ctx,
+	}
+}
+
+// Execute executes the request
+//  @return RunnerRegistryCredential
+func (a *RunnersAPIService) GetRegistryCredentialForAuthenticatedRunnerExecute(r RunnersAPIGetRegistryCredentialForAuthenticatedRunnerRequest) (*RunnerRegistryCredential, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *RunnerRegistryCredential
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "RunnersAPIService.GetRegistryCredentialForAuthenticatedRunner")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/runners/me/registry-credentials"
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.organizationId == nil {
+		return localVarReturnValue, nil, reportError("organizationId is required and must be specified")
+	}
+	if r.host == nil {
+		return localVarReturnValue, nil, reportError("host is required and must be specified")
+	}
+	if r.repository == nil {
+		return localVarReturnValue, nil, reportError("repository is required and must be specified")
+	}
+
+	parameterAddToHeaderOrQuery(localVarQueryParams, "organizationId", r.organizationId, "form", "")
+	parameterAddToHeaderOrQuery(localVarQueryParams, "host", r.host, "form", "")
+	parameterAddToHeaderOrQuery(localVarQueryParams, "repository", r.repository, "form", "")
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
 

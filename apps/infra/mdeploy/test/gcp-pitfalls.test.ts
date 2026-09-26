@@ -52,6 +52,7 @@ import {
 import {
   REGISTRY_SECRET_CREATE_PERMISSIONS,
   REGISTRY_SECRET_PREFIX,
+  REGISTRY_SECRET_READ_ROLE,
   REGISTRY_SECRET_WRITE_PERMISSIONS,
 } from '../stack/providers/gcp/registry-credentials.ts'
 import { REGISTRY_SECRET_STORE_VARIABLE } from '../stack/registry-credentials.ts'
@@ -1677,12 +1678,12 @@ test('the registry proxy is spoken to over HTTP/2', () => {
 
 test('the registry proxy runs as its own account, not the control plane’s', () => {
   /*
-   * What it holds differs from what the API holds, and will differ more: once
-   * registry credentials exist, this is the one process that reads them. An
-   * account shared with the API would hand the control plane those grants too.
+   * What it holds differs from what the API holds: it is the one process that
+   * reads registry credentials. An account shared with the API would hand the
+   * control plane that read too.
    */
   const index = readFileSync(fileURLToPath(new URL('../stack/providers/gcp/index.ts', import.meta.url)), 'utf8')
-  const wiring = /registryProxy: \(\{ network, dependsOn \}\) =>[\s\S]*?\}\),/.exec(index)?.[0]
+  const wiring = /registryProxy: \(\{ network, dependsOn(?:, \w+)* \}\) =>[\s\S]*?\}\),/.exec(index)?.[0]
   assert.ok(wiring, 'the GCP bundle wires no registry proxy')
   assert.match(wiring, /placement: placement\(network, 'registry-proxy'\)/)
   assert.doesNotMatch(wiring, /placement\(network, 'api'\)/)
@@ -1763,4 +1764,19 @@ test('the API names its secrets and its store the way the stack grants them', ()
   assert.match(store, new RegExp(`REGISTRY_SECRET_PREFIX = '${REGISTRY_SECRET_PREFIX}'`))
   assert.match(configuration, new RegExp(`process\\.env\\.${REGISTRY_SECRET_STORE_VARIABLE}\\b`))
   assert.match(store, /backend === 'gcp'/, 'the API no longer answers to the value the stack writes')
+})
+
+test('the registry proxy can read registry passwords and write none', () => {
+  /*
+   * The proxy's half of the split. `secretAccessor` is reading and nothing
+   * else; any other role here is a write the API's half was built to keep
+   * from a single process. Bound by the same prefix condition, so the stack's
+   * own secrets — the database password among them — stay out of reach.
+   */
+  assert.equal(REGISTRY_SECRET_READ_ROLE, 'roles/secretmanager.secretAccessor')
+
+  const grants = projectIamBlocks(withoutComments(sourceOf('registry-proxy')))
+  assert.equal(grants.length, 1, `expected the one read grant, found ${grants.length}`)
+  assert.match(grants[0], /role: registryCredentials\.binding\.readRole,/)
+  assert.match(grants[0], /condition: registryCredentials\.binding\.condition,/, 'the read is not bounded')
 })

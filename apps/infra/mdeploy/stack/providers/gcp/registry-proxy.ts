@@ -30,6 +30,7 @@
  */
 
 import type { Placement } from '../../network.ts'
+import type { RegistryCredentialStore } from '../../registry-credentials.ts'
 import type { RegistryProxy, RegistryProxyProvider, RegistryProxyRequest } from '../../registry-proxy.ts'
 import { REGISTRY_PROXY_HEALTH_PATH, REGISTRY_PROXY_PORT } from '../../registry-proxy.ts'
 import { containerEnvironment } from './secret-env.ts'
@@ -39,11 +40,14 @@ export const gcpRegistryProxyProvider =
   ({
     project,
     region,
+    registryCredentials,
     placement,
     dependsOn,
   }: {
     project: string
     region: string
+    /** Where the logins it presents upstream are kept, and the grant to read them. */
+    registryCredentials: RegistryCredentialStore
     /** Its own role's placement, so the identity it runs as is its own. */
     placement: Extract<Placement, { cloud: 'gcp' }>
     dependsOn: any[]
@@ -121,10 +125,27 @@ export const gcpRegistryProxyProvider =
       member: 'allUsers',
     })
 
+    /*
+     * Reading the credentials' secrets and nothing else: no write, and nothing
+     * outside the prefix. At the project with a condition rather than per
+     * secret, because the secrets appear at run time and nothing at deploy
+     * time could name them.
+     */
+    const readers = registryCredentials.active
+      ? [
+          new gcp.projects.IAMMember('RegistryProxySecretReader', {
+            project,
+            role: registryCredentials.binding.readRole,
+            member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
+            condition: registryCredentials.binding.condition,
+          }),
+        ]
+      : []
+
     return {
       active: true,
       // Cloud Run answers on 443 with no port suffix, so the URI is the origin.
       url: service.uri,
-      ready: [service, invoker],
+      ready: [service, invoker, ...readers],
     }
   }
