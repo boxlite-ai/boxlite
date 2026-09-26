@@ -1,8 +1,8 @@
 """L2 native-process supervision + stack-level commands.
 
-Ports the former `scripts/stack-*.sh` into Python: brings the four native host
-processes (API, runner, proxy, dashboard) up/down/status/restart, builds the Go
-binaries, tails logs, resets DB state, seeds init data, and rebuilds stuck L1
+Ports the former `scripts/stack-*.sh` into Python: brings the five native host
+processes (API, registry proxy, runner, proxy, dashboard) up/down/status/restart,
+builds the Go binaries, tails logs, resets DB state, seeds init data, and rebuilds stuck L1
 boxes. Daemons are spawned DETACHED (`start_new_session=True`) so they outlive
 this process; stopped via SIGTERM→SIGKILL on the process **group**, which reaps
 the `nx serve`/go grandchildren cleanly (the bash needed a pkill-by-name sweep
@@ -35,8 +35,18 @@ from .services import SERVICES
 PORT_API = int(os.environ.get("BOXLITE_LOCAL_API_PORT", "3001"))  # override if :3001 is taken
 PORT_RUNNER = 3003
 PORT_PROXY = 4000
+PORT_REGISTRY_PROXY = 4100  # the binary's own default; see apps/image-service
 PORT_DASHBOARD = 3000
-ALL_COMPONENTS = ("api", "runner", "proxy", "dashboard")  # start order: api first
+# Start order: api first. The registry proxy asks the API about every caller,
+# so it follows the API and precedes nothing that depends on it at start-up.
+ALL_COMPONENTS = ("api", "registry-proxy", "runner", "proxy", "dashboard")
+_PORTS = {
+    "api": PORT_API,
+    "registry-proxy": PORT_REGISTRY_PROXY,
+    "runner": PORT_RUNNER,
+    "proxy": PORT_PROXY,
+    "dashboard": PORT_DASHBOARD,
+}
 _RUNNER_TOKEN = "local-shared-runner-token-aaaa1111"
 # The otel box's host-mapped OTLP HTTP port (the port literal lives in
 # services.py SPEC_OTEL.ports); traces fan out from there to the jaeger box.
@@ -105,6 +115,10 @@ class _Paths:
     @property
     def proxy_bin(self) -> Path:
         return self.bin / "boxlite-proxy"
+
+    @property
+    def registry_proxy_bin(self) -> Path:
+        return self.bin / "boxlite-registry-proxy"
 
     @property
     def runner_home(self) -> Path:
@@ -202,7 +216,7 @@ def _parse_dotenv(path: Path) -> dict[str, str]:
     return env
 
 
-# ── L2 component table (the four native host processes) ────────────────────
+# ── L2 component table (the five native host processes) ────────────────────
 @dataclass(frozen=True)
 class _Component:
     name: str
@@ -270,6 +284,22 @@ def _components(p: _Paths) -> dict[str, _Component]:
                 "OTEL_EXPORTER_OTLP_ENDPOINT": _OTEL_OTLP_HTTP_URL,
             },
             "boxlite-proxy$",
+        ),
+        # Pulls public images only for now: it refuses a private upstream, so
+        # the local registry box is not a registry it will reach.
+        "registry-proxy": _Component(
+            "registry-proxy", PORT_REGISTRY_PROXY, "http", f"http://127.0.0.1:{PORT_REGISTRY_PROXY}/health", 30,
+            [str(p.registry_proxy_bin)], None,
+            {
+                "REGISTRY_PROXY_PORT": str(PORT_REGISTRY_PROXY),
+                "BOXLITE_API_URL": f"http://localhost:{PORT_API}/api",
+                "SHUTDOWN_TIMEOUT_SEC": "10",
+                "ENVIRONMENT": "local",
+                "OTEL_LOGGING_ENABLED": "true",
+                "OTEL_TRACING_ENABLED": "true",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": _OTEL_OTLP_HTTP_URL,
+            },
+            "boxlite-registry-proxy$",
         ),
         # VITE_API_URL=/api routes dashboard API calls through the Vite dev proxy
         # (→ localhost:3001) instead of the hard-coded prod default.
@@ -419,28 +449,43 @@ def _pg_count(cfg: InfraConfig, sql: str) -> int:
 
 
 # ── stack-level commands (the former make stack-* targets) ─────────────────
+# The native Go binaries: the module each is built in, its command, and its
+# build tags. A table because the three no longer share a shape — the registry
+# proxy's module is `image-service`, not its own name.
+#
+# The runner links the BoxLite SDK's native lib. Build it with the boxlite_dev
+# tag so it links this worktree's target/debug/libboxlite.a (matching the local
+# sdks/go via go.work) instead of a downloaded prebuilt — otherwise a
+# locally-changed FFI surface fails to link.
+_GO_BUILDS = {
+    "runner": ("runner", "./cmd/runner", ["-tags", "boxlite_dev"]),
+    "proxy": ("proxy", "./cmd/proxy", []),
+    "registry-proxy": ("image-service", "./cmd/registry-proxy", []),
+}
+
+
+def _bin_for(p: _Paths, comp: str) -> Path:
+    return {"runner": p.runner_bin, "proxy": p.proxy_bin, "registry-proxy": p.registry_proxy_bin}[comp]
+
+
 def _go_build(p: _Paths, comp: str) -> None:
-    """Rebuild one native Go binary (`runner` or `proxy`)."""
-    out = p.runner_bin if comp == "runner" else p.proxy_bin
+    """Rebuild one native Go binary."""
+    module, command, tags = _GO_BUILDS[comp]
+    out = _bin_for(p, comp)
     p.bin.mkdir(parents=True, exist_ok=True)
     log(f"go build {comp} → {out}")
-    # The runner links the BoxLite SDK's native lib. Build it with the
-    # boxlite_dev tag so it links this worktree's target/debug/libboxlite.a
-    # (matching the local sdks/go via go.work) instead of a downloaded
-    # prebuilt — otherwise a locally-changed FFI surface fails to link.
-    tags = ["-tags", "boxlite_dev"] if comp == "runner" else []
-    subprocess.run(["go", "build", *tags, "-o", str(out), f"./cmd/{comp}"],
-                   cwd=str(p.apps / comp), env={**os.environ, "GOTOOLCHAIN": "auto"}, check=True)
+    subprocess.run(["go", "build", *tags, "-o", str(out), command],
+                   cwd=str(p.apps / module), env={**os.environ, "GOTOOLCHAIN": "auto"}, check=True)
 
 
 def build(cfg: InfraConfig) -> int:
-    """Build both native binaries (used by `up` when they're missing)."""
+    """Build every native Go binary (used by `up` when any is missing)."""
     p = _paths(cfg)
     if not (p.apps / "node_modules").is_dir():
         log("yarn install (node_modules missing)")
         subprocess.run(["corepack", "yarn", "install"], cwd=str(p.apps), check=True)
-    _go_build(p, "runner")
-    _go_build(p, "proxy")
+    for comp in _GO_BUILDS:
+        _go_build(p, comp)
     ok("binaries ready")
     return 0
 
@@ -546,7 +591,7 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
             stop_component(p, name)
 
     # 3. binaries present? (auto-build the missing ones)
-    if not p.runner_bin.exists() or not p.proxy_bin.exists():
+    if any(not _bin_for(p, comp).exists() for comp in _GO_BUILDS):
         log("native binaries missing — building")
         build(cfg)
 
@@ -582,7 +627,7 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
 
 def down(cfg: InfraConfig, components: list[str] | None = None, *, include_l1: bool = False) -> int:
     p = _paths(cfg)
-    comps = components or ["dashboard", "proxy", "runner", "api"]  # reverse of start order
+    comps = components or list(reversed(ALL_COMPONENTS))
     for name in comps:
         stop_component(p, name)
     if include_l1:
@@ -607,18 +652,18 @@ def status(cfg: InfraConfig) -> int:
 
     print()
     print(f"{_BOLD}L2 — native processes{_RESET}")
-    print(f"  {'COMP':<10} {'PID':<8} {'PORT':<8} STATE")
-    ports = {"api": PORT_API, "runner": PORT_RUNNER, "proxy": PORT_PROXY, "dashboard": PORT_DASHBOARD}
+    width = max(len(comp) for comp in ALL_COMPONENTS)
+    print(f"  {'COMP':<{width}} {'PID':<8} {'PORT':<8} STATE")
     for comp in ALL_COMPONENTS:
         pid = _component_pid(p, comp)
-        port = ports[comp]
+        port = _PORTS[comp]
         if pid is None:
-            print(f"  {comp:<10} {'-':<8} {port:<8} {_DIM}down{_RESET}")
+            print(f"  {comp:<{width}} {'-':<8} {port:<8} {_DIM}down{_RESET}")
             exit_code = 1
         elif _port_listening(port):
-            print(f"  {comp:<10} {pid:<8} {port:<8} {_GREEN}up{_RESET}")
+            print(f"  {comp:<{width}} {pid:<8} {port:<8} {_GREEN}up{_RESET}")
         else:
-            print(f"  {comp:<10} {pid:<8} {port:<8} {_YELLOW}alive but not listening{_RESET}")
+            print(f"  {comp:<{width}} {pid:<8} {port:<8} {_YELLOW}alive but not listening{_RESET}")
             exit_code = 1
 
     print()
@@ -658,8 +703,8 @@ def logs(cfg: InfraConfig, comp: str | None = None) -> int:
 def restart(cfg: InfraConfig, names: list[str]) -> int:
     """Restart L2 process(es) and/or recreate L1 box(es), by name.
 
-    L2 components (api/runner/proxy/dashboard) are stopped + restarted (runner/
-    proxy rebuild their Go binary first). L1 box names (dex/registry/...) are
+    L2 components (see ALL_COMPONENTS) are stopped + restarted; the Go ones
+    (see _GO_BUILDS) rebuild their binary first. L1 box names (dex/registry/...) are
     destroyed + recreated — the surgical fix for one wedged box (e.g. dex after
     the host sleeps and its clock drifts). The host data volume survives.
     """
@@ -675,7 +720,7 @@ def restart(cfg: InfraConfig, names: list[str]) -> int:
     healthy = True
     for name in l2:
         stop_component(p, name)
-        if name in ("runner", "proxy"):  # native Go binaries — no watch mode, rebuild
+        if name in _GO_BUILDS:  # native Go binaries — no watch mode, rebuild
             _go_build(p, name)
         healthy &= start_component(p, table[name])
 
@@ -694,7 +739,7 @@ def restart(cfg: InfraConfig, names: list[str]) -> int:
 
 def _stop_l2_and_wipe_runner(p: _Paths) -> None:
     log("stopping L2 native processes...")
-    for name in ["dashboard", "proxy", "runner", "api"]:
+    for name in reversed(ALL_COMPONENTS):
         stop_component(p, name)
     log(f"wiping runner home: {p.runner_home}")
     for sub in ("db", "boxes", "images", "rootfs", "logs"):

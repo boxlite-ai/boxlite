@@ -23,13 +23,19 @@
  * oversight, so the contract names it — a provider that quietly gave the runner
  * the services' private placement would work until the first image pull.
  *
- * Roles are a closed set rather than free-form strings. There are four of them
- * and a graph engine to express four edges would be more machinery than the
- * edges. A fifth role is a deliberate edit here, which is the right cost.
+ * Roles are a closed set rather than free-form strings. There are five of them
+ * and a graph engine to express their edges would be more machinery than the
+ * edges. Another role is a deliberate edit here, which is the right cost.
+ *
+ * The fifth, `registry-proxy`, is a role rather than a second hat on the API
+ * because what it holds differs. It terminates a runner's credential and, once
+ * registry credentials exist, is the one process that reads them — so it gets
+ * an identity of its own, and whatever that identity is granted is granted to
+ * it alone rather than to the control plane beside it.
  */
 
-/** The four kinds of workload BoxLite runs. */
-export type WorkloadRole = 'api' | 'proxy' | 'otel-collector' | 'runner'
+/** The five kinds of workload BoxLite runs. */
+export type WorkloadRole = 'api' | 'proxy' | 'otel-collector' | 'runner' | 'registry-proxy'
 
 /**
  * Where in the network a role sits.

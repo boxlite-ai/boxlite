@@ -493,7 +493,8 @@ and tunnels them to guest ports is in [`proxy/README.md`](./proxy/README.md).
 
 **Service:** `apps/image-service` (binary `cmd/registry-proxy`) · **Base path:**
 `/v2` · **Port:** `4100` in deployments (`REGISTRY_PROXY_PORT` environment
-variable)
+variable) · **Reached:** from inside the stage's network only, at its own Cloud
+Run address over HTTP/2
 
 The pull half of the OCI distribution protocol, served so a runner can fetch an
 image whose registry credentials only the platform holds. The organization and
@@ -612,14 +613,15 @@ a separate environment — see
 </details>
 
 <details>
-<summary><b>Application processes</b> · 4 processes</summary>
+<summary><b>Application processes</b> · 5 processes</summary>
 
-| Process     | Host port | Interface                                                                  |
-| ----------- | --------- | -------------------------------------------------------------------------- |
-| `api`       | `3001`    | Control-plane and hosted BoxLite-compatible APIs; probed at `/api/health`. |
-| `dashboard` | `3000`    | Vite dev server for the dashboard app.                                     |
-| `proxy`     | `4000`    | Preview proxy API (`PROXY_PORT`).                                          |
-| `runner`    | `3003`    | Runner API (`API_PORT`).                                                   |
+| Process          | Host port | Interface                                                                  |
+| ---------------- | --------- | -------------------------------------------------------------------------- |
+| `api`            | `3001`    | Control-plane and hosted BoxLite-compatible APIs; probed at `/api/health`. |
+| `dashboard`      | `3000`    | Vite dev server for the dashboard app.                                     |
+| `proxy`          | `4000`    | Preview proxy API (`PROXY_PORT`).                                          |
+| `registry-proxy` | `4100`    | Registry proxy API (`REGISTRY_PROXY_PORT`); probed at `/health`.           |
+| `runner`         | `3003`    | Runner API (`API_PORT`).                                                   |
 
 The local API listens on `3001` rather than the deployed `3000`, which the
 dashboard dev server uses; `BOXLITE_LOCAL_API_PORT` overrides it. This stack
@@ -661,9 +663,9 @@ container.
 | `proxy`     | `4000`    | Preview proxy API.                                          |
 | `runner`    | `8080`    | Runner API, left on the in-code default rather than `3003`. |
 
-These are the same four projects the boxed stack serves, on the same `3000`,
-`3001`, and `4000` host ports, so the two local environments cannot run at the
-same time.
+These are four of the five projects the boxed stack serves — all but the
+registry proxy — on the same `3000`, `3001`, and `4000` host ports, so the two
+local environments cannot run at the same time.
 
 </details>
 

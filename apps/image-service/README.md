@@ -141,6 +141,32 @@ yarn nx serve image-service
 Coverage is reported through `make coverage:go` from the repository root, which
 is also what CI uploads.
 
+Locally it is one of the native processes `apps/infra-local` supervises:
+`make up` builds and starts it, and `make restart COMPONENTS=registry-proxy`
+rebuilds it from source.
+
+## Deployment
+
+[`mdeploy`](../infra/mdeploy/) runs it as a Cloud Run service, declared in
+[`providers/gcp/registry-proxy.ts`](../infra/mdeploy/stack/providers/gcp/registry-proxy.ts).
+AWS stages do not deploy one and report none. Three platform settings are not
+defaults, and each is there because the default loses a pull:
+
+| Setting | Why |
+| --- | --- |
+| Ingress internal, invoker `allUsers` | A caller's `Authorization` header already carries its runner credential for the registry protocol, so it has nowhere to put a Google identity token. Cloud Run's per-request IAM check is therefore off, the ingress is the restriction, and this process authenticates each caller itself. The two are one decision. |
+| HTTP/2 port (`h2c`) | Cloud Run caps an HTTP/1 response at 32 MiB unless it is chunked. A blob relayed with the upstream's own `Content-Length` is not, so over HTTP/1 every layer past that size would fail in production and pass in every test. The binary serves HTTP/1 and HTTP/2 on one port. |
+| Request timeout of an hour | A blob is one response and a large layer takes minutes. Cloud Run's default of five minutes cuts it off. |
+
+A runner reaches it at its own `run.app` address. Runners are VMs on a subnet
+with Google's private access, which is what lets them reach an internal-ingress
+service without a load balancer — the same path they take to the telemetry
+collector.
+
+It runs as its own service account, not the control plane's. It holds no
+credentials yet, but it is the process that will, and whatever it is granted
+then should be granted to it alone.
+
 ## Known limits
 
 - The rate limit is per process. Several instances multiply it, which is the

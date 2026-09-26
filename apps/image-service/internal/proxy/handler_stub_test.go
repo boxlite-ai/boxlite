@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -115,6 +116,10 @@ func (u *stubUpstream) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
+		// A registry states a blob's length, and ghcr did for every layer this
+		// proxy was tried against. It matters over HTTP/2, which holds the body
+		// to exactly that length.
+		w.Header().Set("Content-Length", strconv.Itoa(len(u.blob)))
 		w.WriteHeader(http.StatusOK)
 		if u.blobBarrier == nil {
 			_, _ = w.Write(u.blob)

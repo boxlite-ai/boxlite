@@ -189,3 +189,57 @@ func TestStartFailsOnAPortItCannotBind(t *testing.T) {
 		t.Errorf("error %q does not name the port it failed on", err)
 	}
 }
+
+// Cloud Run caps an HTTP/1 response at 32 MiB unless it is chunked, and a blob
+// relayed with the upstream's Content-Length is not — so a layer past that size
+// would fail in production while every local test passed. HTTP/2 carries no such
+// cap, and Cloud Run speaks it to a container that accepts it in the clear.
+func TestServeSpeaksHTTP2InTheClear(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = serve(ctx, listener, NewRouter(&config.Config{}, nil), time.Second) }()
+
+	// Prior knowledge, which is how Cloud Run opens the connection: no TLS and
+	// no Upgrade dance, the HTTP/2 preface straight away.
+	protocols := new(http.Protocols)
+	protocols.SetUnencryptedHTTP2(true)
+	client := &http.Client{Transport: &http.Transport{Protocols: protocols}, Timeout: 5 * time.Second}
+
+	response, err := client.Get("http://" + listener.Addr().String() + HealthPath)
+	if err != nil {
+		t.Fatalf("an HTTP/2 client could not reach the server: %v", err)
+	}
+	defer response.Body.Close()
+	if response.ProtoMajor != 2 {
+		t.Errorf("answered over %s, want HTTP/2", response.Proto)
+	}
+}
+
+// The same port still has to answer HTTP/1, which is what a developer's curl and
+// the local stack's runner speak.
+func TestServeStillSpeaksHTTP1(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = serve(ctx, listener, NewRouter(&config.Config{}, nil), time.Second) }()
+
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	client := &http.Client{Transport: &http.Transport{Protocols: protocols}, Timeout: 5 * time.Second}
+
+	response, err := client.Get("http://" + listener.Addr().String() + HealthPath)
+	if err != nil {
+		t.Fatalf("an HTTP/1 client could not reach the server: %v", err)
+	}
+	defer response.Body.Close()
+	if response.ProtoMajor != 1 {
+		t.Errorf("answered over %s, want HTTP/1.1", response.Proto)
+	}
+}

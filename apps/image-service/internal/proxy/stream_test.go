@@ -4,10 +4,13 @@
 package proxy
 
 import (
+	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -52,8 +55,15 @@ func TestBlobBytesReachTheCallerBeforeTheUpstreamHasFinished(t *testing.T) {
 
 	// The upstream is still holding the rest of the blob. If the proxy buffered,
 	// this read cannot complete and the timeout below is what reports it.
+	//
+	// Half the first chunk rather than all of it. A buffered writer holds a
+	// sub-buffer tail until the next write, and with a stated Content-Length
+	// that is net/http's own few kilobytes: measured, 62091 of the 65536 bytes
+	// arrive while the upstream stalls. Demanding every byte would assert a
+	// buffer size rather than streaming — and a proxy that buffered the blob
+	// delivers none of it, which is what separates the two.
 	firstByte := make(chan error, 1)
-	head := make([]byte, blobFirstChunk)
+	head := make([]byte, blobFirstChunk/2)
 	go func() {
 		_, err := io.ReadFull(response.Body, head)
 		firstByte <- err
@@ -62,13 +72,13 @@ func TestBlobBytesReachTheCallerBeforeTheUpstreamHasFinished(t *testing.T) {
 	select {
 	case err := <-firstByte:
 		if err != nil {
-			t.Fatalf("reading the first byte: %v", err)
+			t.Fatalf("reading while the upstream was still sending: %v", err)
 		}
 	case <-time.After(3 * time.Second):
 		close(upstream.blobBarrier)
 		t.Fatal("no bytes reached the caller while the upstream was still sending: the blob is being buffered")
 	}
-	if string(head) != string(upstream.blob[:blobFirstChunk]) {
+	if string(head) != string(upstream.blob[:len(head)]) {
 		t.Error("the bytes that arrived early are not the ones the upstream sent first")
 	}
 
@@ -139,5 +149,65 @@ func TestRelayingALargeBlobDoesNotAllocateOnTheOrderOfTheBlob(t *testing.T) {
 	t.Logf("relaying %d bytes allocated %d", blobSize, allocated)
 	if limit := uint64(blobSize / 4); allocated > limit {
 		t.Errorf("relaying %d bytes allocated %d, want under %d", blobSize, allocated, limit)
+	}
+}
+
+// What production actually does: a blob past Cloud Run's 32 MiB HTTP/1 cap,
+// relayed with the upstream's Content-Length, over HTTP/2 in the clear. HTTP/2
+// holds the body to that length exactly and meters it by flow control, so this
+// is the path that has to survive rather than merely the protocol negotiating.
+func TestALargeBlobStreamsOverHTTP2WithItsLengthIntact(t *testing.T) {
+	const blobSize = 48 << 20 // past the cap it exists to clear
+
+	upstream := newStubUpstream(t)
+	upstream.blob = make([]byte, blobSize)
+	for i := range upstream.blob {
+		upstream.blob[i] = byte(i * 31)
+	}
+	router, _ := testProxy(t, upstream, runnerPlane(t), "ghcr.io")
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = serve(ctx, listener, router, 5*time.Second) }()
+
+	protocols := new(http.Protocols)
+	protocols.SetUnencryptedHTTP2(true)
+	client := &http.Client{Transport: &http.Transport{Protocols: protocols}, Timeout: 30 * time.Second}
+
+	request, err := http.NewRequest(http.MethodGet,
+		"http://"+listener.Addr().String()+"/v2/acme/ghcr.io/acme/app/blobs/"+digestOf(upstream.blob), nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	request.SetBasicAuth("runner", runnerKey)
+
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("GET blob over HTTP/2: %v", err)
+	}
+	defer response.Body.Close()
+	if response.ProtoMajor != 2 {
+		t.Fatalf("answered over %s, want HTTP/2", response.Proto)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET blob = %d", response.StatusCode)
+	}
+
+	relayed, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("reading the blob: %v", err)
+	}
+	if len(relayed) != blobSize {
+		t.Fatalf("relayed %d bytes, want %d", len(relayed), blobSize)
+	}
+	if got := response.Header.Get("Content-Length"); got != strconv.Itoa(blobSize) {
+		t.Errorf("Content-Length = %q, want the upstream's %d — dropping it is what would have forced chunking", got, blobSize)
+	}
+	if digestOf(relayed) != digestOf(upstream.blob) {
+		t.Error("the blob arrived over HTTP/2 with different bytes")
 	}
 }

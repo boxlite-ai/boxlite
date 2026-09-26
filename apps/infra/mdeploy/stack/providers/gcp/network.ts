@@ -50,13 +50,13 @@ const INTERNAL_PORTS = [API_PORT, PROXY_PORT, RUNNER_PORT, OTLP_HTTP_PORT].map(S
 export const SUBNET_CIDR = '10.20.0.0/20'
 
 /**
- * The subnet the Cloud Run services egress from, and the source of every rule
- * that admits one to a VM.
+ * The subnet the API and the collector egress from, and the source of every
+ * rule that admits a Cloud Run service to a VM.
  *
  * Its own range rather than a share of `SUBNET_CIDR`, and that is the whole
  * point of it. A rule keyed on the workload subnet would admit every runner and
  * the telemetry host itself — the widening `InternalFirewall` argues against
- * below — whereas this one holds the serverless roles and nothing that can take
+ * below — whereas this one holds those two services and nothing that can take
  * an instance.
  *
  * What it cannot do is tell those roles apart, and that is the price of the
@@ -64,8 +64,9 @@ export const SUBNET_CIDR = '10.20.0.0/20'
  * control plane and the collector alike, so the runner's rule now also admits a
  * collector that has no reason to call it, and ClickHouse's admits both the
  * writer and the reader it already wanted. Narrowing further would need a subnet
- * per role, which is a range each and a placement each; it is worth doing the
- * day a serverless role appears that should not reach both hosts.
+ * per role, which is a range each and a placement each. A serverless role that
+ * should reach neither host needs none of that: the registry proxy egresses
+ * from the workload subnet, which no rule names as a source.
  *
  * A range because it is the only source this direction is documented to take.
  * The page that shows a Cloud Run service being given network tags — it can be,
@@ -175,7 +176,7 @@ export const PSC_NAT_CIDR = '10.20.17.0/24'
 const SERVICE_RANGE_PREFIX = 16
 
 /**
- * The four identities, one per role, and the name Pulumi files each under. A
+ * The five identities, one per role, and the name Pulumi files each under. A
  * grant names one of these and never a range.
  *
  * A `Record` so a role added to `WorkloadRole` cannot silently go without an
@@ -188,6 +189,7 @@ const ACCOUNTS: Record<WorkloadRole, string> = {
   proxy: 'ProxyServiceAccount',
   'otel-collector': 'OtelServiceAccount',
   runner: 'RunnerServiceAccount',
+  'registry-proxy': 'RegistryProxyServiceAccount',
 }
 
 export const gcpNetworkProvider =
@@ -437,10 +439,10 @@ export const gcpNetworkProvider =
        */
       exposure: 'private',
       subnetwork: subnetwork.id,
-      // Offered to every role and read only by the two that are Cloud Run
-      // services. Separate from `subnetwork` because that one also places the
-      // API's internal address, which belongs beside its clients rather than in
-      // the range a firewall rule names as a source.
+      // Offered to every role and read only by the API and the collector; the
+      // registry proxy stays out of it. Separate from `subnetwork` because that
+      // one also places the API's internal address, which belongs beside its
+      // clients rather than in the range a firewall rule names as a source.
       egressSubnetwork: cloudRunEgress.id,
       serviceAccount: accounts[role].email,
     })

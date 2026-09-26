@@ -53,7 +53,7 @@ func Start(ctx context.Context, cfg *config.Config, api *apiclient.APIClient) er
 // so cutting the listener at shutdown truncates an image mid-layer and the
 // puller sees a corrupt digest rather than a retryable failure.
 func serve(ctx context.Context, listener net.Listener, handler http.Handler, drainTimeout time.Duration) error {
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: readHeaderTimeout}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: readHeaderTimeout, Protocols: acceptedProtocols()}
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
@@ -67,6 +67,25 @@ func serve(ctx context.Context, listener net.Listener, handler http.Handler, dra
 		defer cancel()
 		return server.Shutdown(drainCtx)
 	}
+}
+
+// acceptedProtocols is HTTP/1 and HTTP/2 in the clear, on one port.
+//
+// HTTP/2 because Cloud Run caps an HTTP/1 response at 32 MiB unless it is
+// chunked, and a blob relayed with the upstream's Content-Length is not: a
+// layer past that size would be cut off in production while every test here
+// passed. The cap is on HTTP/1 alone, and Cloud Run speaks HTTP/2 to a
+// container that accepts it without TLS — its own frontend terminates TLS.
+//
+// HTTP/1 as well, on the same port, because that is what a developer's curl
+// and the local stack speak. Dropping the Content-Length instead would have
+// forced chunking, but it would also have altered the headers this proxy
+// promises to relay untouched.
+func acceptedProtocols() *http.Protocols {
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	return protocols
 }
 
 // NewRouter builds the registry proxy's HTTP surface. It is separate from Start
