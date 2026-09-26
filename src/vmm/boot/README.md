@@ -61,8 +61,8 @@ Run the offline wrapper checks without starting Docker:
 make test:vmm:boot
 ```
 
-The qualification and reproducibility checks stop the full build process group
-on timeout before removing temporary outputs.
+The qualification and reproducibility checks stop and reap the full build
+process group on timeout or interruption before removing temporary outputs.
 
 Boot the generated image under QEMU's software emulator and check both the
 guest marker and its reboot request:

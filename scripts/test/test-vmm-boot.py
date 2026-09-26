@@ -156,6 +156,68 @@ class BuildEntrypointTests(unittest.TestCase):
                         )
                 socket_path.unlink(missing_ok=True)
 
+    def test_build_interrupt_terminates_the_process_group(self):
+        child = self.path / "build-child.py"
+        child.write_text(
+            "import os, socket\n"
+            "client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+            "client.connect(os.environ['BOXLITE_BUILD_GROUP_TEST_SOCKET'])\n"
+            "client.recv(1)\n"
+            "client.sendall(b'alive')\n"
+        )
+        builder = self.path / "build.sh"
+        builder.write_text(f"#!/bin/sh\npython3 {shlex.quote(str(child))} &\nwait\n")
+        builder.chmod(0o755)
+        socket_path = Path(tempfile.gettempdir()) / f"blt-{os.getpid()}-interrupt.sock"
+        socket_path.unlink(missing_ok=True)
+        process_group = None
+        accepted = None
+        interrupted = False
+        actual_wait = subprocess.Popen.wait
+
+        def interrupt_build_wait(process, *args, **kwargs):
+            nonlocal accepted, interrupted, process_group
+            if not interrupted:
+                process_group = process.pid
+                interrupted = True
+                accepted, _ = listener.accept()
+                raise KeyboardInterrupt
+            return actual_wait(process, *args, **kwargs)
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(socket_path))
+            listener.listen(1)
+            listener.settimeout(5)
+            try:
+                with (
+                    patch.dict(
+                        os.environ,
+                        {"BOXLITE_BUILD_GROUP_TEST_SOCKET": str(socket_path)},
+                    ),
+                    patch(__name__ + ".BUILD", builder),
+                    patch.object(subprocess.Popen, "wait", new=interrupt_build_wait),
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        run_build(self.path / "artifacts")
+
+                self.assertIsNotNone(accepted)
+                with accepted:
+                    accepted.settimeout(0.5)
+                    try:
+                        accepted.sendall(b"x")
+                        response = accepted.recv(5)
+                    except (BrokenPipeError, ConnectionResetError):
+                        response = b""
+                    self.assertNotEqual(
+                        response,
+                        b"alive",
+                        "build child survived its interrupted parent",
+                    )
+            finally:
+                if process_group is not None:
+                    signal_process_group(process_group, signal.SIGKILL)
+                socket_path.unlink(missing_ok=True)
+
 
 def verify_checksums(output):
     checksums = {}
@@ -187,7 +249,7 @@ def run_build(output, *, rebuild=False):
     process = subprocess.Popen(command, start_new_session=True)
     try:
         process.wait(timeout=BUILD_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, KeyboardInterrupt):
         if signal_process_group(process.pid, signal.SIGTERM):
             try:
                 process.wait(timeout=5)
