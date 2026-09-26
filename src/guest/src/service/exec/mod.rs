@@ -417,6 +417,16 @@ async fn spawn_execution(
             pid = leader_pid.as_raw(),
             "failed to capture process identity; signals will be skipped"
         );
+    } else if process.is_some_and(|p| p.own_process_group().is_none()) {
+        // Every spawn path is meant to leave the leader heading its own group
+        // (container runtime, PTY setsid, pipes setpgid). Landing here means
+        // kills reach the leader only, so a forking workload can outlive its
+        // deadline -- say so rather than degrade quietly.
+        warn!(
+            execution_id = %execution_id,
+            pid = leader_pid.as_raw(),
+            "execution leads no process group; kills cannot reach forked children"
+        );
     }
 
     // Register this pid's exit slot at the spawn, not at the wait: a detached
