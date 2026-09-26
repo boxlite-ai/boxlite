@@ -53,8 +53,10 @@ transport is backend-specific. `tunnel()` eagerly prepares one local gvproxy or
 remote service-proxy connection. `uri()` inspects its public URI, while `connect()`
 or `forward()` consumes that prepared one-shot tunnel into a byte stream or listener.
 For a remote public box, preparing the tunnel also registers its guest port. The
-proxy accepts direct HTTP/WebSocket and CONNECT access only while that port's
-tunnel declaration remains active.
+proxy accepts HTTP/WebSocket previews, including signed URLs, and CONNECT access
+only while that port's tunnel declaration remains active. Private boxes cannot
+open guest service ports through previews; the authenticated web terminal uses
+its separate reserved port.
 
 Explicit host port publication is a separate local-runtime feature that owns a
 TCP listener and accepts repeated connections.

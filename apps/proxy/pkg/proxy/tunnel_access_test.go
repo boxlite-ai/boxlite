@@ -15,7 +15,9 @@ import (
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
+	"github.com/boxlite-ai/proxy/cmd/proxy/config"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/securecookie"
 )
 
 func newTunnelProxy(t *testing.T, accessStatus int) *Proxy {
@@ -109,7 +111,7 @@ func TestDeclaredTunnelAllowsHTTP(t *testing.T) {
 	}
 }
 
-func TestAuthenticatedPrivatePreviewKeepsWorking(t *testing.T) {
+func TestAuthenticatedPrivateServicePreviewIsDenied(t *testing.T) {
 	proxy := newTunnelProxy(t, http.StatusNotFound)
 	ctx := context.Background()
 	if err := proxy.boxPublicCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
@@ -125,8 +127,64 @@ func TestAuthenticatedPrivatePreviewKeepsWorking(t *testing.T) {
 
 	target, err := proxy.GetProxyTarget(ginCtx)
 	stopActivityPoll(ginCtx)
+	if err == nil || target != nil {
+		t.Fatalf("private service preview reached guest port: target=%v err=%v", target, err)
+	}
+}
+
+func TestSignedServicePreviewRequiresTunnel(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		accessStatus int
+		allowed      bool
+	}{
+		{name: "undeclared", accessStatus: http.StatusNotFound},
+		{name: "declared", accessStatus: http.StatusOK, allowed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proxy := newTunnelProxy(t, test.accessStatus)
+			proxy.config = &config.Config{}
+			proxy.secureCookie = securecookie.New([]byte("test-cookie-signing-key-with-32-bytes"), nil)
+			token := "signedtoken12345"
+			if err := proxy.boxPublicCache.Set(context.Background(), token, false, time.Minute); err != nil {
+				t.Fatal(err)
+			}
+			cookieValue, err := proxy.secureCookie.Encode(BOX_AUTH_COOKIE_NAME+token, "AbCdEf123456")
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodGet, "http://3000-"+token+".proxy.test/", nil)
+			request.AddCookie(&http.Cookie{Name: BOX_AUTH_COOKIE_NAME + token, Value: cookieValue})
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = request
+
+			target, err := proxy.GetProxyTarget(ctx)
+			stopActivityPoll(ctx)
+			if (err == nil && target != nil) != test.allowed {
+				t.Fatalf("signed preview allowed = %t, want %t (target=%v, err=%v)", err == nil && target != nil, test.allowed, target, err)
+			}
+		})
+	}
+}
+
+func TestPrivateTerminalPreviewRemainsAvailable(t *testing.T) {
+	proxy := newTunnelProxy(t, http.StatusNotFound)
+	ctx := context.Background()
+	if err := proxy.boxPublicCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := proxy.boxAuthKeyValidCache.Set(ctx, "AbCdEf123456:owner-key", true, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://22222-AbCdEf123456.proxy.test/", nil)
+	request.Header.Set(BOX_AUTH_KEY_HEADER, "owner-key")
+	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ginCtx.Request = request
+
+	target, err := proxy.GetProxyTarget(ginCtx)
+	stopActivityPoll(ginCtx)
 	if err != nil || target == nil {
-		t.Fatalf("authenticated private preview rejected: target=%v err=%v", target, err)
+		t.Fatalf("private terminal rejected: target=%v err=%v", target, err)
 	}
 }
 

@@ -85,7 +85,8 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 			}
 			return nil, err
 		}
-	} else {
+	}
+	if targetPort != TERMINAL_PORT {
 		allowed, err := p.hasPublicTunnelAccess(ctx.Request.Context(), boxId, targetPort)
 		if err != nil {
 			wrappedErr := fmt.Errorf("check tunnel access: %w", err)
