@@ -24,11 +24,12 @@ const Realm = "boxlite-registry-proxy"
 // registryProxy serves the pull half of the distribution protocol on behalf of
 // callers that do not hold the upstream's credentials.
 type registryProxy struct {
-	upstream  *oci.Client
-	runners   *runnerAuthenticator
-	allowlist upstreamAllowlist
-	limits    *pullLimiter
-	tokens    *tokenBroker
+	upstream    *oci.Client
+	runners     *runnerAuthenticator
+	allowlist   upstreamAllowlist
+	limits      *pullLimiter
+	tokens      *tokenBroker
+	credentials *credentialFinder
 }
 
 // handle serves every path under /v2/.
@@ -66,7 +67,7 @@ func (p *registryProxy) pull(c *gin.Context) {
 		p.refuseRoute(c, err)
 		return
 	}
-	runnerID, ok := p.authenticated(c)
+	caller, ok := p.authenticated(c)
 	if !ok {
 		return
 	}
@@ -74,7 +75,7 @@ func (p *registryProxy) pull(c *gin.Context) {
 		refuse(c, http.StatusForbidden, oci.CodeDenied, err.Error())
 		return
 	}
-	if retryAfter, allowed := p.limits.allow(runnerID, route.Org); !allowed {
+	if retryAfter, allowed := p.limits.allow(caller.runnerID, route.Org); !allowed {
 		c.Header("Retry-After", strconv.Itoa(int(retryAfter.Round(time.Second)/time.Second)+1))
 		// Which meter tripped is this proxy's business, not the caller's: it
 		// slows down either way, and naming the wrong one sends an operator
@@ -83,9 +84,9 @@ func (p *registryProxy) pull(c *gin.Context) {
 		return
 	}
 
-	response, err := p.forward(c.Request.Context(), route, c.Request.Method, c.Request.Header)
+	response, presentedLogin, err := p.forward(c.Request.Context(), route, c.Request.Method, c.Request.Header, caller)
 	if err != nil {
-		p.refuseUpstream(c, route, err)
+		p.refuseUpstream(c, route, presentedLogin, err)
 		return
 	}
 	defer response.Body.Close()
@@ -94,43 +95,61 @@ func (p *registryProxy) pull(c *gin.Context) {
 		// The upstream refused us, not the caller. Passing its status through
 		// would tell the caller to re-authenticate to this proxy, which it has
 		// already done successfully, and it would loop.
-		refuse(c, http.StatusForbidden, oci.CodeDenied,
-			"upstream "+route.PublishedHost+" refused the pull")
+		refuse(c, http.StatusForbidden, oci.CodeDenied, upstreamRefusal(route, presentedLogin))
 		return
 	}
 	relay(c, response)
 }
 
+// upstreamRefusal says whose refusal it was. A login that was presented and
+// refused is the organization's to fix, which is a different thing to tell
+// someone than an image the upstream will not serve.
+func upstreamRefusal(route Route, presentedLogin bool) string {
+	if presentedLogin {
+		return "upstream " + route.PublishedHost + " refused the organization's registry credential"
+	}
+	return "upstream " + route.PublishedHost + " refused the pull"
+}
+
 // forward issues the pull upstream, answering an authentication challenge once
-// if the upstream makes one.
+// if the upstream makes one. It also reports whether that answer presented the
+// organization's login.
 //
 // The token is tried first and the challenge is only read when the upstream
 // objects, so a warm token costs no extra round trip and a cold one costs
-// exactly the 401 that names the scope to ask for.
+// exactly the 401 that names the scope to ask for. The login is looked up on
+// that path too, so neither the control plane nor Secret Manager is asked
+// while a token is warm.
 func (p *registryProxy) forward(
 	ctx context.Context,
 	route Route,
 	method string,
 	inbound http.Header,
-) (*http.Response, error) {
+	from caller,
+) (*http.Response, bool, error) {
 	header := upstreamHeader(inbound)
-	token, _ := p.tokens.cached(route.Org, route.Upstream)
+	token, _ := p.tokens.cached(from.runnerID, route.Org, route.Upstream)
 	response, err := p.upstream.Pull(ctx, method, route.Upstream, route.Request, merge(header, bearer(token)))
 	if err != nil || response.StatusCode != http.StatusUnauthorized {
-		return response, err
+		return response, false, err
 	}
 
 	challenge := response.Header.Get("Www-Authenticate")
 	response.Body.Close()
 	if challenge == "" {
-		return nil, errors.New("upstream refused the pull and named no way to authenticate")
+		return nil, false, errors.New("upstream refused the pull and named no way to authenticate")
 	}
 
-	token, err = p.tokens.acquire(ctx, route.Org, route.Upstream, challenge)
+	login, err := p.credentials.find(ctx, from, route.Org, route.PublishedHost, route.Upstream.Repository)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return p.upstream.Pull(ctx, method, route.Upstream, route.Request, merge(header, bearer(token)))
+	token, err = p.tokens.acquire(ctx, from.runnerID, route.Org, route.Upstream, challenge, login)
+	if err != nil {
+		return nil, login != nil, err
+	}
+	response, err = p.upstream.Pull(ctx, method, route.Upstream, route.Request, merge(header, bearer(token)))
+	return response, login != nil, err
 }
 
 // relay copies the upstream answer to the caller.
@@ -209,20 +228,28 @@ func merge(base, extra http.Header) http.Header {
 	return merged
 }
 
+// caller is a runner this proxy has verified, and the key it verified it by:
+// the control plane answers only runners, so that key is also what a
+// credential lookup is made with.
+type caller struct {
+	runnerID string
+	apiKey   string
+}
+
 // authenticated resolves the caller to a runner, answering the caller itself
 // when it cannot.
-func (p *registryProxy) authenticated(c *gin.Context) (string, bool) {
+func (p *registryProxy) authenticated(c *gin.Context) (caller, bool) {
 	_, apiKey, presented := c.Request.BasicAuth()
 	if !presented {
 		challenge(c)
-		return "", false
+		return caller{}, false
 	}
 
 	runnerID, err := p.runners.authenticate(c.Request.Context(), apiKey)
 	switch {
 	case errors.Is(err, ErrUnauthenticated):
 		challenge(c)
-		return "", false
+		return caller{}, false
 	case errors.Is(err, ErrAuthUnavailable):
 		// Not a refusal: the control plane could not be asked. Saying so beats
 		// a bare 500, which reads as a bug in this proxy, and beats admitting
@@ -230,12 +257,12 @@ func (p *registryProxy) authenticated(c *gin.Context) (string, bool) {
 		slog.WarnContext(c.Request.Context(), "Cannot verify a caller", "error", err)
 		refuse(c, http.StatusServiceUnavailable, oci.CodeUnauthorized,
 			"cannot verify credentials right now; retry shortly")
-		return "", false
+		return caller{}, false
 	case err != nil:
 		refuse(c, http.StatusInternalServerError, oci.CodeUnauthorized, "credential check failed")
-		return "", false
+		return caller{}, false
 	}
-	return runnerID, true
+	return caller{runnerID: runnerID, apiKey: apiKey}, true
 }
 
 // challenge states what this proxy wants, which is Basic: a caller holds a
@@ -256,9 +283,30 @@ func (p *registryProxy) refuseRoute(c *gin.Context, err error) {
 	}
 }
 
-func (p *registryProxy) refuseUpstream(c *gin.Context, route Route, err error) {
+func (p *registryProxy) refuseUpstream(c *gin.Context, route Route, presentedLogin bool, err error) {
 	slog.WarnContext(c.Request.Context(), "Upstream pull failed",
 		"upstream", route.Upstream.Endpoint, "repository", route.Upstream.Repository, "error", err)
+	if errors.Is(err, ErrCredentialUnavailable) {
+		// Not a refusal: the login could not be looked up or read. Pulling
+		// anonymously instead would turn this outage into a misleading denial.
+		refuse(c, http.StatusServiceUnavailable, oci.CodeUnauthorized,
+			"cannot read the registry credential for "+route.PublishedHost+" right now; retry shortly")
+		return
+	}
+	if errors.Is(err, ErrLoginNotPermitted) {
+		refuse(c, http.StatusForbidden, oci.CodeDenied,
+			"this runner hosts no box of the organization, so its registry credential is not used")
+		return
+	}
+	if errors.Is(err, ErrRealmRefused) {
+		refuse(c, http.StatusBadGateway, oci.CodeDenied,
+			"upstream "+route.PublishedHost+" named a token endpoint on another host; the organization's credential was not sent")
+		return
+	}
+	if presentedLogin && errors.Is(err, oci.ErrCredentialRejected) {
+		refuse(c, http.StatusForbidden, oci.CodeDenied, upstreamRefusal(route, presentedLogin))
+		return
+	}
 	if errors.Is(err, ErrAddressRefused) {
 		refuse(c, http.StatusForbidden, oci.CodeDenied,
 			"upstream "+route.PublishedHost+" sent the pull to an address this proxy will not reach")

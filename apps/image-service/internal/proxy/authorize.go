@@ -20,10 +20,9 @@ var ErrHostRefused = errors.New("upstream host refused")
 // reaching the network it sits on; this stops it reaching the rest of the
 // internet on a caller's say-so.
 //
-// It is a flat set today because there is nothing to key it by: the release
-// that introduces this proxy stores no registry credentials, so no organization
-// has one and every authenticated caller may reach the same public registries.
-// When credentials arrive, an organization's own hosts join what it may reach.
+// It is a flat set, the same for every caller. An organization's login does not
+// widen it: a login is registered only for one of these hosts, and it changes
+// what a pull may see there, not where the proxy connects.
 type upstreamAllowlist map[string]struct{}
 
 func newUpstreamAllowlist(hosts []string) upstreamAllowlist {

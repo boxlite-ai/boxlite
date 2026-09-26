@@ -7,6 +7,7 @@ All URIs are relative to *http://localhost:3000*
 |[**createRunner**](#createrunner) | **POST** /runners | Create runner|
 |[**deleteRunner**](#deleterunner) | **DELETE** /runners/{id} | Delete runner|
 |[**getInfoForAuthenticatedRunner**](#getinfoforauthenticatedrunner) | **GET** /runners/me | Get info for authenticated runner|
+|[**getRegistryCredentialForAuthenticatedRunner**](#getregistrycredentialforauthenticatedrunner) | **GET** /runners/me/registry-credentials | Find the registry credential a pull uses|
 |[**getRunnerByBoxId**](#getrunnerbyboxid) | **GET** /runners/by-box/{boxId} | Get runner by box ID|
 |[**getRunnerById**](#getrunnerbyid) | **GET** /runners/{id} | Get runner by ID|
 |[**getRunnerFullById**](#getrunnerfullbyid) | **GET** /runners/{id}/full | Get runner by ID|
@@ -162,6 +163,64 @@ This endpoint does not have any parameters.
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | Runner info |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **getRegistryCredentialForAuthenticatedRunner**
+> RunnerRegistryCredential getRegistryCredentialForAuthenticatedRunner()
+
+
+### Example
+
+```typescript
+import {
+    RunnersApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new RunnersApi(configuration);
+
+let organizationId: string; //Organization the pull is for
+let host: string; //Registry host as the tenant wrote it
+let repository: string; //Repository on that host
+
+const { status, data } = await apiInstance.getRegistryCredentialForAuthenticatedRunner(
+    organizationId,
+    host,
+    repository
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **organizationId** | [**string**] | Organization the pull is for | |
+| **host** | [**string**] | Registry host as the tenant wrote it | |
+| **repository** | [**string**] | Repository on that host | |
+
+
+### Return type
+
+**RunnerRegistryCredential**
+
+### Authorization
+
+[bearer](../README.md#bearer)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
+|**403** | The runner hosts no box of that organization |  -  |
+|**404** | The organization has no credential for this repository |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

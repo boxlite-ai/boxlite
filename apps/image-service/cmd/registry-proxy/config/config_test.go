@@ -6,6 +6,7 @@ package config
 import (
 	"maps"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -29,9 +30,10 @@ func TestGetConfigFallsBackToRunnableDefaults(t *testing.T) {
 		t.Errorf("ShutdownTimeoutSec = %d, want 3600", config.ShutdownTimeoutSec)
 	}
 	// The upstream set has to be closed by default. An empty one would let the
-	// request path choose what this process connects to.
-	if got := config.UpstreamHosts; len(got) != 2 || got[0] != "ghcr.io" || got[1] != "docker.io" {
-		t.Errorf("UpstreamHosts = %v, want the two public registries", got)
+	// request path choose what this process connects to. It is the four
+	// registries an organization may register a login for.
+	if got := strings.Join(config.UpstreamHosts, ","); got != "ghcr.io,docker.io,quay.io,gcr.io" {
+		t.Errorf("UpstreamHosts = %v, want the four registries a login is accepted for", got)
 	}
 	if config.CredentialTTL != 60*time.Second {
 		t.Errorf("CredentialTTL = %v, want 60s", config.CredentialTTL)

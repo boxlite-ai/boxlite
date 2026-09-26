@@ -31,6 +31,8 @@ import type { Runner } from '../models';
 import type { RunnerFull } from '../models';
 // @ts-ignore
 import type { RunnerHealthcheck } from '../models';
+// @ts-ignore
+import type { RunnerRegistryCredential } from '../models';
 /**
  * RunnersApi - axios parameter creator
  */
@@ -148,6 +150,61 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Find the registry credential a pull uses
+         * @param {string} organizationId Organization the pull is for
+         * @param {string} host Registry host as the tenant wrote it
+         * @param {string} repository Repository on that host
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        getRegistryCredentialForAuthenticatedRunner: async (organizationId: string, host: string, repository: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('getRegistryCredentialForAuthenticatedRunner', 'organizationId', organizationId)
+            // verify required parameter 'host' is not null or undefined
+            assertParamExists('getRegistryCredentialForAuthenticatedRunner', 'host', host)
+            // verify required parameter 'repository' is not null or undefined
+            assertParamExists('getRegistryCredentialForAuthenticatedRunner', 'repository', repository)
+            const localVarPath = `/runners/me/registry-credentials`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            if (organizationId !== undefined) {
+                localVarQueryParameter['organizationId'] = organizationId;
+            }
+
+            if (host !== undefined) {
+                localVarQueryParameter['host'] = host;
+            }
+
+            if (repository !== undefined) {
+                localVarQueryParameter['repository'] = repository;
+            }
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
@@ -503,6 +560,21 @@ export const RunnersApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Find the registry credential a pull uses
+         * @param {string} organizationId Organization the pull is for
+         * @param {string} host Registry host as the tenant wrote it
+         * @param {string} repository Repository on that host
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async getRegistryCredentialForAuthenticatedRunner(organizationId: string, host: string, repository: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<RunnerRegistryCredential>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getRegistryCredentialForAuthenticatedRunner(organizationId, host, repository, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['RunnersApi.getRegistryCredentialForAuthenticatedRunner']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Get runner by box ID
          * @param {string} boxId 
          * @param {*} [options] Override http request option.
@@ -637,6 +709,18 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          * 
+         * @summary Find the registry credential a pull uses
+         * @param {string} organizationId Organization the pull is for
+         * @param {string} host Registry host as the tenant wrote it
+         * @param {string} repository Repository on that host
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        getRegistryCredentialForAuthenticatedRunner(organizationId: string, host: string, repository: string, options?: RawAxiosRequestConfig): AxiosPromise<RunnerRegistryCredential> {
+            return localVarFp.getRegistryCredentialForAuthenticatedRunner(organizationId, host, repository, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Get runner by box ID
          * @param {string} boxId 
          * @param {*} [options] Override http request option.
@@ -747,6 +831,19 @@ export class RunnersApi extends BaseAPI {
      */
     public getInfoForAuthenticatedRunner(options?: RawAxiosRequestConfig) {
         return RunnersApiFp(this.configuration).getInfoForAuthenticatedRunner(options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Find the registry credential a pull uses
+     * @param {string} organizationId Organization the pull is for
+     * @param {string} host Registry host as the tenant wrote it
+     * @param {string} repository Repository on that host
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public getRegistryCredentialForAuthenticatedRunner(organizationId: string, host: string, repository: string, options?: RawAxiosRequestConfig) {
+        return RunnersApiFp(this.configuration).getRegistryCredentialForAuthenticatedRunner(organizationId, host, repository, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

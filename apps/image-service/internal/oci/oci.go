@@ -30,4 +30,8 @@ var (
 	ErrInvalidChallenge = errors.New("invalid authentication challenge")
 	// ErrTokenRefused means a token endpoint would not issue one.
 	ErrTokenRefused = errors.New("token refused")
+	// ErrCredentialRejected means a token endpoint answered 401 or 403: the
+	// credential presented was refused, as opposed to the endpoint failing.
+	// Every error that carries it carries ErrTokenRefused too.
+	ErrCredentialRejected = errors.New("credential rejected")
 )

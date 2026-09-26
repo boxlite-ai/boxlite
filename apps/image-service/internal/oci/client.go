@@ -120,9 +120,13 @@ func (c *Client) Exchange(ctx context.Context, challenge Challenge, scope string
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode != http.StatusOK {
+	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
 		// The body may repeat the credential that was rejected, so only the
-		// status travels on.
+		// status travels on, here and below.
+		return Token{}, fmt.Errorf("%w: %w: %s answered %s",
+			ErrTokenRefused, ErrCredentialRejected, target.Redacted(), response.Status)
+	}
+	if response.StatusCode != http.StatusOK {
 		return Token{}, fmt.Errorf("%w: %s answered %s", ErrTokenRefused, target.Redacted(), response.Status)
 	}
 

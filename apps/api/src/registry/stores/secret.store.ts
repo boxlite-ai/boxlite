@@ -113,7 +113,7 @@ class GcpSecretManagerStore implements SecretStore {
 
 /**
  * One file per credential under a directory, for a local stack that has no
- * Secret Manager.
+ * Secret Manager. The registry proxy's file store reads the same directory.
  */
 class FileSecretStore implements SecretStore {
   constructor(private readonly directory: string) {}

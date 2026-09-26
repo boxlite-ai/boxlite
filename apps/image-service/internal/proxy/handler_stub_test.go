@@ -41,7 +41,9 @@ type stubUpstream struct {
 	// Bearer challenge, which is how ghcr and Docker Hub behave.
 	requireToken bool
 	issuedToken  string
-	redirectBlob string
+	// tokenExpiresIn is the lifetime the token endpoint states, in seconds.
+	tokenExpiresIn int
+	redirectBlob   string
 
 	mutex    sync.Mutex
 	requests []stubRequest
@@ -67,6 +69,8 @@ func newStubUpstream(t *testing.T) *stubUpstream {
 		manifestType: "application/vnd.oci.image.manifest.v1+json",
 		blob:         []byte("compressed layer bytes"),
 		issuedToken:  "upstream-issued-token",
+		// Docker Hub's, measured: 300.
+		tokenExpiresIn: 300,
 	}
 	upstream.server = httptest.NewTLSServer(http.HandlerFunc(upstream.serve))
 	t.Cleanup(upstream.server.Close)
@@ -90,7 +94,7 @@ func (u *stubUpstream) serve(w http.ResponseWriter, r *http.Request) {
 		u.tokens++
 		u.mutex.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"token":"`+u.issuedToken+`","expires_in":300}`)
+		_, _ = io.WriteString(w, `{"token":"`+u.issuedToken+`","expires_in":`+strconv.Itoa(u.tokenExpiresIn)+`}`)
 		return
 	}
 

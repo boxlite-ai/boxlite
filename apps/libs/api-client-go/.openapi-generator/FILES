@@ -107,10 +107,12 @@ model_rate_limit_entry.go
 model_regenerate_api_key_response.go
 model_region.go
 model_region_type.go
+model_registry_credential_kind.go
 model_runner.go
 model_runner_full.go
 model_runner_health_metrics.go
 model_runner_healthcheck.go
+model_runner_registry_credential.go
 model_runner_service_health.go
 model_runner_state.go
 model_send_webhook_dto.go

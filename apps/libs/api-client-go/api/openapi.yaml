@@ -3339,6 +3339,53 @@ paths:
       summary: Get image details
       tags:
       - images
+  /runners/me/registry-credentials:
+    get:
+      operationId: getRegistryCredentialForAuthenticatedRunner
+      parameters:
+      - description: Organization the pull is for
+        explode: true
+        in: query
+        name: organizationId
+        required: true
+        schema:
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        style: form
+      - description: Registry host as the tenant wrote it
+        explode: true
+        in: query
+        name: host
+        required: true
+        schema:
+          example: ghcr.io
+          type: string
+        style: form
+      - description: Repository on that host
+        explode: true
+        in: query
+        name: repository
+        required: true
+        schema:
+          example: acme/app
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunnerRegistryCredential"
+          description: ""
+        "403":
+          description: The runner hosts no box of that organization
+        "404":
+          description: The organization has no credential for this repository
+      security:
+      - bearer: []
+      summary: Find the registry credential a pull uses
+      tags:
+      - runners
   /admin/runners:
     get:
       operationId: adminListRunners
@@ -7336,6 +7383,33 @@ components:
       - tags
       - versionCount
       - versions
+      type: object
+    RegistryCredentialKind:
+      enum:
+      - basic
+      type: string
+    RunnerRegistryCredential:
+      example:
+        kind: basic
+        username: acme-bot
+        secretVersion: projects/123/secrets/registry-credential-123e4567-e89b-12d3-a456-426614174000/versions/1
+      properties:
+        kind:
+          allOf:
+          - $ref: "#/components/schemas/RegistryCredentialKind"
+          example: basic
+        username:
+          description: Username the registry expects
+          example: acme-bot
+          type: string
+        secretVersion:
+          description: Secret Manager version holding the password
+          example: projects/123/secrets/registry-credential-123e4567-e89b-12d3-a456-426614174000/versions/1
+          type: string
+      required:
+      - kind
+      - secretVersion
+      - username
       type: object
     AdminCreateRunner:
       example:

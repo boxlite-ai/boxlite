@@ -16,6 +16,9 @@
  * alone, and all it allows is an empty secret the API still cannot fill outside
  * the prefix.
  *
+ * The registry proxy reads with the predefined `secretAccessor`, which grants
+ * reading and nothing else, bound by the same condition.
+ *
  * The condition is on the project number because that is how Secret Manager
  * spells `resource.name`, whatever the caller wrote.
  */
@@ -27,6 +30,7 @@ export const REGISTRY_SECRET_PREFIX = 'registry-credential-'
 
 export const REGISTRY_SECRET_CREATE_PERMISSIONS = ['secretmanager.secrets.create']
 export const REGISTRY_SECRET_WRITE_PERMISSIONS = ['secretmanager.versions.add', 'secretmanager.versions.destroy']
+export const REGISTRY_SECRET_READ_ROLE = 'roles/secretmanager.secretAccessor'
 
 /**
  * A custom role id: letters, digits, `_` and `.`, and unique in the project,
@@ -61,6 +65,7 @@ export const gcpRegistryCredentialStoreProvider =
         cloud: 'gcp',
         createRole: creator.name,
         writeRole: writer.name,
+        readRole: REGISTRY_SECRET_READ_ROLE,
         condition: {
           title: 'registry-credentials-only',
           description: `Secrets named ${REGISTRY_SECRET_PREFIX}*`,
