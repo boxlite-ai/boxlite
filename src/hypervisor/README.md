@@ -20,7 +20,7 @@ machine layout and device emulation belong to `boxlite-vmm`.
 | `memory` | `MemoryRegion`: host memory mapped into the guest |
 | `error` | `Error`: the failed operation, its resource, and the host cause |
 | `hvf` / `hvf::syndrome` | HVF operations and ARM exception decoding (not implemented yet) |
-| `kvm` | x86_64 VM creation, memory slots, vCPU execution, kicks and pending-I/O completion; boot registers and arm64 follow |
+| `kvm` | x86_64 VM creation, memory slots, entry registers, vCPU execution, kicks and pending-I/O completion; CPUID/MSRs and arm64 follow |
 | `whp` / `whp::emulator` | WHP operations and x86 instruction decoding for memory-access exits (reserved for M10) |
 
 Three boundaries decide placement when a case is ambiguous: KVM memory-slot
@@ -29,13 +29,24 @@ decoding stays inside `hvf`, so `boxlite-vmm` never sees a raw `ESR_EL2`; and
 x86 instruction decoding stays inside `whp`, so `boxlite-vmm` never sees raw
 instruction bytes.
 
+## Backend status
+
 The backend modules are selected by host OS and architecture, and a host with
 no backend fails the build rather than producing a library that exposes no VM
 operations. The traits are exported from the crate root. Linux x86_64 also
 exports `KvmVm` and thread-bound `KvmVcpu`, with creation, memory registration,
 `run` and `complete_pending_io`. `KvmVm` and `KvmVcpu` implement the shared `Vm`
 and `Vcpu` traits, including IRQ forwarding and cross-thread kick handles.
-`run` blocks on an idle guest until interrupted. Boot registers are not exposed yet.
+`run` blocks on an idle guest until interrupted.
+
+`KvmVcpu::set_boot_registers` installs `X86BootRegisters`: general entry registers,
+segments, descriptor tables, control registers, and reset x87 state. Fresh vCPUs
+retain SSE reset state; KVM's legacy FPU ioctl omits MXCSR, so hardware tests
+check that register through XSAVE. Values
+and guest addresses come from the VMM; no Linux memory layout lives in KVM.
+Call it before first entry and discard the vCPU after any configuration error,
+because multiple host writes cannot be rolled back atomically. Secondary vCPUs
+retain reset state until INIT/SIPI. CPUID/MSR setup follows separately.
 
 `KvmVcpu::handle()` can kick a worker before or during guest entry; stale handles
 do nothing. `KvmVm::new()` reserves `SIGRTMIN + 1` on each worker, or the application
@@ -50,7 +61,8 @@ guest code publishes an atomic marker, plus inert handles after vCPU destruction
 On Linux x86_64, `make test:integration:vmm:kvm` requires read/write access to
 `/dev/kvm`. It checks VM/interrupt-controller creation, executes instructions
 from registered RAM, and replaces an unmapped region. Execution currently uses
-the public facade; register setup still uses the private descriptor in the test.
+the public facade; hardware tests also read back the public register configuration
+through KVM to verify long-mode segments, entry addresses, and floating-point state.
 Linux x64 CI runs these tests with `make coverage:vmm:kvm`, adding their coverage
 to the unit profiles before upload; missing KVM access is a failure.
 
