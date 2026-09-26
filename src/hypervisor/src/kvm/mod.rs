@@ -7,7 +7,13 @@
 mod memory;
 
 #[cfg(target_arch = "x86_64")]
+mod vcpu;
+
+#[cfg(target_arch = "x86_64")]
 mod vm;
 
 #[cfg(target_arch = "x86_64")]
 pub use vm::KvmVm;
+
+#[cfg(target_arch = "x86_64")]
+pub use vcpu::KvmVcpu;
